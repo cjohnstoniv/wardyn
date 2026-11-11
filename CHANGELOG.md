@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- New Run: a main drive size typed over the pool's cap now shows "{size} is over the {cap} cap. The run gets {cap}." under the Size field as you type, and the Files summary shows the size the run gets, as Review does.
 - `POST /api/v1/runs/{id}/exec` on a background run answered "no SSH access". A background run (`experience: background`) still answers `409 run_exec_unavailable`, and the message now says to create the run with `experience: interactive` to use exec.
 - A live egress edit (`PATCH /runs/{id}/egress`) that the run's substrate cannot apply, such as a Kubernetes run whose proxy cannot be replaced, now answers `egress_edit_unsupported`, and its audit row says the same. Before, it answered the revive reason `revive_unsupported`.
 - A No network launch of a run that calls a model is now refused for No network before any model sign-in check, so an expired sign-in no longer asks to be reconnected first and then refuses the launch anyway.

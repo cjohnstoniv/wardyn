@@ -360,6 +360,30 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(await screen.findByText(NR_FILES.MOUNT_MAIN("0.5 GiB"))).toBeInTheDocument();
   });
 
+  // Mutation caught: `over` only looks at the stored size (the `!dirty && committed` form), so a typed size shows no note.
+  // Mutation caught: the map keeps the typed text (`dirty ? NR_SHARED.GIB(text)`) ahead of the cap, so it reads 12 GiB.
+  it("a size typed over the pool's cap shows the over-cap note at once, and the mount map reads the cap", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    enter("12");
+    expect(screen.getByTestId("nr-main-drive-over-cap")).toHaveTextContent(NR_FILES.OVER_CAP("12 GiB", "8 GiB"));
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("8 GiB"))).toBeInTheDocument();
+    expect(screen.queryByText(NR_FILES.MOUNT_MAIN("12 GiB"))).toBeNull();
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 8192 });
+  });
+
+  // Mutation caught: the note shows for every typed size (the `mib > capMib` test dropped or flipped to `>=`/`<`).
+  it("a size typed under the cap shows no over-cap note", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    enter("4");
+    expect(screen.queryByTestId("nr-main-drive-over-cap")).toBeNull();
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("4 GiB"))).toBeInTheDocument();
+    enter("8");
+    expect(screen.queryByTestId("nr-main-drive-over-cap")).toBeNull();
+  });
+
   it("emptying the field and leaving it keeps the stored size and the clamp note", async () => {
     checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
     show();
@@ -549,7 +573,7 @@ describe("a stored size over the pool's cap", () => {
     expect(await screen.findByText("1 GiB is over the 768 MiB cap. The run gets 768 MiB.")).toBeInTheDocument();
   });
 
-  it("says nothing for a size the person typed over the cap: blur clamps it and the clamp note speaks", async () => {
+  it("after blur a size typed over the cap is clamped: the over-cap note is gone and the clamp note speaks", async () => {
     checks.result = capped(4096);
     show();
     await screen.findByText(NR_FILES.UP_TO("4 GiB"));
@@ -559,5 +583,19 @@ describe("a stored size over the pool's cap", () => {
     expect(screen.queryByText(/is over the/)).toBeNull();
     expect(screen.getByText(/^Clamped to 4 GiB/)).toBeInTheDocument();
     await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "prompt"));
+  });
+
+  // Mutation caught: the summary tone ignores `size.over` (files-step.tsx), so it stays done while the size is over the cap.
+  it("on a settled step, typing a size over the cap drops the summary from done until blur", async () => {
+    checks.result = capped(4096);
+    show({ ...INTERACTIVE, no_repositories_or_drives: true, resources: { disk_mib: 1024 } } as RunIntent);
+    await screen.findByText(NR_FILES.UP_TO("4 GiB"));
+    await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
+    act(() => size().focus());
+    fireEvent.change(size(), { target: { value: "16" } });
+    expect(screen.getByTestId("nr-main-drive-over-cap")).toBeInTheDocument();
+    await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "prompt"), { timeout: 3000 });
+    await userEvent.tab();
+    await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
   });
 });
