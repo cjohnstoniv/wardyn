@@ -325,8 +325,9 @@ type leaseDeferral struct {
 // (errRunnerLeaseLapsed), or the deadline passes. The deadline is renewedLeaseWindow (the stamp's lapse,
 // identity.RunTokenLapseAfter) after the clock now, which is read at the renewal and so is a little later
 // than the stamp the database wrote; leaseSendable still refuses a lapsed stamp under the lock. It bounds
-// the work: a try that finds it passed does nothing, one that is running is cancelled at it, and no timer
-// is armed past it. The renewal's own path reads nothing from the database for it. Any failure before the
+// when work starts and the work that takes a context: a try that finds it passed does nothing, no timer is
+// armed past it, and a running try's store reads and its wait for room on the runner link end at it. A
+// send stalled on the wire is not ended by the deadline: the runner link's own keepalive ends it. The renewal's own path reads nothing from the database for it. Any failure before the
 // deadline is retried too, the lock being held or not. No timer is armed once the process's context is
 // done, and one already armed stops when it finds that. One deferral is pending per run: a proxy that
 // retries every second while its gate is closed schedules a single send, not one per retry. A renewal that
