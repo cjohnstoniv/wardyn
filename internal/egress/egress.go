@@ -137,7 +137,8 @@ type DecisionLog struct {
 // DNSQuery is one DNS query a run's sandbox asked and what it was told. Name is
 // empty when its spelling was refused. Via says who answered: "vm_relay" (a VM
 // guest's relay, from its own name table) or "proxy" (the run proxy's listener,
-// which refuses every query). Neither looks anything up.
+// which refuses every query except AAAA for its own name, and records the rest). Neither looks
+// anything up.
 type DNSQuery struct {
 	Name    string `json:"name,omitempty"`
 	Type    string `json:"type"`

@@ -15,7 +15,7 @@ import (
 
 // agentToProxyPorts are the ports the agent pod may reach on its proxy pod: the
 // proxy, and 53 over TCP and UDP for its DNS listener, which refuses every
-// query and records it (proxy.DNSListenEnv). 53 reaches only the proxy pod.
+// query and records it, except AAAA for its own name (proxy.DNSListenEnv). 53 reaches only the proxy pod.
 func agentToProxyPorts() []networkingv1.NetworkPolicyPort {
 	return []networkingv1.NetworkPolicyPort{
 		{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(runner.ProxyListenPort))},

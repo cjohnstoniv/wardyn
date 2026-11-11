@@ -438,8 +438,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
 			// Default ClusterFirst would point the agent at kube-dns, which its
 			// NetworkPolicy denies. Its one nameserver is its proxy pod, whose
-			// listener answers every query REFUSED and records it: a
-			// proxy-unaware lookup fails at once and leaves a run.dns.query row.
+			// listener answers every query REFUSED and records it, except AAAA
+			// for its own name: a proxy-unaware lookup fails at once and leaves a run.dns.query row.
 			DNSPolicy: corev1.DNSNone,
 			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{proxyIP}},
 			Containers: []corev1.Container{{

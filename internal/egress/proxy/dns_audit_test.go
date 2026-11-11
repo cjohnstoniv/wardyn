@@ -269,6 +269,205 @@ func checkRefused(t *testing.T, wire []byte, name string) {
 	}
 }
 
+// TestAnswerDNSOwnName pins which questions get the empty answer: AAAA for the
+// proxy's exact name, and nothing else. Mutations: matching with strings.Contains
+// or HasPrefix/HasSuffix instead of equality turns the "wardyn-proxy.evil.com."
+// / "xwardyn-proxy." / "evil.wardyn-proxy." rows into NOERROR with no record;
+// dropping the type check turns the A, TXT and MX rows into NOERROR with no
+// record; dropping ToLower fails the upper-case rows; dropping the trailing-dot
+// trim fails every own-name row; answering REFUSED for the own name, or
+// recording it, fails the own-name rows; setting Authoritative on every reply, or
+// on none, fails the AA check (the bit is on the own-name reply only).
+func TestAnswerDNSOwnName(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  dnsmessage.Type
+		own  bool
+	}{
+		{"wardyn-proxy.", dnsmessage.TypeAAAA, true},
+		{"WARDYN-PROXY.", dnsmessage.TypeAAAA, true},
+		{"Wardyn-Proxy.", dnsmessage.TypeAAAA, true},
+		{"wardyn-proxy.", dnsmessage.TypeA, false},
+		{"WARDYN-PROXY.", dnsmessage.TypeA, false},
+		{"wardyn-proxy.", dnsmessage.TypeTXT, false},
+		{"wardyn-proxy.", dnsmessage.TypeMX, false},
+		{"wardyn-proxy.", dnsmessage.Type(65), false}, // HTTPS
+		{"wardyn-proxy.", dnsmessage.TypeALL, false},
+		{"example.com.", dnsmessage.TypeAAAA, false},
+		{"example.com.", dnsmessage.TypeA, false},
+		{"wardyn-proxy.evil.com.", dnsmessage.TypeAAAA, false},
+		{"wardyn-proxy.evil.com.", dnsmessage.TypeA, false},
+		{"wardyn-proxy.cluster.local.", dnsmessage.TypeAAAA, false},
+		{"xwardyn-proxy.", dnsmessage.TypeAAAA, false},
+		{"wardyn-proxyx.", dnsmessage.TypeAAAA, false},
+		{"evil.wardyn-proxy.", dnsmessage.TypeAAAA, false},
+		{"wardyn-proxy.com.", dnsmessage.TypeAAAA, false},
+	}
+	for _, c := range cases {
+		out, q, record, ok := answerDNS(dnsQueryWire(t, c.name, c.typ))
+		if !ok {
+			t.Fatalf("%s %v: no reply", c.name, c.typ)
+		}
+		var m dnsmessage.Message
+		if err := m.Unpack(out); err != nil {
+			t.Fatal(err)
+		}
+		wantRCode := dnsmessage.RCodeRefused
+		if c.own {
+			wantRCode = dnsmessage.RCodeSuccess
+		}
+		if !m.Header.Response || m.Header.ID != 0x4242 || m.Header.RCode != wantRCode || len(m.Answers) != 0 ||
+			len(m.Questions) != 1 || m.Questions[0].Name.String() != c.name || m.Questions[0].Type != c.typ {
+			t.Errorf("%s %v: reply %+v, want rcode %v, no answers, question echoed", c.name, c.typ, m, wantRCode)
+		}
+		if m.Header.Authoritative != c.own {
+			t.Errorf("%s %v: AA=%v, want %v (set on the own-name empty answer only, so a resolver takes NODATA, not a lame referral)", c.name, c.typ, m.Header.Authoritative, c.own)
+		}
+		if record == c.own {
+			t.Errorf("%s %v: record=%v, want %v", c.name, c.typ, record, !c.own)
+		}
+		if !c.own && (q.Outcome != "refused" || q.Name != dnsName(c.name)) {
+			t.Errorf("%s %v: row %+v, want a refused row for the name", c.name, c.typ, q)
+		}
+	}
+}
+
+// TestAnswerDNSOwnNameNeedsStandardQueryInClass: the empty answer is for a standard
+// QUERY (opcode 0) in the Internet class only. IQUERY, STATUS, NOTIFY and UPDATE
+// carrying the same question, and a CH or ANY class AAAA, are REFUSED and recorded.
+// Mutations: dropping the `h.OpCode == 0` test turns the opcode rows into NOERROR with
+// no record; dropping the ClassINET test does the same to the class rows.
+func TestAnswerDNSOwnNameNeedsStandardQueryInClass(t *testing.T) {
+	wire := func(op dnsmessage.OpCode, class dnsmessage.Class) []byte {
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 0x4242, OpCode: op, RecursionDesired: true})
+		_ = b.StartQuestions()
+		if err := b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName("wardyn-proxy."), Type: dnsmessage.TypeAAAA, Class: class}); err != nil {
+			t.Fatal(err)
+		}
+		out, err := b.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	cases := []struct {
+		what  string
+		op    dnsmessage.OpCode
+		class dnsmessage.Class
+	}{
+		{"IQUERY", 1, dnsmessage.ClassINET},
+		{"STATUS", 2, dnsmessage.ClassINET},
+		{"NOTIFY", 4, dnsmessage.ClassINET},
+		{"UPDATE", 5, dnsmessage.ClassINET},
+		{"class CH", 0, dnsmessage.ClassCHAOS},
+		{"class ANY", 0, dnsmessage.ClassANY},
+	}
+	for _, c := range cases {
+		out, q, record, ok := answerDNS(wire(c.op, c.class))
+		if !ok || !record || q.Outcome != "refused" || q.Name != "wardyn-proxy" || q.Type != "AAAA" {
+			t.Errorf("%s: ok=%v record=%v row=%+v, want a refused AAAA row for wardyn-proxy", c.what, ok, record, q)
+			continue
+		}
+		var m dnsmessage.Message
+		if err := m.Unpack(out); err != nil {
+			t.Fatal(err)
+		}
+		if m.Header.RCode != dnsmessage.RCodeRefused || m.Header.Authoritative || len(m.Answers) != 0 {
+			t.Errorf("%s: reply %+v, want REFUSED, AA=0, no answer", c.what, m.Header)
+		}
+	}
+}
+
+// TestDNSListenerOwnNameWritesNoRow: over UDP and TCP the proxy's own name is
+// answered NOERROR with no answer and leaves no row, while the names around it
+// are still REFUSED and recorded. The other names are asked AFTER the own-name
+// queries and the rows are read once the last of them shows, so a row the own
+// name wrongly wrote would be in the log by then. Mutation: calling lim.note
+// without the record check on either path puts a wardyn-proxy row in the log;
+// treating the own name as refused fails the reply checks.
+func TestDNSListenerOwnNameWritesNoRow(t *testing.T) {
+	var log dnsRowLog
+	udpAddr, tcpAddr := startDNSListener(t, time.Now, log.record)
+	ask := func(c net.Conn, name string, qt dnsmessage.Type) []byte {
+		q := dnsQueryWire(t, name, qt)
+		if _, isTCP := c.(*net.TCPConn); isTCP {
+			q = append(binary.BigEndian.AppendUint16(nil, uint16(len(q))), q...)
+		}
+		if _, err := c.Write(q); err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 1500)
+		if _, isTCP := c.(*net.TCPConn); isTCP {
+			var size [2]byte
+			if _, err := io.ReadFull(c, size[:]); err != nil {
+				t.Fatal(err)
+			}
+			buf = make([]byte, binary.BigEndian.Uint16(size[:]))
+			if _, err := io.ReadFull(c, buf); err != nil {
+				t.Fatal(err)
+			}
+			return buf
+		}
+		n, err := c.Read(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return buf[:n]
+	}
+	empty := func(wire []byte, name string) {
+		t.Helper()
+		var m dnsmessage.Message
+		if err := m.Unpack(wire); err != nil {
+			t.Fatal(err)
+		}
+		if !m.Header.Response || m.Header.RCode != dnsmessage.RCodeSuccess || len(m.Answers) != 0 ||
+			len(m.Questions) != 1 || m.Questions[0].Name.String() != name {
+			t.Fatalf("reply %+v, want NOERROR with no answer for %s", m, name)
+		}
+	}
+
+	uc, err := net.Dial("udp", udpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer uc.Close()
+	tc, err := net.Dial("tcp", tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Close()
+	_ = uc.SetDeadline(time.Now().Add(3 * time.Second))
+	_ = tc.SetDeadline(time.Now().Add(3 * time.Second))
+
+	empty(ask(uc, "wardyn-proxy.", dnsmessage.TypeAAAA), "wardyn-proxy.")
+	empty(ask(uc, "WARDYN-PROXY.", dnsmessage.TypeAAAA), "WARDYN-PROXY.")
+	empty(ask(tc, "wardyn-proxy.", dnsmessage.TypeAAAA), "wardyn-proxy.")
+	checkRefused(t, ask(uc, "example.com.", dnsmessage.TypeAAAA), "example.com.")
+	checkRefused(t, ask(tc, "wardyn-proxy.evil.com.", dnsmessage.TypeAAAA), "wardyn-proxy.evil.com.")
+	checkRefused(t, ask(uc, "xwardyn-proxy.", dnsmessage.TypeAAAA), "xwardyn-proxy.")
+	checkRefused(t, ask(uc, "wardyn-proxy.", dnsmessage.TypeA), "wardyn-proxy.")
+	checkRefused(t, ask(tc, "wardyn-proxy.", dnsmessage.TypeMX), "wardyn-proxy.")
+
+	want := map[string]bool{
+		"example.com/AAAA": true, "wardyn-proxy.evil.com/AAAA": true, "xwardyn-proxy/AAAA": true,
+		"wardyn-proxy/A": true, "wardyn-proxy/MX": true,
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(log.get()) < len(want) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // room for a wrongly written row to land
+	got := log.get()
+	if len(got) != len(want) {
+		t.Fatalf("rows %+v, want exactly %v", got, want)
+	}
+	for _, r := range got {
+		if !want[r.Name+"/"+r.Type] || r.Outcome != "refused" || r.Via != "proxy" {
+			t.Fatalf("row %+v, want a refused row for one of %v", r, want)
+		}
+	}
+}
+
 // TestDNSListenerRowsAreBounded: one name asked over and over writes one row
 // per interval carrying the count; new names are bounded per interval; idle
 // names are forgotten.
