@@ -112,7 +112,10 @@ func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder
 			return kept && !g.unread
 		}
 	}
-	return s.keepForResume(ctx, run.ID, folder, prev.Gen, prev, prev.GenAt)
+	kept := s.keepForResume(ctx, run.ID, folder, prev.Gen, prev, prev.GenAt)
+	// From a record never read, kept only with the resume the sweeps keep it by: a record found past the
+	// unknown generation proves no other owner.
+	return kept && (!g.unread || s.folderStatus(ctx, run.ID).Resume != nil)
 }
 
 // stopForKeep makes run's sandbox safe to keep for a later pass with none sent: quiesced, its agent stopped
