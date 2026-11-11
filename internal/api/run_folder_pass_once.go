@@ -261,6 +261,19 @@ func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen in
 	return rec, true
 }
 
+// folderGenTaken reports whether a fresh read finds run id's computer folder record past gen: proof that
+// another owner moved it on. A read that fails, or a record still at gen, proves nothing.
+func (s *Server) folderGenTaken(ctx context.Context, id uuid.UUID, gen int) bool {
+	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
+		return false
+	}
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	cur, err := st.RunLocalFolderStatus(rctx, id)
+	return err == nil && cur.Gen > gen
+}
+
 // recordFolderPassBusy records a pass back the runner refused as busy, at the generation it owned: settled,
 // since the runner answered, and kept for a resume so a later sweep tries again. The sandbox stays up
 // either way: a record that did not land is another owner's to decide.

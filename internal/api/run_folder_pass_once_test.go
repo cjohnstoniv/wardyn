@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -574,6 +575,66 @@ func TestPassBack_ARecordThatMovedFirstRunsNoPass(t *testing.T) {
 	}
 	if _, ok := s.bumpComputerFolderGen(context.Background(), run.ID, 5); ok {
 		t.Error("a bump from a generation the record is not at landed")
+	}
+}
+
+// folderFaultStore is computerFolderStore whose bump fails (bumpErr), or is lost to another owner who moves
+// the record on first (bumpLost), or whose record writes fail (setErr).
+type folderFaultStore struct {
+	*computerFolderStore
+	bumpErr, setErr error
+	bumpLost        bool
+}
+
+func (s *folderFaultStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
+	if s.bumpErr != nil {
+		return types.RunLocalFolderStatus{}, false, s.bumpErr
+	}
+	if s.bumpLost {
+		s.smu.Lock()
+		s.status.Gen++
+		s.smu.Unlock()
+		return types.RunLocalFolderStatus{}, false, nil
+	}
+	return s.computerFolderStore.BumpRunLocalFolderGen(ctx, id, guard, at)
+}
+
+func (s *folderFaultStore) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
+	if s.setErr != nil {
+		return false, s.setErr
+	}
+	return s.computerFolderStore.SetRunLocalFolderStatusIf(ctx, id, guard, st)
+}
+
+// A pass back keeps the sandbox for a record fault only when a fresh read proves another owner moved the
+// record on. A bump or record write that fails, or a bump from a record never read, lets the caller stop the
+// sandbox, so a terminal run does not keep its agent and egress until a sweep. A record write lost to a newer
+// owner keeps it: TestPassBack_ADelayedOwnerNeitherWritesNorStops.
+func TestPassBack_ARecordFaultKeepsTheSandboxOnlyForAnotherOwner(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fault  folderFaultStore
+		unread bool
+		kept   bool
+	}{
+		"the bump fails":                       {fault: folderFaultStore{bumpErr: errors.New("the bump failed")}},
+		"another owner moved the record first": {fault: folderFaultStore{bumpLost: true}, kept: true},
+		"the record write fails":               {fault: folderFaultStore{setErr: errors.New("the write failed")}},
+		"a bump from a record never read":      {unread: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 2, 2, nil)
+			f.runnerAs(t, &onePerRunnerCaps)
+			fs := tc.fault
+			fs.computerFolderStore = f.cs
+			f.s.cfg.Store = &fs
+			if tc.unread {
+				f.s.cfg.Store = &statusReadFailsOnce{computerFolderStore: f.cs}
+				f.set(func(st *types.RunLocalFolderStatus) { st.Gen, st.Settled = 3, 3 })
+			}
+			if kept := f.back(); kept != tc.kept {
+				t.Errorf("kept %v, want %v", kept, tc.kept)
+			}
+		})
 	}
 }
 
