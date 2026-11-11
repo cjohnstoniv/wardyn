@@ -283,10 +283,12 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 	if serr == nil {
 		return true
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-		ref, "failure", mustJSON(map[string]any{
-			"sandbox_ref": ref, "teardown_error": serr.Error(),
-		})))
+	if s.auditFirstTeardownFailure(ctx, runID, action, serr) {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+			ref, "failure", mustJSON(map[string]any{
+				"sandbox_ref": ref, "teardown_error": serr.Error(),
+			})))
+	}
 	return false
 }
 
@@ -299,7 +301,7 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 	data := s.revokeRunSteps(ctx, runID)
-	if len(data) > 0 {
+	if len(data) > 0 && s.revokeRowDue(ctx, runID) {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(data))))
 	}
 	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {

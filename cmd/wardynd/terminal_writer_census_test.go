@@ -73,6 +73,10 @@ var terminalWriterCensus = map[string]string{
 	// whose sandbox was lost, and could not be kept, or whose grace ran out.
 	// CASes RUNNING->STOPPED or FAILED, then finalizeRunTail.
 	"stopKeptRun": "CASes, then finalizeRunTail",
+	// The same end taken without the run's lock once it is past due: StopKeptRunForcedIf wins the terminal
+	// state (and marks the forced stop), then finalizeRunTailOrdered -> finalizeRunEffects ->
+	// cancelRunApprovals. The retry of an unconfirmed stop (sweepForcedStops) writes no state.
+	"forceKeptStop": "CASes (StopKeptRunForcedIf), then finalizeRunTailOrdered -> finalizeRunEffects -> cancelRunApprovals",
 	// A run whose token lapsed and that cannot be kept (#574).
 	"sweepLapsedRunTokens": "reconcileFinalize -> finalizeRunTail",
 	// A revived run whose proxy could not be replaced and that cannot be kept
@@ -158,8 +162,8 @@ func TestTerminalRunStateWriterCensus(t *testing.T) {
 
 // writesTerminalState reports whether call is a run-state write whose TARGET is
 // one of the terminal states — the three primitives every transition goes
-// through (internal/api's casRunState, its StopKeptRunIf sibling for a kept
-// run's atomic-mark CAS (F04), and the reaper's guarded UpdateRunStateIfIdle)
+// through (internal/api's casRunState, its StopKeptRunIf and StopKeptRunForcedIf
+// siblings for a kept run's atomic-mark CAS (F04) and its forced end, and the reaper's guarded UpdateRunStateIfIdle)
 // — or a finalize helper handed a terminal state — or one of the two runner
 // store methods that end runs themselves (RevokeRunner, AcceptRunnerExit).
 func writesTerminalState(call *ast.CallExpr) bool {
@@ -175,7 +179,7 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		// Store methods that end runs in SQL, with the terminal state inside the
 		// statement rather than in an argument.
 		return true
-	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize", "reconcileFinalizeHint":
+	case "casRunState", "StopKeptRunIf", "StopKeptRunForcedIf", "UpdateRunStateIfIdle", "reconcileFinalize", "reconcileFinalizeHint":
 	default:
 		return false
 	}

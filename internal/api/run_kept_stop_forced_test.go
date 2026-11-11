@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,6 +18,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -812,7 +815,7 @@ func TestForceKeptStop_AFreeLockHandsAMarkedRunToTheLockedPath(t *testing.T) {
 		rec   types.RunLocalFolderStatus
 		stops int
 	}{
-		"a resume is kept":     {types.RunLocalFolderStatus{Gen: 3, Settled: 2, Resume: &types.FolderResume{Unsynced: 1}}, 0},
+		"a resume is kept":     {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}}, 0},
 		"no resume is stopped": {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -967,4 +970,470 @@ func (r *stopsFirstFails) StopSandbox(ctx context.Context, ref string) error {
 		return errors.New("the runner did not answer the stop")
 	}
 	return r.hashedReviveRunner.StopSandbox(ctx, ref)
+}
+
+// sweepRows are the sandbox.sweep rows of one outcome whose data carries key (all of them for key "").
+func sweepRows(audit *recRecorder, outcome, key string) []map[string]any {
+	var rows []map[string]any
+	for _, ev := range audit.snapshot() {
+		var data map[string]any
+		if ev.Action != sandboxSweepAction || ev.Outcome != outcome || json.Unmarshal(ev.Data, &data) != nil {
+			continue
+		}
+		if _, ok := data[key]; key == "" || ok {
+			rows = append(rows, data)
+		}
+	}
+	return rows
+}
+
+// exitedButPresent is the sandbox Docker keeps after a lease end (EndSandbox): the agent container is stopped
+// and still there, so a Status probe answers a state other than RUNNING.
+func (f *forced) exitedButPresent() { f.sb.ended = true }
+
+// Docker keeps an ended agent container, exited and present, so a probe that reads "not running" proves
+// nothing about its removal. A forced end whose tail stop failed keeps its mark through every tick the stop
+// fails, and clears it only when a stop succeeds, with one success row. Catches: a retry that clears the mark
+// on a Status probe answering a state other than RUNNING.
+func TestSweepForcedStops_AnExitedButPresentSandboxKeepsTheMarkUntilAStopSucceeds(t *testing.T) {
+	f := newForced(t)
+	f.exitedButPresent()
+	f.sb.stopErr = errors.New("the daemon did not answer the stop")
+	f.end(f.s)
+	if f.leaser.markCount() != 1 || f.sb.stopCount() != 0 {
+		t.Fatalf("%d marks, %d stops after a failed tail stop; want 1 and 0", f.leaser.markCount(), f.sb.stopCount())
+	}
+	f.tick(t, f.s) // the lock is still held
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 1 || f.sb.stopCount() != 0 {
+		t.Fatalf("%d marks, %d stops after ticks whose stop failed; want 1 and 0: an exited sandbox is not a stopped one", f.leaser.markCount(), f.sb.stopCount())
+	}
+	if rows := sweepRows(f.audit, "success", ""); len(rows) != 0 {
+		t.Fatalf("%d success rows while the stop was failing", len(rows))
+	}
+	f.sb.stopErr = nil
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 || f.sb.stopCount() != 1 {
+		t.Errorf("%d marks, %d stops after the stop succeeded; want 0 and 1", f.leaser.markCount(), f.sb.stopCount())
+	}
+	if rows := sweepRows(f.audit, "success", "sandbox_stopped"); len(rows) != 1 || rows[0]["sandbox_stopped"] != true {
+		t.Errorf("success rows %v; want exactly one saying sandbox_stopped true", rows)
+	}
+}
+
+// A stop that keeps failing writes one failure row per process per run, the first failure's, and not one a tick;
+// a later success writes one row saying the sandbox is stopped, and nothing more after it. Catches: no dedupe on
+// the retry's failure row (three rows); a row naming the latest failure and not the first; a success row written
+// on every tick after the mark cleared, or never.
+func TestSweepForcedStops_AFailingStopWritesOneFailureRowAndOneSuccessRow(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	for i := 1; i <= 3; i++ {
+		f.sb.stopErr = fmt.Errorf("stop failure %d", i)
+		f.tick(t, f.s)
+	}
+	rows := sweepRows(f.audit, "failure", "teardown_error")
+	if len(rows) != 1 || rows[0]["teardown_error"] != "stop failure 1" || f.leaser.markCount() != 1 {
+		t.Fatalf("failure rows %v, %d marks after three failing ticks; want one row naming the first failure, and the mark kept", rows, f.leaser.markCount())
+	}
+	f.sb.stopErr = nil
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if rows := sweepRows(f.audit, "success", ""); len(rows) != 1 || rows[0]["sandbox_stopped"] != true {
+		t.Errorf("success rows %v; want exactly one with sandbox_stopped true", rows)
+	}
+	if rows := sweepRows(f.audit, "failure", "teardown_error"); len(rows) != 1 || f.leaser.markCount() != 0 {
+		t.Errorf("failure rows %v, %d marks after the success; want still one row and the mark cleared", rows, f.leaser.markCount())
+	}
+}
+
+// The terminal sandbox sweep writes under the same action, so its failed teardown of one run is also written once
+// per process, where it used to be written on every pass. Catches: the dedupe keyed on the retry alone.
+func TestSweepTerminalSandboxRun_AFailedTeardownIsWrittenOncePerRun(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.sb.stopErr = errors.New("the daemon did not answer the stop")
+	run, err := f.cs.GetRun(context.Background(), f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		f.s.sweepTerminalSandboxRun(context.Background(), run)
+	}
+	if rows := sweepRows(f.audit, "failure", "teardown_error"); len(rows) != 1 {
+		t.Errorf("%d failure rows after three sweeps of one run; want 1", len(rows))
+	}
+}
+
+// onRunner puts the marked run on runner id, the runner the store holds a row for (cs.runner) or not.
+func (f *forced) onRunner(id uuid.UUID) {
+	f.cs.dispatchTestStore.mu.Lock()
+	defer f.cs.dispatchTestStore.mu.Unlock()
+	f.cs.run.RunnerID = &id
+}
+
+// A stop queued for a runner that is only offline (runner.ErrPendingOnRunner), or an offline runner that
+// refuses it (runner.ErrRunnerOffline), keeps the mark: the queued stop runs when the runner reconnects, and the
+// next tick asks again. Catches: counting either answer as a runner that is gone.
+func TestSweepForcedStops_AnOfflineRunnerWithARowKeepsTheMark(t *testing.T) {
+	for name, err := range map[string]error{
+		"queued":  fmt.Errorf("%w: the stop is queued", runner.ErrPendingOnRunner),
+		"offline": fmt.Errorf("%w: no registered substrate", runner.ErrRunnerOffline),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			f.claimOnly(t)
+			f.release()
+			f.onRunner(f.cs.runner.ID)
+			f.sb.stopErr = err
+			f.tick(t, f.s)
+			f.tick(t, f.s)
+			if f.leaser.markCount() != 1 || len(sweepRows(f.audit, "failure", "runner_gone")) != 0 {
+				t.Errorf("%d marks, runner-gone rows %v; want the mark kept and no such row", f.leaser.markCount(), sweepRows(f.audit, "failure", "runner_gone"))
+			}
+		})
+	}
+}
+
+// A run whose runner row is revoked or gone can never have its stop confirmed: the mark clears with one failure
+// row that says so, the run keeps its sandbox ref (it is not read as stopped), and later ticks add nothing.
+// Both ways in: with the lock free (the locked path) and held (the proxy and sandbox stops). Catches: keeping the
+// mark for ever; clearing it with no row, or a row a tick; clearing the run's ref or writing a success row.
+func TestSweepForcedStops_AGoneRunnerClearsTheMarkWithOneFailureRow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set  func(*forced)
+		free bool
+	}{
+		"revoked, lock free": {func(f *forced) { f.cs.runner.State = types.RunnerRevoked; f.onRunner(f.cs.runner.ID) }, true},
+		"deleted, lock held": {func(f *forced) { f.onRunner(uuid.New()) }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			f.claimOnly(t)
+			if tc.free {
+				f.release()
+			}
+			tc.set(f)
+			f.sb.stopErr = fmt.Errorf("%w: no registered substrate", runner.ErrRunnerOffline)
+			f.tick(t, f.s)
+			f.tick(t, f.s)
+			rows := sweepRows(f.audit, "failure", "runner_gone")
+			if f.leaser.markCount() != 0 || len(rows) != 1 {
+				t.Fatalf("%d marks, %d runner-gone rows; want the mark cleared and one row", f.leaser.markCount(), len(rows))
+			}
+			if rows[0]["reason"] != "its runner is gone; the stop was not confirmed" || rows[0]["sandbox_stopped"] != false {
+				t.Errorf("row %v; want the plain reason and sandbox_stopped false", rows[0])
+			}
+			if run, _ := f.cs.GetRun(context.Background(), f.run.ID); run.SandboxRef == "" {
+				t.Error("the run's sandbox ref was cleared: it must not read as stopped")
+			}
+			if n := len(sweepRows(f.audit, "success", "")); n != 0 {
+				t.Errorf("%d success rows for a stop nobody confirmed", n)
+			}
+		})
+	}
+}
+
+// A ref no substrate owns, on a run with no runner, clears the mark the same way. The error is the real
+// orchestrator's, so a change to its text fails here. Catches: the orchestrator's wording drifting from
+// noSubstrateText; the unowned ref keeping the mark for ever.
+func TestSweepForcedStops_ARefNoSubstrateOwnsClearsTheMarkWithOneFailureRow(t *testing.T) {
+	orch := orchestrator.New(pooledExecutor{Fake: runnertest.NewFake(), name: "a"}, pooledExecutor{Fake: runnertest.NewFake(), name: "b"})
+	unowned := orch.StopSandbox(context.Background(), "agent-of-no-substrate")
+	if unowned == nil {
+		t.Fatal("the orchestrator stopped a ref no substrate owns")
+	}
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.sb.stopErr = unowned
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if rows := sweepRows(f.audit, "failure", "runner_gone"); f.leaser.markCount() != 0 || len(rows) != 1 {
+		t.Errorf("%d marks, %d runner-gone rows; want the mark cleared and one row", f.leaser.markCount(), len(rows))
+	}
+}
+
+// A forced end that died between its claim and the settle of the computer folder record leaves it unsettled; the
+// retry settles it as not brought back before it stops anything, so the sandbox is stopped and not kept for a
+// pass back the forced end gave up. A record already settled is left as it is (no new generation a tick).
+// Catches: a retry that stops with the record unsettled (the sandbox kept, the record untouched); a retry that
+// settles a settled record again.
+func TestSweepForcedStops_AnUnsettledRecordIsSettledOnceBeforeTheStop(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 2, Resume: &types.FolderResume{Unsynced: 1}})
+	f.tick(t, f.s)
+	rec := f.cs.folderStatus()
+	if rec.Gen != 4 || rec.Settled != 4 || rec.Resume != nil || rec.Back == nil || !strings.Contains(rec.Back.Error, "Not brought back") {
+		t.Fatalf("record %+v; want generation 4 settled, no resume, not brought back", rec)
+	}
+	if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+		t.Errorf("%d stops, %d marks; want the sandbox stopped and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+	}
+
+	g := newForced(t)
+	g.claimOnly(t)
+	g.release()
+	g.sb.stopErr = errors.New("the daemon did not answer the stop")
+	settled := types.RunLocalFolderStatus{Gen: 7, Settled: 7, Back: &types.FolderPassRecord{Error: forcedNotBroughtBack}}
+	g.setRecord(settled)
+	g.tick(t, g.s)
+	g.tick(t, g.s)
+	if rec := g.cs.folderStatus(); rec.Gen != 7 || rec.Settled != 7 || rec.Back == nil || rec.Back.Error != forcedNotBroughtBack {
+		t.Errorf("record %+v after two ticks; want the settled record left alone", rec)
+	}
+}
+
+// tickStore is the forced fixture's store for a whole watcher tick: the lease claim fails, as in
+// TestRunWatcherTick_ReturnsTheFirstSubPassError, so the passes before the retry find no watchers.
+type tickStore struct{ markedStore }
+
+func (tickStore) ClaimStaleRunWatchers(context.Context, string, time.Duration) ([]types.AgentRun, error) {
+	return nil, errors.New("claim failed")
+}
+func (tickStore) HeartbeatRunWatcher(context.Context, uuid.UUID, string) error { return nil }
+func (tickStore) RunWatcherFresh(context.Context, uuid.UUID, time.Duration) (bool, error) {
+	return false, nil
+}
+
+// The watcher tick itself retries a marked run's stop, with no call to sweepForcedStops from the test. Catches:
+// removing the pass("forced stop retry", ...) line from runWatcherTick (reconcile.go).
+func TestRunWatcherTick_RetriesAMarkedRunsStop(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.s.cfg.Store = tickStore{f.s.cfg.Store.(markedStore)}
+	recent := f.clock.Now() // inside the undispatched pass's slow cadence: skip it
+	if err := f.s.runWatcherTick(context.Background(), &recent); err == nil || err.Error() != "claim failed" {
+		t.Fatalf("runWatcherTick = %v, want the claim error and every other pass run", err)
+	}
+	if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+		t.Errorf("after one watcher tick: %d stops, %d marks; want 1 and 0", f.sb.stopCount(), f.leaser.markCount())
+	}
+}
+
+// togglingRevokeBroker is the fixture's broker whose revoke fails while fail is set, counting its calls.
+type togglingRevokeBroker struct {
+	fakeBroker
+	fail  atomic.Bool
+	calls atomic.Int32
+}
+
+func (b *togglingRevokeBroker) RevokeRun(ctx context.Context, id uuid.UUID) error {
+	b.calls.Add(1)
+	if b.fail.Load() {
+		return errors.New("the broker did not answer the revoke")
+	}
+	return b.fakeBroker.RevokeRun(ctx, id)
+}
+
+// failingRevoke makes f's server revoke fail until the returned broker's fail is cleared.
+func (f *forced) failingRevoke() *togglingRevokeBroker {
+	b := &togglingRevokeBroker{}
+	b.fail.Store(true)
+	f.s.cfg.Broker = b
+	return b
+}
+
+// revokeFailures are the run.revoke failure rows.
+func revokeFailures(audit *recRecorder) int {
+	n := 0
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "run.revoke" && ev.Outcome == "failure" {
+			n++
+		}
+	}
+	return n
+}
+
+// The mark clears only when the sandbox is contained AND the revoke succeeded. A forced end whose stop succeeds and
+// whose revoke fails keeps the mark; the retry revokes again every tick, writes one failure row for it, and clears
+// the mark on the tick the revoke succeeds, after which nothing more runs. Catches: forcedStopConfirmed clearing on
+// an empty ref alone; a failed revoke writing a row a tick.
+func TestForceKeptStop_AFailedRevokeKeepsTheMarkUntilItSucceeds(t *testing.T) {
+	f := newForced(t)
+	b := f.failingRevoke()
+	f.end(f.s)
+	if rows := forcedRows(t, f.audit, "run.ended.expired"); len(rows) != 1 || !rows[0].Stopped {
+		t.Fatalf("rows %+v; want one, sandbox stopped", rows)
+	}
+	if f.leaser.markCount() != 1 {
+		t.Fatalf("%d marks after a stop that succeeded and a revoke that failed; want 1", f.leaser.markCount())
+	}
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 1 || revokeFailures(f.audit) != 1 {
+		t.Fatalf("%d marks, %d revoke failure rows after two failing ticks; want 1 and 1", f.leaser.markCount(), revokeFailures(f.audit))
+	}
+	b.fail.Store(false)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 {
+		t.Errorf("%d marks after the revoke succeeded; want 0", f.leaser.markCount())
+	}
+	calls := b.calls.Load()
+	f.tick(t, f.s)
+	if b.calls.Load() != calls {
+		t.Error("a tick after the mark cleared revoked again")
+	}
+}
+
+// The retry's stop succeeds and its revoke fails, with the lock free and held: the mark stays through the next
+// ticks (which find the ref empty and only revoke), writes one run.revoke failure row, and clears when the revoke
+// succeeds. Catches: the retry's clear not waiting for the revoke on the locked path, the unlocked path, or the
+// empty-ref path that follows them.
+func TestSweepForcedStops_AFailedRevokeKeepsTheMarkOnBothPaths(t *testing.T) {
+	for name, free := range map[string]bool{"lock free": true, "lock held": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			f.claimOnly(t)
+			if free {
+				f.release()
+			}
+			b := f.failingRevoke()
+			f.tick(t, f.s)
+			if f.sb.stopCount() != 1 || f.leaser.markCount() != 1 {
+				t.Fatalf("%d stops, %d marks after a stop that succeeded and a revoke that failed; want 1 and 1", f.sb.stopCount(), f.leaser.markCount())
+			}
+			f.tick(t, f.s)
+			f.tick(t, f.s)
+			if f.leaser.markCount() != 1 || revokeFailures(f.audit) != 1 || f.sb.stopCount() != 1 {
+				t.Fatalf("%d marks, %d revoke failure rows, %d stops after more failing ticks; want 1, 1 and 1", f.leaser.markCount(), revokeFailures(f.audit), f.sb.stopCount())
+			}
+			b.fail.Store(false)
+			f.tick(t, f.s)
+			if f.leaser.markCount() != 0 {
+				t.Errorf("%d marks after the revoke succeeded; want 0", f.leaser.markCount())
+			}
+		})
+	}
+}
+
+// A marked run whose ref is already empty keeps the mark while its revoke fails. Catches: the empty-ref clear
+// ignoring the revoke.
+func TestSweepForcedStops_AnEmptyRefWithAFailedRevokeKeepsTheMark(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.cs.dispatchTestStore.mu.Lock()
+	f.cs.run.SandboxRef = ""
+	f.cs.dispatchTestStore.mu.Unlock()
+	b := f.failingRevoke()
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 1 || revokeFailures(f.audit) != 1 || f.sb.stopCount() != 0 {
+		t.Fatalf("%d marks, %d revoke failure rows, %d stops; want 1, 1 and 0", f.leaser.markCount(), revokeFailures(f.audit), f.sb.stopCount())
+	}
+	b.fail.Store(false)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 {
+		t.Errorf("%d marks after the revoke succeeded; want 0", f.leaser.markCount())
+	}
+}
+
+// A retry of a sandbox that is already gone is harmless: its stop answers success (the runner's gone-check), the
+// mark clears with one success row and no failure row. Catches: a retry that treats a stop of a missing sandbox
+// as a failure.
+func TestSweepForcedStops_ARetryOnAnAlreadyStoppedSandboxIsHarmless(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	if err := f.s.cfg.Runner.StopSandbox(context.Background(), f.run.SandboxRef); err != nil { // stopped earlier, ref still set
+		t.Fatal(err)
+	}
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 || len(sweepRows(f.audit, "failure", "")) != 0 || len(sweepRows(f.audit, "success", "")) != 1 {
+		t.Errorf("%d marks, %d failure rows, %d success rows; want 0, 0 and 1", f.leaser.markCount(), len(sweepRows(f.audit, "failure", "")), len(sweepRows(f.audit, "success", "")))
+	}
+}
+
+// A clean forced end revokes a second time to confirm it, and that is harmless: no failure row, the mark cleared.
+// Catches: a verification revoke that fails or writes a row when the first revoke succeeded.
+func TestForceKeptStop_ARevokeRepeatedAfterASuccessIsHarmless(t *testing.T) {
+	f := newForced(t)
+	b := &togglingRevokeBroker{}
+	f.s.cfg.Broker = b
+	f.end(f.s)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 || revokeFailures(f.audit) != 0 || b.calls.Load() < 2 {
+		t.Errorf("%d marks, %d revoke failure rows, %d revokes; want 0, 0 and at least 2", f.leaser.markCount(), revokeFailures(f.audit), b.calls.Load())
+	}
+}
+
+// A kept sandbox whose proxy stop fails with an ordinary error is not contained: with a settled resume record and
+// the lock free the mark stays, the next tick asks for the proxy stop again, and a stop that then succeeds keeps
+// the sandbox for its resume and clears the mark. Catches: clearing on "left in place" alone.
+func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsKeepsTheMark(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}})
+	rn := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+	f.s.cfg.Runner = rn
+	f.sb.proxyErr = errors.New("daemon unavailable")
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 1 || rn.proxyStops.Load() != 2 || f.sb.stopCount() != 0 {
+		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
+	}
+	f.sb.proxyErr = nil
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 || !f.sb.proxyStopped.Load() || f.sb.stopCount() != 0 {
+		t.Errorf("%d marks, proxy stopped %v, %d sandbox stops; want 0, true and 0", f.leaser.markCount(), f.sb.proxyStopped.Load(), f.sb.stopCount())
+	}
+}
+
+// unreadableRecordStore is the forced fixture's store whose computer folder record cannot be read.
+type unreadableRecordStore struct{ markedStore }
+
+func (unreadableRecordStore) RunLocalFolderStatus(context.Context, uuid.UUID) (types.RunLocalFolderStatus, error) {
+	return types.RunLocalFolderStatus{}, errors.New("the record could not be read")
+}
+
+// An unreadable folder record with the proxy stop confirmed keeps the sandbox with its proxy stopped and clears the
+// mark: egress is cut, which is all the forced end owes. Catches: tightening the clear so far that this case keeps
+// the mark for ever.
+func TestSweepForcedStops_AnUnreadableRecordWithTheProxyStoppedClearsTheMark(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.s.cfg.Store = unreadableRecordStore{f.s.cfg.Store.(markedStore)}
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 || !f.sb.proxyStopped.Load() || f.sb.stopCount() != 0 {
+		t.Errorf("%d marks, proxy stopped %v, %d sandbox stops; want 0, true and 0", f.leaser.markCount(), f.sb.proxyStopped.Load(), f.sb.stopCount())
+	}
+}
+
+// With the lock held, a proxy stop that fails with an ordinary error sends the retry to the sandbox stop, and when
+// that fails too the mark stays. Once the proxy stop succeeds the sandbox is kept (its record may be in flight)
+// and the mark still waits; it clears on the first tick with the lock free. Catches: the unlocked path clearing
+// on a proxy stop that did not succeed.
+func TestSweepForcedStops_AFailedProxyStopWithTheLockHeldKeepsTheMark(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}})
+	rn := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+	f.s.cfg.Runner = rn
+	f.sb.proxyErr = errors.New("daemon unavailable")
+	f.sb.stopErr = errors.New("daemon unavailable")
+	f.tick(t, f.s)
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 1 || rn.proxyStops.Load() != 2 {
+		t.Fatalf("%d marks, %d proxy stops after two ticks with both stops failing; want 1 and 2", f.leaser.markCount(), rn.proxyStops.Load())
+	}
+	f.sb.proxyErr, f.sb.stopErr = nil, nil
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 1 || !f.sb.proxyStopped.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("%d marks, proxy stopped %v, %d stops with the lock held; want the sandbox kept and the mark waiting", f.leaser.markCount(), f.sb.proxyStopped.Load(), f.sb.stopCount())
+	}
+	f.release()
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 {
+		t.Errorf("%d marks with the lock free; want 0", f.leaser.markCount())
+	}
 }

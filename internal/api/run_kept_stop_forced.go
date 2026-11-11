@@ -8,10 +8,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -65,7 +68,7 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 		return
 	}
 	s.metrics.runTerminal(terminal)
-	fctx, cancel := context.WithTimeout(ctx, forcedStopBound)
+	fctx, cancel := context.WithTimeout(forcedCtx(ctx), forcedStopBound)
 	defer cancel()
 	proxyErr := s.stopProxyOrAudit(fctx, run.ID, cur.SandboxRef, action)
 	s.settleForcedFolder(fctx, run.ID)
@@ -173,21 +176,69 @@ func (s *Server) forcedRecordInFlight(ctx context.Context, id uuid.UUID) bool {
 }
 
 // forcedStopConfirmed reports whether the forced end's sandbox is confirmed stopped, which the tail records
-// by clearing the run's ref only after its own StopSandbox succeeded, and clears the mark when it is.
+// by clearing the run's ref only after its own StopSandbox succeeded, and clears the mark when the revoke also
+// succeeds (clearForcedMarkIf). A failed revoke leaves the mark for the retry, whatever the sandbox did.
 func (s *Server) forcedStopConfirmed(ctx context.Context, fs store.ForcedStopper, id uuid.UUID, stamp time.Time) bool {
 	cur, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil || cur.SandboxRef != "" {
 		return false
 	}
-	s.clearForcedStop(ctx, fs, id, stamp)
+	s.clearForcedMarkIf(ctx, fs, id, stamp, true, nil)
 	return true
 }
 
-func (s *Server) clearForcedStop(ctx context.Context, fs store.ForcedStopper, id uuid.UUID, stamp time.Time) {
-	if _, err := fs.ClearForcedStop(ctx, id, stamp); err != nil {
+// clearForcedMarkIf is the one place the forced mark clears, for the initial force and every path of the retry. It
+// clears only when both hold: contained (the sandbox stop succeeded, a kept sandbox's proxy stop returned nil, the
+// run's ref was already empty, or its runner is gone), and the run's revoke cascade succeeded. The cascade runs
+// whatever contained says, and is idempotent, so a retry after a success is harmless; a failed one is written
+// once per process per run (revokeRowDue) and keeps the mark until a later tick succeeds. onCleared runs only
+// when this call was the one that cleared the mark, so the row it writes is written once across replicas.
+func (s *Server) clearForcedMarkIf(ctx context.Context, fs store.ForcedStopper, id uuid.UUID, stamp time.Time, contained bool, onCleared func(context.Context)) bool {
+	cleared := false
+	settleAfterTeardown(ctx, func(sctx context.Context) { // a budget of its own: the stop may have used the row's
+		sctx = forcedCtx(sctx)
+		err := s.revokeRunCascade(sctx, id)
+		if err == nil {
+			s.forgetTeardownRow(id, "run.revoke")
+		}
+		if !contained || err != nil || !s.clearForcedStop(sctx, fs, id, stamp) {
+			return
+		}
+		cleared = true
+		if onCleared != nil {
+			onCleared(sctx)
+		}
+	})
+	return cleared
+}
+
+// forcedCtxKey marks a context as a forced end's or its retry's, so a failed revoke under it is written once per
+// process per run (revokeRowDue).
+type forcedCtxKey struct{}
+
+func forcedCtx(ctx context.Context) context.Context {
+	return context.WithValue(ctx, forcedCtxKey{}, struct{}{})
+}
+
+// revokeRowDue reports whether revokeRunCascade writes its failure row: always, except under forcedCtx, where it
+// is written once per process per run until a revoke succeeds.
+func (s *Server) revokeRowDue(ctx context.Context, runID uuid.UUID) bool {
+	if _, ok := ctx.Value(forcedCtxKey{}).(struct{}); !ok {
+		return true
+	}
+	_, seen := teardownRowsWritten.LoadOrStore(teardownRowKey{s, runID, "run.revoke"}, struct{}{})
+	return !seen
+}
+
+// clearForcedStop clears the mark the pass read, and reports whether this call cleared it: false is a mark
+// already cleared (another replica's retry won) or one that could not be written, which the next tick checks again.
+func (s *Server) clearForcedStop(ctx context.Context, fs store.ForcedStopper, id uuid.UUID, stamp time.Time) bool {
+	applied, err := fs.ClearForcedStop(ctx, id, stamp)
+	if err != nil {
 		slog.WarnContext(ctx, "wardynd: clearing a forced stop's mark failed; the next tick checks it again",
 			slog.String("run_id", id.String()), slog.Any("err", err))
 	}
+	return applied && err == nil
 }
 
 // sweepForcedStops is the forced end's retry, on every watcher tick of every replica: it takes each run
@@ -195,12 +246,7 @@ func (s *Server) clearForcedStop(ctx context.Context, fs store.ForcedStopper, id
 // the marked runs and not the stored ones). Each row has a bound of its own (forcedStopBound), so one
 // wedged runner holds neither the tick nor the rows behind it.
 //
-// Per row: a ref already empty, or a Status probe that answers without error with a state other than
-// RUNNING, clears the mark after the revoke cascade. A probe that errors keeps the mark and goes on to the
-// stop, unlike the terminal sandbox sweep, which counts it as already gone. With the run's lock free the
-// stop is the locked path's (stopTerminalSandbox); with it held, the proxy is stopped and rule R decides
-// the sandbox. The mark is cleared once the sandbox is stopped, or kept with its proxy stopped for
-// resumeComputerFolderBacks.
+// Per row, retryForcedStop.
 func (s *Server) sweepForcedStops(ctx context.Context) error {
 	fs, ok := s.cfg.Store.(store.ForcedStopper)
 	if !ok {
@@ -218,52 +264,132 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 	return nil
 }
 
+// retryForcedStop retries one marked run's sandbox stop. It never takes a Status probe for a stopped sandbox: a
+// Docker agent that was only ended is exited and still present, and still holds the run's files and its network.
+// The stop itself is the check for a sandbox that is gone, because Docker and Kubernetes answer a stop of a
+// missing sandbox with success. The mark clears (clearForcedMarkIf) only once the run's revoke has also
+// succeeded, and then in exactly these cases:
+//   - the sandbox stop is confirmed (a success row, once);
+//   - the sandbox is kept with its proxy stopped for its computer folder's resume (the locked path, the lock
+//     free; a held lock with a record that may be in flight keeps the mark until the lock is free);
+//   - the run's ref is already empty;
+//   - the run's runner is gone (runnerGoneReason): nothing can confirm the stop, and the failure row says so.
+//
+// Every other failure, a failed revoke included, keeps the mark, and its first row is the only one this process
+// writes. A proxy stop that failed on a kept sandbox leaves a cause (withStopCause) and so keeps it too.
+// A record the forced end left unsettled is settled as not brought back before anything is stopped.
 func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) {
+	ctx = forcedCtx(ctx)
 	run, err := s.cfg.Store.GetRun(ctx, m.RunID)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: reading a forced stop's run failed; the next tick retries",
 			slog.String("run_id", m.RunID.String()), slog.Any("err", err))
 		return
 	}
-	done := func() {
-		_ = s.revokeRunCascade(ctx, run.ID)
-		settleAfterTeardown(ctx, func(sctx context.Context) { s.clearForcedStop(sctx, fs, m.RunID, m.At) })
-	}
 	if run.SandboxRef == "" || s.cfg.Runner == nil {
-		done()
+		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
 		return
 	}
-	if st, perr := s.cfg.Runner.Status(ctx, run.SandboxRef); perr == nil && st.State != types.RunRunning {
-		done()
-		return
-	}
-	const action = "sandbox.sweep"
-	lctx, unlock, locked := s.tryLockRunOp(ctx, run.ID)
+	s.settleUnsettledForcedFolder(ctx, run.ID)
+	ref := run.SandboxRef
+	cctx, cause := withStopCause(ctx)
+	stopped := false
+	lctx, unlock, locked := s.tryLockRunOp(cctx, run.ID)
 	if locked {
 		defer unlock()
 		if cur, gerr := s.cfg.Store.GetRun(lctx, run.ID); gerr == nil {
 			run = cur
 		}
-		left, serr := s.stopTerminalSandbox(lctx, run, action)
-		if serr == nil || (left && !errors.Is(serr, errProxyStopUnconfirmed)) {
-			if !left {
-				settleAfterTeardown(ctx, func(sctx context.Context) { _ = s.clearSandboxRef(sctx, run.ID) })
-			}
-			done()
+		left, serr := s.stopTerminalSandbox(lctx, run, sandboxSweepAction)
+		switch {
+		case serr == nil && !left:
+			stopped = true
+		case serr == nil || (left && cause.last() == nil):
+			// Kept with its proxy stop confirmed: serr is nil, or only the folder record could not be read. A
+			// proxy stop that failed leaves a cause, and the mark.
+			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
+			return
+		}
+	} else {
+		proxyErr := s.stopProxyOrAudit(cctx, run.ID, ref, sandboxSweepAction)
+		if s.forcedKeepsSandbox(cctx, run, proxyErr) {
+			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil) // kept with the lock held: the mark waits for it
+			return
+		}
+		stopped = s.stopSandboxOrAudit(cctx, run.ID, ref, sandboxSweepAction)
+	}
+	if stopped {
+		settleAfterTeardown(ctx, func(sctx context.Context) { _ = s.clearSandboxRef(sctx, run.ID) })
+		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, func(sctx context.Context) {
+			s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", sandboxSweepAction, ref, "success",
+				mustJSON(map[string]any{"sandbox_ref": ref, "sandbox_stopped": true, "forced": true})))
+		})
+		s.forgetTeardownRow(run.ID, sandboxSweepAction)
+		return
+	}
+	if reason := s.runnerGoneReason(ctx, run, cause.last()); reason != "" {
+		cleared := s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, func(sctx context.Context) {
+			s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", sandboxSweepAction, ref, "failure",
+				mustJSON(map[string]any{"sandbox_ref": ref, "sandbox_stopped": false, "forced": true, "runner_gone": true,
+					"reason": "its runner is gone; the stop was not confirmed", "cause": reason})))
+		})
+		if cleared {
+			s.forgetTeardownRow(run.ID, sandboxSweepAction)
 		}
 		return
 	}
-	proxyErr := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, action)
-	if s.forcedKeepsSandbox(ctx, run, proxyErr) {
-		_ = s.revokeRunCascade(ctx, run.ID)
+	s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+}
+
+// runnerGoneReason is why a failed stop of run's sandbox can never be confirmed, "" when it still can. It reads
+// the stop's error as the orchestrator gives it (internal/runner/orchestrator/orchestrator.go subForRef, :624-627
+// and :650):
+//   - runner.ErrRunnerOffline (the runner is not registered, or its link is down) and runner.ErrPendingOnRunner (the
+//     stop is queued for it, internal/runner/remote/substrate.go:464-476): gone only when the run's runner row is
+//     absent or revoked. A runner that is merely offline keeps the mark; the queued stop runs when it reconnects,
+//     and a runner cut off from the server contains the sandbox's egress itself when the run's lease or end lapses
+//     (internal/runner/offline/manager.go CheckLapses, :418-470);
+//   - "no substrate tracked for ref" (orchestrator.go:650): the ref belongs to no substrate; gone for a run with no
+//     runner. The orchestrator has no sentinel for it, so the text is matched, and a test pins it against the
+//     real orchestrator.
+//
+// Anything else (a daemon that errors, a timeout) can pass, so it keeps the mark.
+func (s *Server) runnerGoneReason(ctx context.Context, run types.AgentRun, cause error) string {
+	switch {
+	case cause == nil:
+		return ""
+	case errors.Is(cause, runner.ErrRunnerOffline) || errors.Is(cause, runner.ErrPendingOnRunner):
+		rs, ok := s.cfg.Store.(runnerGetter)
+		if !ok || run.RunnerID == nil {
+			return ""
+		}
+		row, err := rs.GetRunner(ctx, *run.RunnerID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return "the runner's record is gone"
+		case err == nil && row.State == types.RunnerRevoked:
+			return "the runner is revoked"
+		}
+	case run.RunnerID == nil && strings.Contains(cause.Error(), noSubstrateText):
+		return "no substrate owns the sandbox"
+	}
+	return ""
+}
+
+// noSubstrateText is the orchestrator's error for a ref no substrate owns (orchestrator.go:650).
+const noSubstrateText = "no substrate tracked for ref"
+
+// settleUnsettledForcedFolder settles run id's computer folder record as not brought back when a forced end
+// left it unsettled (its process died between the claim and the settle), and leaves a settled record alone.
+func (s *Server) settleUnsettledForcedFolder(ctx context.Context, id uuid.UUID) {
+	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
 		return
 	}
-	if s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, action) {
-		settleAfterTeardown(ctx, func(sctx context.Context) { _ = s.clearSandboxRef(sctx, run.ID) })
-		done()
+	if rec, err := st.RunLocalFolderStatus(ctx, id); err != nil || rec.Gen == rec.Settled {
 		return
 	}
-	_ = s.revokeRunCascade(ctx, run.ID)
+	s.settleForcedFolder(ctx, id)
 }
 
 // reviveExpiryDue refuses a revive whose run reached the end it is kept until (keptUntil) while the
@@ -283,4 +409,65 @@ func (s *Server) reviveExpiryDue(ctx context.Context, id uuid.UUID) *reviveError
 		return reviveRefused(http.StatusConflict, reasonReviveEndedFilesGone, "run has ended and its files are no longer kept; start a new run")
 	}
 	return reviveRefused(http.StatusConflict, reasonRevivePastEnd, "run has passed its end; extend it first")
+}
+
+// sandboxSweepAction is the action of the terminal sandbox sweep's rows and of the forced stop retry's
+// (sweepForcedStops). Their failed teardowns share one row per process per run.
+const sandboxSweepAction = "sandbox.sweep"
+
+// auditFirstTeardownFailure is teardownOrAudit's gate for a failed teardown err: it hands err to a caller that
+// asked for the cause (withStopCause), and reports whether the row is to be written. A failure under
+// sandboxSweepAction is written once per process per run, the first's, and not on every pass or tick; any other
+// action's is written every time.
+func (s *Server) auditFirstTeardownFailure(ctx context.Context, runID uuid.UUID, action string, err error) bool {
+	if c, ok := ctx.Value(stopCauseKey{}).(*stopCause); ok {
+		c.mu.Lock()
+		c.err = err
+		c.mu.Unlock()
+	}
+	if action != sandboxSweepAction {
+		return true
+	}
+	_, seen := teardownRowsWritten.LoadOrStore(teardownRowKey{s, runID, action}, struct{}{})
+	return !seen
+}
+
+// teardownRowsWritten holds, per server, run and action, a failed teardown this process has audited. In memory
+// only: a restart, or another replica, writes its own first row. It is package level because Server's fields
+// are declared elsewhere; the key carries the server so two servers in one process do not share an entry.
+var teardownRowsWritten sync.Map
+
+type teardownRowKey struct {
+	srv    *Server
+	run    uuid.UUID
+	action string
+}
+
+// forgetTeardownRow drops the run's entry once its sandbox is confirmed stopped, so the map follows the runs
+// whose stop is failing and not every run ever stopped.
+func (s *Server) forgetTeardownRow(runID uuid.UUID, action string) {
+	teardownRowsWritten.Delete(teardownRowKey{s, runID, action})
+}
+
+// stopCauseKey carries a *stopCause down to the teardown calls.
+type stopCauseKey struct{}
+
+// stopCause is the error of the last teardown that failed under a context from withStopCause.
+type stopCause struct {
+	mu  sync.Mutex
+	err error
+}
+
+// withStopCause returns ctx and a stopCause that teardownOrAudit fills with the error of each failed teardown
+// run under it, so a caller of stopTerminalSandbox, which answers only that its stop failed, can read why.
+func withStopCause(ctx context.Context) (context.Context, *stopCause) {
+	c := &stopCause{}
+	return context.WithValue(ctx, stopCauseKey{}, c), c
+}
+
+// last is the error of the last failed teardown, nil if none failed.
+func (c *stopCause) last() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
 }

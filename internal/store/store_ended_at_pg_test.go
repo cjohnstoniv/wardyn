@@ -207,13 +207,32 @@ func TestPG_StopKeptRunForcedIf_OneWinnerAndTheMarkLandsWithTheEnd(t *testing.T)
 		t.Errorf("forced_stop_at = %v, want the winner's stamp %v", at, stamps[0])
 	}
 
-	moved := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
-	later := endsAt.Add(time.Hour)
-	if _, ok, err := pg.StopKeptRunForcedIf(ctx, moved.ID, types.RunStopped, moved.LostAt, moved.LostReason, &later); err != nil || ok {
-		t.Fatalf("a stale end claimed = %v, %v; want refused", ok, err)
-	}
-	if at := forcedStopAt(t, ctx, pool, moved.ID); at != nil {
-		t.Errorf("forced_stop_at = %v on a refused claim, want nil", at)
+	// A claim carrying any one value other than the row's own mark is refused, and marks nothing: the end, the
+	// lost time and the lost reason each decide it.
+	laterEnd, laterLost := endsAt.Add(time.Hour), lostAt.Add(time.Hour)
+	for name, tc := range map[string]struct {
+		lostAt     *time.Time
+		lostReason types.LostReason
+		endsAt     *time.Time
+	}{
+		"a moved end":         {&lostAt, types.LostOutage, &laterEnd},
+		"no end":              {&lostAt, types.LostOutage, nil},
+		"a moved lost time":   {&laterLost, types.LostOutage, &endsAt},
+		"no lost time":        {nil, types.LostOutage, &endsAt},
+		"another lost reason": {&lostAt, types.LostEnded, &endsAt},
+	} {
+		t.Run(name, func(t *testing.T) {
+			moved := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+			if _, ok, err := pg.StopKeptRunForcedIf(ctx, moved.ID, types.RunStopped, tc.lostAt, tc.lostReason, tc.endsAt); err != nil || ok {
+				t.Fatalf("a stale claim = %v, %v; want refused", ok, err)
+			}
+			if at := forcedStopAt(t, ctx, pool, moved.ID); at != nil {
+				t.Errorf("forced_stop_at = %v on a refused claim, want nil", at)
+			}
+			if got, err := pg.GetRun(ctx, moved.ID); err != nil || got.State != types.RunRunning {
+				t.Errorf("state %v, %v after a refused claim; want RUNNING", got.State, err)
+			}
+		})
 	}
 }
 
