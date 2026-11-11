@@ -84,7 +84,7 @@ var terminalWriterCensus = map[string]string{
 	"reloseRun": "reconcileFinalize -> finalizeRunTail",
 	// A RUNNING run whose proxy did not confirm its policy, and that cannot be
 	// kept lost: its proxy or sandbox is stopped, then the run ends.
-	"stopUnconfirmedProxy": "reconcileFinalize -> finalizeRunTail",
+	"stopUnconfirmedProxyAt": "reconcileFinalize -> finalizeRunTail",
 	// (6) The runner substrate's store methods end runs in SQL. A revoke kills
 	// the runner's RUNNING runs, and revokeRunner then hands each one to
 	// revokedRunKillTail, which calls cancelRunApprovals.

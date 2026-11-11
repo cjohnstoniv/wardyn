@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -30,21 +31,49 @@ func (s *Server) reviveReadbackSupported(ctx context.Context, run types.AgentRun
 		"this run's substrate cannot confirm a new proxy's policy, so its proxy cannot be replaced")
 }
 
-// advanceRevivePolicyAndStart is advanceRunPolicyGeneration, then the new proxy's pending start under that
-// generation and the fresh token. The caller has retired the old lineage, so no report on it can land on
-// the start. A start that cannot be recorded abandons the generation and is the revive's error.
+// advanceRevivePolicyAndStart is advanceRunPolicyGeneration, expecting generation expected and storing
+// stored, then the new proxy's pending start under that generation and the fresh token. The caller has
+// retired the old lineage, so no report on it can land on the start. A start that cannot be recorded
+// abandons the generation, storing source back, and is the revive's error.
 func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, retiring string,
-	renewed renewedTokens, fresh string) (int, proxyStartRec, error) {
-	gen, err := s.advanceRunPolicyGeneration(ctx, run, policy, retiring, renewed, fresh)
+	renewed renewedTokens, fresh string, expected store.PolicySlot, stored, source []byte) (int, proxyStartRec, error) {
+	gen, err := s.advanceRunPolicyGeneration(ctx, run, policy, retiring, renewed, fresh, expected, stored)
 	if err != nil {
-		return 0, proxyStartRec{}, err
+		if !errors.Is(err, store.ErrRunPolicyMoved) {
+			gen, err = s.reconcileLostAdvance(ctx, run, policy, fresh, expected, source, err)
+		}
+		return gen, proxyStartRec{}, err
 	}
 	start, err := s.beginProxyStart(ctx, run, gen, fresh)
 	if err != nil {
-		s.abandonRunPolicyGeneration(ctx, run, gen)
-		return 0, proxyStartRec{}, err
+		if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
+			err = fmt.Errorf("%w; undoing its generation failed: %v: %w", err, aerr, errPolicyNotAbandoned)
+		}
+		return gen, proxyStartRec{}, err
 	}
 	return gen, start, nil
+}
+
+// whileLockHeld is ctx, also cancelled once the run lock that lock carries is lost (db.ErrLockLost): a
+// revive's replace stops on a lost lock, never on a request that ends. The loss is watched on the hold
+// itself (db.WithoutCancelUnlessLost), not on lock's own end: a caller that disconnected first leaves
+// lock ended with its own cause for good, and a later loss would never show there. stop releases both.
+func whileLockHeld(ctx, lock context.Context) (context.Context, func()) {
+	out, cancel := context.WithCancelCause(ctx)
+	lost, release := db.WithoutCancelUnlessLost(lock)
+	after := context.AfterFunc(lost, func() {
+		if cause := context.Cause(lost); errors.Is(cause, db.ErrLockLost) {
+			cancel(cause)
+		}
+	})
+	if cause := context.Cause(lost); errors.Is(cause, db.ErrLockLost) {
+		cancel(cause) // already lost: ended before it is handed back
+	}
+	return out, func() {
+		after()
+		release()
+		cancel(context.Canceled)
+	}
 }
 
 // replaceRevivedProxyHashed is replaceRevivedProxy through runner.ProxyReviverHashed when rv has it,
@@ -97,7 +126,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 		return nil
 	}
 	data["error"] = "policy readback: " + why
-	rerr := s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
+	rerr := s.reviveFailedAfterClaim(ctx, run, start.gen, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
 		"the run's new proxy did not confirm its policy, so it was stopped", errors.New(why))
 	// The answer's stop wording comes from the containment result, its fate from what the store now
 	// holds, never from the lost mark's outcome.
@@ -123,7 +152,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy"+fate+"; "+
 			"stopping that proxy is not confirmed yet"+retry+unconfirmedImageCause, errors.New(why))
 	case reasonReviveRecoveryUnresolved:
-		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, "+
+		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; revoking its credentials was attempted, "+
 			"but stopping its proxy is not confirmed yet"+retry, errors.New(why))
 	}
 	return rerr

@@ -172,6 +172,10 @@ func (lostWriteFailStore) MarkRunLost(context.Context, uuid.UUID, types.LostReas
 	return false, errors.New("database down")
 }
 
+func (lostWriteFailStore) MarkRunLostAtGeneration(context.Context, uuid.UUID, int, types.LostReason, time.Time, time.Duration) (bool, error) {
+	return false, errors.New("database down")
+}
+
 // A revive whose new proxy sends no hash, when neither the lost mark nor the proxy stop lands: the
 // answer keeps 503 revive_recovery_unresolved but never says the proxy was stopped, and the start
 // stays unresolved.

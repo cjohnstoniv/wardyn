@@ -357,7 +357,7 @@ func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, g
 	if err != nil {
 		return proxyContainment{Err: err}
 	}
-	stopErr := s.stopUnconfirmedProxy(ctx, run)
+	stopErr := s.stopUnconfirmedProxyAt(ctx, run, gen)
 	msg := ""
 	if stopErr != nil {
 		msg = stopErr.Error()
@@ -381,6 +381,15 @@ func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, g
 // back its proxy alone, and any other run its sandbox (one torn down with its lost_at kept among
 // them, whose substrate may refuse a proxy stop): what a retry does.
 func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) error {
+	return s.stopUnconfirmedProxyAt(ctx, run, 0)
+}
+
+// stopUnconfirmedProxyAt is stopUnconfirmedProxy for the failed start of policy generation gen: a running
+// run's lost mark lands only while gen is still the run's newest (loseRunStopped's fence), so a
+// containment whose lock was lost after its generation read does not mark lost a newer revive's run.
+// A kept run's stop below carries no generation: a stale retry can stop a newer revive's proxy (fail
+// closed). 0 fences nothing.
+func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun, gen int) error {
 	switch {
 	case run.State == types.RunStarting:
 		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.create")
@@ -392,7 +401,7 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 	case runIsKept(run) && !isTerminalRunState(run.State):
 		return s.stopLostSandbox(ctx, run, s.cfg.Now())
 	case run.State == types.RunRunning:
-		if handled, err := s.loseUnconfirmedRun(ctx, run); handled {
+		if handled, err := s.loseUnconfirmedRun(ctx, run, gen); handled {
 			return err
 		}
 		// The proxy first, then the end, whose computer folder copy back decides whether the sandbox
@@ -542,14 +551,15 @@ var errLostMarkUnwritten = errors.New("the run's proxy was stopped, but its lost
 // error. handled is false for a run that cannot be kept, which the caller tears down. A lost mark
 // that could not be written still has the proxy stopped, as reloseRun does, and stays unresolved so a
 // retry writes it.
-func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (handled bool, err error) {
+// gen fences the lost mark (loseRunStopped): one that misses it is not applied, and nothing is stopped.
+func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun, gen int) (handled bool, err error) {
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
 	if !ok || !lok {
 		return false, nil
 	}
 	now := s.cfg.Now()
-	switch o, stopErr := s.loseRunStopped(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, 0, now); o {
+	switch o, stopErr := s.loseRunStopped(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, 0, now, gen); o {
 	case loseNotKeepable:
 		return false, nil
 	case loseApplied:
