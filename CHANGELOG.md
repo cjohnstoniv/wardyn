@@ -54,7 +54,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - In a rare race between two servers, a failed network edit whose undo also fails can leave the run's policy reading narrower than its proxy enforces until the proxy is next replaced; the run's network is never wider than the proxy it had before the edit.
 - If the server stops right after restarting a revived run's agent, or cannot record that the agent restarted, later network edits of that run are refused until it is revived from its page.
 - A run can be stopped by mistake only when its database lock was lost and the store then failed.
-- A late network edit can remove, by name, the proxy that a newer edit just started. The run then has no network (it never widens), and its policy reads as enforced until a sweep ends it, about 65 minutes later.
+- On Docker, a late network edit can remove the proxy that a newer edit of the same run just started. The run then has no network (it never widens), but its policy reads as enforced until a background sweep ends the run, within about 66 minutes. Start a new run.
 
 ### Before you upgrade
 
