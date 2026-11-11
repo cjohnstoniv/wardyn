@@ -7,10 +7,15 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
@@ -30,6 +35,47 @@ func proxyAnswered(ctx context.Context, t *testing.T, d *Driver, ref, proxyURL s
 	out := execInSandbox(ctx, t, d, ref, []string{"sh", "-c",
 		"http_proxy=" + proxyURL + " wget -S -O /dev/null -T 5 http://listen-probe.invalid/ 2>&1; true"})
 	return strings.Contains(out, "HTTP/1."), out
+}
+
+// liveRenewingControlPlane serves wardynd's token renewal, and nothing else, where a run's proxy reaches this
+// host (host.docker.internal: the host's loopback on Docker Desktop, else the default bridge's gateway), and
+// returns its URL. It hands back the token it was asked with. A replacement proxy serves only after a
+// renewal answers 200 (proxy.FirstRenewGateEnv).
+func liveRenewingControlPlane(ctx context.Context, t *testing.T, d *Driver) string {
+	t.Helper()
+	bind := netip.MustParseAddr("127.0.0.1")
+	if info, err := d.cli.Info(ctx, client.InfoOptions{}); err != nil {
+		t.Fatal(err)
+	} else if info.Info.OperatingSystem != "Docker Desktop" {
+		insp, err := d.cli.NetworkInspect(ctx, "bridge", client.NetworkInspectOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bind = netip.Addr{}
+		for _, c := range insp.Network.IPAM.Config {
+			if c.Gateway.Is4() {
+				bind = c.Gateway
+			}
+		}
+		if !bind.IsValid() {
+			t.Fatal("the default bridge has no IPv4 gateway")
+		}
+	}
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(bind, 0).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/internal/token/renew", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"token":      strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "),
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		})
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return fmt.Sprintf("http://host.docker.internal:%d", ln.Addr().(*net.TCPAddr).Port)
 }
 
 // TestProxyListener_Live_AgentOnlyOnRunNetwork, on a real engine with the real
@@ -53,7 +99,7 @@ func TestProxyListener_Live_AgentOnlyOnRunNetwork(t *testing.T) {
 		ConfinementClass: types.CC1,
 		ProxyConfig: runner.ProxyConfig{
 			RunToken:        "listen-test",
-			ControlPlaneURL: "http://127.0.0.1:9",
+			ControlPlaneURL: liveRenewingControlPlane(ctx, t, d),
 			Policy:          types.RunPolicySpec{MinConfinementClass: types.CC1},
 		},
 		Resources: runner.Resources{CPUMillis: 500, MemoryMiB: 128},
