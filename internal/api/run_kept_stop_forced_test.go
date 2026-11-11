@@ -1139,7 +1139,7 @@ func TestSweepForcedStops_AGoneRunnerClearsTheMarkWithOneFailureRow(t *testing.T
 
 // A ref no substrate owns, on a run with no runner, clears the mark the same way. The error is the real
 // orchestrator's, so a change to its text fails here. Catches: the orchestrator's wording drifting from
-// noSubstrateText; the unowned ref keeping the mark for ever.
+// the text runnerGoneReason matches; the unowned ref keeping the mark for ever.
 func TestSweepForcedStops_ARefNoSubstrateOwnsClearsTheMarkWithOneFailureRow(t *testing.T) {
 	orch := orchestrator.New(pooledExecutor{Fake: runnertest.NewFake(), name: "a"}, pooledExecutor{Fake: runnertest.NewFake(), name: "b"})
 	unowned := orch.StopSandbox(context.Background(), "agent-of-no-substrate")

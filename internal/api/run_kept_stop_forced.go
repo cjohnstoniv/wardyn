@@ -370,14 +370,11 @@ func (s *Server) runnerGoneReason(ctx context.Context, run types.AgentRun, cause
 		case err == nil && row.State == types.RunnerRevoked:
 			return "the runner is revoked"
 		}
-	case run.RunnerID == nil && strings.Contains(cause.Error(), noSubstrateText):
+	case run.RunnerID == nil && strings.Contains(cause.Error(), "no substrate tracked for ref"):
 		return "no substrate owns the sandbox"
 	}
 	return ""
 }
-
-// noSubstrateText is the orchestrator's error for a ref no substrate owns (orchestrator.go:650).
-const noSubstrateText = "no substrate tracked for ref"
 
 // settleUnsettledForcedFolder settles run id's computer folder record as not brought back when a forced end
 // left it unsettled (its process died between the claim and the settle), and leaves a settled record alone.
