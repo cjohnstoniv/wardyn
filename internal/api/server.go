@@ -896,6 +896,9 @@ type Server struct {
 	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
 	// once more. A durable mark on the person row would need a migration.
 	attachIgnoredSeen sync.Map
+	// leaseDeferred holds, per run id, the *leaseDeferral of the deferred runner lease pending in this
+	// process (deferRenewedLease), so many renewals that meet one held run lock schedule one send.
+	leaseDeferred sync.Map
 	// authFailedLimiter rate-bounds the auth.fail audit emit (see
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
