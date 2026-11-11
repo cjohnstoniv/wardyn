@@ -80,8 +80,8 @@ func (s PG) MarkRunRevivedAtSlot(ctx context.Context, id uuid.UUID, from types.L
 }
 
 // RunAgentStartOwed is a claim that owes its run's agent start, and the clear that settles it. The claim
-// (MarkRunRevivedOwingStart) is MarkRunRevivedAtSlot for a revive that starts the agent: it takes a slot as
-// that does, and leaves agent_stopped_at set on the live row, to a fresh timestamp it returns, as "agent
+// (MarkRunRevivedOwingStart) is MarkRunRevivedAtSlot for a revive that starts the agent: a lost row takes a
+// slot as that does (a live row already holds its own and takes none), and it leaves agent_stopped_at set on the live row, to a fresh timestamp it returns, as "agent
 // start still owed". ClearRunAgentStartOwed clears exactly that timestamp once the revive started the agent:
 // only on a live RUNNING row, only while gen is still its newest generation (0 binds nothing), so a late
 // clear never erases the mark a newer claim set, even at the same generation. A claim that starts no agent
@@ -122,7 +122,9 @@ func (s PG) claimRevived(ctx context.Context, id uuid.UUID, from types.LostReaso
 	default:
 		return false, time.Time{}, nil
 	}
-	if startsAgent {
+	// Only a lost row takes a slot: a live row (from "") already holds its own, so a live run whose start is
+	// owed is never refused for its pool's cap or its waiters. A claim that starts no agent takes none.
+	if startsAgent && from != "" {
 		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit, owe, expected)
 	}
 	return markRunRevived(ctx, s.Pool, id, from, ended, expected, owe, startsAgent)

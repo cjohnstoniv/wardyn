@@ -68,6 +68,10 @@ import (
 // reviveBulkMax bounds one admin restart request.
 const reviveBulkMax = 100
 
+// reviveClaimedTimeout bounds a revive from its claim on, as the kill cascade is bounded. It is a variable so
+// a test can let it run out; a step that must still work after it runs out takes a fresh bound of its own.
+var reviveClaimedTimeout = killCascadeTimeout
+
 // reviveLiveEvery bounds how often a live run's proxy is replaced: each revive
 // of a running run removes and recreates its sidecar, and a run that is lost
 // is never bounded (#1005).
@@ -317,7 +321,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// replace below is checked and bound against (whileLockHeld watches the hold itself, so a request that
 	// ended first cannot hide a later loss): a lost hold is a lock another replica may take.
 	lockCtx := ctx
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reviveClaimedTimeout)
 	defer cancel()
 	// The runner calls below stay under the revive's one runner deadline; the compensation does not.
 	runnerCtx, endClaimedRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)

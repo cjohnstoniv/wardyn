@@ -68,18 +68,29 @@ func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.Agent
 // answer says the stop is confirmed only when it is. Either way the run's rows stay under the generation its proxy enforces, and the next revive tries again.
 // expected is the generation the revive read: its lost mark lands only while that is still the newest.
 func (s *Server) reviveGenerationFailed(ctx context.Context, run types.AgentRun, expected int, data map[string]any, actorType types.ActorType, actor, retiring, fresh string, renewed renewedTokens, err error) *reviveError {
+	undoFailed := errors.Is(err, errPolicyNotAbandoned)
 	data["error"] = "record the run's policy generation: " + err.Error()
-	if run.LostAt == nil && !errors.Is(err, errPolicyNotAbandoned) {
+	if undoFailed {
+		data["error"] = "undo the run's policy generation: " + err.Error()
+	}
+	if run.LostAt == nil && !undoFailed {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 		s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 		s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
 		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 			loggedMsg(ctx, "the run's policy could not be recorded, so its proxy was not replaced, and the run keeps its current proxy", err))
 	}
-	s.revokeRetiringToken(ctx, retiring, run.ID)
-	s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), fresh)
-	return s.reviveFailedAfterClaim(ctx, run, expected, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
-		"the run's policy could not be recorded, so its proxy was not replaced, and the run is lost until revived", err)
+	// The claim's bound may have run out, which is the likeliest reason an undo failed: the containment takes a
+	// bound of its own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	s.revokeRetiringToken(cctx, retiring, run.ID)
+	s.revokeRenewedTokens(cctx, run.ID, renewed.ids(), fresh)
+	msg := "the run's policy could not be recorded, so its proxy was not replaced, and the run is lost until revived"
+	if undoFailed {
+		msg = "the run's new policy record could not be undone, so the run is lost until revived"
+	}
+	return s.reviveFailedAfterClaim(cctx, run, expected, data, actorType, actor, reasonReviveProxyReplaceFailedLost, msg, err)
 }
 
 // abandonRunPolicyGeneration undoes advanceRunPolicyGeneration's current generation when the revive left
@@ -95,6 +106,10 @@ func (s *Server) abandonRunPolicyGeneration(ctx context.Context, run types.Agent
 	if !ok || gen == 0 {
 		return nil
 	}
+	// The undo takes a bound of its own: the claim's may have run out, and a run left under a generation
+	// narrower than its proxy is the worse outcome.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
 	sealed, err := s.sealForGeneration(run.ID, restore)
 	if err != nil {
 		slog.WarnContext(ctx, "api: sealing the config an abandoned revive started from failed; abandoning without it",
@@ -166,12 +181,15 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 	// The generation is abandoned first, so the failure row carries the one that still applies.
 	if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
 		// The generation stays current, narrower than the kept proxy: the run is lost again and its proxy
-		// stop attempted, fenced on gen, never answered kept-current.
+		// stop attempted, fenced on gen, never answered kept-current. The claim's bound may have run out,
+		// which is the likeliest reason the undo failed, so all of this takes a bound of its own.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		defer cancel()
 		data["error"] = err.Error() + "; undoing its generation failed: " + aerr.Error()
 		s.liveRevived.Delete(run.ID)
-		s.revokeRetiringToken(ctx, retiring, run.ID)
-		s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), fresh)
-		return s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
+		s.revokeRetiringToken(cctx, retiring, run.ID)
+		s.revokeRenewedTokens(cctx, run.ID, renewed.ids(), fresh)
+		return s.reviveFailedAfterClaim(cctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
 			"the run's proxy was not replaced and its new policy record could not be undone, so the run is lost until revived", err)
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))

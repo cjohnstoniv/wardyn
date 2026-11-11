@@ -55,6 +55,8 @@ type interleaveStore struct {
 	owed            bool
 	owedAt          time.Time
 	claims, cleared []time.Time
+	// failClears is how many more ClearRunAgentStartOwed calls fail, as a database blip would; clearCalls counts them all.
+	failClears, clearCalls int
 }
 
 // take returns the hook to run now, once: nil when it ran already or is not set.
@@ -158,7 +160,7 @@ func (s *interleaveStore) owe() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.owed = true
-	s.owedAt = time.Date(2026, 1, 1, 0, 0, len(s.claims)+1, 0, time.UTC)
+	s.owedAt = time.Unix(int64(len(s.claims)+1), 0).UTC()
 	s.claims = append(s.claims, s.owedAt)
 	return s.owedAt
 }
@@ -192,6 +194,16 @@ func (s *interleaveStore) MarkRunRevivedOwingStart(ctx context.Context, id uuid.
 // ClearRunAgentStartOwed clears the mark only on the claim's own stamp, on a live RUNNING run, while gen
 // is the newest generation (0 binds nothing), as the PG write does.
 func (s *interleaveStore) ClearRunAgentStartOwed(ctx context.Context, id uuid.UUID, gen int, owedAt time.Time) error {
+	s.mu.Lock()
+	s.clearCalls++
+	fail := s.failClears > 0
+	if fail {
+		s.failClears--
+	}
+	s.mu.Unlock()
+	if fail {
+		return errors.New("clear run agent start owed: connection reset")
+	}
 	run, err := s.GetRun(ctx, id)
 	if err != nil {
 		return err
@@ -831,5 +843,32 @@ func TestStartOwedLiveRunReadsLiveToEveryOtherReader(t *testing.T) {
 	}
 	if !srv.lostRunKeepable(run, time.Now()) {
 		t.Error("lostRunKeepable: the live run is not one the lease may lose")
+	}
+}
+
+// The clear of the owed start takes a bound of its own and one retry: a first clear that fails and a second
+// that lands leaves the mark cleared, and two that fail leave it for the next live revive.
+func TestRevive_AFailedClearOfTheOwedStartIsRetriedOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		fails      int
+		wantOwed   bool
+		wantClears int
+	}{
+		{"the retry lands", 1, false, 2},
+		{"both tries fail", 2, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFenceFixture(t)
+			sr := f.rebootLost()
+			f.is.failClears = tc.fails
+			a := f.reviveOnA(t)
+			if a.Code != http.StatusOK || sr.started() != 1 {
+				t.Fatalf("A: %d %s, agent starts %d; want 200 and one start", a.Code, a.Body.String(), sr.started())
+			}
+			if f.is.startOwed() != tc.wantOwed || f.is.clearCalls != tc.wantClears {
+				t.Errorf("start owed %v after %d clear calls; want owed %v after %d", f.is.startOwed(), f.is.clearCalls, tc.wantOwed, tc.wantClears)
+			}
+		})
 	}
 }

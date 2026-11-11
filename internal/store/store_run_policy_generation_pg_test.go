@@ -390,11 +390,11 @@ func loseRunPG(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UU
 
 // TestMarkRunRevived_StartsAgentKeepsTheOwedMarkUntilCleared: a claim that starts the agent leaves
 // agent_stopped_at set on the live row, on the stamp it returned, as "agent start still owed"; the row
-// reads live (it holds its slot); a clear on a stale generation, on another stamp or on a re-lost row
-// leaves it, and a clear at the newest generation with the claim's own stamp ends it. A claim that starts
+// reads live (it holds its slot); a clear on a stale generation, on another stamp, on a re-lost row or on a
+// terminal row leaves it, and a clear at the newest generation with the claim's own stamp ends it. A claim that starts
 // no agent clears the mark of a lost row as before.
 func TestMarkRunRevived_StartsAgentKeepsTheOwedMarkUntilCleared(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 	r := newRun(types.RunRunning)
@@ -458,6 +458,49 @@ func TestMarkRunRevived_StartsAgentKeepsTheOwedMarkUntilCleared(t *testing.T) {
 		t.Fatal(err)
 	}
 	owed(false, "after a clear at the newest generation with the claim's stamp")
+
+	loseRunPG(t, ctx, pool, r.ID, types.LostReboot)
+	stamp, claimed, err = pg.MarkRunRevivedOwingStart(ctx, r.ID, types.LostReboot, nil, 0, store.PolicySlot{Generation: gen})
+	if err != nil || !claimed {
+		t.Fatalf("third claim = %v, %v", claimed, err)
+	}
+	if ok, err := pg.UpdateRunStateIf(ctx, r.ID, types.RunRunning, types.RunFailed); err != nil || !ok {
+		t.Fatalf("end the run = %v, %v", ok, err)
+	}
+	if err := pg.ClearRunAgentStartOwed(ctx, r.ID, gen, stamp); err != nil {
+		t.Fatal(err)
+	}
+	owed(true, "after a clear on a terminal row")
+}
+
+// TestMarkRunRevivedOwingStart_ALiveOwedRunTakesNoPoolSlot: a live run whose start is owed already holds its
+// slot, so a second claim of it is not refused for its pool's cap or a waiting run, while a lost row of
+// the same pool still is.
+func TestMarkRunRevivedOwingStart_ALiveOwedRunTakesNoPoolSlot(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := cappedPool(t, pg, 1)
+	r, err := pg.CreateRun(ctx, poolRun(p, types.RunRunning, "alice"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loseRunPG(t, ctx, pool, r.ID, types.LostReboot)
+	first, ok, err := pg.MarkRunRevivedOwingStart(ctx, r.ID, types.LostReboot, nil, 0, store.PolicySlot{})
+	if err != nil || !ok {
+		t.Fatalf("claim of the lost run in a pool with a free slot = %v, %v", ok, err)
+	}
+	if _, err := enqueue(t, pg, p, "bob", time.Now().UTC(), 0); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := pg.MarkRunRevivedOwingStart(ctx, r.ID, "", nil, 0, store.PolicySlot{})
+	if err != nil || !ok || second.Equal(first) {
+		t.Fatalf("claim of the live run with a run waiting = %v, %v, %v; want claimed on a fresh stamp (was %v)", second, ok, err, first)
+	}
+	loseRunPG(t, ctx, pool, r.ID, types.LostReboot)
+	if _, _, err := pg.MarkRunRevivedOwingStart(ctx, r.ID, types.LostReboot, nil, 0, store.PolicySlot{}); !errors.Is(err, store.ErrRunnerPoolFull) {
+		t.Fatalf("claim of the lost run with a run waiting = %v; want ErrRunnerPoolFull", err)
+	}
 }
 
 // TestMarkRunRevived_ALaterClaimAtTheSameGenerationKeepsItsOwnMark: A claims and its start lands; the

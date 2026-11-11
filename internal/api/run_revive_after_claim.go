@@ -101,9 +101,16 @@ func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner
 	}
 	data["agent_started"] = true
 	if c, ok := s.cfg.Store.(store.RunAgentStartOwed); ok && !owedAt.IsZero() {
-		if err := c.ClearRunAgentStartOwed(ctx, run.ID, gen, owedAt); err != nil {
+		// The agent runs, so the clear takes a bound of its own and one retry: the claim's bound may have run out.
+		cctx, cancelClear := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		defer cancelClear()
+		err := c.ClearRunAgentStartOwed(cctx, run.ID, gen, owedAt)
+		if err != nil {
+			err = c.ClearRunAgentStartOwed(cctx, run.ID, gen, owedAt)
+		}
+		if err != nil {
 			// The mark stays: the next live revive starts the agent again (its container already runs) and clears it.
-			slog.WarnContext(ctx, "wardynd: clearing a revived run's owed agent start failed",
+			slog.WarnContext(cctx, "wardynd: clearing a revived run's owed agent start failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
@@ -117,8 +124,9 @@ func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner
 // anyway (reloseRun), and the answer says the recovery is unresolved, for a
 // later sweep to settle. "Stopped" or "no egress" is claimed only for a confirmed stop; lost_again
 // only for a persisted lost fate. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
-// fence is the policy generation the revive acts for (reloseRun): once a newer revive started one, this
-// revive loses and stops nothing.
+// fence is the policy generation the revive acts for (reloseRun): once a newer revive started one, a run
+// that can be kept gets no lost mark from this revive and nothing is stopped. That does not hold for a run
+// that cannot be kept, which is ended whatever the generation, nor for the effects after a mark that landed.
 func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, fence int, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
 	fate, stopErr := s.reloseRun(ctx, run, fence)
 	data["lost_again"] = fate == relostLost
@@ -132,10 +140,10 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 	switch {
 	case fate == relostUnwritten && unconfirmed:
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
-			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, but stopping its proxy is not confirmed yet, and a later sweep recovers it", err))
+			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; revoking its credentials was attempted, but stopping its proxy is not confirmed yet, and a later sweep recovers it", err))
 	case fate == relostUnwritten:
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
-			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it", err))
+			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and revoking its credentials was attempted, and a later sweep recovers it", err))
 	case readback:
 	case fate == relostUnknown && unconfirmed:
 		msg = "the revive failed and its lost mark or end did not land, so the run is being lost or ended by another operation; stopping its proxy is not confirmed yet, and a later sweep settles it"
@@ -164,8 +172,10 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 // settles the rest; the caller must not tell anyone the run is lost. stopErr is
 // non-nil when the proxy stop is not confirmed.
 //
-// fence is the policy generation the revive acts for (loseRunStopped): a lost mark that misses it, a newer
-// revive having taken the run over, is not applied, and nothing is stopped.
+// fence is the policy generation the revive acts for (loseRunStopped): for a run that can be kept, a lost
+// mark that misses it, a newer revive having taken the run over, is not applied, and nothing is stopped.
+// A run that cannot be kept is ended whatever the generation, and the effects after a mark that landed
+// are not fenced.
 func (s *Server) reloseRun(ctx context.Context, run types.AgentRun, fence int) (fate reloseFate, stopErr error) {
 	reason, at := types.LostOutage, s.cfg.Now()
 	switch run.LostReason {

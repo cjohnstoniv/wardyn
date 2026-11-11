@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -114,6 +115,9 @@ func (s *generationStore) AbandonRunPolicyGeneration(ctx context.Context, id uui
 // MarkRunLostAtGeneration marks the run lost only while gen is its newest generation, as the PG write's
 // predicate does.
 func (s *generationStore) MarkRunLostAtGeneration(ctx context.Context, id uuid.UUID, gen int, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err // a write on a context that ran out fails, as the database call would
+	}
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
 	if store.NewestPolicyGeneration(s.state) != gen {
@@ -412,32 +416,71 @@ func TestRevive_AnUndoThatFailsNeverAnswersKeptCurrent(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a newer revive took the generation over", func(t *testing.T) {
+	newer := map[string]func(f *fenceFixture){
+		"the commit's acknowledgement was lost": func(f *fenceFixture) { f.is.dropAck = true },
+		"the old proxy was never touched": func(f *fenceFixture) {
+			f.rr.replaceErr = errors.New("inspect the proxy: daemon busy")
+			prev := f.is.onAbandonErr
+			f.is.onAbandonErr = func() { // B's replace must work
+				f.rr.mu.Lock()
+				f.rr.replaceErr = nil
+				f.rr.mu.Unlock()
+				prev()
+			}
+		},
+		"the run's lock was lost before replace": func(f *fenceFixture) { f.is.afterAdvance = func(int) { loseLock(f.srv) } },
+	}
+	for name, arrange := range newer {
+		t.Run("a newer revive took the generation over: "+name, func(t *testing.T) {
+			f := newFenceFixture(t)
+			f.is.abandonErr = undoFails
+			var b *httptest.ResponseRecorder
+			f.is.onAbandonErr = func() { b = f.editOnB(t) }
+			arrange(f)
+			stops := f.lr.proxyStopCount()
+			a := f.reviveOnA(t)
+			if b == nil || b.Code != http.StatusOK {
+				t.Fatalf("B never ran or did not confirm: %v", b)
+			}
+			if errorReason(a) == reasonReviveProxyKeptCurrent {
+				t.Errorf("A: %d %s, a revive whose generation could not be undone answered kept-current", a.Code, a.Body.String())
+			}
+			if f.lr.proxyStopCount() != stops {
+				t.Error("A must stop no proxy once B owns the generation")
+			}
+			if lostAt, _ := f.st.lost(); lostAt != nil {
+				t.Error("A's lost mark landed over B's generation")
+			}
+			if p := f.active(t); p.State != types.ProxyStartEnforced || p.Generation != 3 {
+				t.Errorf("start = %d %s, want B's generation 3 enforced", p.Generation, p.State)
+			}
+			if st := f.policyState(t); st.CurrentGeneration() != 3 {
+				t.Errorf("current generation = %d, want B's 3", st.CurrentGeneration())
+			}
+			denied(t, "the stored config", f.storedPolicy(t))
+		})
+	}
+	t.Run("the claim's bound ran out before the undo failed", func(t *testing.T) {
+		old := reviveClaimedTimeout
+		reviveClaimedTimeout = 300 * time.Millisecond
+		t.Cleanup(func() { reviveClaimedTimeout = old })
 		f := newFenceFixture(t)
-		f.is.dropAck = true
+		f.rr.replaceErr = errors.New("inspect the proxy: daemon busy")
 		f.is.abandonErr = undoFails
-		var b *httptest.ResponseRecorder
-		f.is.onAbandonErr = func() { b = f.editOnB(t) }
+		f.is.onAbandonErr = func() { time.Sleep(450 * time.Millisecond) }
 		stops := f.lr.proxyStopCount()
 		a := f.reviveOnA(t)
-		if b == nil || b.Code != http.StatusOK {
-			t.Fatalf("B never ran or did not confirm: %v", b)
+		if errorReason(a) == reasonReviveProxyKeptCurrent || a.Code < 400 {
+			t.Fatalf("A: %d %s, want a refusal that is not kept-current", a.Code, a.Body.String())
 		}
-		if errorReason(a) == reasonReviveProxyKeptCurrent {
-			t.Errorf("A: %d %s, a revive whose generation could not be undone answered kept-current", a.Code, a.Body.String())
+		if strings.Contains(a.Body.String(), "credentials were revoked") {
+			t.Errorf("A's answer claims revoked credentials: %s", a.Body.String())
 		}
-		if f.lr.proxyStopCount() != stops {
-			t.Error("A must stop no proxy once B owns the generation")
+		if n := f.lr.proxyStopCount() - stops; n != 1 {
+			t.Errorf("StopProxy calls = %d, want 1: the containment must not run on the expired bound", n)
 		}
-		if lostAt, _ := f.st.lost(); lostAt != nil {
-			t.Error("A's lost mark landed over B's generation")
+		if lostAt, _ := f.st.lost(); lostAt == nil {
+			t.Error("the run is not lost: the containment ran on the claim's expired bound")
 		}
-		if p := f.active(t); p.State != types.ProxyStartEnforced || p.Generation != 3 {
-			t.Errorf("start = %d %s, want B's generation 3 enforced", p.Generation, p.State)
-		}
-		if st := f.policyState(t); st.CurrentGeneration() != 3 {
-			t.Errorf("current generation = %d, want B's 3", st.CurrentGeneration())
-		}
-		denied(t, "the stored config", f.storedPolicy(t))
 	})
 }
