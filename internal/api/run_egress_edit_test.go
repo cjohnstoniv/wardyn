@@ -658,10 +658,14 @@ func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 }
 
 // failMarkStore is readbackStore whose cleared sandbox ref, when st is set, is recorded on st as the store does once a
-// teardown succeeds.
+// teardown succeeds, and whose lost mark and run end writes fail or do not apply on request.
 type failMarkStore struct {
 	*readbackStore
-	st *leaseStore
+	st             *leaseStore
+	fail           atomic.Bool
+	notApplied     atomic.Bool // the mark answers not applied, as when another writer moved the run first
+	endNotApplied  atomic.Bool // a kept run's teardown write does not apply
+	finalizeRefuse atomic.Bool // a FAILED transition does not apply, as when another writer moved the run first
 }
 
 func (s *failMarkStore) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
@@ -674,19 +678,153 @@ func (s *failMarkStore) SetSandboxRef(ctx context.Context, id uuid.UUID, ref str
 	return nil
 }
 
+func (s *failMarkStore) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, reason types.LostReason, endsAt *time.Time) (bool, error) {
+	if s.endNotApplied.Load() {
+		return false, nil
+	}
+	return s.readbackStore.StopKeptRunIf(ctx, id, to, lostAt, reason, endsAt)
+}
+
+func (s *failMarkStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	if s.finalizeRefuse.Load() && to == types.RunFailed {
+		return false, nil
+	}
+	return s.readbackStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+func (s *failMarkStore) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, at time.Time, life time.Duration) (bool, error) {
+	if s.fail.Load() {
+		return false, errors.New("injected lost-mark failure")
+	}
+	if s.notApplied.Load() {
+		return false, nil
+	}
+	return s.readbackStore.MarkRunLost(ctx, id, reason, at, life)
+}
+
+// A failed replace whose proxy stop also fails is never answered as stopped, whether the lost mark is
+// written or not. (The egress edit's own answers are pinned by TestEgressEdit_ReplaceFailureAnswersFromTheConfirmedStop.)
+func TestRevive_FailedReplaceWithAFailedStopIsNotStopped(t *testing.T) {
+	for _, markFails := range []bool{false, true} {
+		f := newReadbackFixture(t)
+		fs := &failMarkStore{readbackStore: f.rb}
+		fs.fail.Store(markFails)
+		f.srv.cfg.Store = fs
+		f.rr.replaceErr = runner.ErrProxyReplaceFailed
+		f.setProxyStopErr(errors.New("the runner did not answer the stop"))
+		want := reasonReviveProxyReplaceFailedLost
+		if markFails {
+			want = reasonReviveRecoveryUnresolved
+		}
+		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		body := w.Body.String()
+		if errorReason(w) != want || !strings.Contains(body, "not confirmed") ||
+			strings.Contains(body, "was stopped") || strings.Contains(body, "has no egress") {
+			t.Errorf("mark fails=%v: %d %s, want %s saying the stop is not confirmed", markFails, w.Code, body, want)
+		}
+	}
+}
+
+// failSandboxStopRunner fails every sandbox stop, as a daemon that does not answer would.
+type failSandboxStopRunner struct{ *hashedReviveRunner }
+
+func (r *failSandboxStopRunner) StopSandbox(context.Context, string) error {
+	return errors.New("the daemon did not answer the stop")
+}
+
 // failedAfterClaim makes the fixture's run live, with a store and runner that persist fate when a revive fails after
-// its claim: "torn down" is the mark written on a substrate that cannot keep a sandbox, whose runner refuses a proxy
-// stop alone (runner.ErrEndUnsupported, as a Kubernetes server does), so loseRunStopped tears the run down with its
-// lost_at kept.
+// its claim: lost (the mark written), unknown (the mark not applied), ended (a headless run on a remote runner,
+// which the mark cannot keep, finalized; "ended, stop fails" also fails its sandbox stops), or torn down (the mark
+// written on a substrate that cannot keep a sandbox, so the run is torn down). "torn down, end not applied" keeps
+// the run lost when that teardown's write does not apply, and "ended, end refused" leaves it running when the
+// finalize's transition does not.
 func (f *readbackFixture) failedAfterClaim(fate string) {
-	f.srv.cfg.Store = &failMarkStore{readbackStore: f.rb, st: f.st}
+	fs := &failMarkStore{readbackStore: f.rb, st: f.st}
+	f.srv.cfg.Store = fs
 	f.st.mu.Lock()
 	defer f.st.mu.Unlock()
 	f.st.run.LostAt, f.st.run.LostReason = nil, ""
-	if fate == "torn down" {
+	switch fate {
+	case "unknown":
+		fs.notApplied.Store(true)
+	case "torn down, end not applied":
+		fs.endNotApplied.Store(true)
+		fallthrough
+	case "torn down":
 		f.setProxyStopErr(runner.ErrEndUnsupported)
+	case "ended, end refused":
+		fs.finalizeRefuse.Store(true)
+		f.st.run.Interactive, f.st.run.Placement = false, types.PlacementRemote
+	case "ended, stop fails":
+		f.srv.cfg.Runner = &failSandboxStopRunner{hashedReviveRunner: f.hr}
+		fallthrough
+	case "ended":
+		f.st.run.Interactive, f.st.run.Placement = false, types.PlacementRemote
 	}
 	f.run = f.st.run
+}
+
+// A bulk restart that fails after its claim answers the run's fate as persisted, through a failed replace and through
+// a failed readback (whose stop clause never replaces that fate), and its lost_again is true only once the lost mark
+// was written and the run kept, as the audit row's is. Ended is claimed only once the end landed, and a replace's
+// stop not confirmed is named so, with containment unresolved on its row.
+func TestRestart_FailureAfterTheClaimAnswersThePersistedFate(t *testing.T) {
+	for _, readback := range []bool{false, true} {
+		for _, c := range []struct {
+			fate      string
+			lostAgain bool
+			say       string
+			replaceNC bool // a failed replace's stop is not confirmed
+			ended     bool
+		}{
+			{"lost", true, "lost until revived", false, false},
+			{"unknown", false, "being lost or ended by another operation", true, false},
+			{"ended", false, "being ended", false, true},
+			{"ended, stop fails", false, "being ended", true, true},
+			{"ended, end refused", false, "being lost or ended by another operation", true, false},
+			{"torn down", false, "being ended", false, true},
+			{"torn down, end not applied", true, "lost until revived", true, false},
+		} {
+			f := newReadbackFixture(t)
+			f.failedAfterClaim(c.fate)
+			want := reasonReviveProxyReplaceFailedLost
+			if readback {
+				f.hr.hash, want = func([]byte) string { return "" }, reasonRevivePolicyUnconfirmedLost
+			} else {
+				f.rr.replaceErr = runner.ErrProxyReplaceFailed
+			}
+			res := f.restart(t)
+			if res.OK || res.Reason != want || res.LostAgain != c.lostAgain {
+				t.Errorf("readback=%v %s: %+v, want %s and lost_again %v", readback, c.fate, res, want, c.lostAgain)
+			}
+			if readback {
+				// A failed readback words its fate from the store (storedRunFate) and its stop from its own
+				// containment, so only the lost claim is pinned here.
+				if strings.Contains(res.Error, "lost until revived") != c.lostAgain {
+					t.Errorf("readback=%v %s: %q, want it to say lost until revived only for a lost run", readback, c.fate, res.Error)
+				}
+			} else {
+				if !strings.Contains(res.Error, c.say) || (c.say != "lost until revived" && strings.Contains(res.Error, "lost until revived")) ||
+					strings.Contains(res.Error, "not confirmed") != c.replaceNC {
+					t.Errorf("readback=%v %s: %q, want it to say %q and name the stop not confirmed only when it did not land (%v)",
+						readback, c.fate, res.Error, c.say, c.replaceNC)
+				}
+			}
+			// A readback failure's stop is reported on its run.policy.unconfirmed row, not on run.revive.
+			ev := f.audit.eventsFor(f.run.ID, "run.revive")
+			if len(ev) != 1 {
+				t.Fatalf("readback=%v %s: run.revive rows %+v, want one", readback, c.fate, ev)
+			}
+			data := leaseAuditData(t, ev[0])
+			if _, unresolved := data["containment"]; data["lost_again"] != c.lostAgain || unresolved != (!readback && c.replaceNC) {
+				t.Errorf("readback=%v %s: run.revive data %v, want lost_again %v and containment only for an unconfirmed replace stop",
+					readback, c.fate, data, c.lostAgain)
+			}
+			if ended := isTerminalRunState(f.st.State()); ended != c.ended {
+				t.Errorf("readback=%v %s: state %s, want terminal only for an ended fate", readback, c.fate, f.st.State())
+			}
+		}
+	}
 }
 
 // A failed start of a run torn down with its lost_at kept is contained by a sandbox stop, never retried through a
@@ -695,8 +833,8 @@ func TestReadback_TornDownRunWithLostAtIsContained(t *testing.T) {
 	f := newReadbackFixture(t)
 	f.failedAfterClaim("torn down")
 	f.hr.hash = func([]byte) string { return "" }
-	if res := f.restart(t); res.OK || strings.Contains(res.Error, "not confirmed") {
-		t.Fatalf("restart: %+v, want refused with its stop confirmed", res)
+	if res := f.restart(t); res.OK || res.LostAgain || strings.Contains(res.Error, "not confirmed") {
+		t.Fatalf("restart: %+v, want refused, not lost again, with its stop confirmed", res)
 	}
 	if lostAt, _ := f.st.lost(); lostAt == nil || !isTerminalRunState(f.st.State()) {
 		t.Fatalf("lost_at %v, state %s: want the run torn down with its lost_at kept", lostAt, f.st.State())
