@@ -25,7 +25,8 @@ import (
 //   - a VM guest's relay answers from its own name table and reports each
 //     query's outcome here (routeVMNetDNS), on the relay's lane only;
 //   - a container or pod agent's resolver is this proxy's listener (ServeDNS),
-//     which answers every query REFUSED: those sandboxes had no DNS before it.
+//     which answers every query REFUSED except an AAAA for its own name, which
+//     gets an empty answer and no row: those sandboxes had no DNS before it.
 const (
 	routeVMNetDNS = "/wardyn/v1/vmnet/dns"
 
@@ -251,39 +252,64 @@ func (l *dnsLimiter) flush() {
 	}
 }
 
-// refuseDNS answers one DNS message REFUSED, echoing its one question, and
-// gives the row for it. A message that does not parse, is a response, or asks
-// more or less than one question gets no reply and no row.
-func refuseDNS(msg []byte) ([]byte, egress.DNSQuery, bool) {
+// dnsOwnName is the name the agent reaches this proxy by. Its /etc/hosts (the
+// pod's HostAliases on Kubernetes, the container's extra hosts on Docker) holds
+// only the IPv4 address, so the resolver asks DNS for the AAAA.
+const dnsOwnName = "wardyn-proxy"
+
+// isOwnDNSQuestion reports whether q is the one question the resolver asks that
+// /etc/hosts cannot answer: AAAA, in the Internet class, for the proxy's exact
+// name in any case, with or without the trailing dot. An A or any other type for
+// that name, "wardyn-proxy.example.com" and "xwardyn-proxy" are not it.
+func isOwnDNSQuestion(q dnsmessage.Question) bool {
+	return q.Class == dnsmessage.ClassINET && q.Type == dnsmessage.TypeAAAA && strings.TrimSuffix(strings.ToLower(q.Name.String()), ".") == dnsOwnName
+}
+
+// answerDNS answers one DNS message, echoing its one question. An AAAA query
+// for the proxy's own name gets NOERROR with no answer (the name exists, the
+// type has no data), and record is false: it is not a lookup to audit. Every
+// other query gets REFUSED and its row. A
+// message that does not parse, is a response, or asks more or less than one
+// question gets no reply and no row.
+func answerDNS(msg []byte) (out []byte, q egress.DNSQuery, record, ok bool) {
 	var p dnsmessage.Parser
 	h, err := p.Start(msg)
 	if err != nil {
-		return nil, egress.DNSQuery{}, false
+		return nil, egress.DNSQuery{}, false, false
 	}
 	qs, err := p.AllQuestions()
 	if err != nil || h.Response || len(qs) != 1 {
-		return nil, egress.DNSQuery{}, false
+		return nil, egress.DNSQuery{}, false, false
 	}
-	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, OpCode: h.OpCode, RecursionDesired: h.RecursionDesired, RCode: dnsmessage.RCodeRefused})
+	own := isOwnDNSQuestion(qs[0])
+	rcode := dnsmessage.RCodeRefused
+	if own {
+		rcode = dnsmessage.RCodeSuccess
+	}
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, OpCode: h.OpCode, RecursionDesired: h.RecursionDesired, RCode: rcode})
 	_ = b.StartQuestions()
 	_ = b.Question(qs[0])
-	out, err := b.Finish()
+	out, err = b.Finish()
 	if err != nil {
-		return nil, egress.DNSQuery{}, false
+		return nil, egress.DNSQuery{}, false, false
 	}
-	q := egress.DNSQuery{Name: dnsName(qs[0].Name.String()), Type: dnsType(qs[0].Type.String()), Outcome: dnsRefused, Via: dnsViaProxy}
+	if own {
+		return out, egress.DNSQuery{}, false, true
+	}
+	q = egress.DNSQuery{Name: dnsName(qs[0].Name.String()), Type: dnsType(qs[0].Type.String()), Outcome: dnsRefused, Via: dnsViaProxy}
 	if q.Name == "" {
 		q.Cause = "name"
 	}
 	if q.Type == "" {
 		q.Type = "OTHER"
 	}
-	return out, q, true
+	return out, q, true, true
 }
 
 // ListenDNS opens the run's refusal-only DNS listener on addr, UDP and TCP,
 // and serves it until ctx ends. It answers every query REFUSED and writes its
-// row; it never resolves a name and never forwards a query. With AllowedPeers
+// row, except an AAAA for the proxy's own name, which gets an empty answer and
+// no row; it never resolves a name and never forwards a query. With AllowedPeers
 // set it serves only callers inside them, as the main listener does: a datagram
 // from outside is dropped, and a connection from outside is closed. The error
 // is the bind's.
@@ -334,9 +360,11 @@ func serveDNS(ctx context.Context, pc net.PacketConn, ln net.Listener, lim *dnsL
 			if err != nil {
 				return
 			}
-			if out, q, ok := refuseDNS(buf[:n]); ok {
+			if out, q, record, ok := answerDNS(buf[:n]); ok {
 				_, _ = pc.WriteTo(out, from)
-				lim.note(q)
+				if record {
+					lim.note(q)
+				}
 			}
 		}
 	}()
@@ -382,14 +410,16 @@ func serveDNSConn(c net.Conn, lim *dnsLimiter) {
 		if _, err := io.ReadFull(c, msg); err != nil {
 			return
 		}
-		out, q, ok := refuseDNS(msg)
+		out, q, record, ok := answerDNS(msg)
 		if !ok {
 			return
 		}
 		if _, err := c.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(out))), out...)); err != nil {
 			return
 		}
-		lim.note(q)
+		if record {
+			lim.note(q)
+		}
 	}
 }
 
