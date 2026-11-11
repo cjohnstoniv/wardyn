@@ -46,6 +46,8 @@ type interleaveStore struct {
 	// acknowledgement was lost does; afterDroppedAck runs before that answer.
 	dropAck, firedDrop bool
 	afterDroppedAck    func(gen int)
+	// failBegin makes every BeginProxyStart fail, as a database blip would.
+	failBegin bool
 }
 
 // take returns the hook to run now, once: nil when it ran already or is not set.
@@ -112,6 +114,13 @@ func (s *interleaveStore) AdvanceRunPolicyGeneration(ctx context.Context, id uui
 		}
 	}
 	return gen, err
+}
+
+func (s *interleaveStore) BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string) (store.ProxyStart, error) {
+	if s.failBegin {
+		return store.ProxyStart{}, errors.New("begin proxy start: connection reset")
+	}
+	return s.readbackStore.BeginProxyStart(ctx, runID, gen, jti, mode)
 }
 
 // MarkRunRevived also clears the agent's stop mark, as the PG claim (markRunRevived) does.

@@ -46,7 +46,9 @@ func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.Agen
 	}
 	start, err := s.beginProxyStart(ctx, run, gen, fresh)
 	if err != nil {
-		s.abandonRunPolicyGeneration(ctx, run, gen, source)
+		if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
+			err = fmt.Errorf("%w; undoing its generation failed: %v: %w", err, aerr, errPolicyNotAbandoned)
+		}
 		return gen, proxyStartRec{}, err
 	}
 	return gen, start, nil

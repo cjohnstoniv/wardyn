@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -61,12 +62,14 @@ func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.Agent
 // reviveGenerationFailed ends a revive whose policy generation could not be stored, after the claim and
 // before any proxy is replaced, the way a replace that failed at that point ends. A live run keeps its
 // untouched proxy, which gets its token lineage back; a lost run is lost again, with the old proxy's
-// tokens revoked, since nothing serves on them. Either way the run's rows stay under the generation its
-// proxy enforces, and the next revive tries again.
+// tokens revoked, since nothing serves on them. A live run whose generation could not be undone
+// (errPolicyNotAbandoned) ends the way a lost run does, never answered kept-current: that generation stays
+// current, narrower than the kept proxy, so the run is lost again and its proxy stopped (reloseRun), and the
+// answer says the stop is confirmed only when it is. Either way the run's rows stay under the generation its proxy enforces, and the next revive tries again.
 // expected is the generation the revive read: its lost mark lands only while that is still the newest.
 func (s *Server) reviveGenerationFailed(ctx context.Context, run types.AgentRun, expected int, data map[string]any, actorType types.ActorType, actor, retiring, fresh string, renewed renewedTokens, err error) *reviveError {
 	data["error"] = "record the run's policy generation: " + err.Error()
-	if run.LostAt == nil {
+	if run.LostAt == nil && !errors.Is(err, errPolicyNotAbandoned) {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 		s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 		s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
@@ -82,12 +85,15 @@ func (s *Server) reviveGenerationFailed(ctx context.Context, run types.AgentRun,
 // abandonRunPolicyGeneration undoes advanceRunPolicyGeneration's current generation when the revive left
 // the old proxy running untouched: the generation before it is current again. Its number stays used.
 // restore is the config the revive started from (reviveSourceConfig), stored back in the same write, so
-// the run's stored config is again the one its kept proxy runs. Both land only while gen is still the
-// newest: a late abandon leaves a newer revive's generation and config alone.
-func (s *Server) abandonRunPolicyGeneration(ctx context.Context, run types.AgentRun, gen int, restore []byte) {
+// the run's stored config is again the one its kept proxy runs; a config that cannot be sealed is left
+// out, and the generation is abandoned without it. Both land only while gen is still the
+// newest: a late abandon leaves a newer revive's generation and config alone. It returns the store's error
+// when the undo could not be written: the generation then stays current, and the caller contains the run
+// (errPolicyNotAbandoned) rather than answer that it keeps its current proxy.
+func (s *Server) abandonRunPolicyGeneration(ctx context.Context, run types.AgentRun, gen int, restore []byte) error {
 	st, ok := s.cfg.Store.(store.RunPolicyGenerations)
 	if !ok || gen == 0 {
-		return
+		return nil
 	}
 	sealed, err := s.sealForGeneration(run.ID, restore)
 	if err != nil {
@@ -97,8 +103,13 @@ func (s *Server) abandonRunPolicyGeneration(ctx context.Context, run types.Agent
 	if err := st.AbandonRunPolicyGeneration(ctx, run.ID, gen, sealed); err != nil {
 		slog.WarnContext(ctx, "api: abandoning an unused policy generation failed",
 			slog.String("run_id", run.ID.String()), slog.Int("generation", gen), slog.Any("err", err))
+		return err
 	}
+	return nil
 }
+
+// errPolicyNotAbandoned marks a revive whose new generation could not be undone after the old proxy was kept: that generation stays current, narrower than the kept proxy, so the run is contained rather than answered kept-current.
+var errPolicyNotAbandoned = errors.New("the revive's policy generation could not be undone")
 
 // sealForGeneration seals a revive's config for the generation write that stores it, as
 // storeRunProxyConfig would: nil for no config, or for a deployment that keeps none.
@@ -145,13 +156,24 @@ func (s *Server) revivePolicyMoved(ctx context.Context, run types.AgentRun, data
 // reviveKeptAfterAdvance ends a revive that advanced its generation and then left the old proxy
 // untouched: its start abandoned (when it was not already), the generation abandoned with the source
 // config stored back, the failure recorded, and the run's lineage restored. The old proxy keeps
-// renewing its own token, so its retiring token is not revoked (F4).
-func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string,
+// renewing its own token, so its retiring token is not revoked (F4). A generation that cannot be undone
+// is the exception: it stays current over the kept proxy, so the run is lost again and its proxy stop
+// attempted instead.
+func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, retiring string,
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
 	data["error"] = err.Error()
 	s.abandonProxyStart(ctx, run.ID, start) // a no-op for one the replace already abandoned
 	// The generation is abandoned first, so the failure row carries the one that still applies.
-	s.abandonRunPolicyGeneration(ctx, run, gen, source)
+	if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
+		// The generation stays current, narrower than the kept proxy: the run is lost again and its proxy
+		// stop attempted, fenced on gen, never answered kept-current.
+		data["error"] = err.Error() + "; undoing its generation failed: " + aerr.Error()
+		s.liveRevived.Delete(run.ID)
+		s.revokeRetiringToken(ctx, retiring, run.ID)
+		s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), fresh)
+		return s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
+			"the run's proxy was not replaced and its new policy record could not be undone, so the run is lost until revived", err)
+	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 	s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 	s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
@@ -162,7 +184,7 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 // which may still have committed (an acknowledgement lost after the commit). It reads the run's policy
 // state back once: a newest generation one past expected whose first token is fresh is this attempt's,
 // written after all, so it is recorded (run.policy.generation) and abandoned with source stored back,
-// which lands only while it is still the newest; its number is returned as the generation this attempt
+// (stored back only when it can be sealed), which lands only while it is still the newest; its number is returned as the generation this attempt
 // holds, for the lost mark's fence. Any other newest generation was not this attempt's write (nothing is
 // undone, never a newer winner's), and 0 is returned. A read back that fails too is the named unresolved
 // outcome: nothing is undone, and the error says whether the generation landed is unknown; the effective
@@ -186,7 +208,9 @@ func (s *Server) reconcileLostAdvance(ctx context.Context, run types.AgentRun, p
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.generation",
 		run.ID.String(), "success", mustJSON(map[string]any{"generation": g.Generation, "policy": auditablePolicy(policy)})))
-	s.abandonRunPolicyGeneration(ctx, run, g.Generation, source)
+	if aerr := s.abandonRunPolicyGeneration(ctx, run, g.Generation, source); aerr != nil {
+		return g.Generation, fmt.Errorf("%w (the generation was written all the same, and undoing it failed: %v): %w", err, aerr, errPolicyNotAbandoned)
+	}
 	return g.Generation, fmt.Errorf("%w (the generation was written all the same, and is abandoned)", err)
 }
 
@@ -220,7 +244,9 @@ func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, 
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
 	data["error"] = err.Error()
 	s.abandonProxyStart(ctx, run.ID, start)
-	s.abandonRunPolicyGeneration(ctx, run, gen, source)
+	if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
+		data["abandon_error"] = aerr.Error() // the old proxy is already stopped, so none wider serves
+	}
 	s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 	s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
 	const lostMsg = "The run's lock was lost before its proxy was replaced, so the run is lost until revived"

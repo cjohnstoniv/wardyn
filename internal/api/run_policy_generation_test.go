@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"sync"
 	"testing"
@@ -32,6 +33,10 @@ type generationStore struct {
 	failAdvance int
 	// agentStoppedAt is the agent_stopped_at RunLostFate answers while the run's agent is recorded stopped.
 	agentStoppedAt time.Time
+	// abandonErr makes AbandonRunPolicyGeneration fail without writing, as a database blip would; onAbandonErr
+	// runs once before that failure answers, outside the store's lock (a newer revive landing first).
+	abandonErr   error
+	onAbandonErr func()
 	// recorded is the run's audit log as the recorded-policy read sees it (the dispatch envelope); readErr fails that read.
 	recorded []types.AuditEvent
 	readErr  error
@@ -81,6 +86,16 @@ func (s *generationStore) AdvanceRunPolicyGeneration(ctx context.Context, id uui
 // AbandonRunPolicyGeneration abandons gen, restoring its config, only while gen holds the newest slot
 // and is not abandoned yet, as the PG write does.
 func (s *generationStore) AbandonRunPolicyGeneration(ctx context.Context, id uuid.UUID, gen int, restore []byte) error {
+	s.gmu.Lock()
+	failure, hook := s.abandonErr, s.onAbandonErr
+	s.onAbandonErr = nil
+	s.gmu.Unlock()
+	if failure != nil {
+		if hook != nil {
+			hook()
+		}
+		return failure
+	}
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
 	n := len(s.state.Generations)
@@ -353,4 +368,76 @@ func TestRevive_FailedGenerationWriteNeverStampsTheOldPolicy(t *testing.T) {
 			t.Errorf("live=%v: after recovery the new proxy's decision is stamped %q/%d, want generation 2", live, d, g)
 		}
 	}
+}
+
+// A revive whose new generation cannot be undone never answers that the run keeps its current proxy: that
+// generation stays current, narrower than the kept proxy, so the run is lost again and its proxy stopped,
+// fenced on the generation. When a newer revive took the generation over before the lost mark, the mark
+// misses and the newer revive's proxy, config and generation stand untouched.
+func TestRevive_AnUndoThatFailsNeverAnswersKeptCurrent(t *testing.T) {
+	undoFails := errors.New("abandon policy generation: connection reset")
+	cases := map[string]func(f *fenceFixture){
+		"the commit's acknowledgement was lost":  func(f *fenceFixture) { f.is.dropAck = true },
+		"the old proxy was never touched":        func(f *fenceFixture) { f.rr.replaceErr = errors.New("inspect the proxy: daemon busy") },
+		"the proxy start could not be recorded":  func(f *fenceFixture) { f.is.failBegin = true },
+		"the run's lock was lost before replace": func(f *fenceFixture) { f.is.afterAdvance = func(int) { loseLock(f.srv) } },
+	}
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFenceFixture(t)
+			f.is.abandonErr = undoFails
+			arrange(f)
+			stops := f.lr.proxyStopCount()
+			a := f.reviveOnA(t)
+			if errorReason(a) == reasonReviveProxyKeptCurrent {
+				t.Fatalf("A: %d %s, a revive whose generation could not be undone answered kept-current", a.Code, a.Body.String())
+			}
+			if a.Code < 400 {
+				t.Fatalf("A: %d %s, want a refusal", a.Code, a.Body.String())
+			}
+			if n := f.lr.proxyStopCount() - stops; n != 1 {
+				t.Errorf("StopProxy calls = %d, want 1", n)
+			}
+			if lostAt, _ := f.st.lost(); lostAt == nil {
+				t.Error("the run is not lost, though its proxy is narrower than the generation that stays current")
+			}
+			f.ls.mu.Lock()
+			jtis := slices.Clone(f.ls.jtis)
+			f.ls.mu.Unlock()
+			if len(jtis) != 2 || jtis[0] == "" || jtis[1] != "" {
+				t.Errorf("token lineage %v, want the fresh token alone: the old lineage must not be restored under a kept-current answer", jtis)
+			}
+			if st := f.policyState(t); st.CurrentGeneration() != 2 {
+				t.Errorf("current generation = %d, want A's 2: it stays, and the run is contained", st.CurrentGeneration())
+			}
+		})
+	}
+	t.Run("a newer revive took the generation over", func(t *testing.T) {
+		f := newFenceFixture(t)
+		f.is.dropAck = true
+		f.is.abandonErr = undoFails
+		var b *httptest.ResponseRecorder
+		f.is.onAbandonErr = func() { b = f.editOnB(t) }
+		stops := f.lr.proxyStopCount()
+		a := f.reviveOnA(t)
+		if b == nil || b.Code != http.StatusOK {
+			t.Fatalf("B never ran or did not confirm: %v", b)
+		}
+		if errorReason(a) == reasonReviveProxyKeptCurrent {
+			t.Errorf("A: %d %s, a revive whose generation could not be undone answered kept-current", a.Code, a.Body.String())
+		}
+		if f.lr.proxyStopCount() != stops {
+			t.Error("A must stop no proxy once B owns the generation")
+		}
+		if lostAt, _ := f.st.lost(); lostAt != nil {
+			t.Error("A's lost mark landed over B's generation")
+		}
+		if p := f.active(t); p.State != types.ProxyStartEnforced || p.Generation != 3 {
+			t.Errorf("start = %d %s, want B's generation 3 enforced", p.Generation, p.State)
+		}
+		if st := f.policyState(t); st.CurrentGeneration() != 3 {
+			t.Errorf("current generation = %d, want B's 3", st.CurrentGeneration())
+		}
+		denied(t, "the stored config", f.storedPolicy(t))
+	})
 }

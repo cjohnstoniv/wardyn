@@ -48,7 +48,7 @@ func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.Agent
 		if run.LostAt != nil {
 			return 0, proxyStartRec{}, s.reviveLostHoldRestore(ctx, run, fate, data, actorType, actor, gen, start, source, freshJTI, renewed, err)
 		}
-		return 0, proxyStartRec{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, gen, start, source, freshJTI, renewed, err)
+		return 0, proxyStartRec{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, retiring, gen, start, source, freshJTI, renewed, err)
 	}
 	return gen, start, nil
 }
@@ -66,7 +66,7 @@ func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, da
 		// untouched proxy on a token that can neither renew nor decide,
 		// while its allowlisted egress keeps flowing audit-dark for up to
 		// the lapsed-token sweep's ~1h05m window.
-		return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, gen, start, source, freshJTI, renewed, err)
+		return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, retiring, gen, start, source, freshJTI, renewed, err)
 	}
 	// The old proxy is, or may be, gone: nothing is left to serve on the
 	// retiring token, so revoking it here is safe (F4).
