@@ -24,7 +24,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-var _ store.RunLeaser = (*leaseStore)(nil)
+var (
+	_ store.RunLeaser     = (*leaseStore)(nil)
+	_ store.ForcedStopper = (*leaseStore)(nil)
+)
 
 // leaseStore is dispatchTestStore plus store.RunLeaser, with the PG
 // conditions of MarkRunEnded and MarkRunEndingSoon.
@@ -48,6 +51,8 @@ type leaseStore struct {
 	beforeSetEnd func()
 	// agentStopped is what MarkRunAgentStopped recorded (agent_stopped_at).
 	agentStopped bool
+	// forcedAt is the forced stop's mark (forced_stop_at), zero while unmarked.
+	forcedAt time.Time
 }
 
 func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -172,6 +177,38 @@ func (s *leaseStore) StopKeptRunIf(_ context.Context, _ uuid.UUID, to types.RunS
 		return false, nil
 	}
 	s.state = to
+	return true, nil
+}
+
+// StopKeptRunForcedIf is StopKeptRunIf that also records the forced stop's mark, in the same step
+// (store.ForcedStopper); ListForcedStops and ClearForcedStop read and clear it.
+func (s *leaseStore) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (time.Time, bool, error) {
+	applied, err := s.StopKeptRunIf(ctx, id, to, lostAt, lostReason, endsAt)
+	if err != nil || !applied {
+		return time.Time{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forcedAt = time.Now()
+	return s.forcedAt, true, nil
+}
+
+func (s *leaseStore) ListForcedStops(context.Context) ([]store.ForcedStop, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.forcedAt.IsZero() {
+		return nil, nil
+	}
+	return []store.ForcedStop{{RunID: s.run.ID, At: s.forcedAt}}, nil
+}
+
+func (s *leaseStore) ClearForcedStop(_ context.Context, _ uuid.UUID, stamp time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.forcedAt.Equal(stamp) {
+		return false, nil
+	}
+	s.forcedAt = time.Time{}
 	return true, nil
 }
 

@@ -754,6 +754,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// The lease rides this cadence too: its warnings are minutes
 	// apart and the end is a minute late at worst.
 	pass("run lease sweep", s.sweepRunLeases(ctx))
+	// A forced end whose sandbox stop is not confirmed is stopped again, held lock or not.
+	pass("forced stop retry", s.sweepForcedStops(ctx))
 	// An elevation past its end already counts for nothing; the sweep deletes its row and audits the end.
 	pass("elevation expiry", s.sweepExpiredElevations(ctx))
 	// And the pause, after the lease so a run ending this tick is
