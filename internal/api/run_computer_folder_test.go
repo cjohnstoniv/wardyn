@@ -909,3 +909,35 @@ func findAuditData(events []types.AuditEvent, runID uuid.UUID, action, want stri
 	}
 	return nil
 }
+
+// The longest pass back text the server writes today, a stopped virtual machine whose pass was cut and could not
+// confirm a change, is past a seed's maxLocalFolderSeedError and is kept whole: its record ends with how the
+// sandbox ended and how many changed files it left behind.
+func TestFolderPassRecord_TheLongestBackTextKeepsItsOutcome(t *testing.T) {
+	const tail = ", so the sandbox was stopped with changed files not brought back: 1"
+	text := folderBackGivenUp(
+		folderNotPreservedText(1, "read in the sandbox z.txt: connection lost", "the sync was cut short: context deadline exceeded"),
+		"it cannot be kept with its agent stopped and no egress: a virtual machine is not quiesced from the server's Docker", 1)
+	if n := len([]rune(text)); n <= maxLocalFolderSeedError {
+		t.Fatalf("the text is %d runes, want one past a seed's cap of %d: this pin would prove nothing", n, maxLocalFolderSeedError)
+	}
+	rec := folderPassRecord(time.Now(), runnerwire.FolderPass{}, text, true)
+	if rec.Error != text || !strings.HasSuffix(rec.Error, tail) {
+		t.Errorf("back record = %q, want the whole text, ending %q", rec.Error, tail)
+	}
+}
+
+// A pass back whose runner reason runs past maxFolderBackError is cut there, with the marker, and a seed's record
+// of the same text is still cut at maxLocalFolderSeedError.
+func TestFolderPassRecord_ABackReasonOverTheCapIsCutAtIt(t *testing.T) {
+	text := folderNotPreservedText(1, strings.Repeat("x", 2*maxFolderBackError), "")
+	for _, tc := range []struct {
+		back  bool
+		limit int
+	}{{true, maxFolderBackError}, {false, maxLocalFolderSeedError}} {
+		got := folderPassRecord(time.Now(), runnerwire.FolderPass{}, text, tc.back).Error
+		if kept, ok := strings.CutSuffix(got, "..."); !ok || len([]rune(kept)) != tc.limit || !strings.HasPrefix(text, kept) {
+			t.Errorf("back %v: record of %d runes ends %q; want the text's first %d runes and the marker", tc.back, len([]rune(got)), got[max(0, len(got)-10):], tc.limit)
+		}
+	}
+}

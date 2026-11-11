@@ -34,6 +34,10 @@ const (
 	DefaultLocalFolderSeedWait = 10 * time.Minute
 	maxLocalFolderName         = 255
 	maxLocalFolderSeedError    = 300
+	// maxFolderBackError bounds a pass back's record and audit text, which names the outcome (the sandbox
+	// kept for a later sweep, or stopped with the count not brought back) after the runner's reason: it holds
+	// that outcome's longest wording with room for the reason.
+	maxFolderBackError = 1000
 )
 
 // localFolderSeedPoll is how often dispatch reads the run while it waits.
@@ -118,7 +122,10 @@ func (s *Server) localFolderPassed(ctx context.Context, runID uuid.UUID, princip
 
 // localFolderSeedError is the client's error text as the run keeps it: one
 // line, no control characters, at most maxLocalFolderSeedError runes.
-func localFolderSeedError(s string) string {
+func localFolderSeedError(s string) string { return localFolderErrorText(s, maxLocalFolderSeedError) }
+
+// localFolderErrorText is localFolderSeedError's line, at most limit runes.
+func localFolderErrorText(s string, limit int) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
@@ -128,8 +135,8 @@ func localFolderSeedError(s string) string {
 	if s = strings.TrimSpace(s); s == "" {
 		s = "the sync reported a failure without a message"
 	}
-	if r := []rune(s); len(r) > maxLocalFolderSeedError {
-		s = string(r[:maxLocalFolderSeedError]) + "..."
+	if r := []rune(s); len(r) > limit {
+		s = string(r[:limit]) + "..."
 	}
 	return s
 }
