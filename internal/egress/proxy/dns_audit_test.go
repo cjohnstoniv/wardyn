@@ -276,7 +276,8 @@ func checkRefused(t *testing.T, wire []byte, name string) {
 // dropping the type check turns the A, TXT and MX rows into NOERROR with no
 // record; dropping ToLower fails the upper-case rows; dropping the trailing-dot
 // trim fails every own-name row; answering REFUSED for the own name, or
-// recording it, fails the own-name rows.
+// recording it, fails the own-name rows; setting Authoritative on every reply, or
+// on none, fails the AA check (the bit is on the own-name reply only).
 func TestAnswerDNSOwnName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -290,6 +291,8 @@ func TestAnswerDNSOwnName(t *testing.T) {
 		{"WARDYN-PROXY.", dnsmessage.TypeA, false},
 		{"wardyn-proxy.", dnsmessage.TypeTXT, false},
 		{"wardyn-proxy.", dnsmessage.TypeMX, false},
+		{"wardyn-proxy.", dnsmessage.Type(65), false}, // HTTPS
+		{"wardyn-proxy.", dnsmessage.TypeALL, false},
 		{"example.com.", dnsmessage.TypeAAAA, false},
 		{"example.com.", dnsmessage.TypeA, false},
 		{"wardyn-proxy.evil.com.", dnsmessage.TypeAAAA, false},
@@ -317,11 +320,60 @@ func TestAnswerDNSOwnName(t *testing.T) {
 			len(m.Questions) != 1 || m.Questions[0].Name.String() != c.name || m.Questions[0].Type != c.typ {
 			t.Errorf("%s %v: reply %+v, want rcode %v, no answers, question echoed", c.name, c.typ, m, wantRCode)
 		}
+		if m.Header.Authoritative != c.own {
+			t.Errorf("%s %v: AA=%v, want %v (set on the own-name empty answer only, so a resolver takes NODATA, not a lame referral)", c.name, c.typ, m.Header.Authoritative, c.own)
+		}
 		if record == c.own {
 			t.Errorf("%s %v: record=%v, want %v", c.name, c.typ, record, !c.own)
 		}
 		if !c.own && (q.Outcome != "refused" || q.Name != dnsName(c.name)) {
 			t.Errorf("%s %v: row %+v, want a refused row for the name", c.name, c.typ, q)
+		}
+	}
+}
+
+// TestAnswerDNSOwnNameNeedsStandardQueryInClass: the empty answer is for a standard
+// QUERY (opcode 0) in the Internet class only. IQUERY, STATUS, NOTIFY and UPDATE
+// carrying the same question, and a CH or ANY class AAAA, are REFUSED and recorded.
+// Mutations: dropping the `h.OpCode == 0` test turns the opcode rows into NOERROR with
+// no record; dropping the ClassINET test does the same to the class rows.
+func TestAnswerDNSOwnNameNeedsStandardQueryInClass(t *testing.T) {
+	wire := func(op dnsmessage.OpCode, class dnsmessage.Class) []byte {
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 0x4242, OpCode: op, RecursionDesired: true})
+		_ = b.StartQuestions()
+		if err := b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName("wardyn-proxy."), Type: dnsmessage.TypeAAAA, Class: class}); err != nil {
+			t.Fatal(err)
+		}
+		out, err := b.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	cases := []struct {
+		what  string
+		op    dnsmessage.OpCode
+		class dnsmessage.Class
+	}{
+		{"IQUERY", 1, dnsmessage.ClassINET},
+		{"STATUS", 2, dnsmessage.ClassINET},
+		{"NOTIFY", 4, dnsmessage.ClassINET},
+		{"UPDATE", 5, dnsmessage.ClassINET},
+		{"class CH", 0, dnsmessage.ClassCHAOS},
+		{"class ANY", 0, dnsmessage.ClassANY},
+	}
+	for _, c := range cases {
+		out, q, record, ok := answerDNS(wire(c.op, c.class))
+		if !ok || !record || q.Outcome != "refused" || q.Name != "wardyn-proxy" || q.Type != "AAAA" {
+			t.Errorf("%s: ok=%v record=%v row=%+v, want a refused AAAA row for wardyn-proxy", c.what, ok, record, q)
+			continue
+		}
+		var m dnsmessage.Message
+		if err := m.Unpack(out); err != nil {
+			t.Fatal(err)
+		}
+		if m.Header.RCode != dnsmessage.RCodeRefused || m.Header.Authoritative || len(m.Answers) != 0 {
+			t.Errorf("%s: reply %+v, want REFUSED, AA=0, no answer", c.what, m.Header)
 		}
 	}
 }

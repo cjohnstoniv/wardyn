@@ -265,8 +265,8 @@ func isOwnDNSQuestion(q dnsmessage.Question) bool {
 	return q.Class == dnsmessage.ClassINET && q.Type == dnsmessage.TypeAAAA && strings.TrimSuffix(strings.ToLower(q.Name.String()), ".") == dnsOwnName
 }
 
-// answerDNS answers one DNS message, echoing its one question. An AAAA query
-// for the proxy's own name gets NOERROR with no answer (the name exists, the
+// answerDNS answers one DNS message, echoing its one question. A standard
+// query (opcode 0) for AAAA of the proxy's own name gets NOERROR with no answer (the name exists, the
 // type has no data), and record is false: it is not a lookup to audit. Every
 // other query gets REFUSED and its row. A
 // message that does not parse, is a response, or asks more or less than one
@@ -281,12 +281,15 @@ func answerDNS(msg []byte) (out []byte, q egress.DNSQuery, record, ok bool) {
 	if err != nil || h.Response || len(qs) != 1 {
 		return nil, egress.DNSQuery{}, false, false
 	}
-	own := isOwnDNSQuestion(qs[0])
+	own := h.OpCode == 0 && isOwnDNSQuestion(qs[0]) // a standard QUERY only: IQUERY, STATUS, NOTIFY and UPDATE are refused and recorded
 	rcode := dnsmessage.RCodeRefused
 	if own {
 		rcode = dnsmessage.RCodeSuccess
 	}
-	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, OpCode: h.OpCode, RecursionDesired: h.RecursionDesired, RCode: rcode})
+	// Authoritative on the empty answer only: without the AA bit a resolver reads NOERROR with no
+	// answer as a lame referral, the same as REFUSED, and retries or fails the lookup instead of
+	// taking NODATA (internal/vmnet/dns.go sets it the same way).
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, Authoritative: own, OpCode: h.OpCode, RecursionDesired: h.RecursionDesired, RCode: rcode})
 	_ = b.StartQuestions()
 	_ = b.Question(qs[0])
 	out, err = b.Finish()

@@ -148,7 +148,8 @@ func main() {
 	defer stop()
 
 	// The agent's resolver on k8s and Docker runs, when the runner set it: a listener that refuses every query
-	// and writes its row (internal/egress/proxy/dns_audit.go). A runner that asked for it gets a failed start
+	// and writes its row, except AAAA for its own name, which gets an empty answer and no row
+	// (internal/egress/proxy/dns_audit.go). A runner that asked for it gets a failed start
 	// rather than an agent whose lookups go unanswered and unrecorded.
 	if addr := os.Getenv(proxy.DNSListenEnv); addr != "" {
 		if err := srv.ListenDNS(ctx, addr); err != nil {
