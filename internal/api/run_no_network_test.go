@@ -286,6 +286,51 @@ func TestNoNetwork_ExtraHarnessOnlyModelRunIsRefusedBeforeItsCredential(t *testi
 	}
 }
 
+// TestNoNetwork_ExtraHarnessModelIsASourceWithoutAProvider: with no model provider block, "none" plus an
+// extra model harness (codex-cli) chooses no provider, yet under No network every door (create, Review, the
+// preview) refuses 422 no_network_needs_egress naming "the codex-cli harness's model", as it does for a
+// primary model harness. Controls: the same request without the preset passes, and "none" alone under the
+// preset passes.
+//
+// It catches stepNoNetwork counting only the primary's model, or only an extra harness with a chosen
+// provider (the launch would pass and the harness would run with no model), and a source added for a
+// harness that needs no model.
+func TestNoNetwork_ExtraHarnessModelIsASourceWithoutAProvider(t *testing.T) {
+	srv := providerRunFixture(t, types.SiteConfig{}, &capStore{}, nil)
+	withCodex := twoHarnessRequest("",
+		client.IncludedTool{ID: "none", Kind: client.IncludedToolHarness},
+		client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness})
+	noneOnly := twoHarnessRequest("", client.IncludedTool{ID: "none", Kind: client.IncludedToolHarness})
+	fold := func(mode foldMode, req *createRunRequest, preset *types.WallPresetOnRun) (runFold, *httptest.ResponseRecorder) {
+		w := httptest.NewRecorder()
+		f := runFold{mode: mode, w: w, r: memberRequest(t), req: req, harnesses: harnessSet(*req), source: policySourceRecord{wallPreset: preset}}
+		if !srv.stepModelProvider(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: the model-provider step refused: %d %s", mode, w.Code, w.Body)
+		}
+		return f, w
+	}
+	for _, mode := range []foldMode{foldCreate, foldPreflight, foldPreview} {
+		f, w := fold(mode, &withCodex, builtinFrozen(t, types.WallPresetNoNetwork))
+		if srv.stepNoNetwork(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: a No network launch of a model harness passed", mode)
+		}
+		var body errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusUnprocessableEntity || body.Reason != reasonNoNetworkNeedsEgress || !strings.Contains(body.Error, "the codex-cli harness's model") ||
+			strings.Contains(body.Error, "the none harness's model") {
+			t.Errorf("mode %d: %d %s, want 422 %s naming the codex-cli harness's model only", mode, w.Code, w.Body, reasonNoNetworkNeedsEgress)
+		}
+		f, _ = fold(mode, &withCodex, nil)
+		if !srv.stepNoNetwork(&f, &foldRecorder{}) {
+			t.Errorf("mode %d: a launch without the preset was refused by stepNoNetwork", mode)
+		}
+		f, _ = fold(mode, &noneOnly, builtinFrozen(t, types.WallPresetNoNetwork))
+		if !srv.stepNoNetwork(&f, &foldRecorder{}) {
+			t.Errorf("mode %d: a No network launch of \"none\" alone was refused", mode)
+		}
+	}
+}
+
 // A host still on the spec is named by the source the fold recorded adding it; and a No network launch
 // with nothing that needs a host, or a launch with another preset, passes.
 func TestNoNetwork_SpecHostsAndPasses(t *testing.T) {
