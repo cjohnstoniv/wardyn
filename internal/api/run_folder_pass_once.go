@@ -84,7 +84,7 @@ func (s *Server) lastPassUnanswered(rec types.RunLocalFolderStatus) bool {
 
 // lastPassUnsettled is a record whose last pass the runner did not answer for: a generation past the settled
 // one, or a record an earlier release wrote, whose passes were never counted. That one is Gen 0 with a seed:
-// rc.17 recorded every seed (rc.17 run_computer_folder.go:181) and wrote no generation, while every seed
+// rc.17 recorded every seed (rc.17's seedComputerFolder) and wrote no generation, while every seed
 // since moves the record to a generation before it passes (seedComputerFolder), and a pass back needs the
 // folder seeded (bringComputerFolderBack).
 func lastPassUnsettled(rec types.RunLocalFolderStatus) bool {
