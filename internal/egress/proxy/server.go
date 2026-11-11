@@ -458,9 +458,10 @@ func (s *Server) ListenAndServe() error {
 
 // ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
 // the container's attach stream, which works on any engine, to know the agent may start. It means
-// "listening", nothing more. A self-lapsing proxy (Config self_lapse) binds only after its first token
-// renewal (awaitOpen), so its marker already follows that renewal and the agent never starts behind a
-// proxy that will refuse it.
+// "listening", nothing more. A proxy with a first-renewal gate (a self-lapsing one, Config self_lapse, or a
+// replacement the runner started with FirstRenewGateEnv) binds only after its first token renewal
+// (awaitOpen), so its marker already follows that renewal and the agent never starts behind a proxy that
+// will refuse it.
 const ReadyMarker = "wardyn-proxy: ready"
 
 // OnListening sets fn to run once the main listener is bound, before the first connection is
@@ -476,10 +477,11 @@ func (s *Server) listen(addr string) (net.Listener, error) {
 	return &peerListener{Listener: ln, allowed: s.allowedPeers}, nil
 }
 
-// awaitOpen holds a self-lapsing proxy (k8s runner) off its listeners until its first renew: it
-// refuses every request until then, so it listens only once it serves, and a connect to it (the
-// runner's readiness probe) is proof of that for this proxy and an older one alike. False when
-// Shutdown comes first, which a lapse before that renew ends in too. A gate-less proxy goes on at once.
+// awaitOpen holds a proxy with a first-renewal gate (a self-lapsing one on the k8s runner, or a replacement
+// the runner started with FirstRenewGateEnv) off its listeners until its first renew: it refuses every
+// request until then, so it listens only once it serves, and a connect to it (the runner's readiness
+// probe) is proof of that for this proxy and an older one alike. False when Shutdown comes first, which a
+// lapse before that renew ends in too. A gate-less proxy goes on at once.
 func (s *Server) awaitOpen() bool {
 	g := s.proxy.lapse
 	if g == nil {

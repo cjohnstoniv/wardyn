@@ -134,8 +134,9 @@ func gateEventually(d time.Duration, cond func() bool) bool {
 	}
 }
 
-// TestSidecar_ClosedUntilFirstRenew: a server-mode sidecar with a control plane binds its port and
-// runs OnListening only once its first renewal has answered 200.
+// TestSidecar_ClosedUntilFirstRenew: a server-mode sidecar with a control plane that the runner started as
+// a replacement (FirstRenewGateEnv, set by withFirstRenewGate) binds its port and runs OnListening only
+// once its first renewal has answered 200.
 func TestSidecar_ClosedUntilFirstRenew(t *testing.T) {
 	rp := newRenewPlane(t, http.StatusOK, true)
 	sc := startSidecar(t, rp.srv.URL, true, true)
