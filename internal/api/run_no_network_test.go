@@ -331,6 +331,53 @@ func TestNoNetwork_ExtraHarnessModelIsASourceWithoutAProvider(t *testing.T) {
 	}
 }
 
+// noNetworkRunModeLaunch posts a run-mode launch under No network with tools to door as an admin, on a deployment
+// with no model providers.
+func noNetworkRunModeLaunch(t *testing.T, door string, tools string) *httptest.ResponseRecorder {
+	t.Helper()
+	srv := providerRunFixture(t, types.SiteConfig{}, &capStore{}, nil)
+	srv.cfg.AgentImages = composeAgentImages
+	srv.cfg.Runner = nil
+	body := `{"title":"t","experience":"interactive","tools":` + tools + `,"no_repositories_or_drives":true` + noNetworkWallPreset + `}`
+	return do(t, srv, http.MethodPost, door, providerAdminToken(srv, joinCreateOwner), body)
+}
+
+// TestNoNetwork_ExtraModelHarnessIsRefusedAtEveryDoor: through the real handlers, "none" plus codex-cli (no
+// model provider on the deployment) under No network is 422 no_network_needs_egress naming the codex-cli
+// harness's model at create, at Review (preflight) and at the preview, one subtest each, so the web
+// console and the API give the same answer.
+//
+// It catches stepNoNetwork leaving an extra harness's model out of its sources at any one door.
+func TestNoNetwork_ExtraModelHarnessIsRefusedAtEveryDoor(t *testing.T) {
+	tools := `[{"id":"none","kind":"harness"},{"id":"codex-cli","kind":"harness"}]`
+	for name, door := range map[string]string{"create": "/api/v1/runs", "review": preflightDoor, "preview": previewDoor} {
+		t.Run(name, func(t *testing.T) {
+			w := noNetworkRunModeLaunch(t, door, tools)
+			var body errorBody
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if w.Code != http.StatusUnprocessableEntity || body.Reason != reasonNoNetworkNeedsEgress || !strings.Contains(body.Error, "the codex-cli harness's model") {
+				t.Errorf("%s = %d %s, want 422 %s naming the codex-cli harness's model", door, w.Code, w.Body, reasonNoNetworkNeedsEgress)
+			}
+		})
+	}
+}
+
+// TestNoNetwork_NoModelHarnessStillLaunches: the overreach pin. A No network launch with no model harness at
+// all ("none" alone, your own tools) is not refused for its model at create, Review or the preview.
+//
+// It catches stepNoNetwork counting a harness that needs no model (or every harness in the set) as a host
+// source, which would refuse every No network launch.
+func TestNoNetwork_NoModelHarnessStillLaunches(t *testing.T) {
+	tools := `[{"id":"none","kind":"harness"}]`
+	for name, door := range map[string]string{"create": "/api/v1/runs", "review": preflightDoor, "preview": previewDoor} {
+		t.Run(name, func(t *testing.T) {
+			if w := noNetworkRunModeLaunch(t, door, tools); w.Code/100 != 2 {
+				t.Errorf("%s = %d %s, want it accepted", door, w.Code, w.Body)
+			}
+		})
+	}
+}
+
 // A host still on the spec is named by the source the fold recorded adding it; and a No network launch
 // with nothing that needs a host, or a launch with another preset, passes.
 func TestNoNetwork_SpecHostsAndPasses(t *testing.T) {
