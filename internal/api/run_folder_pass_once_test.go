@@ -655,6 +655,19 @@ func TestPassBack_AnUnreadOpenPassWhoseAgentLivesIsNotKept(t *testing.T) {
 	}
 }
 
+// An open pass from a record never read, whose agent is stopped, is not kept when its resume cannot be
+// written at the unknown generation: the record found past it proves no other owner.
+func TestPassBack_AnUnreadOpenPassWithNoResumeWrittenIsNotKept(t *testing.T) {
+	f := newPassFixture(t, 2, 2, nil)
+	f.runnerAs(t, &olderRunnerCaps)
+	f.s.cfg.Store = &statusReadFailsOnce{computerFolderStore: f.cs}
+	f.set(func(st *types.RunLocalFolderStatus) { st.Gen, st.Settled = 3, 3 })
+	seen := passSeen(f.sb)
+	if f.back() || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox left to its stop", seen.Load())
+	}
+}
+
 // A delayed owner whose generation another owner moved on writes nothing and leaves the sandbox up: owner
 // A's pass is held while owner B moves the record on, passes and settles; A's record then does not land,
 // and A does not let its caller stop B's sandbox.

@@ -46,7 +46,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An older runner waits an hour before the next copy back after an unanswered one, and the two can overlap.
 - Copy backs to a virtual machine are not guarded on an older runner, so one can run beside a stuck pass.
 - A busy folder on a sandbox the server's Docker hosts has no bound of its own: it is retried on every sweep and never given up.
-- A generation bump that fails with a store error stops the sandbox without a copy back, so its changes are not brought back.
+- A generation bump that fails with a store error, or follows a folder record that could not be read, stops the sandbox without a copy back and with no record of it, so its changes are not brought back.
 - A run whose sandbox cannot be kept, ending while another step holds the run, can stay running past its end until that step lets go, or until a sweep forces its stop after the keep grace and another 5 minutes.
 - On Windows, a file replace falls back to a plain rename, with no write-through, when the folder's path cannot be resolved.
 - On a Kubernetes runner that restarts while cut off from the server, a run can keep network access past its scheduled end. Its proxy stops serving at most about an hour after the server records the end, or earlier when a renewal is refused for good.
