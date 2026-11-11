@@ -24,12 +24,15 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 	return p != nil && p.Scope == types.WallPresetScopeBuiltin && p.ID == types.WallPresetNoNetwork
 }
 
-// noNetworkRefusesModelRun reports whether f is a No network launch of a model run, which stepNoNetwork
-// always refuses (the harness's model is a host source). stepModelProvider checks only the provider
-// selection for it, so the refusal never waits on, or tells a caller about, their model credential.
-func noNetworkRefusesModelRun(f *runFold) bool {
-	_, needsModel := agentLLMProvider(f.req.Agent)
-	return noNetworkPreset(f.source.wallPreset) && needsModel && createDoorIsModelRun(*f.req)
+// noNetworkSkipsCredential is r, marked (withNoCredentialCheck) when the launch is a No network one of a
+// model run, which stepNoNetwork always refuses (the harness's model is a host source). The provider is still
+// chosen and judged, but the caller's model credential is not read, so the refusal never waits on it or
+// tells a caller about it.
+func noNetworkSkipsCredential(r *http.Request, preset *types.WallPresetOnRun, req createRunRequest) *http.Request {
+	if _, needsModel := agentLLMProvider(req.Agent); noNetworkPreset(preset) && needsModel && createDoorIsModelRun(req) {
+		return r.WithContext(withNoCredentialCheck(r.Context()))
+	}
+	return r
 }
 
 // stepNoNetwork refuses a No network launch that would need a host (422 no_network_needs_egress), naming
