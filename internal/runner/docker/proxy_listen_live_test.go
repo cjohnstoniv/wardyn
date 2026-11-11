@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -39,10 +41,23 @@ func proxyAnswered(ctx context.Context, t *testing.T, d *Driver, ref, proxyURL s
 
 // liveRenewingControlPlane serves wardynd's token renewal, and nothing else, where a run's proxy reaches this
 // host (host.docker.internal: the host's loopback on Docker Desktop, else the default bridge's gateway), and
-// returns its URL. It hands back the token it was asked with. A replacement proxy serves only after a
-// renewal answers 200 (proxy.FirstRenewGateEnv).
-func liveRenewingControlPlane(ctx context.Context, t *testing.T, d *Driver) string {
+// returns its URL and the CA to pin. It hands back the token it was asked with. A replacement proxy serves
+// only after a renewal answers 200 (proxy.FirstRenewGateEnv). It serves TLS from an internal CA, as wardynd's
+// internal listener does: a proxy refuses plain http:// to a host other than loopback (hoptls.CheckURL).
+func liveRenewingControlPlane(ctx context.Context, t *testing.T, d *Driver) (url, caPEM string) {
 	t.Helper()
+	blob, err := hoptls.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := ca.ServingCert("host.docker.internal", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
 	bind := netip.MustParseAddr("127.0.0.1")
 	if info, err := d.cli.Info(ctx, client.InfoOptions{}); err != nil {
 		t.Fatal(err)
@@ -72,10 +87,11 @@ func liveRenewingControlPlane(ctx context.Context, t *testing.T, d *Driver) stri
 			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		})
 	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() { _ = srv.Serve(ln) }()
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second,
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}}
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
 	t.Cleanup(func() { _ = srv.Close() })
-	return fmt.Sprintf("http://host.docker.internal:%d", ln.Addr().(*net.TCPAddr).Port)
+	return fmt.Sprintf("https://host.docker.internal:%d", ln.Addr().(*net.TCPAddr).Port), string(ca.CertPEM)
 }
 
 // TestProxyListener_Live_AgentOnlyOnRunNetwork, on a real engine with the real
@@ -93,14 +109,16 @@ func TestProxyListener_Live_AgentOnlyOnRunNetwork(t *testing.T) {
 	}
 	ensureNetwork(t, d, d.cfg.InternalNetwork)
 
+	cpURL, cpCA := liveRenewingControlPlane(ctx, t, d)
 	spec := runner.SandboxSpec{
 		RunID:            uuid.New(),
 		Image:            "busybox:latest",
 		ConfinementClass: types.CC1,
 		ProxyConfig: runner.ProxyConfig{
-			RunToken:        "listen-test",
-			ControlPlaneURL: liveRenewingControlPlane(ctx, t, d),
-			Policy:          types.RunPolicySpec{MinConfinementClass: types.CC1},
+			RunToken:          "listen-test",
+			ControlPlaneURL:   cpURL,
+			ControlPlaneCAPEM: cpCA,
+			Policy:            types.RunPolicySpec{MinConfinementClass: types.CC1},
 		},
 		Resources: runner.Resources{CPUMillis: 500, MemoryMiB: 128},
 		Labels:    map[string]string{"wardyn.test": "proxy-listen"},

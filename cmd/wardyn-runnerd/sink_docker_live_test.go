@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
@@ -168,7 +170,8 @@ func TestDockerProxySendsDecisionsToTheSink_Live(t *testing.T) {
 	if err := link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: lease}); err != nil {
 		t.Fatal(err)
 	}
-	pc := runner.ProxyConfig{RunToken: "sink-live-token", ControlPlaneURL: sinkRenewingControlPlane(t, bind),
+	cpURL, cpCA := sinkRenewingControlPlane(t, bind)
+	pc := runner.ProxyConfig{RunToken: "sink-live-token", ControlPlaneURL: cpURL, ControlPlaneCAPEM: cpCA,
 		Policy:        types.RunPolicySpec{AllowedDomains: []string{host}, MinConfinementClass: types.CC1},
 		InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}}
 	created, err := org.CreateSandbox(ctx, runner.SandboxSpec{RunID: runID, RunnerID: row.ID.String(), Image: "busybox:latest", ConfinementClass: types.CC1, ProxyConfig: pc})
@@ -279,10 +282,12 @@ func TestDockerProxySendsDecisionsToTheSink_Live(t *testing.T) {
 }
 
 // sinkRenewingControlPlane serves wardynd's token renewal, and nothing else, on bind, and returns the URL a
-// run's proxy reaches it at. It hands back the token it was asked with. A replacement proxy serves only after
-// a renewal answers 200 (proxy.FirstRenewGateEnv).
-func sinkRenewingControlPlane(t *testing.T, bind netip.Addr) string {
+// run's proxy reaches it at and the CA to pin. It hands back the token it was asked with. A replacement proxy
+// serves only after a renewal answers 200 (proxy.FirstRenewGateEnv). It serves TLS from an internal CA, as
+// wardynd's internal listener does: a proxy refuses plain http:// to a host other than loopback (hoptls.CheckURL).
+func sinkRenewingControlPlane(t *testing.T, bind netip.Addr) (url, caPEM string) {
 	t.Helper()
+	tlsCfg, caPEM := liveHopTLS(t)
 	ln, err := net.Listen("tcp", netip.AddrPortFrom(bind, 0).String())
 	if err != nil {
 		t.Fatal(err)
@@ -294,10 +299,28 @@ func sinkRenewingControlPlane(t *testing.T, bind netip.Addr) string {
 			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		})
 	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() { _ = srv.Serve(ln) }()
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, TLSConfig: tlsCfg}
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
 	t.Cleanup(func() { _ = srv.Close() })
-	return fmt.Sprintf("http://host.docker.internal:%d", ln.Addr().(*net.TCPAddr).Port)
+	return fmt.Sprintf("https://host.docker.internal:%d", ln.Addr().(*net.TCPAddr).Port), caPEM
+}
+
+// liveHopTLS mints an internal CA and a serving certificate for host.docker.internal under it.
+func liveHopTLS(t *testing.T) (*tls.Config, string) {
+	t.Helper()
+	blob, err := hoptls.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := ca.ServingCert("host.docker.internal", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}, string(ca.CertPEM)
 }
 
 // liveSinkBind is where a container on the engine reaches this host through host-gateway, as the relay
