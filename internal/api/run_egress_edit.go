@@ -284,7 +284,7 @@ func (s *Server) withRunFate(ctx context.Context, run types.AgentRun, rerr *revi
 
 // egressEditSupported refuses, before anything changes, an edit whose new proxy could not confirm
 // what it loaded: a store that keeps no generations or proxy starts, a substrate that cannot answer
-// the hash of the bytes it hands the proxy, or a legacy start (proxyStartMode's positive evidence).
+// the hash of the bytes it hands the proxy, or a runner or proxy image known to predate firstRenewGateRelease (olderThanFirstRenewGate's positive evidence, which covers the readback's own floor).
 func (s *Server) egressEditSupported(ctx context.Context, run types.AgentRun) *reviveError {
 	_, gens := s.cfg.Store.(store.RunPolicyGenerations)
 	_, starts := s.cfg.Store.(store.RunProxyStarts)
@@ -293,9 +293,9 @@ func (s *Server) egressEditSupported(ctx context.Context, run types.AgentRun) *r
 		return reviveRefused(http.StatusConflict, reasonEgressEditUnsupported,
 			"this deployment cannot confirm the policy a new proxy loaded, so a live egress edit is refused and nothing changed; start a new run with the narrower policy")
 	}
-	if s.proxyStartMode(ctx, run) == store.ProxyStartLegacy {
+	if s.olderThanFirstRenewGate(ctx, run) {
 		return reviveRefused(http.StatusConflict, reasonEgressEditLegacyProxy,
-			"this run's runner or proxy image predates the policy readback, so an edit could not be confirmed and nothing changed; start a new run with the narrower policy")
+			"this run's runner or proxy image is older than "+firstRenewGateRelease+", so an edit could not be confirmed safely and nothing changed; update the runner and the proxy image to "+firstRenewGateRelease+" or later, or start a new run with the narrower policy")
 	}
 	return nil
 }
