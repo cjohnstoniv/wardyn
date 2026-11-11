@@ -380,7 +380,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 // revive that starts the run's stopped agent (startsAgent, reviveNeedsAgentStart)
 // takes a slot under its pool's cap, WARDYN_MAX_CONCURRENT_RUNS and its runner's
 // max_runs, pool lock first, then the cap's lock, then the runner's, and at any of
-// them is refused as a create is, the run left kept.
+// them is refused as a create is, the run left kept. A live run whose start is owed
+// already holds its slot and takes none.
 //
 // expected is the policy slot the revive read before its source config: the claim lands only while it is
 // still the run's newest (store.RunReviverAtSlot), so a stale revive whose slot a newer one moved (that
@@ -441,8 +442,8 @@ func (s *Server) claimReviveOwing(ctx context.Context, reviver store.RunReviver,
 // outage-kept run whose agent stopped can still read as holding a slot itself.
 func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, startsAgent bool) *reviveError {
 	c, ok := s.cfg.Store.(runCounter)
-	if !startsAgent || s.cfg.MaxConcurrentRuns <= 0 || !ok {
-		return nil
+	if !startsAgent || run.LostAt == nil || s.cfg.MaxConcurrentRuns <= 0 || !ok {
+		return nil // a live run whose start is owed already holds its slot, as the claim's cap path knows
 	}
 	n, err := c.CountNonTerminalRuns(ctx, run.ID)
 	if err != nil {

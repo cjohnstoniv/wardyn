@@ -74,9 +74,12 @@ func (s *Server) reviveGenerationFailed(ctx context.Context, run types.AgentRun,
 		data["error"] = "undo the run's policy generation: " + err.Error()
 	}
 	if run.LostAt == nil && !undoFailed {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+		// The claim's bound may have run out; the audit and the lineage restore take a bound of their own.
+		kctx, cancelKept := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		defer cancelKept()
+		s.recordAudit(kctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 		s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
-		s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
+		s.restoreRunTokenLineage(kctx, run.ID, fresh, renewed)
 		return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 			loggedMsg(ctx, "the run's policy could not be recorded, so its proxy was not replaced, and the run keeps its current proxy", err))
 	}
@@ -176,9 +179,12 @@ func (s *Server) reviveExpectedGeneration(ctx context.Context, runID uuid.UUID) 
 // answer is the kept proxy's.
 func (s *Server) revivePolicyMoved(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, fresh string, renewed renewedTokens, err error) *reviveError {
 	data["error"] = "the run changed since this revive read its policy generation (another revive started or abandoned one, or the run was lost or left RUNNING): " + err.Error()
-	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+	// The claim's bound may have run out; the audit and the lineage restore take a bound of their own.
+	kctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	s.recordAudit(kctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 	s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
-	s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
+	s.restoreRunTokenLineage(kctx, run.ID, fresh, renewed)
 	return reviveKeptCurrent(ctx, err)
 }
 
@@ -235,7 +241,10 @@ func (s *Server) reconcileLostAdvance(ctx context.Context, run types.AgentRun, p
 	if !ok || fresh == "" {
 		return 0, err
 	}
-	ps, _, rerr := st.RunPolicyState(ctx, run.ID)
+	// The claim's bound may have run out; the read-back takes a bound of its own so it does not fail at once.
+	rctx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	ps, _, rerr := st.RunPolicyState(rctx, run.ID)
+	cancelRead()
 	if rerr != nil {
 		return 0, fmt.Errorf("%w (whether the generation was written is unknown: reading it back failed: %v)", err, rerr)
 	}
