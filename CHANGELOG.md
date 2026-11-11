@@ -26,10 +26,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A forced stop of an ended run, after its lock was held 5 minutes past the end, normally stops the sandbox. Changes not yet copied back to the laptop are lost and the run records "not brought back". The exception is a Docker sandbox hosted on the server. If its folder record could not be read, or its copy back may still be in flight, it is kept with its network proxy stopped, and "not brought back" may not be recorded. A failed stop is retried on the next watcher tick, normally within a minute. The same applies on runners, virtual machines and Kubernetes in server mode, which cannot stop the proxy alone.
 - A copy back that finds the folder busy on a sandbox that cannot be held (a virtual machine, or an agent that cannot be stopped alone) stops the sandbox at that visit and records "not brought back". The same happens to such a sandbox whose last pass may still be running on an older runner. Changes the running pass had not finished copying are lost.
 - Changes not yet copied back are lost when the laptop's runner is offline at the end of the run.
-- The cut-off loop for a kept run, the 7-day keep and give-up, and the "kept / deleted" view are not in this release; they are planned for a later release candidate. A revoke that fails at the end of an ordinary run is not retried until then. A forced stop keeps retrying its revoke on each watcher pass, normally within a minute, until it succeeds.
-- A failed write of the guarded folder record, and the first failure of a pass settling with an error only, can still lose a pass's changes.
-- An older runner waits an hour before the next pass back after an unanswered one, and the two can overlap. Passes to a virtual machine are not guarded on an older runner.
-- A busy folder on the server's Docker has no bound of its own. A failed generation bump can leave the sandbox running. On Windows, a file replace that falls back to a plain rename is not atomic.
+- The cut-off loop for a kept run, the 7-day keep and give-up, and the "kept / deleted" view are not in this release; they are planned for a later release candidate. A revoke that fails at the end of an ordinary run is not retried. A forced stop keeps retrying its revoke on each watcher pass, normally within a minute, until it succeeds.
+- A failed write of the guarded folder record can still lose a pass's changes: the copy back is kept without a saved keep, and a later visit that finds no resume stops the sandbox.
+- The first failure of a copy back that settles with an error only, such as a failed file listing before anything was counted, still stops the sandbox, and changes it did not list can be lost.
+- An older runner waits an hour before the next copy back after an unanswered one, and the two can overlap.
+- Copy backs to a virtual machine are not guarded on an older runner, so one can run beside a stuck pass.
+- A busy folder on a sandbox the server's Docker hosts has no bound of its own: it is retried on every sweep and never given up.
+- A failed generation bump can leave the sandbox running without its agent stopped.
+- On Windows, a file replace falls back to a plain rename, with no write-through, when the folder's path cannot be resolved.
 - The check that a template's placement lands where it says is not in this release; it is planned for 0.10.1.
 
 ### Before you upgrade
