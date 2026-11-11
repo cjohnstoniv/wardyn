@@ -453,9 +453,8 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // "lost" only when that was persisted. When the lost mark could not be written
 // the run is not lost on record, its proxy is stopped and its broker revoked
 // anyway (reloseRun), and the answer says the recovery is unresolved, for a
-// later sweep to settle. The answer and the audit row claim a stopped proxy, "no egress" or lost_again
-// only for a stop that was confirmed and a lost mark that was persisted; otherwise they say the stop
-// is not confirmed or the run's fate is another operation's. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
+// later sweep to settle. A stopped proxy, "no egress" or lost_again is claimed only for a confirmed
+// stop and a persisted lost mark. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
 func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
 	fate, stopErr := s.reloseRun(ctx, run)
 	data["lost_again"] = fate == relostLost
@@ -859,8 +858,7 @@ func reviveFrom(run types.AgentRun) string {
 // could not be written, so nothing says the run is lost. The run is contained
 // anyway, its proxy stopped and its broker credentials revoked, and a sweep
 // settles the rest; the caller must not tell anyone the run is lost. stopErr is
-// non-nil when the proxy stop is not confirmed, so the caller says "stopped" or
-// "no egress" only for a stop that landed.
+// non-nil when the proxy stop is not confirmed.
 func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate reloseFate, stopErr error) {
 	reason, at := types.LostOutage, s.cfg.Now()
 	switch run.LostReason {
