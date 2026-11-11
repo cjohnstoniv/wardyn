@@ -453,8 +453,8 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // "lost" only when that was persisted. When the lost mark could not be written
 // the run is not lost on record, its proxy is stopped and its broker revoked
 // anyway (reloseRun), and the answer says the recovery is unresolved, for a
-// later sweep to settle. A stopped proxy, "no egress" or lost_again is claimed only for a confirmed
-// stop and a persisted lost mark. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
+// later sweep to settle. "Stopped" or "no egress" is claimed only for a confirmed stop; lost_again
+// only for a persisted lost fate. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
 func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
 	fate, stopErr := s.reloseRun(ctx, run)
 	data["lost_again"] = fate == relostLost
