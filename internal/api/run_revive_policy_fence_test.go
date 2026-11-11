@@ -125,6 +125,18 @@ func (s *interleaveStore) MarkRunRevived(ctx context.Context, id uuid.UUID, from
 	return ok, err
 }
 
+// MarkRunRevivedAtSlot is the claim bound to the policy slot the revive read, as the PG claim's UPDATE
+// compares it: a moved slot claims nothing.
+func (s *interleaveStore) MarkRunRevivedAtSlot(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, startsAgent bool, expected store.PolicySlot) (bool, error) {
+	gs := s.readbackStore.generationStore
+	gs.gmu.Lock()
+	defer gs.gmu.Unlock()
+	if store.NewestPolicySlot(gs.state) != expected {
+		return false, nil
+	}
+	return s.MarkRunRevived(ctx, id, from, ended, limit, startsAgent)
+}
+
 // fenceFixture is newEgressEditFixture on an interleaveStore, with a second replica (b) over the same
 // store, runner, identity and audit, whose run locks are its own.
 type fenceFixture struct {
@@ -567,5 +579,53 @@ func TestWhileLockHeld_CallerCancelAloneDoesNotEndTheReplace(t *testing.T) {
 	end()
 	if !errors.Is(context.Cause(replaceCtx), context.Canceled) {
 		t.Errorf("after stop: cause %v, want context.Canceled", context.Cause(replaceCtx))
+	}
+}
+
+// A stale revive (A) of a run lost to a reboot reads its policy slot and source config, then pauses
+// before its claim. B, on the second replica, claims, advances, fails its replace and loses the run again
+// (reboot). A's claim is bound to the slot it read, which B moved, so it claims nothing: B's lost mark
+// stands exactly, and A starts and stops nothing. Unbound, A's claim would clear B's mark and its
+// advance would then miss, leaving the run looking live with its agent stopped.
+func TestReviveFence_StaleClaimAfterANewerReviveReLostTheRunClearsNothing(t *testing.T) {
+	f := newFenceFixture(t)
+	sr := &startingHashedRunner{hashedReviveRunner: f.hr}
+	f.srv.cfg.Runner, f.b.cfg.Runner = sr, sr
+	lostAt := f.now.Add(-time.Minute)
+	f.st.mu.Lock()
+	f.st.run.LostAt, f.st.run.LostReason = &lostAt, types.LostReboot
+	f.st.run.Interactive = true
+	f.st.mu.Unlock()
+	f.run = f.st.run
+	ctx := context.Background()
+	var b *httptest.ResponseRecorder
+	var afterB store.RunLostFate
+	var stopsAfterB int
+	f.is.beforeSourceRead = func() {
+		f.rr.mu.Lock()
+		f.rr.replaceErr = runner.ErrProxyReplaceFailed
+		f.rr.mu.Unlock()
+		b = do(t, f.b, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		var err error
+		if afterB, err = f.rb.RunLostFate(ctx, f.run.ID); err != nil {
+			t.Error(err)
+		}
+		stopsAfterB = f.lr.proxyStopCount()
+	}
+	a := f.reviveOnA(t)
+	if b == nil || b.Code != http.StatusBadGateway || errorReason(b) != reasonReviveProxyReplaceFailedLost {
+		t.Fatalf("B: %v, want 502 %s", b, reasonReviveProxyReplaceFailedLost)
+	}
+	if afterB.LostAt == nil || afterB.LostReason != types.LostReboot {
+		t.Fatalf("after B: %+v, want lost again (reboot)", afterB)
+	}
+	if a.Code != http.StatusConflict || errorReason(a) != reasonReviveRunChanged {
+		t.Errorf("A: %d %s, want 409 %s", a.Code, a.Body.String(), reasonReviveRunChanged)
+	}
+	if got, err := f.rb.RunLostFate(ctx, f.run.ID); err != nil || !reflect.DeepEqual(got, afterB) {
+		t.Errorf("fate after A = %+v, %v; want B's relose exactly %+v", got, err, afterB)
+	}
+	if sr.started() != 0 || f.lr.proxyStopCount() != stopsAfterB {
+		t.Errorf("agent starts %d, proxy stops %d (after B %d): A must start and stop nothing", sr.started(), f.lr.proxyStopCount(), stopsAfterB)
 	}
 }

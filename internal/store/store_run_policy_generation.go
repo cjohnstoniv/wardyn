@@ -148,6 +148,19 @@ func NewestPolicyGeneration(st types.RunPolicyState) int {
 // past the last, so the array's last element is the newest.
 const newestPolicyGenerationSQL = `COALESCE((policy_generations -> -1 ->> 'generation')::int, 1)`
 
+// newestPolicyAbandonedSQL is NewestPolicySlot's Abandoned over the row.
+const newestPolicyAbandonedSQL = `COALESCE((policy_generations -> -1 ->> 'abandoned')::boolean, false)`
+
+// RunReviverAtSlot is RunReviver's claim bound to the policy slot the revive read before its source
+// config (NewestPolicySlot, compared in the claim's own UPDATE): a revive whose slot moved since (a newer
+// revive claimed, advanced and, failing, lost the run again) claims nothing, so it never clears a lost
+// mark that revive wrote. A zero expected binds nothing. Optional: the api layer type-asserts.
+type RunReviverAtSlot interface {
+	MarkRunRevivedAtSlot(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, startsAgent bool, expected PolicySlot) (bool, error)
+}
+
+var _ RunReviverAtSlot = PG{}
+
 // putRunProxyConfigSQL is PutRunProxyConfig's write, for the generation writes' own transaction.
 const putRunProxyConfigSQL = `
 	INSERT INTO run_proxy_configs (run_id, sealed) VALUES ($1, $2)

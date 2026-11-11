@@ -305,7 +305,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if rerr := s.claimRevive(ctx, reviver, run, rebooted, actorType, actor); rerr != nil {
+	if rerr := s.claimRevive(ctx, reviver, run, rebooted, expected, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	// From the claim on, the revive finishes or compensates whatever becomes of
@@ -434,11 +434,22 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 // takes a slot under its pool's cap, WARDYN_MAX_CONCURRENT_RUNS and its runner's
 // max_runs, pool lock first, then the cap's lock, then the runner's, and at any of
 // them is refused as a create is, the run left kept.
-func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, actorType types.ActorType, actor string) *reviveError {
+//
+// expected is the policy slot the revive read before its source config: the claim lands only while it is
+// still the run's newest (store.RunReviverAtSlot), so a stale revive whose slot a newer one moved (that
+// one claimed, advanced, failed and lost the run again) clears nothing it wrote and answers that the run
+// changed. A zero slot binds nothing.
+func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, expected store.PolicySlot, actorType types.ActorType, actor string) *reviveError {
 	if rerr := s.reviveExpiryDue(ctx, run.ID); rerr != nil {
 		return rerr
 	}
-	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
+	var claimed bool
+	var err error
+	if at, ok := reviver.(store.RunReviverAtSlot); ok && expected.Generation > 0 {
+		claimed, err = at.MarkRunRevivedAtSlot(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent, expected)
+	} else {
+		claimed, err = reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
+	}
 	if errors.Is(err, store.ErrRunCapReached) {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
 	}

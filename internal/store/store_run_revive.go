@@ -69,6 +69,11 @@ var _ RunReviver = PG{}
 
 // MarkRunRevived — see RunReviver.
 func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, startsAgent bool) (bool, error) {
+	return s.MarkRunRevivedAtSlot(ctx, id, from, ended, limit, startsAgent, PolicySlot{})
+}
+
+// MarkRunRevivedAtSlot — see RunReviverAtSlot.
+func (s PG) MarkRunRevivedAtSlot(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, startsAgent bool, expected PolicySlot) (bool, error) {
 	switch from {
 	case "", types.LostOutage, types.LostReboot:
 	case types.LostEnded:
@@ -79,9 +84,9 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 		return false, nil
 	}
 	if startsAgent {
-		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit)
+		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit, expected)
 	}
-	return markRunRevived(ctx, s.Pool, id, from, ended)
+	return markRunRevived(ctx, s.Pool, id, from, ended, expected)
 }
 
 // markRunRevivedUnderCap is the claim of a revive that starts an agent, under the run's pool cap, the
@@ -96,7 +101,7 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 // The claim does not pin the outage run's end either: admission does not depend on
 // it, and an extension the owner makes meanwhile is legitimate, not a change that
 // should fail the revive.
-func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
+func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, expected PolicySlot) (claimed bool, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
 		if err := lockPoolForRevive(ctx, q, id); err != nil {
 			return err
@@ -127,7 +132,7 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 			}
 		}
 		var err error
-		claimed, err = markRunRevived(ctx, q, id, from, ended)
+		claimed, err = markRunRevived(ctx, q, id, from, ended, expected)
 		return err
 	})
 	return claimed && err == nil, err
@@ -135,8 +140,9 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 
 // markRunRevived clears agent_stopped_at with the lost mark whatever the revive
 // starts: a live run holds its slot by lost_at alone, and a stale stop mark must
-// not make a later outage-kept run look agentless.
-func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error) {
+// not make a later outage-kept run look agentless. expected, when its generation is above 0, binds the
+// claim to the policy slot the revive read (RunReviverAtSlot).
+func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.LostReason, ended *EndedKept, expected PolicySlot) (bool, error) {
 	lostAt, keptAfter, now := endedArgs(ended)
 	tag, err := q.Exec(ctx, `
 		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL, agent_stopped_at=NULL,
@@ -145,8 +151,10 @@ func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.Los
 			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
 		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3
 		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))
-		  AND ($3 <> $9 OR ends_at IS NULL OR ends_at > now())`,
-		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now, string(types.LostReboot), string(types.LostOutage))
+		  AND ($3 <> $9 OR ends_at IS NULL OR ends_at > now())
+		  AND ($10::int = 0 OR (`+newestPolicyGenerationSQL+` = $10 AND `+newestPolicyAbandonedSQL+` = $11))`,
+		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now, string(types.LostReboot), string(types.LostOutage),
+		expected.Generation, expected.Abandoned)
 	if err != nil {
 		return false, fmt.Errorf("store: mark run revived: %w", err)
 	}
