@@ -360,6 +360,30 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(await screen.findByText(NR_FILES.MOUNT_MAIN("0.5 GiB"))).toBeInTheDocument();
   });
 
+  // Mutation caught: `over` only looks at the stored size (the `!dirty && committed` form), so a typed size shows no note.
+  // Mutation caught: the map keeps the typed text (`dirty ? NR_SHARED.GIB(text)`) ahead of the cap, so it reads 12 GiB.
+  it("a size typed over the pool's cap shows the over-cap note at once, and the mount map reads the cap", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    enter("12");
+    expect(screen.getByTestId("nr-main-drive-over-cap")).toHaveTextContent(NR_FILES.OVER_CAP("12 GiB", "8 GiB"));
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("8 GiB"))).toBeInTheDocument();
+    expect(screen.queryByText(NR_FILES.MOUNT_MAIN("12 GiB"))).toBeNull();
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 8192 });
+  });
+
+  // Mutation caught: the note shows for every typed size (the `mib > capMib` test dropped or flipped to `>=`/`<`).
+  it("a size typed under the cap shows no over-cap note", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    enter("4");
+    expect(screen.queryByTestId("nr-main-drive-over-cap")).toBeNull();
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("4 GiB"))).toBeInTheDocument();
+    enter("8");
+    expect(screen.queryByTestId("nr-main-drive-over-cap")).toBeNull();
+  });
+
   it("emptying the field and leaving it keeps the stored size and the clamp note", async () => {
     checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
     show();

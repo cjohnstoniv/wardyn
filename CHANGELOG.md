@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- New Run: a main drive size typed over the pool's cap now shows "{size} is over the {cap} cap. The run gets {cap}." under the Size field as you type, and the Files summary shows the size the run gets, as Review does.
 - Files changed in a computer folder could be lost when a run ended while they were still being copied back: a periodic sandbox sweep could stop the sandbox part way through the copy. The sandbox is now left running until the copy back finishes. Affects 0.10.0 prereleases only.
 - A "both ways" computer folder's changes were dropped when its run was stopped for being idle or for reaching its maximum age. They now come back before the sandbox stops, which can add up to 2 minutes to the stop. Affects 0.10.0 prereleases only.
 - A kept run's teardown at the end of its grace could stop its sandbox while another step was still using the run, and a revive that reached its final step after the grace ran out could still bring the run back. The teardown now waits for that step and is retried on the next pass, stopping the sandbox without bringing a computer folder back once it has waited 5 minutes, and such a revive is refused. Affects 0.10.0 prereleases only.

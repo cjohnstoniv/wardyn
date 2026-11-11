@@ -148,9 +148,10 @@ export function useMainDriveSize(view: MainDriveView) {
   // What the field means: the stored size once committed, else what its text reads as.
   const mib = !dirty && committed !== undefined ? committed : parseSize(text, unit);
   // A stored size over the cap (a template's, a run again's, or one from before a pool change): the field keeps the
-  // request, the run gets the cap, and the server's cut stands. A size being typed is clamped on blur, not flagged here.
-  const over = !dirty && committed !== undefined && view.capMib !== undefined && committed > view.capMib
-    ? { size: sizeWords(committed), cap: sizeWords(view.capMib) } : undefined;
+  // request, the run gets the cap, and the server's cut stands. A size being typed over the cap says the same thing
+  // at once (blur then clamps it); `mib` is the typed size while editing and the stored one otherwise.
+  const over = mib !== undefined && view.capMib !== undefined && mib > view.capMib
+    ? { size: sizeWords(mib), cap: sizeWords(view.capMib) } : undefined;
   return {
     over,
     text,
