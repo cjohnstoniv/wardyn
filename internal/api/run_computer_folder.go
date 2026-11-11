@@ -262,7 +262,9 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	// lost it (another moved the record on) writes nothing and leaves the sandbox to that owner.
 	rec, ok := s.bumpComputerFolderGen(ctx, runID, prev.Gen)
 	if !ok {
-		return true
+		// Kept only for an owner a fresh read proves moved the record on; a store error, or a record never
+		// read, stops the sandbox, so a terminal run does not keep its agent and egress until a sweep.
+		return !unread && s.folderGenTaken(ctx, runID, prev.Gen)
 	}
 	if folderBroughtBack(rec) {
 		// A pass back completed between the read above and the bump: none runs again.
@@ -327,8 +329,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 
 // recordFolderBackAt records a pass back's outcome at the generation it owns, settled when the runner
 // answered for it or nothing was sent, and audits it. It reports whether the sandbox stays up: for next,
-// a resume; and whenever the record did not land, since the generation is then another owner's, who
-// decides the sandbox.
+// a resume; and when the record did not land because another owner moved the generation on (read again,
+// folderGenTaken), who then decides the sandbox. A record that did not land for any other reason stops it.
 func (s *Server) recordFolderBackAt(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, settled bool, next *types.FolderResume, res runnerwire.FolderPass, errText string) bool {
 	recorded := s.writeComputerFolderStatus(ctx, id, gen, func(st *types.RunLocalFolderStatus) {
 		st.Resume, st.Back = next, folderPassRecord(s.cfg.Now(), res, errText, true)
@@ -337,7 +339,7 @@ func (s *Server) recordFolderBackAt(ctx context.Context, id uuid.UUID, folder ty
 		}
 	})
 	if _, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok && !recorded {
-		return true
+		return s.folderGenTaken(ctx, id, gen)
 	}
 	s.auditComputerFolderPass(ctx, id, folder, true, res, errText)
 	return next != nil
