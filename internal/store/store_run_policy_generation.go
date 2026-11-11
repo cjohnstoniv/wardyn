@@ -201,40 +201,15 @@ func (s PG) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expect
 	return gen, nil
 }
 
-// PolicyAbandonNoop is what an abandon that changed nothing because a newer generation slot exists saw, in
-// the transaction that read it: the generation the run's proxy now enforces (RunPolicyState.CurrentGeneration)
-// and the newest slot's number. A current equal to the abandoned gen means a newer generation came and was
-// abandoned itself, so the gen the caller meant to undo is current again.
-type PolicyAbandonNoop struct{ Current, Newest int }
-
-// RunPolicyAbandonNoted is AbandonRunPolicyGeneration that also reports the no-op above (nil when the
-// abandon applied, or changed nothing for a gen that is already abandoned). Optional: the api layer
-// type-asserts.
-type RunPolicyAbandonNoted interface {
-	AbandonRunPolicyGenerationNoted(ctx context.Context, id uuid.UUID, gen int, restore []byte) (*PolicyAbandonNoop, error)
-}
-
-var _ RunPolicyAbandonNoted = PG{}
-
 // AbandonRunPolicyGeneration — see RunPolicyGenerations. A gen that is no longer the newest, or already
 // abandoned, changes nothing.
 func (s PG) AbandonRunPolicyGeneration(ctx context.Context, id uuid.UUID, gen int, restore []byte) error {
-	_, err := s.AbandonRunPolicyGenerationNoted(ctx, id, gen, restore)
-	return err
-}
-
-// AbandonRunPolicyGenerationNoted — see RunPolicyAbandonNoted.
-func (s PG) AbandonRunPolicyGenerationNoted(ctx context.Context, id uuid.UUID, gen int, restore []byte) (*PolicyAbandonNoop, error) {
-	var noop *PolicyAbandonNoop
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		st, err := readPolicyGenerations(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		n := len(st.Generations)
-		if n > 0 && st.Generations[n-1].Generation > gen {
-			noop = &PolicyAbandonNoop{Current: st.CurrentGeneration(), Newest: st.Generations[n-1].Generation}
-		}
 		if n == 0 || st.Generations[n-1].Generation != gen || st.Generations[n-1].Abandoned {
 			return nil
 		}
@@ -247,7 +222,6 @@ func (s PG) AbandonRunPolicyGenerationNoted(ctx context.Context, id uuid.UUID, g
 		}
 		return nil
 	})
-	return noop, err
 }
 
 // RunPolicyState — see RunPolicyGenerations.

@@ -112,21 +112,6 @@ func (s *generationStore) AbandonRunPolicyGeneration(ctx context.Context, id uui
 	return nil
 }
 
-var _ store.RunPolicyAbandonNoted = (*generationStore)(nil)
-
-// AbandonRunPolicyGenerationNoted is AbandonRunPolicyGeneration that also reports a no-op for a gen with a
-// newer slot after it: the generation then current and the newest number, as the PG write reads them.
-func (s *generationStore) AbandonRunPolicyGenerationNoted(ctx context.Context, id uuid.UUID, gen int, restore []byte) (*store.PolicyAbandonNoop, error) {
-	s.gmu.Lock()
-	var noop *store.PolicyAbandonNoop
-	if n := len(s.state.Generations); n > 0 && s.state.Generations[n-1].Generation > gen {
-		noop = &store.PolicyAbandonNoop{Current: s.state.CurrentGeneration(), Newest: s.state.Generations[n-1].Generation}
-	}
-	s.gmu.Unlock()
-	err := s.AbandonRunPolicyGeneration(ctx, id, gen, restore)
-	return noop, err
-}
-
 // MarkRunLostAtGeneration marks the run lost only while gen is its newest generation, as the PG write's
 // predicate does.
 func (s *generationStore) MarkRunLostAtGeneration(ctx context.Context, id uuid.UUID, gen int, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error) {
@@ -498,52 +483,4 @@ func TestRevive_AnUndoThatFailsNeverAnswersKeptCurrent(t *testing.T) {
 			t.Error("the run is not lost: the containment ran on the claim's expired bound")
 		}
 	})
-}
-
-// A advances policy 2 and loses its lock; B advances policy 3, fails before touching the proxy and abandons
-// it, so policy 2 is current again over the untouched proxy that never enforced it, and A's own undo changes
-// nothing (a newer slot exists). A must not answer kept-current: it loses the run, fenced on the newest slot.
-// When B's policy 3 is the current one instead, A's undo changes nothing and stops nothing, as before.
-func TestRevive_AnEditUndoneBehindANewerUndoneEditIsNotKeptCurrent(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		bFails      bool
-		wantLost    bool
-		wantKeptCur bool
-	}{
-		{"the newer edit was undone too", true, true, false},
-		{"the newer edit is current", false, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFenceFixture(t)
-			var b *httptest.ResponseRecorder
-			f.is.afterAdvance = func(int) {
-				loseLock(f.srv)
-				if tc.bFails {
-					f.rr.mu.Lock()
-					f.rr.replaceErr = errors.New("inspect the proxy: daemon busy")
-					f.rr.mu.Unlock()
-				}
-				b = f.editOnB(t)
-			}
-			stops := f.lr.proxyStopCount()
-			a := f.reviveOnA(t)
-			if b == nil {
-				t.Fatal("B never ran")
-			}
-			if kept := errorReason(a) == reasonReviveProxyKeptCurrent; kept != tc.wantKeptCur {
-				t.Errorf("A: %d %s, kept-current = %v, want %v", a.Code, a.Body.String(), kept, tc.wantKeptCur)
-			}
-			if lostAt, _ := f.st.lost(); (lostAt != nil) != tc.wantLost {
-				t.Errorf("lost = %v, want lost %v", lostAt, tc.wantLost)
-			}
-			wantStops := 0
-			if tc.wantLost {
-				wantStops = 1
-			}
-			if n := f.lr.proxyStopCount() - stops; n != wantStops {
-				t.Errorf("StopProxy calls = %d, want %d", n, wantStops)
-			}
-		})
-	}
 }
