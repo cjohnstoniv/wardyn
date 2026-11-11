@@ -83,6 +83,9 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 
 // forcedStopBound bounds one forced end, and one row of sweepForcedStops: a runner that never answers must
 // not hold a watcher tick, and the lease sweep behind it, for good (reconcileFinalizeTimeout's reason).
+// It cuts every call that obeys its context. A call that runs apart from it keeps its own budget: the
+// Docker driver's stop (stopSandboxBudget, 60 s) and each settle write (15 s). So a row can run past
+// forcedStopBound, by at most those budgets, and is still bounded.
 var forcedStopBound = reconcileFinalizeTimeout
 
 // forcedNotBroughtBack is the text a forced end records for a computer folder whose changes it did not bring back.
@@ -243,8 +246,8 @@ func (s *Server) clearForcedStop(ctx context.Context, fs store.ForcedStopper, id
 
 // sweepForcedStops is the forced end's retry, on every watcher tick of every replica: it takes each run
 // whose forced stop is not confirmed (the mark, listed through a partial index, so its cost follows
-// the marked runs and not the stored ones). Each row has a bound of its own (forcedStopBound), so one
-// wedged runner holds neither the tick nor the rows behind it.
+// the marked runs and not the stored ones). Each row has a bound of its own (forcedStopBound, plus the
+// detached budgets it names), so one wedged runner holds neither the tick nor the rows behind it for good.
 //
 // Per row, retryForcedStop.
 func (s *Server) sweepForcedStops(ctx context.Context) error {

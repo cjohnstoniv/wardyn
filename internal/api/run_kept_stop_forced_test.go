@@ -848,8 +848,8 @@ func (r *wedgedStop) StopSandbox(ctx context.Context, ref string) error {
 	return r.passWindowSandbox.StopSandbox(ctx, ref)
 }
 
-// A row's bound: a runner that never answers its stop is cut at forcedStopBound and the next marked row is
-// stopped on the same tick.
+// A row's bound: a runner whose stop obeys its context and never answers is cut at forcedStopBound, and the
+// next marked row is stopped on the same tick. A driver call that detaches keeps its own budget instead.
 func TestSweepForcedStops_AWedgedRunnerIsCutAtTheRowBoundAndTheNextRowStillRuns(t *testing.T) {
 	old := forcedStopBound
 	forcedStopBound = 100 * time.Millisecond
