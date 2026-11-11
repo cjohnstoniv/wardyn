@@ -85,10 +85,9 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 // forcedStopBound bounds one forced end, and one row of sweepForcedStops: a runner that never answers must
 // not hold a watcher tick, and the lease sweep behind it, for good (reconcileFinalizeTimeout's reason).
 // It cuts every call that obeys its context. A call that runs apart from it keeps its own budget: the
-// Docker driver's stop (stopSandboxBudget, 60 s), the forced end's own teardown (teardownCtxWithin,
-// run_terminal_effects.go:44-50, :131-139: at least 15 s, 90 s for a macOS VM run), settleForcedFolder's record
-// write, and each settle write (15 s). So a row can run past forcedStopBound, by at most those budgets, and is
-// still bounded.
+// Docker driver's stop (stopSandboxBudget, 60 s), the forced end's own teardown (teardownCtxWithin: at
+// least 15 s, 90 s for a macOS VM run), settleForcedFolder's record write, and each settle write (15 s). So a
+// row can run past forcedStopBound, by at most those budgets, and is still bounded.
 var forcedStopBound = reconcileFinalizeTimeout
 
 // forcedNotBroughtBack is the text a forced end records for a computer folder whose changes it did not bring back.
@@ -359,14 +358,13 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 }
 
 // runnerGoneReason is why a failed stop of run's sandbox can never be confirmed, "" when it still can. It reads
-// the stop's error as the orchestrator gives it (internal/runner/orchestrator/orchestrator.go subForRef, :624-627
-// and :650):
+// the stop's error as the orchestrator gives it (Orchestrator.subForRef):
 //   - runner.ErrRunnerOffline (the runner is not registered, or its link is down) and runner.ErrPendingOnRunner (the
-//     stop is queued for it, internal/runner/remote/substrate.go:464-476): gone only when the run's runner row is
+//     stop is queued for it, remote Substrate.teardown): gone only when the run's runner row is
 //     absent or revoked. A runner that is merely offline keeps the mark; the queued stop runs when it reconnects,
 //     and a runner cut off from the server contains the sandbox's egress itself when the run's lease or end lapses
-//     (internal/runner/offline/manager.go CheckLapses, :418-470);
-//   - "no substrate tracked for ref" (orchestrator.go:650) is NOT gone: the orchestrator gives the same text when
+//     (the offline manager's CheckLapses);
+//   - "no substrate tracked for ref" (subForRef) is NOT gone: the orchestrator gives the same text when
 //     its ref lookup failed, so this attempt only could not resolve the owner. It keeps the mark, and the next
 //     tick tries again.
 //
@@ -446,8 +444,9 @@ func (s *Server) auditFirstTeardownFailure(ctx context.Context, runID uuid.UUID,
 
 // teardownRowsWritten holds, per server, run and action, a failed teardown this process has audited. In memory
 // only: a restart, or another replica, writes its own first row. The bound is per process: the terminal sweep's
-// entry for a run (sandbox_sweep.go:136) lives as long as the process, and the other replicas' rows are theirs. It is package level because Server's fields
-// are declared elsewhere; the key carries the server so two servers in one process do not share an entry.
+// entry for a run (sweepTerminalSandboxRun) lives as long as the process, and the other replicas' rows are
+// theirs. It is package level because Server's fields are declared elsewhere; the key carries the server so
+// two servers in one process do not share an entry.
 var teardownRowsWritten sync.Map
 
 type teardownRowKey struct {
