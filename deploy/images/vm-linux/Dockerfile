@@ -8,7 +8,7 @@
 # the agent user (uid 1000, home /home/agent), and /usr/lib/openssh/sftp-server for folder syncs.
 # No swap and no zram (#2972): the guest agent refuses to initialise a guest with any swap on, because
 # the desktop's sign-in store (keychain and browser profiles) is a tmpfs that must stay in memory.
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS builder
 WORKDIR /build
 ENV GOTOOLCHAIN=local
 ARG GOPROXY=
@@ -18,7 +18,7 @@ RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/wardyn-guest-agent ./cmd/wardyn-guest-agent
 
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 # No console login (the serial console is the runner's log). The NIC is addressed as the network relay
 # expects (10-wardyn-link.network, wardyn-resolv.service).
 RUN set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update; \
