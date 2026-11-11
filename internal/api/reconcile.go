@@ -751,9 +751,9 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// A tightened profile reaches its live runs on this cadence,
 	// before the lease reads their ends.
 	pass("run limits re-clamp", s.sweepRunLimits(ctx))
-	// The lease rides this cadence too: its warnings are minutes
-	// apart and the end is a minute late at worst.
+	// The lease rides this cadence too (an end is a minute late at worst); a forced end's unconfirmed stop is retried after it.
 	pass("run lease sweep", s.sweepRunLeases(ctx))
+	pass("forced stop retry", s.sweepForcedStops(ctx))
 	// An elevation past its end already counts for nothing; the sweep deletes its row and audits the end.
 	pass("elevation expiry", s.sweepExpiredElevations(ctx))
 	// And the pause, after the lease so a run ending this tick is
