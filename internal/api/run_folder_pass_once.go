@@ -106,7 +106,10 @@ func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder
 	prev := g.last
 	if prev.Resume == nil || g.unread {
 		if err := s.stopForKeep(ctx, run, ref); err != nil {
-			return s.stopNotKept(ctx, run.ID, folder, prev.Gen, false, "no pass ran; the runner may still be running its last pass back", err)
+			// A record never read has no generation to prove another owner moved on (prev.Gen is 0), so a
+			// record fault here never keeps a sandbox whose agent could not be stopped.
+			kept := s.stopNotKept(ctx, run.ID, folder, prev.Gen, false, "no pass ran; the runner may still be running its last pass back", err)
+			return kept && !g.unread
 		}
 	}
 	return s.keepForResume(ctx, run.ID, folder, prev.Gen, prev, prev.GenAt)
@@ -244,11 +247,12 @@ func runsOnePassPerRun(caps runnerwire.Caps, read bool) bool {
 
 // bumpComputerFolderGen moves run id's record from gen to the next, and answers the record as it then
 // stands, its Gen the generation the pass then owns: false when the record moved first or could not be
-// written. A store with no records answers gen, settled.
-func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen int) (types.RunLocalFolderStatus, bool) {
+// written. lost is only the first, a clean miss; a store error is never lost, since its bump may have
+// landed. A store with no records answers gen, settled.
+func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen int) (rec types.RunLocalFolderStatus, ok, lost bool) {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
-		return types.RunLocalFolderStatus{Gen: gen, Settled: gen}, true
+		return types.RunLocalFolderStatus{Gen: gen, Settled: gen}, true, false
 	}
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
@@ -256,9 +260,9 @@ func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen in
 	if err != nil || !ok {
 		slog.WarnContext(ctx, "wardynd: a computer folder's pass record moved before its pass",
 			slog.String("run_id", id.String()), slog.Bool("moved", ok), slog.Any("err", err))
-		return types.RunLocalFolderStatus{}, false
+		return types.RunLocalFolderStatus{}, false, err == nil
 	}
-	return rec, true
+	return rec, true, false
 }
 
 // folderGenTaken reports whether a fresh read finds run id's computer folder record past gen: proof that

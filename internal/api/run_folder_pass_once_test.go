@@ -549,7 +549,7 @@ func TestPassBack_ABusyRunnerIsTriedAgainLater(t *testing.T) {
 		t.Fatal(cs.FailureHint())
 	}
 	// The seed owns gen 1; the pass back moves the record to gen 2.
-	rec, ok := s.bumpComputerFolderGen(context.Background(), run.ID, 1)
+	rec, ok, _ := s.bumpComputerFolderGen(context.Background(), run.ID, 1)
 	if !ok || rec.Gen != 2 {
 		t.Fatalf("bump = %+v %v", rec, ok)
 	}
@@ -573,12 +573,12 @@ func TestPassBack_ARecordThatMovedFirstRunsNoPass(t *testing.T) {
 	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
 		t.Fatal(cs.FailureHint())
 	}
-	if _, ok := s.bumpComputerFolderGen(context.Background(), run.ID, 5); ok {
+	if _, ok, _ := s.bumpComputerFolderGen(context.Background(), run.ID, 5); ok {
 		t.Error("a bump from a generation the record is not at landed")
 	}
 }
 
-// folderFaultStore is computerFolderStore whose bump fails (bumpErr), or is lost to another owner who moves
+// folderFaultStore is computerFolderStore whose bump lands but answers an error (bumpErr), or is lost to another owner who moves
 // the record on first (bumpLost), or whose record writes fail (setErr).
 type folderFaultStore struct {
 	*computerFolderStore
@@ -588,6 +588,9 @@ type folderFaultStore struct {
 
 func (s *folderFaultStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
 	if s.bumpErr != nil {
+		s.smu.Lock()
+		s.status.Gen++
+		s.smu.Unlock()
 		return types.RunLocalFolderStatus{}, false, s.bumpErr
 	}
 	if s.bumpLost {
@@ -638,6 +641,20 @@ func TestPassBack_ARecordFaultKeepsTheSandboxOnlyForAnotherOwner(t *testing.T) {
 	}
 }
 
+// An open pass from a record never read, on a sandbox whose agent cannot be stopped, is not kept: the record
+// it then writes at no known generation does not land, and the record found past it proves no other owner.
+func TestPassBack_AnUnreadOpenPassWhoseAgentLivesIsNotKept(t *testing.T) {
+	f := newPassFixture(t, 2, 2, nil)
+	f.runnerAs(t, &olderRunnerCaps)
+	f.onARunner(t, true)
+	f.s.cfg.Store = &statusReadFailsOnce{computerFolderStore: f.cs}
+	f.set(func(st *types.RunLocalFolderStatus) { st.Gen, st.Settled = 3, 3 })
+	seen := passSeen(f.sb)
+	if f.back() || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox left to its stop", seen.Load())
+	}
+}
+
 // A delayed owner whose generation another owner moved on writes nothing and leaves the sandbox up: owner
 // A's pass is held while owner B moves the record on, passes and settles; A's record then does not land,
 // and A does not let its caller stop B's sandbox.
@@ -673,7 +690,7 @@ func TestSeed_ADelayedSeedNeitherRecordsNorPublishes(t *testing.T) {
 	s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
 	var moved atomic.Bool
 	sb.onPass = func() {
-		if _, ok := s.bumpComputerFolderGen(context.Background(), run.ID, 1); ok {
+		if _, ok, _ := s.bumpComputerFolderGen(context.Background(), run.ID, 1); ok {
 			moved.Store(true)
 		}
 	}

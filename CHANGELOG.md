@@ -41,13 +41,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A copy back that finds the folder busy on a sandbox that cannot be held (a virtual machine, or an agent that cannot be stopped alone) stops the sandbox at that visit and records "not brought back". The same happens to such a sandbox whose last pass may still be running on an older runner. Changes the running pass had not finished copying are lost.
 - Changes not yet copied back are lost when the laptop's runner is offline at the end of the run.
 - The cut-off loop for a kept run, the 7-day keep and give-up, and the "kept / deleted" view are not in this release. A revoke that fails at the end of an ordinary run has no durable retry once its sandbox stops. A forced stop keeps retrying its revoke on each watcher pass, normally within a minute, until it succeeds.
-- A failed write of the guarded folder record stops the sandbox, so changes the copy back left behind are lost.
+- A copy back whose result cannot be written to the guarded folder record stops the sandbox, so changes it left behind are lost.
 - The first failure of a copy back that settles with an error only, such as a failed file listing before anything was counted, still stops the sandbox, and changes it did not list can be lost.
 - An older runner waits an hour before the next copy back after an unanswered one, and the two can overlap.
 - Copy backs to a virtual machine are not guarded on an older runner, so one can run beside a stuck pass.
 - A busy folder on a sandbox the server's Docker hosts has no bound of its own: it is retried on every sweep and never given up.
-- A failed generation bump stops the sandbox without a copy back, so its changes are not brought back.
-- A run whose sandbox cannot be kept, ending while another step holds the run, stays running until that step lets go.
+- A generation bump that fails with a store error stops the sandbox without a copy back, so its changes are not brought back.
+- A run whose sandbox cannot be kept, ending while another step holds the run, can stay running past its end until that step lets go, or until a sweep forces its stop after the keep grace and another 5 minutes.
 - On Windows, a file replace falls back to a plain rename, with no write-through, when the folder's path cannot be resolved.
 - On a Kubernetes runner that restarts while cut off from the server, a run can keep network access past its scheduled end. Its proxy stops serving at most about an hour after the server records the end, or earlier when a renewal is refused for good.
 - The check that a template's placement lands where it says is not in this release.

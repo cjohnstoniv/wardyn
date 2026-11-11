@@ -179,7 +179,7 @@ func isControlRune(r rune) bool { return r < 0x20 || r == 0x7f || (r >= 0x80 && 
 // audits and publishes nothing, and leaves the run to that owner.
 func (s *Server) seedComputerFolder(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, wait time.Duration) {
 	prev := s.folderStatus(ctx, run.ID)
-	rec, ok := s.bumpComputerFolderGen(ctx, run.ID, prev.Gen)
+	rec, ok, _ := s.bumpComputerFolderGen(ctx, run.ID, prev.Gen)
 	if !ok {
 		return
 	}
@@ -260,11 +260,12 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	}
 	// The pass back owns the next generation of the record, and writes only at it: an owner that
 	// lost it (another moved the record on) writes nothing and leaves the sandbox to that owner.
-	rec, ok := s.bumpComputerFolderGen(ctx, runID, prev.Gen)
+	rec, ok, lost := s.bumpComputerFolderGen(ctx, runID, prev.Gen)
 	if !ok {
-		// Kept only for an owner a fresh read proves moved the record on; a store error, or a record never
-		// read, stops the sandbox, so a terminal run does not keep its agent and egress until a sweep.
-		return !unread && s.folderGenTaken(ctx, runID, prev.Gen)
+		// Kept only for a bump lost to an owner a fresh read proves moved the record on. A store error (whose
+		// bump may have landed), or a record never read, stops the sandbox, so a terminal run does not keep
+		// its agent and egress until a sweep.
+		return lost && !unread && s.folderGenTaken(ctx, runID, prev.Gen)
 	}
 	if folderBroughtBack(rec) {
 		// A pass back completed between the read above and the bump: none runs again.
