@@ -280,6 +280,37 @@ func TestEgressEdit_UnsupportedSubstrateAnswersEgressEditUnsupported(t *testing.
 	}
 }
 
+// unhashableRunner has a ReplaceProxyHashed that refuses at once with runner.ErrReviveUnsupported, as a
+// substrate that cannot answer the hash of the bytes it hands a new proxy does.
+type unhashableRunner struct{ *hashedReviveRunner }
+
+func (unhashableRunner) ReplaceProxyHashed(context.Context, string, []byte) (string, error) {
+	return "", runner.ErrReviveUnsupported
+}
+
+// A live edit whose substrate refuses the proxy replace as unable to confirm its policy (the revive's
+// revive_readback_unsupported) is also 409 egress_edit_unsupported, with the same reason on its
+// run.egress.edit row, and the proxy is not replaced. Catches egressEditRefusal mapping only
+// revive_unsupported, which would leave docs/sdk.md's egress_edit_unsupported row inexact.
+func TestEgressEdit_ReadbackUnsupportedAnswersEgressEditUnsupported(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.srv.cfg.Runner = unhashableRunner{f.hr}
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	if w.Code != http.StatusConflict || errorReason(w) != reasonEgressEditUnsupported {
+		t.Fatalf("edit: %d %s, want 409 %s", w.Code, w.Body.String(), reasonEgressEditUnsupported)
+	}
+	if n := len(f.rr.replaced); n != 0 {
+		t.Errorf("ReplaceProxy calls = %d, want 0", n)
+	}
+	ev := f.audit.eventsFor(f.run.ID, "run.egress.edit")
+	if len(ev) != 1 || ev[0].Outcome != "denied" {
+		t.Fatalf("run.egress.edit rows = %+v, want one denied", ev)
+	}
+	if d := leaseAuditData(t, ev[0]); d["reason"] != reasonEgressEditUnsupported {
+		t.Errorf("row reason = %v, want %s", d["reason"], reasonEgressEditUnsupported)
+	}
+}
+
 // applyEgressEdits narrows only: the removed entry leaves the allowlist, every edited host joins the
 // ceiling's denies, and nothing is added to the allowlist.
 func TestApplyEgressEdits_NarrowsOnly(t *testing.T) {

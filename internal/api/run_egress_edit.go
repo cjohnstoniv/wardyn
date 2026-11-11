@@ -490,11 +490,12 @@ func egressEditUnresolved(why string, err error) *reviveError {
 
 // egressEditRefusal is a revive refusal as an edit answers it: a new proxy that did not confirm its
 // policy is egress_edit_unconfirmed, a substrate that cannot replace a sandbox's proxy at all
-// (Kubernetes) is egress_edit_unsupported, not the revive's own reason, and where the revive's own
+// (Kubernetes) or cannot confirm a new proxy's policy (revive_readback_unsupported) is
+// egress_edit_unsupported, not the revive's own reason, and where the revive's own
 // words name only the owner's profile they also name the edit, whose denies are checked as that
 // profile's are.
 func egressEditRefusal(rerr *reviveError) *reviveError {
-	if rerr.reason == reasonReviveUnsupported {
+	if rerr.reason == reasonReviveUnsupported || rerr.reason == reasonReviveReadbackUnsupported {
 		out := *rerr
 		out.reason = reasonEgressEditUnsupported
 		return &out

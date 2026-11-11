@@ -88,7 +88,8 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	at, actor := actorFromRequest(r)
 	fresh, msg := s.sshFreshRun(ctx, run.ID, actor)
 	if msg != "" {
-		if msg == runBackgroundOnlyMsg("SSH access") { // sshFreshRun's sentence for a background task
+		// A background run's own answer; a state refusal (not running, ended) keeps sshFreshRun's words.
+		if run.BackgroundOnly() && msg == runBackgroundOnlyMsg("SSH access") {
 			msg = runExecBackgroundMsg
 		}
 		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).

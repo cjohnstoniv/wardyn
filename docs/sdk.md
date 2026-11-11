@@ -316,7 +316,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 - Only the person who may enter the run may call it, as for the terminal; a profile's `deny_interactive` closes it too.
 - A run whose `data_out` rule is `review` or `blocked`, or whose rule cannot be read, answers `409 data_out_blocked`.
   The command never reaches the sandbox, and a `run.data_out.deny` row with `path` `exec` is written, as for an SSH command.
-- Exec needs an interactive run: create the run with `experience: interactive`. A background run answers `409 run_exec_unavailable`, and so does any run that cannot take a command now (not running, ended, or paused and not resumed).
+- A background run (`experience: background`) answers `409 run_exec_unavailable`; create the run with `experience: interactive` to use exec. A run that cannot take a command now (not running, ended, or paused and not resumed) answers it too.
 - The command may be up to 128 KiB, the most Linux execs as one argument; a longer one answers `400 run_exec_invalid`.
 - `timeout_sec` defaults to 60 and may be 1 to 300.
   When it passes, the command's stream is closed, and the reply says `timed_out` with `exit_code` `-1`.
