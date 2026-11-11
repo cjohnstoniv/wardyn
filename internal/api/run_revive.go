@@ -299,6 +299,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.saveRevivedRestrictions(ctx, run, capturedRestrictions); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	// A lost run's fate as the claim is about to clear it, which a revive that loses its lock before its
+	// replace puts back (reviveLostHoldRestore).
+	fate, rerr := s.reviveLostFate(ctx, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.claimRevive(ctx, reviver, run, rebooted, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -338,16 +344,27 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	case errors.Is(gerr, store.ErrRunPolicyMoved):
 		return reviveResult{}, s.revivePolicyMoved(ctx, run, data, actorType, actor, freshJTI, renewed, gerr)
 	case gerr != nil:
-		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, gerr)
+		// gen is a generation this attempt wrote before the error (abandoned since): the run's newest, and so
+		// the one its lost mark is fenced on.
+		fence := expected.Generation
+		if gen > 0 {
+			fence = gen
+		}
+		return reviveResult{}, s.reviveGenerationFailed(ctx, run, fence, data, actorType, actor, retiring, freshJTI, renewed, gerr)
 	case len(edits) > 0 && gen > 0:
 		s.retireViaOrgEngine(run.ID) // the edited config is stored: no engine built from the pre-edit one serves again
 	}
 	// A hold lost since the claim is a lock another replica may now hold, under which a newer revive may
 	// have replaced the proxy: a replace from here would remove that proxy. The old (or newer) proxy is left
 	// untouched, as when the replace never reached it.
+	// A run that was lost when claimed has no old proxy serving to keep: it gets its lost or ended fate
+	// back instead, fenced on this generation (reviveLostHoldRestore).
 	if err := s.lockHeld(lockCtx); err != nil {
-		return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, gen, start, source, freshJTI, renewed,
-			fmt.Errorf("the run's lock was lost before its proxy was replaced: %w", err))
+		err = fmt.Errorf("the run's lock was lost before its proxy was replaced: %w", err)
+		if run.LostAt != nil {
+			return reviveResult{}, s.reviveLostHoldRestore(ctx, run, fate, data, actorType, actor, gen, start, source, freshJTI, renewed, err)
+		}
+		return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, gen, start, source, freshJTI, renewed, err)
 	}
 	replaceCtx, endReplace := whileLockHeld(runnerCtx, lockCtx)
 	proxyHash, err := s.replaceRevivedProxyHashed(replaceCtx, rv, run, cfgJSON, start) // abandons start on an error
@@ -368,7 +385,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		// retiring token, so revoking it here is safe (F4).
 		s.revokeRetiringToken(ctx, retiring, run.ID)
 		s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), freshJTI)
-		return reviveResult{generation: gen, stored: gen > 0}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
+		return reviveResult{generation: gen, stored: gen > 0}, s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
 			"the run's proxy could not be replaced, so the run has no egress and is lost until revived", err)
 	}
 	// The new proxy is up behind the fresh token: the retiring one is no
@@ -395,7 +412,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		// which stops the new proxy with the agent.
 		if err := s.startRevivedAgent(runnerCtx, starter, run); err != nil {
 			data["error"] = "start agent: " + err.Error()
-			return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveAgentStartFailedLost,
+			return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveAgentStartFailedLost,
 				"the run's agent could not be started, so the run is stopped and lost until revived", err)
 		}
 		data["agent_started"] = true
@@ -473,8 +490,10 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // anyway (reloseRun), and the answer says the recovery is unresolved, for a
 // later sweep to settle. "Stopped" or "no egress" is claimed only for a confirmed stop; lost_again
 // only for a persisted lost fate. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
-func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
-	fate, stopErr := s.reloseRun(ctx, run)
+// fence is the policy generation the revive acts for (reloseRun): once a newer revive started one, this
+// revive loses and stops nothing.
+func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, fence int, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
+	fate, stopErr := s.reloseRun(ctx, run, fence)
 	data["lost_again"] = fate == relostLost
 	// A readback failure's stop and fate wording is settleRevivedProxy's, from its own containment result.
 	readback := reason == reasonRevivePolicyUnconfirmedLost
@@ -879,7 +898,10 @@ func reviveFrom(run types.AgentRun) string {
 // anyway, its proxy stopped and its broker credentials revoked, and a sweep
 // settles the rest; the caller must not tell anyone the run is lost. stopErr is
 // non-nil when the proxy stop is not confirmed.
-func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate reloseFate, stopErr error) {
+//
+// fence is the policy generation the revive acts for (loseRunStopped): a lost mark that misses it, a newer
+// revive having taken the run over, is not applied, and nothing is stopped.
+func (s *Server) reloseRun(ctx context.Context, run types.AgentRun, fence int) (fate reloseFate, stopErr error) {
 	reason, at := types.LostOutage, s.cfg.Now()
 	switch run.LostReason {
 	case types.LostReboot:
@@ -891,7 +913,7 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate relose
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
 	if ok && lok {
-		switch o, err := s.loseRunStopped(ctx, loser, leaser, run, reason, types.RunFailed, 0, at); o {
+		switch o, err := s.loseRunStopped(ctx, loser, leaser, run, reason, types.RunFailed, 0, at, fence); o {
 		case loseWriteFailed:
 			s.revokeRunBroker(ctx, run.ID)
 			run.LostAt, run.LostReason = &at, reason

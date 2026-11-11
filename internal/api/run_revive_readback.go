@@ -36,15 +36,18 @@ func (s *Server) reviveReadbackSupported(ctx context.Context, run types.AgentRun
 // retired the old lineage, so no report on it can land on the start. A start that cannot be recorded
 // abandons the generation, storing source back, and is the revive's error.
 func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, retiring string,
-	renewed renewedTokens, fresh string, expected int, stored, source []byte) (int, proxyStartRec, error) {
+	renewed renewedTokens, fresh string, expected store.PolicySlot, stored, source []byte) (int, proxyStartRec, error) {
 	gen, err := s.advanceRunPolicyGeneration(ctx, run, policy, retiring, renewed, fresh, expected, stored)
 	if err != nil {
-		return 0, proxyStartRec{}, err
+		if !errors.Is(err, store.ErrRunPolicyMoved) {
+			gen, err = s.reconcileLostAdvance(ctx, run, policy, fresh, expected, source, err)
+		}
+		return gen, proxyStartRec{}, err
 	}
 	start, err := s.beginProxyStart(ctx, run, gen, fresh)
 	if err != nil {
 		s.abandonRunPolicyGeneration(ctx, run, gen, source)
-		return 0, proxyStartRec{}, err
+		return gen, proxyStartRec{}, err
 	}
 	return gen, start, nil
 }
@@ -115,7 +118,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 		return nil
 	}
 	data["error"] = "policy readback: " + why
-	rerr := s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
+	rerr := s.reviveFailedAfterClaim(ctx, run, start.gen, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
 		"the run's new proxy did not confirm its policy, so it was stopped", errors.New(why))
 	// The answer's stop wording comes from the containment result, its fate from what the store now
 	// holds, never from the lost mark's outcome.

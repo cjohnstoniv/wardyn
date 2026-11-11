@@ -147,18 +147,29 @@ const (
 // now, except for an ended run put back to ended, whose files grace stays
 // counted from when it first ended.
 func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) loseOutcome {
-	o, _ := s.loseRunStopped(ctx, loser, leaser, run, reason, terminal, tokenLife, at)
+	o, _ := s.loseRunStopped(ctx, loser, leaser, run, reason, terminal, tokenLife, at, 0)
 	return o
 }
 
 // loseRunStopped is loseRun, also answering, for loseApplied, the proxy stop's error: nil is a stop
-// confirmed, anything else containment still unresolved.
-func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) (loseOutcome, error) {
+// confirmed, anything else containment still unresolved. fence, when above 0, is the policy generation
+// the caller acts for (a revive's, or a failed proxy start's): the lost mark then lands only while it is
+// still the run's newest (store.RunLoserAtGeneration), in the mark's own write, so a caller whose lock
+// was lost never loses, or stops the proxy of, a run a newer revive took over. That miss is
+// loseNotApplied and stops nothing. A mark that errors is loseWriteFailed, as unfenced: the caller's
+// fail-closed stop still runs.
+func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int) (loseOutcome, error) {
 	now := s.cfg.Now()
 	if !s.lostRunKeepable(run, now) {
 		return loseNotKeepable, nil
 	}
-	applied, err := loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
+	var applied bool
+	var err error
+	if fl, ok := loser.(store.RunLoserAtGeneration); ok && fence > 0 {
+		applied, err = fl.MarkRunLostAtGeneration(ctx, run.ID, fence, reason, at, tokenLife)
+	} else {
+		applied, err = loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run lost failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

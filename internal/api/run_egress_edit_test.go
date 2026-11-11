@@ -282,7 +282,7 @@ type failPutStore struct {
 }
 
 // AdvanceRunPolicyGeneration fails the config write the advance carries, which takes the generation with it.
-func (s *failPutStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected int, digest string, retired []string, fresh string, sealed []byte) (int, error) {
+func (s *failPutStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected store.PolicySlot, digest string, retired []string, fresh string, sealed []byte) (int, error) {
 	if sealed != nil && s.fail.Load() {
 		if s.onFail != nil {
 			s.onFail()
@@ -731,6 +731,16 @@ func (s *failMarkStore) MarkRunLost(ctx context.Context, id uuid.UUID, reason ty
 	return s.readbackStore.MarkRunLost(ctx, id, reason, at, life)
 }
 
+func (s *failMarkStore) MarkRunLostAtGeneration(ctx context.Context, id uuid.UUID, gen int, reason types.LostReason, at time.Time, life time.Duration) (bool, error) {
+	if s.fail.Load() {
+		return false, errors.New("injected lost-mark failure")
+	}
+	if s.notApplied.Load() {
+		return false, nil
+	}
+	return s.readbackStore.MarkRunLostAtGeneration(ctx, id, gen, reason, at, life)
+}
+
 // A failed replace whose proxy stop also fails is never answered as stopped, whether the lost mark is
 // written or not. (The egress edit's own answers are pinned by TestEgressEdit_ReplaceFailureAnswersFromTheConfirmedStop.)
 func TestRevive_FailedReplaceWithAFailedStopIsNotStopped(t *testing.T) {
@@ -988,6 +998,10 @@ type failLostMarkStore struct {
 }
 
 func (s *failLostMarkStore) MarkRunLost(context.Context, uuid.UUID, types.LostReason, time.Time, time.Duration) (bool, error) {
+	return false, errors.New("injected lost-mark failure")
+}
+
+func (s *failLostMarkStore) MarkRunLostAtGeneration(context.Context, uuid.UUID, int, types.LostReason, time.Time, time.Duration) (bool, error) {
 	return false, errors.New("injected lost-mark failure")
 }
 

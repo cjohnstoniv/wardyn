@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,12 +23,15 @@ import (
 type RunPolicyGenerations interface {
 	// AdvanceRunPolicyGeneration starts the run's next generation under digest, its proxy on the token
 	// fresh, keeps retired on the outgoing generation, and returns the new number. It lands only while
-	// the run is RUNNING and not lost and its newest generation (NewestPolicyGeneration) is still expected, the one
-	// the revive read before its source config; otherwise it changes nothing and is ErrRunPolicyMoved.
+	// the run is RUNNING and not lost and its newest generation slot (NewestPolicySlot: the number and whether it
+	// is abandoned) is still expected, the one the revive read before its source config; otherwise it changes
+	// nothing and is ErrRunPolicyMoved. The abandoned flag is compared too because an abandon stores its
+	// source config back without moving the number: a revive that read the slot before the abandon read the
+	// abandoned revive's config, and must not advance from it.
 	// sealed, when set, is the revive's config, stored as the run's (run_proxy_configs) in the same
 	// transaction, so no reader sees the new generation with the source config before it. A run the
 	// table does not hold is ErrNotFound.
-	AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected int, digest string, retired []string, fresh string, sealed []byte) (int, error)
+	AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected PolicySlot, digest string, retired []string, fresh string, sealed []byte) (int, error)
 	// AbandonRunPolicyGeneration marks gen abandoned when it is still the newest, putting the one before
 	// it back as current: a revive that never replaced the old proxy. restore, when set, is the config the
 	// revive started from, stored back in the same transaction and under the same condition, so a late
@@ -43,10 +47,92 @@ type RunPolicyGenerations interface {
 
 var _ RunPolicyGenerations = PG{}
 
-// ErrRunPolicyMoved is AdvanceRunPolicyGeneration's refusal: another revive started a generation since
-// the caller read the run's newest one, or the run was lost or left RUNNING since its claim. Nothing was
-// written.
+// RunLoserAtGeneration is RunLoser's MarkRunLost fenced on a policy generation: the mark lands only
+// while gen is still the run's newest (NewestPolicyGeneration), in the same UPDATE, so a revive or a
+// failed start's containment whose lock was lost never loses a run a newer revive took over. A miss
+// for any reason (a newer generation, the run no longer RUNNING, already lost, its token fresh) is
+// false with no error. Optional: the api layer type-asserts, and falls back to MarkRunLost.
+//
+// RunLostFate and RestoreRunLostFateAtGeneration put back a lost run's fate as a revive's claim cleared
+// it (lost_at, lost_reason, agent_stopped_at), for a revive that lost its lock before it replaced
+// anything: read before the claim, written only while gen is still the run's newest generation and the
+// run RUNNING and not lost, in one UPDATE. A miss is false with no error.
+type RunLoserAtGeneration interface {
+	MarkRunLostAtGeneration(ctx context.Context, id uuid.UUID, gen int, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error)
+	RunLostFate(ctx context.Context, id uuid.UUID) (RunLostFate, error)
+	RestoreRunLostFateAtGeneration(ctx context.Context, id uuid.UUID, gen int, fate RunLostFate) (bool, error)
+}
+
+// RunLostFate is a run's lost mark: when and why it was lost, and when its agent was recorded stopped
+// (nil: not). An ended run's LostAt is its end, which its kept window counts from.
+type RunLostFate struct {
+	LostAt         *time.Time
+	LostReason     types.LostReason
+	AgentStoppedAt *time.Time
+}
+
+var _ RunLoserAtGeneration = PG{}
+
+// MarkRunLostAtGeneration — see RunLoserAtGeneration.
+func (s PG) MarkRunLostAtGeneration(ctx context.Context, id uuid.UUID, gen int, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, markRunLostSQL+` AND `+newestPolicyGenerationSQL+` = $7`,
+		id, now, string(reason), string(types.RunRunning), tokenLife.String(), string(types.LostReboot), gen)
+	if err != nil {
+		return false, fmt.Errorf("store: mark run lost at generation %d: %w", gen, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// RunLostFate — see RunLoserAtGeneration.
+func (s PG) RunLostFate(ctx context.Context, id uuid.UUID) (RunLostFate, error) {
+	var f RunLostFate
+	var reason string
+	err := s.Pool.QueryRow(ctx, `SELECT lost_at, COALESCE(lost_reason, ''), agent_stopped_at FROM agent_runs WHERE id=$1`, id).
+		Scan(&f.LostAt, &reason, &f.AgentStoppedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RunLostFate{}, ErrNotFound
+	}
+	if err != nil {
+		return RunLostFate{}, fmt.Errorf("store: read run lost fate: %w", err)
+	}
+	f.LostReason = types.LostReason(reason)
+	return f, nil
+}
+
+// RestoreRunLostFateAtGeneration — see RunLoserAtGeneration.
+func (s PG) RestoreRunLostFateAtGeneration(ctx context.Context, id uuid.UUID, gen int, fate RunLostFate) (bool, error) {
+	if fate.LostAt == nil {
+		return false, errors.New("store: restore run lost fate: no lost mark to restore")
+	}
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE agent_runs SET lost_at=$3, lost_reason=$4, agent_stopped_at=$5, updated_at=now()
+		WHERE id=$1 AND state=$6 AND lost_at IS NULL AND `+newestPolicyGenerationSQL+` = $2`,
+		id, gen, *fate.LostAt, string(fate.LostReason), fate.AgentStoppedAt, string(types.RunRunning))
+	if err != nil {
+		return false, fmt.Errorf("store: restore run lost fate at generation %d: %w", gen, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ErrRunPolicyMoved is AdvanceRunPolicyGeneration's refusal: another revive started or abandoned a
+// generation since the caller read the run's newest one, or the run was lost or left RUNNING since its
+// claim. Nothing was written.
 var ErrRunPolicyMoved = errors.New("store: the run's policy generation moved since it was read")
+
+// PolicySlot is a run's newest generation as a revive reads it before its source config: the number
+// (NewestPolicyGeneration) and whether that generation is abandoned.
+type PolicySlot struct {
+	Generation int
+	Abandoned  bool
+}
+
+// NewestPolicySlot is st's newest generation slot: {1, false} before any revive.
+func NewestPolicySlot(st types.RunPolicyState) PolicySlot {
+	if n := len(st.Generations); n > 0 {
+		return PolicySlot{Generation: st.Generations[n-1].Generation, Abandoned: st.Generations[n-1].Abandoned}
+	}
+	return PolicySlot{Generation: 1}
+}
 
 // NewestPolicyGeneration is the number of the run's last generation, abandoned ones included, or 1
 // before any revive: the number a revive reads before its source config and AdvanceRunPolicyGeneration
@@ -69,16 +155,20 @@ const putRunProxyConfigSQL = `
 
 // AdvanceRunPolicyGeneration — see RunPolicyGenerations. The row is locked for the read and the write,
 // so two revives cannot take one number, and the write's own predicate decides the race.
-func (s PG) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected int, digest string, retired []string, fresh string, sealed []byte) (int, error) {
+func (s PG) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected PolicySlot, digest string, retired []string, fresh string, sealed []byte) (int, error) {
 	var gen int
 	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		st, err := readPolicyGenerations(ctx, tx, id)
 		if err != nil {
 			return err
 		}
+		// The row is locked: the slot read here is the one the write replaces.
+		if NewestPolicySlot(st) != expected {
+			return ErrRunPolicyMoved
+		}
 		st, gen = st.Advance(digest, retired, fresh)
 		applied, err := writePolicyGenerations(ctx, tx, id, st,
-			`state = $5 AND lost_at IS NULL AND `+newestPolicyGenerationSQL+` = $4`, expected, string(types.RunRunning))
+			`state = $5 AND lost_at IS NULL AND `+newestPolicyGenerationSQL+` = $4`, expected.Generation, string(types.RunRunning))
 		switch {
 		case err != nil:
 			return err

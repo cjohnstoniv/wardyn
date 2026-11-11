@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,6 +30,8 @@ type generationStore struct {
 	state types.RunPolicyState
 	// failAdvance is how many more AdvanceRunPolicyGeneration calls fail, as a database blip would.
 	failAdvance int
+	// agentStoppedAt is the agent_stopped_at RunLostFate answers while the run's agent is recorded stopped.
+	agentStoppedAt time.Time
 	// recorded is the run's audit log as the recorded-policy read sees it (the dispatch envelope); readErr fails that read.
 	recorded []types.AuditEvent
 	readErr  error
@@ -51,7 +54,7 @@ var _ store.RunPolicyGenerations = (*generationStore)(nil)
 
 // AdvanceRunPolicyGeneration lands, with its config, only on a live run whose newest generation is still
 // expected, as the PG write's predicate does; a config write that fails leaves the generations as they were.
-func (s *generationStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected int, digest string, retired []string, fresh string, sealed []byte) (int, error) {
+func (s *generationStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected store.PolicySlot, digest string, retired []string, fresh string, sealed []byte) (int, error) {
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
 	if s.failAdvance > 0 {
@@ -62,7 +65,7 @@ func (s *generationStore) AdvanceRunPolicyGeneration(ctx context.Context, id uui
 	if err != nil {
 		return 0, err
 	}
-	if run.State != types.RunRunning || run.LostAt != nil || store.NewestPolicyGeneration(s.state) != expected {
+	if run.State != types.RunRunning || run.LostAt != nil || store.NewestPolicySlot(s.state) != expected {
 		return 0, store.ErrRunPolicyMoved
 	}
 	if sealed != nil {
@@ -91,6 +94,55 @@ func (s *generationStore) AbandonRunPolicyGeneration(ctx context.Context, id uui
 	}
 	s.state = s.state.Abandon(gen)
 	return nil
+}
+
+// MarkRunLostAtGeneration marks the run lost only while gen is its newest generation, as the PG write's
+// predicate does.
+func (s *generationStore) MarkRunLostAtGeneration(ctx context.Context, id uuid.UUID, gen int, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error) {
+	s.gmu.Lock()
+	defer s.gmu.Unlock()
+	if store.NewestPolicyGeneration(s.state) != gen {
+		return false, nil
+	}
+	return s.reviveStore.MarkRunLost(ctx, id, reason, now, tokenLife)
+}
+
+// RunLostFate reads the run's lost mark, its agent stop at agentStoppedAt.
+func (s *generationStore) RunLostFate(context.Context, uuid.UUID) (store.RunLostFate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := store.RunLostFate{LostReason: s.run.LostReason}
+	if s.run.LostAt != nil {
+		at := *s.run.LostAt
+		f.LostAt = &at
+	}
+	if s.agentStopped {
+		at := s.agentStoppedAt
+		f.AgentStoppedAt = &at
+	}
+	return f, nil
+}
+
+// RestoreRunLostFateAtGeneration puts fate back only while gen is the newest generation and the run is
+// RUNNING and not lost, as the PG write's predicate does.
+func (s *generationStore) RestoreRunLostFateAtGeneration(_ context.Context, _ uuid.UUID, gen int, f store.RunLostFate) (bool, error) {
+	s.gmu.Lock()
+	defer s.gmu.Unlock()
+	if store.NewestPolicyGeneration(s.state) != gen || f.LostAt == nil {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reviveStore.state != types.RunRunning || s.run.LostAt != nil {
+		return false, nil
+	}
+	at := *f.LostAt
+	s.run.LostAt, s.run.LostReason = &at, f.LostReason
+	s.agentStopped = f.AgentStoppedAt != nil
+	if f.AgentStoppedAt != nil {
+		s.agentStoppedAt = *f.AgentStoppedAt
+	}
+	return true, nil
 }
 
 // TouchRun is the idle-clock bump a decision makes; the embedded store.Store is nil.

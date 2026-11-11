@@ -4,17 +4,23 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -36,6 +42,10 @@ type interleaveStore struct {
 	beforeGenRead, beforeSourceRead, beforeRetire    func()
 	afterAdvance                                     func(gen int)
 	firedGen, firedSource, firedRetire, firedAdvance bool
+	// dropAck makes the first advance that lands answer an error all the same, as a commit whose
+	// acknowledgement was lost does; afterDroppedAck runs before that answer.
+	dropAck, firedDrop bool
+	afterDroppedAck    func(gen int)
 }
 
 // take returns the hook to run now, once: nil when it ran already or is not set.
@@ -78,8 +88,20 @@ func (s *interleaveStore) RetireRunTokenLineage(ctx context.Context, id uuid.UUI
 	return s.readbackStore.RetireRunTokenLineage(ctx, id, fresh)
 }
 
-func (s *interleaveStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected int, digest string, retired []string, fresh string, sealed []byte) (int, error) {
+func (s *interleaveStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected store.PolicySlot, digest string, retired []string, fresh string, sealed []byte) (int, error) {
 	gen, err := s.readbackStore.AdvanceRunPolicyGeneration(ctx, id, expected, digest, retired, fresh, sealed)
+	if err == nil {
+		s.mu.Lock()
+		drop := s.dropAck && !s.firedDrop
+		s.firedDrop = s.firedDrop || drop
+		s.mu.Unlock()
+		if drop {
+			if s.afterDroppedAck != nil {
+				s.afterDroppedAck(gen)
+			}
+			return 0, errors.New("write policy generation: the commit's acknowledgement was lost")
+		}
+	}
 	if err == nil {
 		var hook func()
 		if s.afterAdvance != nil {
@@ -90,6 +112,17 @@ func (s *interleaveStore) AdvanceRunPolicyGeneration(ctx context.Context, id uui
 		}
 	}
 	return gen, err
+}
+
+// MarkRunRevived also clears the agent's stop mark, as the PG claim (markRunRevived) does.
+func (s *interleaveStore) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, startsAgent bool) (bool, error) {
+	ok, err := s.readbackStore.MarkRunRevived(ctx, id, from, ended, limit, startsAgent)
+	if ok {
+		s.readbackStore.generationStore.mu.Lock()
+		s.readbackStore.generationStore.agentStopped = false
+		s.readbackStore.generationStore.mu.Unlock()
+	}
+	return ok, err
 }
 
 // fenceFixture is newEgressEditFixture on an interleaveStore, with a second replica (b) over the same
@@ -288,5 +321,227 @@ func TestReviveFence_LostLockAfterTheAdvanceIssuesNoReplace(t *testing.T) {
 		t.Error("A's late abandon overwrote B's stored config")
 	}
 	denied(t, "the running proxy", f.handedPolicy(t))
+	denied(t, "the stored config", f.storedPolicy(t))
+}
+
+// storedConfig is the run's stored config as every later revive opens it.
+func (f *fenceFixture) storedConfig() []byte {
+	f.rs.mu.Lock()
+	defer f.rs.mu.Unlock()
+	return slices.Clone(f.rs.cfg)
+}
+
+// An edit on A whose lock is lost after its advance stored the edited config abandons its generation
+// and stores back, byte for byte, the source config it read before it changed anything: not the edited
+// config, and not nothing.
+func TestReviveFence_AbandonStoresBackTheExactSourceConfig(t *testing.T) {
+	f := newFenceFixture(t)
+	source := f.storedConfig()
+	f.is.afterAdvance = func(int) {
+		if bytes.Equal(f.storedConfig(), source) {
+			t.Error("the advance did not store the edit's config")
+		}
+		loseLock(f.srv)
+	}
+	w := f.editEgress(t, `{"remove_hosts":["`+fenceHost+`"],"deny_hosts":["`+fenceHost+`"]}`)
+	if w.Code != http.StatusBadGateway || errorReason(w) != reasonReviveProxyKeptCurrent {
+		t.Fatalf("edit: %d %s, want 502 %s", w.Code, w.Body.String(), reasonReviveProxyKeptCurrent)
+	}
+	if len(f.rr.replaced) != 0 {
+		t.Fatal("the edit issued a replace after its lock was lost")
+	}
+	if got := f.storedConfig(); !bytes.Equal(got, source) {
+		t.Errorf("stored config after the abandon:\n%s\nwant the source config:\n%s", got, source)
+	}
+	if st := f.policyState(t); !st.Generations[len(st.Generations)-1].Abandoned || st.CurrentGeneration() != 1 {
+		t.Errorf("policy state %+v, want the edit's generation abandoned and generation 1 current", st)
+	}
+}
+
+// A revive whose lock is lost while its replace runs, the replace answering that the old proxy may be
+// gone, with no newer revive: its lost mark is fenced on its own generation, which is still the newest,
+// so the run is lost with its proxy stopped, as before the fence.
+func TestReviveFence_LostLockMidReplaceWithNoNewerReviveIsLost(t *testing.T) {
+	f := newFenceFixture(t)
+	stops := f.lr.proxyStopCount()
+	f.rr.onReplace = func([]byte) {
+		loseLock(f.srv)
+		f.rr.mu.Lock()
+		f.rr.replaceErr = runner.ErrProxyReplaceFailed
+		f.rr.mu.Unlock()
+	}
+	a := f.reviveOnA(t)
+	if a.Code != http.StatusBadGateway || errorReason(a) != reasonReviveProxyReplaceFailedLost {
+		t.Fatalf("A: %d %s, want 502 %s", a.Code, a.Body.String(), reasonReviveProxyReplaceFailedLost)
+	}
+	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostOutage {
+		t.Errorf("lost = %v %q, want lost (outage): the fence must match the revive's own generation", lostAt, reason)
+	}
+	if f.lr.proxyStopCount() == stops {
+		t.Error("the lost run's proxy was not stopped")
+	}
+}
+
+// Containment of A's failed start, paused after its generation read while B narrows the run and
+// confirms on the second replica (A's lock lost, so B took it), stops nothing and loses nothing: its lost
+// mark is fenced on A's generation, which B moved on. B's start and narrowed config stand.
+func TestReviveFence_ContainmentAcrossANewerConfirmedEditStopsNothing(t *testing.T) {
+	f := newFenceFixture(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("A's revive: %d, want 200", code)
+	}
+	f.srv.liveRevived.Delete(f.run.ID)
+	gen := f.active(t).Generation
+	f.rb.pmu.Lock()
+	f.rb.starts[f.run.ID][gen].State = types.ProxyStartFailed
+	f.rb.pmu.Unlock()
+	stops := f.lr.proxyStopCount()
+	var b *httptest.ResponseRecorder
+	old := proxyContainPaused
+	proxyContainPaused = func() {
+		proxyContainPaused = func() {}
+		b = f.editOnB(t)
+	}
+	t.Cleanup(func() { proxyContainPaused = old })
+	c := f.srv.containProxyStart(context.Background(), f.run.ID, gen)
+	if b == nil || b.Code != http.StatusOK {
+		t.Fatalf("B never ran or did not confirm: %v", b)
+	}
+	if c.Contained {
+		t.Errorf("containment of start %d = %+v, want not contained: it stopped nothing", gen, c)
+	}
+	if f.lr.proxyStopCount() != stops {
+		t.Error("A's containment stopped the proxy of B's newer, confirmed start")
+	}
+	if lostAt, _ := f.st.lost(); lostAt != nil {
+		t.Errorf("lost at %v: A's containment lost a run B had taken over", lostAt)
+	}
+	if p := f.active(t); p.Generation <= gen || p.State != types.ProxyStartEnforced {
+		t.Errorf("start = %d %s, want B's newer start enforced", p.Generation, p.State)
+	}
+	denied(t, "the stored config", f.storedPolicy(t))
+}
+
+// startingHashedRunner is the readback runner that can also start a stopped agent.
+type startingHashedRunner struct {
+	*hashedReviveRunner
+	smu    sync.Mutex
+	starts int
+}
+
+func (r *startingHashedRunner) StartSandbox(context.Context, string) error {
+	r.smu.Lock()
+	defer r.smu.Unlock()
+	r.starts++
+	return nil
+}
+
+func (r *startingHashedRunner) started() int {
+	r.smu.Lock()
+	defer r.smu.Unlock()
+	return r.starts
+}
+
+// A run lost to a reboot, or ended and kept, whose revive loses its lock after its advance with no newer
+// revive: nothing is replaced or started, and the run gets back exactly the lost mark the claim cleared
+// (lost_at, lost_reason, agent_stopped_at). So the next revive takes the lost path and starts the agent,
+// where one that found the run live would leave its stopped agent unstarted.
+func TestReviveFence_LostLockAfterTheAdvancePutsBackALostRunsFate(t *testing.T) {
+	for _, reason := range []types.LostReason{types.LostReboot, types.LostEnded} {
+		t.Run(string(reason), func(t *testing.T) {
+			f := newFenceFixture(t)
+			sr := &startingHashedRunner{hashedReviveRunner: f.hr}
+			f.srv.cfg.Runner = sr
+			lostAt := f.now.Add(-time.Minute)
+			f.st.mu.Lock()
+			f.st.run.LostAt, f.st.run.LostReason = &lostAt, reason
+			f.st.run.Interactive = true
+			if reason == types.LostEnded {
+				end := f.now.Add(48 * time.Hour) // extended past its end, so it may be revived
+				f.st.run.EndsAt = &end
+			}
+			f.st.agentStopped = true
+			f.st.mu.Unlock()
+			f.rb.generationStore.agentStoppedAt = lostAt.Add(time.Second)
+			f.run = f.st.run
+			ctx := context.Background()
+			before, err := f.rb.RunLostFate(ctx, f.run.ID)
+			if err != nil || before.LostAt == nil || before.AgentStoppedAt == nil {
+				t.Fatalf("fate before = %+v, %v; want lost with its agent stopped", before, err)
+			}
+			stops := f.lr.proxyStopCount()
+			f.is.afterAdvance = func(int) { loseLock(f.srv) }
+			a := f.reviveOnA(t)
+			if a.Code != http.StatusConflict || errorReason(a) != reasonReviveRunChanged {
+				t.Fatalf("A: %d %s, want 409 %s", a.Code, a.Body.String(), reasonReviveRunChanged)
+			}
+			if len(f.rr.replaced) != 0 || sr.started() != 0 || f.lr.proxyStopCount() != stops {
+				t.Fatalf("replaces %d, agent starts %d, proxy stops %d (was %d): want none", len(f.rr.replaced), sr.started(), f.lr.proxyStopCount(), stops)
+			}
+			if after, err := f.rb.RunLostFate(ctx, f.run.ID); err != nil || !reflect.DeepEqual(after, before) {
+				t.Fatalf("fate after = %+v, %v; want exactly %+v", after, err, before)
+			}
+			f.srv.locks.held = nil
+			if b := f.reviveOnA(t); b.Code != http.StatusOK {
+				t.Fatalf("the next revive: %d %s, want 200", b.Code, b.Body.String())
+			}
+			if sr.started() != 1 {
+				t.Errorf("agent starts = %d, want 1: the next revive must take the lost path", sr.started())
+			}
+		})
+	}
+}
+
+// An advance that commits but answers an error (its acknowledgement lost) is read back: the newest
+// generation is this attempt's (its fresh token), so it is recorded and abandoned with the source config
+// stored back, and the run keeps its current proxy.
+func TestReviveFence_LostCommitAcknowledgementIsAbandoned(t *testing.T) {
+	f := newFenceFixture(t)
+	source := f.storedConfig()
+	f.is.dropAck = true
+	a := f.reviveOnA(t)
+	if a.Code != http.StatusBadGateway || errorReason(a) != reasonReviveProxyKeptCurrent {
+		t.Fatalf("A: %d %s, want 502 %s", a.Code, a.Body.String(), reasonReviveProxyKeptCurrent)
+	}
+	if len(f.rr.replaced) != 0 {
+		t.Fatal("A issued a replace after its advance answered an error")
+	}
+	st := f.policyState(t)
+	last := st.Generations[len(st.Generations)-1]
+	if last.Generation != 2 || !last.Abandoned || st.CurrentGeneration() != 1 {
+		t.Errorf("policy state %+v, want generation 2 written and abandoned, 1 current", st)
+	}
+	if got := f.storedConfig(); !bytes.Equal(got, source) {
+		t.Error("the source config was not stored back")
+	}
+	if rows := f.audit.eventsFor(f.run.ID, "run.policy.generation"); len(rows) == 0 {
+		t.Error("the written generation has no run.policy.generation row")
+	}
+}
+
+// The same lost acknowledgement, when B advances and confirms before A reads back: the newest
+// generation is B's, not A's, so A undoes nothing and B's generation, start and config stand.
+func TestReviveFence_LostCommitAcknowledgementNeverUndoesANewerRevive(t *testing.T) {
+	f := newFenceFixture(t)
+	var b *httptest.ResponseRecorder
+	f.is.dropAck = true
+	f.is.afterDroppedAck = func(int) { b = f.editOnB(t) }
+	a := f.reviveOnA(t)
+	if b == nil || b.Code != http.StatusOK {
+		t.Fatalf("B never ran or did not confirm: %v", b)
+	}
+	if a.Code != http.StatusBadGateway || errorReason(a) != reasonReviveProxyKeptCurrent {
+		t.Fatalf("A: %d %s, want 502 %s", a.Code, a.Body.String(), reasonReviveProxyKeptCurrent)
+	}
+	if n := len(f.rr.replaced); n != 1 {
+		t.Fatalf("replaces = %d, want B's one", n)
+	}
+	st := f.policyState(t)
+	if last := st.Generations[len(st.Generations)-1]; last.Abandoned || st.CurrentGeneration() != last.Generation {
+		t.Errorf("policy state %+v, want B's newest generation current", st)
+	}
+	if p := f.active(t); p.State != types.ProxyStartEnforced {
+		t.Errorf("start = %d %s, want B's enforced", p.Generation, p.State)
+	}
 	denied(t, "the stored config", f.storedPolicy(t))
 }

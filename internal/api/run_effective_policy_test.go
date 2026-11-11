@@ -48,10 +48,10 @@ func (s *genViewStore) QueryAuditEventsFilteredPage(ctx context.Context, runID *
 	return out, err
 }
 
-func (s *genViewStore) AdvanceRunPolicyGeneration(_ context.Context, _ uuid.UUID, expected int, digest string, retired []string, fresh string, _ []byte) (int, error) {
+func (s *genViewStore) AdvanceRunPolicyGeneration(_ context.Context, _ uuid.UUID, expected store.PolicySlot, digest string, retired []string, fresh string, _ []byte) (int, error) {
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
-	if store.NewestPolicyGeneration(s.state) != expected {
+	if store.NewestPolicySlot(s.state) != expected {
 		return 0, store.ErrRunPolicyMoved
 	}
 	var gen int
@@ -100,7 +100,7 @@ func newGenViewFixture(t *testing.T, filler int) (*Server, *genViewStore, types.
 // reviseGenView starts the revive's generation as reviveRunProxy does, before the new proxy starts.
 func reviseGenView(t *testing.T, srv *Server, run types.AgentRun) int {
 	t.Helper()
-	gen, err := srv.advanceRunPolicyGeneration(context.Background(), run, genViewRevived, "", renewedTokens{}, "jti-revived", 1, nil)
+	gen, err := srv.advanceRunPolicyGeneration(context.Background(), run, genViewRevived, "", renewedTokens{}, "jti-revived", store.PolicySlot{Generation: 1}, nil)
 	if err != nil || gen != 2 {
 		t.Fatalf("advance = %d, %v; want generation 2", gen, err)
 	}

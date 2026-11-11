@@ -396,13 +396,13 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, pe
 	// is in no start sweep, so the edit retries it (both stops are idempotent), and only a retry that
 	// lands replaces the known stop. One that never lands is the lapsed-token sweep's
 	// (sweepLapsedRunTokens): with the proxy stopped, nothing renews the run's token.
-	err = s.stopUnconfirmedProxy(lctx, run)
+	err = s.stopUnconfirmedProxyAt(lctx, run, gen)
 	for try := 1; try < egressEditEndTries && errors.Is(err, errRunEndUnwritten) && lctx.Err() == nil; try++ {
 		select {
 		case <-lctx.Done():
 		case <-time.After(egressEditPoll):
 		}
-		if cur, gerr := s.cfg.Store.GetRun(lctx, runID); gerr == nil && s.stopUnconfirmedProxy(lctx, cur) == nil {
+		if cur, gerr := s.cfg.Store.GetRun(lctx, runID); gerr == nil && s.stopUnconfirmedProxyAt(lctx, cur, gen) == nil {
 			err = nil
 		}
 	}
