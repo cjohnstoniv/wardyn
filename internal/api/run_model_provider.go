@@ -288,7 +288,7 @@ func preflightRenewal(ctx context.Context) bool {
 type noCredentialCheckKey struct{}
 
 // withNoCredentialCheck marks ctx as a launch refused for its hosts whatever the caller's model
-// credential is (stepModelProvider, for a No network model run), so enforceChosenModelProvider reads none.
+// credential is (stepModelProvider, for a No network launch), so enforceChosenModelProvider reads none.
 func withNoCredentialCheck(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noCredentialCheckKey{}, true)
 }

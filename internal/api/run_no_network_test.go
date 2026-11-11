@@ -242,6 +242,50 @@ func TestNoNetwork_ExtraHarnessCredentialIsNotRead(t *testing.T) {
 	}
 }
 
+// TestNoNetwork_ExtraHarnessOnlyModelRunIsRefusedBeforeItsCredential: a run whose primary harness needs no
+// model ("none", your own tools) and whose extra harness does (codex-cli on a granted provider the caller has
+// no key for) is a valid set at every door. Under No network the model-provider step passes with nothing
+// written and stepNoNetwork then refuses 422 no_network_needs_egress naming the extra's provider, with no
+// word of a credential and no model_credential row. The same fold without the preset is refused
+// model_credential naming codex-cli.
+//
+// It catches the credential skip being keyed on the primary harness alone (the extra's key is then read and
+// refused first), and a refusal that names the credential.
+func TestNoNetwork_ExtraHarnessOnlyModelRunIsRefusedBeforeItsCredential(t *testing.T) {
+	openai := keyProvider("openai", "codex-cli")
+	openai.Kind = types.ModelProviderOpenAIAPIKey
+	cs := &capStore{enf: map[string]bool{capModelProvider: true},
+		grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capModelProvider, "openai", types.CapabilityAllow)}}
+	srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(openai)}, cs, nil)
+	req := twoHarnessRequest("",
+		client.IncludedTool{ID: "none", Kind: client.IncludedToolHarness},
+		client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness, ModelProvider: "openai"})
+	fold := func(preset *types.WallPresetOnRun) (runFold, *httptest.ResponseRecorder) {
+		w := httptest.NewRecorder()
+		return runFold{mode: foldCreate, w: w, r: memberRequest(t), req: &req, harnesses: harnessSet(req), source: policySourceRecord{wallPreset: preset}}, w
+	}
+
+	f, w := fold(builtinFrozen(t, types.WallPresetNoNetwork))
+	if !srv.stepModelProvider(&f, &foldRecorder{}) || w.Body.Len() != 0 {
+		t.Fatalf("model-provider step under No network: %d %s, want it to pass with nothing written", w.Code, w.Body)
+	}
+	if srv.stepNoNetwork(&f, &foldRecorder{}) {
+		t.Fatal("a No network launch with a model harness's provider passed")
+	}
+	var keys map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &keys)
+	if w.Code != http.StatusUnprocessableEntity || len(keys) != 2 || keys["reason"] != reasonNoNetworkNeedsEgress ||
+		!strings.Contains(keys["error"], "model provider openai") {
+		t.Errorf("answer %d %s, want 422 %s naming model provider openai", w.Code, w.Body, reasonNoNetworkNeedsEgress)
+	}
+	noCredentialTrace(t, "none + codex-cli", w, srv.cfg.Audit.(*recRecorder).snapshot())
+
+	f, w = fold(nil)
+	if srv.stepModelProvider(&f, &foldRecorder{}) || errorReason(w) != llmRefusalAuditReason || bodyTool(t, w) != "codex-cli" {
+		t.Errorf("without No network: %d %s, want model_credential naming codex-cli", w.Code, w.Body)
+	}
+}
+
 // A host still on the spec is named by the source the fold recorded adding it; and a No network launch
 // with nothing that needs a host, or a launch with another preset, passes.
 func TestNoNetwork_SpecHostsAndPasses(t *testing.T) {

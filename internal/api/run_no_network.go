@@ -24,12 +24,13 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 	return p != nil && p.Scope == types.WallPresetScopeBuiltin && p.ID == types.WallPresetNoNetwork
 }
 
-// noNetworkSkipsCredential is r, marked (withNoCredentialCheck) when the launch is a No network one of a
-// model run, which stepNoNetwork always refuses (the harness's model is a host source). The provider is still
-// chosen and judged, but the caller's model credential is not read, so the refusal never waits on it or
-// tells a caller about it.
-func noNetworkSkipsCredential(r *http.Request, preset *types.WallPresetOnRun, req createRunRequest) *http.Request {
-	if _, needsModel := agentLLMProvider(req.Agent); noNetworkPreset(preset) && needsModel && createDoorIsModelRun(req) {
+// noNetworkSkipsCredential is r, marked (withNoCredentialCheck) when the launch has the No network preset.
+// The provider is still chosen and judged, but the caller's model credential is read for a chosen provider
+// only, and stepNoNetwork refuses every chosen provider, the primary's and each extra harness's alike
+// ("model provider ..." below), so for this preset the refusal is certain and never waits on, or tells a
+// caller about, the credential. A harness with no chosen provider reads none either way.
+func noNetworkSkipsCredential(r *http.Request, preset *types.WallPresetOnRun) *http.Request {
+	if noNetworkPreset(preset) {
 		return r.WithContext(withNoCredentialCheck(r.Context()))
 	}
 	return r
