@@ -672,9 +672,18 @@ func (s *Server) auditComputerFolderPass(ctx context.Context, runID uuid.UUID, f
 	}
 	outcome := "success"
 	if errText != "" {
-		outcome, data["error"] = "failure", localFolderSeedError(errText)
+		outcome, data["error"] = "failure", folderPassErrorText(errText, back)
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, actorType, actor, "run.folder.transfer", runID.String(), outcome, mustJSON(data)))
+}
+
+// folderPassErrorText is a pass's error as its record and audit row keep it: a seed's as the client's, a pass
+// back's within maxFolderBackError, so the outcome its text ends with is kept.
+func folderPassErrorText(errText string, back bool) string {
+	if back {
+		return localFolderErrorText(errText, maxFolderBackError)
+	}
+	return localFolderSeedError(errText)
 }
 
 func folderPassRecord(now time.Time, res runnerwire.FolderPass, errText string, back bool) *types.FolderPassRecord {
@@ -683,7 +692,7 @@ func folderPassRecord(now time.Time, res runnerwire.FolderPass, errText string, 
 		rec.Files, rec.Bytes = res.Pulled, res.BytesIn
 	}
 	if errText != "" {
-		rec.Error = localFolderSeedError(errText)
+		rec.Error = folderPassErrorText(errText, back)
 	}
 	for _, r := range res.Refused[:min(len(res.Refused), runnerwire.MaxFolderRefusals)] {
 		rec.Refused = append(rec.Refused, types.FolderRefusal{Path: localFolderSeedError(r.Path), Reason: localFolderSeedError(r.Reason)})

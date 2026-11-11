@@ -214,14 +214,15 @@ func TestRunOp_AHeldRunDoesNotDelayAnotherOrTheTokenSweep(t *testing.T) {
 
 // TestRunOp_AnExpiredKeptRunEndsOnlyUnderItsLock: an expired kept run's end publishes nothing while its
 // lock is held (here by a revive in flight), and lands on the first pass after the lock is free. A member
-// who keeps reviving cannot hold the end off: past the expiry the revive is refused.
+// who keeps reviving cannot hold the end off: past the expiry the revive is refused. The clock is at the
+// expiry, inside keptEndHoldOffLimit: a lock still held past that is cut by forceKeptStop instead.
 func TestRunOp_AnExpiredKeptRunEndsOnlyUnderItsLock(t *testing.T) {
 	f := newReviveFixture(t)
 	end := f.now.Add(time.Hour)
 	f.st.mu.Lock()
 	f.st.run.EndsAt = &end
 	f.st.mu.Unlock()
-	f.now = end.Add(8 * 24 * time.Hour)
+	f.now = end.Add(f.srv.cfg.EndedRunGrace)
 	ctx := context.Background()
 	run, _ := f.st.GetRun(ctx, f.run.ID)
 	_, unlock, err := f.srv.lockRunOp(ctx, run.ID)

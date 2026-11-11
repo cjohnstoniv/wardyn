@@ -347,8 +347,9 @@ func TestReviveFence_LostLockAfterClaimKeepsTheNewerEdit(t *testing.T) {
 }
 
 // A reads the run's generation; B then narrows and confirms (its config and generation in one write);
-// A reads the source config B stored. A's generation is stale, so its advance changes nothing: A answers
-// kept current and issues no replace.
+// A reads the source config B stored. A's claim is bound to the policy slot it read
+// (store.RunReviverAtSlot), which B moved, so A claims nothing: it answers that the run changed and
+// issues no replace.
 func TestReviveFence_EditBetweenTheGenerationAndSourceReads(t *testing.T) {
 	f := newFenceFixture(t)
 	var b *httptest.ResponseRecorder
@@ -357,8 +358,8 @@ func TestReviveFence_EditBetweenTheGenerationAndSourceReads(t *testing.T) {
 	if b == nil || b.Code != http.StatusOK {
 		t.Fatalf("B never ran or did not confirm: %v", b)
 	}
-	if a.Code != http.StatusBadGateway || errorReason(a) != reasonReviveProxyKeptCurrent {
-		t.Fatalf("A: %d %s, want 502 %s", a.Code, a.Body.String(), reasonReviveProxyKeptCurrent)
+	if a.Code != http.StatusConflict || errorReason(a) != reasonReviveRunChanged {
+		t.Fatalf("A: %d %s, want 409 %s", a.Code, a.Body.String(), reasonReviveRunChanged)
 	}
 	if n := len(f.rr.replaced); n != 1 {
 		t.Errorf("replaces = %d, want B's one", n)

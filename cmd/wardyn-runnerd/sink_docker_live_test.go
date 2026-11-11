@@ -10,9 +10,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	mathrand "math/rand/v2"
+	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -165,7 +168,7 @@ func TestDockerProxySendsDecisionsToTheSink_Live(t *testing.T) {
 	if err := link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: lease}); err != nil {
 		t.Fatal(err)
 	}
-	pc := runner.ProxyConfig{RunToken: "sink-live-token", ControlPlaneURL: "http://127.0.0.1:9",
+	pc := runner.ProxyConfig{RunToken: "sink-live-token", ControlPlaneURL: sinkRenewingControlPlane(t, bind),
 		Policy:        types.RunPolicySpec{AllowedDomains: []string{host}, MinConfinementClass: types.CC1},
 		InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}}
 	created, err := org.CreateSandbox(ctx, runner.SandboxSpec{RunID: runID, RunnerID: row.ID.String(), Image: "busybox:latest", ConfinementClass: types.CC1, ProxyConfig: pc})
@@ -273,6 +276,28 @@ func TestDockerProxySendsDecisionsToTheSink_Live(t *testing.T) {
 	if len(orgRows) != 2 {
 		t.Fatalf("the organisation got %d rows, want the two decisions", len(orgRows))
 	}
+}
+
+// sinkRenewingControlPlane serves wardynd's token renewal, and nothing else, on bind, and returns the URL a
+// run's proxy reaches it at. It hands back the token it was asked with. A replacement proxy serves only after
+// a renewal answers 200 (proxy.FirstRenewGateEnv).
+func sinkRenewingControlPlane(t *testing.T, bind netip.Addr) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(bind, 0).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/internal/token/renew", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"token":      strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "),
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		})
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return fmt.Sprintf("http://host.docker.internal:%d", ln.Addr().(*net.TCPAddr).Port)
 }
 
 // liveSinkBind is where a container on the engine reaches this host through host-gateway, as the relay

@@ -525,6 +525,12 @@ func runRows(events []types.AuditEvent, runID uuid.UUID) []types.AuditEvent {
 	return out
 }
 
+// keptSweepRows is runRows less the identity provider's identity.revoke rows: sweepTerminalSandboxRun runs the revoke
+// cascade on every pass, a kept sandbox's too, and that row is the revoke's (Provider.RevokeRun), not the sweep's.
+func keptSweepRows(events []types.AuditEvent, runID uuid.UUID) []types.AuditEvent {
+	return slices.DeleteFunc(runRows(events, runID), func(ev types.AuditEvent) bool { return ev.Action == "identity.revoke" })
+}
+
 // The terminal-sandbox sweep leaves a sandbox kept for its computer folder's pass back with only its proxy stopped,
 // and still stops one that is not kept.
 func TestSweepTerminalSandboxes_LeavesAKeptFolderSandbox(t *testing.T) {
@@ -539,8 +545,8 @@ func TestSweepTerminalSandboxes_LeavesAKeptFolderSandbox(t *testing.T) {
 	}
 }
 
-// Two passes over a kept sandbox stop its proxy once each and leave the sandbox: a stop that lands writes no row,
-// and the sandbox is never counted as swept, on either pass.
+// Two passes over a kept sandbox stop its proxy once each and leave the sandbox: a stop that lands writes no row of
+// the sweep's, and the sandbox is never counted as swept, on either pass.
 func TestSweepTerminalSandboxes_KeptFolderSandboxIsNotReapedEachPass(t *testing.T) {
 	kept := sweepRun(types.RunFailed, "sbx-kept")
 	srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept}}, kept: kept.ID})
@@ -553,7 +559,7 @@ func TestSweepTerminalSandboxes_KeptFolderSandboxIsNotReapedEachPass(t *testing.
 			t.Errorf("pass %d: swept %d, StopProxy %v, StopSandbox %v; want 0, %d proxy stops, no sandbox stop",
 				pass, swept, rr.proxied, rr.stopped, pass)
 		}
-		if rows := runRows(h.audit.snapshot(), kept.ID); len(rows) != 0 {
+		if rows := keptSweepRows(h.audit.snapshot(), kept.ID); len(rows) != 0 {
 			t.Errorf("pass %d: rows %+v, want none for a proxy stop that landed", pass, rows)
 		}
 	}
@@ -580,7 +586,7 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 	if _, err := srv.SweepTerminalSandboxes(context.Background()); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	rows := runRows(h.audit.snapshot(), kept.ID)
+	rows := keptSweepRows(h.audit.snapshot(), kept.ID)
 	if len(rows) != 1 || rows[0].Action != "sandbox.sweep" || rows[0].Outcome != "failure" ||
 		!strings.Contains(string(rows[0].Data), `"teardown_error"`) || strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
 		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with teardown_error alone and no sandbox stop", rows, rr.stopped)

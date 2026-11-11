@@ -848,6 +848,21 @@ func (r *wedgedStop) StopSandbox(ctx context.Context, ref string) error {
 	return r.passWindowSandbox.StopSandbox(ctx, ref)
 }
 
+// otherRunStore is the fixture's store answering the run other as a run of its own: the fixture's one run under
+// that id, as a store reads a run by the id it is asked for.
+type otherRunStore struct {
+	markedStore
+	other uuid.UUID
+}
+
+func (s otherRunStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.markedStore.GetRun(ctx, id)
+	if id == s.other {
+		run.ID = id
+	}
+	return run, err
+}
+
 // A row's bound: a runner whose stop obeys its context and never answers is cut at forcedStopBound, and the
 // next marked row is stopped on the same tick. A driver call that detaches keeps its own budget instead.
 func TestSweepForcedStops_AWedgedRunnerIsCutAtTheRowBoundAndTheNextRowStillRuns(t *testing.T) {
@@ -861,6 +876,7 @@ func TestSweepForcedStops_AWedgedRunnerIsCutAtTheRowBoundAndTheNextRowStillRuns(
 	f.leaser.marksMu.Lock()
 	f.leaser.marked = append(f.leaser.marked, second)
 	f.leaser.marksMu.Unlock()
+	f.s.cfg.Store = otherRunStore{f.s.cfg.Store.(markedStore), second.RunID}
 	w := &wedgedStop{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
 	f.s.cfg.Runner = w
 	start := time.Now()
