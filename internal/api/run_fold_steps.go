@@ -454,6 +454,8 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 	if f.mode == foldPreflight {
 		r = r.WithContext(withPreflightRenewal(r.Context()))
 	}
+	// A No network launch's credentials are not read: stepNoNetwork refuses every chosen provider whatever they say.
+	r = noNetworkSkipsCredential(r, f.source.wallPreset)
 	var choice runProviderChoice
 	if choice, ok = s.enforceRunModelProvider(f.w, r, *f.req, f.spec, f.wsRefs, f.mode != foldPreview, f.queued); !ok {
 		return false

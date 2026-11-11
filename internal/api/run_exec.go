@@ -53,6 +53,9 @@ const (
 	runExecBusyMsg = "This run already has %d SSH channels or commands open, the most it may; try again when one ends."
 	// runExecFailedMsg answers a runner that could not start the command or lost it; the cause goes to the log.
 	runExecFailedMsg = "The runner could not run the command, or lost it before it ended."
+	// runExecBackgroundMsg answers a background task: exec is not an SSH-only door, but a background run takes no
+	// command at all, so the sentence says what to create instead of naming SSH.
+	runExecBackgroundMsg = "This run is a background task, so it cannot take a command. Exec needs an interactive run: create the run with experience: interactive. Its logs, audit trail and status stay available."
 )
 
 func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +88,10 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	at, actor := actorFromRequest(r)
 	fresh, msg := s.sshFreshRun(ctx, run.ID, actor)
 	if msg != "" {
+		// A background run's own answer; a state refusal (not running, ended) keeps sshFreshRun's words.
+		if run.BackgroundOnly() && msg == runBackgroundOnlyMsg("SSH access") {
+			msg = runExecBackgroundMsg
+		}
 		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).
 		s.auditRunExec(ctx, run, at, actor, "failure", map[string]any{"error": msg})
 		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, msg)

@@ -5,10 +5,13 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -16,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // noNetworkFold is a launch with the No network preset carrying every host source the fold can see: a
@@ -65,6 +69,312 @@ func TestNoNetwork_CreateRefusesNamingEachSource(t *testing.T) {
 				t.Errorf("mode %d: the refusal does not name %q: %s", mode, src, body.Error)
 			}
 		}
+	}
+}
+
+// noNetworkModelLaunch drives door as an admin with a model run on kind k under sc (joinCreate's states: the
+// owner's credential stored, the secret store wedged), plus extra body fields, and returns the answer and
+// the audit rows it wrote.
+func noNetworkModelLaunch(t *testing.T, k joinKind, sc joinScenario, door, extra string) (*httptest.ResponseRecorder, []types.AuditEvent) {
+	t.Helper()
+	p := k.record(sc)
+	srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(p)}, &capStore{}, nil)
+	srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
+	srv.cfg.Runner = nil
+	if sc.stored {
+		if err := k.store(srv.cfg.Secrets.(*memSecrets).For(joinCreateOwner), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sc.wedged {
+		srv.cfg.Secrets = wedgedSecrets{err: errors.New("age: no identity matched")}
+	}
+	body := `{"agent":"claude-code","task":"t","model_provider":"` + p.ID + `"` + extra + `}`
+	w := do(t, srv, http.MethodPost, door, providerAdminToken(srv, joinCreateOwner), body)
+	return w, srv.cfg.Audit.(*recRecorder).snapshot()
+}
+
+const noNetworkWallPreset = `,"wall_preset":"` + types.WallPresetNoNetwork + `"`
+
+// noCredentialTrace fails t for any sign of the model credential having been read or answered: the word in
+// the body, a model_credential or model_provider_unavailable audit row, or a sign-in renewal row.
+func noCredentialTrace(t *testing.T, label string, w *httptest.ResponseRecorder, rows []types.AuditEvent) {
+	t.Helper()
+	if strings.Contains(strings.ToLower(w.Body.String()), "credential") {
+		t.Errorf("%s: the refusal mentions the model credential: %s", label, w.Body)
+	}
+	for _, ev := range rows {
+		d := strings.ToLower(string(ev.Data))
+		if ev.Action == "harness.credential.refresh" || strings.Contains(d, llmRefusalAuditReason) || strings.Contains(d, "model_provider_unavailable") {
+			t.Errorf("%s: audit row %s %s carries a model credential read", label, ev.Action, ev.Data)
+		}
+	}
+}
+
+// wantNoNetworkRefusal checks w is the 422 no_network_needs_egress body: exactly the keys error and reason,
+// and the error is stepNoNetwork's sentence naming the model among its sources.
+func wantNoNetworkRefusal(t *testing.T, label string, w *httptest.ResponseRecorder) {
+	t.Helper()
+	var keys map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &keys)
+	if w.Code != http.StatusUnprocessableEntity || len(keys) != 2 || keys["reason"] != reasonNoNetworkNeedsEgress {
+		t.Fatalf("%s: %d %s, want 422 with only error and reason %s", label, w.Code, w.Body, reasonNoNetworkNeedsEgress)
+	}
+	for _, part := range []string{"This run uses the No network wall preset, and these need a network host: ",
+		"the claude-code harness's model", "Remove them, or launch without No network."} {
+		if !strings.Contains(keys["error"], part) {
+			t.Errorf("%s: error %q lacks %q", label, keys["error"], part)
+		}
+	}
+}
+
+// TestNoNetwork_ModelRunIsRefusedBeforeItsCredential: a No network launch of a model-backed harness is
+// refused 422 no_network_needs_egress at create, Review and the preview alike, though the caller's model
+// credential is missing (a model_credential refusal otherwise). The body is exactly the two keys error and
+// reason: the message is stepNoNetwork's sentence naming its host sources, and says nothing of the
+// credential, and no model_credential or model_provider_unavailable row is written. The same launch
+// without No network still gets the model_credential 422 at create and Review.
+//
+// It catches stepModelProvider reading the credential first again (a model_credential body, or the row),
+// and a skip that is too wide (the control launch losing its model_credential refusal).
+func TestNoNetwork_ModelRunIsRefusedBeforeItsCredential(t *testing.T) {
+	k := joinKinds()[0] // anthropic_api_key, serving claude-code; nothing is stored, so the credential is missing
+	sc := joinScenario{chosen: true}
+	for _, door := range []string{"/api/v1/runs", preflightDoor, previewDoor} {
+		w, rows := noNetworkModelLaunch(t, k, sc, door, noNetworkWallPreset)
+		wantNoNetworkRefusal(t, door, w)
+		if !strings.Contains(w.Body.String(), "model provider "+k.p.ID) {
+			t.Errorf("%s: the refusal does not name the model provider: %s", door, w.Body)
+		}
+		noCredentialTrace(t, door, w, rows)
+	}
+	for _, door := range []string{"/api/v1/runs", preflightDoor} {
+		if w, _ := noNetworkModelLaunch(t, k, sc, door, ""); w.Code != http.StatusUnprocessableEntity || errorReason(w) != llmRefusalAuditReason {
+			t.Errorf("%s without No network: %d %s, want 422 %s", door, w.Code, w.Body, llmRefusalAuditReason)
+		}
+	}
+}
+
+// TestNoNetwork_UnreadableCredentialIsStillNoNetwork: with the secret store failing every read, a No network
+// model launch is still 422 no_network_needs_egress at create and Review, not the 503 an unreadable credential
+// answers, and the body says nothing of it. Without No network the same launch is that 503.
+//
+// It catches the skip being applied after the credential read (so the read error answers 503 first), or the
+// error of a skipped read still being returned.
+func TestNoNetwork_UnreadableCredentialIsStillNoNetwork(t *testing.T) {
+	k := joinKinds()[0]
+	sc := joinScenario{stored: true, wedged: true, chosen: true}
+	for _, door := range []string{"/api/v1/runs", preflightDoor} {
+		w, rows := noNetworkModelLaunch(t, k, sc, door, noNetworkWallPreset)
+		wantNoNetworkRefusal(t, door, w)
+		noCredentialTrace(t, door, w, rows)
+		if w, _ := noNetworkModelLaunch(t, k, sc, door, ""); w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s without No network: %d %s, want 503", door, w.Code, w.Body)
+		}
+	}
+}
+
+// TestNoNetwork_ExpiredSignInIsNotRenewed: the Bedrock SSO kind holds an expired but renewable sign-in. A
+// No network launch at create is refused no_network_needs_egress with no CreateToken call, no
+// harness.credential.refresh row and the stored pair untouched, and no run row. Without No network the same
+// create renews once (the control, which also shows the row filter sees a renewal row).
+//
+// It catches the renewal still running before the refusal (a create-time renewal for a launch that will
+// not start: an OIDC call, a refresh row and a rewritten pair), and a skip that also stops the ordinary
+// renewal.
+func TestNoNetwork_ExpiredSignInIsNotRenewed(t *testing.T) {
+	launch := func(extra string) (*httptest.ResponseRecorder, []types.AuditEvent, *atomic.Int32, *Server) {
+		srv := createRenewalFixture(t)
+		calls := renewedOIDC(t)
+		body := strings.TrimSuffix(createRenewalBody, "}") + extra + "}"
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", providerAdminToken(srv, createRenewalOwner), body)
+		return w, srv.cfg.Audit.(*recRecorder).snapshot(), calls, srv
+	}
+	w, rows, calls, srv := launch(noNetworkWallPreset)
+	wantNoNetworkRefusal(t, "create", w)
+	noCredentialTrace(t, "create", w, rows)
+	if calls.Load() != 0 {
+		t.Errorf("CreateToken calls = %d, want 0: the sign-in was renewed for a launch that is refused", calls.Load())
+	}
+	if got, found := createRenewalStored(t, srv); !found || got.AccessToken != createRenewalBlob().AccessToken {
+		t.Errorf("stored pair = %+v, want the old one untouched", got)
+	}
+	if n := runRowCount(srv); n != 0 {
+		t.Errorf("run rows = %d, want none", n)
+	}
+	w, rows, calls, _ = launch("")
+	if w.Code != http.StatusCreated || calls.Load() != 1 || !slices.ContainsFunc(rows, func(ev types.AuditEvent) bool { return ev.Action == "harness.credential.refresh" }) {
+		t.Errorf("control create = %d %s, CreateToken calls %d, want 201, one renewal and a refresh row", w.Code, w.Body, calls.Load())
+	}
+}
+
+// TestNoNetwork_ExtraHarnessCredentialIsNotRead: a No network model run that adds a second harness
+// (codex-cli) on providers the caller has no key for passes the model-provider step with nothing written,
+// so it reaches stepNoNetwork; the same fold without No network refuses with model_credential.
+//
+// It catches stepModelProvider handing judgeHarnessProviders the unmarked request instead of the marked
+// one (the primary's read is skipped, the extra harness's key is read and refused), and the skip being
+// dropped from the primary too.
+func TestNoNetwork_ExtraHarnessCredentialIsNotRead(t *testing.T) {
+	openai := keyProvider("openai", "codex-cli")
+	openai.Kind = types.ModelProviderOpenAIAPIKey
+	site := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), openai)}
+	cs := &capStore{enf: map[string]bool{capModelProvider: true}, grants: []types.CapabilityGrant{
+		grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow),
+		grant(types.CapabilitySubjectAll, "", capModelProvider, "openai", types.CapabilityAllow)}}
+	srv := providerRunFixture(t, site, cs, nil)
+	req := twoHarnessRequest("claude-code",
+		client.IncludedTool{ID: "claude-code", Kind: client.IncludedToolHarness, ModelProvider: "anthropic"},
+		client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness, ModelProvider: "openai"})
+	for _, tc := range []struct {
+		name   string
+		preset *types.WallPresetOnRun
+	}{{"No network", builtinFrozen(t, types.WallPresetNoNetwork)}, {"no preset", nil}} {
+		w := httptest.NewRecorder()
+		f := runFold{mode: foldCreate, w: w, r: memberRequest(t), req: &req, harnesses: harnessSet(req), source: policySourceRecord{wallPreset: tc.preset}}
+		ok := srv.stepModelProvider(&f, &foldRecorder{})
+		if tc.preset != nil && (!ok || w.Body.Len() != 0) {
+			t.Errorf("%s: ok=%v %d %s, want the step to pass with nothing written", tc.name, ok, w.Code, w.Body)
+		}
+		if tc.preset == nil && (ok || errorReason(w) != llmRefusalAuditReason) {
+			t.Errorf("%s: ok=%v %d %s, want a model_credential refusal", tc.name, ok, w.Code, w.Body)
+		}
+	}
+}
+
+// TestNoNetwork_ExtraHarnessOnlyModelRunIsRefusedBeforeItsCredential: a run whose primary harness needs no
+// model ("none", your own tools) and whose extra harness does (codex-cli on a granted provider the caller has
+// no key for) is a valid set at every door. Under No network the model-provider step passes with nothing
+// written and stepNoNetwork then refuses 422 no_network_needs_egress naming the extra's provider, with no
+// word of a credential and no model_credential row. The same fold without the preset is refused
+// model_credential naming codex-cli.
+//
+// It catches the credential skip being keyed on the primary harness alone (the extra's key is then read and
+// refused first), and a refusal that names the credential.
+func TestNoNetwork_ExtraHarnessOnlyModelRunIsRefusedBeforeItsCredential(t *testing.T) {
+	openai := keyProvider("openai", "codex-cli")
+	openai.Kind = types.ModelProviderOpenAIAPIKey
+	cs := &capStore{enf: map[string]bool{capModelProvider: true},
+		grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capModelProvider, "openai", types.CapabilityAllow)}}
+	srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(openai)}, cs, nil)
+	req := twoHarnessRequest("",
+		client.IncludedTool{ID: "none", Kind: client.IncludedToolHarness},
+		client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness, ModelProvider: "openai"})
+	fold := func(preset *types.WallPresetOnRun) (runFold, *httptest.ResponseRecorder) {
+		w := httptest.NewRecorder()
+		return runFold{mode: foldCreate, w: w, r: memberRequest(t), req: &req, harnesses: harnessSet(req), source: policySourceRecord{wallPreset: preset}}, w
+	}
+
+	f, w := fold(builtinFrozen(t, types.WallPresetNoNetwork))
+	if !srv.stepModelProvider(&f, &foldRecorder{}) || w.Body.Len() != 0 {
+		t.Fatalf("model-provider step under No network: %d %s, want it to pass with nothing written", w.Code, w.Body)
+	}
+	if srv.stepNoNetwork(&f, &foldRecorder{}) {
+		t.Fatal("a No network launch with a model harness's provider passed")
+	}
+	var keys map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &keys)
+	if w.Code != http.StatusUnprocessableEntity || len(keys) != 2 || keys["reason"] != reasonNoNetworkNeedsEgress ||
+		!strings.Contains(keys["error"], "model provider openai") {
+		t.Errorf("answer %d %s, want 422 %s naming model provider openai", w.Code, w.Body, reasonNoNetworkNeedsEgress)
+	}
+	noCredentialTrace(t, "none + codex-cli", w, srv.cfg.Audit.(*recRecorder).snapshot())
+
+	f, w = fold(nil)
+	if srv.stepModelProvider(&f, &foldRecorder{}) || errorReason(w) != llmRefusalAuditReason || bodyTool(t, w) != "codex-cli" {
+		t.Errorf("without No network: %d %s, want model_credential naming codex-cli", w.Code, w.Body)
+	}
+}
+
+// TestNoNetwork_ExtraHarnessModelIsASourceWithoutAProvider: with no model provider block, "none" plus an
+// extra model harness (codex-cli) chooses no provider, yet under No network every door (create, Review, the
+// preview) refuses 422 no_network_needs_egress naming "the codex-cli harness's model", as it does for a
+// primary model harness. Controls: the same request without the preset passes, and "none" alone under the
+// preset passes.
+//
+// It catches stepNoNetwork counting only the primary's model, or only an extra harness with a chosen
+// provider (the launch would pass and the harness would run with no model), and a source added for a
+// harness that needs no model.
+func TestNoNetwork_ExtraHarnessModelIsASourceWithoutAProvider(t *testing.T) {
+	srv := providerRunFixture(t, types.SiteConfig{}, &capStore{}, nil)
+	withCodex := twoHarnessRequest("",
+		client.IncludedTool{ID: "none", Kind: client.IncludedToolHarness},
+		client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness})
+	noneOnly := twoHarnessRequest("", client.IncludedTool{ID: "none", Kind: client.IncludedToolHarness})
+	fold := func(mode foldMode, req *createRunRequest, preset *types.WallPresetOnRun) (runFold, *httptest.ResponseRecorder) {
+		w := httptest.NewRecorder()
+		f := runFold{mode: mode, w: w, r: memberRequest(t), req: req, harnesses: harnessSet(*req), source: policySourceRecord{wallPreset: preset}}
+		if !srv.stepModelProvider(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: the model-provider step refused: %d %s", mode, w.Code, w.Body)
+		}
+		return f, w
+	}
+	for _, mode := range []foldMode{foldCreate, foldPreflight, foldPreview} {
+		f, w := fold(mode, &withCodex, builtinFrozen(t, types.WallPresetNoNetwork))
+		if srv.stepNoNetwork(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: a No network launch of a model harness passed", mode)
+		}
+		var body errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusUnprocessableEntity || body.Reason != reasonNoNetworkNeedsEgress || !strings.Contains(body.Error, "the codex-cli harness's model") ||
+			strings.Contains(body.Error, "the none harness's model") {
+			t.Errorf("mode %d: %d %s, want 422 %s naming the codex-cli harness's model only", mode, w.Code, w.Body, reasonNoNetworkNeedsEgress)
+		}
+		f, _ = fold(mode, &withCodex, nil)
+		if !srv.stepNoNetwork(&f, &foldRecorder{}) {
+			t.Errorf("mode %d: a launch without the preset was refused by stepNoNetwork", mode)
+		}
+		f, _ = fold(mode, &noneOnly, builtinFrozen(t, types.WallPresetNoNetwork))
+		if !srv.stepNoNetwork(&f, &foldRecorder{}) {
+			t.Errorf("mode %d: a No network launch of \"none\" alone was refused", mode)
+		}
+	}
+}
+
+// noNetworkRunModeLaunch posts a run-mode launch under No network with tools to door as an admin, on a deployment
+// with no model providers.
+func noNetworkRunModeLaunch(t *testing.T, door string, tools string) *httptest.ResponseRecorder {
+	t.Helper()
+	srv := providerRunFixture(t, types.SiteConfig{}, &capStore{}, nil)
+	srv.cfg.AgentImages = composeAgentImages
+	srv.cfg.Runner = nil
+	body := `{"title":"t","experience":"interactive","tools":` + tools + `,"no_repositories_or_drives":true` + noNetworkWallPreset + `}`
+	return do(t, srv, http.MethodPost, door, providerAdminToken(srv, joinCreateOwner), body)
+}
+
+// TestNoNetwork_ExtraModelHarnessIsRefusedAtEveryDoor: through the real handlers, "none" plus codex-cli (no
+// model provider on the deployment) under No network is 422 no_network_needs_egress naming the codex-cli
+// harness's model at create, at Review (preflight) and at the preview, one subtest each, so the web
+// console and the API give the same answer.
+//
+// It catches stepNoNetwork leaving an extra harness's model out of its sources at any one door.
+func TestNoNetwork_ExtraModelHarnessIsRefusedAtEveryDoor(t *testing.T) {
+	tools := `[{"id":"none","kind":"harness"},{"id":"codex-cli","kind":"harness"}]`
+	for name, door := range map[string]string{"create": "/api/v1/runs", "review": preflightDoor, "preview": previewDoor} {
+		t.Run(name, func(t *testing.T) {
+			w := noNetworkRunModeLaunch(t, door, tools)
+			var body errorBody
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if w.Code != http.StatusUnprocessableEntity || body.Reason != reasonNoNetworkNeedsEgress || !strings.Contains(body.Error, "the codex-cli harness's model") {
+				t.Errorf("%s = %d %s, want 422 %s naming the codex-cli harness's model", door, w.Code, w.Body, reasonNoNetworkNeedsEgress)
+			}
+		})
+	}
+}
+
+// TestNoNetwork_NoModelHarnessStillLaunches: the overreach pin. A No network launch with no model harness at
+// all ("none" alone, your own tools) is not refused for its model at create, Review or the preview.
+//
+// It catches stepNoNetwork counting a harness that needs no model (or every harness in the set) as a host
+// source, which would refuse every No network launch.
+func TestNoNetwork_NoModelHarnessStillLaunches(t *testing.T) {
+	tools := `[{"id":"none","kind":"harness"}]`
+	for name, door := range map[string]string{"create": "/api/v1/runs", "review": preflightDoor, "preview": previewDoor} {
+		t.Run(name, func(t *testing.T) {
+			if w := noNetworkRunModeLaunch(t, door, tools); w.Code/100 != 2 {
+				t.Errorf("%s = %d %s, want it accepted", door, w.Code, w.Body)
+			}
+		})
 	}
 }
 

@@ -24,11 +24,23 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 	return p != nil && p.Scope == types.WallPresetScopeBuiltin && p.ID == types.WallPresetNoNetwork
 }
 
+// noNetworkSkipsCredential is r, marked (withNoCredentialCheck) when the launch has the No network preset.
+// The provider is still chosen and judged, but the caller's model credential is read for a chosen provider
+// only, and stepNoNetwork refuses every chosen provider, the primary's and each extra harness's alike
+// ("model provider ..." below), so for this preset the refusal is certain and never waits on, or tells a
+// caller about, the credential. A harness with no chosen provider reads none either way.
+func noNetworkSkipsCredential(r *http.Request, preset *types.WallPresetOnRun) *http.Request {
+	if noNetworkPreset(preset) {
+		return r.WithContext(withNoCredentialCheck(r.Context()))
+	}
+	return r
+}
+
 // stepNoNetwork refuses a No network launch that would need a host (422 no_network_needs_egress), naming
 // each source, sorted and once each: the kinds deriveRunEgress adds after the mint (from a copy with an
 // empty allowlist, so each kind reports every host it would add; its git grants only when the run clones a
 // repository, noNetworkClonesRepo), the repository itself, a direct GitHub clone, each component that needs a host,
-// the Azure DevOps sign-in, the harness's model and each chosen model provider, and whatever is still on
+// the Azure DevOps sign-in, each harness's model and each chosen model provider, and whatever is still on
 // the spec's allowlist, by the source the fold recorded for it. It runs after the tool policy, the last
 // step that adds a host to the spec, in every door, so create, Review and the preview answer the same.
 func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
@@ -70,8 +82,11 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	if f.adoGrade.org != "" {
 		add("azure_devops_sign_in")
 	}
-	if _, needsModel := agentLLMProvider(f.req.Agent); needsModel && createDoorIsModelRun(*f.req) {
-		add("the " + f.req.Agent + " harness's model")
+	// The primary's model, and each extra harness's (the set stepModelProvider judged), chosen provider or not.
+	for _, agent := range append([]string{f.req.Agent}, harnessChoiceIDs(f.harnessChoices)...) {
+		if _, needsModel := agentLLMProvider(agent); needsModel && createDoorIsModelRun(*f.req) {
+			add("the " + agent + " harness's model")
+		}
 	}
 	if f.mpChoice.chosen {
 		add("model provider " + noNetworkProvider(f.mpChoice.provider))
@@ -89,6 +104,15 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	return !runError(http.StatusUnprocessableEntity, reasonNoNetworkNeedsEgress,
 		"This run uses the No network wall preset, and these need a network host: "+strings.Join(out, ", ")+
 			". Remove them, or launch without No network."+hint).write(s, f.w, f.r)
+}
+
+// harnessChoiceIDs is the harness ids of choices, in the set's order.
+func harnessChoiceIDs(choices []harnessChoice) []string {
+	ids := make([]string, 0, len(choices))
+	for _, hc := range choices {
+		ids = append(ids, hc.harness)
+	}
+	return ids
 }
 
 // noNetworkClonesRepo reports whether the run names a repository to clone: the legacy repo field or a
