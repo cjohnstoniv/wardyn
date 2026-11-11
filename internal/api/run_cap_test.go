@@ -126,6 +126,56 @@ func TestReviveRun_KeptRunAtTheDeploymentCapIsRefused(t *testing.T) {
 	}
 }
 
+// startOwedStore is a reviveStore whose live run still owes its agent start, and whose claim
+// takes no slot for a live row, as store.PG's does (a start owed already holds its slot).
+type startOwedStore struct{ *reviveStore }
+
+func (startOwedStore) RunAgentStopped(context.Context, uuid.UUID) (bool, error) { return true, nil }
+
+func (s startOwedStore) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, startsAgent bool) (bool, error) {
+	if from == "" {
+		limit = 0
+	}
+	return s.reviveStore.MarkRunRevived(ctx, id, from, ended, limit, startsAgent)
+}
+
+// TestReviveRun_LiveRunOwedItsStartAtTheDeploymentCapSucceeds: a live run whose agent start is
+// owed still holds its slot, so a revive at the cap starts its agent instead of being refused;
+// the same revive of a lost run, which holds none, is refused 422 run_quota.
+func TestReviveRun_LiveRunOwedItsStartAtTheDeploymentCapSucceeds(t *testing.T) {
+	t.Run("live", func(t *testing.T) {
+		f := newReviveFixture(t)
+		sr := &startingRunner{reviveRunner: f.rr}
+		f.srv.cfg.Runner = sr
+		f.st.run.LostAt, f.st.run.LostReason = nil, ""
+		f.run = f.st.run
+		f.srv.cfg.Store = startOwedStore{f.rs}
+		f.srv.cfg.MaxConcurrentRuns = 1
+		f.rs.capFull = true
+		if n, _ := f.rs.CountNonTerminalRuns(context.Background(), f.run.ID); n < f.srv.cfg.MaxConcurrentRuns {
+			t.Fatalf("fixture: %d other runs against a cap of %d; want the cap reached", n, f.srv.cfg.MaxConcurrentRuns)
+		}
+		if code, body := f.reviveAs(t, false); code != http.StatusOK {
+			t.Fatalf("revive of a live run owed its start at the cap = %d %s, want 200", code, body)
+		}
+		if len(sr.starts()) != 1 {
+			t.Fatalf("agent starts = %v, want one", sr.starts())
+		}
+	})
+	t.Run("lost", func(t *testing.T) {
+		f, sr := newRebootFixture(t)
+		f.srv.cfg.MaxConcurrentRuns = 1
+		f.rs.capFull = true
+		code, body := f.reviveAs(t, false)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(body, string(authz.ReasonRunQuota)) {
+			t.Fatalf("revive of a lost run at the cap = %d %s, want 422 run_quota", code, body)
+		}
+		if len(sr.starts()) != 0 {
+			t.Fatalf("agent starts = %v, want none", sr.starts())
+		}
+	})
+}
+
 // TestReviveRun_UnreadableCountKeepsDriverTextOutOfTheBody: when the cap count
 // cannot be read, the 503 names the step and nothing of the store's own error.
 func TestReviveRun_UnreadableCountKeepsDriverTextOutOfTheBody(t *testing.T) {
