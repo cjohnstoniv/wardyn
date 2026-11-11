@@ -223,7 +223,7 @@ func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, 
 	s.abandonRunPolicyGeneration(ctx, run, gen, source)
 	s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 	s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
-	const lostMsg = "the run's lock was lost before its proxy was replaced, so the run is lost until revived"
+	const lostMsg = "The run's lock was lost before its proxy was replaced, so the run is lost until revived"
 	fl, ok := s.cfg.Store.(store.RunLoserAtGeneration)
 	if !ok || fate == nil || gen <= 0 {
 		return s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost, lostMsg, err)
