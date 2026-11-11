@@ -34,6 +34,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A busy folder on a sandbox the server's Docker hosts has no bound of its own: it is retried on every sweep and never given up.
 - A failed generation bump can leave the sandbox running without its agent stopped.
 - On Windows, a file replace falls back to a plain rename, with no write-through, when the folder's path cannot be resolved.
+- On a Kubernetes runner that restarts while cut off from the server, an ended run's network is cut when its proxy's renewal window runs out, up to about 70 minutes after the run's end, not at the end itself.
 - The check that a template's placement lands where it says is not in this release; it is planned for 0.10.1.
 
 ### Before you upgrade
