@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- A live network edit or revive on Docker now fails, and ends the run, if the new proxy can't renew its token with the server within 10 seconds. Creates are unchanged.
+- A live edit or revive that loses its database lock while it is replacing the proxy now stops instead of finishing the replace, and a headless run that is not on a laptop runner then ends.
+
 ### Fixed
 
 - New Run: a main drive size typed over the pool's cap now shows "{size} is over the {cap} cap. The run gets {cap}." under the Size field as you type, and the Files summary shows the size the run gets, as Review does.
@@ -43,6 +48,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On Windows, a file replace falls back to a plain rename, with no write-through, when the folder's path cannot be resolved.
 - On a Kubernetes runner that restarts while cut off from the server, a run can keep network access past its scheduled end. Its proxy stops serving at most about an hour after the server records the end, or earlier when a renewal is refused for good.
 - The check that a template's placement lands where it says is not in this release.
+- The fix for overlapping network edits on Docker applies only when the server, the runner and the proxy image are all at 0.10.0-rc.19 or later. A live network edit is refused with an update hint when a part is known to be older; a part whose version can't be read (a digest-pinned or custom image, a runner that reports no version, or a runner's own proxy image) is not checked. During a rolling upgrade, update every server replica before using live network edits. A revive or admin restart whose policy narrows because org policy or the ceiling changed mid-run can still race a stale revive on an older runner or proxy image.
+- After a lost database lock, a slower attempt can still stop a newer revive's proxy or sandbox. The run then has no network (it never widens), and its policy can still read as enforced, until it is revived again.
+- If a headless run that is not on a laptop runner loses its database lock while a revive or live egress edit of it is failing, and another server revives the same run at that moment, the failing attempt can end the newer revive's run: the run stops and its sandbox is removed. Start a new run.
+- In a rare race between two servers, a failed network edit whose undo also fails can leave the run's policy reading narrower than its proxy enforces until the proxy is next replaced; the run's network is never wider than the proxy it had before the edit.
+- If the server stops right after restarting a revived run's agent, or cannot record that the agent restarted, later network edits of that run are refused until it is revived from its page.
+- A run can be stopped by mistake only when its database lock was lost and the store then failed.
+- A late network edit can remove, by name, the proxy that a newer edit just started. The run then has no network (it never widens), and its policy reads as enforced until a sweep ends it, about 65 minutes later.
 
 ### Before you upgrade
 
