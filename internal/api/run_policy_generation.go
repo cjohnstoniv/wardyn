@@ -178,12 +178,14 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
 	data["error"] = err.Error()
 	s.abandonProxyStart(ctx, run.ID, start) // a no-op for one the replace already abandoned
+	// The generation is abandoned first, so the failure row carries the one that still applies.
+	aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
 	// The claim's bound may have run out, which is the likeliest reason an undo failed and would fail the
-	// lineage restore and the audit too, so the steps below take a bound of their own.
+	// lineage restore and the audit too, so the steps below take a bound of their own, started only once
+	// the undo has returned so a slow undo cannot use it up.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	// The generation is abandoned first, so the failure row carries the one that still applies.
-	if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
+	if aerr != nil {
 		// The generation stays current, narrower than the kept proxy: the run is lost again and its proxy
 		// stop attempted, fenced on gen, never answered kept-current.
 		data["error"] = err.Error() + "; undoing its generation failed: " + aerr.Error()
