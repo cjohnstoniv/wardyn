@@ -285,7 +285,9 @@ func TestRunExecRefusals(t *testing.T) {
 }
 
 // TestRunExecBackgroundRunIsRefused: POST /exec is the SSH access door (backgroundDoors), so a background
-// task refuses a command as SSH does, with the door's sentence, and the runner is never called.
+// task refuses a command as SSH does, and the runner is never called. The 409 says exec needs an interactive
+// run (experience: interactive) and does not say "no SSH access"; it catches the SSH-only sentence
+// (runBackgroundOnlyMsg) reaching an exec caller again.
 func TestRunExecBackgroundRunIsRefused(t *testing.T) {
 	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil })
 	e.ast.mu.Lock()
@@ -294,8 +296,9 @@ func TestRunExecBackgroundRunIsRefused(t *testing.T) {
 	e.ast.runs[e.id] = run
 	e.ast.mu.Unlock()
 	w := e.exec(t, `{"command":"id"}`)
-	if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || !strings.Contains(w.Body.String(), runBackgroundOnlyMsg("SSH access")) {
-		t.Errorf("a background run = %d %s, want 409 %s with %q", w.Code, w.Body, reasonRunExecUnavailable, runBackgroundOnlyMsg("SSH access"))
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || !strings.Contains(w.Body.String(), "interactive run") ||
+		!strings.Contains(w.Body.String(), "experience: interactive") || strings.Contains(w.Body.String(), "no SSH access") {
+		t.Errorf("a background run = %d %s, want 409 %s naming an interactive run", w.Code, w.Body, reasonRunExecUnavailable)
 	}
 	if n := e.execs.Load(); n != 0 {
 		t.Errorf("ExecStream was called %d times for a background run", n)

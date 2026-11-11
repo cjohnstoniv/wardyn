@@ -68,6 +68,55 @@ func TestNoNetwork_CreateRefusesNamingEachSource(t *testing.T) {
 	}
 }
 
+// TestNoNetwork_ModelRunIsRefusedBeforeItsCredential: a No network launch of a model-backed harness is
+// refused 422 no_network_needs_egress at create, Review and the preview alike, though the caller's model
+// credential is missing (a model_credential refusal otherwise). The body is exactly the two keys error and
+// reason: the message is stepNoNetwork's sentence naming its host sources, and says nothing of the
+// credential, and no model_credential or model_provider_unavailable row is written. The same launch
+// without No network still gets the model_credential 422 at create and Review.
+//
+// It catches stepModelProvider reading the credential first again (a model_credential body, or the row),
+// and a skip that is too wide (the control launch losing its model_credential refusal).
+func TestNoNetwork_ModelRunIsRefusedBeforeItsCredential(t *testing.T) {
+	k := joinKinds()[0] // anthropic_api_key, serving claude-code; nothing is stored, so the credential is missing
+	launch := func(door, extra string) (*httptest.ResponseRecorder, []types.AuditEvent) {
+		srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(k.record(joinScenario{chosen: true}))}, &capStore{}, nil)
+		srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
+		srv.cfg.Runner = nil
+		body := `{"agent":"claude-code","task":"t","model_provider":"` + k.p.ID + `"` + extra + `}`
+		w := do(t, srv, http.MethodPost, door, providerAdminToken(srv, joinCreateOwner), body)
+		return w, srv.cfg.Audit.(*recRecorder).snapshot()
+	}
+	for _, door := range []string{"/api/v1/runs", preflightDoor, previewDoor} {
+		w, rows := launch(door, `,"wall_preset":"`+types.WallPresetNoNetwork+`"`)
+		var keys map[string]string
+		_ = json.Unmarshal(w.Body.Bytes(), &keys)
+		if w.Code != http.StatusUnprocessableEntity || len(keys) != 2 || keys["reason"] != reasonNoNetworkNeedsEgress {
+			t.Fatalf("%s: %d %s, want 422 with only error and reason %s", door, w.Code, w.Body, reasonNoNetworkNeedsEgress)
+		}
+		msg := keys["error"]
+		for _, part := range []string{"This run uses the No network wall preset, and these need a network host: ",
+			"model provider " + k.p.ID, "the claude-code harness's model", "Remove them, or launch without No network."} {
+			if !strings.Contains(msg, part) {
+				t.Errorf("%s: error %q lacks %q", door, msg, part)
+			}
+		}
+		if strings.Contains(strings.ToLower(w.Body.String()), "credential") {
+			t.Errorf("%s: the refusal mentions the model credential: %s", door, w.Body)
+		}
+		for _, ev := range rows {
+			if d := strings.ToLower(string(ev.Data)); strings.Contains(d, llmRefusalAuditReason) || strings.Contains(d, "model_provider_unavailable") {
+				t.Errorf("%s: audit row %s %s carries a model credential refusal", door, ev.Action, ev.Data)
+			}
+		}
+	}
+	for _, door := range []string{"/api/v1/runs", preflightDoor} {
+		if w, _ := launch(door, ""); w.Code != http.StatusUnprocessableEntity || errorReason(w) != llmRefusalAuditReason {
+			t.Errorf("%s without No network: %d %s, want 422 %s", door, w.Code, w.Body, llmRefusalAuditReason)
+		}
+	}
+}
+
 // A host still on the spec is named by the source the fold recorded adding it; and a No network launch
 // with nothing that needs a host, or a launch with another preset, passes.
 func TestNoNetwork_SpecHostsAndPasses(t *testing.T) {

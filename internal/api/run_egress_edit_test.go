@@ -249,6 +249,37 @@ func TestEgressEdit_RefusedBeforeAnyChange(t *testing.T) {
 	}
 }
 
+// k8sLikeHashedRunner answers CanReplaceProxy the way the orchestrator does for a Kubernetes
+// sandbox, while still passing the edit's own support check (a store with readback, a hashing runner).
+type k8sLikeHashedRunner struct{ *hashedReviveRunner }
+
+func (k8sLikeHashedRunner) CanReplaceProxy(context.Context, string) error {
+	return runner.ErrReviveUnsupported
+}
+
+// A live edit on a substrate that cannot replace a sandbox's proxy (Kubernetes) is refused 409
+// egress_edit_unsupported, not the revive's revive_unsupported, and its run.egress.edit row carries
+// the same reason. Catches a production change that drops egressEditRefusal's reviveUnsupported
+// mapping, or maps only the response and leaves the audit row on revive_unsupported.
+func TestEgressEdit_UnsupportedSubstrateAnswersEgressEditUnsupported(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.srv.cfg.Runner = k8sLikeHashedRunner{f.hr}
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	if w.Code != http.StatusConflict || errorReason(w) != reasonEgressEditUnsupported {
+		t.Fatalf("edit: %d %s, want 409 %s", w.Code, w.Body.String(), reasonEgressEditUnsupported)
+	}
+	if n := len(f.rr.replaced); n != 0 {
+		t.Errorf("ReplaceProxy calls = %d, want 0", n)
+	}
+	ev := f.audit.eventsFor(f.run.ID, "run.egress.edit")
+	if len(ev) != 1 || ev[0].Outcome != "denied" {
+		t.Fatalf("run.egress.edit rows = %+v, want one denied", ev)
+	}
+	if d := leaseAuditData(t, ev[0]); d["reason"] != reasonEgressEditUnsupported {
+		t.Errorf("row reason = %v, want %s", d["reason"], reasonEgressEditUnsupported)
+	}
+}
+
 // applyEgressEdits narrows only: the removed entry leaves the allowlist, every edited host joins the
 // ceiling's denies, and nothing is added to the allowlist.
 func TestApplyEgressEdits_NarrowsOnly(t *testing.T) {
