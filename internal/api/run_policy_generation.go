@@ -102,9 +102,17 @@ func (s *Server) reviveGenerationFailed(ctx context.Context, run types.AgentRun,
 // when the undo could not be written: the generation then stays current, and the caller contains the run
 // (errPolicyNotAbandoned) rather than answer that it keeps its current proxy.
 func (s *Server) abandonRunPolicyGeneration(ctx context.Context, run types.AgentRun, gen int, restore []byte) error {
+	_, err := s.abandonRunPolicyGenerationNoted(ctx, run, gen, restore)
+	return err
+}
+
+// abandonRunPolicyGenerationNoted is abandonRunPolicyGeneration that also returns what an abandon saw when it
+// changed nothing because a newer generation slot exists (store.PolicyAbandonNoop; nil otherwise, and for a
+// store that does not report it). Only reviveKeptAfterAdvance acts on it; every other caller treats it as no error.
+func (s *Server) abandonRunPolicyGenerationNoted(ctx context.Context, run types.AgentRun, gen int, restore []byte) (*store.PolicyAbandonNoop, error) {
 	st, ok := s.cfg.Store.(store.RunPolicyGenerations)
 	if !ok || gen == 0 {
-		return nil
+		return nil, nil
 	}
 	// The undo takes a bound of its own: the claim's may have run out, and a run left under a generation
 	// narrower than its proxy is the worse outcome.
@@ -115,12 +123,18 @@ func (s *Server) abandonRunPolicyGeneration(ctx context.Context, run types.Agent
 		slog.WarnContext(ctx, "api: sealing the config an abandoned revive started from failed; abandoning without it",
 			slog.String("run_id", run.ID.String()), slog.Int("generation", gen), slog.Any("err", err))
 	}
-	if err := st.AbandonRunPolicyGeneration(ctx, run.ID, gen, sealed); err != nil {
+	var noop *store.PolicyAbandonNoop
+	if nt, ok := st.(store.RunPolicyAbandonNoted); ok {
+		noop, err = nt.AbandonRunPolicyGenerationNoted(ctx, run.ID, gen, sealed)
+	} else {
+		err = st.AbandonRunPolicyGeneration(ctx, run.ID, gen, sealed)
+	}
+	if err != nil {
 		slog.WarnContext(ctx, "api: abandoning an unused policy generation failed",
 			slog.String("run_id", run.ID.String()), slog.Int("generation", gen), slog.Any("err", err))
-		return err
+		return nil, err
 	}
-	return nil
+	return noop, nil
 }
 
 // errPolicyNotAbandoned marks a revive whose new generation could not be undone after the old proxy was kept: that generation stays current, narrower than the kept proxy, so the run is contained rather than answered kept-current.
@@ -179,21 +193,27 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 	data["error"] = err.Error()
 	s.abandonProxyStart(ctx, run.ID, start) // a no-op for one the replace already abandoned
 	// The generation is abandoned first, so the failure row carries the one that still applies.
-	aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
+	noop, aerr := s.abandonRunPolicyGenerationNoted(ctx, run, gen, source)
 	// The claim's bound may have run out, which is the likeliest reason an undo failed and would fail the
 	// lineage restore and the audit too, so the steps below take a bound of their own, started only once
 	// the undo has returned so a slow undo cannot use it up.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
+	fence, msg := gen, "the run's proxy was not replaced and its new policy record could not be undone, so the run is lost until revived"
+	if aerr == nil && noop != nil && noop.Current == gen {
+		// A newer edit came after this one and was itself undone, which left this one current again: nothing
+		// undid it. The mark is fenced on the newest slot, which is what the store compares.
+		fence, aerr = noop.Newest, errPolicyNotAbandoned
+		msg = "the run's proxy was not replaced and the edit could not be undone because another edit came after it, so the run is lost until revived"
+	}
 	if aerr != nil {
 		// The generation stays current, narrower than the kept proxy: the run is lost again and its proxy
-		// stop attempted, fenced on gen, never answered kept-current.
+		// stop attempted, fenced on fence, never answered kept-current.
 		data["error"] = err.Error() + "; undoing its generation failed: " + aerr.Error()
 		s.liveRevived.Delete(run.ID)
 		s.revokeRetiringToken(cctx, retiring, run.ID)
 		s.revokeRenewedTokens(cctx, run.ID, renewed.ids(), fresh)
-		return s.reviveFailedAfterClaim(cctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
-			"the run's proxy was not replaced and its new policy record could not be undone, so the run is lost until revived", err)
+		return s.reviveFailedAfterClaim(cctx, run, fence, data, actorType, actor, reasonReviveProxyReplaceFailedLost, msg, err)
 	}
 	s.recordAudit(cctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 	s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
