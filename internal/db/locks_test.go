@@ -6,7 +6,7 @@ package db
 import (
 	"context"
 	"errors"
-	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -303,12 +303,25 @@ func TestLockConnConfig_KeepsAliveOnTheClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	poolDial := fmt.Sprintf("%p", pool.DialFunc)
-	cfg := lockConnConfig(pool)
-	if cfg.ConnectTimeout != 7*time.Second || cfg.DialFunc == nil || fmt.Sprintf("%p", cfg.DialFunc) == poolDial {
-		t.Errorf("connect timeout %s, dialer replaced %v; want the pool's 7s and a dialer of its own", cfg.ConnectTimeout, fmt.Sprintf("%p", cfg.DialFunc) != poolDial)
+	// pgconn's own dialer is a net.Dialer's DialContext, the same method lockConnConfig's is, so their function
+	// pointers print alike: the pool's dialer is one that counts its calls instead, dialed on a cancelled context.
+	poolDials := 0
+	pool.DialFunc = func(context.Context, string, string) (net.Conn, error) {
+		poolDials++
+		return nil, errors.New("the pool's dialer")
 	}
-	if fmt.Sprintf("%p", pool.DialFunc) != poolDial {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := lockConnConfig(pool)
+	if cfg.DialFunc != nil {
+		_, _ = cfg.DialFunc(ctx, "tcp", "127.0.0.1:1")
+	}
+	if cfg.ConnectTimeout != 7*time.Second || cfg.DialFunc == nil || poolDials != 0 {
+		t.Errorf("connect timeout %s, dialer replaced %v; want the pool's 7s and a dialer of its own", cfg.ConnectTimeout, cfg.DialFunc != nil && poolDials == 0)
+	}
+	before := poolDials
+	_, _ = pool.DialFunc(ctx, "tcp", "127.0.0.1:1")
+	if poolDials != before+1 {
 		t.Error("the pool's own dialer was changed")
 	}
 }
