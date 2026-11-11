@@ -22,6 +22,30 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A kept run's teardown at the end of its grace could stop its sandbox while another step was still using the run, and a revive that reached its final step after the grace ran out could still bring the run back. The teardown now waits for that step and is retried on the next pass, stopping the sandbox without bringing a computer folder back once it has waited 5 minutes, and such a revive is refused. Affects 0.10.0 prereleases only.
 - The brokered model routes (`/wardyn/llm/anthropic/`, `/wardyn/llm/openai/`) now refuse a request whose upstream host the run's policy denies, with the same `403` as a refused connection. Before, a local model with no auth configured was still reached after its host was denied, because the broker sends it no credential to withhold.
 - An `AAAA` lookup for `wardyn-proxy`, which a sandbox on Kubernetes or Docker makes because its `/etc/hosts` holds only the proxy's IPv4 address, no longer writes a refused `run.dns.query` row: the proxy answers it with an empty `NOERROR` and records nothing. A lookup for any other name, and an `A` or any other type for `wardyn-proxy`, is still refused and recorded.
+- A kept run whose lock was held 5 minutes past its end could lose the race with a copy back that started after the forced stop read the run, so the stop and the copy back both acted on it. The forced stop now wins or loses the run's one terminal claim, and when it wins and the stop of the sandbox fails, that stop is retried on the next watcher tick, normally within a minute. Affects 0.10.0 prereleases only.
+- A copy back that found the folder busy, because a pass back was still running on the sandbox, stopped the sandbox and dropped a copy that was still going. A sandbox that can be held is now kept with a Resume until the pass finishes, and the busy visit no longer counts as a stalled pass. Affects 0.10.0 prereleases only.
+- On Kubernetes in server mode, a torn-down run whose proxy failed to start now has its sandbox stopped on the first pass. Before, its network could stay open past the cut-off until a background sweep, at most about two hours. Affects 0.10.0 prereleases only.
+
+### Known issues
+
+- A forced stop of an ended run, after its lock was held 5 minutes past the end, normally stops the sandbox. Changes not yet copied back to the laptop are lost and the run records "not brought back". The exception is a Docker sandbox hosted on the server. If its folder record could not be read, or its copy back may still be in flight, it is kept with its network proxy stopped, and "not brought back" may not be recorded. A failed stop is retried on the next watcher tick, normally within a minute. The same applies on runners, virtual machines and Kubernetes in server mode, which cannot stop the proxy alone.
+- A copy back that finds the folder busy on a sandbox that cannot be held (a virtual machine, or an agent that cannot be stopped alone) stops the sandbox at that visit and records "not brought back". The same happens to such a sandbox whose last pass may still be running on an older runner. Changes the running pass had not finished copying are lost.
+- Changes not yet copied back are lost when the laptop's runner is offline at the end of the run.
+- The cut-off loop for a kept run, the 7-day keep and give-up, and the "kept / deleted" view are not in this release. A revoke that fails at the end of an ordinary run has no durable retry once its sandbox stops. A forced stop keeps retrying its revoke on each watcher pass, normally within a minute, until it succeeds.
+- A failed write of the guarded folder record can still lose a pass's changes: the copy back is kept without a saved keep, and a later visit that finds no resume stops the sandbox.
+- The first failure of a copy back that settles with an error only, such as a failed file listing before anything was counted, still stops the sandbox, and changes it did not list can be lost.
+- An older runner waits an hour before the next copy back after an unanswered one, and the two can overlap.
+- Copy backs to a virtual machine are not guarded on an older runner, so one can run beside a stuck pass.
+- A busy folder on a sandbox the server's Docker hosts has no bound of its own: it is retried on every sweep and never given up.
+- A failed generation bump can leave the sandbox running without its agent stopped.
+- On Windows, a file replace falls back to a plain rename, with no write-through, when the folder's path cannot be resolved.
+- On a Kubernetes runner that restarts while cut off from the server, a run can keep network access past its scheduled end. Its proxy stops serving at most about an hour after the server records the end, or earlier when a renewal is refused for good.
+- The check that a template's placement lands where it says is not in this release.
+
+### Before you upgrade
+
+- This release adds a database migration (0276, forward only). Once it has run, the previous release candidate will not start on that database, as the previous one did to the one before it, so going back needs a database restore. Take a database backup first.
+- Update the server first, then every laptop runner. A runner from this release answers busy to a copy back it is still running, which an older server reads as an error and answers by stopping the sandbox. Most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older behaviour.
 
 ## [0.10.0-rc.18] — 2026-11-10
 
