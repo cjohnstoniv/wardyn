@@ -657,15 +657,11 @@ func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 	}
 }
 
-// failMarkStore fails the run's lost mark while fail is set, as a database blip would. st, when set, has a cleared
-// sandbox ref recorded as the store does once a teardown succeeds.
+// failMarkStore is readbackStore whose cleared sandbox ref, when st is set, is recorded on st as the store does once a
+// teardown succeeds.
 type failMarkStore struct {
 	*readbackStore
-	st             *leaseStore
-	fail           atomic.Bool
-	notApplied     atomic.Bool // the mark answers not applied, as when another writer moved the run first
-	endNotApplied  atomic.Bool // a kept run's teardown write does not apply
-	finalizeRefuse atomic.Bool // a FAILED transition does not apply, as when another writer moved the run first
+	st *leaseStore
 }
 
 func (s *failMarkStore) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
@@ -678,28 +674,72 @@ func (s *failMarkStore) SetSandboxRef(ctx context.Context, id uuid.UUID, ref str
 	return nil
 }
 
-func (s *failMarkStore) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, reason types.LostReason, endsAt *time.Time) (bool, error) {
-	if s.endNotApplied.Load() {
-		return false, nil
+// failedAfterClaim makes the fixture's run live, with a store and runner that persist fate when a revive fails after
+// its claim: "torn down" is the mark written on a substrate that cannot keep a sandbox, whose runner refuses a proxy
+// stop alone (runner.ErrEndUnsupported, as a Kubernetes server does), so loseRunStopped tears the run down with its
+// lost_at kept.
+func (f *readbackFixture) failedAfterClaim(fate string) {
+	f.srv.cfg.Store = &failMarkStore{readbackStore: f.rb, st: f.st}
+	f.st.mu.Lock()
+	defer f.st.mu.Unlock()
+	f.st.run.LostAt, f.st.run.LostReason = nil, ""
+	if fate == "torn down" {
+		f.setProxyStopErr(runner.ErrEndUnsupported)
 	}
-	return s.readbackStore.StopKeptRunIf(ctx, id, to, lostAt, reason, endsAt)
+	f.run = f.st.run
 }
 
-func (s *failMarkStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
-	if s.finalizeRefuse.Load() && to == types.RunFailed {
-		return false, nil
+// A failed start of a run torn down with its lost_at kept is contained by a sandbox stop, never retried through a
+// proxy stop its substrate refuses, so it leaves the overdue sweep's list.
+func TestReadback_TornDownRunWithLostAtIsContained(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.failedAfterClaim("torn down")
+	f.hr.hash = func([]byte) string { return "" }
+	if res := f.restart(t); res.OK || strings.Contains(res.Error, "not confirmed") {
+		t.Fatalf("restart: %+v, want refused with its stop confirmed", res)
 	}
-	return s.readbackStore.UpdateRunStateIf(ctx, id, from, to)
+	if lostAt, _ := f.st.lost(); lostAt == nil || !isTerminalRunState(f.st.State()) {
+		t.Fatalf("lost_at %v, state %s: want the run torn down with its lost_at kept", lostAt, f.st.State())
+	}
+	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt == nil {
+		t.Errorf("start = %s contained_at = %v, want failed and contained", p.State, p.ContainedAt)
+	}
+	stops := f.lr.proxyStopCount()
+	if err := f.srv.sweepOverdueProxyStarts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if overdue, err := f.rb.OverdueProxyStarts(context.Background()); err != nil || len(overdue) != 0 {
+		t.Errorf("overdue starts = %+v (%v), want none: a contained start is not retried", overdue, err)
+	}
+	if n := f.lr.proxyStopCount() - stops; n != 0 {
+		t.Errorf("the sweep asked for %d more proxy stops, want none", n)
+	}
 }
 
-func (s *failMarkStore) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, at time.Time, life time.Duration) (bool, error) {
-	if s.fail.Load() {
-		return false, errors.New("injected lost-mark failure")
+// A failed start whose runner refuses a proxy stop alone (runner.ErrEndUnsupported, as a Kubernetes server does) has
+// its run torn down and its sandbox stopped on the report's own pass, and is contained there, never left unresolved
+// for the sweep as an unconfirmed proxy stop.
+func TestReadback_FailedStartOfATornDownRunIsContainedAtOnce(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.srv.cfg.Store = &failMarkStore{readbackStore: f.rb, st: f.st}
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
 	}
-	if s.notApplied.Load() {
-		return false, nil
+	_, _, jti := f.lastHandover(t)
+	f.setProxyStopErr(runner.ErrEndUnsupported)
+	sandboxStops := f.lr.stopCount()
+	if code, state := postLoaded(t, f.srv, f.run.ID, jti, hashHex([]byte("other bytes"))); code != http.StatusOK || state != string(types.ProxyStartFailed) {
+		t.Fatalf("mismatched report: %d %q, want 200 failed", code, state)
 	}
-	return s.readbackStore.MarkRunLost(ctx, id, reason, at, life)
+	if n := f.lr.stopCount() - sandboxStops; n < 1 {
+		t.Errorf("sandbox stops +%d on the first pass, want the sandbox stopped", n)
+	}
+	if p := f.active(t); p.ContainedAt == nil || p.ContainmentError != "" {
+		t.Errorf("start contained %v, error %q; want contained on the report's own pass", p.ContainedAt, p.ContainmentError)
+	}
+	if !isTerminalRunState(f.st.State()) {
+		t.Errorf("state %s, want the run torn down", f.st.State())
+	}
 }
 
 // failEndStore fails every write ending the run, as a database blip would.

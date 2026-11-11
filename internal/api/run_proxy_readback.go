@@ -355,9 +355,10 @@ func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, g
 // stopUnconfirmedProxy stops the proxy of a run whose start failed after its driver answered, and
 // answers nil only once that stop is confirmed. A run still being dispatched fails, its sandbox
 // stopped (the dispatch's own RUNNING write then loses); a running run is lost (outage) with its
-// proxy stopped, or ended when it cannot be kept, as the lapsed-token sweep does. A run already
-// lost has its proxy stopped again, an ended run whose sandbox is kept for its computer folder's
-// copy back its proxy alone, and any other run its sandbox: what a retry does.
+// proxy stopped, or ended when it cannot be kept, as the lapsed-token sweep does. A run kept lost
+// has its proxy stopped again, an ended run whose sandbox is kept for its computer folder's copy
+// back its proxy alone, and any other run its sandbox (one torn down with its lost_at kept among
+// them, whose substrate may refuse a proxy stop): what a retry does.
 func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) error {
 	switch {
 	case run.State == types.RunStarting:
@@ -367,7 +368,7 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 			return errProxyStopUnconfirmed
 		}
 		return nil
-	case runIsKept(run):
+	case runIsKept(run) && !isTerminalRunState(run.State):
 		return s.stopLostSandbox(ctx, run, s.cfg.Now())
 	case run.State == types.RunRunning:
 		if handled, err := s.loseUnconfirmedRun(ctx, run); handled {
@@ -548,6 +549,11 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (ha
 	case loseNotKeepable:
 		return false, nil
 	case loseApplied:
+		if errors.Is(stopErr, runner.ErrEndUnsupported) {
+			// loseRunStopped asked to tear the run down: contained once that end and its sandbox stop landed.
+			_, err := s.reloseEnded(ctx, run.ID)
+			return true, err
+		}
 		return true, stopErr
 	case loseWriteFailed:
 		s.revokeRunBroker(ctx, run.ID)
