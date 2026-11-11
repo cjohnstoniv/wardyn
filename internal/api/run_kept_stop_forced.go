@@ -83,7 +83,7 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 var forcedStopBound = reconcileFinalizeTimeout
 
 // forcedNotBroughtBack is the text a forced end records for a computer folder whose changes it did not bring back.
-const forcedNotBroughtBack = "not brought back: the run was ended past its end while another operation held it"
+const forcedNotBroughtBack = "Not brought back: the run was ended past its end while another operation held it"
 
 // sameKeptMark reports whether a and b carry the same lost mark and end: the three values StopKeptRunIf
 // compares.

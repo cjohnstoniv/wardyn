@@ -628,7 +628,7 @@ func TestForceKeptStop_WinsTheClaimAndTheHolderStartsNoPass(t *testing.T) {
 		t.Fatalf("state %s, %d claims; want STOPPED and 1", f.state(), f.leaser.claimCount())
 	}
 	rec := f.cs.folderStatus()
-	if rec.Gen != before+1 || rec.Settled != rec.Gen || rec.Resume != nil || rec.Back == nil || !strings.Contains(rec.Back.Error, "not brought back") {
+	if rec.Gen != before+1 || rec.Settled != rec.Gen || rec.Resume != nil || rec.Back == nil || !strings.Contains(rec.Back.Error, "Not brought back") {
 		t.Errorf("record %+v after the force (gen was %d); want the next generation, settled, no resume, not brought back", rec, before)
 	}
 	f.release()
