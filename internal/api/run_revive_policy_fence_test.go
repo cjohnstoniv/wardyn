@@ -221,6 +221,14 @@ func (s *interleaveStore) ClearRunAgentStartOwed(ctx context.Context, id uuid.UU
 	return nil
 }
 
+// RestoreRunTokenLineage fails on a context that ran out, as the database call would.
+func (s *interleaveStore) RestoreRunTokenLineage(ctx context.Context, id uuid.UUID, fresh, jti, prev string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.readbackStore.RestoreRunTokenLineage(ctx, id, fresh, jti, prev)
+}
+
 // RestoreRunLostFateAtGeneration writes the lost row's fate back, whose stop mark replaces the owed start.
 func (s *interleaveStore) RestoreRunLostFateAtGeneration(ctx context.Context, id uuid.UUID, gen int, f store.RunLostFate) (bool, error) {
 	applied, err := s.readbackStore.RestoreRunLostFateAtGeneration(ctx, id, gen, f)
@@ -870,5 +878,34 @@ func TestRevive_AFailedClearOfTheOwedStartIsRetriedOnce(t *testing.T) {
 				t.Errorf("start owed %v after %d clear calls; want owed %v after %d", f.is.startOwed(), f.is.clearCalls, tc.wantOwed, tc.wantClears)
 			}
 		})
+	}
+}
+
+// A revive whose claim bound has run out before its replace fails with the old proxy untouched, and whose
+// undo succeeds, still puts the old proxy's token lineage back on a bound of its own: the old token is the
+// head again, so the kept proxy can renew, and the answer is kept-current with no lost mark.
+func TestRevive_AnExpiredClaimBoundStillRestoresTheKeptProxysLineage(t *testing.T) {
+	old := reviveClaimedTimeout
+	reviveClaimedTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { reviveClaimedTimeout = old })
+	f := newFenceFixture(t)
+	f.ls.mu.Lock()
+	f.ls.jtis = []string{"old-jti", "old-prev"}
+	f.ls.mu.Unlock()
+	f.rr.replaceErr = errors.New("inspect the proxy: daemon busy")
+	f.is.afterAdvance = func(int) { time.Sleep(450 * time.Millisecond) }
+	stops := f.lr.proxyStopCount()
+	a := f.reviveOnA(t)
+	if a.Code != http.StatusBadGateway || errorReason(a) != reasonReviveProxyKeptCurrent {
+		t.Fatalf("A: %d %s, want 502 %s", a.Code, a.Body.String(), reasonReviveProxyKeptCurrent)
+	}
+	f.ls.mu.Lock()
+	jtis := slices.Clone(f.ls.jtis)
+	f.ls.mu.Unlock()
+	if !slices.Equal(jtis, []string{"old-jti", "old-prev"}) {
+		t.Errorf("token lineage %v, want the kept proxy's [old-jti old-prev]: restoring it ran on the expired claim bound", jtis)
+	}
+	if lostAt, _ := f.st.lost(); lostAt != nil || f.lr.proxyStopCount() != stops {
+		t.Errorf("lost %v, proxy stops %d (was %d); want a live run and no stop", lostAt, f.lr.proxyStopCount(), stops)
 	}
 }

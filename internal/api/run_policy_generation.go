@@ -178,13 +178,14 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 	gen int, start proxyStartRec, source []byte, fresh string, renewed renewedTokens, err error) *reviveError {
 	data["error"] = err.Error()
 	s.abandonProxyStart(ctx, run.ID, start) // a no-op for one the replace already abandoned
+	// The claim's bound may have run out, which is the likeliest reason an undo failed and would fail the
+	// lineage restore and the audit too, so the steps below take a bound of their own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
 	// The generation is abandoned first, so the failure row carries the one that still applies.
 	if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
 		// The generation stays current, narrower than the kept proxy: the run is lost again and its proxy
-		// stop attempted, fenced on gen, never answered kept-current. The claim's bound may have run out,
-		// which is the likeliest reason the undo failed, so all of this takes a bound of its own.
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
-		defer cancel()
+		// stop attempted, fenced on gen, never answered kept-current.
 		data["error"] = err.Error() + "; undoing its generation failed: " + aerr.Error()
 		s.liveRevived.Delete(run.ID)
 		s.revokeRetiringToken(cctx, retiring, run.ID)
@@ -192,9 +193,9 @@ func (s *Server) reviveKeptAfterAdvance(ctx context.Context, run types.AgentRun,
 		return s.reviveFailedAfterClaim(cctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
 			"the run's proxy was not replaced and its new policy record could not be undone, so the run is lost until revived", err)
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+	s.recordAudit(cctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 	s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
-	s.restoreRunTokenLineage(ctx, run.ID, fresh, renewed)
+	s.restoreRunTokenLineage(cctx, run.ID, fresh, renewed)
 	return reviveKeptCurrent(ctx, err)
 }
 
