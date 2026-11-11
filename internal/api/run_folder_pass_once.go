@@ -113,9 +113,14 @@ func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder
 		}
 	}
 	kept := s.keepForResume(ctx, run.ID, folder, prev.Gen, prev, prev.GenAt)
+	if !kept || !g.unread {
+		return kept
+	}
 	// From a record never read, kept only with the resume the sweeps keep it by: a record found past the
-	// unknown generation proves no other owner.
-	return kept && (!g.unread || s.folderStatus(ctx, run.ID).Resume != nil)
+	// unknown generation proves no other owner. The read, like the write, outlives a cancelled caller.
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	return s.folderStatus(rctx, run.ID).Resume != nil
 }
 
 // stopForKeep makes run's sandbox safe to keep for a later pass with none sent: quiesced, its agent stopped

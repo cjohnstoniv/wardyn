@@ -668,6 +668,34 @@ func TestPassBack_AnUnreadOpenPassWithNoResumeWrittenIsNotKept(t *testing.T) {
 	}
 }
 
+// unreadThenCtxStore is statusReadFailsOnce whose later reads answer a cancelled context's error, as a
+// database does.
+type unreadThenCtxStore struct{ *statusReadFailsOnce }
+
+func (s unreadThenCtxStore) RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return types.RunLocalFolderStatus{}, err
+	}
+	return s.statusReadFailsOnce.RunLocalFolderStatus(ctx, id)
+}
+
+// An open pass from a record never read whose resume is written stays kept when its caller was cancelled:
+// the read that checks the resume outlives the caller, as the write does.
+func TestPassBack_AnUnreadOpenPassKeptPastACancelledCaller(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	f.s.cfg.Store = unreadThenCtxStore{&statusReadFailsOnce{computerFolderStore: f.cs}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !f.s.bringComputerFolderBack(ctx, f.run.ID, "sbx") {
+		t.Fatal("the sandbox was not kept; want it kept with its resume")
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil {
+		t.Errorf("record %+v, want a resume", st)
+	}
+}
+
 // A delayed owner whose generation another owner moved on writes nothing and leaves the sandbox up: owner
 // A's pass is held while owner B moves the record on, passes and settles; A's record then does not land,
 // and A does not let its caller stop B's sandbox.
