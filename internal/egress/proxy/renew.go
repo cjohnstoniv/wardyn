@@ -50,10 +50,18 @@ func (t *tokenSource) Set(tok string) {
 	t.mu.Unlock()
 }
 
+// FirstRenewGateEnv, set to "1" in a proxy's environment by the runner that replaces it, makes the proxy
+// serve only after a token renewal under its own token has landed. A create does not set it. It is an
+// environment variable, not a config key, so a proxy image that predates it ignores it.
+const FirstRenewGateEnv = "WARDYN_PROXY_FIRST_RENEW_GATE"
+
 const (
 	renewRetry       = time.Minute      // first gap after a failed renew, and the floor on every gap
 	renewMaxInterval = 30 * time.Minute // caps the gap between renews and the failure-backoff ceiling
 	renewTimeout     = 10 * time.Second // bounds one renew request
+	// renewClosedTimeout bounds one request while a replacement proxy's gate has not opened: the runner
+	// waits 10 s for the proxy, so a first request that hangs must leave room for a retry.
+	renewClosedTimeout = 3 * time.Second
 	// renewExpiryMargin is how long before the held token expires the backoff's last attempts land, so a
 	// control plane back before then is reached while that token still authenticates.
 	renewExpiryMargin = 2 * time.Minute
@@ -85,16 +93,22 @@ type renewerTuning struct {
 	maxInterval  time.Duration
 	giveUpAfter  time.Duration
 	expiryMargin time.Duration
-	now          func() time.Time
+	closedRetry  time.Duration // the gap between tries while a gate has not yet opened
+	// closedTimeout bounds one request while the gate is closed, so a hung first renewal cannot use up
+	// the replace's whole wait before the next try. Zero means renewTimeout.
+	closedTimeout time.Duration
+	now           func() time.Time
 }
 
 func defaultRenewerTuning() renewerTuning {
 	return renewerTuning{
-		firstRetry:   renewRetry,
-		maxInterval:  renewMaxInterval,
-		giveUpAfter:  renewGiveUpAfter,
-		expiryMargin: renewExpiryMargin,
-		now:          time.Now,
+		firstRetry:    renewRetry,
+		maxInterval:   renewMaxInterval,
+		giveUpAfter:   renewGiveUpAfter,
+		expiryMargin:  renewExpiryMargin,
+		closedRetry:   time.Second,
+		closedTimeout: renewClosedTimeout,
+		now:           time.Now,
 	}
 }
 
@@ -134,9 +148,9 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 }
 
 // runTokenRenewerGated is runTokenRenewerTuned for a proxy that stays closed until its first renewal:
-// g opens on the first success. A failure before that lapses g once its next try would pass
-// firstRenewWithin, and a permanent refusal lapses it at once; once open, later failures never close
-// it. A nil g is the plain loop.
+// g opens on the first success. Until then it retries every tune.closedRetry, lapses g once its next
+// try would pass firstRenewWithin, and lapses it at once on a permanent refusal; once open, later
+// failures never close it. A nil g is the plain loop.
 func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning, g *lapseGate) {
 	lastGood := tune.now() // the startup token is the first "last good token"
 	var heldExp time.Time  // the held token's expiry; unknown for the startup token
@@ -146,7 +160,11 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 		if g != nil {
 			sent = g.clock.Now()
 		}
-		rctx, cancel := context.WithTimeout(ctx, renewTimeout)
+		timeout := renewTimeout
+		if tune.closedTimeout > 0 && g.isClosed() {
+			timeout = tune.closedTimeout
+		}
+		rctx, cancel := context.WithTimeout(ctx, timeout)
 		tok, exp, err := renewToken(rctx, base, ts.Get(), client)
 		cancel()
 		var next time.Duration
@@ -163,15 +181,22 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 					slog.Duration("failing_for", held), slog.Any("err", err))
 				return
 			}
+			closed := g.isClosed()
 			next = tune.retryGap(backoff, heldExp, tune.now())
+			if closed {
+				// Nothing has been served and the replace is waiting on this: keep asking quickly.
+				next = tune.closedRetry
+			}
 			if g != nil {
 				g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
 			}
 			// SECURITY: do not log the token; the error carries status + body only.
 			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off",
 				slog.Duration("retry_in", next), slog.Any("err", err))
-			if backoff = backoff * 2; backoff > tune.maxInterval {
-				backoff = tune.maxInterval
+			if !closed {
+				if backoff = backoff * 2; backoff > tune.maxInterval {
+					backoff = tune.maxInterval
+				}
 			}
 		} else {
 			ts.Set(tok)
@@ -190,9 +215,21 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 		select {
 		case <-ctx.Done():
 			return
+		case <-g.Done():
+			return
 		case <-time.After(next):
 		}
 	}
+}
+
+// isClosed reports a gate that has not opened yet; false for nil.
+func (g *lapseGate) isClosed() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.state == lapseClosed
 }
 
 // refuseIfClosed lapses a gate that never opened because the control plane refused its renewal for

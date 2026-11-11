@@ -84,7 +84,6 @@ func (f *netHintForge) boot(t *testing.T, golden, addr string) (*Server, *bytes.
 	if err != nil {
 		t.Fatal(err)
 	}
-	serveWithoutFirstRenew(srv)
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	return srv, buf
 }

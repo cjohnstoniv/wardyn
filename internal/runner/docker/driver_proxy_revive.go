@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -347,10 +348,6 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 		return "", "", err
 	}
 	defer att.Close()
-	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
-		remove()
-		return "", "", err
-	}
 	// Wait for the proxy's ready marker: it is printed once the listener is bound, so the agent is
 	// never started into "connection refused", and a proxy that exits first (it refused its own
 	// config) is named here instead of surfacing as the generic "proxy has no IP...". A proxy image
@@ -368,6 +365,12 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	if err := waitErr; err != nil {
 		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
 		return resp.ID, "", err
+	}
+	// Opened only once the proxy is ready: a replacement that waits for its first token renewal serves
+	// nothing before that, and a refused one never gets its local models.
+	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
+		remove()
+		return "", "", err
 	}
 	return resp.ID, sum, nil
 }
@@ -746,12 +749,23 @@ func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []b
 	if agentMountsResolver(agent.Container.HostConfig, id) {
 		env = withDNSListen(env)
 	}
+	// A replacement serves only after a token renewal under its own token has landed, so a proxy
+	// started late by a superseded revive never serves. A create does not set it.
+	env = withFirstRenewGate(env)
 	_, sum, err := d.startProxy(ctx, id, d.labels(id, componentProxy, agentLabels),
 		env, prep, ip)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
 	return sum, nil
+}
+
+// withFirstRenewGate puts the flag last and drops any earlier setting of it, so nothing copied into env
+// ahead of it, an operator's knob included, can turn it off.
+func withFirstRenewGate(env []string) []string {
+	key := proxy.FirstRenewGateEnv + "="
+	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, key) })
+	return append(env, key+"1")
 }
 
 // StartSandbox starts the agent ref's kept, stopped container again

@@ -312,7 +312,6 @@ func TestInternalHost_DispatchedConfigVerdicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serveWithoutFirstRenew(srv)
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	rec := httptest.NewRecorder()

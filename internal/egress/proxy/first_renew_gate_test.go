@@ -23,10 +23,11 @@ import (
 // renewPlane is a control plane whose token renewal answers what the test says; every other path
 // answers 204, so the sidecar's other control-plane calls neither fail nor matter.
 type renewPlane struct {
-	srv     *httptest.Server
-	renews  atomic.Int32
-	status  atomic.Int32 // the renewal's status
-	release chan struct{}
+	srv       *httptest.Server
+	renews    atomic.Int32
+	hangFirst atomic.Bool  // the first renewal request never answers
+	status    atomic.Int32 // the renewal's status
+	release   chan struct{}
 }
 
 func newRenewPlane(t *testing.T, status int, hold bool) *renewPlane {
@@ -38,7 +39,10 @@ func newRenewPlane(t *testing.T, status int, hold bool) *renewPlane {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		rp.renews.Add(1)
+		if rp.renews.Add(1) == 1 && rp.hangFirst.Load() {
+			<-r.Context().Done()
+			return
+		}
 		if hold {
 			select {
 			case <-rp.release:
@@ -90,9 +94,14 @@ type sidecar struct {
 }
 
 // startSidecar builds a server-mode sidecar (no self_lapse) against cp, as cmd/wardyn-proxy does,
-// and runs ListenAndServe.
-func startSidecar(t *testing.T, cp string, controlPlane bool) *sidecar {
+// and runs ListenAndServe. flag sets FirstRenewGateEnv, as a runner does for a replacement proxy.
+func startSidecar(t *testing.T, cp string, controlPlane, flag bool) *sidecar {
 	t.Helper()
+	if flag {
+		t.Setenv(FirstRenewGateEnv, "1")
+	} else {
+		t.Setenv(FirstRenewGateEnv, "")
+	}
 	sc := &sidecar{addr: freeAddr(t), clock: &fakeBoot{}}
 	cfg := &Config{RunID: uuid.New(), RunToken: "seed", Listen: sc.addr, DecisionBufferSize: defaultBufferSize,
 		Policy: types.RunPolicySpec{AllowAllEgress: true}}
@@ -129,7 +138,7 @@ func gateEventually(d time.Duration, cond func() bool) bool {
 // runs OnListening only once its first renewal has answered 200.
 func TestSidecar_ClosedUntilFirstRenew(t *testing.T) {
 	rp := newRenewPlane(t, http.StatusOK, true)
-	sc := startSidecar(t, rp.srv.URL, true)
+	sc := startSidecar(t, rp.srv.URL, true, true)
 	if !gateEventually(5*time.Second, func() bool { return rp.renews.Load() > 0 }) {
 		t.Fatal("the sidecar never asked for its first renewal")
 	}
@@ -152,11 +161,18 @@ func TestSidecar_RetiredOrRevokedTokenNeverServes(t *testing.T) {
 	for _, status := range []int{http.StatusServiceUnavailable, http.StatusUnauthorized, http.StatusForbidden} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			rp := newRenewPlane(t, status, false)
-			sc := startSidecar(t, rp.srv.URL, true)
+			sc := startSidecar(t, rp.srv.URL, true, true)
 			g := sc.srv.proxy.lapse
+			if status != http.StatusForbidden {
+				// A refusal that may pass keeps being retried until firstRenewWithin.
+				if !gateEventually(5*time.Second, func() bool { return rp.renews.Load() >= 1 }) {
+					t.Fatal("the sidecar never asked for its renewal")
+				}
+				sc.clock.set(firstRenewWithin)
+			}
 			select {
 			case <-sc.srv.Lapsed():
-			case <-time.After(5 * time.Second):
+			case <-time.After(10 * time.Second):
 				t.Fatal("the gate never lapsed")
 			}
 			want := LapseDeadline
@@ -177,7 +193,7 @@ func TestSidecar_RetiredOrRevokedTokenNeverServes(t *testing.T) {
 		clock := &fakeBoot{}
 		g := newLapseGate(clock, 1<<62)
 		tune := renewerTuning{firstRetry: 5 * time.Millisecond, maxInterval: 20 * time.Millisecond, giveUpAfter: time.Hour,
-			expiryMargin: time.Minute, now: time.Now}
+			expiryMargin: time.Minute, closedRetry: 5 * time.Millisecond, now: time.Now}
 		go runTokenRenewerGated(t.Context(), newTokenSource("seed"), rp.srv.URL, http.DefaultClient, tune, g)
 		if !gateEventually(5*time.Second, func() bool { return rp.renews.Load() >= 3 }) {
 			t.Fatal("the renewer did not keep trying")
@@ -204,7 +220,7 @@ func TestSidecar_RetiredOrRevokedTokenNeverServes(t *testing.T) {
 func TestSidecar_OpenStaysOpenAfterLaterFailures(t *testing.T) {
 	t.Run("through the server", func(t *testing.T) {
 		rp := newRenewPlane(t, http.StatusOK, false)
-		sc := startSidecar(t, rp.srv.URL, true)
+		sc := startSidecar(t, rp.srv.URL, true, true)
 		if !isListening(sc.addr, 5*time.Second) {
 			t.Fatal("the sidecar never served")
 		}
@@ -227,7 +243,7 @@ func TestSidecar_OpenStaysOpenAfterLaterFailures(t *testing.T) {
 			g := newLapseGate(clock, 1<<62)
 			ts := newTokenSource("seed")
 			tune := renewerTuning{firstRetry: 5 * time.Millisecond, maxInterval: 10 * time.Millisecond, giveUpAfter: time.Hour,
-				expiryMargin: time.Minute, now: time.Now}
+				expiryMargin: time.Minute, closedRetry: 5 * time.Millisecond, now: time.Now}
 			ended := make(chan struct{})
 			go func() {
 				runTokenRenewerGated(t.Context(), ts, rp.srv.URL, http.DefaultClient, tune, g)
@@ -261,6 +277,7 @@ func TestSidecar_OpenStaysOpenAfterLaterFailures(t *testing.T) {
 // TestViaOrgEngine_NeverGated: the via_org engine builds through newServer too and starts no
 // renewer, so it must not carry a gate that nothing would ever open.
 func TestViaOrgEngine_NeverGated(t *testing.T) {
+	t.Setenv(FirstRenewGateEnv, "1")
 	cfg := &Config{RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK", DecisionBufferSize: defaultBufferSize,
 		Policy: types.RunPolicySpec{AllowAllEgress: true}}
 	e, err := NewViaOrgEngine(context.Background(), cfg, ViaOrgEngineOptions{Client: &http.Client{Transport: &fakeOrg{}}})
@@ -276,7 +293,7 @@ func TestViaOrgEngine_NeverGated(t *testing.T) {
 // TestSidecar_NoControlPlaneNoGate: without a control plane there is no renewal to wait for, so the
 // sidecar has no gate and binds at once.
 func TestSidecar_NoControlPlaneNoGate(t *testing.T) {
-	sc := startSidecar(t, "", false)
+	sc := startSidecar(t, "", false, true)
 	if sc.srv.proxy.lapse != nil {
 		t.Fatal("a sidecar with no control plane has a gate")
 	}
@@ -285,6 +302,45 @@ func TestSidecar_NoControlPlaneNoGate(t *testing.T) {
 	}
 }
 
-// serveWithoutFirstRenew lets a test that drives a booted server's handler directly, for a verdict
-// that has nothing to do with the first-renewal gate, run without the control plane it has no use for.
-func serveWithoutFirstRenew(srv *Server) { srv.proxy.lapse = nil }
+// TestSidecar_OneRefusalThenAnswerOpensQuickly: a closed gate retries every second, not at the
+// ordinary one-minute gap, so one refused renewal does not spend a replace's ten-second wait.
+func TestSidecar_OneRefusalThenAnswerOpensQuickly(t *testing.T) {
+	rp := newRenewPlane(t, http.StatusServiceUnavailable, false)
+	sc := startSidecar(t, rp.srv.URL, true, true)
+	if !gateEventually(5*time.Second, func() bool { return rp.renews.Load() >= 1 }) {
+		t.Fatal("the sidecar never asked for its renewal")
+	}
+	if isListening(sc.addr, 100*time.Millisecond) {
+		t.Fatal("the sidecar bound after a refusal")
+	}
+	rp.status.Store(http.StatusOK)
+	if !isListening(sc.addr, 10*time.Second) || !gateEventually(time.Second, sc.listening.Load) {
+		t.Fatal("the sidecar did not open within ten seconds of the renewal answering")
+	}
+}
+
+// TestSidecar_FlagUnsetServesAtOnce: without FirstRenewGateEnv (a create, or an older runner) a
+// sidecar binds before its renewal answers, as before.
+func TestSidecar_FlagUnsetServesAtOnce(t *testing.T) {
+	rp := newRenewPlane(t, http.StatusOK, true)
+	sc := startSidecar(t, rp.srv.URL, true, false)
+	if sc.srv.proxy.lapse != nil {
+		t.Fatal("a sidecar without the flag has a gate")
+	}
+	if !isListening(sc.addr, 5*time.Second) || !gateEventually(5*time.Second, sc.listening.Load) {
+		t.Fatal("a sidecar without the flag did not bind at once")
+	}
+	close(rp.release)
+}
+
+// TestSidecar_HungFirstRenewThenAnswerOpensQuickly: while the gate is closed a renewal request is
+// cut off at about three seconds, so a first request that hangs still leaves room for a retry that
+// opens the proxy within a replace's ten-second wait.
+func TestSidecar_HungFirstRenewThenAnswerOpensQuickly(t *testing.T) {
+	rp := newRenewPlane(t, http.StatusOK, false)
+	rp.hangFirst.Store(true)
+	sc := startSidecar(t, rp.srv.URL, true, true)
+	if !isListening(sc.addr, 10*time.Second) || !gateEventually(time.Second, sc.listening.Load) {
+		t.Fatalf("the sidecar did not open within ten seconds after a hung first renewal (%d tries)", rp.renews.Load())
+	}
+}

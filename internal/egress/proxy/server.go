@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -372,8 +373,11 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	return out, nil
 }
 
-// gatesFirstRenew is the one rule for which sidecars stay closed until their first token renewal.
-func gatesFirstRenew(cfg *Config) bool { return cfg.ControlPlaneURL != "" }
+// gatesFirstRenew is the one rule for which sidecars stay closed until their first token renewal: a
+// proxy with a control plane that the runner started as a replacement (FirstRenewGateEnv).
+func gatesFirstRenew(cfg *Config) bool {
+	return cfg.ControlPlaneURL != "" && os.Getenv(FirstRenewGateEnv) == "1"
+}
 
 // startRunTokenRenewer starts the run-token renewer, which keeps this
 // sidecar's short-TTL token fresh for the life of the run. Without it every
@@ -386,9 +390,9 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
-	// A sidecar with a control plane serves nothing until a renewal under its own token has landed:
-	// a proxy started late by a superseded revive, whose token was retired or revoked, never binds.
-	// A self-lapsing proxy (k8s runner) already has its gate; any other gets one with no deadline.
+	// A replacement proxy serves nothing until a renewal under its own token has landed: one started
+	// late by a superseded revive, whose token was retired or revoked, never binds. A self-lapsing
+	// proxy (k8s runner) already has its gate; any other gets one with no deadline.
 	selfLapse := p.lapse != nil
 	if !selfLapse && gatesFirstRenew(cfg) {
 		p.lapse = newLapseGate(clock, math.MaxInt64)

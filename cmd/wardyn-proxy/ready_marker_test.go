@@ -24,12 +24,7 @@ import (
 // The real entry point prints the ready marker on stdout once its listener is bound: a Docker runner
 // holds the agent back until it sees this line.
 func TestMain_PrintsTheReadyMarkerOnceListening(t *testing.T) {
-	// The proxy binds only once its first renewal lands, so the control plane answers it.
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok2", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)})
-	}))
-	t.Cleanup(cp.Close)
-	cfg, err := json.Marshal(&proxy.Config{RunID: uuid.New(), ControlPlaneURL: cp.URL, RunToken: "tok", Listen: "127.0.0.1:0"})
+	cfg, err := json.Marshal(&proxy.Config{RunID: uuid.New(), ControlPlaneURL: "http://127.0.0.1:1", RunToken: "tok", Listen: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
