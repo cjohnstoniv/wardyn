@@ -366,6 +366,10 @@ What happens:
 - A run stopped for being idle or for its maximum age brings its changes back the same way, so the stop can take up to 2 more minutes while they come back.
 - A run kept after its end is torn down on the first pass that can take its lock, and brings its changes back the same way. If that lock is held 5 minutes after the end was due, the sandbox is stopped without its changes: about 6 to 7 minutes after, on a sweep running on time.
 - A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
+- A forced stop of an ended run, when its lock is held 5 minutes past the end, stops the sandbox. Changes not yet copied back are lost and recorded "not brought back". A runner, a virtual machine and Kubernetes in server mode stop it the same way.
+- A failed forced stop is retried on the next watcher tick, normally within a minute.
+- A copy back that finds the folder busy keeps a sandbox that can be held until the pass finishes. A virtual machine, or an agent that cannot be stopped alone, is stopped at that visit and recorded "not brought back"; the same holds for such a sandbox whose last pass may still be running.
+- Update the server first, then every laptop runner: a runner from this release answers busy, and an older server reads that as an error and stops the sandbox.
 - Update the Wardyn runner on every laptop: most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older folder sync behaviour.
 - An older runner keeps working. If one of its passes back goes unanswered, the next is sent an hour or more later, on the hourly sweep. That pass can still run beside a stuck one, which only an updated runner prevents. A run started before the server was updated waits the same way for its first pass back.
 - Meanwhile a sandbox on the server's Docker is kept with its agent stopped and no network. One on a runner or on Kubernetes is kept with its agent stopped; its network is not cut. A virtual machine's sandbox cannot be kept that way: its pass is sent at once, as before, and can still run beside a stuck one.
