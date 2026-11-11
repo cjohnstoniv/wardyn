@@ -71,8 +71,8 @@ var (
 	errRunnerLeaseBusy = errors.New("the run's lease is being sent by another holder")
 )
 
-// leaseSendTimeout bounds one LEASE send under the run's lock: a runner that stops acknowledging cannot
-// pin the lock, or the process's lock connections, past it. leaseWait is how long a sender that must not
+// leaseSendTimeout bounds one LEASE send's wait for room on the runner link under the run's lock; a send
+// already stalled on the wire is ended by the link's own keepalive, not by this. leaseWait is how long a sender that must not
 // lose to a stale renewal (an end change, a READY re-lease, a revive) waits for the owner's slot and the
 // run's lock: one send's worth.
 const (
