@@ -16,9 +16,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -74,6 +76,14 @@ type serverHooks struct {
 	lapseTune  *lapseRenewTuning
 }
 
+// clock is the boot clock the gates read: the hook's in tests, CLOCK_BOOTTIME otherwise.
+func (h serverHooks) clock() bootClock {
+	if h.lapseClock != nil {
+		return h.lapseClock
+	}
+	return sysBootClock{}
+}
+
 // start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
 // starts none, and its brokered mints and approval polls ride the caller's
 // client too: it is the organisation, and never dials itself.
@@ -94,7 +104,7 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 	if h.lapseTune != nil {
 		tune = *h.lapseTune
 	}
-	startRunTokenRenewer(out, p, ts, cfg, client, tune)
+	startRunTokenRenewer(out, p, ts, cfg, client, tune, h.clock())
 }
 
 // egressTLSConfig is the egress trust set: the system roots plus pemBundle, nil (the default roots) when
@@ -327,11 +337,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// k8s runners only: the proxy is closed until its first renew and lapses
 	// for good at the last renew's send time + RunTokenTTL (§6.2).
 	if cfg.SelfLapse {
-		clock := hooks.lapseClock
-		if clock == nil {
-			clock = sysBootClock{}
-		}
-		p.lapse = newLapseGate(clock, selfLapseTTL)
+		p.lapse = newLapseGate(hooks.clock(), selfLapseTTL)
 		if sink.remote != nil {
 			p.lapse.onLapse = sink.remote.lapse
 		}
@@ -367,6 +373,12 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	return out, nil
 }
 
+// gatesFirstRenew is the one rule for which sidecars stay closed until their first token renewal: a
+// proxy with a control plane that the runner started as a replacement (FirstRenewGateEnv).
+func gatesFirstRenew(cfg *Config) bool {
+	return cfg.ControlPlaneURL != "" && os.Getenv(FirstRenewGateEnv) == "1"
+}
+
 // startRunTokenRenewer starts the run-token renewer, which keeps this
 // sidecar's short-TTL token fresh for the life of the run. Without it every
 // control-plane call starts 401ing once the startup token's 1h TTL lapses,
@@ -374,21 +386,29 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 // torn down by Shutdown; NewServer's ctx is a STARTUP context, so the
 // renewer gets its own lifetime instead. Alongside it, the activity reporter
 // streams the pause's presence clock for as long as the renewer runs.
-func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning) {
+func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning, clock bootClock) {
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
+	// A replacement proxy serves nothing until a renewal under its own token has landed: one started
+	// late by a superseded revive, whose token was retired or revoked, never binds. A self-lapsing
+	// proxy (k8s runner) already has its gate; any other gets one with no deadline.
+	selfLapse := p.lapse != nil
+	if !selfLapse && gatesFirstRenew(cfg) {
+		p.lapse = newLapseGate(clock, math.MaxInt64)
+	}
+	gate := p.lapse
 	rctx, cancel := context.WithCancel(context.Background())
 	out.renewStop = cancel
 	out.renewStopped = make(chan struct{})
 	go func() {
 		defer close(out.renewStopped)
-		if p.lapse != nil {
-			go p.lapse.watch(rctx, tune.watchEvery)
-			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, p.lapse, tune)
+		if selfLapse {
+			go gate.watch(rctx, tune.watchEvery)
+			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, gate, tune)
 			return
 		}
-		runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
+		runTokenRenewerGated(rctx, ts, cfg.ControlPlaneURL, client, defaultRenewerTuning(), gate)
 	}()
 	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
 }
@@ -438,9 +458,10 @@ func (s *Server) ListenAndServe() error {
 
 // ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
 // the container's attach stream, which works on any engine, to know the agent may start. It means
-// "listening", nothing more. A self-lapsing proxy (Config self_lapse) binds only after its first token
-// renewal (awaitOpen), so its marker already follows that renewal and the agent never starts behind a
-// proxy that will refuse it.
+// "listening", nothing more. A proxy with a first-renewal gate (a self-lapsing one, Config self_lapse, or a
+// replacement the runner started with FirstRenewGateEnv) binds only after its first token renewal
+// (awaitOpen), so its marker already follows that renewal and the agent never starts behind a proxy that
+// will refuse it.
 const ReadyMarker = "wardyn-proxy: ready"
 
 // OnListening sets fn to run once the main listener is bound, before the first connection is
@@ -456,10 +477,11 @@ func (s *Server) listen(addr string) (net.Listener, error) {
 	return &peerListener{Listener: ln, allowed: s.allowedPeers}, nil
 }
 
-// awaitOpen holds a self-lapsing proxy (k8s runner) off its listeners until its first renew: it
-// refuses every request until then, so it listens only once it serves, and a connect to it (the
-// runner's readiness probe) is proof of that for this proxy and an older one alike. False when
-// Shutdown comes first, which a lapse before that renew ends in too. A gate-less proxy goes on at once.
+// awaitOpen holds a proxy with a first-renewal gate (a self-lapsing one on the k8s runner, or a replacement
+// the runner started with FirstRenewGateEnv) off its listeners until its first renew: it refuses every
+// request until then, so it listens only once it serves, and a connect to it (the runner's readiness
+// probe) is proof of that for this proxy and an older one alike. False when Shutdown comes first, which a
+// lapse before that renew ends in too. A gate-less proxy goes on at once.
 func (s *Server) awaitOpen() bool {
 	g := s.proxy.lapse
 	if g == nil {

@@ -883,11 +883,11 @@ type Server struct {
 	// replica is this server's identity when no LiveBus names one (replicaName).
 	replica         string
 	replicaOnce     sync.Once
-	leaseKeeperOnce sync.Once   // starts attachLeaseKeeper (attach_lease.go)
-	runEvents       runEventHub // each run's lifecycle event ring (run_events.go)
-	// execOutputs holds each non-interactive run's output tail (run_output.go).
-	execOutputs    execOutputTails
-	uiGatewayState // the UI gateway's process state (server_uigateway.go)
+	leaseKeeperOnce sync.Once       // starts attachLeaseKeeper (attach_lease.go)
+	runEvents       runEventHub     // each run's lifecycle event ring (run_events.go)
+	leaseDeferred   sync.Map        // see deferRenewedLease
+	execOutputs     execOutputTails // each non-interactive run's output tail (run_output.go)
+	uiGatewayState                  // the UI gateway's process state (server_uigateway.go)
 
 	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
 	desktopRecs desktopRecordings

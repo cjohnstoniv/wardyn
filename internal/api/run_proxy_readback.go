@@ -44,17 +44,21 @@ const readbackRelease = "0.10.0-rc.18"
 // internal/runner/k8s's releaseTagRE and cmd/wardyn-runnerd's releaseVersion hold: change one, change all.
 var readbackReleaseRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
 
-// releaseBefore reports whether v parses as a release older than readbackRelease. Anything that does
+// firstRenewGateRelease is the first release whose runner and proxy image make a replacement proxy wait
+// for its first token renewal before it serves. A live egress edit needs both.
+const firstRenewGateRelease = "0.10.0-rc.19"
+
+// releaseBefore reports whether v parses as a release older than floor. Anything that does
 // not parse (empty, a development tag, a digest) is not evidence, and reads as not older. A build from
 // a checkout reports its release with a "+<commit>[-dirty]" suffix (internal/version), which is dropped
 // first: such a build at an older release has no hash to report, so it reads as that release.
-func releaseBefore(v string) bool {
+func releaseBefore(v, floor string) bool {
 	v, _, _ = strings.Cut(strings.TrimPrefix(strings.TrimSpace(v), "v"), "+")
 	a, ok := releaseRank(v)
 	if !ok {
 		return false
 	}
-	b, _ := releaseRank(readbackRelease)
+	b, _ := releaseRank(floor)
 	for i := range a {
 		if a[i] != b[i] {
 			return a[i] < b[i]
@@ -90,6 +94,23 @@ func proxyImageRelease(image string) string {
 	return ref[i+1:]
 }
 
+// olderThanFirstRenewGate applies proxyStartMode's evidence rule against firstRenewGateRelease: true only
+// for a remote runner whose registered Version, or an in-process driver whose proxy image tag, is a
+// release older than it. A version that cannot be read (an unreadable runner row, an empty Version, a
+// digest-only image) is not checked: it is not evidence, so it passes.
+func (s *Server) olderThanFirstRenewGate(ctx context.Context, run types.AgentRun) bool {
+	if run.RunnerID != nil {
+		rs, ok := s.cfg.Store.(runnerGetter)
+		if !ok {
+			return false
+		}
+		row, err := rs.GetRunner(ctx, *run.RunnerID)
+		return err == nil && releaseBefore(row.Version, firstRenewGateRelease)
+	}
+	tag := proxyImageRelease(s.cfg.ProxyImage)
+	return tag != "" && releaseBefore(tag, firstRenewGateRelease)
+}
+
 // proxyStartMode is legacy only on positive evidence: a remote runner whose registered Version is a
 // release older than readbackRelease, or an in-process driver whose proxy image tag is. Anything else,
 // an unreadable runner row included, is expected. It needs only the runner read, not all of
@@ -101,12 +122,12 @@ func (s *Server) proxyStartMode(ctx context.Context, run types.AgentRun) string 
 			return store.ProxyStartExpected
 		}
 		row, err := rs.GetRunner(ctx, *run.RunnerID)
-		if err == nil && releaseBefore(row.Version) {
+		if err == nil && releaseBefore(row.Version, readbackRelease) {
 			return store.ProxyStartLegacy
 		}
 		return store.ProxyStartExpected
 	}
-	if tag := proxyImageRelease(s.cfg.ProxyImage); tag != "" && releaseBefore(tag) {
+	if tag := proxyImageRelease(s.cfg.ProxyImage); tag != "" && releaseBefore(tag, readbackRelease) {
 		return store.ProxyStartLegacy
 	}
 	return store.ProxyStartExpected
