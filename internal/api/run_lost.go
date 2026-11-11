@@ -155,9 +155,10 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 // confirmed, anything else containment still unresolved. fence, when above 0, is the policy generation
 // the caller acts for (a revive's, or a failed proxy start's): the lost mark then lands only while it is
 // still the run's newest (store.RunLoserAtGeneration), in the mark's own write, so a caller whose lock
-// was lost never loses, or stops the proxy of, a run a newer revive took over. That miss is
-// loseNotApplied and stops nothing. A mark that errors is loseWriteFailed, as unfenced: the caller's
-// fail-closed stop still runs.
+// was lost does not mark lost a run a newer revive took over. That miss is loseNotApplied and stops
+// nothing. The effects after a mark that landed (approvals, broker, stopLostSandbox) are not fenced: a
+// newer revive that takes the run between the mark and them can have its proxy stopped (fail closed).
+// A mark that errors is loseWriteFailed, as unfenced: the caller's fail-closed stop still runs.
 func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int) (loseOutcome, error) {
 	now := s.cfg.Now()
 	if !s.lostRunKeepable(run, now) {
