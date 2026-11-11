@@ -312,8 +312,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the request: a person closing the tab stops waiting for the answer, not
 	// the consistency work. The context keeps the request's values (the audit
 	// delegation) and loses its cancellation, bounded as the kill cascade is.
-	// This is also what bounds how long the run's lock is held. lockCtx keeps the lock's own end, which the
-	// replace below is checked and bound against: a lost hold is a lock another replica may take.
+	// This is also what bounds how long the run's lock is held. lockCtx carries the run lock's hold, which the
+	// replace below is checked and bound against (whileLockHeld watches the hold itself, so a request that
+	// ended first cannot hide a later loss): a lost hold is a lock another replica may take.
 	lockCtx := ctx
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()

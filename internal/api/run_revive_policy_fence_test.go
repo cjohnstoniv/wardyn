@@ -545,3 +545,27 @@ func TestReviveFence_LostCommitAcknowledgementNeverUndoesANewerRevive(t *testing
 	}
 	denied(t, "the stored config", f.storedPolicy(t))
 }
+
+// A caller that disconnects while a revive's replace runs does not stop it: the consistency work
+// outlives the request, and only the lock's loss ends it (see the Postgres pin,
+// TestWhileLockHeld_LockLostAfterTheCallerEndedCancelsTheReplace).
+func TestWhileLockHeld_CallerCancelAloneDoesNotEndTheReplace(t *testing.T) {
+	hctx, release, err := db.NewLocalLocker().Lock(context.Background(), db.NewLockKey(db.RunOpLockClass, uuid.NewString()), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	caller, cancelCaller := context.WithCancel(hctx)
+	replaceCtx, end := whileLockHeld(context.WithoutCancel(caller), caller)
+	defer end()
+	cancelCaller()
+	select {
+	case <-replaceCtx.Done():
+		t.Fatalf("the caller's cancel ended the replace: %v", context.Cause(replaceCtx))
+	case <-time.After(100 * time.Millisecond):
+	}
+	end()
+	if !errors.Is(context.Cause(replaceCtx), context.Canceled) {
+		t.Errorf("after stop: cause %v, want context.Canceled", context.Cause(replaceCtx))
+	}
+}

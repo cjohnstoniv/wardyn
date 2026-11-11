@@ -52,18 +52,24 @@ func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.Agen
 	return gen, start, nil
 }
 
-// whileLockHeld is ctx, also cancelled once lock, the run lock's own context, ends because the hold was
-// lost (db.ErrLockLost): a revive's replace stops on a lost lock, never on a request that ends. stop
-// releases it.
+// whileLockHeld is ctx, also cancelled once the run lock that lock carries is lost (db.ErrLockLost): a
+// revive's replace stops on a lost lock, never on a request that ends. The loss is watched on the hold
+// itself (db.WithoutCancelUnlessLost), not on lock's own end: a caller that disconnected first leaves
+// lock ended with its own cause for good, and a later loss would never show there. stop releases both.
 func whileLockHeld(ctx, lock context.Context) (context.Context, func()) {
 	out, cancel := context.WithCancelCause(ctx)
-	after := context.AfterFunc(lock, func() {
-		if cause := context.Cause(lock); errors.Is(cause, db.ErrLockLost) {
+	lost, release := db.WithoutCancelUnlessLost(lock)
+	after := context.AfterFunc(lost, func() {
+		if cause := context.Cause(lost); errors.Is(cause, db.ErrLockLost) {
 			cancel(cause)
 		}
 	})
+	if cause := context.Cause(lost); errors.Is(cause, db.ErrLockLost) {
+		cancel(cause) // already lost: ended before it is handed back
+	}
 	return out, func() {
 		after()
+		release()
 		cancel(context.Canceled)
 	}
 }
