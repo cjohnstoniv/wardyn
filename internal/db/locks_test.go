@@ -6,8 +6,13 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // testKey is a key of class whose object is unique to the test.
@@ -288,5 +293,39 @@ func TestWithoutCancelUnlessLost_AlreadyLostIsEndedOnReturn(t *testing.T) {
 	}
 	if cause := context.Cause(fenced); !errors.Is(cause, ErrLockLost) {
 		t.Errorf("cause = %v, want ErrLockLost", cause)
+	}
+}
+
+// A lock connection's client dialer probes on the keepalive schedule, keeping the pool's connect timeout;
+// the pool's own config is left as it was.
+func TestLockConnConfig_KeepsAliveOnTheClient(t *testing.T) {
+	pool, err := pgx.ParseConfig("postgres://u@db.example:5432/x?connect_timeout=7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolDial := fmt.Sprintf("%p", pool.DialFunc)
+	cfg := lockConnConfig(pool)
+	if cfg.ConnectTimeout != 7*time.Second || cfg.DialFunc == nil || fmt.Sprintf("%p", cfg.DialFunc) == poolDial {
+		t.Errorf("connect timeout %s, dialer replaced %v; want the pool's 7s and a dialer of its own", cfg.ConnectTimeout, fmt.Sprintf("%p", cfg.DialFunc) != poolDial)
+	}
+	if fmt.Sprintf("%p", pool.DialFunc) != poolDial {
+		t.Error("the pool's own dialer was changed")
+	}
+}
+
+// Every keepalive setting is tried after connect, and one the server refuses is skipped: the rest are still
+// set and nothing fails.
+func TestSetLockKeepalives_ARefusedSettingIsSkipped(t *testing.T) {
+	var sent []string
+	setLockKeepalives(context.Background(), func(_ context.Context, sql string) error {
+		sent = append(sent, sql)
+		if strings.Contains(sql, "tcp_user_timeout") {
+			return errors.New(`unrecognized configuration parameter "tcp_user_timeout"`)
+		}
+		return nil
+	})
+	want := []string{"SET tcp_keepalives_idle = 30", "SET tcp_keepalives_interval = 10", "SET tcp_keepalives_count = 3", "SET tcp_user_timeout = 60000"}
+	if !slices.Equal(sent, want) {
+		t.Errorf("sent %v, want %v", sent, want)
 	}
 }

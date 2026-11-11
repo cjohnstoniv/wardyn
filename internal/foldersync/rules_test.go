@@ -128,7 +128,7 @@ func TestSyncStateRoundTripAndPairing(t *testing.T) {
 		t.Fatalf("fresh state: %v %+v", err, st)
 	}
 	st.Files["a"] = FileSeen{Local: Side{1, 2}, Remote: Side{3, 4}}
-	if err := st.Save(file); err != nil {
+	if err := st.SaveUnder(file, filepath.Dir(filepath.Dir(file))); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o600 {

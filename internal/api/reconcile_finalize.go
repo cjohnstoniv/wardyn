@@ -33,6 +33,12 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 // records hint, the status's FailureHint, as its failure hint in place of reason, which the audit keeps.
 // An empty hint is reconcileFinalize exactly.
 func (s *Server) reconcileFinalizeHint(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason, hint string) {
+	// The run's lock is held from the read below through the tail's computer folder pass (lockRunEnd).
+	ctx, unlock, locked := s.lockRunEnd(ctx, runID)
+	if !locked {
+		return
+	}
+	defer unlock()
 	// Bound the whole tail: the sweep loop and the boot pass call
 	// this SYNCHRONOUSLY, so an unbounded wedged StopSandbox would stall adoption
 	// for the process lifetime (or block boot from serving).

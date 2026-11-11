@@ -792,6 +792,15 @@ type RunLocalFolderStatus struct {
 	// Resume is set while a pass back that was cut short keeps the run's sandbox for a later
 	// sweep to resume it.
 	Resume *FolderResume `json:"resume,omitempty"`
+	// Gen is the record's generation: a pass back's owner moves it on before its pass and writes the
+	// record only at the generation it moved it to, so a stale owner's write cannot land. Absent is 0.
+	Gen int `json:"gen,omitempty"`
+	// Settled is the latest generation whose pass the runner answered for, or that sent nothing.
+	Settled int `json:"settled,omitempty"`
+	// GenAt is when the record was moved to Gen, so when that generation's pass was sent at the
+	// earliest. Absent (a record from before it) is not taken as long ago: the first pass back that
+	// finds it absent stamps it, and the wait for an unanswered pass runs from there.
+	GenAt time.Time `json:"gen_at,omitzero"`
 }
 
 // FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that

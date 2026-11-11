@@ -657,6 +657,51 @@ func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 	}
 }
 
+// failMarkStore fails the run's lost mark while fail is set, as a database blip would. st, when set, has a cleared
+// sandbox ref recorded as the store does once a teardown succeeds.
+type failMarkStore struct {
+	*readbackStore
+	st             *leaseStore
+	fail           atomic.Bool
+	notApplied     atomic.Bool // the mark answers not applied, as when another writer moved the run first
+	endNotApplied  atomic.Bool // a kept run's teardown write does not apply
+	finalizeRefuse atomic.Bool // a FAILED transition does not apply, as when another writer moved the run first
+}
+
+func (s *failMarkStore) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
+	if s.st == nil {
+		return s.readbackStore.SetSandboxRef(ctx, id, ref)
+	}
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	s.st.run.SandboxRef = ref
+	return nil
+}
+
+func (s *failMarkStore) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, reason types.LostReason, endsAt *time.Time) (bool, error) {
+	if s.endNotApplied.Load() {
+		return false, nil
+	}
+	return s.readbackStore.StopKeptRunIf(ctx, id, to, lostAt, reason, endsAt)
+}
+
+func (s *failMarkStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	if s.finalizeRefuse.Load() && to == types.RunFailed {
+		return false, nil
+	}
+	return s.readbackStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+func (s *failMarkStore) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, at time.Time, life time.Duration) (bool, error) {
+	if s.fail.Load() {
+		return false, errors.New("injected lost-mark failure")
+	}
+	if s.notApplied.Load() {
+		return false, nil
+	}
+	return s.readbackStore.MarkRunLost(ctx, id, reason, at, life)
+}
+
 // failEndStore fails every write ending the run, as a database blip would.
 type failEndStore struct {
 	*readbackStore

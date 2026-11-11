@@ -345,8 +345,14 @@ What happens:
 - Wardyn copies the folder in, and holds the agent until that copy lands. A
   failed copy fails the run, naming the folder. The run detail shows the first copy's files, bytes and refused paths.
 - One side edits at a time: the sandbox, while the run is live. With **Both ways**, its changes come back when the run
-  ends, before the sandbox is stopped, except as below. A file changed on both sides keeps your computer's copy; nothing there is
-  deleted. With **Copy in only**, nothing comes back.
+  ends, before the sandbox is stopped, except as below. Nothing on your computer is deleted. With **Copy in only**,
+  nothing comes back.
+- A file changed on both sides keeps your computer's copy, and the sandbox's is saved beside it as
+  `<name> (sandbox conflict <run>)<ext>`. If it can't be saved, neither side changes and the file is listed as not
+  brought back. A later run copies these in like any file; a `.wardynignore` line `* (sandbox conflict *)*` leaves
+  them out.
+- On filesystems that cannot sync a directory, and for read-only files on Windows, a power loss can drop a
+  just-written change; Wardyn logs a warning and continues.
 - Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
   [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
 - Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its
@@ -356,7 +362,14 @@ What happens:
 - A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, use Bring
   back (or `wardyn folder bring-back <run>`) before you end the run.
 - If the agent can't be stopped, no pass runs, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
+- If the sandbox's proxy can't be stopped, the sandbox is stopped and its folder changes are not brought back.
+- A run stopped for being idle or for its maximum age brings its changes back the same way, so the stop can take up to 2 more minutes while they come back.
+- A run kept after its end is torn down on the first pass that can take its lock, and brings its changes back the same way. If that lock is held 5 minutes after the end was due, the sandbox is stopped without its changes: about 6 to 7 minutes after, on a sweep running on time.
 - A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
+- Update the Wardyn runner on every laptop: most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older folder sync behaviour.
+- An older runner keeps working. If one of its passes back goes unanswered, the next is sent an hour or more later, on the hourly sweep. That pass can still run beside a stuck one, which only an updated runner prevents. A run started before the server was updated waits the same way for its first pass back.
+- Meanwhile a sandbox on the server's Docker is kept with its agent stopped and no network. One on a runner or on Kubernetes is kept with its agent stopped; its network is not cut. A virtual machine's sandbox cannot be kept that way: its pass is sent at once, as before, and can still run beside a stuck one.
+- Changes still not brought back after two passes in a row that bring nothing back are lost, with a failure record.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:

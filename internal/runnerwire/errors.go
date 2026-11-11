@@ -25,6 +25,7 @@ const (
 	CodeImageArch          Code = "image_arch"
 	CodeRelayIPFenced      Code = "relay_ip_fenced"
 	CodeObserveUnsupported Code = "observe_unsupported"
+	CodeFolderPassBusy     Code = "folder_pass_busy"
 	CodeRefused            Code = "refused"
 	CodeInternal           Code = "internal"
 )
@@ -43,6 +44,7 @@ var codeSentinels = []struct {
 	{CodeImageArch, runner.ErrImageArch},
 	{CodeRelayIPFenced, runner.ErrRelayIPFenced},
 	{CodeObserveUnsupported, runner.ErrObserveUnsupported},
+	{CodeFolderPassBusy, runner.ErrFolderPassBusy},
 }
 
 // Valid reports whether c is in the closed list.

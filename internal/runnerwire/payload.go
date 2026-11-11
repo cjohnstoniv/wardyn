@@ -150,6 +150,10 @@ type Caps struct {
 	// runner (0.10 on). Absent (an older runner) reads as none, so a person sees
 	// "no runner on your computer" rather than a refused call.
 	Folders bool `json:"folders,omitempty"`
+	// FolderPassOnce says the runner runs at most one folder pass per run at a time and refuses a second
+	// with folder_pass_busy (0.10 on). Absent (an older runner), the org starts a pass only once the last
+	// one it started is settled.
+	FolderPassOnce bool `json:"folder_pass_once,omitempty"`
 	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.

@@ -57,7 +57,7 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 		s.leaseRun(ctx, leaser, run)
 	}
 	// A run the sweep no longer lists (torn down, killed) needs no entry.
-	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending, &s.renewalRefused} {
+	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending, &s.renewalRefused, &s.keptEndForced} {
 		m.Range(func(id, _ any) bool {
 			if !listed[id.(uuid.UUID)] {
 				m.Delete(id)
@@ -108,8 +108,10 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// The stop is decided from that re-read: an end moved before it (the
 		// end edit writes under this lock too) keeps the agent running.
 		// It never waits: a run whose lock is held is skipped and retried next
-		// pass. The expiry teardown above stays outside this, so a run cannot
-		// dodge it by being revived again and again. The busy mark covers the
+		// pass. The expiry teardown above is retried the same way, and a run
+		// cannot dodge it by being revived again and again: a revive is refused
+		// a claim past the expiry (reviveExpiryDue), and a hold past
+		// keptEndHoldOffLimit is cut by forceKeptStop. The busy mark covers the
 		// instant between a revive's mark and its lock.
 		ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
 		if !ok {
@@ -440,7 +442,22 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 // predicate, so a concurrent kill's outcome is still preserved. Metrics counts
 // this transition itself, mirroring casRunState, since it no longer routes
 // through it.
+//
+// It holds the run's lock across the transition and the tail, or does nothing: a run whose lock is held
+// publishes no end and starts no pass, and the next pass retries. A lock found held (not one that could
+// not be asked) keptEndHoldOffLimit past the run's due end is cut by stopping the sandbox without it
+// instead (forceKeptStop).
 func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
+	lctx, unlock, ok, held := s.tryLockRunOpHeld(ctx, run.ID)
+	if !ok {
+		if held {
+			s.forceKeptStop(ctx, run, action)
+		}
+		return
+	}
+	defer unlock()
+	ctx = lctx
+	s.keptEndForced.Delete(run.ID)
 	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",

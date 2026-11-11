@@ -189,3 +189,9 @@ func (s *Server) produceRunnerRetirements(ctx context.Context) error {
 	}
 	return errors.Join(errs...)
 }
+
+// isTerminalRunState reports whether a run is in a terminal (already-ended)
+// state. The kill-switch must not re-kill or clobber a run that already ended
+// (COMPLETED/FAILED by the watcher, or KILLED/STOPPED/ARCHIVED earlier). The set
+// itself lives on types.RunState so the CLI and SDK share one definition.
+func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }

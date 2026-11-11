@@ -440,7 +440,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - `--git` sends the current branch as a git bundle (no hooks, no config). The sandbox fetches it into a new hook-free repository, or into `refs/remotes/laptop/<branch>` if one exists.
 - `--pull-commits` fetches the sandbox's later commits, as a verified bundle, into the laptop branch `wardyn/sync-<run>`, never the working tree. Both git flags run once, over an SSH exec channel, from the top of a work tree.
 - Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
-- A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed.
+- A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed. Only a runner's pass back keeps a conflict copy ([hybrid laptops](operations/hybrid-laptops.md)).
 - Paths equal under case or Unicode normalisation, and names with invisible characters, are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
 - A pass pulls at most `--max-pull-bytes` (1 GiB), and never a file over 256 MiB; a refused path is listed and the pass goes on.
 - It refuses a plain-http, non-loopback server: the gateway address and host key come from `/healthz`.

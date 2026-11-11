@@ -265,6 +265,9 @@ type SyncFolderArgs struct {
 	RemoteDir string    `json:"remote_dir"`
 	Pull      bool      `json:"pull,omitempty"`
 	Deny      []string  `json:"deny,omitempty"`
+	// DeadlineUnixMs is when the org stops waiting for the pass (Unix ms); the runner ends the pass by
+	// then. Absent (an older org), the runner bounds only a pass back.
+	DeadlineUnixMs int64 `json:"deadline_unix_ms,omitempty"`
 }
 
 // SyncFolderWaitArgs waits for the pass on Stream to end.
@@ -284,8 +287,16 @@ type FolderPass struct {
 	BytesOut  int64           `json:"bytes_out"`
 	BytesIn   int64           `json:"bytes_in"`
 	// Unsynced is, on a pass back cut short, the sandbox's changed files it had not brought back.
-	Unsynced int    `json:"unsynced,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Unsynced int `json:"unsynced,omitempty"`
+	// UnsyncedPaths names those files, sorted, at most MaxFolderUnsyncedPaths of them.
+	UnsyncedPaths []string `json:"unsynced_paths,omitempty"`
+	// NotPreserved, from a runner of this release, is the first reason a change the pass owed the
+	// laptop was not proven kept there: an install, a directory sync or the state save failed, or a
+	// conflict's sandbox copy could not be kept. A pass that sets it is never a success.
+	NotPreserved string `json:"not_preserved,omitempty"`
+	// Recovered is the base name of an unreadable sync record the pass moved aside before comparing every file.
+	Recovered string `json:"recovered,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // FolderRefusal is one path a pass refused and why.
@@ -296,6 +307,9 @@ type FolderRefusal struct {
 
 // MaxFolderRefusals bounds FolderPass.Refused.
 const MaxFolderRefusals = 50
+
+// MaxFolderUnsyncedPaths bounds FolderPass.UnsyncedPaths.
+const MaxFolderUnsyncedPaths = 50
 
 type ResizeArgs struct {
 	Stream uint32 `json:"stream"`
