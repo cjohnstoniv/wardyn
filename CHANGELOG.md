@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.19] — 2026-11-11
+
 ### Changed
 
 - A live network edit or revive on Docker now fails if the new proxy can't renew its token with the server within 10 seconds: a run that can be kept is lost until revived, and any other run ends. Creates are unchanged.
