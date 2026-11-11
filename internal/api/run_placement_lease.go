@@ -306,9 +306,14 @@ func (s *Server) renewLeaseAfterEndChange(ctx context.Context, runID uuid.UUID) 
 // renewedLeaseRetry is the proxy's own retry gap (renewRetry). A var so tests can shorten it.
 var renewedLeaseRetry = time.Minute
 
-// leaseDeferral is a run's one pending deferred lease send (deferRenewedLease). The callback that owns it
-// keeps the run's key until it stops for good, and a renewal that finds the key held sets again instead of
-// starting a timer of its own.
+// renewedLeaseWindow is how long a deferred lease keeps trying: a token stamp's lapse. A var so tests can
+// shorten it.
+var renewedLeaseWindow = identity.RunTokenLapseAfter
+
+// leaseDeferral is a run's one pending deferred lease send (deferRenewedLease), kept per run id in
+// Server.leaseDeferred so many renewals that meet one held run lock schedule one send. The callback that
+// owns it keeps the run's key until it stops for good, and a renewal that finds the key held sets again
+// instead of starting a timer of its own.
 type leaseDeferral struct {
 	deadline time.Time   // when the retries stop: fixed when the deferral is first scheduled
 	again    atomic.Bool // a renewal stamped a newer token since the owner's last try began
@@ -317,23 +322,28 @@ type leaseDeferral struct {
 // deferRenewedLease sends the lease of a renewal whose stamp landed while the run's lock was held by
 // another holder. A 200 for that renewal never means the lease was delivered: the send is retried every
 // renewedLeaseRetry until it succeeds, the run has ended or is kept, the stamp has lapsed
-// (errRunnerLeaseLapsed), or the deadline passes. The deadline is fixed when the deferral is first
-// scheduled, at the stamp's lapse (identity.RunTokenLapseAfter after token_renewed_at, as leaseSendable
-// reckons it), so a lock that stays held cannot keep it retrying. Any failure before then is retried too,
-// the lock being held or not; none is scheduled once the process's context is done. One deferral is pending per run: a proxy that retries every second while its
-// gate is closed schedules a single send, not one per retry; a renewal that arrives while one is pending
-// marks it to send once more after its current try, since that try may have read the stamp before the
-// renewal wrote the newer one; that send keeps the deferral's own deadline. Each try re-reads the run, the stamp and the generation under the run's
-// lock (renewRunnerLeaseHeld), and leaseSendable refuses a stamp or end that has passed, so it sends what
-// the organisation holds now; the run's state and lost mark are checked here before the lock is taken, as
-// an early exit, not as a guarantee on the locked re-read. If this process exits before the deferred send,
-// the deferral is lost: the runner keeps its last lease, which ends short of the organisation's deadline
-// and never after it, until the next renewal, a reconnect of the runner, or an end change sends a newer one.
+// (errRunnerLeaseLapsed), or the deadline passes. The deadline is renewedLeaseWindow (the stamp's lapse,
+// identity.RunTokenLapseAfter) after the clock now, which is read at the renewal and so is a little later
+// than the stamp the database wrote; leaseSendable still refuses a lapsed stamp under the lock. It bounds
+// the work: a try that finds it passed does nothing, one that is running is cancelled at it, and no timer
+// is armed past it. The renewal's own path reads nothing from the database for it. Any failure before the
+// deadline is retried too, the lock being held or not. No timer is armed once the process's context is
+// done, and one already armed stops when it finds that. One deferral is pending per run: a proxy that
+// retries every second while its gate is closed schedules a single send, not one per retry. A renewal that
+// arrives while one is pending marks it to send once more after its current try, since that try may have
+// read the stamp before the renewal wrote the newer one; a stop that finds the mark set (at the deadline
+// included) schedules a new deferral with a deadline of its own. Each try re-reads the run, the stamp and
+// the generation under the run's lock (renewRunnerLeaseHeld), and leaseSendable refuses a stamp or end
+// that has passed, so it sends what the organisation holds now; the run's state and lost mark are checked
+// here before the lock is taken, as an early exit, not as a guarantee on the locked re-read. If this
+// process exits before the deferred send, the deferral is lost: the runner keeps its last lease, which
+// ends short of the organisation's deadline and never after it, until the next renewal, a reconnect of
+// the runner, or an end change sends a newer one.
 func (s *Server) deferRenewedLease(runID uuid.UUID) {
 	for s.renewedLeaseCtx().Err() == nil {
 		v, held := s.leaseDeferred.Load(runID)
 		if !held {
-			d := &leaseDeferral{deadline: s.renewedLeaseDeadline(runID)}
+			d := &leaseDeferral{deadline: s.cfg.Now().Add(renewedLeaseWindow)}
 			if v, held = s.leaseDeferred.LoadOrStore(runID, d); !held {
 				s.armRenewedLease(runID, d)
 				return
@@ -350,16 +360,6 @@ func (s *Server) deferRenewedLease(runID uuid.UUID) {
 	}
 }
 
-// renewedLeaseDeadline is when a deferral scheduled now stops retrying: the run's stamp lapses.
-func (s *Server) renewedLeaseDeadline(runID uuid.UUID) time.Time {
-	if st, err := s.runnerExecutionStore(); err == nil {
-		if renewed, err := st.RunTokenRenewedAt(s.renewedLeaseCtx(), runID); err == nil {
-			return renewed.Add(identity.RunTokenLapseAfter)
-		}
-	}
-	return s.cfg.Now().Add(identity.RunTokenLapseAfter)
-}
-
 // renewedLeaseCtx is the context a deferred lease send runs under: the process's, not a request's.
 func (s *Server) renewedLeaseCtx() context.Context {
 	if s.cfg.BaseCtx != nil {
@@ -368,19 +368,36 @@ func (s *Server) renewedLeaseCtx() context.Context {
 	return context.Background()
 }
 
-// armRenewedLease starts the owner's next try of d, renewedLeaseRetry from now.
+// armRenewedLease starts the owner's next try of d, renewedLeaseRetry from now or at d's deadline if that
+// comes first. Once the process's context is done it arms nothing and clears the key; at the deadline it
+// stops the deferral.
 func (s *Server) armRenewedLease(runID uuid.UUID, d *leaseDeferral) {
-	time.AfterFunc(renewedLeaseRetry, func() { s.tryDeferredLease(runID, d) })
+	if s.renewedLeaseCtx().Err() != nil {
+		s.leaseDeferred.CompareAndDelete(runID, d)
+		return
+	}
+	wait := min(renewedLeaseRetry, d.deadline.Sub(s.cfg.Now()))
+	if wait <= 0 {
+		s.endLeaseDeferral(runID, d)
+		return
+	}
+	time.AfterFunc(wait, func() { s.tryDeferredLease(runID, d) })
 }
 
 // tryDeferredLease is one try of the owner of d. It keeps the run's key through every reschedule and
 // removes it only when it stops for good (endLeaseDeferral).
 func (s *Server) tryDeferredLease(runID uuid.UUID, d *leaseDeferral) {
-	ctx := s.renewedLeaseCtx()
-	if ctx.Err() != nil { // shutting down: no successor
+	base := s.renewedLeaseCtx()
+	if base.Err() != nil { // shutting down: no successor
 		s.leaseDeferred.CompareAndDelete(runID, d)
 		return
 	}
+	if !s.cfg.Now().Before(d.deadline) { // the deadline passed before the timer ran: no work
+		s.endLeaseDeferral(runID, d)
+		return
+	}
+	ctx, cancel := context.WithDeadline(base, d.deadline)
+	defer cancel()
 	d.again.Store(false) // a renewal from here on may postdate the stamp this try reads
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err == nil && (isTerminalRunState(run.State) || runIsKept(run)) {
@@ -392,8 +409,8 @@ func (s *Server) tryDeferredLease(runID uuid.UUID, d *leaseDeferral) {
 	}
 	switch {
 	case err == nil:
-		if d.again.Swap(false) && s.cfg.Now().Before(d.deadline) {
-			s.armRenewedLease(runID, d)
+		if s.cfg.Now().Before(d.deadline) && d.again.CompareAndSwap(true, false) {
+			s.armRenewedLease(runID, d) // a renewal landed during the send: send once more
 			return
 		}
 	case errors.Is(err, errRunnerLeaseLapsed):
@@ -401,17 +418,18 @@ func (s *Server) tryDeferredLease(runID uuid.UUID, d *leaseDeferral) {
 		s.armRenewedLease(runID, d)
 		return
 	default:
-		slog.WarnContext(ctx, "wardynd: a renewed run's deferred runner lease gave up", slog.String("run_id", runID.String()), slog.Any("err", err))
+		slog.WarnContext(base, "wardynd: a renewed run's deferred runner lease gave up", slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
 	s.endLeaseDeferral(runID, d)
 }
 
 // endLeaseDeferral removes d's key, then looks once more for a renewal that marked d while it was
 // stopping: a mark set before the delete is seen here, and one set after it finds no key and schedules
-// afresh (deferRenewedLease).
+// afresh (deferRenewedLease). A mark found here starts a new deferral with its own deadline; d's is
+// never stretched.
 func (s *Server) endLeaseDeferral(runID uuid.UUID, d *leaseDeferral) {
 	s.leaseDeferred.CompareAndDelete(runID, d)
-	if d.again.Load() && s.cfg.Now().Before(d.deadline) && s.renewedLeaseCtx().Err() == nil {
+	if d.again.Load() && s.renewedLeaseCtx().Err() == nil {
 		s.deferRenewedLease(runID)
 	}
 }

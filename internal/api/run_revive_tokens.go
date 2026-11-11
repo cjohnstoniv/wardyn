@@ -46,7 +46,7 @@ func (s *Server) revokeRetiringToken(ctx context.Context, retiring string, runID
 }
 
 // renewedTokens is the ids the run's last token renewal recorded: the minted token, and the one it
-// presented, which the proxy keeps when the lease send behind a renewal fails.
+// presented, which the proxy keeps only when the renewal's answer never reaches it.
 type renewedTokens struct{ jti, prev string }
 
 func (t renewedTokens) ids() []string { return []string{t.jti, t.prev} }
