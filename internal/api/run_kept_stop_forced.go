@@ -8,7 +8,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -352,9 +351,9 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 //     absent or revoked. A runner that is merely offline keeps the mark; the queued stop runs when it reconnects,
 //     and a runner cut off from the server contains the sandbox's egress itself when the run's lease or end lapses
 //     (internal/runner/offline/manager.go CheckLapses, :418-470);
-//   - "no substrate tracked for ref" (orchestrator.go:650): the ref belongs to no substrate; gone for a run with no
-//     runner. The orchestrator has no sentinel for it, so the text is matched, and a test pins it against the
-//     real orchestrator.
+//   - "no substrate tracked for ref" (orchestrator.go:650) is NOT gone: the orchestrator gives the same text when
+//     its ref lookup failed, so this attempt only could not resolve the owner. It keeps the mark, and the next
+//     tick tries again.
 //
 // Anything else (a daemon that errors, a timeout) can pass, so it keeps the mark.
 func (s *Server) runnerGoneReason(ctx context.Context, run types.AgentRun, cause error) string {
@@ -373,8 +372,6 @@ func (s *Server) runnerGoneReason(ctx context.Context, run types.AgentRun, cause
 		case err == nil && row.State == types.RunnerRevoked:
 			return "the runner is revoked"
 		}
-	case run.RunnerID == nil && strings.Contains(cause.Error(), "no substrate tracked for ref"):
-		return "no substrate owns the sandbox"
 	}
 	return ""
 }

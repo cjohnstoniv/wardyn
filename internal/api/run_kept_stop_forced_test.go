@@ -1137,10 +1137,11 @@ func TestSweepForcedStops_AGoneRunnerClearsTheMarkWithOneFailureRow(t *testing.T
 	}
 }
 
-// A ref no substrate owns, on a run with no runner, clears the mark the same way. The error is the real
-// orchestrator's, so a change to its text fails here. Catches: the orchestrator's wording drifting from
-// the text runnerGoneReason matches; the unowned ref keeping the mark for ever.
-func TestSweepForcedStops_ARefNoSubstrateOwnsClearsTheMarkWithOneFailureRow(t *testing.T) {
+// A ref the orchestrator could not resolve, on a run with no runner, keeps the mark: the same text comes from a
+// failed ref lookup, so it is not proof the sandbox is gone. Once the stop succeeds, the next tick clears it.
+// Catches: treating the orchestrator's "no substrate tracked" answer as gone (the mark cleared on a lookup that
+// may recover); a retry that stops trying after it.
+func TestSweepForcedStops_ARefTheOrchestratorCannotResolveKeepsTheMark(t *testing.T) {
 	orch := orchestrator.New(pooledExecutor{Fake: runnertest.NewFake(), name: "a"}, pooledExecutor{Fake: runnertest.NewFake(), name: "b"})
 	unowned := orch.StopSandbox(context.Background(), "agent-of-no-substrate")
 	if unowned == nil {
@@ -1152,8 +1153,13 @@ func TestSweepForcedStops_ARefNoSubstrateOwnsClearsTheMarkWithOneFailureRow(t *t
 	f.sb.stopErr = unowned
 	f.tick(t, f.s)
 	f.tick(t, f.s)
-	if rows := sweepRows(f.audit, "failure", "runner_gone"); f.leaser.markCount() != 0 || len(rows) != 1 {
-		t.Errorf("%d marks, %d runner-gone rows; want the mark cleared and one row", f.leaser.markCount(), len(rows))
+	if rows := sweepRows(f.audit, "failure", "runner_gone"); f.leaser.markCount() != 1 || len(rows) != 0 {
+		t.Fatalf("%d marks, %d runner-gone rows; want the mark kept and no runner-gone row", f.leaser.markCount(), len(rows))
+	}
+	f.sb.stopErr = nil
+	f.tick(t, f.s)
+	if f.leaser.markCount() != 0 {
+		t.Errorf("%d marks; want the mark cleared once the stop succeeds", f.leaser.markCount())
 	}
 }
 
