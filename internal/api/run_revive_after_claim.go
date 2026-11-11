@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -76,8 +77,9 @@ func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, da
 		"the run's proxy could not be replaced, so the run has no egress and is lost until revived", err)
 }
 
-// reviveStartAgent starts a rebooted run's agent behind its new proxy (reviveRunProxy). It is nil once the agent runs.
-func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner.SandboxStarter, run types.AgentRun, gen int, data map[string]any, actorType types.ActorType, actor string) *reviveError {
+// reviveStartAgent starts a rebooted run's agent behind its new proxy (reviveRunProxy). It is nil once the agent runs,
+// and its claim's owed-start mark (owedAt, zero for none) is cleared.
+func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner.SandboxStarter, run types.AgentRun, gen int, owedAt time.Time, data map[string]any, actorType types.ActorType, actor string) *reviveError {
 	// F2: refresh the watcher lease right before starting the agent — on a
 	// multi-replica deployment the claim's own stamp can go stale while
 	// ReplaceProxy ran, and a sweep that then adopted this run would probe
@@ -98,6 +100,13 @@ func (s *Server) reviveStartAgent(ctx, runnerCtx context.Context, starter runner
 			"the run's agent could not be started, so the run is stopped and lost until revived", err)
 	}
 	data["agent_started"] = true
+	if c, ok := s.cfg.Store.(store.RunAgentStartOwed); ok && !owedAt.IsZero() {
+		if err := c.ClearRunAgentStartOwed(ctx, run.ID, gen, owedAt); err != nil {
+			// The mark stays: the next live revive starts the agent again (its container already runs) and clears it.
+			slog.WarnContext(ctx, "wardynd: clearing a revived run's owed agent start failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
+	}
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +49,12 @@ type interleaveStore struct {
 	afterDroppedAck    func(gen int)
 	// failBegin makes every BeginProxyStart fail, as a database blip would.
 	failBegin bool
+	// owed is the run's agent start still owed: the claim of a revive that starts the agent leaves
+	// agent_stopped_at set on the live row (store.RunAgentStartOwed), at owedAt. claims are the stamps
+	// those claims returned and cleared the stamps ClearRunAgentStartOwed matched.
+	owed            bool
+	owedAt          time.Time
+	claims, cleared []time.Time
 }
 
 // take returns the hook to run now, once: nil when it ran already or is not set.
@@ -123,15 +130,94 @@ func (s *interleaveStore) BeginProxyStart(ctx context.Context, runID uuid.UUID, 
 	return s.readbackStore.BeginProxyStart(ctx, runID, gen, jti, mode)
 }
 
-// MarkRunRevived also clears the agent's stop mark, as the PG claim (markRunRevived) does.
+// MarkRunRevived also clears the agent's stop mark, as the PG claim (markRunRevived) does, and refuses a
+// live claim that starts no agent while a start is owed.
 func (s *interleaveStore) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, startsAgent bool) (bool, error) {
+	s.mu.Lock()
+	refused := !startsAgent && from == "" && s.owed
+	s.mu.Unlock()
+	if refused {
+		return false, nil
+	}
 	ok, err := s.readbackStore.MarkRunRevived(ctx, id, from, ended, limit, startsAgent)
 	if ok {
 		s.readbackStore.generationStore.mu.Lock()
 		s.readbackStore.generationStore.agentStopped = false
 		s.readbackStore.generationStore.mu.Unlock()
+		s.mu.Lock()
+		s.owed = false
+		s.mu.Unlock()
 	}
 	return ok, err
+}
+
+var _ store.RunAgentStartOwed = (*interleaveStore)(nil)
+
+// owe leaves an agent start owed on a fresh stamp, as an owing claim does.
+func (s *interleaveStore) owe() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.owed = true
+	s.owedAt = time.Date(2026, 1, 1, 0, 0, len(s.claims)+1, 0, time.UTC)
+	s.claims = append(s.claims, s.owedAt)
+	return s.owedAt
+}
+
+// startOwed is whether the run's agent start is still owed.
+func (s *interleaveStore) startOwed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.owed
+}
+
+func (s *interleaveStore) RunAgentStopped(context.Context, uuid.UUID) (bool, error) {
+	return s.startOwed(), nil
+}
+
+// MarkRunRevivedOwingStart is the claim of a revive that starts the agent, which leaves the start owed.
+func (s *interleaveStore) MarkRunRevivedOwingStart(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, expected store.PolicySlot) (time.Time, bool, error) {
+	var ok bool
+	var err error
+	if expected.Generation > 0 {
+		ok, err = s.MarkRunRevivedAtSlot(ctx, id, from, ended, limit, true, expected)
+	} else {
+		ok, err = s.MarkRunRevived(ctx, id, from, ended, limit, true)
+	}
+	if !ok || err != nil {
+		return time.Time{}, false, err
+	}
+	return s.owe(), true, nil
+}
+
+// ClearRunAgentStartOwed clears the mark only on the claim's own stamp, on a live RUNNING run, while gen
+// is the newest generation (0 binds nothing), as the PG write does.
+func (s *interleaveStore) ClearRunAgentStartOwed(ctx context.Context, id uuid.UUID, gen int, owedAt time.Time) error {
+	run, err := s.GetRun(ctx, id)
+	if err != nil {
+		return err
+	}
+	gs := s.readbackStore.generationStore
+	gs.gmu.Lock()
+	newest := store.NewestPolicyGeneration(gs.state)
+	gs.gmu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owed && s.owedAt.Equal(owedAt) && run.State == types.RunRunning && run.LostAt == nil && (gen == 0 || newest == gen) {
+		s.owed = false
+		s.cleared = append(s.cleared, owedAt)
+	}
+	return nil
+}
+
+// RestoreRunLostFateAtGeneration writes the lost row's fate back, whose stop mark replaces the owed start.
+func (s *interleaveStore) RestoreRunLostFateAtGeneration(ctx context.Context, id uuid.UUID, gen int, f store.RunLostFate) (bool, error) {
+	applied, err := s.readbackStore.RestoreRunLostFateAtGeneration(ctx, id, gen, f)
+	if applied {
+		s.mu.Lock()
+		s.owed = false
+		s.mu.Unlock()
+	}
+	return applied, err
 }
 
 // MarkRunRevivedAtSlot is the claim bound to the policy slot the revive read, as the PG claim's UPDATE
@@ -636,5 +722,114 @@ func TestReviveFence_StaleClaimAfterANewerReviveReLostTheRunClearsNothing(t *tes
 	}
 	if sr.started() != 0 || f.lr.proxyStopCount() != stopsAfterB {
 		t.Errorf("agent starts %d, proxy stops %d (after B %d): A must start and stop nothing", sr.started(), f.lr.proxyStopCount(), stopsAfterB)
+	}
+}
+
+// rebootLost makes the fixture's run one lost to a reboot, on runners that can start its agent again.
+func (f *fenceFixture) rebootLost() *startingHashedRunner {
+	sr := &startingHashedRunner{hashedReviveRunner: f.hr}
+	f.srv.cfg.Runner, f.b.cfg.Runner = sr, sr
+	lostAt := f.now.Add(-time.Minute)
+	f.st.mu.Lock()
+	f.st.run.LostAt, f.st.run.LostReason = &lostAt, types.LostReboot
+	f.st.run.Interactive = true
+	f.st.mu.Unlock()
+	f.run = f.st.run
+	return sr
+}
+
+// A claims a run lost to a reboot, which clears its lost mark and owes the agent's start, and pauses before
+// its advance. A second revive then reads the run live. From the run's page it sees the owed start, starts
+// the agent behind its own proxy and clears the mark on the stamp of its own claim; A, whose slot that
+// moved, answers kept-current and starts nothing. An egress edit cannot start an agent, so it is refused
+// 409 with the mark still set, and A, resuming, starts the agent itself.
+func TestRevive_ANewerLiveReviveAfterAStrandedClaimStartsTheAgent(t *testing.T) {
+	t.Run("a revive from the run's page", func(t *testing.T) {
+		f := newFenceFixture(t)
+		sr := f.rebootLost()
+		var b *httptest.ResponseRecorder
+		var owedAtB bool
+		f.is.beforeRetire = func() {
+			owedAtB = f.is.startOwed()
+			b = do(t, f.b, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		}
+		a := f.reviveOnA(t)
+		if !owedAtB {
+			t.Fatal("A's claim left no owed start for the second revive to read")
+		}
+		if b == nil || b.Code != http.StatusOK || !strings.Contains(b.Body.String(), `"agent_started":true`) {
+			t.Fatalf("B: %v, want 200 with the agent started", b)
+		}
+		if a.Code != http.StatusBadGateway || errorReason(a) != reasonReviveProxyKeptCurrent {
+			t.Errorf("A: %d %s, want 502 %s", a.Code, a.Body.String(), reasonReviveProxyKeptCurrent)
+		}
+		if sr.started() != 1 {
+			t.Errorf("StartSandbox calls = %d, want 1: B's", sr.started())
+		}
+		if f.is.startOwed() {
+			t.Error("the agent start is still owed after B started it")
+		}
+		if len(f.is.claims) != 2 || !slices.Equal(f.is.cleared, f.is.claims[1:]) {
+			t.Errorf("claims %v, clears %v; want B's clear on B's own stamp alone", f.is.claims, f.is.cleared)
+		}
+	})
+	t.Run("an egress edit", func(t *testing.T) {
+		f := newFenceFixture(t)
+		sr := f.rebootLost()
+		var b *httptest.ResponseRecorder
+		var owedAfterB bool
+		var replacedByB int
+		f.is.beforeRetire = func() {
+			b = f.editOnB(t)
+			owedAfterB, replacedByB = f.is.startOwed(), len(f.rr.replaced)
+		}
+		a := f.reviveOnA(t)
+		if b == nil || b.Code != http.StatusConflict || errorReason(b) != reasonReviveBulkCannotStartAgent {
+			t.Fatalf("B: %v, want 409 %s", b, reasonReviveBulkCannotStartAgent)
+		}
+		if !owedAfterB || replacedByB != 0 {
+			t.Errorf("after B: start owed %v, replaces %d; want the mark kept and no replace by B", owedAfterB, replacedByB)
+		}
+		if a.Code != http.StatusOK || sr.started() != 1 || f.is.startOwed() {
+			t.Errorf("A: %d, agent starts %d, still owed %v; want A to finish, start the agent and clear its mark", a.Code, sr.started(), f.is.startOwed())
+		}
+	})
+}
+
+// A revive that read the run live with no start owed (an edit or a restart, which cannot start an agent)
+// meets a start-owing claim before its own claim lands: its claim is refused and the owed mark stays, so
+// nothing is replaced and the agent is never left unstarted behind a proxy the revive replaced.
+func TestRevive_AStaleReviveThatStartsNoAgentNeverErasesAnOwedStart(t *testing.T) {
+	f := newFenceFixture(t)
+	sr := &startingHashedRunner{hashedReviveRunner: f.hr}
+	f.srv.cfg.Runner = sr
+	f.is.beforeSourceRead = func() { f.is.owe() }
+	a := f.reviveOnA(t)
+	if a.Code != http.StatusConflict || errorReason(a) != reasonReviveRunChanged {
+		t.Fatalf("A: %d %s, want 409 %s", a.Code, a.Body.String(), reasonReviveRunChanged)
+	}
+	if !f.is.startOwed() || len(f.rr.replaced) != 0 || sr.started() != 0 {
+		t.Errorf("start owed %v, replaces %d, agent starts %d; want the mark kept and nothing replaced or started", f.is.startOwed(), len(f.rr.replaced), sr.started())
+	}
+}
+
+// A live run whose agent start is owed (its agent_stopped_at set) reads live to every other reader of that
+// column: it is not kept, its agent is not stopped, its desktop pause is not over, and it is still a run the
+// lease may lose. Each of them checks the lost mark before the stop mark.
+func TestStartOwedLiveRunReadsLiveToEveryOtherReader(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, Interactive: true, SandboxRef: "wardyn-agent-x"}
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: agentStoppedStore{runFilesStore{run: run}, true}, Runner: &sshFakeRunner{}, Audit: &recRecorder{}})
+	ctx := context.Background()
+	if runIsKept(run) {
+		t.Error("runIsKept: a live run with its start owed reads kept")
+	}
+	if srv.keptAgentStopped(ctx, run) {
+		t.Error("keptAgentStopped: the run's files read as an agent stopped on purpose")
+	}
+	if srv.desktopPauseOver(ctx, run) {
+		t.Error("desktopPauseOver: the run's desktop pause reads over")
+	}
+	if !srv.lostRunKeepable(run, time.Now()) {
+		t.Error("lostRunKeepable: the live run is not one the lease may lose")
 	}
 }

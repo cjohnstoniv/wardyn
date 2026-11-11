@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -74,19 +75,57 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 
 // MarkRunRevivedAtSlot — see RunReviverAtSlot.
 func (s PG) MarkRunRevivedAtSlot(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, startsAgent bool, expected PolicySlot) (bool, error) {
+	claimed, _, err := s.claimRevived(ctx, id, from, ended, limit, startsAgent, false, expected)
+	return claimed, err
+}
+
+// RunAgentStartOwed is a claim that owes its run's agent start, and the clear that settles it. The claim
+// (MarkRunRevivedOwingStart) is MarkRunRevivedAtSlot for a revive that starts the agent: it takes a slot as
+// that does, and leaves agent_stopped_at set on the live row, to a fresh timestamp it returns, as "agent
+// start still owed". ClearRunAgentStartOwed clears exactly that timestamp once the revive started the agent:
+// only on a live RUNNING row, only while gen is still its newest generation (0 binds nothing), so a late
+// clear never erases the mark a newer claim set, even at the same generation. A claim that starts no agent
+// is refused (false) on a live row that owes a start, and clears the mark on a lost one as before.
+// Optional: the api layer type-asserts.
+type RunAgentStartOwed interface {
+	MarkRunRevivedOwingStart(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, expected PolicySlot) (owedAt time.Time, claimed bool, err error)
+	ClearRunAgentStartOwed(ctx context.Context, id uuid.UUID, gen int, owedAt time.Time) error
+}
+
+var _ RunAgentStartOwed = PG{}
+
+// MarkRunRevivedOwingStart — see RunAgentStartOwed.
+func (s PG) MarkRunRevivedOwingStart(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, expected PolicySlot) (time.Time, bool, error) {
+	claimed, owedAt, err := s.claimRevived(ctx, id, from, ended, limit, true, true, expected)
+	return owedAt, claimed, err
+}
+
+// ClearRunAgentStartOwed — see RunAgentStartOwed.
+func (s PG) ClearRunAgentStartOwed(ctx context.Context, id uuid.UUID, gen int, owedAt time.Time) error {
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET agent_stopped_at=NULL, updated_at=now()
+		WHERE id=$1 AND state=$2 AND lost_at IS NULL AND agent_stopped_at = $3
+		  AND ($4::int = 0 OR `+newestPolicyGenerationSQL+` = $4)`, id, string(types.RunRunning), owedAt, gen); err != nil {
+		return fmt.Errorf("store: clear run agent start owed: %w", err)
+	}
+	return nil
+}
+
+// claimRevived is the claim behind MarkRunRevivedAtSlot (owe false) and MarkRunRevivedOwingStart (owe
+// true). It returns whether the run was claimed and, for owe, the owed-start stamp the claim itself wrote.
+func (s PG) claimRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, startsAgent, owe bool, expected PolicySlot) (bool, time.Time, error) {
 	switch from {
 	case "", types.LostOutage, types.LostReboot:
 	case types.LostEnded:
 		if ended == nil {
-			return false, nil
+			return false, time.Time{}, nil
 		}
 	default:
-		return false, nil
+		return false, time.Time{}, nil
 	}
 	if startsAgent {
-		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit, expected)
+		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit, owe, expected)
 	}
-	return markRunRevived(ctx, s.Pool, id, from, ended, expected)
+	return markRunRevived(ctx, s.Pool, id, from, ended, expected, owe, startsAgent)
 }
 
 // markRunRevivedUnderCap is the claim of a revive that starts an agent, under the run's pool cap, the
@@ -101,7 +140,7 @@ func (s PG) MarkRunRevivedAtSlot(ctx context.Context, id uuid.UUID, from types.L
 // The claim does not pin the outage run's end either: admission does not depend on
 // it, and an extension the owner makes meanwhile is legitimate, not a change that
 // should fail the revive.
-func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, expected PolicySlot) (claimed bool, err error) {
+func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, owe bool, expected PolicySlot) (claimed bool, owedAt time.Time, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
 		if err := lockPoolForRevive(ctx, q, id); err != nil {
 			return err
@@ -131,34 +170,51 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 				return err
 			}
 		}
-		var err error
-		claimed, err = markRunRevived(ctx, q, id, from, ended, expected)
-		return err
+		var cerr error
+		claimed, owedAt, cerr = markRunRevived(ctx, q, id, from, ended, expected, owe, true)
+		return cerr
 	})
-	return claimed && err == nil, err
+	if !claimed || err != nil {
+		return false, time.Time{}, err
+	}
+	return true, owedAt, nil
 }
 
-// markRunRevived clears agent_stopped_at with the lost mark whatever the revive
-// starts: a live run holds its slot by lost_at alone, and a stale stop mark must
-// not make a later outage-kept run look agentless. expected, when its generation is above 0, binds the
-// claim to the policy slot the revive read (RunReviverAtSlot).
-func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.LostReason, ended *EndedKept, expected PolicySlot) (bool, error) {
+// markRunRevived clears the lost mark and, with it, agent_stopped_at, except for a claim that owes the
+// agent's start (owe): that one sets agent_stopped_at to a fresh clock_timestamp() on the live row, as "agent start still owed"
+// until ClearRunAgentStartOwed, and returns it. A live run holds its slot by lost_at alone, and a stale
+// stop mark must not make a later outage-kept run look agentless, so every other claim clears it. A claim
+// that starts no agent is refused on a live row whose mark is set: that mark is an owed start (nothing else
+// sets it on a live row), which such a claim would erase; a lost row keeps today's rule, so an outage
+// revive whose agent still runs clears the mark of its lost row. expected, when its generation is above 0,
+// binds the claim to the policy slot the revive read (RunReviverAtSlot).
+func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.LostReason, ended *EndedKept, expected PolicySlot, owe, startsAgent bool) (bool, time.Time, error) {
 	lostAt, keptAfter, now := endedArgs(ended)
-	tag, err := q.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL, agent_stopped_at=NULL,
+	var owed *time.Time
+	err := q.QueryRow(ctx, `
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL,
+			agent_stopped_at=CASE WHEN $12 THEN clock_timestamp() ELSE NULL END,
 			paused_at=CASE WHEN $3=$8 THEN NULL ELSE paused_at END,
 			paused_reason=CASE WHEN $3=$8 THEN '' ELSE paused_reason END,
 			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
 		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3
 		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))
 		  AND ($3 <> $9 OR ends_at IS NULL OR ends_at > now())
-		  AND ($10::int = 0 OR (`+newestPolicyGenerationSQL+` = $10 AND `+newestPolicyAbandonedSQL+` = $11))`,
+		  AND ($10::int = 0 OR (`+newestPolicyGenerationSQL+` = $10 AND `+newestPolicyAbandonedSQL+` = $11))
+		  AND ($13 OR lost_at IS NOT NULL OR agent_stopped_at IS NULL)
+		RETURNING agent_stopped_at`,
 		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now, string(types.LostReboot), string(types.LostOutage),
-		expected.Generation, expected.Abandoned)
-	if err != nil {
-		return false, fmt.Errorf("store: mark run revived: %w", err)
+		expected.Generation, expected.Abandoned, owe, startsAgent).Scan(&owed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, time.Time{}, nil
 	}
-	return tag.RowsAffected() > 0, nil
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("store: mark run revived: %w", err)
+	}
+	if owed == nil {
+		return true, time.Time{}, nil
+	}
+	return true, *owed, nil
 }
 
 // SetRunProxyRelease — see RunReviver.

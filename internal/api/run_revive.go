@@ -305,7 +305,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if rerr := s.claimRevive(ctx, reviver, run, rebooted, expected, actorType, actor); rerr != nil {
+	owedAt, rerr := s.claimReviveOwing(ctx, reviver, run, rebooted, expected, actorType, actor)
+	if rerr != nil {
 		return reviveResult{}, rerr
 	}
 	// From the claim on, the revive finishes or compensates whatever becomes of
@@ -356,7 +357,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{generation: gen, stored: stored}, rerr // the start an edit waits on for its containment
 	}
 	if rebooted {
-		if rerr := s.reviveStartAgent(ctx, runnerCtx, starter, run, gen, data, actorType, actor); rerr != nil {
+		if rerr := s.reviveStartAgent(ctx, runnerCtx, starter, run, gen, owedAt, data, actorType, actor); rerr != nil {
 			return reviveResult{}, rerr
 		}
 	}
@@ -382,40 +383,52 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 // one claimed, advanced, failed and lost the run again) clears nothing it wrote and answers that the run
 // changed. A zero slot binds nothing.
 func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, expected store.PolicySlot, actorType types.ActorType, actor string) *reviveError {
+	_, rerr := s.claimReviveOwing(ctx, reviver, run, startsAgent, expected, actorType, actor)
+	return rerr
+}
+
+// claimReviveOwing is claimRevive, and the stamp of the agent-start-owed mark the claim of a revive that
+// starts the agent left on the live row (store.RunAgentStartOwed; zero for any other claim or store). The
+// stamp is the claim's own: the clear of the mark (reviveStartAgent) matches it, so it never erases the mark
+// a newer claim set.
+func (s *Server) claimReviveOwing(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, expected store.PolicySlot, actorType types.ActorType, actor string) (time.Time, *reviveError) {
 	if rerr := s.reviveExpiryDue(ctx, run.ID); rerr != nil {
-		return rerr
+		return time.Time{}, rerr
 	}
 	var claimed bool
 	var err error
-	if at, ok := reviver.(store.RunReviverAtSlot); ok && expected.Generation > 0 {
+	var owedAt time.Time
+	if ow, ok := reviver.(store.RunAgentStartOwed); ok && startsAgent {
+		owedAt, claimed, err = ow.MarkRunRevivedOwingStart(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, expected)
+	} else if at, ok := reviver.(store.RunReviverAtSlot); ok && expected.Generation > 0 {
 		claimed, err = at.MarkRunRevivedAtSlot(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent, expected)
 	} else {
 		claimed, err = reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
 	}
 	if errors.Is(err, store.ErrRunCapReached) {
-		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+		return time.Time{}, reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
 	}
 	// A revive takes a pool slot only when nobody waits (Q10-A): a waiting run is first in line.
 	var full *store.RunnerPoolFullError
 	if errors.As(err, &full) {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": string(runnerpool.ReasonFull), "pool_id": run.RunnerPoolID})))
-		return reviveRefused(runnerpool.ReasonFull.Status(), string(runnerpool.ReasonFull), runnerpool.FullMsg(full.Pool, full.Max))
+		return time.Time{}, reviveRefused(runnerpool.ReasonFull.Status(), string(runnerpool.ReasonFull), runnerpool.FullMsg(full.Pool, full.Max))
 	}
 	var atMax *store.RunnerAtCapacityError
 	if errors.As(err, &atMax) {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": string(placement.ReasonRunnerAtCapacity), "runner_id": run.RunnerID})))
-		return reviveRefused(placement.ReasonRunnerAtCapacity.Status(), string(placement.ReasonRunnerAtCapacity),
+		return time.Time{}, reviveRefused(placement.ReasonRunnerAtCapacity.Status(), string(placement.ReasonRunnerAtCapacity),
 			fmt.Sprintf("%s is at its limit, so this run cannot start there now. Try again when a run there finishes, or raise the runner's limits.", atMax.Runner))
 	}
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "claim the run for revive", err))
+		return time.Time{}, reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "claim the run for revive", err))
 	}
 	if !claimed {
-		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+		return time.Time{}, reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
 	}
-	return nil
+	return owedAt, nil
 }
 
 // reviveCapPrecheck refuses, before an identity is minted or the proxy image pulled, a revive that
@@ -781,6 +794,21 @@ func (s *Server) stampLiveRevive(run types.AgentRun) {
 func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) (bool, *reviveError) {
 	if run.LostReason == types.LostReboot || run.LostReason == types.LostEnded {
 		return true, nil
+	}
+	if run.LostAt == nil {
+		// A claim that starts the agent leaves its stop mark on the live row until the start lands
+		// (store.RunAgentStartOwed): a revive that reads the run live after one whose start never ran
+		// starts the agent itself, or a bulk restart or edit refuses (reasonReviveBulkCannotStartAgent).
+		// Only this mark sets agent_stopped_at on a live row.
+		rd, ok := s.cfg.Store.(runAgentStoppedReader)
+		if !ok {
+			return false, nil
+		}
+		owed, err := rd.RunAgentStopped(ctx, run.ID)
+		if err != nil {
+			return false, reviveRefused(http.StatusServiceUnavailable, reasonReviveAgentStatusUnreadable, loggedMsg(ctx, "read whether the run's agent start is still owed", err))
+		}
+		return owed, nil
 	}
 	if run.LostReason != types.LostOutage {
 		return false, nil
