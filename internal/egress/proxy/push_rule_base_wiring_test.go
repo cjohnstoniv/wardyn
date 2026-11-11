@@ -49,6 +49,7 @@ func TestNewServerHoldsAnEntryWithNoSetToThePushRuleBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
+	serveWithoutFirstRenew(srv)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

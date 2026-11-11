@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -21,8 +20,7 @@ import (
 // any other connection is closed before a byte is answered. Unset, every
 // caller is served as before.
 func TestProxyServesOnlyAllowedPeers(t *testing.T) {
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
-	defer cp.Close()
+	cp := newRenewPlane(t, http.StatusOK, false).srv
 	for _, c := range []struct {
 		peers  string
 		served bool

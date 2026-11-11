@@ -17,7 +17,7 @@ import (
 // OnListening runs once the listener is bound, which is the moment a runner may start the agent: the
 // address must already accept a connection when the hook fires.
 func TestServer_OnListeningFiresOnceTheListenerIsBound(t *testing.T) {
-	b, err := json.Marshal(&Config{RunID: uuid.New(), ControlPlaneURL: "http://127.0.0.1:1", RunToken: "tok", Listen: "127.0.0.1:0"})
+	b, err := json.Marshal(&Config{RunID: uuid.New(), ControlPlaneURL: newRenewPlane(t, http.StatusOK, false).srv.URL, RunToken: "tok", Listen: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}

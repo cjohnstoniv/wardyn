@@ -85,6 +85,7 @@ func TestAzureConfig_BootedProxyHoldsEveryDoor(t *testing.T) {
 	if n := cpHits.Load(); n != 1 {
 		t.Fatalf("the token was redeemed %d times at boot, want once", n)
 	}
+	serveWithoutFirstRenew(srv)
 	p := srv.proxy
 	p.res = publicResolver{}
 	p.dial = redirectDial(strings.TrimPrefix(upstream.URL, "http://"))

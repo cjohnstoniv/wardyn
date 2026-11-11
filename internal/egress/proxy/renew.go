@@ -130,10 +130,22 @@ func (tune renewerTuning) retryGap(backoff time.Duration, heldExp, now time.Time
 
 // runTokenRenewerTuned is runTokenRenewer with its timing injected; see renewerTuning.
 func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning) {
+	runTokenRenewerGated(ctx, ts, base, client, tune, nil)
+}
+
+// runTokenRenewerGated is runTokenRenewerTuned for a proxy that stays closed until its first renewal:
+// g opens on the first success. A failure before that lapses g once its next try would pass
+// firstRenewWithin, and a permanent refusal lapses it at once; once open, later failures never close
+// it. A nil g is the plain loop.
+func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning, g *lapseGate) {
 	lastGood := tune.now() // the startup token is the first "last good token"
 	var heldExp time.Time  // the held token's expiry; unknown for the startup token
 	backoff := tune.firstRetry
 	for {
+		var sent time.Duration
+		if g != nil {
+			sent = g.clock.Now()
+		}
 		rctx, cancel := context.WithTimeout(ctx, renewTimeout)
 		tok, exp, err := renewToken(rctx, base, ts.Get(), client)
 		cancel()
@@ -143,6 +155,7 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 			if errors.As(err, &se) && se.permanent() {
 				slog.ErrorContext(ctx, "wardyn-proxy: run token renew refused permanently, giving up",
 					slog.Int("status", se.Status), slog.Any("err", err))
+				g.refuseIfClosed(renewCause(err, ts.Get()))
 				return
 			}
 			if held := tune.now().Sub(lastGood); held >= tune.giveUpAfter {
@@ -151,6 +164,9 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 				return
 			}
 			next = tune.retryGap(backoff, heldExp, tune.now())
+			if g != nil {
+				g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
+			}
 			// SECURITY: do not log the token; the error carries status + body only.
 			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off",
 				slog.Duration("retry_in", next), slog.Any("err", err))
@@ -159,6 +175,9 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 			}
 		} else {
 			ts.Set(tok)
+			if g != nil && !g.renewed(sent, func() {}) {
+				return
+			}
 			lastGood, heldExp = tune.now(), exp
 			backoff = tune.firstRetry
 			next = tune.maxInterval
@@ -173,6 +192,20 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 			return
 		case <-time.After(next):
 		}
+	}
+}
+
+// refuseIfClosed lapses a gate that never opened because the control plane refused its renewal for
+// good, keeping that refusal as the cause. An open gate stays open; nil does nothing.
+func (g *lapseGate) refuseIfClosed(cause string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cause = cause
+	if g.state == lapseClosed {
+		g.lapseLocked(LapseRenewRefused)
 	}
 }
 

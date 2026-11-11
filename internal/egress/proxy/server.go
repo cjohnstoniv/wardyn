@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -74,6 +75,14 @@ type serverHooks struct {
 	lapseTune  *lapseRenewTuning
 }
 
+// clock is the boot clock the gates read: the hook's in tests, CLOCK_BOOTTIME otherwise.
+func (h serverHooks) clock() bootClock {
+	if h.lapseClock != nil {
+		return h.lapseClock
+	}
+	return sysBootClock{}
+}
+
 // start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
 // starts none, and its brokered mints and approval polls ride the caller's
 // client too: it is the organisation, and never dials itself.
@@ -94,7 +103,7 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 	if h.lapseTune != nil {
 		tune = *h.lapseTune
 	}
-	startRunTokenRenewer(out, p, ts, cfg, client, tune)
+	startRunTokenRenewer(out, p, ts, cfg, client, tune, h.clock())
 }
 
 // egressTLSConfig is the egress trust set: the system roots plus pemBundle, nil (the default roots) when
@@ -327,11 +336,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// k8s runners only: the proxy is closed until its first renew and lapses
 	// for good at the last renew's send time + RunTokenTTL (§6.2).
 	if cfg.SelfLapse {
-		clock := hooks.lapseClock
-		if clock == nil {
-			clock = sysBootClock{}
-		}
-		p.lapse = newLapseGate(clock, selfLapseTTL)
+		p.lapse = newLapseGate(hooks.clock(), selfLapseTTL)
 		if sink.remote != nil {
 			p.lapse.onLapse = sink.remote.lapse
 		}
@@ -367,6 +372,9 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	return out, nil
 }
 
+// gatesFirstRenew is the one rule for which sidecars stay closed until their first token renewal.
+func gatesFirstRenew(cfg *Config) bool { return cfg.ControlPlaneURL != "" }
+
 // startRunTokenRenewer starts the run-token renewer, which keeps this
 // sidecar's short-TTL token fresh for the life of the run. Without it every
 // control-plane call starts 401ing once the startup token's 1h TTL lapses,
@@ -374,21 +382,29 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 // torn down by Shutdown; NewServer's ctx is a STARTUP context, so the
 // renewer gets its own lifetime instead. Alongside it, the activity reporter
 // streams the pause's presence clock for as long as the renewer runs.
-func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning) {
+func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning, clock bootClock) {
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
+	// A sidecar with a control plane serves nothing until a renewal under its own token has landed:
+	// a proxy started late by a superseded revive, whose token was retired or revoked, never binds.
+	// A self-lapsing proxy (k8s runner) already has its gate; any other gets one with no deadline.
+	selfLapse := p.lapse != nil
+	if !selfLapse && gatesFirstRenew(cfg) {
+		p.lapse = newLapseGate(clock, math.MaxInt64)
+	}
+	gate := p.lapse
 	rctx, cancel := context.WithCancel(context.Background())
 	out.renewStop = cancel
 	out.renewStopped = make(chan struct{})
 	go func() {
 		defer close(out.renewStopped)
-		if p.lapse != nil {
-			go p.lapse.watch(rctx, tune.watchEvery)
-			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, p.lapse, tune)
+		if selfLapse {
+			go gate.watch(rctx, tune.watchEvery)
+			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, gate, tune)
 			return
 		}
-		runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
+		runTokenRenewerGated(rctx, ts, cfg.ControlPlaneURL, client, defaultRenewerTuning(), gate)
 	}()
 	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
 }

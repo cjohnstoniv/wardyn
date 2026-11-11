@@ -17,6 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A "both ways" computer folder's changes were dropped when its run was stopped for being idle or for reaching its maximum age. They now come back before the sandbox stops, which can add up to 2 minutes to the stop. Affects 0.10.0 prereleases only.
 - A kept run's teardown at the end of its grace could stop its sandbox while another step was still using the run, and a revive that reached its final step after the grace ran out could still bring the run back. The teardown now waits for that step and is retried on the next pass, stopping the sandbox without bringing a computer folder back once it has waited 5 minutes, and such a revive is refused. Affects 0.10.0 prereleases only.
 - The brokered model routes (`/wardyn/llm/anthropic/`, `/wardyn/llm/openai/`) now refuse a request whose upstream host the run's policy denies, with the same `403` as a refused connection. Before, a local model with no auth configured was still reached after its host was denied, because the broker sends it no credential to withhold.
+- A network proxy sidecar that has a control plane now waits for its first token renewal before it serves, so a proxy started late, after its token was retired or revoked, never serves a byte; it exits if that renewal is refused or does not land. A proxy image pinned to an older release (`WARDYN_PROXY_IMAGE`) does not wait and keeps the old behaviour.
 
 ## [0.10.0-rc.18] — 2026-11-10
 
