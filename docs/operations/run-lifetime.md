@@ -159,7 +159,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
 8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config, which the edit stored before its replace.
 
-An edit changes nothing, and the run keeps its current proxy (`502 revive_proxy_kept_current`), when its config cannot be stored, when the run changed since the edit read its policy generation, or when it lost the run's lock before its replace. A revive's claim and its later lost marks land only while its generation is the newest. The stops after a mark lands, and a kept run's stop, are not fenced.
+An edit whose config cannot be stored changes nothing: the run keeps its current proxy (`502 revive_proxy_kept_current`). So does one that finds the run changed since it read its policy generation, or that lost the run's lock before its replace. Its claim and lost marks land only while its generation is the newest; the stops after a mark lands are not fenced.
 
 Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced.
 
