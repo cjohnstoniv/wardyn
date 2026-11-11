@@ -149,7 +149,9 @@ export function useMainDriveSize(view: MainDriveView) {
   const mib = !dirty && committed !== undefined ? committed : parseSize(text, unit);
   // A stored size over the cap (a template's, a run again's, or one from before a pool change): the field keeps the
   // request, the run gets the cap, and the server's cut stands. A size being typed over the cap says the same thing
-  // at once (blur then clamps it); `mib` is the typed size while editing and the stored one otherwise.
+  // at once (blur then clamps it). `mib` is the typed size while editing, the stored one when not editing, and
+  // the pool's prefill (read from the field's text) when not editing and nothing is stored. An over-cap prefill
+  // therefore shows the note too; the server cuts a default to the cap (internal/api/run_main_drive.go:55-57).
   const over = mib !== undefined && view.capMib !== undefined && mib > view.capMib
     ? { size: sizeWords(mib), cap: sizeWords(view.capMib) } : undefined;
   return {
