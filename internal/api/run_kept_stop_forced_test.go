@@ -1305,6 +1305,9 @@ func TestSweepForcedStops_AFailedRevokeKeepsTheMarkOnBothPaths(t *testing.T) {
 			if f.sb.stopCount() != 1 || f.leaser.markCount() != 1 {
 				t.Fatalf("%d stops, %d marks after a stop that succeeded and a revoke that failed; want 1 and 1", f.sb.stopCount(), f.leaser.markCount())
 			}
+			if rows := sweepRows(f.audit, "success", "sandbox_stopped"); len(rows) != 1 {
+				t.Fatalf("%d success rows on the tick whose stop was confirmed; want 1, whatever the revoke did", len(rows))
+			}
 			f.tick(t, f.s)
 			f.tick(t, f.s)
 			if f.leaser.markCount() != 1 || revokeFailures(f.audit) != 1 || f.sb.stopCount() != 1 {
@@ -1315,7 +1318,42 @@ func TestSweepForcedStops_AFailedRevokeKeepsTheMarkOnBothPaths(t *testing.T) {
 			if f.leaser.markCount() != 0 {
 				t.Errorf("%d marks after the revoke succeeded; want 0", f.leaser.markCount())
 			}
+			if rows := sweepRows(f.audit, "success", ""); len(rows) != 1 {
+				t.Errorf("%d success rows after the clear on the empty-ref path; want still 1", len(rows))
+			}
 		})
+	}
+}
+
+// pendingPATStore is the forced fixture's store with one Azure DevOps token it can never close, so every revoke
+// leaves a pending token revoke: revokeRunCascade writes its failure row and still returns nil.
+type pendingPATStore struct{ markedStore }
+
+func (pendingPATStore) InsertRunPAT(context.Context, store.RunPAT) error { return nil }
+func (pendingPATStore) MarkRunPATRevoked(context.Context, uuid.UUID, uuid.UUID, string, string) (bool, error) {
+	return false, nil
+}
+func (pendingPATStore) NoteRunPATRevokeFailed(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+func (pendingPATStore) ListUnrevokedRunPATs(context.Context, store.RunPATFilter) ([]store.RunPAT, error) {
+	return []store.RunPAT{{ValidTo: time.Now().Add(-time.Hour)}}, nil
+}
+
+// A revoke whose only residue is a pending token revoke returns nil, and the mark, kept by a failing stop,
+// still writes one run.revoke failure row per process across ticks. Catches: forgetting the row's key on a revoke
+// that returned nil but left a pending token (a row every tick).
+func TestSweepForcedStops_APendingTokenRevokeWritesOneRowAcrossTicks(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.s.cfg.Store = pendingPATStore{f.s.cfg.Store.(markedStore)}
+	f.sb.stopErr = errors.New("the daemon did not answer the stop")
+	for range 3 {
+		f.tick(t, f.s)
+	}
+	if f.leaser.markCount() != 1 || revokeFailures(f.audit) != 1 {
+		t.Errorf("%d marks, %d revoke failure rows after three ticks; want 1 and 1", f.leaser.markCount(), revokeFailures(f.audit))
 	}
 }
 

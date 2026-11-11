@@ -73,8 +73,9 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	s.settleForcedFolder(fctx, run.ID)
 	keep := s.forcedKeepsSandbox(fctx, cur, proxyErr)
 	s.finalizeRunTailOrdered(context.WithValue(fctx, forcedEndKey{}, forcedEnd{keep: keep}), run.ID, cur.SandboxRef, action, "success", data, false, terminal == types.RunStopped)
-	settleAfterTeardown(ctx, func(sctx context.Context) {
-		stopped := s.forcedStopConfirmed(sctx, fs, run.ID, stamp)
+	stopped := false
+	settleAfterTeardown(ctx, func(sctx context.Context) { stopped = s.forcedStopConfirmed(sctx, fs, run.ID, stamp) })
+	settleAfterTeardown(ctx, func(sctx context.Context) { // its own budget: a revoke that hangs to its deadline cannot expire the row
 		s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, cur.SandboxRef, "failure",
 			mustJSON(map[string]any{"sandbox_ref": cur.SandboxRef, "past_due_sec": int64(now.Sub(until).Seconds()), "sandbox_stopped": stopped, "forced": true})))
 	})
@@ -83,8 +84,10 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 // forcedStopBound bounds one forced end, and one row of sweepForcedStops: a runner that never answers must
 // not hold a watcher tick, and the lease sweep behind it, for good (reconcileFinalizeTimeout's reason).
 // It cuts every call that obeys its context. A call that runs apart from it keeps its own budget: the
-// Docker driver's stop (stopSandboxBudget, 60 s) and each settle write (15 s). So a row can run past
-// forcedStopBound, by at most those budgets, and is still bounded.
+// Docker driver's stop (stopSandboxBudget, 60 s), the forced end's own teardown (teardownCtxWithin,
+// run_terminal_effects.go:44-50, :131-139: at least 15 s, 90 s for a macOS VM run), settleForcedFolder's record
+// write, and each settle write (15 s). So a row can run past forcedStopBound, by at most those budgets, and is
+// still bounded.
 var forcedStopBound = reconcileFinalizeTimeout
 
 // forcedNotBroughtBack is the text a forced end records for a computer folder whose changes it did not bring back.
@@ -200,8 +203,8 @@ func (s *Server) clearForcedMarkIf(ctx context.Context, fs store.ForcedStopper, 
 	settleAfterTeardown(ctx, func(sctx context.Context) { // a budget of its own: the stop may have used the row's
 		sctx = forcedCtx(sctx)
 		err := s.revokeRunCascade(sctx, id)
-		if err == nil {
-			s.forgetTeardownRow(id, "run.revoke")
+		if err == nil && !sctx.Value(forcedCtxKey{}).(*revokeResidue).left.Load() {
+			s.forgetTeardownRow(id, "run.revoke") // a clean revoke only: a pending token revoke keeps its one row
 		}
 		if !contained || err != nil || !s.clearForcedStop(sctx, fs, id, stamp) {
 			return
@@ -219,15 +222,21 @@ func (s *Server) clearForcedMarkIf(ctx context.Context, fs store.ForcedStopper, 
 type forcedCtxKey struct{}
 
 func forcedCtx(ctx context.Context) context.Context {
-	return context.WithValue(ctx, forcedCtxKey{}, struct{}{})
+	return context.WithValue(ctx, forcedCtxKey{}, &revokeResidue{})
 }
+
+// revokeResidue records that a revoke under its forcedCtx left something to report, a failure or a pending
+// token revoke, which revokeRunCascade returns nil for.
+type revokeResidue struct{ left atomic.Bool }
 
 // revokeRowDue reports whether revokeRunCascade writes its failure row: always, except under forcedCtx, where it
 // is written once per process per run until a revoke succeeds.
 func (s *Server) revokeRowDue(ctx context.Context, runID uuid.UUID) bool {
-	if _, ok := ctx.Value(forcedCtxKey{}).(struct{}); !ok {
+	r, ok := ctx.Value(forcedCtxKey{}).(*revokeResidue)
+	if !ok {
 		return true
 	}
+	r.left.Store(true) // called only for a revoke with something to report
 	_, seen := teardownRowsWritten.LoadOrStore(teardownRowKey{s, runID, "run.revoke"}, struct{}{})
 	return !seen
 }
@@ -309,7 +318,9 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		case serr == nil || (left && cause.last() == nil):
 			// Kept with its proxy stop confirmed: serr is nil, or only the folder record could not be read. A
 			// proxy stop that failed leaves a cause, and the mark.
-			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
+			if s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil) {
+				s.forgetTeardownRow(run.ID, sandboxSweepAction) // a later failure is written again
+			}
 			return
 		}
 	} else {
@@ -322,10 +333,13 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 	}
 	if stopped {
 		settleAfterTeardown(ctx, func(sctx context.Context) { _ = s.clearSandboxRef(sctx, run.ID) })
-		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, func(sctx context.Context) {
+		// One success row per confirmed stop, whatever the revoke does: the empty-ref clear that follows a failed
+		// revoke writes none.
+		settleAfterTeardown(ctx, func(sctx context.Context) {
 			s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", sandboxSweepAction, ref, "success",
 				mustJSON(map[string]any{"sandbox_ref": ref, "sandbox_stopped": true, "forced": true})))
 		})
+		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
 		s.forgetTeardownRow(run.ID, sandboxSweepAction)
 		return
 	}
@@ -430,7 +444,8 @@ func (s *Server) auditFirstTeardownFailure(ctx context.Context, runID uuid.UUID,
 }
 
 // teardownRowsWritten holds, per server, run and action, a failed teardown this process has audited. In memory
-// only: a restart, or another replica, writes its own first row. It is package level because Server's fields
+// only: a restart, or another replica, writes its own first row. The bound is per process: the terminal sweep's
+// entry for a run (sandbox_sweep.go:136) lives as long as the process, and the other replicas' rows are theirs. It is package level because Server's fields
 // are declared elsewhere; the key carries the server so two servers in one process do not share an entry.
 var teardownRowsWritten sync.Map
 
