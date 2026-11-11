@@ -34,13 +34,13 @@ import (
 // cannot reopen it; widening the run again is a new run or an approval of another host.
 //
 // Every 4xx refusal comes before the revive replaces anything. Past it, the edited
-// config is stored before the new proxy's start is settled, so every later revive starts
-// from it. The answer waits for the new proxy's own readback (run_proxy_readback.go) of the start the
+// config is stored in the edit's own policy generation write, before the replace, so every
+// revive that reads that generation starts from it (advanceRunPolicyGeneration). The answer waits for the new proxy's own readback (run_proxy_readback.go) of the start the
 // edit recorded: 200 only once that start is enforced. Otherwise the answer names what is known:
 // egress_edit_unconfirmed once the new proxy's stop is confirmed (its containment recorded on the
 // start, or confirmed by the edit's own stop), egress_edit_containment_unresolved while it is not, and
 // egress_edit_superseded when another revive replaced the start. A config that could not be stored
-// fails the start, which the readback contains like any failed start. A report under the pre-edit
+// takes no generation and no start, and the run keeps its current proxy. A report under the pre-edit
 // proxy's token is stale for that start, so it can never confirm the edit. An edit is never a legacy
 // start: a run whose runner or proxy image predates the readback is refused before anything changes.
 
@@ -421,42 +421,26 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, pe
 // egressEditEndTries bounds an edit's attempts at an end whose write failed.
 const egressEditEndTries = 3
 
-// storeAndSettleRevived stores a revive's config as the run's, the one every later revive starts from,
-// and settles the new proxy's start (settleRevivedProxy). An ordinary revive stores after the settle,
-// best-effort: a failed write keeps the previous config, from which the next revive re-derives the
-// same result. An edit stores first, since its config only narrows: any revive after it, a revive
-// that supersedes a failed settle included, starts from the edited config. An edit's write fails
-// closed: a later revive would start from the pre-edit config and reopen the removed or denied hosts,
-// so the new proxy's start is failed and contained, and the edit never answers 200.
+// storeAndSettleRevived settles the new proxy's start (settleRevivedProxy) and answers whether the revive's
+// config is the run's stored one. With policy generations (gen > 0) it already is: every revive, an ordinary
+// one or an edit, stored it in its generation's own write, before the replace (advanceRunPolicyGeneration),
+// so nothing is stored here and no write after the replace can overwrite a newer revive's config. A store
+// without generations has nothing to fence that write on, and stores it after the settle, best-effort, as
+// before: a failed write keeps the previous config, from which the next revive re-derives the same result
+// (an edit is refused on such a store, egressEditSupported).
 func (s *Server) storeAndSettleRevived(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string,
-	start proxyStartRec, proxyHash, retiring string, renewed renewedTokens, freshJTI string, storedJSON []byte, edits []liveEgressEdit) (stored bool, rerr *reviveError) {
-	if len(edits) == 0 {
-		if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil {
-			return false, rerr
-		}
-		if err := s.storeRunProxyConfig(ctx, run.ID, storedJSON); err != nil {
-			slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
-				slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		}
-		return false, nil
+	gen int, start proxyStartRec, proxyHash, retiring string, renewed renewedTokens, freshJTI string, storedJSON []byte) (stored bool, rerr *reviveError) {
+	if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil {
+		return gen > 0, rerr
 	}
-	storeErr := s.storeRunProxyConfig(ctx, run.ID, storedJSON)
-	if storeErr != nil {
-		// The hash is withheld, so the settle fails the start (hash missing) and contains it as the
-		// readback contains any failed start: recorded on the start, and retried by its sweep.
-		data["config_store_error"] = storeErr.Error()
-		proxyHash = ""
-		slog.WarnContext(ctx, "wardynd: storing an edited run's proxy config failed; failing its new proxy's start",
-			slog.String("run_id", run.ID.String()), slog.Any("err", storeErr))
-	} else {
-		s.retireViaOrgEngine(run.ID) // no engine built from the pre-edit config serves again
+	if gen > 0 {
+		return true, nil
 	}
-	rerr = s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI)
-	if rerr == nil && storeErr != nil { // a start with no hash always fails; never let an unstored edit stand
-		return false, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
-			"the edited proxy config could not be stored, so the run's new proxy is being stopped", storeErr)
+	if err := s.storeRunProxyConfig(ctx, run.ID, storedJSON); err != nil {
+		slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
-	return storeErr == nil, rerr
+	return false, nil
 }
 
 // egressEditUnconfirmed is the 503 of an edit whose new proxy did not confirm it, once that proxy's
@@ -467,9 +451,9 @@ func egressEditUnconfirmed(why string) *reviveError {
 }
 
 // egressEditSuperseded is the 503 of an edit whose start another revive replaced before it confirmed.
-// persisted says this request stored the edited config: that revive then started from it, and its
-// own readback settles it. Otherwise (the edit's replace or config write failed) the edit was never
-// applied, and that revive started from the config stored before it.
+// persisted says this request stored the edited config, as every edit that recorded a start did, in
+// its generation's own write: that revive then started from it, and its own readback settles it.
+// Otherwise the edit was never applied, and that revive started from the config stored before it.
 func egressEditSuperseded(persisted bool) *reviveError {
 	msg := "another revive replaced the run's proxy before the edit took effect, so the edit was not applied; send it again"
 	if persisted {

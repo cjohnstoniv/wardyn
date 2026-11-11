@@ -225,7 +225,13 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// The restrictions the revive holds the run to are the run's from here: the seal and the mint read them.
 	capturedRestrictions := run.RestrictionIDs
 	run.RestrictionIDs = c.restrictionIDs
-	cfg, rerr := s.reviveSourceConfig(ctx, rv, run, actorType, actor)
+	// The run's newest policy generation, read once and before its source config: the advance lands only
+	// while it is still the newest, so the revive never applies a config derived from an older source.
+	expected, rerr := s.reviveExpectedGeneration(ctx, run.ID)
+	if rerr != nil {
+		return reviveResult{}, rerr
+	}
+	cfg, source, rerr := s.reviveSourceConfig(ctx, rv, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -300,7 +306,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the request: a person closing the tab stops waiting for the answer, not
 	// the consistency work. The context keeps the request's values (the audit
 	// delegation) and loses its cancellation, bounded as the kill cascade is.
-	// This is also what bounds how long the run's lock is held.
+	// This is also what bounds how long the run's lock is held. lockCtx keeps the lock's own end, which the
+	// replace below is checked and bound against: a lost hold is a lock another replica may take.
+	lockCtx := ctx
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 	// The runner calls below stay under the revive's one runner deadline; the compensation does not.
@@ -323,11 +331,27 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
 	// it is refused, so it can mint no token this list misses, and the new one renews at once.
 	renewed := s.retireRunTokenLineage(ctx, run.ID, freshJTI)
-	gen, start, gerr := s.advanceRevivePolicyAndStart(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI) // before the new proxy's first row
-	if gerr != nil {
+	// The revive's config becomes the run's stored one in the generation's own write, before the new
+	// proxy's first row and before the replace: any revive that reads the new generation reads this config.
+	gen, start, gerr := s.advanceRevivePolicyAndStart(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI, expected, storedJSON, source)
+	switch {
+	case errors.Is(gerr, store.ErrRunPolicyMoved):
+		return reviveResult{}, s.revivePolicyMoved(ctx, run, data, actorType, actor, freshJTI, renewed, gerr)
+	case gerr != nil:
 		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, gerr)
+	case len(edits) > 0 && gen > 0:
+		s.retireViaOrgEngine(run.ID) // the edited config is stored: no engine built from the pre-edit one serves again
 	}
-	proxyHash, err := s.replaceRevivedProxyHashed(runnerCtx, rv, run, cfgJSON, start) // abandons start on an error
+	// A hold lost since the claim is a lock another replica may now hold, under which a newer revive may
+	// have replaced the proxy: a replace from here would remove that proxy. The old (or newer) proxy is left
+	// untouched, as when the replace never reached it.
+	if err := s.lockHeld(lockCtx); err != nil {
+		return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, gen, start, source, freshJTI, renewed,
+			fmt.Errorf("the run's lock was lost before its proxy was replaced: %w", err))
+	}
+	replaceCtx, endReplace := whileLockHeld(runnerCtx, lockCtx)
+	proxyHash, err := s.replaceRevivedProxyHashed(replaceCtx, rv, run, cfgJSON, start) // abandons start on an error
+	endReplace()
 	if err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
@@ -338,25 +362,19 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			// untouched proxy on a token that can neither renew nor decide,
 			// while its allowlisted egress keeps flowing audit-dark for up to
 			// the lapsed-token sweep's ~1h05m window.
-			// The generation is abandoned first, so the failure row carries the one that still applies.
-			s.abandonRunPolicyGeneration(ctx, run, gen)
-			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
-			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
-			s.restoreRunTokenLineage(ctx, run.ID, freshJTI, renewed)
-			return reviveResult{}, reviveKeptCurrent(ctx, err)
+			return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, gen, start, source, freshJTI, renewed, err)
 		}
 		// The old proxy is, or may be, gone: nothing is left to serve on the
 		// retiring token, so revoking it here is safe (F4).
 		s.revokeRetiringToken(ctx, retiring, run.ID)
 		s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), freshJTI)
-		return reviveResult{generation: gen}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
+		return reviveResult{generation: gen, stored: gen > 0}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
 			"the run's proxy could not be replaced, so the run has no egress and is lost until revived", err)
 	}
 	// The new proxy is up behind the fresh token: the retiring one is no
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
 	// return above this point leaves the old proxy running unrevoked.
-	// The stored config becomes the one now running (storeAndSettleRevived): an edit's before the settle.
-	stored, rerr := s.storeAndSettleRevived(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI, storedJSON, edits)
+	stored, rerr := s.storeAndSettleRevived(ctx, run, data, actorType, actor, gen, start, proxyHash, retiring, renewed, freshJTI, storedJSON)
 	if rerr != nil {
 		return reviveResult{generation: gen, stored: stored}, rerr // the start an edit waits on for its containment
 	}
@@ -528,33 +546,35 @@ func (s *Server) reviveRecoverContainment(ctx context.Context, run types.AgentRu
 
 // reviveSourceConfig is the config a revive starts from: the run's stored
 // one (run_proxy_config.go), never the proxy container's (#1176), once the
-// run's substrate says it can replace a proxy at all.
-func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun, actorType types.ActorType, actor string) (*proxy.Config, *reviveError) {
+// run's substrate says it can replace a proxy at all. source is that stored
+// config exactly as read, before any change, which a revive that leaves the
+// old proxy untouched stores back (abandonRunPolicyGeneration).
+func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun, actorType types.ActorType, actor string) (*proxy.Config, []byte, *reviveError) {
 	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
 		if errors.Is(err, runner.ErrReviveUnsupported) {
-			return nil, reviveUnsupported()
+			return nil, nil, reviveUnsupported()
 		}
-		return nil, reviveRefused(http.StatusBadGateway, reasonReviveSubstrateUnreadable, loggedMsg(ctx, "resolve the run's substrate", err))
+		return nil, nil, reviveRefused(http.StatusBadGateway, reasonReviveSubstrateUnreadable, loggedMsg(ctx, "resolve the run's substrate", err))
 	}
 	old, err := s.loadRunProxyConfig(ctx, run.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
-		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigNotStored,
+		return nil, nil, reviveRefused(http.StatusConflict, reasonReviveConfigNotStored,
 			"the run's proxy config is not stored (it started before this release, or this deployment keeps none); start a new run")
 	case err != nil:
-		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's proxy config", err))
+		return nil, nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's proxy config", err))
 	}
 	cfg, err := s.loadRenderedProxyConfig(old)
 	if err != nil {
-		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
+		return nil, nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
-		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+		return nil, nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
 			loggedMsg(ctx, "read the run's git_pat grants", err))
 	}
 	if rerr := s.revivePATNarrowing(ctx, run, cfg, grants, actorType, actor); rerr != nil {
-		return nil, rerr
+		return nil, nil, rerr
 	}
 	// A config rendered under 0.8.5 has no brokered_pat_grant_ids, so the set is
 	// recomputed rather than trusted, whatever the stored value says.
@@ -563,13 +583,13 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	// forge or api, and its grant row may carry them (0.8.5 ignored them). The revived proxy gets what
 	// dispatch would give it. A grant whose row is gone has no scope to apply and revives as stored.
 	if err := rescopeRevivedPATGrants(cfg.PATGrants, grants); err != nil {
-		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
+		return nil, nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
 			"a git_pat grant's scope could not be read, so what it is narrowed to is unknown: "+err.Error())
 	}
 	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
-		return nil, rerr
+		return nil, nil, rerr
 	}
-	return cfg, s.reviveModelListRunnerRefusal(run, cfg)
+	return cfg, old, s.reviveModelListRunnerRefusal(run, cfg)
 }
 
 // rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.

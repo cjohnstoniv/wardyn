@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -30,21 +31,38 @@ func (s *Server) reviveReadbackSupported(ctx context.Context, run types.AgentRun
 		"this run's substrate cannot confirm a new proxy's policy, so its proxy cannot be replaced")
 }
 
-// advanceRevivePolicyAndStart is advanceRunPolicyGeneration, then the new proxy's pending start under that
-// generation and the fresh token. The caller has retired the old lineage, so no report on it can land on
-// the start. A start that cannot be recorded abandons the generation and is the revive's error.
+// advanceRevivePolicyAndStart is advanceRunPolicyGeneration, expecting generation expected and storing
+// stored, then the new proxy's pending start under that generation and the fresh token. The caller has
+// retired the old lineage, so no report on it can land on the start. A start that cannot be recorded
+// abandons the generation, storing source back, and is the revive's error.
 func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, retiring string,
-	renewed renewedTokens, fresh string) (int, proxyStartRec, error) {
-	gen, err := s.advanceRunPolicyGeneration(ctx, run, policy, retiring, renewed, fresh)
+	renewed renewedTokens, fresh string, expected int, stored, source []byte) (int, proxyStartRec, error) {
+	gen, err := s.advanceRunPolicyGeneration(ctx, run, policy, retiring, renewed, fresh, expected, stored)
 	if err != nil {
 		return 0, proxyStartRec{}, err
 	}
 	start, err := s.beginProxyStart(ctx, run, gen, fresh)
 	if err != nil {
-		s.abandonRunPolicyGeneration(ctx, run, gen)
+		s.abandonRunPolicyGeneration(ctx, run, gen, source)
 		return 0, proxyStartRec{}, err
 	}
 	return gen, start, nil
+}
+
+// whileLockHeld is ctx, also cancelled once lock, the run lock's own context, ends because the hold was
+// lost (db.ErrLockLost): a revive's replace stops on a lost lock, never on a request that ends. stop
+// releases it.
+func whileLockHeld(ctx, lock context.Context) (context.Context, func()) {
+	out, cancel := context.WithCancelCause(ctx)
+	after := context.AfterFunc(lock, func() {
+		if cause := context.Cause(lock); errors.Is(cause, db.ErrLockLost) {
+			cancel(cause)
+		}
+	})
+	return out, func() {
+		after()
+		cancel(context.Canceled)
+	}
 }
 
 // replaceRevivedProxyHashed is replaceRevivedProxy through runner.ProxyReviverHashed when rv has it,

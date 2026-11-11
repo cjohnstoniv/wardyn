@@ -49,21 +49,46 @@ func (s *generationStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _
 
 var _ store.RunPolicyGenerations = (*generationStore)(nil)
 
-func (s *generationStore) AdvanceRunPolicyGeneration(_ context.Context, _ uuid.UUID, digest string, retired []string, fresh string) (int, error) {
+// AdvanceRunPolicyGeneration lands, with its config, only on a live run whose newest generation is still
+// expected, as the PG write's predicate does; a config write that fails leaves the generations as they were.
+func (s *generationStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected int, digest string, retired []string, fresh string, sealed []byte) (int, error) {
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
 	if s.failAdvance > 0 {
 		s.failAdvance--
 		return 0, errors.New("write policy generation: connection reset")
 	}
+	run, err := s.reviveStore.GetRun(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if run.State != types.RunRunning || run.LostAt != nil || store.NewestPolicyGeneration(s.state) != expected {
+		return 0, store.ErrRunPolicyMoved
+	}
+	if sealed != nil {
+		if err := s.reviveStore.PutRunProxyConfig(ctx, id, sealed); err != nil {
+			return 0, err
+		}
+	}
 	var gen int
 	s.state, gen = s.state.Advance(digest, retired, fresh)
 	return gen, nil
 }
 
-func (s *generationStore) AbandonRunPolicyGeneration(_ context.Context, _ uuid.UUID, gen int) error {
+// AbandonRunPolicyGeneration abandons gen, restoring its config, only while gen holds the newest slot
+// and is not abandoned yet, as the PG write does.
+func (s *generationStore) AbandonRunPolicyGeneration(ctx context.Context, id uuid.UUID, gen int, restore []byte) error {
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
+	n := len(s.state.Generations)
+	if n == 0 || s.state.Generations[n-1].Generation != gen || s.state.Generations[n-1].Abandoned {
+		return nil
+	}
+	if restore != nil {
+		if err := s.reviveStore.PutRunProxyConfig(ctx, id, restore); err != nil {
+			return err
+		}
+	}
 	s.state = s.state.Abandon(gen)
 	return nil
 }

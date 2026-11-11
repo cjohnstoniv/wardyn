@@ -48,15 +48,18 @@ func (s *genViewStore) QueryAuditEventsFilteredPage(ctx context.Context, runID *
 	return out, err
 }
 
-func (s *genViewStore) AdvanceRunPolicyGeneration(_ context.Context, _ uuid.UUID, digest string, retired []string, fresh string) (int, error) {
+func (s *genViewStore) AdvanceRunPolicyGeneration(_ context.Context, _ uuid.UUID, expected int, digest string, retired []string, fresh string, _ []byte) (int, error) {
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
+	if store.NewestPolicyGeneration(s.state) != expected {
+		return 0, store.ErrRunPolicyMoved
+	}
 	var gen int
 	s.state, gen = s.state.Advance(digest, retired, fresh)
 	return gen, nil
 }
 
-func (s *genViewStore) AbandonRunPolicyGeneration(_ context.Context, _ uuid.UUID, gen int) error {
+func (s *genViewStore) AbandonRunPolicyGeneration(_ context.Context, _ uuid.UUID, gen int, _ []byte) error {
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
 	s.state = s.state.Abandon(gen)
@@ -97,7 +100,7 @@ func newGenViewFixture(t *testing.T, filler int) (*Server, *genViewStore, types.
 // reviseGenView starts the revive's generation as reviveRunProxy does, before the new proxy starts.
 func reviseGenView(t *testing.T, srv *Server, run types.AgentRun) int {
 	t.Helper()
-	gen, err := srv.advanceRunPolicyGeneration(context.Background(), run, genViewRevived, "", renewedTokens{}, "jti-revived")
+	gen, err := srv.advanceRunPolicyGeneration(context.Background(), run, genViewRevived, "", renewedTokens{}, "jti-revived", 1, nil)
 	if err != nil || gen != 2 {
 		t.Fatalf("advance = %d, %v; want generation 2", gen, err)
 	}
@@ -130,7 +133,7 @@ func wantEffectivePolicy(t *testing.T, srv *Server, run types.AgentRun, want typ
 func TestEffectivePolicy_AbandonedGenerationKeepsTheDispatchPolicy(t *testing.T) {
 	srv, _, run := newGenViewFixture(t, 0)
 	gen := reviseGenView(t, srv, run)
-	srv.abandonRunPolicyGeneration(context.Background(), run, gen)
+	srv.abandonRunPolicyGeneration(context.Background(), run, gen, nil)
 	wantEffectivePolicy(t, srv, run, genViewDispatched)
 }
 

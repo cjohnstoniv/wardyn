@@ -281,6 +281,17 @@ type failPutStore struct {
 	onFail func() // runs at each failed write, before it answers
 }
 
+// AdvanceRunPolicyGeneration fails the config write the advance carries, which takes the generation with it.
+func (s *failPutStore) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, expected int, digest string, retired []string, fresh string, sealed []byte) (int, error) {
+	if sealed != nil && s.fail.Load() {
+		if s.onFail != nil {
+			s.onFail()
+		}
+		return 0, errors.New("injected config write failure")
+	}
+	return s.readbackStore.AdvanceRunPolicyGeneration(ctx, id, expected, digest, retired, fresh, sealed)
+}
+
 func (s *failPutStore) PutRunProxyConfig(ctx context.Context, id uuid.UUID, sealed []byte) error {
 	if s.fail.Load() {
 		if s.onFail != nil {
@@ -302,25 +313,38 @@ func (f *readbackFixture) handedPolicy(t *testing.T) types.RunPolicySpec {
 	return cfg.Policy
 }
 
-// An edit whose config cannot be stored never answers 200: a later revive starts from the stored
-// config, so the edit fails closed (503, the new proxy stopped, the run lost). The ordinary revive
-// after it then starts from the pre-edit config, which is right only because no edit was confirmed.
-func TestEgressEdit_ConfigWriteFailureFailsClosed(t *testing.T) {
+// An edit whose config cannot be stored changes nothing: an edit's config, like an ordinary revive's, is
+// stored in its generation's own write, before the replace, so a write that fails takes no generation and
+// no start, replaces and stops no proxy, and the run keeps its current proxy (502 revive_proxy_kept_current).
+// The ordinary revive after it then starts from the pre-edit config, right because no edit took effect.
+func TestEgressEdit_ConfigWriteFailureChangesNothing(t *testing.T) {
 	f := newEgressEditFixture(t)
 	fs := &failPutStore{readbackStore: f.rb}
 	fs.fail.Store(true)
 	f.srv.cfg.Store = fs
 	f.confirmEachReplace(t)
-	stops := f.lr.proxyStopCount()
+	ctx := context.Background()
+	stops, replaced, stored := f.lr.proxyStopCount(), len(f.rr.replaced), string(f.rs.cfg)
+	before, _, _ := f.rb.RunPolicyState(ctx, f.run.ID)
+	startBefore, hadStart, _ := f.rb.ActiveProxyStart(ctx, f.run.ID)
 	w := f.editEgress(t, `{"remove_hosts":["api.anthropic.com"],"deny_hosts":["evil.example"]}`)
-	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditUnconfirmed {
-		t.Fatalf("edit with a failed config write: %d %s, want 503 %s", w.Code, w.Body.String(), reasonEgressEditUnconfirmed)
+	if w.Code != http.StatusBadGateway || errorReason(w) != reasonReviveProxyKeptCurrent {
+		t.Fatalf("edit with a failed config write: %d %s, want 502 %s", w.Code, w.Body.String(), reasonReviveProxyKeptCurrent)
 	}
-	if lostAt, _ := f.st.lost(); lostAt == nil || f.lr.proxyStopCount() <= stops {
-		t.Fatal("the edit's new proxy must be stopped and the run lost")
+	if f.lr.proxyStopCount() != stops || len(f.rr.replaced) != replaced {
+		t.Fatal("an edit whose config was never stored must replace and stop no proxy")
 	}
-	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt == nil {
-		t.Errorf("start = %s contained_at = %v, want failed and its containment recorded", p.State, p.ContainedAt)
+	if lostAt, _ := f.st.lost(); lostAt != nil {
+		t.Error("an edit whose config was never stored must not lose the run")
+	}
+	after, _, _ := f.rb.RunPolicyState(ctx, f.run.ID)
+	startAfter, hasStart, _ := f.rb.ActiveProxyStart(ctx, f.run.ID)
+	if store.NewestPolicyGeneration(after) != store.NewestPolicyGeneration(before) || hasStart != hadStart || startAfter.Generation != startBefore.Generation {
+		t.Errorf("generation %d -> %d, start %v %d -> %v %d: a failed config write must take no generation and no start",
+			store.NewestPolicyGeneration(before), store.NewestPolicyGeneration(after), hadStart, startBefore.Generation, hasStart, startAfter.Generation)
+	}
+	if string(f.rs.cfg) != stored {
+		t.Error("the stored config changed though its write failed")
 	}
 	fs.fail.Store(false)
 	if code := f.revive(t); code != http.StatusOK {
@@ -579,32 +603,37 @@ func TestEgressEdit_ReviveAfterAFailedSettleStartsFromTheEdit(t *testing.T) {
 	}
 }
 
-// An unstored edit whose stop does not land is answered unresolved, and its failed start keeps the
-// stop's error, which the readback sweep retries (OverdueProxyStarts lists it).
-func TestEgressEdit_ConfigWriteFailureWithAFailedStopIsRetried(t *testing.T) {
+// An ordinary revive now stores its config before the replace, in its generation's own write, as an edit
+// does: while the new proxy is being started, the stored config already carries that proxy's token. A
+// write that fails is the revive's: it replaces nothing and the live run keeps its current proxy.
+func TestEgressEdit_OrdinaryReviveStoresItsConfigBeforeTheReplace(t *testing.T) {
 	f := newEgressEditFixture(t)
+	var storedToken, handedToken string
+	f.rr.onReplace = func(cfg []byte) {
+		handedToken = f.tokenJTI(t, cfg)
+		f.rs.mu.Lock()
+		raw := slices.Clone(f.rs.cfg)
+		f.rs.mu.Unlock()
+		storedToken = f.tokenJTI(t, raw)
+		postLoaded(t, f.srv, f.run.ID, handedToken, hashHex(cfg))
+	}
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: %d, want 200", code)
+	}
+	if handedToken == "" || storedToken != handedToken {
+		t.Fatalf("during the replace the stored config's token was %q and the new proxy's %q: the config must be stored before the replace", storedToken, handedToken)
+	}
 	fs := &failPutStore{readbackStore: f.rb}
 	fs.fail.Store(true)
 	f.srv.cfg.Store = fs
-	f.rr.onReplace = func([]byte) { f.setProxyStopErr(errors.New("the runner did not answer the stop")) }
-	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
-	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditContainmentUnresolved {
-		t.Fatalf("edit: %d %s, want 503 %s", w.Code, w.Body.String(), reasonEgressEditContainmentUnresolved)
+	f.now = f.now.Add(reviveLiveEvery) // past the live-revive bound
+	stops, replaced := f.lr.proxyStopCount(), len(f.rr.replaced)
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusBadGateway || errorReason(w) != reasonReviveProxyKeptCurrent {
+		t.Fatalf("revive with a failed config write: %d %s, want 502 %s", w.Code, w.Body.String(), reasonReviveProxyKeptCurrent)
 	}
-	p := f.active(t)
-	if p.State != types.ProxyStartFailed || p.ContainedAt != nil || p.ContainmentError == "" {
-		t.Fatalf("start = %s contained_at = %v error = %q, want failed and unresolved", p.State, p.ContainedAt, p.ContainmentError)
-	}
-	overdue, err := f.rb.OverdueProxyStarts(context.Background())
-	if err != nil || !slices.ContainsFunc(overdue, func(o store.ProxyStart) bool { return o.Generation == p.Generation }) {
-		t.Fatalf("overdue starts = %+v (%v): the sweep must retry the unstored edit's stop", overdue, err)
-	}
-	f.setProxyStopErr(nil)
-	if err := f.srv.sweepOverdueProxyStarts(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if p := f.active(t); p.ContainedAt == nil {
-		t.Error("the sweep's retry must record the start contained once the stop lands")
+	if f.lr.proxyStopCount() != stops || len(f.rr.replaced) != replaced {
+		t.Error("a revive whose config write failed must replace and stop no proxy")
 	}
 }
 
@@ -989,10 +1018,11 @@ func (s *supersedeOnAbandonStore) AbandonProxyStart(ctx context.Context, runID u
 	return err
 }
 
-// An edit superseded after its replace or its config write failed was never applied: the revive that
-// replaced it started from the config stored before the edit, so the answer says to send it again and
-// never that the run now starts from the edited config.
-func TestEgressEdit_SupersededAfterAFailureSaysTheEditWasNotApplied(t *testing.T) {
+// An edit stores its config in its generation's own write, before the replace. So one whose replace failed
+// and that another revive then superseded was stored, and that revive started from it: the answer says so,
+// never "send it again". One whose config write failed took no generation and no start, so nothing can
+// supersede it: it answers that the run keeps its current proxy.
+func TestEgressEdit_SupersededAfterAFailedReplaceStartsFromTheEditedConfig(t *testing.T) {
 	for _, failure := range []string{"replace", "config write"} {
 		f := newEgressEditFixture(t)
 		switch failure {
@@ -1002,19 +1032,20 @@ func TestEgressEdit_SupersededAfterAFailureSaysTheEditWasNotApplied(t *testing.T
 		default:
 			fs := &failPutStore{readbackStore: f.rb}
 			fs.fail.Store(true)
-			fs.onFail = func() {
-				p, _, _ := f.rb.ActiveProxyStart(context.Background(), f.run.ID)
-				if _, err := f.rb.BeginProxyStart(context.Background(), f.run.ID, p.Generation+1, "newer-jti", store.ProxyStartExpected); err != nil {
-					t.Error(err)
-				}
-			}
 			f.srv.cfg.Store = fs
 		}
 		w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
 		body := w.Body.String()
-		if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditSuperseded ||
-			!strings.Contains(body, "not applied") || strings.Contains(body, "edited config") {
-			t.Errorf("superseded after a failed %s: %d %s, want %s saying the edit was not applied", failure, w.Code, body, reasonEgressEditSuperseded)
+		switch failure {
+		case "replace":
+			if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditSuperseded ||
+				!strings.Contains(body, "edited config") || strings.Contains(body, "not applied") {
+				t.Errorf("superseded after a failed replace: %d %s, want %s saying the run starts from the edited config", w.Code, body, reasonEgressEditSuperseded)
+			}
+		default:
+			if w.Code != http.StatusBadGateway || errorReason(w) != reasonReviveProxyKeptCurrent {
+				t.Errorf("a failed config write: %d %s, want 502 %s", w.Code, body, reasonReviveProxyKeptCurrent)
+			}
 		}
 	}
 }
