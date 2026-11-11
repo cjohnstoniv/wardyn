@@ -572,7 +572,7 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordKeepsTheSandbox(t *testing
 	}
 }
 
-// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row, never silent.
+// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row with teardown_error, never silent.
 func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T) {
 	kept := sweepRun(types.RunFailed, "sbx-kept")
 	srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept}}, kept: kept.ID})
@@ -582,8 +582,8 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 	}
 	rows := runRows(h.audit.snapshot(), kept.ID)
 	if len(rows) != 1 || rows[0].Action != "sandbox.sweep" || rows[0].Outcome != "failure" ||
-		!strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
-		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with proxy_stop_error and no sandbox stop", rows, rr.stopped)
+		!strings.Contains(string(rows[0].Data), `"teardown_error"`) || strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
+		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with teardown_error alone and no sandbox stop", rows, rr.stopped)
 	}
 }
 
@@ -629,7 +629,7 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordFailsClosed(t *testing.T) 
 		proxied  int
 	}{
 		{name: "proxy stopped", left: true, row: "folder_record_error", proxied: 1},
-		{name: "proxy stop failed", proxyErr: errors.New("the daemon did not answer the proxy stop"), row: "proxy_stop_error", proxied: 1},
+		{name: "proxy stop failed", proxyErr: errors.New("the daemon did not answer the proxy stop"), row: `"teardown_error"`, proxied: 1},
 		{name: "proxy stop unsupported", proxyErr: runner.ErrEndUnsupported, proxied: 1},
 		{name: "no proxy stop", noProxy: true},
 		{name: "on a runner", edit: func(r *types.AgentRun) { r.RunnerID = &runnerID }},
@@ -660,6 +660,9 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordFailsClosed(t *testing.T) 
 			for _, ev := range runRows(h.audit.snapshot(), run.ID) {
 				if ev.Outcome == "failure" {
 					failures = append(failures, ev)
+				}
+				if strings.Contains(string(ev.Data), "proxy_stop_error") {
+					t.Errorf("row %s names proxy_stop_error, want teardown_error alone", ev.Data)
 				}
 			}
 			if tc.row == "" && len(failures) != 0 || tc.row != "" && (len(failures) != 1 || failures[0].Action != "sandbox.sweep" || !strings.Contains(string(failures[0].Data), tc.row)) {

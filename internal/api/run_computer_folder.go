@@ -555,8 +555,9 @@ func (s *Server) computerFolderKept(ctx context.Context, id uuid.UUID) bool {
 	return err != nil || kept
 }
 
-// computerFolderKeptRead is computerFolderKept with the record's read error apart, for a caller that must
-// not count a record it could not read as settled (a failed proxy start's containment).
+// computerFolderKeptRead is computerFolderKept with the record's read error apart, for a caller that logs or
+// audits that error (the terminal-sandbox sweep, and a failed proxy start's containment, which still counts the
+// record as kept).
 func (s *Server) computerFolderKeptRead(ctx context.Context, id uuid.UUID) (bool, error) {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {

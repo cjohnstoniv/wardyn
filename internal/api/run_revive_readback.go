@@ -159,9 +159,9 @@ func fateOf(run types.AgentRun) string {
 	return ""
 }
 
-// reloseFate is what reloseRun persisted for a run: nothing (no reloseRun ran), lost again (the mark written), the mark
-// not written (unresolved), the mark not applied (another writer moved the run first), or the run ended as unkeepable
-// (also when the mark landed on a substrate that cannot keep a sandbox, so loseRunStopped tore it down).
+// reloseFate is the fate reloseEnded reads back for a run asked to end: nothing, lost again (the mark written), the
+// mark not written (unresolved), the mark not applied or the end not landed (another writer moved the run first), or
+// the run ended (also when the mark landed on a substrate that cannot keep a sandbox, so loseRunStopped tore it down).
 type reloseFate int
 
 const (
@@ -172,8 +172,8 @@ const (
 	relostEnded
 )
 
-// reloseEnded is the fate of a run reloseRun asked to end (reconcileFinalize, or loseRunStopped's teardown on a
-// substrate that cannot keep a sandbox), read back rather than assumed: ended only once the store has it terminal,
+// reloseEnded is the fate of a run asked to end (loseRunStopped's teardown on a substrate that cannot keep a sandbox,
+// which loseUnconfirmedRun reads back, or reloseRun's reconcileFinalize), read back rather than assumed: ended only once the store has it terminal,
 // its stop confirmed only once its sandbox ref is cleared (finalizeRunEffects clears it only after its own stop
 // succeeded) or its sandbox is kept for its computer folder's pass back (quiesceKeptSandbox stopped its proxy). A run still kept is lost with its stop unconfirmed; any other is left to whatever moves it.
 func (s *Server) reloseEnded(ctx context.Context, runID uuid.UUID) (reloseFate, error) {
