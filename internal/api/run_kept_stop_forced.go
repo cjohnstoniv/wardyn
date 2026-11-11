@@ -139,7 +139,7 @@ func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID) {
 	if err != nil || folderBroughtBack(rec) {
 		return
 	}
-	next, ok := s.bumpComputerFolderGen(ctx, id, rec.Gen)
+	next, ok, _ := s.bumpComputerFolderGen(ctx, id, rec.Gen)
 	if !ok {
 		return
 	}
