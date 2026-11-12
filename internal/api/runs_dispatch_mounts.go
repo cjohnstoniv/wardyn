@@ -788,6 +788,7 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 	s.recordProxyAddr(ctx, run.ID, sb.ProxyAddr)
 	s.recordDesktopVMSignIns(ctx, run, sb)
 	s.auditKeychainTrust(ctx, run, sb)
+	s.auditNoNetworkProxyOnly(ctx, run, sb)
 	return nil
 }
 
@@ -807,6 +808,33 @@ func (s *Server) auditKeychainTrust(ctx context.Context, run types.AgentRun, sb 
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "denied",
 		mustJSON(map[string]any{"note": keychainTrustNote, "keychain_trust": k.Status, "keychain_trust_reason": k.Reason})))
+}
+
+// noNetworkProxyOnlyNote is the note on a No network run's row when nothing proves isolation below its proxy.
+const noNetworkProxyOnlyNote = "Wardyn has no proof that this No network run has isolation below its proxy. Treat it as enforced by the proxy only."
+
+// auditNoNetworkProxyOnly writes a denied run.dispatch row when a No network run on Kubernetes may have the
+// proxy's isolation only (runner.Sandbox.NoNetworkProxyOnly): its namespace's NetworkPolicy was not proven
+// enforced when the sandbox was created. "pod_enforced" writes nothing. An empty field writes "not_proven"
+// for a No network run on Kubernetes, since a driver or runner from before this field sent none, and nothing
+// for any other run. Only fixed codes are written, never the runner's text. Denied, not failure, for the
+// reason auditKeychainTrust gives.
+func (s *Server) auditNoNetworkProxyOnly(ctx context.Context, run types.AgentRun, sb runner.Sandbox) {
+	code := sb.NoNetworkProxyOnly
+	switch code {
+	case "pod_enforced":
+		return
+	case "":
+		if !noNetworkPreset(run.WallPreset) || !s.runOnKubernetes(run) {
+			return
+		}
+		code = "not_proven"
+	case "netpol_not_enforced", "netpol_ambient_acknowledged", "netpol_not_proven":
+	default:
+		code = "not_proven"
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "denied",
+		mustJSON(map[string]any{"note": noNetworkProxyOnlyNote, "no_network_isolation": "proxy_only", "network_policy": code})))
 }
 
 // recordVMMachine writes the virtual hardware a VM run was started with (#2996). A VM whose machine is

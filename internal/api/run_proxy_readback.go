@@ -393,10 +393,12 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 // read as not connected at selection, and that plain stop can stop it once the runner is back.
 // 0 fences nothing.
 func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun, gen int) error {
+	missed := s.noNetworkFirstStartMissed(ctx, run, gen)
+	cni := missed && s.runOnKubernetes(run)
 	switch {
 	case run.State == types.RunStarting:
 		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.create")
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, unconfirmedHint(ok))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, unconfirmedRunHint(unconfirmedHint(ok), cni))
 		if !ok {
 			return errProxyStopUnconfirmed
 		}
@@ -404,8 +406,12 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 	case runIsKept(run) && !isTerminalRunState(run.State):
 		return s.stopLostSandboxAt(ctx, run, gen)
 	case run.State == types.RunRunning:
-		if handled, err := s.loseUnconfirmedRun(ctx, run, gen); handled {
-			return err
+		// A No network run's first start that never reported, and that cannot be revived, ends with its hint
+		// rather than waiting lost: keeping it lost only delays a failure nothing can undo.
+		if !(missed && s.runUnrevivable(run)) {
+			if handled, err := s.loseUnconfirmedRun(ctx, run, gen); handled {
+				return err
+			}
 		}
 		// The proxy first, then the end, whose computer folder copy back decides whether the sandbox
 		// is stopped (finalizeRunEffects): a sandbox kept for it is not stopped here, so the end must
@@ -414,7 +420,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		// the end, as before.
 		left := run.RunnerID == nil && s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") == nil
 		ok := left || s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
-		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, runStopHint(ctx, ok))
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedRunHint(runStopHint(ctx, ok), cni))
 		switch {
 		case !ok:
 			return errProxyStopUnconfirmed
@@ -615,6 +621,55 @@ func unconfirmedHint(stopped bool) string {
 		return unconfirmedPolicyHint
 	}
 	return unconfirmedStopPendingHint
+}
+
+// unconfirmedNoNetworkCause ends the hint of a No network run's first start that never confirmed.
+const unconfirmedNoNetworkCause = ". For a No network run on Kubernetes, another: its proxy pod reaches Wardyn only through a pod-selector NetworkPolicy peer, which a CNI that matches NetworkPolicy before Service translation blocks; see \"What No network guarantees on Kubernetes\" in docs/operations/kubernetes-known-gaps.md"
+
+// noNetworkFirstStartMissed says whether gen is a No network run's first proxy start, the dispatch's
+// (generation 1), and it failed at its deadline: answered with a hash, never reported (store.ProxyStartDeadline;
+// a hash_missing start has no expected hash, a hash_mismatch one has a reported hash). Its proxy may never
+// have reached Wardyn.
+func (s *Server) noNetworkFirstStartMissed(ctx context.Context, run types.AgentRun, gen int) bool {
+	if gen != 1 || !noNetworkPreset(run.WallPreset) {
+		return false
+	}
+	st, ok := s.cfg.Store.(store.RunProxyStarts)
+	if !ok {
+		return false
+	}
+	p, found, err := st.ActiveProxyStart(ctx, run.ID)
+	return err == nil && found && p.Generation == gen && p.State == types.ProxyStartFailed &&
+		p.ExpectedSHA256 != "" && p.ReportedSHA256 == ""
+}
+
+// runOnKubernetes: in server mode, the k8s target; on a runner, its last caps say EndsUnkept, which only a
+// Kubernetes runner reports (runnerwire.Caps.EndsUnkept). Caps not held read as not Kubernetes.
+func (s *Server) runOnKubernetes(run types.AgentRun) bool {
+	if run.RunnerID == nil {
+		return s.cfg.RunnerTarget == "k8s"
+	}
+	c, ok := s.runnerLastCaps(*run.RunnerID)
+	return ok && c.EndsUnkept
+}
+
+// runUnrevivable: in server mode, the driver is no runner.ProxyReviver; on a runner, its last caps say
+// EndsUnkept. Caps not held read as revivable, so such a run keeps today's handling.
+func (s *Server) runUnrevivable(run types.AgentRun) bool {
+	if run.RunnerID == nil {
+		_, ok := s.cfg.Runner.(runner.ProxyReviver)
+		return !ok
+	}
+	c, ok := s.runnerLastCaps(*run.RunnerID)
+	return ok && c.EndsUnkept
+}
+
+// unconfirmedRunHint is hint, with the CNI cause when cni is set.
+func unconfirmedRunHint(hint string, cni bool) string {
+	if cni {
+		return hint + unconfirmedNoNetworkCause
+	}
+	return hint
 }
 
 // unconfirmedNarrowedHint and unconfirmedNarrowedStopPendingHint are those two hints for a run whose proxy

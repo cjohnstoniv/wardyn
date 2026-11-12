@@ -26,6 +26,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A live egress edit that the run's substrate cannot apply now says what to do: "This run's network can't be changed while it runs on this substrate. Start a new run with the narrower policy." On a runner that must be updated first, it says to update the runner.
 - macOS VM windows say that paste from your Mac does not reach the VM, and the edit window says Type code types only the one-time code.
 - Ending a run with a Both ways folder now says that the folder does not come back, and names `wardyn folder bring-back`. The folder docs no longer point at a Bring back control the console does not have.
+- Kubernetes: where the egress canary shows NetworkPolicy enforced, a No network run's proxy pod now reaches only Wardyn. Its NetworkPolicy has no DNS rule and no route out of the cluster, and on a server Wardyn's internal address is pinned in the proxy pod's hosts file. A server without `WARDYN_K8S_CONTROL_PLANE_NAMESPACE` and `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` (the chart sets both) refuses No network runs. Under `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`, No network stays proxy-level, and the run's `run.dispatch` audit row says so.
+- A live egress edit of a No network run is refused with `409 egress_edit_no_network`, on every substrate.
 
 ### Fixed
 
@@ -78,6 +80,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - This release adds a database migration (0276, forward only). Once it has run, the previous release candidate will not start on that database, as the previous one did to the one before it, so going back needs a database restore. Take a database backup first.
 - Update the server first, then every laptop runner. A runner from this release answers busy to a copy back it is still running, which an older server reads as an error and answers by stopping the sandbox. Most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older behaviour.
+- Kubernetes: a No network run's proxy pod reaches Wardyn through a pod-selector NetworkPolicy peer behind a Service address. A CNI that matches NetworkPolicy before Service translation blocks it, and the run fails about a minute after it starts, with a hint that names this. Use a CNI that matches after translation.
+- Kubernetes: where the server's proxy image, or the runner, is older than 0.10.0-rc.18, that proxy never confirms the policy it loaded, so nothing waits for it. On such a CNI the run is then not failed about a minute after it starts. It is ended or marked lost when its run token lapses, about 65 minutes later, with the hint "run token lapsed: the control plane was unreachable past its renew window", which does not name the cause.
 
 ## [0.10.0-rc.19] — 2026-11-11
 

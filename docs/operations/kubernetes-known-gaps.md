@@ -22,7 +22,7 @@
 | Ground-truth sensor | Opt-in | `groundtruth.k8s.enabled` runs a DaemonSet that ties your Tetragon's events to runs ([`cmd/wardyn-tetragon-ingest`](../../cmd/wardyn-tetragon-ingest)). Off by default. | Wardyn ships no Tetragon and does not verify its events. Gaps: gVisor and Kata runs are invisible to host eBPF, and no live-Tetragon test exists yet. See [Ground truth on Kubernetes](kubernetes-ground-truth.md). |
 | A default-deny NetworkPolicy already in `k8s.runsNamespace` | Refused | wardynd refuses to boot, unless the canary pod ran and could not connect. | See [the egress canary](#the-egress-canary). |
 | NetworkPolicy stops being enforced after boot | Refused for new sandboxes | The canary re-runs every 10 minutes; the first check that shows egress through a deny-all policy refuses new sandboxes in that namespace. Running sandboxes keep running. | Fix the CNI; see [re-checks after boot](#re-checks-after-boot). |
-| The proxy's DNS rule covers only `kube-dns` pods in `kube-system` | Partial | The per-run proxy NetworkPolicy admits DNS to its address range (cloud-metadata address excluded) and to pods labelled `k8s-app=kube-dns` in `kube-system` ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). | GKE Cloud DNS, NodeLocal DNSCache on the host network and DNS outside `kube-system` (OpenShift) need an operator-supplied NetworkPolicy. |
+| The proxy's DNS rule covers only `kube-dns` pods in `kube-system` | Partial | The per-run proxy NetworkPolicy admits DNS to its address range (cloud-metadata address excluded) and to pods labelled `k8s-app=kube-dns` in `kube-system` ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). | GKE Cloud DNS, NodeLocal DNSCache on the host network and DNS outside `kube-system` (OpenShift) need an operator-supplied NetworkPolicy. A No network run's proxy has no DNS rule. |
 | `replicas` stays 1 unless `ha.enabled` is set | Partial | HA is supported on Kubernetes only. | See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks. With registered runners keep one replica: [what a second replica still hits](high-availability.md). |
 
 - In place of a revive, a run whose proxy is out of date is stopped and a new run started ([run lifetime](run-lifetime.md)).
@@ -32,7 +32,17 @@
 - At the proxy: every request from the sandbox is refused (`policy:no-network`), and the proxy opens no connection for it.
 - Proxy DNS: every query gets `REFUSED` and a `run.dns.query` row, except an `AAAA` for the proxy's own name, `wardyn-proxy`, which gets an empty answer and no row. The proxy's own calls to Wardyn go on: the request and DNS rows, approvals and the policy readback.
 - At the agent pod: its NetworkPolicy lets it reach only its proxy pod, the same for every run.
-- At the proxy pod: its NetworkPolicy is the same as any run's, DNS and every address but the cloud-metadata one. So No network is enforced by the proxy, not by the proxy pod's NetworkPolicy.
+- At the proxy pod, where the egress canary shows NetworkPolicy enforced and neither `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` nor `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` admitted the namespace: its NetworkPolicy allows egress only to Wardyn.
+- On a server that is wardynd's pods on the internal port, with Wardyn's internal address pinned in the proxy pod's hosts file and no DNS rule. On a runner it is `wardyn-runnerd`'s relay and sink ports. The proxy pod stays: it is the run's only link to Wardyn.
+- Under either override, No network is enforced by the proxy only. The run's `run.dispatch` audit row says so: `no_network_isolation` is `proxy_only`, and `network_policy` is `netpol_not_enforced` or `netpol_ambient_acknowledged`.
+- `network_policy` is `netpol_not_proven` when the namespace's verdict changed during the create, and `not_proven` when a Kubernetes runner sent nothing, as one older than this release does. The row comes from a server of this release; a missing row proves nothing on an older runner.
+- The proxy pod reaches Wardyn through a pod-selector peer behind a Service address, so your CNI must match NetworkPolicy peers after Service translation. On one that matches before, the run fails about a minute after it starts.
+- That failure says the proxy did not confirm the policy it loaded and names this cause, and its `run.policy.unconfirmed` audit row has reason `deadline`. Use a CNI that matches after translation. Wardyn's Kubernetes conformance suite checks this on Calico.
+- NetworkPolicy allows add up. Another policy in the runs namespace, or a cluster-wide policy your CNI applies, that selects the proxy pod and allows more widens it. Keep such policies off pods labelled `wardyn.managed=true`.
+- On a server, Wardyn's internal address must resolve to exactly one IP from wardynd's pod. A dual-stack Service with two is refused, and the run does not start.
+- A No network run on a server without `WARDYN_K8S_CONTROL_PLANE_NAMESPACE` and `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` is refused too. The chart sets both.
+- A run on a Kubernetes runner older than this release keeps the proxy-level guarantee only.
+- A live egress edit of a No network run is refused with `409 egress_edit_no_network`, on every substrate: it has nothing to narrow.
 
 ## The agent-sandbox backend
 

@@ -20,6 +20,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -499,6 +501,153 @@ func TestReadback_NoReportByTheDeadlineStopsTheProxy(t *testing.T) {
 	}
 	if len(f.audit.eventsFor(f.run.ID, "run.policy.enforced")) != 0 {
 		t.Error("a late report must confirm nothing")
+	}
+}
+
+// seedFailedStart records the run's start of generation gen as failed at its deadline: answered with a hash,
+// and either never reported (reported "") or reported with a different hash.
+func (f *readbackFixture) seedFailedStart(gen int, reported string) {
+	f.rb.pmu.Lock()
+	defer f.rb.pmu.Unlock()
+	f.rb.starts[f.run.ID] = map[int]*store.ProxyStart{gen: {RunID: f.run.ID, Generation: gen,
+		State: types.ProxyStartFailed, ExpectedSHA256: "aa", ReportedSHA256: reported}}
+	if gen > 1 {
+		f.rb.gmu.Lock()
+		f.rb.state.Generations = []types.PolicyGeneration{{Generation: 1}, {Generation: gen}}
+		f.rb.gmu.Unlock()
+	}
+}
+
+// A No network run's first proxy start that never reported, on Kubernetes (the k8s target, a driver that
+// cannot revive), names the CNI cause and is ended, never kept lost. Every other run keeps today's handling:
+// a Docker run that misses the deadline is kept lost, a run with another preset, a start that reported a
+// different hash, a later generation and an in-place narrowing keep today's words.
+// Catches the CNI case left silent, and the change reaching other substrates, other failures, other runs or
+// later starts.
+func TestReadback_NoNetworkFirstStartNamesTheCNI(t *testing.T) {
+	noNetwork := &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Name: "No network", Scope: types.WallPresetScopeBuiltin}
+	other := &types.WallPresetOnRun{ID: "other", Name: "Other", Scope: types.WallPresetScopeBuiltin}
+	plain := unconfirmedPolicyHint
+	cni := unconfirmedPolicyHint + unconfirmedNoNetworkCause
+	const kept = "kept lost"
+	for _, tc := range []struct {
+		name        string
+		target      string // the server's runner target
+		reviver     bool   // the driver is a runner.ProxyReviver (Docker)
+		preset      *types.WallPresetOnRun
+		interactive bool
+		starting    bool
+		gen         int
+		reported    string
+		narrowed    bool
+		want        string // kept, or the failure hint the run ends with
+	}{
+		{"Kubernetes, interactive", "k8s", false, noNetwork, true, false, 1, "", false, cni},
+		{"Kubernetes, background", "k8s", false, noNetwork, false, false, 1, "", false, cni},
+		{"Kubernetes, still starting", "k8s", false, noNetwork, true, true, 1, "", false, cni},
+		{"Docker, interactive", "docker", true, noNetwork, true, false, 1, "", false, kept},
+		{"Docker, background", "docker", true, noNetwork, false, false, 1, "", false, plain},
+		{"Docker, still starting", "docker", true, noNetwork, true, true, 1, "", false, plain},
+		{"another preset, interactive", "k8s", false, other, true, false, 1, "", false, kept},
+		{"another preset, background", "k8s", false, other, false, false, 1, "", false, plain},
+		{"another preset, still starting", "k8s", false, other, true, true, 1, "", false, plain},
+		{"a reported hash that differs, interactive", "k8s", false, noNetwork, true, false, 1, "bb", false, kept},
+		{"a reported hash that differs, background", "k8s", false, noNetwork, false, false, 1, "bb", false, plain},
+		{"generation 2, interactive", "k8s", false, noNetwork, true, false, 2, "", false, kept},
+		{"generation 2, background", "k8s", false, noNetwork, false, false, 2, "", false, plain},
+		{"an in-place narrowing keeps its words", "k8s", false, other, false, false, 2, "", true, unconfirmedNarrowedHint},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEgressEditFixture(t)
+			f.srv.cfg.RunnerTarget = tc.target
+			if !tc.reviver {
+				f.srv.cfg.Runner = f.lr // no runner.ProxyReviver, as the Kubernetes driver
+			}
+			f.st.run.WallPreset, f.st.run.Interactive = tc.preset, tc.interactive
+			if tc.starting {
+				f.st.state = types.RunStarting
+			}
+			f.seedFailedStart(tc.gen, tc.reported)
+			run, err := f.srv.cfg.Store.GetRun(context.Background(), f.st.run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if tc.narrowed {
+				ctx = withNarrowedStart(ctx)
+			}
+			if err := f.srv.stopUnconfirmedProxyAt(ctx, run, tc.gen); err != nil {
+				t.Fatalf("stopUnconfirmedProxyAt: %v", err)
+			}
+			lostAt, _ := f.st.lost()
+			if tc.want == kept {
+				if lostAt == nil || f.st.State() != types.RunRunning {
+					t.Errorf("state %s, lost %v; want the run kept lost, still RUNNING", f.st.State(), lostAt)
+				}
+				return
+			}
+			if f.st.State() != types.RunFailed || lostAt != nil {
+				t.Errorf("state %s, lost %v; want the run ended, not lost", f.st.State(), lostAt)
+			}
+			if got := f.st.FailureHint(); got != tc.want {
+				t.Errorf("failure hint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// seedRunnerCaps is a runner's last caps event as the server holds it.
+func seedRunnerCaps(t *testing.T, srv *Server, id uuid.UUID, caps runnerwire.Caps) {
+	t.Helper()
+	data, err := json.Marshal(caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := remote.New(id.String(), &capsTransport{online: true}, remote.Options{})
+	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	srv.runnerStreams.subsMu.Lock()
+	defer srv.runnerStreams.subsMu.Unlock()
+	if srv.runnerStreams.subs == nil {
+		srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	}
+	srv.runnerStreams.subs[id] = runnerEndpoint{sub: sub, link: &remote.Link{}}
+}
+
+// runOnKubernetes and runUnrevivable: the k8s target with a driver that cannot revive, and a runner whose last
+// caps say EndsUnkept, are Kubernetes and unrevivable; Docker, a runner without that cap and a runner whose
+// caps are not held are neither, so those runs keep today's handling.
+func TestRunOnKubernetes_ServerAndRunner(t *testing.T) {
+	srv := &Server{}
+	kube, docker, held := uuid.New(), uuid.New(), uuid.New()
+	seedRunnerCaps(t, srv, kube, runnerwire.Caps{EndsUnkept: true})
+	seedRunnerCaps(t, srv, docker, runnerwire.Caps{MachineName: "build-mac"})
+	for _, tc := range []struct {
+		name               string
+		target             string
+		reviver            bool
+		runnerID           *uuid.UUID
+		wantKube, wantUnrv bool
+	}{
+		{"server, Kubernetes driver", "k8s", false, nil, true, true},
+		{"server, Docker driver", "docker", true, nil, false, false},
+		{"runner that ends unkept", "docker", true, &kube, true, true},
+		{"runner that keeps its sandbox", "k8s", false, &docker, false, false},
+		{"runner with no caps held", "k8s", false, &held, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv.cfg.RunnerTarget = tc.target
+			srv.cfg.Runner = &lostRunner{}
+			if tc.reviver {
+				srv.cfg.Runner = &reviveRunner{lostRunner: &lostRunner{}}
+			}
+			run := types.AgentRun{RunnerID: tc.runnerID}
+			if got := srv.runOnKubernetes(run); got != tc.wantKube {
+				t.Errorf("runOnKubernetes = %v, want %v", got, tc.wantKube)
+			}
+			if got := srv.runUnrevivable(run); got != tc.wantUnrv {
+				t.Errorf("runUnrevivable = %v, want %v", got, tc.wantUnrv)
+			}
+		})
 	}
 }
 

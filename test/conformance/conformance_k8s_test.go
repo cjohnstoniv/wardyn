@@ -36,6 +36,7 @@ package conformance_test
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -83,6 +84,14 @@ func TestConformanceK8s(t *testing.T) {
 		Namespaces: []string{os.Getenv("WARDYN_K8S_NAMESPACE")},
 		ProxyImage: proxyImage,
 		Record:     true, // the production default; see the doc comment above
+		// A No network create is refused without a peer, and the suite's server-mode driver has no
+		// Wardyn to point at: its own namespace (the fallback is Config.withDefaults') and a label no
+		// Wardyn pod carries. The suite's control-plane URL is a loopback literal, so nothing is looked up
+		// or pinned, and no case here calls Wardyn.
+		ControlPlanePeer: &k8s.ControlPlanePeer{
+			Namespace: cmp.Or(os.Getenv("WARDYN_K8S_NAMESPACE"), "default"),
+			PodLabels: map[string]string{standInLabelKey: standInLabelValue},
+		},
 		// ConfinementRuntimes deliberately nil: this suite proves CC1 (the
 		// unconditional floor); CC2/CC3 need a RuntimeClass pin this
 		// throwaway conformance cluster does not provision (see A1's
@@ -147,6 +156,10 @@ func TestConformanceK8s(t *testing.T) {
 
 	t.Run("AgentCannotReachAnythingButTheProxy", func(t *testing.T) {
 		testAgentCannotReachAnythingButTheProxy(t, r, agentImage)
+	})
+
+	t.Run("NoNetworkProxyPodReachesOnlyWardyn", func(t *testing.T) {
+		testNoNetworkProxyPodReachesOnlyWardyn(t, r, agentImage)
 	})
 
 	t.Run("ClosedOffAfterTeardown", func(t *testing.T) {

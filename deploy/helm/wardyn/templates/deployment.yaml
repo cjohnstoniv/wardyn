@@ -708,6 +708,12 @@ spec:
             # refuses to boot on an http:// value that is not loopback.
             - name: WARDYN_CONTROL_PLANE_URL
               value: {{ printf "https://%s.%s.svc.%s:%d" (include "wardyn.fullname" .) .Release.Namespace (.Values.k8s.clusterDomain | default "cluster.local") $internalPort | quote }}
+            # A No network run's proxy pod may reach only these pods: wardynd's own, by the labels its
+            # own NetworkPolicy selects (run pods can carry extra labels, so the component label is part of it).
+            - name: WARDYN_K8S_CONTROL_PLANE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: WARDYN_K8S_CONTROL_PLANE_POD_LABELS
+              value: {{ $l := list }}{{ range $k, $v := (include "wardyn.selectorLabels" . | fromYaml) }}{{ $l = append $l (printf "%s=%s" $k $v) }}{{ end }}{{ $l = append $l "app.kubernetes.io/component=control-plane" }}{{ join "," $l | quote }}
             {{- end }}
             {{- if $ssh.enabled }}
             - name: WARDYN_SSH_LISTEN
