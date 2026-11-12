@@ -304,16 +304,19 @@ func (s *Server) outageEnd(ctx context.Context, run types.AgentRun) (lostEnd, er
 }
 
 // lostReadFailure is a stop's answer when a lost run's end could not be read: the cut's error when the cut
-// failed, else the read's error, wrapped. Neither runner.ErrEndUnsupported nor runner.ErrPendingOnRunner is
-// let through from the cut: the first would tear the run down through stopKeptRun, and a read that keeps failing
-// is retried by the lease sweep instead.
+// failed, else the read's error, wrapped. runner.ErrEndUnsupported from the cut is not let through (it would
+// tear the run down through stopKeptRun; a read that keeps failing is retried by the lease sweep instead), and
+// it wins if a cut error carries both. A cut queued for the runner (runner.ErrPendingOnRunner) is let through
+// beside the read's error, so the run is audited as pending on its runner, as it is when the end was read.
 func lostReadFailure(readErr, cutErr error) error {
 	wrapped := fmt.Errorf("read the lost run's end: %w", readErr)
 	switch {
 	case cutErr == nil:
 		return wrapped
-	case errors.Is(cutErr, runner.ErrEndUnsupported) || errors.Is(cutErr, runner.ErrPendingOnRunner):
+	case errors.Is(cutErr, runner.ErrEndUnsupported):
 		return fmt.Errorf("%w (its proxy stop answered: %v)", wrapped, cutErr)
+	case errors.Is(cutErr, runner.ErrPendingOnRunner):
+		return errors.Join(wrapped, cutErr)
 	}
 	return cutErr
 }

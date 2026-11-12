@@ -158,15 +158,16 @@ func TestStopLostSandbox_NoAnswerFromTheDatabase(t *testing.T) {
 	})
 }
 
-// A cut that fails answers with its own error when the read failed, and an unsupported or queued cut is not let
-// through as such (it would send the run to stopKeptRun); the read's error is the answer then.
+// A cut that fails answers with its own error when the read failed. An unsupported cut is not let through as
+// such (it would send the run to stopKeptRun); the read's error is the answer then. A cut queued for the runner
+// is let through beside the read's error, so the run is audited as pending on its runner.
 func TestStopLostSandbox_AReadErrorAndACutThatFails(t *testing.T) {
 	errRead, errCut := errors.New("database down"), errors.New("runner refused the cut")
 	for _, c := range []struct {
 		name    string
 		cut     error
 		wantCut bool // the cut's own error is the answer
-	}{{"cut fails", errCut, true}, {"cut unsupported", runner.ErrEndUnsupported, false}, {"cut queued", runner.ErrPendingOnRunner, false}} {
+	}{{"cut fails", errCut, true}, {"cut unsupported", runner.ErrEndUnsupported, false}} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newLostFixture(t)
 			run := oneClockRun(f, f.now.Add(time.Minute))
@@ -183,6 +184,18 @@ func TestStopLostSandbox_AReadErrorAndACutThatFails(t *testing.T) {
 			}
 		})
 	}
+	t.Run("cut queued", func(t *testing.T) {
+		f := newLostFixture(t)
+		run := oneClockRun(f, f.now.Add(time.Minute))
+		f.st.endsErr, f.lr.proxyErr = errRead, runner.ErrPendingOnRunner
+		err := f.srv.stopLostSandbox(context.Background(), run)
+		if !errors.Is(err, errRead) || !errors.Is(err, runner.ErrPendingOnRunner) || errors.Is(err, runner.ErrEndUnsupported) {
+			t.Errorf("err = %v; want the read's error and the queued cut, never an unsupported end", err)
+		}
+		if f.lr.endCount() != 0 || f.lr.proxyStopCount() != 1 {
+			t.Errorf("ends %d, proxy stops %d; want (0, 1)", f.lr.endCount(), f.lr.proxyStopCount())
+		}
+	})
 }
 
 // The generation path cuts first as well. A read that fails: "stop@3" and no "end@3", the read's error. No
@@ -242,6 +255,7 @@ func TestLoseRunStopped_AnUnknownEndStillCutsTheProxyWithEveryEndHoldTaken(t *te
 			f := newLostFixture(t)
 			run := oneClockRun(f, f.now.Add(time.Minute))
 			run.LostAt, run.LostReason = nil, ""
+			f.ls.lapsed = true // a token-lapse visit: the mark is refused otherwise
 			f.lr.endErr = runner.ErrEndUnsupported
 			takeEndHolds(t, f.srv, maxEndHolds)
 			if noReader {
