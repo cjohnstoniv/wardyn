@@ -76,6 +76,7 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/wardyn/copy/run-service.test.ts"]=5 # injected clock only: agoText and serviceBadge read a fixed now passed in, never the wall clock
   ["ui/src/app/components/screens/approvals-lists.test.tsx"]=4 # display only: two decided rows' requested and decided times
   ["ui/src/app/components/screens/permissions.test.tsx"]=1 # display only: a deactivated person's deactivated_at
+  ["ui/src/app/components/screens/run-detail/widgets/identity-computer-folder.test.tsx"]=2 # display only: a give-up deadline rendered in three time zones, never compared to the clock
   ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
   ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=24 # passthrough only: audit rows' time, a gap's start/end, a playback's started_at (also in the failed action-feed case) and the stopped-at time read from it, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
