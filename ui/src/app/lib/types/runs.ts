@@ -636,6 +636,11 @@ export interface RunComputerFolder {
   error?: string;
   seed?: RunFolderPass;
   back?: RunFolderPass;
+  // The fate of the changes not yet back; each is absent while the run is live or when the server cannot tell.
+  fate?: "retained" | "given_up" | "complete";
+  sandbox_copy?: "kept" | "deleted";
+  last_report?: { unsynced: number | null; paths?: string[]; paths_more?: number; at: string };
+  give_up_at?: string;
 }
 
 // One pass as the runner counted it (types.FolderPassRecord).
@@ -645,6 +650,12 @@ export interface RunFolderPass {
   bytes: number;
   refused: { path: string; reason: string }[];
   error?: string;
+  // Set once the sandbox's keep ended with changes not yet back; given_up_audited is internal bookkeeping, sent as is.
+  given_up_at?: string;
+  given_up_count?: number;
+  given_up_paths?: string[];
+  given_up_paths_more?: number;
+  given_up_audited?: boolean;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
