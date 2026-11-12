@@ -276,6 +276,15 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 	return nil
 }
 
+// forcedResumeRowWritten holds, per server and run, the retry's resumed row this process has written. In
+// memory only, like teardownRowsWritten: a restart writes its own, which is the case it reports.
+var forcedResumeRowWritten sync.Map
+
+type forcedResumeKey struct {
+	srv *Server
+	run uuid.UUID
+}
+
 // retryForcedStop retries one marked run's sandbox stop. It never takes a Status probe for a stopped sandbox: a
 // Docker agent that was only ended is exited and still present, and still holds the run's files and its network.
 // The stop itself is the check for a sandbox that is gone, because Docker and Kubernetes answer a stop of a
@@ -297,6 +306,20 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		slog.WarnContext(ctx, "wardynd: reading a forced stop's run failed; the next tick retries",
 			slog.String("run_id", m.RunID.String()), slog.Any("err", err))
 		return
+	}
+	// A forced end whose process died between its claim and its tail left the run terminal with its
+	// approvals pending and no end row. The retry makes up both: the cancel moves only pending rows, so
+	// repeating it on every visit is harmless, and the row is written on the first visit this process makes.
+	_ = s.cancelRunApprovals(ctx, run.ID)
+	if _, seen := forcedResumeRowWritten.LoadOrStore(forcedResumeKey{s, run.ID}, struct{}{}); !seen {
+		action := "run.lost"
+		if run.LostReason == types.LostEnded {
+			action = "run.ended"
+		}
+		settleAfterTeardown(ctx, func(sctx context.Context) {
+			s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
+				mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "forced": true, "resumed": true})))
+		})
 	}
 	if run.SandboxRef == "" || s.cfg.Runner == nil {
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
