@@ -266,7 +266,7 @@ func TestPG_ListTerminalSandboxPage_Keyset(t *testing.T) {
 }
 
 // TestPG_ContainmentDueMatchesGo: store.ContainmentDueSQL is COALESCE(EndedAt, UpdatedAt) plus
-// store.ContainmentLag, the value api.containmentDue computes for the same row.
+// store.ContainmentLag, the value the test computes for the same row.
 func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()

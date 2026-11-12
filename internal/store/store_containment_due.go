@@ -10,5 +10,6 @@ import "time"
 // never the reverse.
 const ContainmentLag = 6 * time.Minute
 
-// ContainmentDueSQL is the store's SQL for the api's containmentDue; change both together.
+// ContainmentDueSQL is when the containment loop takes an ended run: its end, COALESCE(ended_at, updated_at),
+// plus ContainmentLag.
 const ContainmentDueSQL = "(COALESCE(ended_at, updated_at) + interval '6 minutes')"

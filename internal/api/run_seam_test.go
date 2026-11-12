@@ -337,27 +337,6 @@ func TestCopyBackCut_Table(t *testing.T) {
 	}
 }
 
-func TestContainmentDue_TerminalOnly(t *testing.T) {
-	t0 := time.Now().UTC().Truncate(time.Second)
-	u := t0.Add(-time.Hour)
-	capAt := t0.Add(-2 * time.Hour)
-	for name, tc := range map[string]struct {
-		run  types.AgentRun
-		want time.Time
-		ok   bool
-	}{
-		"running":                     {types.AgentRun{State: types.RunRunning, UpdatedAt: u}, time.Time{}, false},
-		"ended at t":                  {types.AgentRun{State: types.RunFailed, EndedAt: &t0, UpdatedAt: u}, t0.Add(6 * time.Minute), true},
-		"ended_at null":               {types.AgentRun{State: types.RunFailed, UpdatedAt: u}, u.Add(6 * time.Minute), true},
-		"lifetime cap before the end": {types.AgentRun{State: types.RunFailed, EndedAt: &t0, UpdatedAt: u, LifetimeCapAt: &capAt}, t0.Add(6 * time.Minute), true},
-	} {
-		got, ok := containmentDue(tc.run)
-		if ok != tc.ok || !got.Equal(tc.want) {
-			t.Errorf("%s: containmentDue = %v, %v; want %v, %v", name, got, ok, tc.want, tc.ok)
-		}
-	}
-}
-
 func TestLockLost_NoHoldIsNotLost(t *testing.T) {
 	if lockLost(context.Background()) {
 		t.Error("a ctx with no hold reads as lost")
