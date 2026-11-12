@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,38 +131,73 @@ func proxyAnswer(t *testing.T, r runner.Runner, ref, host string) string {
 	return strings.ToLower(string(out))
 }
 
-// holdConnection holds a connection from the agent to its proxy, and returns a channel that closes when
-// the connection is gone.
-func holdConnection(t *testing.T, r runner.Runner, ref string) <-chan struct{} {
+// holdConnection holds a connection from the agent to its proxy. gone closes on heldScript's first gone=
+// line, and failed on its first observer-error= line. The end of the stream closes neither, so it never
+// passes for a close. Every line the script printed is logged at cleanup.
+func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	t.Cleanup(cancel)
 	sess, err := r.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", heldScript}})
 	if err != nil {
+		cancel()
 		t.Fatalf("ExecStream (hold a connection to the proxy): %v", err)
 	}
 	go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	if sess.Stdin != nil {
 		_ = sess.Stdin.Close()
 	}
-	held, closed := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var lines []string
+	held, goneCh, failedCh, ended := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
-		defer close(closed)
+		defer close(ended)
+		var sawHeld, sawGone, sawFailed bool
 		sc := bufio.NewScanner(sess.Stdout)
 		for sc.Scan() {
-			if strings.TrimSpace(sc.Text()) == "held=1" {
+			line := strings.TrimSpace(sc.Text())
+			mu.Lock()
+			lines = append(lines, line)
+			mu.Unlock()
+			switch {
+			case line == "held=1" && !sawHeld:
+				sawHeld = true
 				close(held)
+			case strings.HasPrefix(line, "gone=") && !sawGone:
+				sawGone = true
+				close(goneCh)
+			case strings.HasPrefix(line, "observer-error=") && !sawFailed:
+				sawFailed = true
+				close(failedCh)
 			}
 		}
 	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-ended:
+		case <-time.After(5 * time.Second):
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for _, l := range lines {
+			t.Logf("held-connection observer: %s", l)
+		}
+		select {
+		case <-failedCh:
+			t.Error("the held-connection observer failed (its lines are above)")
+		default:
+		}
+	})
 	select {
 	case <-held:
-	case <-closed:
+	case <-failedCh:
+		t.Fatal("the held-connection observer failed before the connection was held (its lines are logged below)")
+	case <-ended:
 		t.Fatal("the connection from the agent to its proxy did not stay up for 2 s: an environment problem, not a verdict")
 	case <-time.After(time.Minute):
 		t.Fatal("the held-connection script never reported: an environment problem, not a verdict")
 	}
-	return closed
+	return goneCh, failedCh
 }
 
 func narrower(t *testing.T, r runner.Runner) runner.ProxyNarrower {
@@ -187,7 +223,7 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 	uid, ip, version := s.pod.UID, s.pod.Status.PodIP, secretVersion(t, cs, ns, s.spec.RunID)
 
 	// 2. A connection from the agent to the proxy, held open.
-	closed := holdConnection(t, r, s.sb.Ref)
+	closed, observerFailed := holdConnection(t, r, s.sb.Ref)
 
 	// 3. The proxy's state: the config it enforces is the one the driver handed it, with no list.
 	st, err := n.ProxyNarrowState(ctx, s.sb.Ref)
@@ -204,7 +240,15 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 		t.Fatalf("probe = %+v; want the sandbox's config hash %s, base %s and no list", st, s.sb.ProxyConfigSHA256, wantBase)
 	}
 
-	// 4. Narrow it. The answer's hash is that of the launch config with the list.
+	// 4. Narrow it. The answer's hash is that of the launch config with the list. A connection already
+	// gone, or an observer already failed, before the narrowing is never a pass.
+	select {
+	case <-closed:
+		t.Fatal("held connection never held: the observer saw it go before the narrowing")
+	case <-observerFailed:
+		t.Fatal("the held-connection observer failed before the narrowing")
+	default:
+	}
 	after, err := n.NarrowProxy(ctx, s.sb.Ref, []string{narrowedHost})
 	t.Logf("narrow exec: answer=%+v err=%v", after, err)
 	if err != nil {

@@ -157,11 +157,40 @@ func TestConformanceK8s(t *testing.T) {
 	})
 }
 
-// heldScript holds a connection to the proxy and prints held=1 once it has stayed up for 2 s.
-const heldScript = `sleep 3600 | nc wardyn-proxy 3128 &
+// heldScript holds a connection to the proxy and prints held=1 once it has stayed up for 2 s. busybox nc
+// never exits while its stdin is open, so the script watches the agent's own socket table instead: it
+// finds the one ESTABLISHED socket to port 3128 (hex 0C38) and prints gone=<state> when that socket
+// leaves ESTABLISHED, or gone=absent when it leaves the table. A table it cannot read or parse prints
+// observer-error=<why> and stops, never gone=. HELD_PROC_NET stands in for /proc/net in a local check.
+const heldScript = `sleep 3600 | nc -v wardyn-proxy 3128 2>&1 &
 pid=$!
 sleep 2
-kill -0 "$pid" && echo held=1
+kill -0 "$pid" || { echo "observer-error=nc exited before 2 s"; exit 1; }
+net=${HELD_PROC_NET:-/proc/net}
+scan() {
+	for f in "$net/tcp" "$net/tcp6"; do
+		[ -r "$f" ] || { echo "observer-error=cannot read $f"; return 1; }
+	done
+	out=$(awk -v lp="$1" '$3 ~ /:0C38$/ { split($2, a, ":"); if ((lp == "" && $4 == "01") || (lp != "" && (a[2] "") == (lp ""))) { n++; p = a[2]; s = $4 } } END { print n + 0, p, s }' "$net/tcp" "$net/tcp6") || { echo "observer-error=awk exited $?"; return 1; }
+}
+scan "" || exit 1
+set -- $out
+[ "$1" = 1 ] || { echo "observer-error=held connection not identified: $1 ESTABLISHED sockets to port 3128"; exit 1; }
+lp=$2
+case $lp in [0-9A-F][0-9A-F][0-9A-F][0-9A-F]) ;; *) echo "observer-error=bad local port '$lp'"; exit 1 ;; esac
+echo "held-port=$lp"
+echo held=1
+while :; do
+	sleep 0.2 || { echo "observer-error=sleep 0.2 failed"; exit 1; }
+	scan "$lp" || exit 1
+	set -- $out
+	case "$1 $3" in
+	"0 ") echo gone=absent; break ;;
+	"1 01") ;;
+	"1 "[0-9A-F][0-9A-F]) echo "gone=$3"; break ;;
+	*) echo "observer-error=unexpected rows for local port $lp: $out"; exit 1 ;;
+	esac
+done
 wait`
 
 // closedOffBound is how long a held connection may outlive a teardown that has returned. A driver that
