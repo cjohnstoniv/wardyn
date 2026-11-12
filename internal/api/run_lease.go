@@ -444,12 +444,18 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 // this transition itself, mirroring casRunState, since it no longer routes
 // through it.
 //
-// It holds the run's lock across the transition and the tail, or does nothing: a run whose lock is held
-// publishes no end through it and starts no pass, and the next pass retries. A lock found held (not one that could
-// not be asked) keptEndHoldOffLimit past the run's due end is cut by forceKeptStop instead, which takes the
+// It holds the run's lock across the transition and the tail as an end hold (tryHoldRunEnd), or does nothing: a run
+// whose lock is held, or whose server has every end hold taken,
+// publishes no end through it and starts no pass, and the next pass retries. A busy refusal (a lock found held or
+// every end hold taken, not a lock that could not be asked) keptEndHoldOffLimit past the run's due end is cut by
+// forceKeptStop instead, which takes the
 // same terminal claim without the lock and runs the tail with no pass back.
 func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
-	lctx, unlock, ok, held := s.tryLockRunOpHeld(ctx, run.ID)
+	b := endHoldSweep
+	if run.MachineKind.IsMacOSVM() {
+		b += macOSVMTeardownBudget
+	}
+	lctx, unlock, ok, held := s.tryHoldRunEnd(ctx, run.ID, b)
 	if !ok {
 		if held {
 			s.forceKeptStop(ctx, leaser, run, terminal, action, data)

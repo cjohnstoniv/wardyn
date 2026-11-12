@@ -22,8 +22,8 @@ import (
 // there. Each B is the holder's own, and a macOS VM run's gets macOSVMTeardownBudget more (endHoldBudget),
 // which its sandbox stop alone can use.
 const (
-	endHoldSweep     = 60 * time.Second // a sweep's end: reconcile finalize, a lease end, a Mac-prep failure
-	endHoldDedicated = 3 * time.Minute  // the completion watcher and a person's bring-back
+	endHoldSweep     = 60 * time.Second // a sweep's end: reconcile finalize, a lease or kept run's end, a Mac-prep failure
+	endHoldDedicated = 3 * time.Minute  // the completion watcher, a person's bring-back and the tail owner
 	endHoldReaper    = 2 * time.Minute  // the idle and max-age stop (LockRunEnd)
 	// A runner's exit receipt holds for runnerExitTimeout: 30 s, plus a macOS VM's stop.
 )
@@ -105,6 +105,32 @@ func (s *Server) holdRunEnd(ctx context.Context, id uuid.UUID, b time.Duration) 
 			s.endHolds.release()
 		}
 	}, nil
+}
+
+// tryHoldRunEnd is holdRunEnd that gives up instead of waiting for the lock (tryLockRunOpHeld), for the sweeps that
+// only try. ok false with held true is a busy refusal: the lock found held, or every slot taken (a full semaphore
+// is busy, as holdRunEnd's refusal is); held false is a lock that could not be asked.
+func (s *Server) tryHoldRunEnd(ctx context.Context, id uuid.UUID, b time.Duration) (context.Context, func(), bool, bool) {
+	dl := time.Now().Add(b)
+	outer, nested := holdDeadline(ctx)
+	if nested {
+		dl = minTime(dl, outer)
+	} else if !s.endHolds.take() {
+		return ctx, nil, false, true
+	}
+	lctx, unlock, ok, held := s.tryLockRunOpHeld(ctx, id)
+	if !ok {
+		if !nested {
+			s.endHolds.release()
+		}
+		return ctx, nil, false, held
+	}
+	return withHoldDeadline(lctx, dl), func() {
+		unlock()
+		if !nested {
+			s.endHolds.release()
+		}
+	}, true, false
 }
 
 // endHoldBudget is base, plus macOSVMTeardownBudget for a macOS VM run.

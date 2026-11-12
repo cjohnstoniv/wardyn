@@ -420,10 +420,10 @@ func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (r
 	return run, st, note, next == step, true
 }
 
-// tailRun takes run id's lock, reads the run and its record again, and runs step's tail if the same step is
-// still due. A lock held elsewhere leaves the run for the next tick.
+// tailRun takes run id's lock as an end hold (tryHoldRunEnd), reads the run and its record again, and runs step's
+// tail if the same step is still due. A lock held elsewhere, or every end hold taken, leaves the run for the next tick.
 func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran bool) {
-	lctx, unlock, ok := s.tryLockRunOp(ctx, id)
+	lctx, unlock, ok, _ := s.tryHoldRunEnd(ctx, id, s.endHoldBudget(ctx, id, endHoldDedicated))
 	if !ok {
 		return false
 	}

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -457,4 +459,146 @@ func TestRevive_MaxAgeHasItsOwnReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// holdSeen records, for each StopSandbox, the end-hold deadline its ctx carries (zero for none).
+type holdSeen struct {
+	mu  sync.Mutex
+	dls []time.Time
+}
+
+func (h *holdSeen) see(ctx context.Context) {
+	dl, _ := holdDeadline(ctx)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dls = append(h.dls, dl)
+}
+
+func (h *holdSeen) calls() []time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.dls)
+}
+
+// holdSeeingLeaseRunner is the lease fixture's runner, recording each StopSandbox's hold.
+type holdSeeingLeaseRunner struct {
+	*leaseRunner
+	seen *holdSeen
+}
+
+func (r *holdSeeingLeaseRunner) StopSandbox(ctx context.Context, ref string) error {
+	r.seen.see(ctx)
+	return r.leaseRunner.StopSandbox(ctx, ref)
+}
+
+// holdSeeingSandbox is the pass fixture's sandbox runner, recording each StopSandbox's hold before the call.
+type holdSeeingSandbox struct {
+	*folderSandboxRunner
+	seen *holdSeen
+}
+
+func (r *holdSeeingSandbox) StopSandbox(ctx context.Context, ref string) error {
+	r.seen.see(ctx)
+	return r.folderSandboxRunner.StopSandbox(ctx, ref)
+}
+
+// A kept run's end (stopKeptRun) is an end hold for a sweep's budget: the stop's ctx carries a deadline 60 s from
+// the call, and the slot is given back; with every hold taken it is a busy refusal and ends nothing; and past its
+// hold (an outer hold already passed, which it re-enters) the terminal-effects guard reads the deadline and nothing
+// is stopped. Catches stopKeptRun's own tryLockRunOpHeld left in place.
+func TestEndHold_KeptRunEndIsAHold(t *testing.T) {
+	setup := func(t *testing.T) (*leaseFixture, *holdSeen) {
+		t.Helper()
+		f := newLeaseFixture(t, -time.Minute)
+		seen := &holdSeen{}
+		f.srv.cfg.Runner = &holdSeeingLeaseRunner{leaseRunner: f.rn, seen: seen}
+		return f, seen
+	}
+	t.Run("the hold is set", func(t *testing.T) {
+		f, seen := setup(t)
+		before := time.Now()
+		f.srv.stopKeptRun(context.Background(), f.st, f.run, types.RunStopped, "run.ended", nil)
+		after := time.Now()
+		dls := seen.calls()
+		if f.st.State() != types.RunStopped || len(dls) != 1 {
+			t.Fatalf("state %s, %d stops; want STOPPED and one stop", f.st.State(), len(dls))
+		}
+		if dls[0].Before(before.Add(endHoldSweep)) || dls[0].After(after.Add(endHoldSweep)) {
+			t.Errorf("the stop's hold deadline is %v from the call, want %v", dls[0].Sub(before), endHoldSweep)
+		}
+		if f.srv.endHolds.n != 0 {
+			t.Errorf("%d end holds taken after the end, want 0", f.srv.endHolds.n)
+		}
+	})
+	t.Run("every hold taken", func(t *testing.T) {
+		f, seen := setup(t)
+		takeEndHolds(t, f.srv, maxEndHolds)
+		f.srv.stopKeptRun(context.Background(), f.st, f.run, types.RunStopped, "run.ended", nil)
+		if f.st.State() != types.RunRunning || len(seen.calls()) != 0 {
+			t.Errorf("state %s, %d stops with every end hold taken; want RUNNING and none", f.st.State(), len(seen.calls()))
+		}
+	})
+	t.Run("the hold passed", func(t *testing.T) {
+		f, seen := setup(t)
+		ctx := withHoldDeadline(context.Background(), time.Now().Add(-time.Second))
+		f.srv.stopKeptRun(ctx, f.st, f.run, types.RunStopped, "run.ended", nil)
+		if n := len(seen.calls()); n != 0 {
+			t.Errorf("%d stops past the hold, want 0", n)
+		}
+	})
+}
+
+// The tail owner's run (tailRun) is an end hold for the dedicated budget: the stop after its pass back carries a
+// deadline 3 minutes from the call; with every hold taken it runs nothing; and past its hold (an outer hold
+// already passed, which it re-enters) the pass back's budget reads the deadline, so no pass is sent, and the
+// terminal-effects guard reads it, so nothing is stopped. Catches tailRun's own tryLockRunOp left in place.
+func TestEndHold_TailOwnerRunIsAHold(t *testing.T) {
+	setup := func(t *testing.T) (*passFixture, types.AgentRun, *holdSeen) {
+		t.Helper()
+		f := newPassFixture(t, 1, 0, &types.FolderResume{Unsynced: 1})
+		seen := &holdSeen{}
+		f.s.cfg.Runner = &holdSeeingSandbox{folderSandboxRunner: f.sb, seen: seen}
+		ds := f.cs.localFolderStore.dispatchTestStore
+		ds.mu.Lock()
+		ds.state, ds.run.SandboxRef = types.RunCompleted, "sbx"
+		ds.mu.Unlock()
+		run, err := ds.GetRun(context.Background(), f.run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f, run, seen
+	}
+	t.Run("the hold is set", func(t *testing.T) {
+		f, run, seen := setup(t)
+		before := time.Now()
+		f.s.tailRun(context.Background(), run.ID, tailFolder)
+		after := time.Now()
+		dls := seen.calls()
+		if len(dls) != 1 {
+			t.Fatalf("%d stops after the tail owner's pass back, want 1", len(dls))
+		}
+		if dls[0].Before(before.Add(endHoldDedicated)) || dls[0].After(after.Add(endHoldDedicated)) {
+			t.Errorf("the stop's hold deadline is %v from the call, want %v", dls[0].Sub(before), endHoldDedicated)
+		}
+		if f.s.endHolds.n != 0 {
+			t.Errorf("%d end holds taken after the tail, want 0", f.s.endHolds.n)
+		}
+	})
+	t.Run("every hold taken", func(t *testing.T) {
+		f, run, seen := setup(t)
+		takeEndHolds(t, f.s, maxEndHolds)
+		pass := passSeen(f.sb)
+		if f.s.tailRun(context.Background(), run.ID, tailFolder) || pass.Load() || len(seen.calls()) != 0 {
+			t.Errorf("with every end hold taken: pass %v, %d stops; want the run left for the next tick", pass.Load(), len(seen.calls()))
+		}
+	})
+	t.Run("the hold passed", func(t *testing.T) {
+		f, run, seen := setup(t)
+		pass := passSeen(f.sb)
+		ctx := withHoldDeadline(context.Background(), time.Now().Add(-time.Second))
+		f.s.tailRun(ctx, run.ID, tailFolder)
+		if pass.Load() || len(seen.calls()) != 0 {
+			t.Errorf("past the hold: pass %v, %d stops; want no pass sent and nothing stopped", pass.Load(), len(seen.calls()))
+		}
+	})
 }
