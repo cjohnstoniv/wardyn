@@ -78,13 +78,23 @@ describe("Folders from your computer", () => {
       expect(list).toHaveTextContent("README.md");
       expect(list).toHaveTextContent("src/app/main.ts");
       expect(screen.getByText(C.MORE("2"))).toBeInTheDocument();
-      expect(screen.getByText(C.KEPT_DEADLINE("12 Nov 2026, 14:30 UTC"))).toBeInTheDocument();
+      // The instant 2026-11-12T14:30Z shown in the viewer's own zone, with that zone's short name.
+      const wanted: Record<string, RegExp> = {
+        UTC: /02:30:00 PM UTC\b/,
+        "America/New_York": /09:30:00 AM EST\b/,
+        "Asia/Tokyo": /11:30:00 PM (GMT\+9|JST)\b/,
+      };
+      const para = screen.getByText(/^Wardyn may give up these changes and stop the sandbox after /);
+      expect(para.textContent).toMatch(/ or sooner if needed to cut its network access\.$/);
+      const zone = wanted[process.env.TZ ?? ""];
+      if (zone) expect(para.textContent).toMatch(zone);
+      else expect(para.textContent).toMatch(/\d{2}:30:00 [AP]M \S+, or/);
       expect(screen.getByText(C.KEEP_RUNNER_ONLINE("laptop-7f2"))).toBeInTheDocument();
       expect(screen.queryByText(C.MAY_BE_GONE)).toBeNull();
     });
 
     it("a give-up shows the count and its list", () => {
-      show("COMPLETED", { ...SYNCED, fate: "given_up", last_report: { unsynced: 2, paths: NAMES, at: AT } });
+      show("COMPLETED", { ...SYNCED, fate: "given_up", sandbox_copy: "deleted", last_report: { unsynced: 2, paths: NAMES, at: AT } });
       expect(screen.getByText(C.GIVEN_UP)).toBeInTheDocument();
       expect(screen.getByText(C.FILES("2"))).toBeInTheDocument();
       expect(screen.getByText(C.GAVE_UP_LIST)).toBeInTheDocument();
@@ -111,6 +121,27 @@ describe("Folders from your computer", () => {
       expect(screen.queryByText(C.DELETED)).toBeNull();
     });
 
+    it("a give-up with sandbox_copy omitted or unknown leads with the unconfirmed stop, keeping heading, count and list", () => {
+      for (const copy of [undefined, "future_value"]) {
+        show("COMPLETED", { ...SYNCED, fate: "given_up", sandbox_copy: copy as "kept", last_report: REPORT });
+        expect(screen.getByText(C.GIVEN_UP)).toBeInTheDocument();
+        expect(screen.getByText(C.FILES("4"))).toBeInTheDocument();
+        expect(screen.getByText(C.STOP_UNCONFIRMED)).toBeInTheDocument();
+        expect(screen.getByRole("list", { name: C.PATHS_LABEL })).toHaveTextContent("README.md");
+        expect(screen.queryByText(C.GAVE_UP_LIST)).toBeNull();
+        expect(screen.queryByText(C.GAVE_UP_NO_LIST)).toBeNull();
+        expect(screen.queryByText(C.DELETED)).toBeNull();
+        cleanup();
+      }
+    });
+
+    it("an unknown fate falls back to the neutral line and draws no fate rows", () => {
+      show("COMPLETED", { ...SYNCED, fate: "future_value" as "retained", last_report: REPORT });
+      expect(screen.getByText(C.MAY_BE_GONE)).toBeInTheDocument();
+      expect(screen.queryByText(C.NOT_BACK)).toBeNull();
+      expect(screen.queryByText(C.GIVEN_UP)).toBeNull();
+    });
+
     it("a count with no names shows the count and no list", () => {
       show("COMPLETED", { ...SYNCED, fate: "retained", last_report: { unsynced: 7, at: AT }, give_up_at: GIVE_UP_AT });
       expect(screen.getByText(C.FILES("7"))).toBeInTheDocument();
@@ -123,7 +154,7 @@ describe("Folders from your computer", () => {
       expect(screen.getByText(C.NOT_COUNTED)).toBeInTheDocument();
       expect(screen.queryByText(C.FILES("0"))).toBeNull();
       cleanup();
-      show("COMPLETED", { ...SYNCED, fate: "given_up" });
+      show("COMPLETED", { ...SYNCED, fate: "given_up", sandbox_copy: "deleted" });
       expect(screen.getByText(C.NOT_COUNTED)).toBeInTheDocument();
       expect(screen.getByText(C.GAVE_UP_NO_LIST)).toBeInTheDocument();
       expect(screen.queryByText(C.FILES("0"))).toBeNull();
