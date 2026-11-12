@@ -37,8 +37,9 @@ type TerminalSandboxRow struct {
 	ContainmentErrorAt *time.Time
 	ForcedStopAt       *time.Time
 	FencedAt           *time.Time
-	// Due and CapPassed are the database's own answers, set only by ListTerminalSandboxPageDue: the run is past
-	// ContainmentDueSQL, and its end plus the keep it was asked about has passed, both against now().
+	// Due and CapPassed are the database's own answers: the run is past ContainmentDueSQL, and its end plus the
+	// keep it was asked about has passed, both against now(). Due is set by both listings; CapPassed only by
+	// ListTerminalSandboxPageDue (a plain listing was asked about no keep). A zero Due always means not due.
 	Due       bool
 	CapPassed bool
 }
@@ -86,7 +87,7 @@ var _ RunContainer = PG{}
 func (s PG) ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool) ([]TerminalSandboxRow, *TerminalSandboxCursor, error) {
 	rows, next, err := s.listTerminalSandboxPage(ctx, after, limit, unfencedOnly, 0)
 	for i := range rows {
-		rows[i].Due, rows[i].CapPassed = false, false // not asked for
+		rows[i].CapPassed = false // no keep was asked about; Due is the same SQL as the Due listing's, never a default false
 	}
 	return rows, next, err
 }

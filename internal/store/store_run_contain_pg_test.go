@@ -204,8 +204,8 @@ func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 
 // TestPG_TerminalDueFlags: ListTerminalSandboxPageDue and RunDueFlags answer Due (the containment due has passed)
 // and CapPassed (the end plus keep has passed) against the database's now(), the same for the page and the single
-// read; a run with no ended_at is timed from updated_at; the plain listing leaves both false; an unknown run is
-// ErrNotFound. Catches: either flag decided from a caller's clock, and the two reads disagreeing.
+// read; a run with no ended_at is timed from updated_at; the plain listing fills Due the same way and leaves
+// CapPassed false; an unknown run is ErrNotFound. Catches: either flag decided from a caller's clock, and the two reads disagreeing.
 func TestPG_TerminalDueFlags(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -271,11 +271,53 @@ func TestPG_TerminalDueFlags(t *testing.T) {
 		if err != nil || one.Due != c.due || one.CapPassed != c.past {
 			t.Errorf("%s: RunDueFlags = %+v, %v; want due %v, cap passed %v", name, one, err, c.due, c.past)
 		}
-		if got := plain[c.id]; got.ID != c.id || got.Due || got.CapPassed {
-			t.Errorf("%s: the plain listing answers due %v, cap passed %v; want the flags left false", name, got.Due, got.CapPassed)
+		if got := plain[c.id]; got.ID != c.id || got.Due != c.due || got.CapPassed {
+			t.Errorf("%s: the plain listing answers due %v, cap passed %v; want due %v and cap passed left false", name, got.Due, got.CapPassed, c.due)
 		}
 	}
 	if _, err := pg.RunDueFlags(ctx, uuid.New(), keep); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("an unknown run: %v; want store.ErrNotFound", err)
+	}
+}
+
+// TestPG_PlainListingFillsDue: the plain ListTerminalSandboxPage answers Due from the same SQL as the Due listing,
+// for a row 30 s short of its containment due and one 30 s past it, both seeded with the database's now(), so a
+// zero Due means not due. Catches: the plain listing leaving Due at its default.
+func TestPG_PlainListingFillsDue(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	place := func(offset time.Duration) uuid.UUID {
+		t.Helper()
+		r := newRun(types.RunFailed)
+		r.SandboxRef = "sbx-" + r.ID.String()
+		r = persistRun(t, ctx, pool, r)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = $2, ended_at = now() - make_interval(secs => $3) WHERE id = $1`,
+			r.ID, r.SandboxRef, (store.ContainmentLag + offset).Seconds()); err != nil {
+			t.Fatalf("place run: %v", err)
+		}
+		return r.ID
+	}
+	short, past := place(-30*time.Second), place(30*time.Second)
+	got := map[uuid.UUID]bool{}
+	var cur *store.TerminalSandboxCursor
+	for {
+		page, next, err := pg.ListTerminalSandboxPage(ctx, cur, 500, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range page {
+			got[r.ID] = r.Due
+		}
+		if next == nil {
+			break
+		}
+		cur = next
+	}
+	if due, ok := got[short]; !ok || due {
+		t.Errorf("a row 30 s short of its due: listed %v, Due %v; want listed and not due", ok, due)
+	}
+	if due, ok := got[past]; !ok || !due {
+		t.Errorf("a row 30 s past its due: listed %v, Due %v; want listed and due", ok, due)
 	}
 }
