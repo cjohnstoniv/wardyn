@@ -75,13 +75,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If a run's lost mark cannot be written after its database lock was lost, the server tries to stop its proxy anyway, even when a newer revive has taken the run over.
 - On Docker, a late network edit can remove the proxy that a newer edit of the same run just started. The run then has no network (it never widens), but its policy reads as enforced until a background sweep ends the run, within about 66 minutes. Start a new run.
 - On Kubernetes, a narrowed proxy restarts on its launch policy if its deny list is lost: a node's disk wiped under the pod, or someone with exec rights deleting it. It allows the denied hosts until the next edit. One restarted over about 30 minutes in cannot renew, so its run ends within 65 minutes of its last renewal.
+- Kubernetes: a No network run's proxy pod reaches Wardyn through a pod-selector NetworkPolicy peer behind a Service address. A CNI that matches NetworkPolicy before Service translation blocks it, and the run fails about a minute after it starts, with a hint that names this. Use a CNI that matches after translation.
+- Kubernetes: where the server's proxy image, or the runner, is older than 0.10.0-rc.18, that proxy never confirms the policy it loaded, so nothing waits for it and the failure above does not happen. On such a CNI the run goes on until its run token lapses, about 65 minutes later, and the older token-lapse handling then ends it or marks it lost, without the hint that names this cause. A run that cannot be kept gets only the hint "run token lapsed: the control plane was unreachable past its renew window", which does not name the cause.
 
 ### Before you upgrade
 
 - This release adds a database migration (0276, forward only). Once it has run, the previous release candidate will not start on that database, as the previous one did to the one before it, so going back needs a database restore. Take a database backup first.
 - Update the server first, then every laptop runner. A runner from this release answers busy to a copy back it is still running, which an older server reads as an error and answers by stopping the sandbox. Most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older behaviour.
-- Kubernetes: a No network run's proxy pod reaches Wardyn through a pod-selector NetworkPolicy peer behind a Service address. A CNI that matches NetworkPolicy before Service translation blocks it, and the run fails about a minute after it starts, with a hint that names this. Use a CNI that matches after translation.
-- Kubernetes: where the server's proxy image, or the runner, is older than 0.10.0-rc.18, that proxy never confirms the policy it loaded, so nothing waits for it. On such a CNI the run is then not failed about a minute after it starts. It is ended or marked lost when its run token lapses, about 65 minutes later, with the hint "run token lapsed: the control plane was unreachable past its renew window", which does not name the cause.
 
 ## [0.10.0-rc.19] — 2026-11-11
 

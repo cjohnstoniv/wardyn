@@ -20,7 +20,9 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -518,6 +520,77 @@ func (f *readbackFixture) seedFailedStart(gen int, reported string) {
 	}
 }
 
+// reviveAnswer is what a substrate under the orchestrator says to CanReplaceProxy.
+type reviveAnswer int
+
+const (
+	noReviver   reviveAnswer = iota // the substrate is no runner.ProxyReviver, as the Kubernetes driver
+	canRevive                       // CanReplaceProxy answers nil, as the Docker driver
+	unsupported                     // CanReplaceProxy answers runner.ErrReviveUnsupported
+	unreadable                      // CanReplaceProxy answers an error that says nothing about reviving
+)
+
+// unrevivableSubstrate is a lostRunner as one substrate of the orchestrator: no runner.ProxyReviver.
+type unrevivableSubstrate struct {
+	*lostRunner
+	name string
+}
+
+func (s unrevivableSubstrate) Name() string { return s.name }
+
+func (unrevivableSubstrate) Classes(context.Context) (substrate.ClassSupport, error) {
+	return substrate.ClassSupport{}, nil
+}
+
+// reviveSubstrate is a reviveRunner as one substrate of the orchestrator, answering CanReplaceProxy with answer.
+type reviveSubstrate struct {
+	*reviveRunner
+	name   string
+	answer error
+}
+
+func (s reviveSubstrate) Name() string { return s.name }
+
+func (reviveSubstrate) Classes(context.Context) (substrate.ClassSupport, error) {
+	return substrate.ClassSupport{}, nil
+}
+
+func (s reviveSubstrate) CanReplaceProxy(context.Context, string) error { return s.answer }
+
+// substrateRefNames is an orchestrator.RefStore holding the substrate name of each ref.
+type substrateRefNames map[string]string
+
+func (m substrateRefNames) PutRef(_ context.Context, ref, name string) error {
+	m[ref] = name
+	return nil
+}
+func (m substrateRefNames) DeleteRef(_ context.Context, ref string) error { delete(m, ref); return nil }
+func (m substrateRefNames) GetRef(_ context.Context, ref string) (string, bool, error) {
+	name, ok := m[ref]
+	return name, ok, nil
+}
+
+// orchestrated is the runner a deployment holds: an orchestrator around the run's substrate, as cmd/wardynd
+// builds it, never a bare fake, which no deployment has. The substrate is called name and answers
+// CanReplaceProxy as ans says. With beside set, a Docker substrate that can revive stands next to it and the
+// ref store names the run's substrate, so a ref routed to the wrong one reads the Docker answer.
+func (f *readbackFixture) orchestrated(name string, ans reviveAnswer, beside bool) *orchestrator.Orchestrator {
+	var own substrate.Substrate = unrevivableSubstrate{lostRunner: f.lr, name: name}
+	switch ans {
+	case canRevive:
+		own = reviveSubstrate{reviveRunner: f.rr, name: name}
+	case unsupported:
+		own = reviveSubstrate{reviveRunner: f.rr, name: name, answer: runner.ErrReviveUnsupported}
+	case unreadable:
+		own = reviveSubstrate{reviveRunner: f.rr, name: name, answer: errors.New("the substrate cannot be read")}
+	}
+	if !beside {
+		return orchestrator.New(own)
+	}
+	docker := reviveSubstrate{reviveRunner: &reviveRunner{lostRunner: f.lr}, name: "docker"}
+	return orchestrator.New(own, docker).WithRefStore(substrateRefNames{f.st.run.SandboxRef: name})
+}
+
 // A No network run's first proxy start that never reported, on Kubernetes (the k8s target, a driver that
 // cannot revive), names the CNI cause and is ended, never kept lost. Every other run keeps today's handling:
 // a Docker run that misses the deadline is kept lost, a run with another preset, a start that reported a
@@ -532,8 +605,8 @@ func TestReadback_NoNetworkFirstStartNamesTheCNI(t *testing.T) {
 	const kept = "kept lost"
 	for _, tc := range []struct {
 		name        string
-		target      string // the server's runner target
-		reviver     bool   // the driver is a runner.ProxyReviver (Docker)
+		target      string       // the server's runner target
+		sub         reviveAnswer // how the run's substrate answers CanReplaceProxy
 		preset      *types.WallPresetOnRun
 		interactive bool
 		starting    bool
@@ -542,27 +615,25 @@ func TestReadback_NoNetworkFirstStartNamesTheCNI(t *testing.T) {
 		narrowed    bool
 		want        string // kept, or the failure hint the run ends with
 	}{
-		{"Kubernetes, interactive", "k8s", false, noNetwork, true, false, 1, "", false, cni},
-		{"Kubernetes, background", "k8s", false, noNetwork, false, false, 1, "", false, cni},
-		{"Kubernetes, still starting", "k8s", false, noNetwork, true, true, 1, "", false, cni},
-		{"Docker, interactive", "docker", true, noNetwork, true, false, 1, "", false, kept},
-		{"Docker, background", "docker", true, noNetwork, false, false, 1, "", false, plain},
-		{"Docker, still starting", "docker", true, noNetwork, true, true, 1, "", false, plain},
-		{"another preset, interactive", "k8s", false, other, true, false, 1, "", false, kept},
-		{"another preset, background", "k8s", false, other, false, false, 1, "", false, plain},
-		{"another preset, still starting", "k8s", false, other, true, true, 1, "", false, plain},
-		{"a reported hash that differs, interactive", "k8s", false, noNetwork, true, false, 1, "bb", false, kept},
-		{"a reported hash that differs, background", "k8s", false, noNetwork, false, false, 1, "bb", false, plain},
-		{"generation 2, interactive", "k8s", false, noNetwork, true, false, 2, "", false, kept},
-		{"generation 2, background", "k8s", false, noNetwork, false, false, 2, "", false, plain},
-		{"an in-place narrowing keeps its words", "k8s", false, other, false, false, 2, "", true, unconfirmedNarrowedHint},
+		{"Kubernetes, interactive", "k8s", noReviver, noNetwork, true, false, 1, "", false, cni},
+		{"Kubernetes, background", "k8s", noReviver, noNetwork, false, false, 1, "", false, cni},
+		{"Kubernetes, still starting", "k8s", noReviver, noNetwork, true, true, 1, "", false, cni},
+		{"Docker, interactive", "docker", canRevive, noNetwork, true, false, 1, "", false, kept},
+		{"Docker, background", "docker", canRevive, noNetwork, false, false, 1, "", false, plain},
+		{"Docker, still starting", "docker", canRevive, noNetwork, true, true, 1, "", false, plain},
+		{"another preset, interactive", "k8s", noReviver, other, true, false, 1, "", false, kept},
+		{"another preset, background", "k8s", noReviver, other, false, false, 1, "", false, plain},
+		{"another preset, still starting", "k8s", noReviver, other, true, true, 1, "", false, plain},
+		{"a reported hash that differs, interactive", "k8s", noReviver, noNetwork, true, false, 1, "bb", false, kept},
+		{"a reported hash that differs, background", "k8s", noReviver, noNetwork, false, false, 1, "bb", false, plain},
+		{"generation 2, interactive", "k8s", noReviver, noNetwork, true, false, 2, "", false, kept},
+		{"generation 2, background", "k8s", noReviver, noNetwork, false, false, 2, "", false, plain},
+		{"an in-place narrowing keeps its words", "k8s", noReviver, other, false, false, 2, "", true, unconfirmedNarrowedHint},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newEgressEditFixture(t)
 			f.srv.cfg.RunnerTarget = tc.target
-			if !tc.reviver {
-				f.srv.cfg.Runner = f.lr // no runner.ProxyReviver, as the Kubernetes driver
-			}
+			f.srv.cfg.Runner = f.orchestrated(tc.target, tc.sub, false)
 			f.st.run.WallPreset, f.st.run.Interactive = tc.preset, tc.interactive
 			if tc.starting {
 				f.st.state = types.RunStarting
@@ -583,6 +654,9 @@ func TestReadback_NoNetworkFirstStartNamesTheCNI(t *testing.T) {
 			if tc.want == kept {
 				if lostAt == nil || f.st.State() != types.RunRunning {
 					t.Errorf("state %s, lost %v; want the run kept lost, still RUNNING", f.st.State(), lostAt)
+				}
+				if got := f.st.FailureHint(); got != "" {
+					t.Errorf("failure hint = %q, want none on a run kept lost", got)
 				}
 				return
 			}
@@ -613,39 +687,115 @@ func seedRunnerCaps(t *testing.T, srv *Server, id uuid.UUID, caps runnerwire.Cap
 	srv.runnerStreams.subs[id] = runnerEndpoint{sub: sub, link: &remote.Link{}}
 }
 
-// runOnKubernetes and runUnrevivable: the k8s target with a driver that cannot revive, and a runner whose last
-// caps say EndsUnkept, are Kubernetes and unrevivable; Docker, a runner without that cap and a runner whose
-// caps are not held are neither, so those runs keep today's handling.
+// runOnKubernetes and runUnrevivable: the k8s target says Kubernetes, and a server's run is unrevivable when its
+// own substrate, asked through the orchestrator every deployment holds, answers runner.ErrReviveUnsupported (or is
+// no runner.ProxyReviver); a runner whose last caps say EndsUnkept is both. Docker, an answer that is an error of
+// another kind, a runner without that cap and a runner whose caps are not held are not unrevivable, so those runs
+// keep today's handling.
 func TestRunOnKubernetes_ServerAndRunner(t *testing.T) {
 	srv := &Server{}
 	kube, docker, held := uuid.New(), uuid.New(), uuid.New()
 	seedRunnerCaps(t, srv, kube, runnerwire.Caps{EndsUnkept: true})
 	seedRunnerCaps(t, srv, docker, runnerwire.Caps{MachineName: "build-mac"})
+	f := &readbackFixture{reviveFixture: &reviveFixture{lostFixture: &lostFixture{lr: &lostRunner{}}, rr: &reviveRunner{lostRunner: &lostRunner{}}}}
 	for _, tc := range []struct {
 		name               string
 		target             string
-		reviver            bool
+		sub                reviveAnswer
 		runnerID           *uuid.UUID
 		wantKube, wantUnrv bool
 	}{
-		{"server, Kubernetes driver", "k8s", false, nil, true, true},
-		{"server, Docker driver", "docker", true, nil, false, false},
-		{"runner that ends unkept", "docker", true, &kube, true, true},
-		{"runner that keeps its sandbox", "k8s", false, &docker, false, false},
-		{"runner with no caps held", "k8s", false, &held, false, false},
+		{"server, Kubernetes driver", "k8s", noReviver, nil, true, true},
+		{"server, Kubernetes driver answering unsupported", "k8s", unsupported, nil, true, true},
+		{"server, Kubernetes driver answering another error", "k8s", unreadable, nil, true, false},
+		{"server, Docker driver", "docker", canRevive, nil, false, false},
+		{"runner that ends unkept", "docker", canRevive, &kube, true, true},
+		{"runner that keeps its sandbox", "k8s", noReviver, &docker, false, false},
+		{"runner with no caps held", "k8s", noReviver, &held, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv.cfg.RunnerTarget = tc.target
-			srv.cfg.Runner = &lostRunner{}
-			if tc.reviver {
-				srv.cfg.Runner = &reviveRunner{lostRunner: &lostRunner{}}
-			}
+			srv.cfg.Runner = f.orchestrated(tc.target, tc.sub, false)
 			run := types.AgentRun{RunnerID: tc.runnerID}
 			if got := srv.runOnKubernetes(run); got != tc.wantKube {
 				t.Errorf("runOnKubernetes = %v, want %v", got, tc.wantKube)
 			}
-			if got := srv.runUnrevivable(run); got != tc.wantUnrv {
+			if got := srv.runUnrevivable(context.Background(), run); got != tc.wantUnrv {
 				t.Errorf("runUnrevivable = %v, want %v", got, tc.wantUnrv)
+			}
+		})
+	}
+}
+
+// A server-mode No network run's first start that never reported is ended with the CNI hint when its own
+// substrate cannot replace a proxy, whatever else the orchestrator holds: on Kubernetes alone, whether the driver
+// is no ProxyReviver or answers unsupported, and on Kubernetes beside Docker, where the run's ref routes to the
+// Kubernetes substrate. A substrate whose answer is nil, or an error that says nothing about reviving, keeps an
+// interactive run lost as today, and a Docker run's hint is exactly today's.
+// Catches the skip tested on the orchestrator's interface (always a ProxyReviver in production), a ref routed to
+// the other substrate, and an unreadable answer read as unrevivable.
+func TestReadback_NoNetworkFirstStartDecidedBySubstrateAnswer(t *testing.T) {
+	noNetwork := &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Name: "No network", Scope: types.WallPresetScopeBuiltin}
+	plain := unconfirmedPolicyHint
+	cni := unconfirmedPolicyHint + unconfirmedNoNetworkCause
+	const kept = "kept lost"
+	for _, tc := range []struct {
+		name        string
+		target      string
+		sub         reviveAnswer
+		beside      bool // a Docker substrate that can revive stands beside the run's
+		interactive bool
+		starting    bool
+		want        string
+	}{
+		{"Kubernetes alone, no ProxyReviver, interactive", "k8s", noReviver, false, true, false, cni},
+		{"Kubernetes alone, answers unsupported, interactive", "k8s", unsupported, false, true, false, cni},
+		{"Kubernetes alone, answers unsupported, background", "k8s", unsupported, false, false, false, cni},
+		{"Kubernetes alone, answers unsupported, still starting", "k8s", unsupported, false, true, true, cni},
+		{"Kubernetes alone, answers another error, interactive", "k8s", unreadable, false, true, false, kept},
+		{"Kubernetes alone, answers another error, background", "k8s", unreadable, false, false, false, cni},
+		{"Kubernetes alone, answers nil, interactive", "k8s", canRevive, false, true, false, kept},
+		{"Kubernetes beside Docker, no ProxyReviver, interactive", "k8s", noReviver, true, true, false, cni},
+		{"Kubernetes beside Docker, answers unsupported, interactive", "k8s", unsupported, true, true, false, cni},
+		{"Kubernetes beside Docker, answers unsupported, background", "k8s", unsupported, true, false, false, cni},
+		{"Kubernetes beside Docker, answers unsupported, still starting", "k8s", unsupported, true, true, true, cni},
+		{"Kubernetes beside Docker, answers another error, interactive", "k8s", unreadable, true, true, false, kept},
+		{"Docker alone, answers nil, interactive", "docker", canRevive, false, true, false, kept},
+		{"Docker alone, answers nil, background", "docker", canRevive, false, false, false, plain},
+		{"Docker alone, answers nil, still starting", "docker", canRevive, false, true, true, plain},
+		{"Docker alone, answers another error, interactive", "docker", unreadable, false, true, false, kept},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEgressEditFixture(t)
+			f.srv.cfg.RunnerTarget = tc.target
+			f.srv.cfg.Runner = f.orchestrated(tc.target, tc.sub, tc.beside)
+			f.st.run.WallPreset, f.st.run.Interactive = noNetwork, tc.interactive
+			if tc.starting {
+				f.st.state = types.RunStarting
+			}
+			f.seedFailedStart(1, "")
+			run, err := f.srv.cfg.Store.GetRun(context.Background(), f.st.run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.srv.stopUnconfirmedProxyAt(context.Background(), run, 1); err != nil {
+				t.Fatalf("stopUnconfirmedProxyAt: %v", err)
+			}
+			lostAt, _ := f.st.lost()
+			if tc.want == kept {
+				if lostAt == nil || f.st.State() != types.RunRunning {
+					t.Errorf("state %s, lost %v; want the run kept lost, still RUNNING", f.st.State(), lostAt)
+				}
+				if got := f.st.FailureHint(); got != "" {
+					t.Errorf("failure hint = %q, want none on a run kept lost", got)
+				}
+				return
+			}
+			if f.st.State() != types.RunFailed || lostAt != nil {
+				t.Errorf("state %s, lost %v; want the run ended, not lost", f.st.State(), lostAt)
+			}
+			if got := f.st.FailureHint(); got != tc.want {
+				t.Errorf("failure hint = %q, want %q", got, tc.want)
 			}
 		})
 	}

@@ -63,8 +63,10 @@ func TestAuditKeychainTrust(t *testing.T) {
 // A No network run on Kubernetes whose namespace was not proven enforced gets one denied run.dispatch row
 // naming the proxy layer only and why; "pod_enforced" gets none. An empty answer from a Kubernetes run (a
 // driver or runner from before the field) is "not_proven", and from any other run writes nothing. A value the
-// host does not know is written as "not_proven", never as the runner sent it.
-// Catches a run under an override that the audit cannot tell apart, and an older runner's silence read as proven.
+// host does not know is written as "not_proven", never as the runner sent it. A run whose preset is not No
+// network (another preset, or none) gets no row for any answer, as the row speaks of a No network run.
+// Catches a run under an override that the audit cannot tell apart, an older runner's silence read as proven,
+// and a runner's field written as a claim about a run that is not No network.
 func TestDispatch_NoNetworkProxyOnlyIsRecorded(t *testing.T) {
 	noNetwork := &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Name: "No network", Scope: types.WallPresetScopeBuiltin}
 	other := &types.WallPresetOnRun{ID: "other", Name: "Other", Scope: types.WallPresetScopeBuiltin}
@@ -91,6 +93,18 @@ func TestDispatch_NoNetworkProxyOnlyIsRecorded(t *testing.T) {
 		{"empty, Docker server", "", types.AgentRun{WallPreset: noNetwork}, nil, "docker", ""},
 		{"empty, runner that keeps its sandbox", "", types.AgentRun{WallPreset: noNetwork}, &plain, "k8s", ""},
 		{"empty, another preset", "", types.AgentRun{WallPreset: other}, nil, "k8s", ""},
+		{"empty, no preset", "", types.AgentRun{}, nil, "k8s", ""},
+		{"not enforced, another preset", "netpol_not_enforced", types.AgentRun{WallPreset: other}, nil, "k8s", ""},
+		{"acknowledged, another preset", "netpol_ambient_acknowledged", types.AgentRun{WallPreset: other}, nil, "k8s", ""},
+		{"not proven, another preset", "netpol_not_proven", types.AgentRun{WallPreset: other}, nil, "k8s", ""},
+		{"enforced, another preset", "pod_enforced", types.AgentRun{WallPreset: other}, nil, "k8s", ""},
+		{"unknown text, another preset", "the runner's own words", types.AgentRun{WallPreset: other}, nil, "k8s", ""},
+		{"not enforced, no preset", "netpol_not_enforced", types.AgentRun{}, nil, "k8s", ""},
+		{"acknowledged, no preset", "netpol_ambient_acknowledged", types.AgentRun{}, nil, "k8s", ""},
+		{"not proven, no preset", "netpol_not_proven", types.AgentRun{}, nil, "k8s", ""},
+		{"enforced, no preset", "pod_enforced", types.AgentRun{}, nil, "k8s", ""},
+		{"unknown text, no preset", "the runner's own words", types.AgentRun{}, nil, "k8s", ""},
+		{"unknown text, another preset, runner that ends unkept", "the runner's own words", types.AgentRun{WallPreset: other}, &kube, "docker", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f.srv.cfg.RunnerTarget = tc.target

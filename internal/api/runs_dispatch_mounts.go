@@ -815,17 +815,21 @@ const noNetworkProxyOnlyNote = "Wardyn has no proof that this No network run has
 
 // auditNoNetworkProxyOnly writes a denied run.dispatch row when a No network run on Kubernetes may have the
 // proxy's isolation only (runner.Sandbox.NoNetworkProxyOnly): its namespace's NetworkPolicy was not proven
-// enforced when the sandbox was created. "pod_enforced" writes nothing. An empty field writes "not_proven"
-// for a No network run on Kubernetes, since a driver or runner from before this field sent none, and nothing
-// for any other run. Only fixed codes are written, never the runner's text. Denied, not failure, for the
-// reason auditKeychainTrust gives.
+// enforced when the sandbox was created. It writes only for a run whose stored preset is No network, whatever
+// the runner sent: the row says "this No network run". "pod_enforced" writes nothing. An empty field writes
+// "not_proven" for a No network run on Kubernetes, since a driver or runner from before this field sent none,
+// and nothing for any other run. Only fixed codes are written, never the runner's text. Denied, not failure,
+// for the reason auditKeychainTrust gives.
 func (s *Server) auditNoNetworkProxyOnly(ctx context.Context, run types.AgentRun, sb runner.Sandbox) {
+	if !noNetworkPreset(run.WallPreset) {
+		return
+	}
 	code := sb.NoNetworkProxyOnly
 	switch code {
 	case "pod_enforced":
 		return
 	case "":
-		if !noNetworkPreset(run.WallPreset) || !s.runOnKubernetes(run) {
+		if !s.runOnKubernetes(run) {
 			return
 		}
 		code = "not_proven"

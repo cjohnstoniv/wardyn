@@ -713,7 +713,7 @@ spec:
             - name: WARDYN_K8S_CONTROL_PLANE_NAMESPACE
               value: {{ .Release.Namespace | quote }}
             - name: WARDYN_K8S_CONTROL_PLANE_POD_LABELS
-              value: {{ $l := list }}{{ range $k, $v := (include "wardyn.selectorLabels" . | fromYaml) }}{{ $l = append $l (printf "%s=%s" $k $v) }}{{ end }}{{ $l = append $l "app.kubernetes.io/component=control-plane" }}{{ join "," $l | quote }}
+              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/name=%s,app.kubernetes.io/component=control-plane" .Release.Name (include "wardyn.name" .) | quote }}
             {{- end }}
             {{- if $ssh.enabled }}
             - name: WARDYN_SSH_LISTEN

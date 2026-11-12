@@ -408,7 +408,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 	case run.State == types.RunRunning:
 		// A No network run's first start that never reported, and that cannot be revived, ends with its hint
 		// rather than waiting lost: keeping it lost only delays a failure nothing can undo.
-		if !(missed && s.runUnrevivable(run)) {
+		if !(missed && s.runUnrevivable(ctx, run)) {
 			if handled, err := s.loseUnconfirmedRun(ctx, run, gen); handled {
 				return err
 			}
@@ -653,12 +653,14 @@ func (s *Server) runOnKubernetes(run types.AgentRun) bool {
 	return ok && c.EndsUnkept
 }
 
-// runUnrevivable: in server mode, the driver is no runner.ProxyReviver; on a runner, its last caps say
-// EndsUnkept. Caps not held read as revivable, so such a run keeps today's handling.
-func (s *Server) runUnrevivable(run types.AgentRun) bool {
+// runUnrevivable: in server mode, the run's own substrate cannot replace a proxy, as the runner answers
+// through CanReplaceProxy (the orchestrator wraps every substrate, so the interface alone says nothing); on a
+// runner, its last caps say EndsUnkept. Any other CanReplaceProxy error, and caps not held, read as revivable,
+// so such a run keeps today's handling. As reviveSourceConfig reads the same answer.
+func (s *Server) runUnrevivable(ctx context.Context, run types.AgentRun) bool {
 	if run.RunnerID == nil {
-		_, ok := s.cfg.Runner.(runner.ProxyReviver)
-		return !ok
+		rv, ok := s.cfg.Runner.(runner.ProxyReviver)
+		return !ok || errors.Is(rv.CanReplaceProxy(ctx, run.SandboxRef), runner.ErrReviveUnsupported)
 	}
 	c, ok := s.runnerLastCaps(*run.RunnerID)
 	return ok && c.EndsUnkept

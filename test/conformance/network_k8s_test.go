@@ -287,8 +287,9 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 	}
 
 	// probe creates a run and a probe pod that carries its proxy's labels, and returns what the probe reached.
-	// The probes fire once, at container start, so the script first retries wardyn_pod for up to 60 s (the
-	// NetworkPolicy may not be programmed yet) and then wardyn_svc for up to 30 s (its endpoints may lag).
+	// The probes fire once, at container start, so the script first retries wardyn_pod for up to about 2 minutes
+	// (20 tries of a 3 s connect and a 3 s sleep; the NetworkPolicy may not be programmed yet) and then
+	// wardyn_svc for up to about 1 minute (10 tries; its endpoints may lag).
 	probe := func(what string, noNetwork bool) map[string]string {
 		spec := runner.SandboxSpec{
 			RunID:            uuid.New(),
@@ -339,7 +340,7 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 				what, got["done"], got["tool_nc"], got["tool_nslookup"], got["env_apiserver"])
 		}
 		if got["wardyn_pod"] != "REACHED" {
-			t.Fatalf("%s: the probe pod's NetworkPolicy was not programmed in 60 s (wardyn_pod %s)", what, got["wardyn_pod"])
+			t.Fatalf("%s: the probe pod's NetworkPolicy was not programmed in about 2 minutes (wardyn_pod %s)", what, got["wardyn_pod"])
 		}
 		return got
 	}
@@ -353,6 +354,17 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 	}
 
 	got := probe("No network run", true)
+	// wardyn_pod is REACHED before the proxy's policy selects the probe pod and after it, so it cannot show the
+	// policy is programmed. A CNI that programs it late reads a target REACHED that the policy blocks: such a
+	// target is probed once more, 10 s later, by a fresh pod, and fails only if that pod reads REACHED again.
+	for _, k := range []string{"wardyn_other_port", "cluster_pod", "apiserver", "dns_cluster", "metadata", "public"} {
+		if got[k] == "REACHED" {
+			t.Logf("the first No network probe read %s REACHED (all: %v); probing once more with a fresh pod", k, got)
+			time.Sleep(10 * time.Second)
+			got = probe("No network run, second probe", true)
+			break
+		}
+	}
 	if got["wardyn_svc"] != "REACHED" {
 		t.Fatalf("a pod-selector NetworkPolicy peer was not matched after Service translation: a No network run's proxy cannot reach Wardyn on this CNI (wardyn_svc %s)", got["wardyn_svc"])
 	}
