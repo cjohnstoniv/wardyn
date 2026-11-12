@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -69,4 +70,23 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, now 
 		}
 	}
 	return err
+}
+
+// replaceProxyHashedAt is h.ReplaceProxyHashed that names the start's generation when h honours it.
+func replaceProxyHashedAt(ctx context.Context, h runner.ProxyReviverHashed, ref string, cfgJSON []byte, gen int) (string, error) {
+	if at, ok := h.(runner.ProxyReviverAt); ok && gen > 0 {
+		return at.ReplaceProxyHashedAt(ctx, ref, cfgJSON, gen)
+	}
+	return h.ReplaceProxyHashed(ctx, ref, cfgJSON)
+}
+
+// runnerNeedsUpdateToRevive is the caps of the connected runner a container run is on when that runner is a
+// Docker one without ProxyFence, which cannot replace a proxy under a generation (every Kubernetes runner
+// sets EndsUnkept and is not refused; a VM and an unconnected runner never are).
+func (s *Server) runnerNeedsUpdateToRevive(run types.AgentRun) (runnerwire.Caps, bool) {
+	if run.RunnerID == nil || run.MachineKind.IsVM() {
+		return runnerwire.Caps{}, false
+	}
+	caps, ok := s.runnerConnected(*run.RunnerID)
+	return caps, ok && !caps.ProxyFence && !caps.EndsUnkept
 }

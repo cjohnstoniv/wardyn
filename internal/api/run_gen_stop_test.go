@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -279,4 +280,223 @@ func TestStopLostSandboxAt_UnconnectedRunnerUsesPlainStop(t *testing.T) {
 	if got := gr.atCalls(); len(got) != 1 || f.lr.proxyStopCount() != 3 {
 		t.Fatalf("a VM: generation stops %v, plain %d; want 1 and 3", got, f.lr.proxyStopCount())
 	}
+}
+
+// genReviveRunner is the readback fixture's runner that replaces a proxy by generation, recording the
+// generation each replace named.
+type genReviveRunner struct {
+	*hashedReviveRunner
+	amu   sync.Mutex
+	gens  []int
+	plain int
+	atErr error
+}
+
+func (r *genReviveRunner) ReplaceProxyHashed(ctx context.Context, ref string, cfg []byte) (string, error) {
+	r.amu.Lock()
+	r.plain++
+	r.amu.Unlock()
+	return r.hashedReviveRunner.ReplaceProxyHashed(ctx, ref, cfg)
+}
+
+func (r *genReviveRunner) ReplaceProxyHashedAt(ctx context.Context, ref string, cfg []byte, gen int) (string, error) {
+	r.amu.Lock()
+	r.gens = append(r.gens, gen)
+	err := r.atErr
+	r.amu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	return r.hashedReviveRunner.ReplaceProxyHashed(ctx, ref, cfg)
+}
+
+func (r *genReviveRunner) replaces() (gens []int, plain int) {
+	r.amu.Lock()
+	defer r.amu.Unlock()
+	return append([]int(nil), r.gens...), r.plain
+}
+
+// genClaimCount counts the revive claims the store took.
+type genClaimCount struct {
+	*readbackStore
+	claims atomic.Int32
+}
+
+func (s *genClaimCount) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, startsAgent bool) (bool, error) {
+	s.claims.Add(1)
+	return s.readbackStore.MarkRunRevived(ctx, id, from, ended, limit, startsAgent)
+}
+
+func newGenReviveFixture(t *testing.T, live bool) (*readbackFixture, *genReviveRunner, *genClaimCount) {
+	t.Helper()
+	var f *readbackFixture
+	if live {
+		f = newEgressEditFixture(t)
+	} else {
+		f = newReadbackFixture(t)
+	}
+	gr := &genReviveRunner{hashedReviveRunner: f.hr}
+	cs := &genClaimCount{readbackStore: f.rb}
+	f.srv.cfg.Runner = gr
+	f.srv.cfg.Store = cs
+	return f, gr, cs
+}
+
+// onRunner puts the fixture's run on a runner, connected with caps (nil: no session) while online is true.
+func (f *readbackFixture) onRunner(t *testing.T, caps *runnerwire.Caps, online bool) uuid.UUID {
+	t.Helper()
+	rid := uuid.New()
+	f.st.run.RunnerID = &rid
+	f.run = f.st.run
+	f.srv.cfg.RunnerOnline = func(uuid.UUID) bool { return online }
+	if caps != nil {
+		seamConnect(t, f.srv, rid, *caps)
+	}
+	return rid
+}
+
+func (f *readbackFixture) assertNothingRevived(t *testing.T, gr *genReviveRunner, cs *genClaimCount) {
+	t.Helper()
+	gens, plain := gr.replaces()
+	if len(gens) != 0 || plain != 0 || len(f.rr.replaced) != 0 {
+		t.Errorf("replaces: %d by generation, %d plain, %d handed over; want none", len(gens), plain, len(f.rr.replaced))
+	}
+	if n := cs.claims.Load(); n != 0 {
+		t.Errorf("revive claims = %d, want 0: the refusal comes before the claim", n)
+	}
+	if _, active, _ := f.rb.ActiveProxyStart(context.Background(), f.run.ID); active {
+		t.Error("a refused revive recorded a proxy start")
+	}
+}
+
+// A revive's replace names the generation its start was recorded under. Catches ReplaceProxyHashed.
+func TestRevive_ReplaceCarriesTheGeneration(t *testing.T) {
+	f, gr, _ := newGenReviveFixture(t, false)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	gens, plain := gr.replaces()
+	if want := f.active(t).Generation; want < 1 || len(gens) != 1 || gens[0] != want || plain != 0 {
+		t.Errorf("replace generations %v (plain %d); want [%d] and no plain replace", gens, plain, want)
+	}
+}
+
+// A container run on a connected Docker runner without ProxyFence is refused 409 before anything moves: no
+// claim, no start, no replace. Catches the check placed after the claim.
+func TestRevive_RefusedToARunnerWithoutProxyFence(t *testing.T) {
+	f, gr, cs := newGenReviveFixture(t, false)
+	f.onRunner(t, &runnerwire.Caps{MachineName: "alice-laptop"}, true)
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusConflict || errorReason(w) != reasonReviveRunnerUpdateNeeded ||
+		!strings.Contains(w.Body.String(), "update the runner on alice-laptop to revive this run") {
+		t.Fatalf("revive: %d %s; want 409 %s naming alice-laptop", w.Code, w.Body.String(), reasonReviveRunnerUpdateNeeded)
+	}
+	if lostAt, _ := f.st.lost(); lostAt == nil {
+		t.Error("the refused revive moved the run's lost mark")
+	}
+	f.assertNothingRevived(t, gr, cs)
+
+	f.onRunner(t, &runnerwire.Caps{}, true) // no machine name
+	if _, _, rerr := f.srv.lockRevive(context.Background(), f.st.run); rerr == nil || rerr.status != http.StatusConflict ||
+		rerr.msg != "update the runner on its computer to revive this run" {
+		t.Errorf("lockRevive without a machine name = %+v; want 409 naming its computer", rerr)
+	}
+}
+
+// A runner with no live session is not refused for its last-known caps: the replace answers that it is offline.
+// Catches runnerLastCaps used alone.
+func TestRevive_UnconnectedRunnerKeepsOfflineRefusal(t *testing.T) {
+	f, gr, _ := newGenReviveFixture(t, false)
+	gr.atErr = runner.ErrRunnerOffline
+	f.onRunner(t, &runnerwire.Caps{MachineName: "alice-laptop"}, false) // stale caps, no ProxyFence, session not live
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if errorReason(w) == reasonReviveRunnerUpdateNeeded {
+		t.Fatalf("revive: %d %s; an unconnected runner must not be refused for its stale caps", w.Code, w.Body.String())
+	}
+	if gens, _ := gr.replaces(); len(gens) != 1 {
+		t.Errorf("replaces by generation = %v; want the one that answered offline", gens)
+	}
+}
+
+// Every Kubernetes runner sets EndsUnkept and has no ProxyFence: its revive is not refused for the cap.
+func TestRevive_K8sRunnerIsNotRefusedForTheCap(t *testing.T) {
+	f, _, _ := newGenReviveFixture(t, false)
+	f.onRunner(t, &runnerwire.Caps{EndsUnkept: true, MachineName: "cluster"}, true)
+	_, unlock, rerr := f.srv.lockRevive(context.Background(), f.st.run)
+	if rerr != nil {
+		t.Fatalf("lockRevive = %+v; want the lock", rerr)
+	}
+	unlock()
+}
+
+// A VM has no proxy generation: its revive keeps today's answer. Catches the 409 on a VM.
+func TestRevive_VMRunIsNotRefusedForTheCap(t *testing.T) {
+	f, _, _ := newGenReviveFixture(t, false)
+	f.onRunner(t, &runnerwire.Caps{MachineName: "alice-laptop"}, true)
+	run := f.st.run
+	run.MachineKind = types.MachineLinuxVM
+	_, unlock, rerr := f.srv.lockRevive(context.Background(), run)
+	if rerr != nil {
+		t.Fatalf("lockRevive = %+v; want the lock", rerr)
+	}
+	unlock()
+}
+
+// A runner that reconnected without ProxyFence between lockRevive's check and the replace is refused as
+// unsupported with no call, and the start is abandoned.
+func TestRevive_RunnerReconnectedOlderBeforeReplaceIsRefused(t *testing.T) {
+	f, gr, _ := newGenReviveFixture(t, false)
+	rid := f.onRunner(t, &runnerwire.Caps{ProxyFence: true, MachineName: "alice-laptop"}, true)
+	f.rr.onEnsure = func() { seamConnect(t, f.srv, rid, runnerwire.Caps{MachineName: "alice-laptop"}) }
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code == http.StatusOK || errorReason(w) == reasonReviveRunnerUpdateNeeded {
+		t.Fatalf("revive: %d %s; want a refusal that is not the lock-time 409", w.Code, w.Body.String())
+	}
+	gens, plain := gr.replaces()
+	if len(gens) != 0 || plain != 0 || len(f.rr.replaced) != 0 {
+		t.Errorf("replaces: %d by generation, %d plain, %d handed over; want no call", len(gens), plain, len(f.rr.replaced))
+	}
+	if _, active, _ := f.rb.ActiveProxyStart(context.Background(), f.run.ID); active {
+		t.Error("the refused replace left its proxy start active")
+	}
+}
+
+// genUnsupportedRunner cannot replace a proxy by hash, with or without a generation.
+type genUnsupportedRunner struct{ *hashedReviveRunner }
+
+func (genUnsupportedRunner) ReplaceProxyHashed(context.Context, string, []byte) (string, error) {
+	return "", runner.ErrReviveUnsupported
+}
+
+func (genUnsupportedRunner) ReplaceProxyHashedAt(context.Context, string, []byte, int) (string, error) {
+	return "", runner.ErrReviveUnsupported
+}
+
+// A start under a generation never falls back to the plain replace, which stamps no generation label; one
+// without a generation still does.
+func TestRevive_GenerationStartSkipsLegacyFallback(t *testing.T) {
+	f := newReadbackFixture(t)
+	rv := genUnsupportedRunner{f.hr}
+	_, err := f.srv.replaceRevivedProxyHashed(context.Background(), rv, f.st.run, []byte(`{}`), proxyStartRec{gen: 3, mode: store.ProxyStartLegacy})
+	if !errors.Is(err, runner.ErrReviveUnsupported) || len(f.rr.replaced) != 0 {
+		t.Fatalf("gen 3: err %v, %d plain replaces; want ErrReviveUnsupported and none", err, len(f.rr.replaced))
+	}
+	_, err = f.srv.replaceRevivedProxyHashed(context.Background(), rv, f.st.run, []byte(`{}`), proxyStartRec{mode: store.ProxyStartLegacy})
+	if err != nil || len(f.rr.replaced) != 1 {
+		t.Fatalf("gen 0: err %v, %d plain replaces; want nil and 1 (the legacy fallback)", err, len(f.rr.replaced))
+	}
+}
+
+// The live egress edit goes through the same lock, so it gets the same refusal, and nothing changes.
+func TestEgressEdit_RefusedToARunnerWithoutProxyFence(t *testing.T) {
+	f, gr, cs := newGenReviveFixture(t, true)
+	f.onRunner(t, &runnerwire.Caps{MachineName: "alice-laptop"}, true)
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	if w.Code != http.StatusConflict || errorReason(w) != reasonReviveRunnerUpdateNeeded {
+		t.Fatalf("edit: %d %s; want 409 %s", w.Code, w.Body.String(), reasonReviveRunnerUpdateNeeded)
+	}
+	if lostAt, _ := f.st.lost(); lostAt != nil {
+		t.Error("the refused edit marked the run lost")
+	}
+	f.assertNothingRevived(t, gr, cs)
 }

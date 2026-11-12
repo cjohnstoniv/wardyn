@@ -86,13 +86,18 @@ func (s *Server) replaceRevivedProxyHashed(ctx context.Context, rv runner.ProxyR
 	if h, ok := rv.(runner.ProxyReviverHashed); !ok {
 		err = s.replaceRevivedProxy(ctx, rv, run, cfgJSON)
 	} else if run.RunnerID == nil {
-		sha, err = h.ReplaceProxyHashed(ctx, run.SandboxRef, cfgJSON)
+		sha, err = replaceProxyHashedAt(ctx, h, run.SandboxRef, cfgJSON, start.gen)
 	} else if err = s.renewRunnerLease(ctx, run, leaseWait); err == nil {
-		sha, err = h.ReplaceProxyHashed(ctx, run.SandboxRef, cfgJSON)
+		// A runner that reconnected older since lockRevive's check cannot replace under a generation.
+		if _, stale := s.runnerNeedsUpdateToRevive(run); stale {
+			err = runner.ErrReviveUnsupported
+		} else {
+			sha, err = replaceProxyHashedAt(ctx, h, run.SandboxRef, cfgJSON, start.gen)
+		}
 	}
 	// A substrate that cannot hash refuses before anything changes; a start that need not confirm is
-	// replaced as before.
-	if errors.Is(err, runner.ErrReviveUnsupported) && start.mode != store.ProxyStartExpected {
+	// replaced as before, except a generation's start: the plain replace stamps no generation.
+	if errors.Is(err, runner.ErrReviveUnsupported) && start.mode != store.ProxyStartExpected && start.gen == 0 {
 		sha, err = "", s.replaceRevivedProxy(ctx, rv, run, cfgJSON)
 	}
 	if err != nil {
