@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -154,7 +155,8 @@ func (f *containStore) stampWrites() int {
 // fences. Any other Runner call panics on the nil embedded Runner, which is how a probe would show.
 type containRunner struct {
 	runner.Runner
-	name string
+	name   string
+	status types.RunState
 
 	mu           sync.Mutex
 	hook         func(ctx context.Context, ref string) error // the behaviour of a fence or a proxy stop
@@ -214,6 +216,13 @@ func (r *containRunner) StopProxy(ctx context.Context, ref string) error {
 	r.stops++
 	r.mu.Unlock()
 	return r.call(ctx, ref)
+}
+
+// Status reads as r.status, the sandbox as the kept-agent kill's check finds it.
+func (r *containRunner) Status(context.Context, string) (runner.Status, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return runner.Status{State: r.status}, nil
 }
 
 func (r *containRunner) StopSandbox(context.Context, string) error {
@@ -1143,4 +1152,129 @@ func TestContain_HungCallsInFlightBounded(t *testing.T) {
 			t.Error("a run had two calls in flight")
 		}
 	})
+}
+
+// quiesceRun is an ended (or, with state, a live) run for the quiesce pins.
+func quiesceRun(runnerID *uuid.UUID, state types.RunState, execID string) types.AgentRun {
+	run := containRunOf(dueRow(runnerID, time.Minute))
+	run.State, run.AgentExecID = state, execID
+	return run
+}
+
+func quiesceCalls(l *containLab) (fences, stops int) {
+	fences, stops, _ = l.rn.counts()
+	return fences, stops
+}
+
+func wantNotQuiescable(t *testing.T, err error, text string) {
+	t.Helper()
+	var cannot notQuiescable
+	if !errors.As(err, &cannot) || !strings.Contains(string(cannot), text) {
+		t.Fatalf("quiesce = %v, want notQuiescable containing %q", err, text)
+	}
+}
+
+func TestQuiesce_VMOnAProxyFenceRunnerKeepsTheUnquiescedFirstPass(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(true)
+	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	run.MachineKind = types.MachineLinuxVM
+	wantNotQuiescable(t, l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef), "virtual machine")
+	if fences, stops := quiesceCalls(l); fences+stops != 0 {
+		t.Errorf("calls = %d fences, %d stops; want none for a VM", fences, stops)
+	}
+}
+
+func TestQuiesce_RunnerNotConnectedKeepsRC19Answer(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(true)
+	l.online.Store(false)
+	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	wantNotQuiescable(t, l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef), "a sandbox on a runner is not kept")
+	if fences, stops := quiesceCalls(l); fences+stops != 0 {
+		t.Errorf("calls = %d fences, %d stops; want none to an absent runner", fences, stops)
+	}
+}
+
+func TestQuiesce_RunnerFenceErrorIsNotQuiescable(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(true)
+	l.rn.setHook(func(context.Context, string) error { return errContainBoom })
+	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	err := l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef)
+	wantNotQuiescable(t, err, "a sandbox on a runner is not kept")
+	if errors.Is(err, errContainBoom) {
+		t.Errorf("quiesce = %v: a fence error must not reach the caller as a plain error", err)
+	}
+}
+
+// A fenced runner run reaches the kill tail: a sandbox already stopped is passed through as such.
+func TestQuiesce_RunnerWithProxyFenceIsQuiesced(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(true)
+	l.rn.status = types.RunStopped
+	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	if err := l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef); err != errSandboxStopped {
+		t.Errorf("quiesce = %v, want errSandboxStopped from the kill tail", err)
+	}
+	if fences, stops := quiesceCalls(l); fences != 1 || stops != 0 {
+		t.Errorf("calls = %d fences, %d stops; want one fence", fences, stops)
+	}
+}
+
+func TestQuiesce_LiveBringBackKeepsRc19Quiesce(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(true)
+	live := quiesceRun(&id, types.RunRunning, "")
+	wantNotQuiescable(t, l.srv.quiesceKeptSandbox(context.Background(), live, live.SandboxRef), "a sandbox on a runner is not kept")
+	if fences, stops := quiesceCalls(l); fences+stops != 0 {
+		t.Errorf("a live runner run made %d fences, %d stops; want none", fences, stops)
+	}
+	hosted := quiesceRun(nil, types.RunRunning, "")
+	err := l.srv.quiesceKeptSandbox(context.Background(), hosted, hosted.SandboxRef)
+	var cannot notQuiescable
+	if err == nil || errors.As(err, &cannot) {
+		t.Errorf("a live hosted run answered %v, want the kill tail's plain error", err)
+	}
+	if fences, stops := quiesceCalls(l); fences != 0 || stops != 1 {
+		t.Errorf("a live hosted run made %d fences, %d stops; want the proxy stopped once and no cut", fences, stops)
+	}
+}
+
+func TestQuiesce_TerminalRunTakesTheCut(t *testing.T) {
+	l := newContainLab(t, true)
+	hosted := quiesceRun(nil, types.RunKilled, "")
+	if err := l.srv.quiesceKeptSandbox(context.Background(), hosted, hosted.SandboxRef); err == nil {
+		t.Error("a hosted terminal run with no known agent process was quiesced")
+	}
+	if fences, stops := quiesceCalls(l); fences != 1 || stops != 0 {
+		t.Errorf("a terminal hosted run made %d fences, %d stops; want the cut (one fence) and no direct proxy stop", fences, stops)
+	}
+	id := l.connect(true)
+	l.rn.status = types.RunStopped
+	onRunner := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	if err := l.srv.quiesceKeptSandbox(context.Background(), onRunner, onRunner.SandboxRef); err != errSandboxStopped {
+		t.Errorf("a terminal fence runner run answered %v, want errSandboxStopped", err)
+	}
+	if fences, _ := quiesceCalls(l); fences != 2 {
+		t.Errorf("fences = %d after the runner run, want 2", fences)
+	}
+}
+
+func TestQuiesce_RunnerKillTailErrorIsNotQuiescable(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(true)
+	onRunner := quiesceRun(&id, types.RunKilled, "")
+	wantNotQuiescable(t, l.srv.quiesceKeptSandbox(context.Background(), onRunner, onRunner.SandboxRef), "its agent's process is not known")
+	l.rn.status = types.RunStopped
+	stopped := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	if err := l.srv.quiesceKeptSandbox(context.Background(), stopped, stopped.SandboxRef); err != errSandboxStopped {
+		t.Errorf("a stopped sandbox answered %v, want errSandboxStopped unwrapped", err)
+	}
+	hosted := quiesceRun(nil, types.RunKilled, "")
+	err := l.srv.quiesceKeptSandbox(context.Background(), hosted, hosted.SandboxRef)
+	var cannot notQuiescable
+	if err == nil || errors.As(err, &cannot) {
+		t.Errorf("a hosted run's kill error = %v, want it plain", err)
+	}
 }
