@@ -1076,11 +1076,13 @@ func TestForcedEnd_OwedPassKeptThenBroughtBackByTheTailOwner(t *testing.T) {
 }
 
 // shareFoldersFrom makes the runner id the forced fixture's laptop runner again, with the fence and the folders
-// it shares, rooted at the home the fixture's folder lives under.
+// it shares, rooted at the home the fixture's folder lives under, and with the state its seed's pass saved, as
+// the same runner reconnecting has.
 func (f *forced) shareFoldersFrom(t *testing.T, id uuid.UUID) {
 	t.Helper()
 	home := filepath.Dir(filepath.Dir(f.cs.folder.Path))
-	ep := folderRunnerEndpointCaps(t, id, runnerwire.Caps{Folders: true, FolderPassOnce: true, ProxyFence: true, MachineName: "alice-laptop"}, home)
+	caps := runnerwire.Caps{Folders: true, FolderPassOnce: true, ProxyFence: true, MachineName: "alice-laptop"}
+	ep, _ := folderRunnerEndpointWith(t, id, folderRunnerOpts{caps: caps, stateDir: f.cs.runnerState}, home)
 	f.s.runnerStreams.subsMu.Lock()
 	defer f.s.runnerStreams.subsMu.Unlock()
 	f.s.runnerStreams.subs[id] = ep

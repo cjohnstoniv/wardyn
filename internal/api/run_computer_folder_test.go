@@ -209,6 +209,9 @@ type computerFolderStore struct {
 	policyErr error
 	// dbNow is the fake database's clock for the due flags (RunDueFlags); nil is the real one.
 	dbNow func() time.Time
+	// runnerState is the state directory of the folder runner computerFolderFixture connects, which keeps what
+	// each pass saw. A test that connects that runner again passes it, as a runner that reconnects keeps its state.
+	runnerState string
 }
 
 func (s *computerFolderStore) dueNow() time.Time {
@@ -521,12 +524,13 @@ func computerFolderFixture(t *testing.T, direction string) (*Server, *computerFo
 	id := row.ID
 	ls.folder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &id, Path: app, Direction: direction}
 	ls.run.AgentExecID = "agent-exec"
-	cs := &computerFolderStore{localFolderStore: ls, runner: row}
+	cs := &computerFolderStore{localFolderStore: ls, runner: row, runnerState: t.TempDir()}
 	s.cfg.Store = cs
 	s.cfg.ComputerFolders = true
 	s.cfg.LocalFolderSeedWait = 20 * time.Second
 	s.cfg.RunnerOnline = func(uuid.UUID) bool { return true }
-	s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: folderRunnerEndpoint(t, id, true, home)}
+	ep, _ := folderRunnerEndpointWith(t, id, folderRunnerOpts{caps: runnerwire.Caps{Folders: true, FolderPassOnce: true, MachineName: "alice-laptop"}, stateDir: cs.runnerState}, home)
+	s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: ep}
 	return s, cs, audit, run, sb, app
 }
 
