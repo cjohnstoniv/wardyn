@@ -517,24 +517,22 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 	if run.MachineKind.IsVM() {
 		return notQuiescable("a virtual machine is not quiesced from the server's Docker")
 	}
-	cutRun := run
-	cutRun.SandboxRef = ref // the sandbox being quiesced is the one to cut
 	if run.RunnerID != nil {
 		if !s.keepable(run) {
 			return notQuiescable("a sandbox on a runner is not kept")
 		}
-		if kind, err := s.cutAgent(ctx, cutRun); kind != cutFenced || err != nil {
+		if kind, err := s.cutAgent(ctx, run); kind != cutFenced || err != nil {
 			return notQuiescable("a sandbox on a runner is not kept")
 		}
-	} else if kind, err := s.cutAgent(ctx, cutRun); kind == cutUnsupported && err == nil || errors.Is(err, runner.ErrEndUnsupported) {
+	} else if kind, err := s.cutAgent(ctx, run); kind == cutUnsupported && err == nil || errors.Is(err, runner.ErrEndUnsupported) {
 		return notQuiescable("its substrate cannot stop its proxy alone")
 	} else if err != nil {
 		return fmt.Errorf("its proxy did not stop: %w", err)
 	}
 	err := s.killKeptAgent(ctx, run, ref)
 	if err != nil && run.RunnerID != nil && !errors.Is(err, errSandboxStopped) {
-		// A runner run took rc.19's unquiesced first pass; a failed kill after its cut keeps that answer,
-		// and the cut stays.
+		// A runner run answers as one that cannot be quiesced, which takes the unquiesced first pass; a
+		// failed kill after its cut keeps that answer, and the cut stays.
 		return notQuiescable("a sandbox on a runner is not kept: " + err.Error())
 	}
 	return err

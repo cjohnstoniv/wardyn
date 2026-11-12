@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -17,61 +18,77 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// containErrAt reads a run's containment_error_at.
-func containErrAt(t *testing.T, ctx context.Context, pg store.PG, id uuid.UUID) *time.Time {
-	t.Helper()
-	got, err := pg.GetRun(ctx, id)
-	if err != nil {
-		t.Fatalf("get run: %v", err)
-	}
-	return got.ContainmentErrorAt
-}
-
-// TestPG_SetRunContainmentErrorSince: no stamp, or one older than since, becomes now; one not older than
-// since is kept; a run that is not terminal has no row. Proven red by the COALESCE form, which keeps a
-// kept-phase stamp from before the end.
+// TestPG_SetRunContainmentErrorSince: a missing stamp, or one older than the streak start, becomes the
+// database's now(); one not older is kept; a run that is not terminal has no row. The streak start is the
+// latest of the run's due time (end plus the lag), now minus startedAgo and now minus unobservedAgo, all on
+// the database's clock. Each case seeds ended_at and the stamp as seconds before now() in SQL, so nothing
+// sleeps and no Go time reaches the comparison. Proven red by the COALESCE form, which keeps a kept-phase
+// stamp from before the end; by dropping the due time (the "due wins" cases), startedAgo ("started wins")
+// or unobservedAgo ("unobserved wins") from the GREATEST; and by stamping a time the caller passes in.
 func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	since := now.Add(-time.Minute)
-	stamp := func(id uuid.UUID, at *time.Time) {
-		t.Helper()
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error_at = $2 WHERE id = $1`, id, at); err != nil {
-			t.Fatalf("set stamp: %v", err)
+	secs := func(n float64) *float64 { return &n }
+	ago := func(d time.Duration) *time.Duration { return &d }
+	lag := store.ContainmentLag.Seconds()
+	seeded := func(p *float64) string {
+		if p == nil {
+			return "none"
 		}
+		return strconv.FormatFloat(*p, 'f', -1, 64) + " s"
 	}
-	older, newer := now.Add(-time.Hour), now.Add(-30*time.Second)
 
 	for name, tc := range map[string]struct {
 		state       types.RunState
-		stamp       *time.Time
+		endedAgo    float64  // seconds before now() the run ended
+		stampAgo    *float64 // seconds before now() of the stored stamp; nil: none
+		startedAgo  time.Duration
+		unobserved  *time.Duration
 		wantStarted bool
-		wantAt      *time.Time
 	}{
-		"null":        {types.RunKilled, nil, true, &now},
-		"older":       {types.RunKilled, &older, true, &now},
-		"newer":       {types.RunKilled, &newer, false, &newer},
-		"at since":    {types.RunKilled, &since, false, &since},
-		"running row": {types.RunRunning, &older, false, &older},
+		"null stamp":                    {types.RunKilled, 3600, nil, time.Minute, nil, true},
+		"older than the start":          {types.RunKilled, 3600, secs(3000), time.Minute, nil, true},
+		"newer than the start":          {types.RunKilled, 3600, secs(30), time.Minute, nil, false},
+		"due wins, stamp before it":     {types.RunKilled, lag + 60, secs(120), time.Hour, nil, true},
+		"due wins, stamp after it":      {types.RunKilled, lag + 60, secs(30), time.Hour, nil, false},
+		"started wins, stamp before":    {types.RunKilled, 3600, secs(600), 5 * time.Minute, nil, true},
+		"started wins, stamp after":     {types.RunKilled, 3600, secs(120), 5 * time.Minute, nil, false},
+		"unobserved wins, stamp before": {types.RunKilled, 3600, secs(60), time.Hour, ago(30 * time.Second), true},
+		"unobserved wins, stamp after":  {types.RunKilled, 3600, secs(10), time.Hour, ago(30 * time.Second), false},
+		"running row":                   {types.RunRunning, 3600, secs(3000), time.Minute, nil, false},
 	} {
-		r := persistRun(t, ctx, pool, newRun(tc.state))
-		stamp(r.ID, tc.stamp)
-		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", now, since)
+		run := newRun(tc.state)
+		run.SandboxRef = "ref-" + run.ID.String()
+		r := persistRun(t, ctx, pool, run)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = now() - $2::float8 * interval '1 second',
+			containment_error_at = now() - $3::float8 * interval '1 second' WHERE id = $1`, r.ID, tc.endedAgo, tc.stampAgo); err != nil {
+			t.Fatalf("%s: seed the row: %v", name, err)
+		}
+		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", tc.startedAgo, tc.unobserved)
 		if err != nil || started != tc.wantStarted {
 			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want %v", name, started, err, tc.wantStarted)
 		}
-		got := containErrAt(t, ctx, pg, r.ID)
-		if got == nil || !got.Equal(*tc.wantAt) {
-			t.Errorf("%s: containment_error_at = %v, want %v", name, got, tc.wantAt)
+		// The stamp's age in SQL: a stamp this call set is within 5 s of now(); one kept is still the seeded
+		// age, give or take the seconds the test took.
+		var age *float64
+		if err := pool.QueryRow(ctx, `SELECT extract(epoch FROM now() - containment_error_at)::float8 FROM agent_runs WHERE id = $1`, r.ID).Scan(&age); err != nil {
+			t.Fatalf("%s: read the stamp's age: %v", name, err)
 		}
-		run, err := pg.GetRun(ctx, r.ID)
+		switch {
+		case age == nil:
+			t.Errorf("%s: containment_error_at is NULL", name)
+		case tc.wantStarted && (*age < 0 || *age >= 5):
+			t.Errorf("%s: stamp is %.2f s old, want within 5 s of the database's now()", name, *age)
+		case !tc.wantStarted && (tc.stampAgo == nil || *age < *tc.stampAgo || *age > *tc.stampAgo+5):
+			t.Errorf("%s: stamp is %.2f s old, want the seeded age (%s) or up to 5 s more", name, *age, seeded(tc.stampAgo))
+		}
+		got, err := pg.GetRun(ctx, r.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if wantMsg := tc.state.IsTerminal(); (run.ContainmentError == "boom") != wantMsg {
-			t.Errorf("%s: containment_error = %q, written = %v, want %v", name, run.ContainmentError, run.ContainmentError == "boom", wantMsg)
+		if wantMsg := tc.state.IsTerminal(); (got.ContainmentError == "boom") != wantMsg {
+			t.Errorf("%s: containment_error = %q, written = %v, want %v", name, got.ContainmentError, got.ContainmentError == "boom", wantMsg)
 		}
 	}
 }
@@ -89,12 +106,17 @@ func TestPG_MarkRunFencedOnlyTerminal(t *testing.T) {
 		}
 		return at
 	}
-	live := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	withRef := func(state types.RunState) types.AgentRun {
+		run := newRun(state)
+		run.SandboxRef = "ref-" + run.ID.String()
+		return run
+	}
+	live := persistRun(t, ctx, pool, withRef(types.RunRunning))
 	if err := pg.MarkRunFenced(ctx, live.ID); err != nil || fencedAt(live.ID) != nil {
 		t.Errorf("a RUNNING run: err %v, fenced_at %v; want nil, nil", err, fencedAt(live.ID))
 	}
 	for _, st := range []types.RunState{types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived} {
-		r := persistRun(t, ctx, pool, newRun(st))
+		r := persistRun(t, ctx, pool, withRef(st))
 		if err := pg.MarkRunFenced(ctx, r.ID); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
@@ -109,6 +131,78 @@ func TestPG_MarkRunFencedOnlyTerminal(t *testing.T) {
 		if again := fencedAt(r.ID); again == nil || !again.Equal(*first) {
 			t.Errorf("%s: fenced_at moved from %v to %v", st, first, again)
 		}
+	}
+}
+
+// TestPG_ContainWritesSkipARunWithNoSandbox: an ended run whose sandbox_ref is empty is neither stamped
+// with a containment error nor marked fenced. Proven red by dropping the sandbox_ref condition from
+// either statement.
+func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	for _, state := range []types.RunState{types.RunKilled, types.RunFailed} {
+		run := newRun(state)
+		run.SandboxRef = "ref-" + run.ID.String()
+		r := persistRun(t, ctx, pool, run)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = '' WHERE id = $1`, r.ID); err != nil {
+			t.Fatalf("clear the ref: %v", err)
+		}
+		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", time.Minute, nil)
+		if err != nil || started {
+			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want false, nil", state, started, err)
+		}
+		if err := pg.MarkRunFenced(ctx, r.ID); err != nil {
+			t.Errorf("%s: MarkRunFenced: %v", state, err)
+		}
+		var errAt, fencedAt *time.Time
+		var msg *string
+		if err := pool.QueryRow(ctx, `SELECT containment_error_at, fenced_at, containment_error FROM agent_runs WHERE id = $1`, r.ID).Scan(&errAt, &fencedAt, &msg); err != nil {
+			t.Fatalf("read the row: %v", err)
+		}
+		if errAt != nil || fencedAt != nil || msg != nil {
+			t.Errorf("%s: containment_error_at %v, fenced_at %v, containment_error %v; want none of them written", state, errAt, fencedAt, msg)
+		}
+	}
+}
+
+// TestPG_ListTerminalSandboxPage_DueIsTheDatabases: each listed row says whether it is due by the
+// database's now(), with ended_at seeded in SQL 30 s short of the lag and a few seconds past it, so no Go
+// time is in any statement. Proven red by a due that is always true or always false, or a listing that
+// leaves it unset. That the server's own clock never decides it is pinned in the api package, where the
+// two clocks can differ.
+func TestPG_ListTerminalSandboxPage_DueIsTheDatabases(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	lag := store.ContainmentLag.Seconds()
+	add := func(ref string, endedAgo float64) uuid.UUID {
+		t.Helper()
+		run := newRun(types.RunKilled)
+		run.SandboxRef = ref
+		r := persistRun(t, ctx, pool, run)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = now() - $2::float8 * interval '1 second' WHERE id = $1`, r.ID, endedAgo); err != nil {
+			t.Fatalf("place run: %v", err)
+		}
+		return r.ID
+	}
+	notYet, due := add("ref-not-yet", lag-30), add("ref-due", lag+2)
+	rows, _, err := pg.ListTerminalSandboxPage(ctx, nil, 10, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]bool{}
+	for _, r := range rows {
+		got[r.ID] = r.Due
+	}
+	if len(got) != 2 {
+		t.Fatalf("listed %d rows, want the 2 seeded", len(got))
+	}
+	if got[notYet] {
+		t.Error("a run 30 s short of due listed Due = true, want false")
+	}
+	if !got[due] {
+		t.Error("a run 2 s past due listed Due = false, want true")
 	}
 }
 
