@@ -337,7 +337,7 @@ A run gets what every layer allows. The run's policy record names the layer that
     its own TLS.
   - The organisation serves this only through the run's own runner relay with the run token, for this
     run's `via_org` grants, to each grant's host on 443, within 16 streams, 8 GiB a run per server
-    replica (reset on restart) and 10 minutes idle.
+    replica (reset on restart; headers are not counted; each open stream can pass the total by about one chunk each way) and 10 minutes idle.
   - **Residual:** the laptop proxy terminates the sandbox's TLS to forward these requests, so the
     developer (root on the laptop) sees each request and response in plaintext and can make any request
     the rule's pins and the policy allow while the run lives (residual #75).

@@ -350,7 +350,8 @@ func TestViaOrg_PerRunCaps(t *testing.T) {
 	}
 
 	// The total is the run's: an idle release and a runner reconnect keep it spent.
-	setViaOrgSeams(t, 150*time.Millisecond, 20*time.Millisecond, 8)
+	// The watcher never ticks here: the test makes the idle release itself, so nothing depends on the clock.
+	setViaOrgSeams(t, viaOrgIdleTimeout, time.Hour, 8)
 	k := newViaOrgAPIFixture(t)
 	exhausted := func(stage string) {
 		t.Helper()
@@ -358,9 +359,21 @@ func TestViaOrg_PerRunCaps(t *testing.T) {
 			t.Fatalf("%s = %d %s, want 429 via_org_cap_exceeded", stage, w.Code, w.Body)
 		}
 	}
-	k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost)
+	if w := k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK {
+		t.Fatalf("the first forward = %d %s, want 200", w.Code, w.Body)
+	}
+	if hits, _, _ := k.up.seen(); hits != 1 {
+		t.Fatalf("the first forward reached the destination %d times, want 1", hits)
+	}
 	exhausted("past the total")
-	waitFor(t, "the idle release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })
+	k.srv.viaOrg.mu.Lock()
+	kRun := k.srv.viaOrg.runs[k.run.ID]
+	k.srv.viaOrg.mu.Unlock()
+	idleGen := kRun.closeIdle(time.Now().Add(2 * viaOrgIdleTimeout))
+	if idleGen == nil {
+		t.Fatal("no idle release past the timeout")
+	}
+	closeViaOrgGen(k.run.ID, idleGen)
 	exhausted("after the idle release")
 	k.srv.RecordRunnerDisconnected(context.Background(), k.rn.ID, nil)
 	waitFor(t, "the disconnect release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })
@@ -631,6 +644,57 @@ func TestViaOrg_OrgInspectsWithTheDeclaredCorpus(t *testing.T) {
 	}
 }
 
+// An engine built for a request that comes after a quiet period is not idle: the idle tick that lands
+// between its build and the admission of its stream leaves it in place, and the request is served by it.
+func TestViaOrg_FreshEngineSurvivesAnIdleTick(t *testing.T) {
+	setViaOrgSeams(t, viaOrgIdleTimeout, time.Hour, viaOrgMaxBytes)
+	f := newViaOrgAPIFixture(t)
+	R := f.rn.ID
+	if w := f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK {
+		t.Fatalf("the first forward = %d %s, want 200", w.Code, w.Body)
+	}
+	f.srv.viaOrg.mu.Lock()
+	run := f.srv.viaOrg.runs[f.run.ID]
+	f.srv.viaOrg.mu.Unlock()
+	f.srv.releaseViaOrgRun(run, false, false)
+	run.smu.Lock()
+	run.idleSince = time.Now().Add(-2 * viaOrgIdleTimeout)
+	run.smu.Unlock()
+
+	acquired, proceed := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	resume := sync.OnceFunc(func() { close(proceed) })
+	viaOrgAfterEngine = func() { once.Do(func() { close(acquired); <-proceed }) }
+	t.Cleanup(func() { viaOrgAfterEngine = nil; resume() })
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost) }()
+	select {
+	case <-acquired:
+	case w := <-done:
+		t.Fatalf("the request returned before it parked = %d %s", w.Code, w.Body)
+	}
+	run.mu.Lock()
+	built := run.engine
+	run.mu.Unlock()
+	if built == nil {
+		t.Fatal("the request parked without an engine")
+	}
+	if gen := run.closeIdle(time.Now()); gen != nil {
+		t.Fatal("an idle tick retired the engine a waiting request had just built")
+	}
+	resume()
+	w := <-done
+	if w.Code != http.StatusOK || w.Body.String() != "upstream-ok" {
+		t.Fatalf("the request after the idle tick = %d %s, want 200 upstream-ok", w.Code, w.Body)
+	}
+	run.mu.Lock()
+	cur := run.engine
+	run.mu.Unlock()
+	if cur != built {
+		t.Fatal("the request was not served by the engine it waited on")
+	}
+}
+
 // A request that took the run's engine just before a non-final release (idle, or the runner away)
 // is never served through the retired engine: it takes the live replacement, and the org-side
 // decision row of its traffic is written.
@@ -643,7 +707,11 @@ func TestViaOrg_RetiredEngineIsNeverServed(t *testing.T) {
 	t.Cleanup(func() { viaOrgAfterEngine = nil })
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost) }()
-	<-acquired
+	select {
+	case <-acquired:
+	case w := <-done:
+		t.Fatalf("the request returned before it parked = %d %s", w.Code, w.Body)
+	}
 	f.srv.viaOrg.mu.Lock()
 	run := f.srv.viaOrg.runs[f.run.ID]
 	f.srv.viaOrg.mu.Unlock()
