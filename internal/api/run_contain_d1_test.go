@@ -49,7 +49,9 @@ type d1Store struct {
 	notApplied   bool // the give-up statement applies nothing
 	otherWriter  bool // the statement applies nothing, and the record is final from another writer
 	streaks      []d1Streak
-	cleared      []string // the refs a confirmed stop cleared a failure for
+	cleared      []string      // the refs a confirmed stop cleared a failure for
+	giveUpLag    time.Duration // the give-up statement takes this long, ignoring its ctx
+	postLag      atomic.Int64  // a failure write takes this many nanoseconds more, ignoring its ctx
 }
 
 func newD1Store() *d1Store {
@@ -103,6 +105,12 @@ func (f *d1Store) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, err
 		return types.AgentRun{}, errors.New("no such run")
 	}
 	return containRunOf(r.TerminalSandboxRow), nil
+}
+
+// SetRunContainmentErrorSince is containStore's, after postLag when a test set one.
+func (f *d1Store) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, now, since time.Time) (bool, error) {
+	time.Sleep(time.Duration(f.postLag.Load()))
+	return f.containStore.SetRunContainmentErrorSince(ctx, id, msg, now, since)
 }
 
 // ClearRunContainmentErrorForRef is the store's statement over the rows in memory: the failure is cleared
@@ -236,6 +244,7 @@ func (f *d1Store) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.Folder
 }
 
 func (f *d1Store) GiveUpRunLocalFolder(_ context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	time.Sleep(f.giveUpLag)
 	f.fmu.Lock()
 	defer f.fmu.Unlock()
 	f.giveUps = append(f.giveUps, id)
@@ -1338,9 +1347,9 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 			t.Errorf("calls in flight peaked at %d for one run, want at most 2", peak)
 		}
 	})
-	// The same run with a StopSandbox that hangs to the end of its 60 s phase. The chain is the same up to
-	// the stop's start at 135 s; the stop is then abandoned at 195 s, and that failure is stamped at once.
-	// (The give-up and post phases, 5 s each, are not driven here: nothing is owed and the write is quick.)
+	// The same run with nothing owed and a StopSandbox that hangs to the end of its 60 s phase. The chain is
+	// the same up to the stop's start at 135 s; the stop is abandoned at 195 s, and that failure is stamped at
+	// once because nothing is owed (no give-up phase) and the write is quick.
 	synctest.Test(t, func(t *testing.T) {
 		l, row, _ := d1LateLab(t, 15*time.Second, 0, deadline)
 		l.dr.stopFn = func(ctx context.Context, _ string, _ int) error {
@@ -1353,13 +1362,44 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 		l.stop()
 		began, _, ok := l.dr.firstStop(row.SandboxRef)
 		if !ok || began.Sub(start) != 135*time.Second {
-			t.Errorf("StopSandbox called %v at +%v, want +135s", ok, began.Sub(start))
+			t.Errorf("nothing owed: StopSandbox called %v at +%v, want +135s", ok, began.Sub(start))
 		}
 		l.st.mu.Lock()
 		stamps := slices.Clone(l.st.stamps)
 		l.st.mu.Unlock()
 		if n := len(stamps); n != 4 || stamps[3].Sub(start) != 195*time.Second {
-			t.Errorf("failure stamps %v, want three cut failures and the abandoned stop's at +195s", stamps)
+			t.Errorf("nothing owed: failure stamps %v, want three cut failures and the abandoned stop's at +195s", stamps)
+		}
+	})
+	// The same again with a copy back owed, so the item runs every phase to its end: the hand-off at 115 s,
+	// the last cut abandoned at 135 s, the give-up statement taking its whole 5 s (to 140 s), the stop hanging
+	// to the end of its 60 s phase (200 s), and the write of its failure taking its whole 5 s: 205 s. This is
+	// the one pin that times the give-up phase.
+	synctest.Test(t, func(t *testing.T) {
+		l, row, _ := d1LateLab(t, 15*time.Second, 0, deadline)
+		l.ds.owe(row.ID)
+		l.ds.giveUpLag = d1GiveUpPhase
+		l.dr.stopFn = func(ctx context.Context, _ string, _ int) error {
+			l.ds.postLag.Store(int64(containPost))
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		start := time.Now()
+		l.start()
+		time.Sleep(300 * time.Second)
+		l.stop()
+		began, _, ok := l.dr.firstStop(row.SandboxRef)
+		if !ok || began.Sub(start) != 140*time.Second {
+			t.Errorf("owed: StopSandbox called %v at +%v, want +140s, after the 5 s give-up", ok, began.Sub(start))
+		}
+		if n := l.ds.giveUpCount(); n != 1 {
+			t.Errorf("owed: give-ups = %d, want 1", n)
+		}
+		l.st.mu.Lock()
+		stamps := slices.Clone(l.st.stamps)
+		l.st.mu.Unlock()
+		if n := len(stamps); n != 4 || stamps[3].Sub(start) != 205*time.Second {
+			t.Errorf("owed: failure stamps %v, want three cut failures and the stop's, written at +205s", stamps)
 		}
 	})
 	// The late answer of the round whose d1Due was true (the third) is not observed: nothing is handed off
@@ -1780,4 +1820,59 @@ func TestContain_LateAnswerBetweenDueKnownAndReleaseKeepsOneStopItem(t *testing.
 			t.Errorf("calls in flight peaked at %d for one run, want at most 2", peak)
 		}
 	})
+}
+
+// A pass back that holds the run's lock across the end of the server-mode wait (its due plus five minutes)
+// stops nothing: the visits after the wait hand the run to the stop item, which finds the lock held and ends
+// with no give-up, no stop and no failure write, every visit until the pass is done. The first visit after
+// it stops the sandbox; the changes that arrived are untouched, and changes still owed are given up first.
+func TestContain_StopWaitsForAPassHoldingTheLockPastTheWait(t *testing.T) {
+	for name, arrives := range map[string]bool{"the changes arrive": true, "the changes are still owed": false} {
+		synctest.Test(t, func(t *testing.T) {
+			l, _ := d1ServerLab(t, time.Second, time.Second)
+			l.dr.stopFn = d1StopTakes(time.Second)
+			row := l.rowDue(-time.Minute, nil, "")
+			l.ds.owe(row.ID)
+			keepEnd := row.EndedAt.Add(containmentLag + containServerKeepWait)
+			_, unlock, err := l.srv.lockRunOp(context.Background(), row.ID)
+			if err != nil {
+				t.Fatalf("%s: take the run's lock: %v", name, err)
+			}
+			start := time.Now()
+			l.start()
+			// The pass holds the lock from the start to a minute past the end of the wait.
+			time.Sleep(keepEnd.Sub(start) + time.Minute)
+			if n, w, g := l.dr.totalStops(), l.st.stampWrites(), l.ds.giveUpCount(); n != 0 || w != 0 || g != 0 {
+				t.Errorf("%s: stops %d, failure writes %d, give-ups %d while the pass held the lock past the wait; want none", name, n, w, g)
+			}
+			passEnds := time.Now()
+			if arrives {
+				l.ds.arrive(row.ID)
+			}
+			unlock()
+			time.Sleep(containServerKeepWait)
+			l.stop()
+			began, _, ok := l.dr.firstStop(row.SandboxRef)
+			if !ok || began.Before(passEnds) || began.Sub(passEnds) > 2*containTick {
+				t.Errorf("%s: StopSandbox called %v at +%v, want within a visit or two of the pass ending at +%v", name, ok, began.Sub(start), passEnds.Sub(start))
+			}
+			wantGiveUps := 1
+			if arrives {
+				wantGiveUps = 0
+			}
+			if g := l.ds.giveUpCount(); g != wantGiveUps {
+				t.Errorf("%s: give-ups = %d, want %d", name, g, wantGiveUps)
+			}
+			l.ds.fmu.Lock()
+			st := l.ds.status[row.ID]
+			arrived := st.Back != nil && st.Back.GivenUpAt == nil && st.Back.Files == 3
+			l.ds.fmu.Unlock()
+			if arrives && !arrived {
+				t.Errorf("%s: the arrived changes' record was overwritten", name)
+			}
+			if w := l.st.stampWrites(); w != 0 {
+				t.Errorf("%s: %d failure writes, want none: a held lock is not a failure", name, w)
+			}
+		})
+	}
 }

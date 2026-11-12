@@ -710,11 +710,22 @@ func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 
 // runStopItem is the stop pool's item for one run. A run with a contain call is cut once more first. Each
 // phase runs on a context of its own, so a phase that overruns takes nothing from the next: the item ends
-// within containD1 (containD1Unsupported with no last cut).
+// within containD1 (containD1Unsupported with no last cut). Nothing is given up or stopped while a pass
+// back holds the run's lock: the lock is taken after the last cut and held across the give-up and the stop,
+// and a lock that is held ends the item with nothing written, to be tried again on the next visit.
 func (s *Server) runStopItem(ctx context.Context, run types.AgentRun) {
 	base := context.WithoutCancel(ctx)
 	run, ok := s.d1Reread(base, run)
-	if !ok || (!s.d1NoCall(run) && !s.d1LastCut(base, run)) || !s.d1GiveUp(base, run) {
+	if !ok || (!s.d1NoCall(run) && !s.d1LastCut(base, run)) {
+		return
+	}
+	_, unlock, locked, _ := s.tryLockRunOpHeld(base, run.ID)
+	if !locked {
+		slog.DebugContext(base, "wardynd: an ended run's lock is held; its stop waits for the next visit", slog.String("run_id", run.ID.String()))
+		return
+	}
+	defer unlock()
+	if !s.d1GiveUp(base, run) {
 		return
 	}
 	s.d1Stop(base, run)
