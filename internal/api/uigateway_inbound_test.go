@@ -1272,3 +1272,71 @@ func TestInboundSessionDropsBeforeTheAnswerLeaves(t *testing.T) {
 		})
 	}
 }
+
+// TestUIGateway_InboundTokenObeysDataOut: an inbound token reaches a web app under the run's recorded data_out
+// rule as the browser entry does (refuseAppDataOut): review and blocked refuse it with a run.data_out.deny row
+// for the app, allowed admits it, and a caller with no reach still gets the one 404.
+func TestUIGateway_InboundTokenObeysDataOut(t *testing.T) {
+	withRule := func(t *testing.T, rule types.TransferRule, callers ...string) (*uiHarness, chan http.Header) {
+		t.Helper()
+		h, seen := inboundHarness(t, callers...)
+		h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{MinConfinementClass: types.CC2, DataOut: rule,
+			UIApps: []types.UIApp{{Name: "code", Port: uiTestPort, Inbound: true, Callers: callers}}})
+		return h, seen
+	}
+	for _, rule := range []types.TransferRule{types.TransferBlocked, types.TransferReview} {
+		t.Run(string(rule)+" refuses the owner's token", func(t *testing.T) {
+			h, seen := withRule(t, rule)
+			rec := h.call("wdn_alice", nil)
+			if rec.Code != http.StatusForbidden || respondedReason(t, rec) != reasonDataOutBlocked {
+				t.Fatalf("call = %d %s, want 403 %s", rec.Code, rec.Body.String(), reasonDataOutBlocked)
+			}
+			rows := h.audit.auditRows("run.data_out.deny", "denied")
+			if len(rows) != 1 || rows[0].Actor != h.owner || !strings.Contains(string(rows[0].Data), `"path":"app"`) || !strings.Contains(string(rows[0].Data), `"rule":"`+string(rule)+`"`) {
+				t.Errorf("run.data_out.deny rows = %+v, want one by %s for the app under %s", rows, h.owner, rule)
+			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyDataOut) {
+				t.Errorf("inbound.deny rows = %+v, want one data_out by %s", rows, h.owner)
+			}
+			if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != 0 {
+				t.Errorf("inbound.allow rows = %+v, want none", rows)
+			}
+			select {
+			case <-seen:
+				t.Error("the sandbox app was reached under a held data_out rule")
+			default:
+			}
+		})
+	}
+
+	t.Run("a named caller's token is refused too", func(t *testing.T) {
+		h, _ := withRule(t, types.TransferBlocked, "user:bob")
+		if rec := h.call("wdn_bob", nil); rec.Code != http.StatusForbidden || respondedReason(t, rec) != reasonDataOutBlocked {
+			t.Fatalf("call = %d %s, want 403 %s", rec.Code, rec.Body.String(), reasonDataOutBlocked)
+		}
+		if rows := h.audit.auditRows("run.data_out.deny", "denied"); len(rows) != 1 || rows[0].Actor != "bob" {
+			t.Errorf("run.data_out.deny rows = %+v, want one by bob", rows)
+		}
+	})
+
+	t.Run("allowed admits", func(t *testing.T) {
+		h, _ := withRule(t, types.TransferAllowed)
+		if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK || rec.Body.String() != "sandbox app" {
+			t.Fatalf("call = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+		if rows := h.audit.auditRows("run.data_out.deny", "denied"); len(rows) != 0 {
+			t.Errorf("run.data_out.deny rows = %+v, want none", rows)
+		}
+	})
+
+	t.Run("a caller with no reach still gets the one 404", func(t *testing.T) {
+		h, _ := withRule(t, types.TransferBlocked, "user:bob")
+		rec := h.call("wdn_carol", nil)
+		if rec.Code != http.StatusNotFound || respondedReason(t, rec) != reasonInboundNotFound {
+			t.Fatalf("call = %d %s, want 404 %s", rec.Code, rec.Body.String(), reasonInboundNotFound)
+		}
+		if rows := h.audit.auditRows("run.data_out.deny", "denied"); len(rows) != 0 {
+			t.Errorf("run.data_out.deny rows = %+v, want none: the rule is no oracle to a caller with no reach", rows)
+		}
+	})
+}

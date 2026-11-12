@@ -29,7 +29,8 @@
       "ca_pem",
       "service_account",
       "namespaces",
-      "access"
+      "access",
+      "approve_each"
     ],
     "CLIServiceAccount": [
       "namespace",
@@ -115,6 +116,15 @@
       "sandbox_mode",
       "approvals"
     ],
+    "HostRule": [
+      "host",
+      "methods",
+      "paths",
+      "effect"
+    ],
+    "HostRuleSet": [
+      "rules"
+    ],
     "IncludedTool": [
       "id",
       "kind",
@@ -131,6 +141,7 @@
       "detect_entropy",
       "detect_pii",
       "detector_sidecar_url",
+      "detector_sidecar_format",
       "classified_markers",
       "scan_attachments",
       "inspect_forward_egress",
@@ -342,6 +353,14 @@
       "section": "run_wide"
     },
     {
+      "name": "refuse_ip_literals",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "IP address hosts follow the baseline. False is a choice to leave them as allow_all_egress has them.",
+      "section": "run_wide"
+    },
+    {
       "name": "first_use_approval",
       "part": "egress",
       "omitted": "baseline",
@@ -371,6 +390,14 @@
       "omitted": "baseline",
       "empty": "all",
       "meaning": "Methods follow the baseline. An empty list allows every method.",
+      "section": "run_wide"
+    },
+    {
+      "name": "host_rules",
+      "part": "egress",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No host rules are added. A template's rule sets apply beside the sets of every other layer.",
       "section": "run_wide"
     },
     {
@@ -468,6 +495,14 @@
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
       "meaning": "The organisation's recording level applies. Keystrokes are never recorded.",
+      "section": "run_wide"
+    },
+    {
+      "name": "data_out",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter.",
       "section": "run_wide"
     },
     {

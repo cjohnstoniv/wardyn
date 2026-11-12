@@ -150,6 +150,10 @@ type Caps struct {
 	// runner (0.10 on). Absent (an older runner) reads as none, so a person sees
 	// "no runner on your computer" rather than a refused call.
 	Folders bool `json:"folders,omitempty"`
+	// FolderPassOnce says the runner runs at most one folder pass per run at a time and refuses a second
+	// with folder_pass_busy (0.10 on). Absent (an older runner), the org starts a pass only once the last
+	// one it started is settled.
+	FolderPassOnce bool `json:"folder_pass_once,omitempty"`
 	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
@@ -197,6 +201,25 @@ const (
 	ProxySettingGitPushWithheld = "git_push_withheld"
 	ProxySettingForgeHosts      = "forge_hosts"
 	ProxySettingAllowedModels   = "allowed_models"
+	// ProxySettingLLMHeaders is llm_headers: the headers a provider's gateway is given. Dropped, the gateway
+	// gets the request without them and may route it where its admin did not choose.
+	ProxySettingLLMHeaders = "llm_headers"
+	// ProxySettingAWSSigV4Gateways is aws_sigv4.gateways, a field inside aws_sigv4: a runner that
+	// predates it decodes the grant without it, and its proxy then sends the gateway calls unsigned
+	// for AWS, so such a runner is refused a run that carries one.
+	ProxySettingAWSSigV4Gateways = "aws_sigv4_gateways"
+	ProxySettingMCPApproveEach   = "mcp_approve_each"
+	// ProxySettingNoNetwork is no_network. Dropped, the run's proxy would serve the doors its allowlist
+	// does not key, so such a runner is refused the run.
+	ProxySettingNoNetwork = "no_network"
+	// ProxySettingRefuseIPLiterals is policy.refuse_ip_literals, a field inside policy: a runner that
+	// predates it decodes the policy without it, and its proxy then allows a literal under allow-all,
+	// so such a runner is refused a run that sets it under allow_all_egress, the only place it acts.
+	ProxySettingRefuseIPLiterals = "refuse_ip_literals"
+	// ProxySettingHostRules is policy.host_rules, a field inside policy: a runner that predates it
+	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
+	// such a runner is refused a run that has rules.
+	ProxySettingHostRules = "host_rules"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -218,13 +241,24 @@ func LocalModelRelayNeeded(pc runner.ProxyConfig) bool {
 
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.
-var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld, ProxySettingForgeHosts, ProxySettingAllowedModels}
+var ProxySettings = []string{
+	ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels,
+	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
+	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
+	ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals, ProxySettingHostRules,
+}
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
 // Nothing sets VM yet (the Docker driver will, where the desktop relay starts), so the org leaves it false; its gate stays.
 func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
-	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0, pc.ModelLimit != nil} {
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0, pc.ModelLimit != nil,
+		pc.AWSSigV4 != nil && len(pc.AWSSigV4.Gateways) != 0,
+		pc.MCPApproveEach != nil,
+		len(pc.LLMHeaders) != 0,
+		pc.NoNetwork,
+		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
+		len(pc.Policy.HostRules) != 0} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

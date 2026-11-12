@@ -242,6 +242,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	s.projectRunnerFacts(r, runs)
 	redactRunRepos(runs)
 	run = runs[0]
+	run.PolicyReadback = s.runPolicyReadback(r.Context(), run.ID)
 	// A local run's runner was named by projectRunnerFacts; a remote-hosted runner's name is read here.
 	if run.RunnerName == "" {
 		run.RunnerName = s.runnerNameOf(r.Context(), run)
@@ -441,9 +442,10 @@ func (s *Server) runCreatedViaName(ctx context.Context, run types.AgentRun) stri
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
-// scanned for its run.policy.resolve envelope. Dispatch writes that event
-// before the sandbox exists, so it is always among a run's first events; the
-// bound keeps a long-lived run's audit tail out of the query.
+// scanned for its run.create row, and, on a store without filtered reads, for
+// its policy rows (runEffectivePolicy). Dispatch writes those before the
+// sandbox exists, so they are among a run's first events; the bound keeps a
+// long-lived run's audit tail out of the query.
 const effectivePolicyAuditScan = 200
 
 // effectiveUIApps returns the ui_apps of the run's EFFECTIVE policy — the
@@ -456,23 +458,22 @@ const effectivePolicyAuditScan = 200
 // created with an INLINE policy the DEFAULT policy's apps — a widening this
 // must never do.
 //
+// A revived run's apps are its current policy generation's (runEffectivePolicy).
 // A run with no such event (never dispatched, or the audit store unavailable)
 // yields no apps, so every caller fails closed on it.
 func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.UIApp, error) {
-	if s.cfg.Store == nil {
-		return nil, nil
-	}
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, effectivePolicyAuditScan)
+	envelope, _, _, err := s.runEffectivePolicy(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	envelope, _, _ := latestPolicyResolve(events)
 	return envelope.UIApps, nil
 }
 
-// latestPolicyResolve is the run's last decodable run.policy.resolve envelope
-// and when it was written. dispatchRun writes one per run, behind claimDispatch,
-// so last-wins only keeps the read defined if a second ever lands. ok=false when there is none, and every caller fails closed on it.
+// latestPolicyResolve is the run's last decodable run.policy.resolve envelope among events, and when
+// it was written: the policy dispatch recorded. It never reads a run.policy.generation row, whose
+// policy applies only while agent_runs says that generation is current (runEffectivePolicy).
+// dispatchRun writes one resolve per run, behind claimDispatch, so last-wins only keeps the read
+// defined if a second ever lands. ok=false when there is none, and every caller fails closed on it.
 func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
 		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
@@ -517,12 +518,15 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 	if policyID == nil {
 		spec := ceiling.Spec.Clone()
 		clampStoredFileSize(&spec, "the governance profile ceiling")
-		// A ceiling's azure_devops_capabilities and github_capabilities are
-		// bounds, not grants: handed to a member as their spec either would
-		// replace the row's default_profile with the widest list they may
-		// choose. Only a choice the member (or a selected row) made is honoured.
+		// A ceiling's azure_devops_capabilities is a bound, not a grant: handed
+		// to a member as their spec it would replace the row's default_profile
+		// with the widest list they may choose. Only a choice the member (or a
+		// selected row) made is honoured. Its github_capabilities stays: nothing
+		// on GitHub reads that list as a grant, so the run carrying it only
+		// narrows the run (pushes withheld without code_write, the GitHub CLI
+		// kept to the list), which is the profile's wall for the member.
 		if !s.runUngoverned(ctx) {
-			spec.AzureDevOpsCapabilities, spec.GitHubCapabilities = nil, nil
+			spec.AzureDevOpsCapabilities = nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
 		if ceiling.Unit != nil {

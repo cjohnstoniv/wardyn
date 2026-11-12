@@ -32,6 +32,9 @@ type runnerStreamState struct {
 	runners principalLimiter
 	subsMu  sync.Mutex
 	subs    map[uuid.UUID]runnerEndpoint
+	// netpolLast is each runner's last NetworkPolicy verdict this process took (auditRunnerNetpol),
+	// under subsMu.
+	netpolLast map[uuid.UUID]string
 	// owners is each runner owner's slots, under subsMu.
 	owners  map[string]ownerSlots
 	offline runnerOfflineSweeps

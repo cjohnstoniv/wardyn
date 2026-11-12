@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { CHANGES } from "../../lib/governance-copy";
+import { CHANGE_NOTE } from "./copy/change-note";
 import { aheadByHours } from "../../lib/test-clock";
 
 const getAvailabilityMock = vi.fn();
@@ -303,6 +304,9 @@ describe("AvailabilityControl — states.html", () => {
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
 
     const err = await screen.findByText(UNKNOWN_TYPE);
+    // Announced, and tied to the field it is about.
+    expect(err).toHaveAttribute("role", "alert");
+    expect(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveAccessibleDescription(UNKNOWN_TYPE);
     expect(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveValue("analyst");
     // Under the adder, above the note — not a toast.
     const input = screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER);
@@ -525,6 +529,7 @@ describe("AvailabilityControl — a 202 is submitted, never saved", () => {
     await userEvent.click(only());
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(first()).toBeChecked();
   });
 

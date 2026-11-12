@@ -85,6 +85,9 @@ type queuedLaunch struct {
 	// so its resolve selects the context the launch did, and sameUnit compares like with like.
 	RunIn       uuid.UUID   `json:"run_in,omitzero"`
 	OwningUnits []uuid.UUID `json:"owning_units,omitempty"`
+	// StrictPins are the choice's strict pins (contextChoice.StrictPins); a launch queued before them
+	// has none.
+	StrictPins []contextPin `json:"strict_pins,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
 	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
@@ -300,6 +303,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	case errors.Is(err, store.ErrRunnerPoolStale):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
+	case errors.Is(err, store.ErrRunCreateKeySuperseded):
+		writeRunCreateKeyInFlight(w)
+		return
 	case err != nil:
 		writeServerError(w, r, "create run", err)
 		return
@@ -499,7 +505,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		launch.UnitID = &id
 	}
 	choice := contextChoiceFrom(ctx)
-	launch.RunIn, launch.OwningUnits = choice.RunIn, choice.OwningUnits
+	launch.RunIn, launch.OwningUnits, launch.StrictPins = choice.RunIn, choice.OwningUnits, choice.StrictPins
 	raw, err := json.Marshal(launch)
 	if err != nil {
 		return store.RunQueueEntry{}, err
@@ -540,7 +546,9 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
+	stampImageAdmission(createData, q.f.admission)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
+	stampIdempotencyKey(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
 		created.ID.String(), "success", mustJSON(withRunUserType(ctx, created.UserType, createData))))
 	s.auditRunComponents(ctx, created.ID, q.createdByType, created.CreatedBy, q.f.comps)
@@ -558,7 +566,7 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 	}
 	warnings = append(warnings, q.f.autonomyWarns...)
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &q.req, spec: q.f.spec, harnesses: q.f.harnesses, level: q.f.autonomy.Level,
-		locked: ceilingForDispatch(q.f.ceiling, q.f.adoGrade, q.f.bedrockGrade).agentGuardrailLocks, class: q.f.enforced, place: q.f.place}, nil)...)
+		locked: ceilingForDispatch(q.f.ceiling, q.f.adoGrade, q.f.bedrockGrade).agentGuardrailLocks, class: q.f.enforced, place: q.f.place, comps: q.f.comps}, nil)...)
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)

@@ -180,7 +180,9 @@ export function SetupScreen({
   const [visitedSteps, setVisitedSteps] = React.useState<Set<SetupStepId>>(
     () => new Set(loadVisitedSteps()),
   );
-  const [secretNames, setSecretNames] = React.useState<string[]>([]);
+  // null = not known (still loading, or the read failed): an unknown list must
+  // never read as "the store is empty", or a configured ref shows as deleted.
+  const [secretNames, setSecretNames] = React.useState<string[] | null>(null);
   // Count of ENABLED git-provider rows (§7.5: "counts ENABLED rows, never
   // hosts") — feeds the `providers` step's own badge/done rule, the same
   // shape `integrationsCount` feeds `integrations`'s.
@@ -422,7 +424,7 @@ export function SetupScreen({
     return secretsApi
       .listSecrets()
       .then(setSecretNames)
-      .catch(() => setSecretNames([]));
+      .catch(() => setSecretNames(null));
   }, [adminReads]);
 
   // GET /workspace-providers is operatorOnly — gated on `operatorResolved &&
@@ -896,7 +898,7 @@ export function SetupScreen({
             gate={corpGate}
             onGateChange={onCorpGateChange}
             onRecheck={forceRecheck}
-            secretNames={secretNames}
+            secretNames={secretNames ?? undefined}
             registerActions={(a) => {
               corpActionsRef.current = a;
             }}

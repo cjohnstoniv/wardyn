@@ -1,79 +1,133 @@
 # Wardyn docs
 
-- Start at the repo [README](../README.md) — it, the in-product Getting Started wizard — with its built-in demo steps — is the first-run path.
-- Everything here is the next question.
+- Start at the repo [README](../README.md); the console's Getting started page then walks a first run and the built-in demos.
 
-![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](img/wardyn-walls.webp)
+## Getting started
 
-![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-places.webp)
+| Video | Who it's for | Page |
+|---|---|---|
+| Install | Admin | [TRY-IT.md](TRY-IT.md), [DESKTOP.md](DESKTOP.md), [operations/k8s-runners.md](operations/k8s-runners.md) |
+| First governed run | Member | [NEW-RUN.md](NEW-RUN.md) |
+| Approvals | Member and approver | [operations/approval-rules.md](operations/approval-rules.md) |
+| A Mac inside your Mac | Developer | [operations/macos-vm-use.md](operations/macos-vm-use.md) |
+| A unit admin's day | Unit admin | [operations/unit-admins.md](operations/unit-admins.md), [operations/three-roles.md](operations/three-roles.md) |
+| Security admin setup | Security admin | [operations/security-admin-setup.md](operations/security-admin-setup.md) |
+| CI | Platform engineer | [CI.md](CI.md), [ci-jobs-as-runs.md](ci-jobs-as-runs.md) |
 
-## Index
+## Evaluate
 
 | If you want to… | Read |
 |---|---|
 | Run it locally and watch the boundary hold | [TRY-IT.md](TRY-IT.md) |
-| Use a Wardyn someone else operates (you are a member, not the admin) | [USERS.md](USERS.md) |
-| Start a run from the console: the New run steps, Review, templates and run documents | [NEW-RUN.md](NEW-RUN.md) |
-| Configure a deployment (every `WARDYN_*` variable, defaults, which binary reads it) | [ENV.md](ENV.md) |
-| Author a run policy (every `RunPolicySpec` field, defaults, legal values) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
-| See where a credential is while a run works (added at the proxy, or delivered inside), and each residual | [CREDENTIALS.md](CREDENTIALS.md) |
+| Answer a vendor security questionnaire: what leaves the box | [DATA-FLOW.md](DATA-FLOW.md) |
+| Verify a release artifact (cosign signatures, SBOM attestations) | [VERIFY.md](VERIFY.md) |
+| Answer a data-subject request: what Wardyn retains | [OPERATIONS.md](OPERATIONS.md#retention-erasure-and-gdpr--a-residual-not-a-solved-problem) |
+| State an export-control classification (ECCN, EAR) for a procurement form | [EXPORT.md](EXPORT.md) |
+| Know how Wardyn is built: AI-written code under a human maintainer | [HOW-WARDYN-IS-BUILT.md](HOW-WARDYN-IS-BUILT.md) |
+| Know what Wardyn does *not* defend against | [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) |
+| Reason about agent risk in general: terms and threat categories | [../threatmodel/AGENT-THREAT-MODEL.md](../threatmodel/AGENT-THREAT-MODEL.md) |
+| See what is shipped vs. planned | [../ROADMAP.md](../ROADMAP.md), [../CHANGELOG.md](../CHANGELOG.md) |
+
+## Use a Wardyn someone else runs
+
+| If you want to… | Read |
+|---|---|
+| Use a Wardyn someone else operates (you are a member) | [USERS.md](USERS.md) |
+| Start a run from the console: New run steps, Review, templates | [NEW-RUN.md](NEW-RUN.md) |
+| Reach a run over SSH, sftp, port-forward or VS Code Remote-SSH | [SSH.md](SSH.md) |
+| Relay a UI app in a run (editor, dev server) to your browser | [UI-SANDBOXES.md](UI-SANDBOXES.md) |
+| Keep a command running, with restarts and a health check | [SERVICES.md](SERVICES.md) |
+
+## Operate a deployment
+
+| If you want to… | Read |
+|---|---|
+| Configure a deployment (every `WARDYN_*` variable) | [ENV.md](ENV.md) |
+| Back up, restore or upgrade a deployment, or put it behind a corporate proxy | [OPERATIONS.md](OPERATIONS.md) |
+| Run the blessed compose stack (no-login local mode, TLS) | [../deploy/compose/README.md](../deploy/compose/README.md) |
+| Deploy to a Kubernetes cluster (Helm chart, quickstart) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
+| Run a daemon on each developer's managed laptop (MDM envelope, ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
+| Register a self-hosted runner, and what it does offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
+| Decide where runs go: runner pools, limits, barriers, the queue | [operations/runner-pools.md](operations/runner-pools.md) |
+| Offer Linux VM sandboxes (QEMU/KVM) from a Linux runner host | [operations/linux-vm-sandboxes.md](operations/linux-vm-sandboxes.md) |
+| Offer macOS VM sandboxes from a managed Mac: requirements, switches, settings | [operations/macos-vms.md](operations/macos-vms.md) |
+| Use a macOS VM sandbox: first run, keep a machine, windows, recording, folders | [operations/macos-vm-use.md](operations/macos-vm-use.md) |
+| Prepare and customise a Mac's base image; set up the guest by hand | [operations/macos-vm-base-image.md](operations/macos-vm-base-image.md) |
+| Run a Mac that offers macOS VMs: capacity, disk, the shared ledger, credentials | [operations/macos-vm-host.md](operations/macos-vm-host.md) |
+| Fix a Mac that stopped offering macOS VMs; see what has not run on a real Mac | [operations/macos-vm-troubleshooting.md](operations/macos-vm-troubleshooting.md) |
+| Run the organisation's own runner in a Kubernetes cluster | [operations/k8s-runners.md](operations/k8s-runners.md) + [design/0.9/k8s-runnerd.md](design/0.9/k8s-runnerd.md) + the `wardyn-k8s-runner-setup` Claude Code skill |
+| Set up SSO (Entra ID / OIDC) and admin/member roles on a cluster | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
+| Run more than one wardynd replica, and see its limits | [operations/high-availability.md](operations/high-availability.md) |
+| Require a signed image when a member creates a run (audit first, then enforce) | [operations/image-signature-checks.md](operations/image-signature-checks.md) |
+| Make a cluster refuse unsigned Wardyn images (policy-controller or Kyverno) | [operations/image-admission.md](operations/image-admission.md) |
+| Let an agent-sandbox controller make the agent pods (experimental) | [operations/kubernetes-agent-sandbox.md](operations/kubernetes-agent-sandbox.md) |
+| See which run and person a Kubernetes kernel-sensor alert belongs to | [operations/kubernetes-ground-truth.md](operations/kubernetes-ground-truth.md) |
+| Set up as a security admin: a first-setup checklist | [operations/security-admin-setup.md](operations/security-admin-setup.md) |
+| Monitor a deployment: metrics, health and audit sinks | [operations/monitoring.md](operations/monitoring.md) |
+| Rotate the age key, or use an external key store | [operations/secrets-and-keys.md](operations/secrets-and-keys.md) |
+| Know what the shared-mount recording fallback's read confinement covers | [RECORDING-ROOT-READ.md](RECORDING-ROOT-READ.md) |
+| Set anonymous-route rate limits behind a shared ingress (`WARDYN_TRUSTED_PROXIES`) | [operations/ingress-rate-limits.md](operations/ingress-rate-limits.md) |
+| Sign a CLI component in | [operations/cli-component-sign-in.md](operations/cli-component-sign-in.md) |
+| Take a recovery set and rehearse a restore | [operations/recovery-rehearsal.md](operations/recovery-rehearsal.md) |
+| Set a run's toolchain, or build the Claude sign-in image | [operations/build-images.md](operations/build-images.md) |
+| Brand the console as the organisation's own | [operations/console-branding.md](operations/console-branding.md) |
+| See what the Kubernetes runner substrate does not do yet | [operations/kubernetes-known-gaps.md](operations/kubernetes-known-gaps.md) |
+| Give each person persistent storage, and reclaim it | [operations/user-drives.md](operations/user-drives.md) |
+| Offboard a person: sessions, tokens, runs, credentials, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
+| Keep a run declared from a file or a WardynWorkload resource | [operations/workloads.md](operations/workloads.md) |
+| Set a run's lease, extend it, or revive a kept run | [operations/run-lifetime.md](operations/run-lifetime.md) |
+| Keep run branches and pull requests from starting pipelines | [operations/ci-trigger-guard.md](operations/ci-trigger-guard.md) |
+
+## Govern as an admin
+
+| If you want to… | Read |
+|---|---|
+| Author a run policy (every `RunPolicySpec` field) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
+| Choose a barrier for an agent | [CONFINEMENT.md](CONFINEMENT.md) |
+| See where a credential is while a run works, and each residual | [CREDENTIALS.md](CREDENTIALS.md) |
+| Connect a model provider, or route model traffic through an AI gateway | [operations/integrations.md](operations/integrations.md#model-access-comes-from-a-model-provider), [operations/ai-gateway.md](operations/ai-gateway.md) |
+| Sign people in to a custom model endpoint's identity service | [operations/endpoint-sign-in.md](operations/endpoint-sign-in.md) |
+| Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
+| See which writes are admin-only or security-admin | [operations/admin-only-writes.md](operations/admin-only-writes.md) |
+| Cap what one person or group may do: governance profiles, capability grants | [operations/three-roles.md](operations/three-roles.md) + [operations/capabilities.md](operations/capabilities.md) |
+| Narrow what a member's own run may reach | [operations/member-runs.md](operations/member-runs.md) + [operations/capabilities.md](operations/capabilities.md) |
+| Turn a governance write into a two-human decision | [operations/governance-writes.md](operations/governance-writes.md) |
+| Set the Wardyn boundary around every run, and use break-glass | [operations/boundary.md](operations/boundary.md) |
+| Let a security admin's rule approve a service identity's held requests | [operations/approval-rules.md](operations/approval-rules.md) |
+| Stop sharing the admin token: a token per person, and for service use | [operations/api-tokens.md](operations/api-tokens.md) |
+| Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
+| Configure an org component, and what a launch leaves behind | [operations/custom-components.md](operations/custom-components.md) |
+| Name a launch preset for a non-console launcher | [operations/launch-presets.md](operations/launch-presets.md) |
+| Govern one part of the tree as a unit admin | [operations/unit-admins.md](operations/unit-admins.md) |
+| See what a member sees, as an admin | [operations/member-mode.md](operations/member-mode.md) |
+| Look up why a member was refused (`authz.denied` reasons) | [operations/denials.md](operations/denials.md) |
+| Look up an audit action's meaning and emit site | [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) |
+
+## Build on it
+
+| If you want to… | Read |
+|---|---|
 | Run a governed sandbox from a pipeline, headless | [CI.md](CI.md) + [ci/](ci/) |
-| Run each CI job as a confined one-shot run on a control plane you operate (governance profile, pinned image, runner token, `--wait`, audit) | [ci-jobs-as-runs.md](ci-jobs-as-runs.md) |
-| SSH / sftp / port-forward / VS Code Remote-SSH / scripted access for another tool into a run | [SSH.md](SSH.md) |
-| Relay a UI app inside a run — a code editor, a dev server — to your browser | [UI-SANDBOXES.md](UI-SANDBOXES.md) |
+| Run each CI job as a confined one-shot run on a control plane you operate | [ci-jobs-as-runs.md](ci-jobs-as-runs.md) |
 | Build against the API in Go, or with curl | [sdk.md](sdk.md) |
 | Understand or debug a devcontainer / BYOI image build | [ENVBUILD.md](ENVBUILD.md) |
-| Back up, restore, or upgrade a running deployment, or put it behind a corporate proxy | [OPERATIONS.md](OPERATIONS.md) |
-| Run the blessed compose stack (no-login local mode, TLS) | [../deploy/compose/README.md](../deploy/compose/README.md) |
-| Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
-| Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
-| Register a self-hosted runner on a laptop, and what it does while offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
-| Offer Linux VM sandboxes (QEMU/KVM) from a Linux runner host: requirements, the `/dev/kvm` step, the guest image contract | [operations/linux-vm-sandboxes.md](operations/linux-vm-sandboxes.md) |
-| Offer macOS VM sandboxes from a company-managed Mac: requirements, the base image, memory and disk limits, the shared ledger | [operations/macos-vms.md](operations/macos-vms.md) |
-| Sign people in to a custom model endpoint's own identity service (OIDC, identity binding, renewal) | [operations/endpoint-sign-in.md](operations/endpoint-sign-in.md) |
-| Make a cluster refuse unsigned Wardyn images (Sigstore policy-controller or Kyverno; not run in CI) | [operations/image-admission.md](operations/image-admission.md) |
-| Run the organisation's own runner in a Kubernetes cluster (Helm chart, enrolment, claim, trust class, failure modes) | [operations/k8s-runners.md](operations/k8s-runners.md) + [design/0.9/k8s-runnerd.md](design/0.9/k8s-runnerd.md) + the `wardyn-k8s-runner-setup` Claude Code skill |
-| Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
-| Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
-| See which writes are admin-only and which sit on the security-admin tier | [operations/admin-only-writes.md](operations/admin-only-writes.md) |
-| Cap what one person or group may do — governance profiles, the security-admin tier, capability grants | [operations/three-roles.md](operations/three-roles.md) + [operations/capabilities.md](operations/capabilities.md) |
-| Narrow what a member's own run may reach — egress, secrets, images, agents, features | [operations/member-runs.md](operations/member-runs.md) + [operations/capabilities.md](operations/capabilities.md) |
-| Turn a governance write into a two-human decision, and work the approval queue | [operations/governance-writes.md](operations/governance-writes.md) |
-| Set the Wardyn boundary, the outermost layer of every run, super admins' included, and use break-glass | [operations/boundary.md](operations/boundary.md) |
-| Let a security admin's rule approve a service identity's held tool calls and first-use hosts | [operations/approval-rules.md](operations/approval-rules.md) |
-| Stop sharing the admin token — a token per person, and tokens for someone who never signs in | [operations/api-tokens.md](operations/api-tokens.md) |
-| Decide where runs go — runner pools, their limits and barriers, and the queue | [operations/runner-pools.md](operations/runner-pools.md) |
-| Run more than one wardynd replica, and see what a second replica still cannot do | [operations/high-availability.md](operations/high-availability.md) |
-| Keep a command running, with restarts and a health check | [SERVICES.md](SERVICES.md) |
-| Keep a run declared from a file or a WardynWorkload resource, and bind a namespace | [operations/workloads.md](operations/workloads.md) |
-| Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |
-| Offboard a person: sessions, tokens, keys, runs, credentials, workspaces, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
-| Let an agent-sandbox controller make the agent pods (experimental), and what that trusts | [operations/kubernetes-agent-sandbox.md](operations/kubernetes-agent-sandbox.md) |
-| See which run and person a Kubernetes kernel-sensor alert belongs to | [operations/kubernetes-ground-truth.md](operations/kubernetes-ground-truth.md) |
-| Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
-| Look up why a member was refused (`authz.denied` reasons and their targets) | [operations/denials.md](operations/denials.md) |
-| Configure an org component, and what a launch leaves behind | [operations/custom-components.md](operations/custom-components.md) |
+| Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
+| Find the layers of the code and the interface each extension implements | [EXTENDING.md](EXTENDING.md) |
 | Runnable sample workspaces, one per governance control | [../examples/](../examples/) |
+
+## Contribute
+
+| If you want to… | Read |
+|---|---|
+| Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
+| Plan a change: issues, branches, pull requests | [../CONTRIBUTING.md](../CONTRIBUTING.md#branching-issues-and-pull-requests) |
+| Write or edit a doc: form, size caps, links, visuals | [STYLE.md](STYLE.md) |
+| Design or review a console screen | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
+| Read a design note, current or a record | [design/README.md](design/README.md) |
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Run the live tests against real Entra/ADO/Bedrock | [LIVE-TESTS.md](LIVE-TESTS.md) |
-| Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
-| Find the layers of the code, the interface each extension implements, and where a service or workload plugs in | [EXTENDING.md](EXTENDING.md) |
-| Write or edit a doc (form, size caps, links, visuals, the headings code quotes) | [STYLE.md](STYLE.md) |
-| Design or review a console screen (color budget, type rungs, elevation, status glyphs) | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
-| Read a design note, and tell a current one from a record | [design/README.md](design/README.md) |
-| Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
-| Plan a change — issues, branches, pull requests, what "done" means | [../CONTRIBUTING.md](../CONTRIBUTING.md#branching-issues-and-pull-requests) |
-| Know how Wardyn is built — AI-written code, and the human-driven planning and review around it | [HOW-WARDYN-IS-BUILT.md](HOW-WARDYN-IS-BUILT.md) |
-| Prepare or cut a release (milestone → PRs → release branch → tag) | [../RELEASING.md](../RELEASING.md#how-a-release-is-prepared) |
-| Answer a vendor security questionnaire — what leaves the box, what never does | [DATA-FLOW.md](DATA-FLOW.md) |
-| Verify a release artifact (cosign signatures, SBOM attestations) | [VERIFY.md](VERIFY.md) |
-| Answer a data-subject request — what Wardyn retains, and why there is no selective erasure | [OPERATIONS.md](OPERATIONS.md#retention-erasure-and-gdpr--a-residual-not-a-solved-problem) |
-| State an export-control classification (ECCN, EAR) for a procurement form | [EXPORT.md](EXPORT.md) |
-| Look up an audit action's meaning and emit site | [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) |
+| Prepare or cut a release | [../RELEASING.md](../RELEASING.md#how-a-release-is-prepared) |
 | Record or re-record the demo video series | [DEMO-SCRIPT.md](DEMO-SCRIPT.md) |
-| Reason about agent risk in general — shared terminology and threat categories | [../threatmodel/AGENT-THREAT-MODEL.md](../threatmodel/AGENT-THREAT-MODEL.md) |
-| Know what Wardyn does *not* defend against | [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) |
-| See what is shipped vs. planned | [../ROADMAP.md](../ROADMAP.md), [../CHANGELOG.md](../CHANGELOG.md) |
 
 ## Field reports
 

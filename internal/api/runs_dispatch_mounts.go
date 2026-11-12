@@ -785,6 +785,7 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 	if err := s.recordVMMachine(ctx, run, sb); err != nil {
 		return err
 	}
+	s.recordProxyAddr(ctx, run.ID, sb.ProxyAddr)
 	s.recordDesktopVMSignIns(ctx, run, sb)
 	s.auditKeychainTrust(ctx, run, sb)
 	return nil

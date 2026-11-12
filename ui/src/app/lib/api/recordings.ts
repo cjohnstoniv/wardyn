@@ -14,7 +14,7 @@
 // (internal/types.AgentRun), so getRecording is the only fetch left: it is
 // called once, for the one cast a viewer actually presses play on.
 import type { AsciicastEvent, Recording } from "../types";
-import { errText, HttpError, num, str, wfetch } from "./core";
+import { errEnvelope, errText, HttpError, num, str, wfetch } from "./core";
 
 // Parse an asciicast (v2) recording document into the Recording shape.
 // Accepts either JSON ({header, events|stdout}) or raw asciicast text
@@ -58,7 +58,9 @@ async function fetchCast(runId: string, key: string): Promise<string | undefined
   );
   if (res.status === 404) return undefined;
   if (!res.ok) {
-    throw new HttpError(res.status, await errText(res));
+    // Keep the reason: a held data_out rule is a refusal, not a missing recording.
+    const { message, reason } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason);
   }
   const text = await res.text();
   if (!text.trim()) return undefined;

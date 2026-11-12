@@ -12,7 +12,7 @@
 // The ids are NOT ours to choose: internal/api/ui_layout.go's
 // runLayoutWidgetIDs is a CLOSED set the server validates every PUT against
 // ("terminal, egress, files, sandbox, credentials, identity, effective-policy,
-// desktop, ssh, service, machine"). An id outside it is a 400, so this table's keys must match that slice
+// desktop, ssh, service, machine, model-usage"). An id outside it is a 400, so this table's keys must match that slice
 // exactly — the two halves of the contract are kept in sync by hand (C-UI adds
 // `effective-policy` to BOTH, in the same commit — a client-only add would
 // 400 every layout PUT that ever placed it). That file's own doc explains what
@@ -23,7 +23,7 @@
 // use React.createElement rather than turning the registry into a component
 // module.
 import * as React from "react";
-import { Box, FileDiff, Fingerprint, Globe, HardDrive, HeartPulse, KeyRound, Monitor, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
+import { Box, FileDiff, Fingerprint, Gauge, Globe, HardDrive, HeartPulse, KeyRound, Monitor, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
 import type {
   AuditEvent,
   CredentialGrant,
@@ -38,6 +38,7 @@ import { isMacOSVM, isVMKind } from "../../../lib/types/machine-kind";
 import { DesktopCard } from "../run-detail-desktop";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import { MachineWidget } from "./widgets/machine-card";
+import { withheldCredentialHosts } from "./widgets/effective-policy";
 import { ServicePanel } from "./service-panel";
 import {
   CredentialsWidget,
@@ -45,6 +46,7 @@ import {
   EgressWidget,
   FilesChangedWidget,
   IdentityWidget,
+  ModelUsageWidget,
   SandboxWidget,
 } from "./widgets";
 
@@ -61,6 +63,7 @@ export type WidgetId =
   | "egress"
   | "files"
   | "sandbox"
+  | "model-usage"
   | "credentials"
   | "identity"
   | "effective-policy"
@@ -209,6 +212,18 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: { live: { x: 8, y: 8, w: 4, h: 4 } },
   },
+  // Token counts from the run proxy. Unlike Sandbox it answers for a finished run, so it has a finished slot; that
+  // slot is under Effective policy: the right half of that row is the Desktop tile's on a VM run.
+  "model-usage": {
+    label: "Model usage",
+    Icon: Gauge,
+    component: (ctx) => React.createElement(ModelUsageWidget, { runId: ctx.run.id, live: !ctx.finished }),
+    defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
+    presets: {
+      live: { x: 8, y: 12, w: 4, h: 4 },
+      finished: { x: 0, y: 16, w: 6, h: 4 },
+    },
+  },
   credentials: {
     label: "Credentials",
     Icon: KeyRound,
@@ -220,7 +235,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
       }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
-      live: { x: 8, y: 12, w: 4, h: 4 },
+      live: { x: 8, y: 16, w: 4, h: 4 },
       finished: { x: 0, y: 8, w: 6, h: 4 },
     },
   },
@@ -231,7 +246,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
       React.createElement(IdentityWidget, { run: ctx.run, audit: ctx.audit, onGoPolicy: ctx.onGoPolicy, onGoAudit: ctx.onGoAudit }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
-      live: { x: 8, y: 16, w: 4, h: 4 },
+      live: { x: 8, y: 20, w: 4, h: 4 },
       finished: { x: 6, y: 8, w: 6, h: 4 },
     },
   },
@@ -245,7 +260,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     component: (ctx) => React.createElement(EffectivePolicyWidget, { audit: ctx.audit }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
-      live: { x: 8, y: 29, w: 4, h: 4 },
+      live: { x: 8, y: 33, w: 4, h: 4 },
       finished: { x: 0, y: 12, w: 6, h: 4 },
     },
     // The widget returns null whenever the run's own run.create row never
@@ -253,7 +268,8 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // and a null inside a grid tile is a reserved hole mid-canvas, plus a dock
     // button that opens a blank pane (focus-mode.tsx). Same reason ssh carries
     // one: the predicate must mirror the component's own gate exactly.
-    available: (ctx) => createRequestFromAudit(ctx.audit).clamp_warnings !== undefined,
+    available: (ctx) =>
+      createRequestFromAudit(ctx.audit).clamp_warnings !== undefined || withheldCredentialHosts(ctx.audit).length > 0,
   },
   // A VM run's desktop, in its own tile between Identity and Attach (it was a block inside the ssh tile).
   desktop: {
@@ -264,7 +280,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // Above Attach in the live rail. The finished place is the one the Attach tile had for a finished macOS VM run's disk
     // line, which this tile now carries. (Migration 0236 appended Attach to saved finished layouts at x 0, below
     // everything; the console adds this tile to a saved layout itself, withDesktop.)
-    presets: { live: { x: 8, y: 20, w: 4, h: 4 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
+    presets: { live: { x: 8, y: 24, w: 4, h: 4 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
     // DesktopCard's own gate, so the grid never holds an empty tile: a VM run the person may enter, while it runs or,
     // for a macOS VM, while the Mac's report of its disk has something to say. The admin monitor has
     // no door at all, even on the admin's own run (admin-member-modes-design.md §4.6, §6).
@@ -283,7 +299,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // absent (owner-only), and with free placement an absent tile leaves a
     // hole — at the bottom of the rail that hole costs nothing, between two
     // widgets it is a visible gap on every run you did not start.
-    presets: { live: { x: 8, y: 24, w: 4, h: 5 } },
+    presets: { live: { x: 8, y: 28, w: 4, h: 5 } },
     // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check. A background run has no terminal, SSH or apps of
     // its own to attach to so its desktop's Watch lives in the Desktop tile alone.
     // M-7: AND the user view — the admin monitor carries no Connect-via-SSH

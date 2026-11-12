@@ -218,7 +218,8 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: cs, Version: "conformance"})
+			// Every run proxy setting this build carries, as wardyn-runnerd's Docker caps name them.
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: cs, Version: "conformance", ProxySettings: runnerwire.ProxySettings})
 			if err != nil {
 				return err
 			}

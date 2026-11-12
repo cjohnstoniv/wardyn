@@ -56,6 +56,9 @@ func (m *meeter) meetEgress(o types.CeilingOverlay) {
 		}
 		c.AllowAllEgress = c.AllowAllEgress && *o.AllowAllEgress
 	}
+	if o.RefuseIPLiterals != nil {
+		c.RefuseIPLiterals = c.RefuseIPLiterals || *o.RefuseIPLiterals // only ever adds a refusal
+	}
 	if o.FirstUseApproval != nil {
 		b, v := c.FirstUseApproval.Normalize(), o.FirstUseApproval.Normalize()
 		if firstUseApprovalRank(v) < firstUseApprovalRank(b) {
@@ -187,15 +190,24 @@ func (e domEntry) covers(f domEntry) bool {
 	return false
 }
 
+// portCovers is the port rule (proxy port_rule.go): every port an entry on port q reaches, an entry
+// on port p reaches too. A bare entry (0) reaches 80 and 443 only, and a port-qualified one its own
+// port. With the rule off a bare entry reaches every port, so this reading can only narrow there.
+func portCovers(p, q int) bool { return p == q || p == 0 && (q == 80 || q == 443) }
+
 // intersect is the entry that matches exactly what both a and b match, if one
-// can be spelled: a request is in the result only if both entries match it.
+// can be spelled: a request is in the result only if both entries match it. The
+// port is read under the port rule (portCovers): a bare entry met with host:8443
+// is nothing, never host:8443.
 func (e domEntry) intersect(b domEntry) (domEntry, bool) {
 	a := e
-	port := a.port
+	var port int
 	switch {
-	case a.port == 0:
+	case portCovers(a.port, b.port):
 		port = b.port
-	case b.port != 0 && b.port != a.port:
+	case portCovers(b.port, a.port):
+		port = a.port
+	default:
 		return domEntry{}, false
 	}
 	switch {
@@ -223,7 +235,9 @@ func (e domEntry) intersect(b domEntry) (domEntry, bool) {
 // and a wildcard are not the same kind: an exact entry also enrols credential
 // injection and trust of a literal IP, which a wildcard never does), dedupes,
 // and sorts, so equal meets spell equal lists. Never nil: an empty allowlist is
-// the explicit default-deny value.
+// the explicit default-deny value. Domination reads the port under the port rule
+// (coversOnPort), as intersect does, so a host:port beside a bare host stays when
+// both lists name it, and the meet is the same in either order.
 func minimise(es []domEntry) []string {
 	uniq := map[string]domEntry{}
 	for _, e := range es {
@@ -243,7 +257,7 @@ func minimise(es []domEntry) []string {
 
 func hasDominator(all map[string]domEntry, name string, e domEntry) bool {
 	for other, f := range all {
-		if other != name && f.wild == e.wild && f.covers(e) {
+		if other != name && f.wild == e.wild && coversOnPort(f, e) {
 			return true
 		}
 	}
@@ -266,7 +280,7 @@ func (m *meeter) meetAllowedDomains(ov []string) {
 	var uncovered []string
 	for _, s := range ov {
 		e, ok := parseDomEntry(s)
-		if ok && slices.ContainsFunc(base, func(b domEntry) bool { return b.covers(e) }) {
+		if ok && slices.ContainsFunc(base, func(b domEntry) bool { return coversOnPort(b, e) }) {
 			over = append(over, e)
 			continue
 		}

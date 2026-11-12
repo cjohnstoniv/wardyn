@@ -98,7 +98,12 @@ func asUserHome(uid uint32, argv ...string) (string, []string) {
 
 // agentPassword reads the agent account's password from the kcpassword file. The caller clears it.
 func (l ScreenLock) agentPassword() ([]byte, error) {
-	path := l.KCPassword
+	return readKCPassword(l.KCPassword)
+}
+
+// readKCPassword reads the agent account's password from the kcpassword file at path ("" is
+// MacKCPasswordPath). The caller clears it; the error never holds any of it.
+func readKCPassword(path string) ([]byte, error) {
 	if path == "" {
 		path = MacKCPasswordPath
 	}

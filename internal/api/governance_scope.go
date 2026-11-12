@@ -541,7 +541,7 @@ func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, i
 		if err != nil {
 			return err
 		}
-		if !narrows {
+		if !narrows && !s.envelopeApprovesMoveQ(ctx, q, row, to) { // an envelope's approved group moves within it
 			return errHoldForApproval
 		}
 		shift, err := moveShiftQ(ctx, q, row, to)

@@ -110,6 +110,8 @@ func (a *AgentRun) Main(args []string) int {
 		return a.selftest()
 	case "--prepare":
 		return a.prepareOnly()
+	case "--session-env-retry":
+		return a.sessionEnvRetry()
 	case "--tasks":
 		return a.refuse(agentRunTasksRefused)
 	case "--idle", "--revive", "--boot-seed", "--continue":

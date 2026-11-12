@@ -42,6 +42,7 @@ import { Chip, ConfinementChip } from "./primitives";
 import { CC_META, CC_MATRIX_ROWS, CC_MATRIX_WHERE, CONFINEMENT_CONSTANT_NOTE } from "./cc-meta";
 import { MarkCell } from "./mark-cell";
 import { RESIDUAL_PREFIX } from "./copy";
+import { useRovingRadio } from "./use-roving-radio";
 import { TIER_PICKER } from "../../lib/tier-picker-copy";
 import { CC_ORDER, type ConfinementClass } from "../../lib/types";
 import { PICK_WHEN } from "../screens/setup/environment-step";
@@ -147,6 +148,9 @@ export function TierPicker({
   const [ref, measuredWidth] = useElementWidth<HTMLDivElement>();
   const resolvedShape = shape ?? pickerShape(measuredWidth);
   const [compareOpen, setCompareOpen] = React.useState(false);
+  const tierGroup = useRovingRadio(tiers.length, Math.max(0, tiers.findIndex((cc) => cc === selected)), (i) =>
+    onSelect?.(tiers[i]),
+  );
 
   const compareLink = (
     <button
@@ -218,7 +222,12 @@ export function TierPicker({
       {resolvedShape === "dropdown" ? (
         <DropdownPicker tiers={tiers} selected={selected} onSelect={onSelect} recommended={recommended} />
       ) : (
-        <div role="radiogroup" aria-label="Barrier tier" className="overflow-hidden rounded-xl border border-border bg-card">
+        <div
+          role="radiogroup"
+          aria-label="Barrier tier"
+          {...tierGroup.containerProps}
+          className="overflow-hidden rounded-xl border border-border bg-card"
+        >
           {tiers.map((cc, i) => (
             <TierRow
               key={cc}
@@ -226,6 +235,7 @@ export function TierPicker({
               selectable
               selected={selected === cc}
               onSelect={() => onSelect?.(cc)}
+              {...tierGroup.itemProps(i)}
               last={i === tiers.length - 1}
               recommended={recommended === cc}
               readiness={readiness}
@@ -287,6 +297,8 @@ function TierRow({
   last,
   readiness,
   onSelect,
+  tabIndex,
+  radioRef,
 }: {
   cc: ConfinementClass;
   selectable?: boolean;
@@ -296,6 +308,8 @@ function TierRow({
   last?: boolean;
   readiness?: "ready" | "checking" | "unverified";
   onSelect?: () => void;
+  tabIndex?: number;
+  radioRef?: (el: HTMLElement | null) => void;
 }) {
   const meta = CC_META[cc];
   const content = (
@@ -326,9 +340,12 @@ function TierRow({
       role="radio"
       aria-checked={!!selected}
       aria-label={meta.label}
-      tabIndex={0}
+      ref={radioRef}
+      tabIndex={tabIndex ?? 0}
       onClick={onSelect}
       onKeyDown={(e) => {
+        // Enter/Space on the row itself only: the info button inside it keeps its own activation.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelect?.();

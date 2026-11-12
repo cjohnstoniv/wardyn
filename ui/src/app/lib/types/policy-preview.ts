@@ -5,7 +5,7 @@
 
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
-import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageAdmissionFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { EffectiveRunLimits, PoolSlots, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 
@@ -106,6 +106,8 @@ export interface PolicyPreviewResult {
   // The image the run would start from and its source (absent until the image
   // lane resolves it), and the images the organisation lets the person choose.
   image?: ImageFact;
+  // "checked at launch" when launch checks the image's signatures; absent when it checks nothing.
+  image_admission?: ImageAdmissionFact;
   allowed_images?: AllowedImage[];
   // The preflight's harness_set fact, with the same meaning.
   harness_set?: HarnessSetFact;

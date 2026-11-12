@@ -56,7 +56,7 @@ export function OutputTab({
   runTask?: string;
   onGoRecording: () => void;
 }) {
-  const { out, refusal, loaded, saving, retrying, retry } = useRunOutput(runId, live, state, endedAt);
+  const { out, refusal, refusalText, loaded, saving, retrying, retry } = useRunOutput(runId, live, state, endedAt);
   const noticeId = React.useId();
   const [showLoading, setShowLoading] = React.useState(false);
   const recordingOff = useRecordingDisabled() === true;
@@ -105,7 +105,7 @@ export function OutputTab({
         aria-busy={retrying}
       >
         {/* The surface stays mounted while the retry read is in flight, so keyboard focus stays on Retry. */}
-        {refusalBody(refusal, saving, recordingOff, live, state, onGoRecording, retry)}
+        {refusalBody(refusal, refusalText, saving, recordingOff, live, state, onGoRecording, retry)}
       </div>,
     );
   }
@@ -169,7 +169,7 @@ export function OutputTab({
         role="region"
         aria-label={sourceLabel}
         aria-describedby={describedBy}
-        className="scroll-thin max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[#0d1117] p-3 font-mono text-xs text-[#e6edf3]"
+        className="scroll-thin overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-[#0d1117] p-3 font-mono text-xs text-[#e6edf3]"
       >
         {cleanEmpty ? (
           <span className="text-muted-foreground">{o.complete ? RUN_OUTPUT.emptyFinal : RUN_OUTPUT.emptyLive}</span>
@@ -186,6 +186,7 @@ export function OutputTab({
 
 function refusalBody(
   r: Refusal,
+  text: string,
   saving: boolean,
   recordingOff: boolean,
   live: boolean,
@@ -262,6 +263,9 @@ function refusalBody(
       );
     case "mask":
       return <EmptyState icon={Logs} title={RUN_OUTPUT.maskTitle} description={RUN_OUTPUT.maskUnavailable} />;
+    case "data_out":
+      // The server's own sentence, with no action: nothing here can make the output readable.
+      return <EmptyState icon={Logs} title={text} />;
     default:
       return <ErrorState message={RUN_COCKPIT.loadError} onRetry={retry} />;
   }

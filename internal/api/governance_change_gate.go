@@ -147,6 +147,8 @@ func (s *Server) recordGovernanceBypass(r *http.Request, kind, target, outcome s
 type govApprover struct {
 	allowed func(s *Server, r *http.Request) bool
 	reason  authz.Reason
+	// refusal, when set, names the reason for the caller allowed refused, in place of reason.
+	refusal func(s *Server, r *http.Request) authz.Reason
 	scoped  bool
 }
 
@@ -172,6 +174,9 @@ type govKind struct {
 	// the current state, and writes the target through the Querier forms of the store writes. It never
 	// touches the pool, and it never audits: the audit rows follow the commit.
 	apply func(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error)
+	// rejectAction, when set, is the kind's own row a reject writes after governance.change.reject (a
+	// request kind's, governance_requests.go); empty for every other kind.
+	rejectAction string
 }
 
 // govApplied is what an applied change leaves for the audit rows written after the commit.
@@ -207,8 +212,15 @@ var governanceChangeKinds = map[string]govKind{
 	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
+	govKindComponentOwningUnit: {approver: securityApprover, apply: applyComponentOwningUnitChange},
 	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
+	govKindUnitDeciders:        {approver: securityApprover, apply: applyUnitDecidersChange},
+	govKindEnvelope:            {approver: securityApprover, apply: applyEnvelopeChange},
+	// An elevation's approver is its unit's rule (forChange, requestApprover).
+	types.GovernanceTargetElevation: {apply: applyElevationChange, rejectAction: "governance.elevation.reject"},
+	// An image request's approver is the met image rule at its unit (forChange, requestApprover).
+	types.GovernanceTargetImageRequest: {apply: applyImageRequestChange, rejectAction: "governance.image_request.reject"},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
@@ -231,18 +243,32 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 		if profilePayloadSetsHostPath(ch.Payload) {
 			k.approver = operatorApprover
 		}
-	case govKindMembership, govKindUnitAdmin:
+	case govKindMembership, govKindUnitAdmin, govKindUnitDeciders:
 		k.approver = unitChangeApprover(ch)
+	case types.GovernanceTargetElevation:
+		k.approver = requestApprover(ch, types.DeciderKindElevation)
+	case types.GovernanceTargetImageRequest:
+		k.approver = requestApprover(ch, types.DeciderKindImage)
 	}
 	return k
 }
 
 // canSeeGovernanceChange reports whether the caller may list or read a change: the approver predicate,
-// so a change that only a super admin may decide is never shown to a security admin. A kind this
-// binary does not know (a row from a newer one) is shown to nobody: it cannot be decided here.
+// so a change that only a super admin may decide is never shown to a security admin, or the person who
+// proposed it, who keeps seeing their own change though a tier above theirs decides it (a unit admin's
+// change of an envelope's root). It widens list, read and the pending change a refused repeat names,
+// never a decision. A kind this binary does not know (a row from a newer one) is shown to nobody,
+// proposer included: it cannot be decided here.
 func (s *Server) canSeeGovernanceChange(r *http.Request, ch types.GovernanceChange) bool {
 	k, ok := governanceChangeKinds[ch.TargetKind]
-	return ok && k.forChange(ch).approver.allowed(s, r)
+	if !ok {
+		return false
+	}
+	if k.forChange(ch).approver.allowed(s, r) {
+		return true
+	}
+	_, principal := actorFromRequest(r)
+	return sameGovernanceHuman(ch, principal, oidcEmailFromContext(r.Context()))
 }
 
 // govProposal is a covered write to hold.
@@ -263,6 +289,11 @@ type govProposal struct {
 	// belongsBy is, for a unit admin's membership add or delete, the units they are granted that its
 	// subject holds another membership below (governingRoots, heldBelongsStale).
 	belongsBy []uuid.UUID
+	// note is a request's reason and ticket, stored with the change; nil for every other write.
+	note *types.ChangeNote
+	// answer, when set, writes the 202 in place of the Location header and the pending_change body: a
+	// request answers with its own view, and its requester cannot read /governance/changes.
+	answer func(w http.ResponseWriter, saved types.GovernanceChange)
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -282,6 +313,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
 		ProposedByEmail: oidcEmailFromContext(r.Context()),
+		Note:            p.note,
 	}
 	saved, expired, err := s.cfg.Store.ProposeGovernanceChange(r.Context(), ch, s.governanceChangeTTL())
 	var pending *store.ErrGovernanceChangePending
@@ -308,8 +340,19 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.expire", e.ID.String(), "success",
 			mustJSON(map[string]any{"target_kind": p.kind, "target_key": e.TargetKey})))
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success",
-		mustJSON(map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt})))
+	changed := p.changed
+	if changed == nil {
+		changed = []string{}
+	}
+	proposed := map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt, "changed": changed}
+	if units, _, scoped := unitChangeScope(saved); scoped {
+		proposed["units"] = unitIDStrings(units)
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success", mustJSON(proposed)))
+	if p.answer != nil {
+		p.answer(w, saved)
+		return
+	}
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
 	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": s.changeForRead(r, saved)})
 }

@@ -51,7 +51,7 @@ takes. The packet supersedes the design record's §5.1 chips: the admin's own co
 ## Frozen strings — the provider editor (#537)
 
 The #537 packet's rows: `docs/design/model-providers-mock/canon.html` Table 1 (branch
-`design/551-providers-mock-packet`, owner-approved 2026-09-25), under the same ids. Its
+`design/551-providers-mock-packet`, approved 2026-09-25), under the same ids. Its
 `MODEL_PROVIDERS.ADD_CTA` and kind-label rows are the ones above. The two agent reasons it reuses,
 `INTEGRATIONS.X_KEY_CODEX` and `INTEGRATIONS.X_OPENAI_CLAUDE`, are `lib/integrations.ts`'s own.
 
@@ -103,7 +103,7 @@ line is `MODEL_PROVIDERS.PROVIDES.KEY` (each person adds their own Bedrock API k
 
 ## Frozen strings — the Bedrock and Claude subscription kinds (#538)
 
-`mp-packet-B.html`'s own "Frozen strings" table (owner-approved 2026-09-22 as packet MP-B), for E3
+`mp-packet-B.html`'s own "Frozen strings" table (approved 2026-09-22 as packet MP-B), for E3
 and E4 — the two rows `docs/design/model-providers-mock/canon.html` Table 1 left as "#538 builds it".
 The agent reasons reused, `INTEGRATIONS.X_BEDROCK_CODEX` and `INTEGRATIONS.X_SUB_CODEX`, are
 `lib/integrations.ts`'s own; the AWS sign-in labels reused, `AGENTS.FIELD_SSO_START_URL`,
@@ -126,9 +126,35 @@ as every other row below.
 | `PROVIDER_EDITOR.MODEL_HINT_BEDROCK` | E3, under a ticked agent | An inference profile id. |
 | `PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING` | kind step (disabled reason) and E4 | Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image. |
 
+## Frozen strings — gateway presets
+
+Approved design: gateway presets, rc.17. A preset prefills the fields it names on a new Your own endpoint
+provider; nothing records which one was pressed.
+
+| Key | Renders at | Frozen string |
+|---|---|---|
+| `PROVIDER_EDITOR.PRESET_LABEL` | new Your own endpoint, preset row label | Start from a gateway |
+| `PROVIDER_EDITOR.PRESET.litellm` | preset row, chip | LiteLLM |
+| `PROVIDER_EDITOR.PRESET.portkey_self_hosted` | preset row, chip | Portkey self-hosted |
+| `PROVIDER_EDITOR.PRESET.portkey_hosted` | preset row, chip | Portkey hosted |
+| `PROVIDER_EDITOR.PRESET.openrouter` | preset row, chip | OpenRouter |
+| `PROVIDER_EDITOR.PRESET.other` | preset row, chip | Other |
+| `PROVIDER_EDITOR.PRESET_HINT` | preset row, under the chips | Fills in the fields below for that gateway and keeps what an earlier one filled. Change any of them; nothing records which one you picked. |
+| `PROVIDER_EDITOR.HEADERS_LABEL` | Your own endpoint, extra headers label | Extra headers (optional) |
+| `PROVIDER_EDITOR.HEADER_NAME_PLACEHOLDER` | extra headers, name input | Name |
+| `PROVIDER_EDITOR.HEADER_VALUE_PLACEHOLDER` | extra headers, value input | Value |
+| `PROVIDER_EDITOR.HEADERS_ADD` | extra headers, button | Add header |
+| `PROVIDER_EDITOR.HEADERS_REMOVE` | extra headers, icon button `aria-label` | Remove |
+| `PROVIDER_EDITOR.HEADERS_HINT` | extra headers, under the rows | Sent to your gateway on every request, for a gateway that routes on a header. Stored in clear, so never a credential: that goes in the auth header. |
+| `PROVIDER_EDITOR.HEADERS_CAP` | extra headers, beside the disabled Add header | At most 8 headers. |
+| `PROVIDER_EDITOR.PORTKEY_SLUG_PLACEHOLDER` | Portkey hosted, value of the x-portkey-provider row | @<slug> |
+| `PROVIDER_EDITOR.PORTKEY_SLUG_HINT` | Portkey hosted, under the rows | Your Portkey provider's slug, starting with @. |
+| `PROVIDER_EDITOR.OPENROUTER_MODEL_PLACEHOLDER` | OpenRouter, Codex CLI Model | openai/… |
+| `PROVIDER_EDITOR.OPENROUTER_MODEL_HINT` | OpenRouter, Codex CLI Model hint | OpenRouter names a model vendor first, for example openai/… |
+
 ## Owner decisions (packet MP-C) — the Agents tab default (#539)
 
-Packet MP-C ("Choosing at Launch", owner-approved 2026-09-28, recommended on every question). Its
+Packet MP-C ("Choosing at Launch", approved 2026-09-28, recommended on every question). Its
 Agents-tab strings are frozen in the `AGENTS` table of `workspace-providers-prompt.md` §7.7, beside the
 rest of that tab's copy, and parsed back by `workspace-providers-copy.test.ts`.
 

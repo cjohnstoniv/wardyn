@@ -4,12 +4,9 @@
 
 - **The open-source governed-sandbox control plane for any workload — identity, controls, and audit are the product; the sandbox is a pluggable commodity.**
 - Anything you run under your own credentials inherits your full blast radius. Wardyn is the layer in between — per-run identity, credentials scoped to each run, one audited path off-host. Most credential kinds are added at the proxy and never placed in the sandbox ([which ones](docs/CREDENTIALS.md)).
-- [docs/CREDENTIALS.md](docs/CREDENTIALS.md) says how each kind of credential reaches a run, and which ones the sandbox can read.
 - Coding agents are the flagship use.
 
-![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](docs/img/wardyn-walls.webp)
-
-![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.webp)
+![Where Wardyn sits: the organisation's firewall, proxy, VPN and device management surround a cluster or host and people's laptops. Every sandbox, in the cluster or on a laptop with a runner, leaves only through its own egress proxy and nothing connects in. A laptop's runner reports runs and audit to the control plane, wardynd. Most keys are added at the proxy, not placed in the sandbox.](docs/img/wardyn-places.webp)
 
 ## Before you start
 
@@ -18,37 +15,36 @@
 > - Do not run production workloads.
 > - "Wardyn" is a working name — trademark clearance (USPTO full-text + org / domain / package handles) is still pending, so the name and the personal `github.com/cjohnstoniv/wardyn` module path may change before a 1.0.
 
-![Wardyn detecting this host's confinement capabilities](docs/img/getting-started.png)
-
 ## Install
 
 - Pick by **who runs this box**.
-- Everything here pulls cosign-signed, SBOM-attested images — [`docs/VERIFY.md`](docs/VERIFY.md) checks that — no clone needed.
+- Everything here pulls cosign-signed images, with no clone needed. Release images also carry an SBOM and build provenance; the `:latest` tag is signed only. [`docs/VERIFY.md`](docs/VERIFY.md) checks each.
 
 ### Single-user — you are the operator
 
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.13/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.18/install.sh | sh
 ```
 
-- Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
+- Cosign-signed, not tip-of-`main` — the script installs its own release (`WARDYN_VERSION` overrides).
 - Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
+- Set the runner's limits before the first run: the server runs in a container and cannot measure host disk. Pass what `wardyn runner remote propose <id> --free-disk <GB>` prints to `wardyn runner set <id>`, or use the console (Runners, the runner, **Set limits**). `make setup` does this for you.
 - **Only the CLI**, for an organisation's console: `install-cli.sh` (Windows: `install-cli.ps1`), a release asset ([install paths](docs/runner-registration.md#install-the-cli)).
 - **A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 ### Multi-user — an admin sets the ceiling, members run inside it
 
 - Each human gets an SSO identity and an **admin** or **member** role ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#multi-user-who-can-change-what)).
-- **A shared host** — compose `--profile sso` + `WARDYN_OIDC_ROLE_MAP`: [OPERATIONS.md §"Second user, same host"](docs/OPERATIONS.md#second-user-same-host).
+- **A shared host** — compose `--profile sso` + `WARDYN_OIDC_ROLE_MAP`: [Second user, same host](docs/OPERATIONS.md#second-user-same-host).
 - **Kubernetes** — a published OCI chart (the command after this list); `.claude/skills/wardyn-k8s-setup/` carries an agent-readable recipe for the same path.
 - **Managed laptops under org governance** — desktop profile m′: [`docs/DESKTOP.md`](docs/DESKTOP.md#the-member-mode-profile-topology-m).
 
 ```sh
-# NOT releases/latest — it excludes pre-releases, and a Wardyn release may be
-# one, so that endpoint can skip the newest release or 404.
-WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
+# The release GitHub marks Latest (a pre-release is never marked; set WARDYN_VERSION by hand for one).
+# If there is none the lookup fails and the guard below refuses to install unpinned.
+WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 
 kubectl create namespace wardyn
@@ -79,12 +75,17 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 
 - Install nothing — sign in with SSO and read **[`docs/USERS.md`](docs/USERS.md)**: what a member can do, your first run, and what to ask your admin for.
 
-- **Building from source is a contributor path** — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
-- Clone, then `make setup` (a failed image pull falls back to building from this checkout; `WARDYN_BUILD_LOCAL=1` forces it).
+### Requirements
 
-- **That is the whole setup.**
-- The barrier is the only requirement — no model, no API key, no agent.
-- Put the sandbox rules in a small **YAML** (or JSON) policy and hand it to one `wardyn run` — interactive or unattended:
+- **Docker** + `compose` v2 (Postgres rides in the compose file).
+  - Fence/CC1 needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` + Kata — `wardyn setup wall|vault` prints the steps for your host.
+- **Go 1.26+**, **Node 22 + pnpm 9** — only to build from source: clone, then `make setup` ([CONTRIBUTING.md](CONTRIBUTING.md)). A failed image pull falls back to building from the checkout; `WARDYN_BUILD_LOCAL=1` forces it.
+- The **CLI** needs no toolchain: each release publishes `wardyn-<os>-<arch>` ([runner install](docs/runner-registration.md#set-up-a-runner)). `go install …/cmd/wardyn@latest` builds it yourself; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
+
+## First governed run
+
+- No model, API key or agent is needed: the barrier is the only requirement.
+- Put the sandbox rules in a small YAML (or JSON) policy and hand it to one `wardyn run`, interactive or unattended:
 
 ```sh
 # The CLI reads the token from the environment; the installer wrote it to ~/.wardyn/.env.
@@ -102,86 +103,59 @@ wardyn run --agent claude-code --task-mode exec \
   --policy-file sandbox.yaml --wait
 ```
 
-- That runs a plain shell command in a governed sandbox: `--task-mode exec` means no agent and no model are involved at all.
-- (`--agent` still names which sandbox image to launch — it is an image label, not a statement that an AI runs your task.)
-- The policy is written out here because the one-line install ships no repo — from a clone, the same four keys with their comments are [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml).
+- That runs a plain shell command in a governed sandbox: `--task-mode exec` means no agent and no model are involved.
+- `--agent` still names which sandbox image to launch; it is an image label, not a statement that an AI runs your task.
+- The one-line install ships no repo, so the policy is written out here. From a clone, the same four keys with their comments are [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml).
 - `wardyn policy render -f <file>` checks either.
 - `--image` brings your own base ([docs/ENVBUILD.md](docs/ENVBUILD.md)).
 - To stop everything: `cd ~/.wardyn && docker compose down` (from a clone: `make compose-down`).
 
-- **Want an agent to write the code?** Then connect a model — optional, and equally first-class at the CLI or in the UI.
-  - The one-line install needs a Claude Code image first ([TRY-IT.md](docs/TRY-IT.md#before-you-start)).
+### Connect a model (optional)
+
+- To have an agent write the code, connect a model. It works the same at the CLI and in the console.
+- The one-line install needs a Claude Code image first ([TRY-IT.md](docs/TRY-IT.md#before-you-start)).
 - An admin adds a model provider under Settings → Model providers; each person then connects their own credential for it (a key, or a Claude or AWS sign-in) from Getting started:
 
 ```sh
 wardyn setup status   # what's configured + the next command per unmet check
 ```
 
-- Skipping this is a supported end state, not an unfinished setup: `setup status` reports model access as **optional** and never as a gap to clear.
-- Most of the built-in demos need no model either — see [TRY-IT.md](docs/TRY-IT.md)'s "governance demo (no keys)".
-
-### Requirements
-
-- **Docker** + `compose` v2 (Postgres rides in the compose file).
-  - Fence/CC1 needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` + Kata — `wardyn setup wall|vault` prints the steps for your host.
-- **Go 1.26+**, **Node 22 + pnpm 9** — only to build from source.
-- The **CLI** needs no toolchain: each release publishes `wardyn-<os>-<arch>` ([runner install](docs/runner-registration.md#set-up-a-runner)). `go install …/cmd/wardyn@latest` builds it yourself; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
+- Skipping this is a supported end state: `setup status` reports model access as **optional**, never as a gap to clear.
+- Most of the built-in demos need no model either; see "governance demo (no keys)" in [TRY-IT.md](docs/TRY-IT.md).
 
 ## What you get
 
 | Capability | What it does | Detail |
 |---|---|---|
-| Governed runs | Per-run identity in a gatewayless sandbox, driven from a terminal-first cockpit | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Governed runs | Per-run identity in a sandbox whose only path out is the proxy, driven from the terminal or the console | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Egress + approvals | Only path out is the proxy; an unlisted host can hold mid-flight — once, run, until, always | [POLICIES.md](docs/POLICIES.md) |
 | Record Mode | Run once open, get the minimal policy, replay confined | [TRY-IT.md](docs/TRY-IT.md) |
 | Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | [OPERATIONS.md](docs/OPERATIONS.md) |
-| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md) |
+| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md), [CONFINEMENT.md](docs/CONFINEMENT.md) |
 | Model access | Each person's own key or Claude sign-in is injected proxy-side and the sandbox holds a placeholder; an AWS sign-in's session is injected too, but the short-lived role credentials it yields live in the sandbox | [TRY-IT.md](docs/TRY-IT.md) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | [CI.md](docs/CI.md) |
 | Audit + attach | Three audit streams. The audit log itself is append-only — a Postgres trigger refuses `UPDATE`, `DELETE` and `TRUNCATE` on it. PTY replay is a separate store (upserted per cast, retention-swept), each upload audited. Attach live from browser or SSH | [SSH.md](docs/SSH.md) |
-| UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
+| UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser, on a shared origin unless an admin sets a per-run one (set it for any install with more than one user) | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
 
 - Everything else — env and policy reference, deployment, sample workspaces — is indexed in [docs/](docs/README.md).
 
 ## Watch it work
 
 - Six narrated walkthroughs are published, about 41 minutes end to end.
-- The rest of the series is being re-recorded on 0.7 and lands in the same release as each episode passes (those rows read *coming soon*).
-- Every one drives the real console against real sandboxes — the policies are live, the refusals are real, and the audit rows on screen were written by the run you are watching.
 - Start with **03a** if you only watch one; it is the boundary itself.
-- The series uses a coding agent as its worked example, because that is the case most people arrive for.
-- The mechanics on screen — the egress boundary, the credential brokering, the audit trail — are the same for any sandboxed workload.
+- The series uses a coding agent as its worked example; the egress boundary, credential brokering and audit trail it shows are the same for any sandboxed workload.
 
 | Episode | What it shows | Length |
 |---|---|---|
-| 00 — Meet Wardyn | **The front door.** One keyless run answers what a run may reach, what it may touch, and what it is handed | coming soon |
 | [01 — Why govern agents][v01] | The blast radius anything inherits when it runs as you | 6:50 |
 | [02 — Set up the host][v02] | `make setup`, from a bare host to a running control plane | 7:26 |
-| 02b — Managed desktop | Enterprise desktop deployment: the systemd installer, an MDM-distributable package | coming soon |
-| 02c — One command to a cluster | `make kind-quickstart`, from a bare cluster to a running control plane | coming soon |
 | [03a — What it stops][v03a] | **The core.** Four things that happen to a host a run may not reach, then the secret the sandbox is never handed | 11:45 |
 | [03b — The network, three more ways][v03b] | A real agent boxed in, a policy recorded from a run, an approval that lasts one connection | 5:05 |
-| 03c — Authorized, then issued | A bearer token attached at the boundary; a PAT that only ever exists in a pipe | coming soon |
 | [03d — The kinds that can't use a header][v03d] | SSH keys, brokered GitHub tokens, cloud STS — credentials no header injection can carry | 5:58 |
-| 04 — Add a workspace | Onboarding a source, so a run can mount only what was declared | coming soon |
-| 04b — A member's own workspace | A member onboards their own source, inside the ceiling an admin set | coming soon |
-| 04c — Who may do what | Governance profiles and role mappings: an admin delegates a ceiling, not the deployment | coming soon |
-| 04d — Your drive | A member's own persistent scratch space, sized and scoped to them | coming soon |
 | [05 — Your first policy][v05] | Writing the ceiling every run is clamped to | 3:58 |
-| 06 — Your first run | One governed run, launched and read back from its record | coming soon |
-| 07 — Interactive runs | Attaching a live terminal to a running sandbox | coming soon |
-| 08 — An autonomous agent | A real coding agent doing real work inside the boundary | coming soon |
-| 09 — Record a run | Run open, derive the minimal policy, replay it confined | coming soon |
-| 10 — Approvals and egress | Deciding a held request — once, this run, until, always | coming soon |
-| 11 — CI and headless | No UI, no human: a governed run's exit code becomes the pipeline's | coming soon |
-| 12 — Audit and attach | The append-only audit trail, and attaching live from browser or SSH | coming soon |
-| 12b — Admin operations | Backup, upgrade, rotation and monitoring, day-2 on a running deployment | coming soon |
-| 13 — Your terminal, our cluster | `wardyn run ssh` into a Kubernetes-hosted run, from an ordinary terminal | coming soon |
 
-- They ship as [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.0), not in the repo, so a clone stays small.
-- Each link pins the release that first shipped (or last re-recorded) that episode.
-- A later release does **not** automatically re-publish an untouched episode under its own tag; only a re-recorded episode moves, to whichever release ships next.
-- An episode without a link has not been recorded yet; it ships in whichever release its take passes under.
+- More episodes are listed in [DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md).
+- The videos are [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.0), not in the repo. Each link pins the release that first shipped (or last re-recorded) that episode.
 
 [v01]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-01-why-govern-agents.mp4
 [v02]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-02-set-up-the-host.mp4
@@ -192,34 +166,15 @@ wardyn setup status   # what's configured + the next command per unmet check
 
 ## Architecture at a glance
 
-![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations allowed, held or denied by policy; the proxy adds keys to outbound requests.](docs/img/wardyn-run.webp)
+![A run from left to right: console or CLI, control plane (wardynd), a sandbox behind Fence, Wall or Vault, the egress proxy, then destinations the run's policy allows, holds for approval or denies. The proxy adds keys on the way out; a policy can also deliver a key to the sandbox as a file or variable.](docs/img/wardyn-run.webp)
 
-```mermaid
-flowchart LR
-  entry(["Human operator<br/>UI or wardyn CLI"])
-  subgraph control["Control plane (trusted)"]
-    wardynd["wardynd<br/>REST API + embedded UI<br/>policy · approvals · broker · audit"]
-    pg[("Postgres<br/>append-only audit")]
-    wardynd --> pg
-  end
-  subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
-    %% rec declared first: else dagre routes the launch edge through it
-    rec["wardyn-rec<br/>PTY recorder"]
-    agent["Coding agent<br/>claude-code / codex-cli"]
-    rec -->|"cast, brokered to wardynd"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
-    agent -->|"only path out"| proxy
-  end
-  entry --> wardynd
-  wardynd -->|"launch (docker driver)"| agent
-  proxy -->|"allowlisted L7, creds injected"| net(("Internet / APIs"))
-```
-
-- A trusted control plane launches each run into an untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar, which adds most credentials there ([which, and which the sandbox can read](docs/CREDENTIALS.md)).
-- Decision logs flow back into the append-only audit log ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §8).
+- A trusted control plane places each run in an untrusted sandbox, which is a container or a Linux or macOS VM, on the server's host or on a registered runner. Its only path out is its own `wardyn-proxy`, which adds most credentials there ([which, and which the sandbox can read](docs/CREDENTIALS.md)).
+- A host the policy does not list is denied (`always_deny`), denied with a request raised for a person (`deny_with_review`), or held for a person (`wait_for_review`), as the policy's `first_use_approval` sets ([the three modes](docs/POLICIES.md#first_use_approval-modes)).
+- Decision logs flow back into the append-only audit log ([the three audit streams](threatmodel/THREAT-MODEL.md#the-three-audit-streams-mechanically)).
 - Masked session recordings are optional and kept in their own store, with their own retention.
 - Wardyn never *adds* power: a run reaches at most what you can, clamped by policy.
 
-## Honest security posture
+## Security posture
 
 - What Wardyn does **not** defend against is published in full ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)).
 - Wardyn keeps credentials out of the sandbox wherever it can broker them, and names the kinds that enter ([SECURITY.md](SECURITY.md#which-credentials-enter-the-sandbox)).
@@ -228,21 +183,19 @@ flowchart LR
     - Prompts and tool calls are logged; nothing stops an agent encoding data into a permitted prompt.
   - **Domain fronting and DNS-tunnel exfil** need TLS interception, which ships only for operator-listed hosts (off by default) — most non-LLM egress stays opaque.
   - **CC1/Fence shares the host kernel**, and the 1-hour minted-token window before revocation is minimized by TTL, never eliminated.
-  - **The UI sandbox gateway defaults to a shared browser origin** across runs, separated only by a path-scoped cookie, unless the operator sets a per-run origin template — the documented production default ([UI-SANDBOXES.md](docs/UI-SANDBOXES.md#4-deployment)).
+  - **The UI sandbox gateway defaults to a shared browser origin** across runs, separated only by a path-scoped cookie. Set a per-run origin template for any install with more than one user ([UI-SANDBOXES.md](docs/UI-SANDBOXES.md#4-deployment)).
 
 ## Status
 
 - Wardyn is **pre-alpha**.
 - The current release is the one the install line above pins — the same version `internal/version`'s `Version` and the chart's `appVersion` carry — and [CHANGELOG.md](CHANGELOG.md) is what each release added.
-- Two deployment lanes, both running real sandboxes, not one inverted into the other:
-- **`deploy/compose`** — the local 10-minute trial.
-  - The only lane that runs on a laptop without a real cluster, and the only one with recorded demos (the Getting Started demo steps).
-- **Kubernetes**: `helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn
-  --version <release>` (needs the admin-token/Postgres-DSN/age-identity Secrets in the recipe above the fold) — the chart is published as a signed OCI artifact, so no clone and no `helm repo add`.
-  - See **[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md)** — the deployment story: `make kind-quickstart` for a one-command real-cluster install, or a production Helm install onto your own Kubernetes.
-  - Not yet at Compose parity (see the chart README's "Known gaps").
+- Two deployments, both running real sandboxes:
+  - **`deploy/compose`** is the local 10-minute trial. It runs on a laptop without a cluster and has the Getting Started demo steps.
+  - **Kubernetes** is the signed OCI chart above. See [`deploy/helm/wardyn`](deploy/helm/wardyn/README.md): `make kind-quickstart` for a one-command real-cluster install, or a production Helm install onto your own cluster. It is not yet at Compose parity (the chart README's "Known gaps").
 
-- Still unbuilt: SPIRE, OpenBao, an MCP gateway, arbitrary-domain TLS interception, OTLP/OCSF sinks, SAML team SSO, SCIM provisioning of joiners (SCIM only removes leavers today; see [OPERATIONS.md](docs/OPERATIONS.md#leavers-and-scim)), Compose's own L1 default-deny — see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md).
+- Not built yet: SPIRE, OpenBao, tool-call egress interception (per-tool approval ships), arbitrary-domain TLS interception, an OCSF sink, SAML team SSO, and Compose's own L1 default-deny.
+- SCIM only removes leavers today and does not provision joiners ([OPERATIONS.md](docs/OPERATIONS.md#leavers-and-scim)).
+- [ROADMAP.md](ROADMAP.md) has the list, and [CHANGELOG.md](CHANGELOG.md) what each release added.
 
 ## License and governance
 
@@ -253,7 +206,7 @@ flowchart LR
 - [`LICENSING.md`](LICENSING.md) is the one page to hand your legal team: the grant, what the artifacts contain, redistribution obligations, patents, warranty, and the disclosed risks.
 - [`TRADEMARKS.md`](TRADEMARKS.md) covers what you may call things, which Apache-2.0 §6 deliberately does not.
 
-- Every published image is cosign-signed with an attested SBOM and build provenance — [`docs/VERIFY.md`](docs/VERIFY.md) shows how to check that yourself.
+- Every release image is cosign-signed with an attested SBOM and build provenance. The continuous `wardynd:latest` and `:sha-` tags are signed only. [`docs/VERIFY.md`](docs/VERIFY.md) shows how to check each.
 
 - Contributor sign-off via DCO (`Signed-off-by`).
 - CNCF Sandbox is the governance target, not a status.

@@ -28,10 +28,12 @@ type CeilingOverlay struct {
 	AllowedDomains          *[]string              `json:"allowed_domains,omitempty"`
 	DeniedDomains           *[]string              `json:"denied_domains,omitempty"`
 	AllowAllEgress          *bool                  `json:"allow_all_egress,omitempty"`
+	RefuseIPLiterals        *bool                  `json:"refuse_ip_literals,omitempty"`
 	FirstUseApproval        *FirstUseMode          `json:"first_use_approval,omitempty"`
 	FirstUseHoldSeconds     *int                   `json:"first_use_hold_seconds,omitempty"`
 	MaxHolds                *int                   `json:"max_holds,omitempty"`
 	AllowedMethods          *[]string              `json:"allowed_methods,omitempty"`
+	HostRules               *[]HostRuleSet         `json:"host_rules,omitempty"`
 	MinConfinementClass     *ConfinementClass      `json:"min_confinement_class,omitempty"`
 	EligibleGrants          *[]GrantSpec           `json:"eligible_grants,omitempty"`
 	AutoStopAfterSec        *int                   `json:"auto_stop_after_sec,omitempty"`
@@ -48,6 +50,7 @@ type CeilingOverlay struct {
 	HarnessInnerWalls       *HarnessInnerWalls     `json:"harness_inner_walls,omitempty"`
 	Desktop                 *DesktopControls       `json:"desktop,omitempty"`
 	Recording               *RecordingLevel        `json:"recording,omitempty"`
+	DataOut                 *TransferRule          `json:"data_out,omitempty"`
 }
 
 // ResourcesOverlay mirrors ResourceLimits with per-field presence.
@@ -82,9 +85,13 @@ type LimitsOverlay struct {
 	DenyUserDrive              *bool           `json:"deny_user_drive,omitempty"`
 	DenyMemberDrives           *bool           `json:"deny_member_drives,omitempty"`
 	DenyKeptMachines           *bool           `json:"deny_kept_machines,omitempty"`
+	DenyScheduledRuns          *bool           `json:"deny_scheduled_runs,omitempty"`
+	DenyComponents             *[]string       `json:"deny_components,omitempty"`
+	DenyModelProviders         *[]string       `json:"deny_model_providers,omitempty"`
 	DenyPlacements             *[]Placement    `json:"deny_placements,omitempty"`
 	AllowedMacOSBases          *[]string       `json:"allowed_macos_bases,omitempty"`
 	AllowedModels              *[]string       `json:"allowed_models,omitempty"`
+	RequiredImageSigners       *[]string       `json:"required_image_signers,omitempty"`
 	MaxCPUMillis               *int            `json:"max_cpu_millis,omitempty"`
 	MaxMemoryMiB               *int            `json:"max_memory_mib,omitempty"`
 	MaxEphemeralDiskMiB        *int            `json:"max_ephemeral_disk_mib,omitempty"`

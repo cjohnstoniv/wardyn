@@ -101,6 +101,7 @@ export const NR_TOOLS = {
   DEFAULT_LABEL: "When a tool has no rule",
   EFFECT_ALLOW: "Run it",
   EFFECT_HOLD: "Ask first",
+  EFFECT_APPROVE_EACH: "Approve each call",
   EFFECT_DENY: "Block it",
   /** pending W-30: the recommended text until the owner answers. */
   DEFAULT_HELP_GATED: "Ask first holds the call until an admin approves it.",
@@ -121,6 +122,8 @@ export const NR_TOOLS = {
   MCP_FOR_HARNESS: "MCP servers for this harness",
   MCP_FOLLOWS: "Calls to an MCP server follow this harness's tool rules, as mcp__<server>__<tool>.",
   MCP_NONE: "None added. Add an MCP server below and it appears here.",
+  /** One MCP tool's rule that holds each call at the proxy for a person. */
+  MCP_APPROVE_EACH: "Wardyn asks a person to approve each exact call before sending it.",
   /** pending W-44: the recommended text until the owner answers. */
   MCP_ASKS: "The harness asks before an MCP tool runs; Wardyn does not hold the call.",
   RULE_TITLE: (name: string | number) => `Add a tool rule for ${name}`,
@@ -253,15 +256,15 @@ export const NR_TOOLS = {
   NET_NOT_ALLOWED: "Not allowed",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_DENY_REVIEW_YOU:
-    "Anything else is refused the first time the run asks for it and raises a request. Once you approve it, the run can try again.",
+    "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once you approve it, the run can try again.",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_DENY_REVIEW_ADMIN:
-    "Anything else is refused the first time the run asks for it and raises a request. Once an admin approves it, the run can try again.",
+    "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once an admin approves it, the run can try again.",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_ALWAYS_DENY: "Anything else is refused and logged.",
-  NET_POLICY_HELD_YOU: "Anything else is held for your review the first time the run asks for it.",
+  NET_POLICY_HELD_YOU: "Another host is held for your review the first time the run asks for it, unless it is always blocked.",
   /** pending W-36: the recommended text until the owner answers. */
-  NET_POLICY_HELD_ADMIN: "Anything else is held for an admin's review the first time the run asks for it.",
+  NET_POLICY_HELD_ADMIN: "Another host is held for an admin's review the first time the run asks for it, unless it is always blocked.",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_TIMEOUT: (n: string | number) => `If nobody decides within ${n} seconds, it's refused.`,
   /** pending W-36: the recommended text until the owner answers. */

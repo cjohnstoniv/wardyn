@@ -22,6 +22,7 @@ var kindLabels = map[types.ApprovalKind]string{
 	types.ApprovalCredentialReauth: "Sign-in needed",
 	types.ApprovalPushContent:      "Push review",
 	types.ApprovalHumanTakeover:    "Needs you",
+	types.ApprovalFileDownload:     "Download review",
 }
 
 // message is the chat view of one outbox row, built from the same allowlisted facts as the webhook

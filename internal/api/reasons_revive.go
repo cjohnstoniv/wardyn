@@ -16,6 +16,7 @@ package api
 // ways (the runner substrate cannot revive at all) and share one on purpose.
 const (
 	reasonPolicyPreviewRateLimited    = "policy_preview_rate_limited"
+	reasonProfileSynthesisBusy        = "profile_synthesis_busy"        // two profile syntheses already run on this replica
 	reasonReviveLocalModeNotOwner     = "local_mode_not_owner"          // local mode mints for the run's own owner; nobody else may revive it — the SAME literal this refusal's own audit row already carried
 	reasonReviveUnsupportedDeployment = "revive_unsupported_deployment" // this deployment's store has no RunReviver, or configures no runner at all
 	// reasonReviveUnsupportedRunner covers three arms that all answer the
@@ -57,4 +58,22 @@ const (
 	reasonReviveAdminRestartCountInvalid    = "revive_admin_restart_count_invalid"    // run_ids named none, or more than the bulk maximum
 	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases
 	reasonRunCapacityStoreUnavailable       = "run_capacity_store_unavailable"        // this store cannot report fleet capacity
+)
+
+// Image admission at revive (run_revive_image.go).
+const reasonReviveImageNotAdmitted = "revive_image_not_admitted" // the image is held (images.admission enforce, or a profile's required_image_signers) and the run's create pinned no checked digest: started before admission was enforced, or in audit mode
+
+// PATCH /runs/{id}/egress, the live egress edit (run_egress_edit.go). A refusal from the revive path
+// it runs through keeps that path's own reason.
+const (
+	reasonEgressEditInvalid       = "egress_edit_invalid"         // the body names no host, too many, or an entry the proxy cannot match
+	reasonEgressEditRunNotLive    = "egress_edit_run_not_live"    // the run is not running, has no sandbox, or is lost
+	reasonEgressEditInProgress    = "egress_edit_in_progress"     // another egress edit of this run has not answered yet
+	reasonEgressEditHostNotListed = "egress_edit_host_not_listed" // a remove_hosts entry is not an entry on the run's allowlist
+	reasonEgressEditUnsupported   = "egress_edit_unsupported"     // no readback in the store, or a substrate that cannot hash what it hands a proxy or replace the proxy at all (Kubernetes)
+	reasonEgressEditLegacyProxy   = "egress_edit_legacy_proxy"    // the run's runner or proxy image is known to be older than firstRenewGateRelease
+	reasonEgressEditUnconfirmed   = "egress_edit_unconfirmed"     // the new proxy did not confirm the edit; its stop is confirmed
+	reasonEgressEditSuperseded    = "egress_edit_superseded"      // another revive replaced the edit's proxy start before it confirmed
+	// reasonEgressEditContainmentUnresolved: the new proxy did not confirm the edit, and its stop is not confirmed yet.
+	reasonEgressEditContainmentUnresolved = "egress_edit_containment_unresolved"
 )

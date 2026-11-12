@@ -67,8 +67,8 @@ const (
 const pushRulesDenyAll = "deny_all"
 
 var policyFieldOrder = []string{
-	fieldAllowed, fieldDenied, "allow_all_egress", "first_use_approval", "first_use_hold_seconds", "max_holds",
-	fieldMethods, fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
+	fieldAllowed, fieldDenied, "allow_all_egress", "refuse_ip_literals", "first_use_approval", "first_use_hold_seconds", "max_holds",
+	fieldMethods, "host_rules", fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
 	"resources.cpu_millis", "resources.memory_mib", "resources.pids_limit", fieldDisk,
 	fieldToolRules, "git_push_any_branch", fieldADOCaps, fieldGHCaps,
 }
@@ -433,6 +433,9 @@ func desktopBlocked(sp types.RunPolicySpec) []string {
 			out = append(out, dir.name)
 		}
 	}
+	if d.Download == types.TransferReview { // held for a person's yes on each file: neither allowed nor blocked
+		out = append(out, "Review download")
+	}
 	return out
 }
 
@@ -451,6 +454,7 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		}
 	}
 	scalar("allow_all_egress", strconv.FormatBool(sp.AllowAllEgress))
+	scalar("refuse_ip_literals", strconv.FormatBool(sp.RefuseIPLiterals))
 	scalar("first_use_approval", string(sp.FirstUseApproval))
 	scalar("first_use_hold_seconds", strconv.Itoa(sp.FirstUseHoldSeconds))
 	scalar("max_holds", strconv.Itoa(sp.MaxHolds))
@@ -468,6 +472,9 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 	}
 	for _, g := range sp.EligibleGrants {
 		m[fieldGrants] = append(m[fieldGrants], grantKey(g))
+	}
+	for _, s := range sp.HostRules { // one entry per set: layers' sets apply side by side, never merged
+		m["host_rules"] = append(m["host_rules"], types.HostRuleSetKey(s))
 	}
 	for _, mnt := range sp.WorkspaceMounts {
 		m[fieldMounts] = append(m[fieldMounts], mnt.Target)

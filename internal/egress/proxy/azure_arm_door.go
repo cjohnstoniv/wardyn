@@ -142,7 +142,7 @@ func (p *Proxy) serveAzureARM(w http.ResponseWriter, r *http.Request, host strin
 		p.refuseAzureARM(w, r, host, port, azureARMCredentialUnavailable, azureARMNoCredential)
 		return
 	}
-	rearmBodyDeadline(w) // the resolve may have held the request
+	rearmBodyDeadline(w, r) // the resolve may have held the request
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceAzureARM, denied: ruleSourceAzureARMRefused,
 		mintFailed: "azure credential", upstream: "azure",
 		credential: func(context.Context) (string, string, error) { return hdr.name, hdr.value, nil }})

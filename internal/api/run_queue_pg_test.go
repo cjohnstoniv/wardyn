@@ -401,3 +401,27 @@ func TestPG_QueueStartRecordsTheServiceAdvisory(t *testing.T) {
 		t.Errorf("run.queue.start warnings = %q, want %q", data.Warnings, want)
 	}
 }
+
+// A run that waited in the queue starts with the token stamp of its mint, not of its enqueue: a stale
+// stamp makes a runner refuse the run's lease and lets the lapsed-token sweep end it.
+func TestPG_QueueStartStampsTheMintedToken(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, ``)
+	e.exec(`UPDATE agent_runs SET token_renewed_at = now() - interval '2 hours' WHERE id = $1`, waiting.ID)
+	e.free(occupant)
+	e.waitStarted(waiting.ID)
+	var ageSec float64
+	var jti string
+	if err := e.poolEnv.pool.QueryRow(context.Background(),
+		`SELECT EXTRACT(EPOCH FROM now() - token_renewed_at)::float8, COALESCE(token_jti, '') FROM agent_runs WHERE id = $1`, waiting.ID).Scan(&ageSec, &jti); err != nil {
+		t.Fatal(err)
+	}
+	if ageSec > 60 {
+		t.Errorf("the started run's token stamp is %.0fs old, want a fresh one", ageSec)
+	}
+	if jti == "" {
+		t.Error("the started run recorded no token id")
+	}
+}

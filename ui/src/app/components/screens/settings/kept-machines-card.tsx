@@ -13,20 +13,21 @@ import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { deleteMyMachine, myMachines } from "../../../lib/api/me-machines";
-import { shortDate } from "../../../lib/format";
+import { mediumDate } from "../../../lib/format";
 import type { KeptMachine, MyMachines } from "../../../lib/types";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { gbOf, KEEP_LIST as T } from "../../wardyn/copy/keep-machine";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState } from "../../wardyn/states";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { useHolderLabels, shortRunId } from "./use-holder-labels";
 import { macOf, macsOf, rowOf } from "./kept-machines-model";
 
 export function KeptMachinesCard() {
   const [data, setData] = React.useState<MyMachines | null>(null);
   const [state, setState] = React.useState<"loading" | "absent" | "failed" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [toDelete, setToDelete] = React.useState<KeptMachine | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
@@ -42,7 +43,10 @@ export function KeptMachinesCard() {
         setData(d);
         setState("ready");
       })
-      .catch((e) => setState(e instanceof HttpError && (e.status === 403 || e.status === 404) ? "absent" : "failed"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setState(e instanceof HttpError && (e.status === 403 || e.status === 404) ? "absent" : "failed");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -80,7 +84,7 @@ export function KeptMachinesCard() {
   return (
     <CollapsibleCard title={T.TITLE} summary={state === "ready" ? (machines.length ? T.SUMMARY(machines.length, macsOf(machines).join(", ")) : T.NONE) : undefined} testId="kept-machines-card" id="kept-machines" ref={ref} tabIndex={-1} open={open} onOpenChange={setOpen} className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]">
       {state === "failed" ? (
-        <ErrorState size="compact" title={T.LOAD_FAILED} onRetry={load} />
+        <ErrorState size="compact" title={T.LOAD_FAILED} message={loadMessage} onRetry={load} />
       ) : (
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">{T.LEDE(data?.idle_days)}</p>
@@ -98,7 +102,7 @@ export function KeptMachinesCard() {
                         <Chip tone={row.tone}>{row.chip}</Chip>
                       </span>
                       <span className="block text-xs text-muted-foreground">{T.META(macOf(m), m.base, gbOf(m.disk_bytes))}</span>
-                      <span className="block text-xs text-muted-foreground">{T.DATES(shortDate(m.last_used_at), shortDate(m.expires_at))}</span>
+                      <span className="block text-xs text-muted-foreground">{T.DATES(mediumDate(m.last_used_at), mediumDate(m.expires_at))}</span>
                       {row.line && <span className="block text-xs text-muted-foreground">{row.line}</span>}
                     </span>
                     <Button type="button" variant="ghost" size="sm" disabled={!row.canDelete || busy} aria-label={`${T.DELETE} ${m.name}`} onClick={() => setToDelete(m)}>

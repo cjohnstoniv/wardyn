@@ -58,7 +58,7 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["MV-N06", NR_MACHINE.MACOS_PREPARING("mac-studio-07", 42), "mac-studio-07 is still preparing macOS (42%)."],
   ["MV-N07", NR_MACHINE.MACOS_AT_LIMIT("mac-studio-07"), "mac-studio-07 already runs 2 macOS VMs, the most Apple's licence allows."],
   ["MV-N08", NR_MACHINE.MACOS_NOT_MANAGED_OPERATOR("mac-studio-07", "rnr_7f3a"), "mac-studio-07 is not marked as company-managed. Mark it with `wardyn runner trust rnr_7f3a managed_device`."],
-  ["MV-N09", NR_MACHINE.MACOS_NOT_MANAGED_MEMBER("mac-studio-07"), "mac-studio-07 is not marked as company-managed. Ask a security operator to mark it."],
+  ["MV-N09", NR_MACHINE.MACOS_NOT_MANAGED_MEMBER("mac-studio-07"), "mac-studio-07 is not marked as company-managed. Ask a security admin to mark it as a managed device."],
   ["MV-N10", NR_MACHINE.MACOS_NO_POSTURE("mac-studio-07", "/Library/Application Support/Wardyn/posture.json"), "mac-studio-07 has no MDM posture file saying it is managed (`/Library/Application Support/Wardyn/posture.json`)."],
   ["MV-N11", NR_MACHINE.MACOS_HARNESS_ONE("mac-studio-07"), "macOS VMs on mac-studio-07 offer only Your own tools until Apple's Command Line Tools finish installing."],
   ["MV-N12", NR_MACHINE.MACOS_MINIMUM_MARK, "macOS minimum"],

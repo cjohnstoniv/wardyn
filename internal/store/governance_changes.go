@@ -24,14 +24,14 @@ import (
 )
 
 const governanceChangeCols = `id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
-	proposed_by, proposed_by_email, proposed_at, expires_at, state, decided_by, decided_by_email, decided_at, reason`
+	proposed_by, proposed_by_email, proposed_at, expires_at, state, decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket`
 
 // governanceChangeColsRead is governanceChangeCols with an expired-but-unswept pending row reported as
 // expired: a read computes expiry from expires_at, so no sweeper is needed for correctness.
 const governanceChangeColsRead = `id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
 	proposed_by, proposed_by_email, proposed_at, expires_at,
 	CASE WHEN state = 'pending' AND expires_at <= now() THEN 'expired' ELSE state END,
-	decided_by, decided_by_email, decided_at, reason`
+	decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket`
 
 // MaxGovernanceChangeList bounds one list read; the newest changes come first. The store reads one
 // row past it, so a caller can tell a list that was cut from one that ends exactly at the bound.
@@ -113,13 +113,17 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	if ch.ID == uuid.Nil {
 		ch.ID = uuid.New()
 	}
+	var note types.ChangeNote // a request carries its note from the start; every other proposal none
+	if ch.Note != nil {
+		note = *ch.Note
+	}
 	out, err := scanGovernanceChange(tx.QueryRow(ctx, `
 		INSERT INTO governance_changes (id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
-			proposed_by, proposed_by_email, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond')
+			proposed_by, proposed_by_email, expires_at, note_reason, note_ticket)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond', $12, $13)
 		RETURNING `+governanceChangeCols,
 		ch.ID, ch.TargetKind, ch.Op, ch.TargetKey, ch.Payload, ch.Diff, ch.BaseHash, ch.DeploymentHash,
-		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds()))
+		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds(), note.Reason, note.Ticket))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -235,6 +239,24 @@ func (s PG) GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.Govern
 		`SELECT `+governanceChangeColsRead+` FROM governance_changes WHERE id = $1`, id))
 }
 
+// SetGovernanceChangeNote replaces the note on a change that is still pending and unexpired, and returns
+// the change. ErrNotFound when no such change; *ErrGovernanceChangeNotPending (with the state it reads
+// as now) when it is decided or has lapsed.
+func (s PG) SetGovernanceChangeNote(ctx context.Context, id uuid.UUID, note types.ChangeNote) (types.GovernanceChange, error) {
+	out, err := scanGovernanceChange(s.Pool.QueryRow(ctx, `
+		UPDATE governance_changes SET note_reason = $2, note_ticket = $3
+		WHERE id = $1 AND state = 'pending' AND expires_at > now()
+		RETURNING `+governanceChangeCols, id, note.Reason, note.Ticket))
+	if !errors.Is(err, ErrNotFound) {
+		return out, err
+	}
+	cur, gerr := s.GetGovernanceChange(ctx, id)
+	if gerr != nil {
+		return types.GovernanceChange{}, gerr
+	}
+	return cur, &ErrGovernanceChangeNotPending{State: cur.State}
+}
+
 // DecideGovernanceChange decides one change in one transaction:
 //
 //  1. lock the change row;
@@ -337,6 +359,8 @@ func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, principals,
 			proposed_by_email = CASE WHEN proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2) THEN '' ELSE proposed_by_email END,
 			decided_by        = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE decided_by END,
 			decided_by_email  = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE decided_by_email END,
+			note_reason       = CASE WHEN proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2) THEN '' ELSE note_reason END,
+			note_ticket       = CASE WHEN proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2) THEN '' ELSE note_ticket END,
 			reason            = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE reason END,
 			payload           = CASE WHEN target_kind = $3 AND (proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2))
 			                         THEN jsonb_set(payload, '{reason}', '""'::jsonb) ELSE payload END
@@ -364,9 +388,10 @@ func scanGovernanceChange(row pgx.Row) (types.GovernanceChange, error) {
 // scanGovernanceChangeInto is scanGovernanceChange plus one trailing boolean column some reads add.
 func scanGovernanceChangeInto(row pgx.Row, extra *bool) (types.GovernanceChange, error) {
 	var c types.GovernanceChange
+	var noteReason, noteTicket string
 	dest := []any{&c.ID, &c.TargetKind, &c.Op, &c.TargetKey, &c.Payload, &c.Diff, &c.BaseHash, &c.DeploymentHash,
 		&c.ProposedBy, &c.ProposedByEmail, &c.ProposedAt, &c.ExpiresAt, &c.State,
-		&c.DecidedBy, &c.DecidedByEmail, &c.DecidedAt, &c.Reason}
+		&c.DecidedBy, &c.DecidedByEmail, &c.DecidedAt, &c.Reason, &noteReason, &noteTicket}
 	if extra != nil {
 		dest = append(dest, extra)
 	}
@@ -376,6 +401,9 @@ func scanGovernanceChangeInto(row pgx.Row, extra *bool) (types.GovernanceChange,
 	}
 	if err != nil {
 		return types.GovernanceChange{}, fmt.Errorf("store: scan governance change: %w", err)
+	}
+	if noteReason != "" || noteTicket != "" {
+		c.Note = &types.ChangeNote{Reason: noteReason, Ticket: noteTicket}
 	}
 	return c, nil
 }

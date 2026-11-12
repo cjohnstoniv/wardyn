@@ -43,19 +43,31 @@ const count = (n: number) => n.toLocaleString("en");
 const FIELD_LABEL = "text-xs font-semibold";
 const baseName = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
 
-/** WARDYN_COMPUTER_FOLDERS as /setup/status says it: undefined until it answers, false on a failed read. */
-export function useComputerFoldersAllowed(): boolean | undefined {
+export interface ComputerFoldersLookup {
+  /** WARDYN_COMPUTER_FOLDERS as /setup/status says it: undefined until it answers, and after a failed read. */
+  allowed?: boolean;
+  /** The read failed: not an answer, so not evidence that the organisation forbids folders. */
+  failed: boolean;
+  retry: () => void;
+}
+
+/** WARDYN_COMPUTER_FOLDERS as /setup/status says it. Loading and failed are both "unknown"; only a read that said false is a no. */
+export function useComputerFoldersAllowed(): ComputerFoldersLookup {
   const [allowed, setAllowed] = React.useState<boolean>();
+  const [failed, setFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     let alive = true;
+    setFailed(false);
     setupApi.getSetupStatus()
       .then((s) => alive && setAllowed(s.runner.computer_folders === true))
-      .catch(() => alive && setAllowed(false));
+      .catch(() => alive && setFailed(true));
     return () => {
       alive = false;
     };
-  }, []);
-  return allowed;
+  }, [attempt]);
+  const retry = React.useCallback(() => setAttempt((n) => n + 1), []);
+  return { allowed, failed, retry };
 }
 
 /** The person's own claimed runners that share folders; null while loading. */

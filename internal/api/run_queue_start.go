@@ -175,8 +175,8 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
-	st.ctx = withPromotedStart(bindAuthority(st.prep, a, choice), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits, StrictPins: st.launch.StrictPins}
+	st.ctx = withPromotedStart(withFrozenPoolUnit(bindAuthority(st.prep, a, choice), st.launch.UnitID), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
@@ -214,6 +214,9 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	}
 	ceiling, end := s.queueGovernance(st, req)
 	if end != nil {
+		return end
+	}
+	if end := s.queueScheduleDoor(st, ceiling); end != nil {
 		return end
 	}
 	if end := s.queuePolicyUnchanged(st, req, nil); end != nil {
@@ -494,6 +497,11 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	anchor := run
 	anchor.CreatedAt = *run.AdmittedAt
 	s.captureRunLimits(&anchor, ceiling, &f.end)
+	// A run whose cap passed while it waited (a cap set by an elevation that ended, say) ends here,
+	// before anything is minted, rather than starting for the seconds until the sweep kills it.
+	if end := lifetimePassedEnd(anchor, s.cfg.Now().UTC()); end != nil {
+		return end
+	}
 
 	id, err := s.cfg.Identity.MintRunIdentity(st.ctx, run.ID, runIdentitySubject(st.ctx, run.CreatedBy), requestSponsor(st.ctx, run.CreatedBy), internalAudience, run.OperatorOwned)
 	if err != nil {
@@ -502,14 +510,15 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	}
 	imageInput := createDigestInput(req, f.carriedImage) // what this start's fold held to the digest rule, for a revive
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
-		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
+		SPIFFEID: id.SPIFFEID, TokenJTI: id.JTI, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
 		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID, RestrictionIDs: anchor.RestrictionIDs,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
 		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
-		ImageInput: &imageInput,
-		WallPreset: f.source.wallPreset,
+		ImageInput:     &imageInput,
+		ImageAdmission: f.admission, // the start checked the image again; it dispatches under this verdict
+		WallPreset:     f.source.wallPreset,
 	})
 	switch {
 	case errors.Is(err, store.ErrRunnerAtCapacity):

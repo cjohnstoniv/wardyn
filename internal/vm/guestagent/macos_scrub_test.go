@@ -391,11 +391,12 @@ func TestScrubRemovesRunDirs(t *testing.T) {
 		t.Run(when, func(t *testing.T) {
 			m, root := scrubOn(t, &fakeRunner{})
 			put(t, root, MacRunDir+"/secrets/a-file", "a-fake-delivered-secret")
+			put(t, root, MacSessionEnvPath, "export HTTPS_PROXY='http://proxy:3128'\n")
 			put(t, root, scrubOutDir+"/exec-1", "output")
 			put(t, root, "/var/run/"+pauseFenceFile, `{"generation":3}`)
 			put(t, root, "/var/run/"+initMarkerFile, "")
 			rep := m.Scrub(context.Background(), when)
-			if exists(root, MacRunDir) || exists(root, scrubOutDir+"/exec-1") {
+			if exists(root, MacRunDir) || exists(root, MacSessionEnvDir) || exists(root, scrubOutDir+"/exec-1") {
 				t.Error("a run directory's content is left")
 			}
 			if !exists(root, scrubOutDir) {
@@ -407,7 +408,7 @@ func TestScrubRemovesRunDirs(t *testing.T) {
 			if !exists(root, "/var/run/"+initMarkerFile) {
 				t.Error("the Init marker is removed, so a second Init could pass")
 			}
-			if want := map[bool]int{true: 2, false: 3}[when == ScrubAtStop]; rep.Removed[ScrubRunDirs] != want {
+			if want := map[bool]int{true: 3, false: 4}[when == ScrubAtStop]; rep.Removed[ScrubRunDirs] != want {
 				t.Errorf("report = %+v, want %d run entries", rep, want)
 			}
 		})

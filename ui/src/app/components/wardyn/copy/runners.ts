@@ -79,6 +79,20 @@ export const RUNNERS = {
   FILTER_EMPTY_ACTIVE: "No active runners.",
   FILTER_EMPTY_REVOKED: "No revoked runners.",
   SEARCH_EMPTY: (q: string) => `No runner matches "${q}".`,
+  // Settings > Runners: the "Require a managed device" switch.
+  MANAGED_CARD_TITLE: "Runners",
+  MANAGED_LABEL: "Require a managed device",
+  MANAGED_HINT:
+    "A new run on a computer marked Personal is refused. Computers marked Managed device, and your organisation's own clusters, still take runs. Runs already started keep their computer.",
+  MANAGED_HONEST: "Wardyn goes by the trust class a security admin sets on each runner. It can't check the device itself.",
+  MANAGED_RUNNERS_OFF: "Runners are off, so this has no effect yet.",
+  MANAGED_NOT_SUPER: "Only a super admin can change this.",
+  MANAGED_CONFIRM_TITLE: "Require a managed device?",
+  MANAGED_CONFIRM_BODY: "New runs on a computer marked Personal will be refused until a security admin marks it Managed device. Runs already started are not affected.",
+  MANAGED_CONFIRM: "Require a managed device",
+  MANAGED_REFUSED_TITLE: "Couldn't change this",
+  MANAGED_LOAD_FAILED: "Couldn't load right now.",
+  MANAGED_RETRY: "Try again",
 } as const;
 
 export const RUNNER = {
@@ -118,7 +132,7 @@ export const RUNNER = {
 
 export const MY_RUNNER = {
   TITLE: "My runner",
-  LEDE: "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
+  LEDE: "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organisation's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
   NO_RUNNER: "You haven't registered a runner.",
   SUMMARY_NONE: "Not registered",
   SUMMARY_ONE: (name: string, state: string) => `${name} · ${state}`,
@@ -162,6 +176,9 @@ export const RUN_PLACEMENT = {
   LABEL: "Runs on",
   /** pending W-52: the recommended text until the owner answers. */
   REMOTE: "Remote-hosted runner",
+  /** A remote-hosted run says which kind of place it is when the run's runner_target names it. */
+  DOCKER_HOST: "Docker host",
+  KUBERNETES: "Kubernetes cluster",
   /** pending W-51: the recommended text until the owner answers. */
   MINE: (name: string) => `${name} · your computer`,
   OTHERS: (name: string, owner: string) => `${name} · ${owner}'s runner`,
@@ -183,8 +200,8 @@ export const RUN_PLACEMENT = {
 /** Pending a mock round: the run's not_recorded, on the Identity card. */
 export const RUN_RECORDING = {
   LABEL: "Recording",
-  org_off: "Not recorded; the organization kept no recordings when it started.",
-  runner_declined: "Not recorded by the runner; the organization kept recordings when it started.",
+  org_off: "Not recorded; the organisation kept no recordings when it started.",
+  runner_declined: "Not recorded by the runner; the organisation kept recordings when it started.",
   // A macOS VM run marked runner_declined: its terminal sessions are recorded, its agent's output is not.
   macos_terminal: "Terminal sessions are recorded at this run's recording level. The agent's output isn't recorded.",
   // Not on the boards: M7-RunStrip state 4 in the Identity card's form.
@@ -210,7 +227,7 @@ export const RUN_COMPUTER_FOLDER = {
   WAITING_BODY: "The run starts when this finishes. Nothing has run yet.",
   NOTHING_RAN: "Nothing ran.",
   BACK_AT: (time: string, files: string) => `Last changes synced back at ${time}. ${files} files came back to you.`,
-  DELETED: "The sandbox copy was deleted when the run ended.",
+  MAY_BE_GONE: "The run has ended. Its sandbox copy may no longer be available.",
   REFUSED: (n: string) => `${n} paths were not copied.`,
   BACK_FAILED: (text: string) => `The changes could not come back: ${text}`,
 };

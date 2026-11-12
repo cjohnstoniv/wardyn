@@ -39,13 +39,15 @@ import {
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { CAPABILITY, OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { OWN_SECRETS } from "../wardyn/copy/components";
 import { WRITE_ONLY } from "../wardyn/copy/door";
+import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
 import { useOperator } from "../wardyn/operator-context";
 
 // Secret names are constrained server-side to a safe identifier set; mirror that
@@ -87,24 +89,30 @@ export function SecretsScreen() {
   const [names, setNames] = React.useState<string[]>([]);
   const [mine, setMine] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [addOpen, setAddOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<string | null>(null);
   // #381 F3: the real WARDYN_GIT_PAT_BROKER switch, read from the ONE door
-  // that projects it (GET /workspace-providers, operator-only). Defaults to
-  // the 0.7.10 default (on) for a non-operator viewer or before the fetch
-  // resolves — the same default git-tab.tsx's own patBrokerEnabled prop
-  // takes when it has no switch value in scope yet.
-  const [patBrokerEnabled, setPatBrokerEnabled] = React.useState(true);
-  React.useEffect(() => {
+  // that projects it (GET /workspace-providers, operator-only). null = not
+  // known: still loading, the lookup failed, or the viewer is not an operator.
+  // Unknown stays unknown: the header says nothing about where a Git token is
+  // held until the switch is read, because either answer can be the true one.
+  const [patBroker, setPatBroker] = React.useState<boolean | null>(null);
+  const [brokerFailed, setBrokerFailed] = React.useState(false);
+  const loadBroker = React.useCallback(() => {
     if (!operator) return;
+    setBrokerFailed(false);
     providersApi
       .getWorkspaceProviders()
-      .then((snap) => setPatBrokerEnabled(snap.providers.git_pat_broker_enabled ?? true))
-      .catch(() => {});
+      .then((snap) => setPatBroker(snap.providers.git_pat_broker_enabled ?? true))
+      .catch(() => setBrokerFailed(true));
   }, [operator]);
+  React.useEffect(loadBroker, [loadBroker]);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
     (operator
@@ -115,7 +123,10 @@ export function SecretsScreen() {
         setMine(r.mine);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, [operator]);
   React.useEffect(load, [load]);
 
@@ -128,11 +139,15 @@ export function SecretsScreen() {
       <PageHeader
         title="Secrets"
         // #381 F3: "Exception" only reads true when the broker is OFF (the
-        // resident posture really is an exception to brokerLine's claim); on
+        // resident posture really is an exception to gitPatLine's claim); on
         // (the default), gitPatLine's own text just elaborates on the same
         // claim, so the word is dropped rather than reading as a contradiction.
-        description={`Write-only: values go in and never come out. ${CAPABILITY.brokerLine} ${
-          patBrokerEnabled ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`
+        // storedSecretLine says a value "stays in Wardyn, unless a run delivers it": false for a Git token
+        // with the broker off (the git helper hands over the token itself), so it waits for the switch too.
+        description={`Write-only: values go in and never come out. ${
+          patBroker === null
+            ? SECRETS_BROKER_UNCHECKED.VALUE_DELIVERABLE
+            : `${CAPABILITY.storedSecretLine} ${patBroker ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`}`
         }`}
         actions={
           <>
@@ -143,6 +158,15 @@ export function SecretsScreen() {
         }
       />
 
+      {brokerFailed && patBroker === null && (
+        <p role="status" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          {SECRETS_BROKER_UNCHECKED.NOTE}
+          <Button variant="outline" size="sm" onClick={loadBroker}>
+            {SECRETS_BROKER_UNCHECKED.RETRY}
+          </Button>
+        </p>
+      )}
+
       {caps?.enforcement.secret && (
         <p className="mb-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">{DENIED.SECRETS_NARROWED}</p>
       )}
@@ -151,7 +175,8 @@ export function SecretsScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search secrets by name…"
-            value={query}
+            aria-label="Search secrets"
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 max-w-sm"
           />
@@ -168,7 +193,7 @@ export function SecretsScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={2} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : shown.length === 0 ? (
           <EmptyState
             icon={KeyRound}
@@ -202,7 +227,9 @@ export function SecretsScreen() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -221,7 +248,7 @@ export function SecretsScreen() {
                           </Chip>
                         )}
                         {ownSet.has(name) ? (
-                          <Chip tone="cyan" className="gap-1" title={WRITE_ONLY.TOOLTIP}>
+                          <Chip tone="cyan" className="gap-1 [tr:hover_&]:bg-card" title={WRITE_ONLY.TOOLTIP}>
                             <Lock className="size-3" /> {WRITE_ONLY.CHIP}
                           </Chip>
                         ) : (
@@ -236,7 +263,7 @@ export function SecretsScreen() {
                     {ownSet.has(name) && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="size-8" aria-label="Secret actions">
+                        <Button variant="ghost" size="icon" className="size-8" aria-label={`Secret actions: ${name}`}>
                           <MoreHorizontal className="size-4" />
                         </Button>
                       </DropdownMenuTrigger>
@@ -264,7 +291,7 @@ export function SecretsScreen() {
         onSaved={load}
         existingNames={mine}
         ownRows
-        patBrokerEnabled={patBrokerEnabled}
+        patBroker={patBroker}
       />
 
       <AddSecretDialog
@@ -277,7 +304,7 @@ export function SecretsScreen() {
         existingNames={mine}
         ownRows
         initialName={rotateName ?? ""}
-        patBrokerEnabled={patBrokerEnabled}
+        patBroker={patBroker}
       />
 
       <DeleteConfirmDialog
@@ -327,7 +354,7 @@ export function AddSecretDialog({
   lockName,
   host,
   lane,
-  patBrokerEnabled = true,
+  patBroker = null,
   ownRows = false,
 }: {
   open: boolean;
@@ -359,7 +386,8 @@ export function AddSecretDialog({
   // Optional — a caller with no switch value in scope (corp-network-proxy.tsx,
   // whose secret is never a git_pat) gets the 0.7.10 default (on), the same
   // fallback every other unwired surface takes.
-  patBrokerEnabled?: boolean;
+  /** The WARDYN_GIT_PAT_BROKER switch; null = not known (loading, failed, or a viewer who cannot read it): the dialog then claims nothing about where a value or a Git token is held. */
+  patBroker?: boolean | null;
   // The caller writes into the signed-in person's OWN namespace (PUT
   // /secrets/{name} stores under the caller, never another person), which any
   // signed-in person may do. Only the Secrets screen says so; every other
@@ -402,7 +430,9 @@ export function AddSecretDialog({
   const isOverwrite = existingNames.includes(trimmed);
   const resolvedLane: Lane = lane ?? laneOfName(trimmed);
   // #381 F3: pat's meta depends on the real switch; app/ssh keep LANE_META.
-  const resolvedLaneMeta = resolvedLane === "pat" ? patLaneMeta(patBrokerEnabled) : LANE_META[resolvedLane];
+  // An unknown switch gets a plain "PAT" chip: brokered or in-sandbox would be a claim.
+  const resolvedLaneMeta =
+    resolvedLane !== "pat" ? LANE_META[resolvedLane] : patBroker === null ? { ...patLaneMeta(true), label: "PAT", tooltip: "", tone: "neutral" as const } : patLaneMeta(patBroker);
   // Editing the name clears any prior overwrite acknowledgement.
   React.useEffect(() => {
     setConfirmOverwrite(false);
@@ -433,7 +463,7 @@ export function AddSecretDialog({
       onOpenChange(false);
       onSaved?.(n);
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to store secret.");
+      setError(getErrorMessage(e, "Failed to store secret."));
       setSaving(false);
     }
   };
@@ -446,7 +476,10 @@ export function AddSecretDialog({
           <DialogDescription>
             {lockName
               ? "The value is write-only — it can be replaced or removed, never read back."
-              : "The value is stored write-only — it is injected proxy-side at use time and is never returned by the API or shown again."}
+              : patBroker === null
+                ? "The value is stored write-only: it is never returned by the API or shown again."
+                : "The value is stored write-only: it is never returned by the API or shown again. It stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox."}
+            {!lockName && patBroker === false && " With the token broker off, a stored Git token is handed to git inside the sandbox."}
           </DialogDescription>
         </DialogHeader>
 

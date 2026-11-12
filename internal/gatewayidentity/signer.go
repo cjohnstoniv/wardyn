@@ -7,8 +7,8 @@
 // never touches internal-API auth, and a token it signs cannot authenticate
 // inward. Only wardynd holds it.
 //
-// The token format and the JWKS are experimental until 0.11, and either may
-// change before then.
+// The token format is "1": within it claims are only added, never removed,
+// renamed or re-typed. See "Compatibility" in docs/operations/ai-gateway.md.
 package gatewayidentity
 
 import (
@@ -31,8 +31,9 @@ import (
 
 const (
 	// tokenFormat is the wardyn_format claim: a gateway rule can tell which
-	// shape it is reading while the format is experimental.
-	tokenFormat = "experimental-1"
+	// shape it is reading. A change to this value is a new format, announced a
+	// minor release ahead.
+	tokenFormat = "1"
 	// tokenLifetime is the longest a token lives, and how long one lives when the
 	// provider sets none. A gateway cannot learn that a run was killed, so this is
 	// also the longest a killed run's token can still be spent. Key retirement
@@ -56,6 +57,9 @@ type Claims struct {
 	Provider string `json:"wardyn_provider,omitempty"` // the model provider id; empty on an MCP server's token
 	MCP      string `json:"wardyn_mcp,omitempty"`      // the MCP server's key, on its token alone
 	Sponsor  string `json:"sponsor,omitempty"`
+	// Delegate is the id of the portal a delegated run was launched through; empty on a run its person
+	// launched themselves. A flat claim, so a gateway rule needs no walk through act.
+	Delegate string `json:"wardyn_delegate,omitempty"`
 
 	ID        string   `json:"jti"`
 	IssuedAt  int64    `json:"iat"`
@@ -64,9 +68,23 @@ type Claims struct {
 	Actor     actClaim `json:"act"`
 }
 
-// actClaim names the agent run acting for the subject, in the run token's shape.
+// actClaim names the agent run acting for the subject, in the run token's shape. Act is the actor
+// before it (RFC 8693 section 4.1: the outermost act is the current actor and the most deeply nested
+// the least recent), so the Wardyn run sits outside the agent a portal named. A gateway that reads it
+// should treat the nested actor as provenance: the RFC says prior actors are informational only.
 type actClaim struct {
-	Sub string `json:"sub"`
+	Sub string    `json:"sub"`
+	Iss string    `json:"iss,omitempty"`
+	Act *actClaim `json:"act,omitempty"`
+}
+
+// NamePriorActor records the agent that asked for this run, as the actor before it. Sign keeps it and
+// sets the run's own subject over it. An empty sub names no one.
+func (c *Claims) NamePriorActor(sub, iss string) {
+	if sub == "" {
+		return
+	}
+	c.Actor.Act = &actClaim{Sub: sub, Iss: iss}
 }
 
 // storedKeys is the secret-store row. The previous key is kept as its public
@@ -174,7 +192,7 @@ func (s *Signer) Sign(c Claims, lifetime time.Duration) (string, Claims, error) 
 	c.IssuedAt = now.Unix()
 	c.ExpiresAt = now.Add(lifetime).Unix()
 	c.Format = tokenFormat
-	c.Actor = actClaim{Sub: c.Issuer + "/agent-run/" + c.Run}
+	c.Actor = actClaim{Sub: c.Issuer + "/agent-run/" + c.Run, Act: c.Actor.Act}
 	token, err := jwt.Signed(s.signer).Claims(c).Serialize()
 	if err != nil {
 		return "", Claims{}, fmt.Errorf("gateway identity: sign: %w", err)

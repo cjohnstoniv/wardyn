@@ -47,6 +47,9 @@ func buildConfig(d substrate.Deps, recordingMount string) Config {
 		ConfinementRuntimes:    d.ConfinementRuntimes,
 		// The deployment's host_path user-drive ceiling, parsed once at boot.
 		UserDriveHostRoots: d.UserDriveHostRoots,
+
+		// Off by default: a run's network has no address on the Docker host, or the run is refused.
+		AllowHostReachableRunNetwork: AllowHostReachableRunNetworkFromEnv(),
 	}
 }
 

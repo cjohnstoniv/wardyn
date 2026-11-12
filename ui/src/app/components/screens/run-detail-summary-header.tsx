@@ -160,6 +160,19 @@ export function SummaryHeader({
   // Rename's edit mode: the form renders as its own full-width row under the header.
   const [renaming, setRenaming] = React.useState(false);
   const [draftTitle, setDraftTitle] = React.useState("");
+  // Closing the edit row unmounts the field that held focus: hand it back to the Rename button, or to the title
+  // when that button is not drawn (phone width, where Rename lives in the More menu).
+  const renameButton = React.useRef<HTMLButtonElement>(null);
+  const titleHeading = React.useRef<HTMLHeadingElement>(null);
+  const wasRenaming = React.useRef(false);
+  React.useEffect(() => {
+    if (wasRenaming.current && !renaming) {
+      const button = renameButton.current;
+      const drawn = !!button && getComputedStyle(button).display !== "none";
+      (drawn ? button : titleHeading.current)?.focus();
+    }
+    wasRenaming.current = renaming;
+  }, [renaming]);
   // Claim "attachable" only under the SAME entry rule AttachTerminal itself
   // gates the connect on (lib/run-entry.ts) — otherwise a viewer sees this chip
   // promise attachability and then gets a refusal the instant they open the
@@ -220,11 +233,11 @@ export function SummaryHeader({
           <span className="shrink-0 text-muted-foreground" aria-hidden="true">/</span>
         </div>
         {/* The page's only h1: for an autonomous run it is the one statement of what the run is doing. */}
-        <h1 className="min-w-[8rem] flex-1 truncate text-lg font-semibold text-foreground sm:text-base" title={run.task || undefined}>
+        <h1 ref={titleHeading} tabIndex={-1} className="min-w-[8rem] flex-1 truncate text-lg font-semibold text-foreground outline-none sm:text-base" title={run.task || undefined}>
           {runHeadline(run)}
         </h1>
         {canRename && (
-          <Button variant="ghost" size="sm" className="hidden shrink-0 sm:inline-flex" onClick={startRename}>
+          <Button ref={renameButton} variant="ghost" size="sm" className="hidden shrink-0 sm:inline-flex" onClick={startRename}>
             <Pencil className="size-4" /> {RUN_COCKPIT.rename}
           </Button>
         )}
@@ -373,6 +386,9 @@ export function SummaryHeader({
     {renaming && onRename && (
       <form
         className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-2"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setRenaming(false);
+        }}
         onSubmit={(e) => {
           e.preventDefault();
           // F5 (review round 2): an emptied draft is Cancel, not a "renamed

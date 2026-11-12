@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -80,6 +81,10 @@ type Server struct {
 
 	// stopping is set by the stop scrub: the run's settings are gone, so no Init or exec starts.
 	stopping bool
+	// stopCtx ends with the stop scrub, so the GUI settings step does not outlive the run's settings.
+	stopOnce   sync.Once
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 }
 
 type detached struct {
@@ -172,6 +177,15 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad init: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// A run with a desktop starts only once the agent account is at the console. Auto-login runs once per
+	// boot, so a guest still at the login window when the wait ends stays there: the run fails with that
+	// reason instead of running with a desktop nobody can sign in to. Nothing is written before.
+	if s.Desktop != nil && s.Cred != nil && in.DesktopPassword != "" && !in.SignInsOff {
+		if err := s.Desktop.awaitAgentConsole(r.Context(), s.Cred.Uid, bootTime()); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping {
@@ -244,7 +258,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		res.KeychainTrust, res.KeychainTrustReason = s.TrustRunCA(r.Context(), in.RunCA)
 	}
 	if s.Desktop != nil {
-		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
+		*res.DesktopPasswordSet = s.initDesktop(r.Context(), in.Env, in.SecretEnv, ca, in.DesktopPassword, !in.SignInsOff)
 	}
 	if s.ScreenLockOff != nil {
 		s.ScreenLockOff(r.Context())
@@ -266,6 +280,8 @@ func (s *Server) handleScrub(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.stopping = true
 	s.mu.Unlock()
+	s.sessionCtx()
+	s.stopCancel()
 	writeJSON(w, s.Scrub(r.Context(), ScrubAtStop))
 }
 
@@ -279,23 +295,46 @@ func (s *Server) buildCA(files []File) error {
 	return nil
 }
 
-// initDesktop sets the run's VNC password (pw, from Init) and the CA variables in the desktop session,
-// and says whether the password is set. Neither fails the Init: a run without them is agent-only or
-// sees certificate errors in GUI apps, and InitResult.DesktopPasswordSet says which. The log lines name
-// the step and never the password.
-func (s *Server) initDesktop(ctx context.Context, ca []string, pw string, desktop bool) bool {
+// initDesktop sets the run's VNC password (pw, from Init), adds the agent account to Screen Sharing's access list
+// when the base has one, and gives the run's non-secret settings to the
+// shells and the desktop session (StartSessionEnv), and says whether the password is set. Neither fails
+// the Init: a run without them is agent-only or sees certificate errors in GUI apps, and
+// InitResult.DesktopPasswordSet says which. The GUI session's part runs on after Init answers, until the
+// agent account is at the console or the stop scrub cancels it. secret is passed only so StartSessionEnv
+// can drop a colliding key: its values never reach a shell or the session. The log lines name the step
+// and never the password.
+func (s *Server) initDesktop(ctx context.Context, env, secret map[string]string, ca []string, pw string, desktop bool) bool {
 	set := false
 	if desktop {
+		s.Desktop.AllowScreenSharing(ctx, s.User)
 		if err := s.Desktop.SetRunPassword(ctx, pw); err != nil {
 			slog.Warn("guest agent: no desktop password for this run", "err", err)
 		} else {
 			set = true
 		}
 	}
-	if err := s.Desktop.SetSessionEnv(ctx, ca); err != nil {
-		slog.Warn("guest agent: CA variables not set in the desktop session", "err", err)
+	uid := uint32(0)
+	if s.Cred != nil {
+		uid = s.Cred.Uid
 	}
+	s.Desktop.StartSessionEnv(s.sessionCtx(), SessionEnvPaths{}, uid, env, secret, ca)
+	go s.Desktop.endSetupAssistant(s.sessionCtx(), uid, ExecRunner{})
 	return set
+}
+
+// bootTime is when the guest booted (kern.boottime), or now when it cannot be read.
+func bootTime() time.Time {
+	tv, err := unix.SysctlTimeval("kern.boottime")
+	if err != nil {
+		return time.Now()
+	}
+	return time.Unix(tv.Unix())
+}
+
+// sessionCtx is the context of the GUI settings step, ended by the stop scrub.
+func (s *Server) sessionCtx() context.Context {
+	s.stopOnce.Do(func() { s.stopCtx, s.stopCancel = context.WithCancel(context.Background()) })
+	return s.stopCtx
 }
 
 // signalAgent sends sig to the latest detached exec's process group: the harness and every process

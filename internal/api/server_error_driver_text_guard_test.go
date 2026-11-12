@@ -630,7 +630,7 @@ func TestFixedDriverTextSitesStayFixed(t *testing.T) {
 	// operator's own policy shape (config validation), not a driver error, and it is the one site.
 	allowed := map[string]bool{"provider_azure.go:Server.authorAzureInjection:refuse": true}
 	fset := token.NewFileSet()
-	for _, name := range []string{"run_owner_authority.go", "provider_azure.go", "run_revive.go", "run_mcp.go"} {
+	for _, name := range []string{"run_owner_authority.go", "provider_azure.go", "run_revive.go", "run_revive_after_claim.go", "run_mcp.go"} {
 		src, err := readFixedSite(name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

@@ -22,6 +22,8 @@ import { AlertTriangle, ShieldAlert, Clock, Check, Loader2, X } from "lucide-rea
 import { toast } from "sonner";
 import {
   canDecideApproval,
+  isMCPCallRequest,
+  isHostCallRequest,
   decisionArgs,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
@@ -32,6 +34,8 @@ import {
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "./push-content-card";
+import { McpCallCard } from "./mcp-call-card";
+import { HostCallCard } from "./host-call-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
@@ -348,7 +352,7 @@ export function LiveApprovals({
       setAdminOnly((cur) => new Set(cur).add(id));
     }
   };
-  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind)) && !adminOnly.has(a.id);
+  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind, a)) && !adminOnly.has(a.id);
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -364,6 +368,7 @@ export function LiveApprovals({
         await api.deny(a.id, reasonDeny, ...args);
       }
       await refresh();
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
     } catch (e) {
       noteRefusal(a.id, e);
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
@@ -385,6 +390,7 @@ export function LiveApprovals({
       if (approve) await api.approve(a.id, reasonApprove, ...opts);
       else await api.deny(a.id, reasonDeny, ...opts);
       await refresh();
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
     } catch (e) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(e) });
     } finally {
@@ -551,6 +557,35 @@ export function LiveApprovals({
             />
           );
         }
+        // One MCP call: its own card, which shows the exact arguments (the strip's plain row has no room for them).
+        if (isMCPCallRequest(a) && a.state === "PENDING") {
+          return (
+            <McpCallCard
+              key={a.id}
+              item={a}
+              canDecide={canDecide(a)}
+              run={run}
+              busy={busy === a.id ? busyAction : null}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
+            />
+          );
+        }
+        // One held request to a rule-held host: its own card, which shows the whole host, method and path and says the
+        // approval lasts the run (the strip's plain row clips a long title and offers a bare Approve).
+        if (isHostCallRequest(a) && a.state === "PENDING") {
+          return (
+            <HostCallCard
+              key={a.id}
+              item={a}
+              canDecide={canDecide(a)}
+              run={run}
+              busy={busy === a.id ? busyAction : null}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
+            />
+          );
+        }
         const label = rowLabel(a);
         const title = deriveTitle(a.kind, a.requested_scope ?? {});
         const held = isHeld(a);
@@ -597,7 +632,8 @@ export function LiveApprovals({
             <Button
               size="sm"
               variant="info"
-              className="h-7 rounded-r-none border-r-0"
+              // Squared on the right only when the scope caret is drawn next to it.
+              className={scoped && !a.walls_block ? "h-7 rounded-r-none border-r-0" : "h-7"}
               disabled={!canDecide(a) || !!a.walls_block || busy === a.id}
               onClick={() => decide(a, true)}
             >
@@ -620,7 +656,7 @@ export function LiveApprovals({
             <Button
               size="sm"
               variant="outline"
-              className="h-7 ml-1 rounded-r-none border-r-0"
+              className={scoped ? "h-7 ml-1 rounded-r-none border-r-0" : "h-7 ml-1"}
               disabled={!canDecide(a) || busy === a.id}
               onClick={() => setDenyTarget({ request: a, scope: "run" })}
             >

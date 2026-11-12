@@ -29,6 +29,8 @@
 #   WARDYN_CI_REPO           org/name to clone into the workspace       [optional]
 #   WARDYN_CI_POLICY_FILE    RunPolicySpec JSON path                    [examples/policies/ci.json]
 #   WARDYN_CI_TIMEOUT        wardyn run --wait timeout                  [30m]
+#   WARDYN_CI_IDEMPOTENCY_KEY with WARDYN_URL: wardyn run --idempotency-key; [unset]
+#                            use a value the same on every re-run of one job
 #   WARDYN_CI_OUT            artifact dir (run.json, audit.json, .cast) [./ci-artifacts]
 #   WARDYN_URL               an existing control plane to drive         [unset = throwaway stack]
 #   WARDYN_CI_TOKEN          with WARDYN_URL: the CI principal's own    [required with WARDYN_URL]
@@ -95,6 +97,7 @@ AGENT="${WARDYN_CI_AGENT:-claude-code}"
 CI_REPO="${WARDYN_CI_REPO:-}"
 POLICY_FILE="${WARDYN_CI_POLICY_FILE:-${REPO_ROOT}/examples/policies/ci.json}"
 TIMEOUT="${WARDYN_CI_TIMEOUT:-30m}"
+IDEMPOTENCY_KEY="${WARDYN_CI_IDEMPOTENCY_KEY:-}"
 OUT_DIR="${WARDYN_CI_OUT:-./ci-artifacts}"
 MODEL_PROVIDER="${WARDYN_CI_MODEL_PROVIDER:-}"
 REMOTE_URL="${WARDYN_URL:-}"
@@ -329,6 +332,8 @@ wardyn "${base_args[@]}" --dry-run 2>&1 | sed 's/^/  preflight: /' ||
 
 # ── launch + wait ────────────────────────────────────────────────────────────
 run_args=("${base_args[@]}" --wait --timeout "${TIMEOUT}" --json)
+# Only the launch carries the key: the preflight above makes no run.
+[[ -n "${IDEMPOTENCY_KEY}" ]] && run_args+=(--idempotency-key "${IDEMPOTENCY_KEY}")
 
 log "Launching governed run: wardyn ${run_args[*]}"
 run_json="${OUT_DIR}/run.json"

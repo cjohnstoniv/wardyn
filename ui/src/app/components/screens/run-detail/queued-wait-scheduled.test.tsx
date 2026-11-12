@@ -17,6 +17,7 @@ import { MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
 import type { RunDetail, RunQueue } from "../../../lib/types";
 import { MODEL_ACCESS_BANNER } from "../../wardyn/model-access-copy";
 import { CONNECTIONS } from "../../wardyn/copy/door";
+import { CANCEL_NOT_STARTED } from "../../wardyn/copy/cancel-not-started";
 import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
 import { TerminalPane } from "./terminal-notice";
 
@@ -68,7 +69,7 @@ describe("a scheduled run's page", () => {
     show(scheduled("scheduled"));
     await userEvent.click(screen.getByRole("button", { name: SCHEDULED_RUN.CANCEL_RUN }));
     expect(runs.killRun).not.toHaveBeenCalled();
-    await userEvent.click(await screen.findByRole("button", { name: "End run" }));
+    await userEvent.click(await screen.findByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
     await waitFor(() => expect(runs.killRun).toHaveBeenCalledWith("run-1"));
   });
 });

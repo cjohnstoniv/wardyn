@@ -120,6 +120,43 @@ func TestLeqRefusesAnAddedSidecarComposition(t *testing.T) {
 	}
 }
 
+// TestLeqRefusesAnOffWebPortOfABareBaseEntry: a port other than 80 or 443 of an entry the base
+// names bare is a port the base reaches only with the port rule off, so Leq does not prove it
+// within the base and the change waits for a second approver. The meet reads the bare entry the
+// same way: an overlay naming that port composes to nothing, which Leq proves within the base.
+func TestLeqRefusesAnOffWebPortOfABareBaseEntry(t *testing.T) {
+	base := composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"b.example"}}}
+	port := []string{"b.example:8443"}
+	if leqOf(composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: port}}, base) {
+		t.Error("Leq holds for b.example:8443 under a base naming b.example bare")
+	}
+	got, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &port}})
+	if err != nil || len(got.Ceiling.AllowedDomains) != 0 {
+		t.Fatalf("ApplyOverlay = %v (%v), want []", got.Ceiling.AllowedDomains, err)
+	}
+	if !leqOf(got, base) {
+		t.Error("Leq refuses the empty meet")
+	}
+}
+
+// TestLeqRefusesAPortAddedBesideABareEntry: under a base naming h and h:22, a composition that goes
+// from [h] to [h, h:22] keeps the port (both sides name it), and Leq does not prove it within [h].
+func TestLeqRefusesAPortAddedBesideABareEntry(t *testing.T) {
+	base := composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"b.example", "b.example:22"}}}
+	compose := func(list ...string) composer.Authority {
+		t.Helper()
+		got, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &list}})
+		if err != nil || !slices.Equal(got.Ceiling.AllowedDomains, list) {
+			t.Fatalf("ApplyOverlay(%v) = %v (%v), want it kept", list, got.Ceiling.AllowedDomains, err)
+		}
+		return got
+	}
+	before, after := compose("b.example"), compose("b.example", "b.example:22")
+	if leqOf(after, before) {
+		t.Error("Leq holds for [b.example b.example:22] within [b.example]")
+	}
+}
+
 // Leq is judged against ENFORCEMENT, not against its own comparators: whenever
 // it says x is at most as permissive as y, the independent oracle that compiles
 // both through the proxy finds nothing x reaches that y does not. The pairs are

@@ -265,6 +265,8 @@ type SiteImages struct {
 	// admin approved, and only a digest makes that what runs. Off by default.
 	// Operators are not bound by it (their runs are marked in the audit row).
 	RequireDigest bool `json:"require_digest,omitempty"`
+	// Admission is signature admission for member-chosen images (SiteImageAdmission). Absent reads off.
+	Admission *SiteImageAdmission `json:"admission,omitempty"`
 }
 
 // ComponentSettings is SiteConfig.Components. Every field's zero value is the
@@ -361,4 +363,10 @@ type WithheldScmHost struct {
 // RunnerSettings controls admission to runner routes. Nil and false both deny.
 type RunnerSettings struct {
 	Enabled bool `json:"enabled"`
+	// RequireManagedDevice refuses a new local run on a runner whose trust class is personal, so only a
+	// runner a security operator marked managed_device (or an organisation's cluster runner) takes one.
+	// Default off: an existing install keeps placing on personal runners until an admin turns this on.
+	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
+	// Always on the wire, false included, so GET /runners/settings states it when it is off.
+	RequireManagedDevice bool `json:"require_managed_device"`
 }

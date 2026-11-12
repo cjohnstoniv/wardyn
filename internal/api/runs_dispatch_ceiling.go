@@ -425,6 +425,9 @@ func ceilingDeniesAny(deny []string, hosts []string) bool {
 type withholding struct {
 	deny   []string
 	layers []sealLayer
+	// pinnedOut is the name of the run's first organisation component whose unit pin no longer
+	// covers the run's unit: every credential is then withheld. Only the live doors set it.
+	pinnedOut string
 }
 
 // binds reports whether anything can be withheld at all.
@@ -460,9 +463,11 @@ func grantWithheldBy(g types.GrantSpec, list []types.GrantSpec) bool {
 }
 
 // credentialWithheld reports whether a grant is kept from the run: by its kind and scope
-// (grantWithheld), or because a host it delivers to is withheld (grantHosts).
+// (grantWithheld), because a host it delivers to is withheld (grantHosts), or because a component the
+// run carries is pinned to a unit the run is not in (pinnedOut): a grant does not record which
+// component it came from, so every one is.
 func (w withholding) credentialWithheld(g types.GrantSpec) bool {
-	return w.grantWithheld(g) || w.withheldAny(grantHosts(g))
+	return w.pinnedOut != "" || w.grantWithheld(g) || w.withheldAny(grantHosts(g))
 }
 
 // grantHosts is the hosts a grant's credential is delivered to: the git broker's re-origination set
@@ -596,15 +601,15 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 // run.ConfinementClass, fixed at create — raising policy.MinConfinementClass
 // here would be decoration that looks enforced and is not.
 //
-// A provable NO-OP when the principal has no assigned profile and the boundary
-// is in no_limits: c.deny is empty for an unassigned member and for an operator
+// A provable NO-OP when the principal has no assigned profile, the boundary
+// is in no_limits and the policy binds every injection's host: c.deny is empty for an unassigned member and for an operator
 // (effectiveCeiling's step-1 short-circuit), and layers is nil. It is NOT a no-op merely because a lane forgot to resolve a
 // ceiling — that state is unrepresentable now, since dispatchCeiling is a
 // required argument whose zero value dispatchRun refuses (see dispatchCeiling).
 func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, c dispatchCeiling, layers []sealLayer,
 	grantRows []types.CredentialGrant, p *dispatchParams, sandboxEnv map[string]string, llm *llmTransport, mitmHosts, componentMITMHosts *[]string,
-) []types.CredentialGrant {
+) (_ []types.CredentialGrant, unbound []runner.InjectionGrant) {
 	// THE ENFORCEMENT half is gated on the deny list, because with nothing to
 	// deny there is nothing to union, no injection to drop and no lane to
 	// withhold. The AUDIT half below is gated on the PROFILE instead — those are
@@ -646,18 +651,21 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 				return w.withheld(componentMITMHost(entry))
 			})
 		}
-
-		if len(droppedInjection) > 0 || len(droppedLane) > 0 {
-			slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile or the Wardyn boundary denies",
-				slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
-				slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
-		}
 	}
-	// An outer layer (the Wardyn boundary, a restriction, the run owner's walls) withheld a credential
-	// from a run no profile applies to: the row is written for it too, naming the layer, so a stripped
-	// credential is never silent. boundary is set only for a boundary layer, personal_walls for the
-	// walls' layer.
+	unbound = withholdUnboundDispatchInjections(policy, *p, injections)
+	droppedInjection = append(droppedInjection, hostsOfInjections(unbound)...)
+	if len(droppedInjection) > 0 || len(droppedLane) > 0 {
+		slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile or the Wardyn boundary denies, or the run's policy does not bind",
+			slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
+			slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
+	}
+	// An outer layer (the Wardyn boundary, a restriction, the run owner's walls) or the binding check
+	// above withheld a credential from a run no profile applies to: the row is written for it too,
+	// naming the layer, so a stripped credential is never silent. boundary is set only for a boundary
+	// layer, personal_walls for the walls' layer.
 	layerActed := len(layers) > 0 && (len(droppedInjection) > 0 || len(droppedLane) > 0 || len(droppedGrant) > 0)
+	unboundOnly := len(unbound) > 0 && len(droppedInjection) == len(unbound) &&
+		len(added) == 0 && len(droppedLane) == 0 && len(droppedGrant) == 0
 	boundaryLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerBoundary })
 	wallsLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerPersonal })
 	presetLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerWallPreset })
@@ -666,8 +674,8 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// makes the row's ABSENCE mean "no profile applies" rather than "this door
 	// skipped the ceiling". ceilingForDispatch leaves deny and profile empty
 	// together, so this is the same provable no-op the deny check stood for.
-	if c.profile == "" && !layerActed {
-		return grantRows
+	if c.profile == "" && !layerActed && len(unbound) == 0 {
+		return grantRows, unbound
 	}
 	// ALWAYS audited when a profile applies, even with nothing to drop: "which
 	// ceiling did this run actually run under" is the question the envelope at
@@ -701,14 +709,8 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		}
 		data["withheld_grants"] = nonNilStrings(droppedGrant)
 	}
-	if c.profile == "" && boundaryLayer {
-		data["note"] = "the Wardyn boundary denies these hosts or does not allow them, so every credential lane that reaches one is withheld"
-	} else if c.profile == "" {
-		data["note"] = "a restriction, the run owner's walls or the run's wall preset deny these hosts or keep these credentials out, so every credential lane that reaches one is withheld"
-	} else if len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
-		data["note"] = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
-			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
-			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them"
+	if note := ceilingReassertNote(c.profile, unboundOnly, boundaryLayer, len(added)+len(droppedInjection)+len(droppedLane) > 0); note != "" {
+		data["note"] = note
 	}
 	// The SIZE half of the profile, present only when the profile sets one — so a
 	// profile that sets no size adds no size fields to the row. applyEphemeralDisk
@@ -725,7 +727,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ceiling.reassert",
 		run.ID.String(), "success", mustJSON(data)))
-	return grantRows
+	return grantRows, unbound
 }
 
 // dropWithheldGrants keeps from the run every grant the outer layers do not let it be given

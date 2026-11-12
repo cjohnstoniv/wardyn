@@ -23,19 +23,64 @@
 | Proxy variables | `HTTPS_PROXY`, `HTTP_PROXY` and `WARDYN_PROXY_URL` name the run's proxy. The relay carries a connection to the proxy itself unchanged, and the proxy checks what is sent on it as it checks a container's |
 | Open connections | The relay holds at most 1,024 per run on granted ports other than 80. One past that is refused and reported as `tunnel-limit`; the cap does not evict existing connections; lower process or container resource limits can bind first |
 | Refused traffic | A port or host not allowed, a raw IP or an outside DNS resolver: a deny decision each. Dropped IPv6 and ICMP frames: one row a second per kind, with a repeat count. Global IPv6 connects find no route |
+| Output | The harness's output is kept on the VM's disk, at most 64 MiB, with a closing line that says so |
+| AWS sign-ins | Ending a run wipes `~/.aws/sso/cache` and `~/.aws/cli/cache` in the guest, and the run record says when it cannot |
 | Sign-ins | The desktop's keychain and browser profiles are kept in the guest's memory and are gone when the guest shuts down ([Sign-ins in the desktop](#sign-ins-in-the-desktop)) |
 
-- Not in this release: session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
+- Not in this release: reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
+- A runner whose `--recording-store` is `pg` (the default) or `fs` refuses a Linux VM run with recording on: turn recording off for the run.
+- On a remote runner with `--recording-store off`, the gateway records the desktop at Screen and actions while someone watches. A sign-in pause keeps no frames ([Pause the agent to sign in](#pause-the-agent-to-sign-in)).
+- A disk size or process limit is not enforced. A policy or governance profile that sets `disk_mib` or `pids_limit` is refused for a Linux VM run. A disk size that is only requested, or filled in as a default, runs and is shown as not enforced.
 - Linux VMs need a pool where every runner offers them; a mixed pool refuses them.
 - Windows VMs are not available yet. `machine_kind` takes `container`, `linux_vm` and `macos_vm` only.
 - **A Linux desktop VM is your own image for now.** The reference guest image has no desktop ([`deploy/images/vm-linux/Dockerfile`](../../deploy/images/vm-linux/Dockerfile)). To get a desktop, build an image that meets the [guest image contract](#the-guest-image-contract) and adds one, and name it with `--image`. Wardyn does not ship an official Linux desktop VM image yet.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
 
+## Requirements
+
+| Requirement | Detail |
+|---|---|
+| Host | x86-64 Linux with hardware virtualisation and the `kvm` module loaded (`/dev/kvm` exists) |
+| Docker engine | A local engine that shares the runner's filesystem. Docker Desktop and a remote `DOCKER_HOST` are refused by the probe |
+| `/dev/kvm` access | Its group is not `root`, or it is open to all (mode `0666`). The QEMU container gets that group, never root's |
+| Runner user | Any user. A runner that runs as root starts its VM containers as uid 65532 |
+| The QEMU image | Built from [`deploy/runner/vm-qemu`](../../deploy/runner/vm-qemu/Dockerfile) and named in `WARDYN_RUNNER_VM_QEMU_IMAGE` |
+| The proxy image | Also carries the network relay (`wardyn-vmnet`), so a `proxy_image` pin in `runnerd.json` pins the relay too |
+
+## Turn it on
+
+1. Give `/dev/kvm` a group the runner can hand to its containers. Stock distributions ship it as `root:kvm 0660`, which already works. If it is `root:root`, install a udev rule and reload it:
+   ```sh
+   echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-wardyn-kvm.rules
+   sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+   ```
+2. Build the QEMU image on the runner's engine: `docker build -f deploy/runner/vm-qemu/Dockerfile -t wardyn/vm-qemu:local .`
+3. Set `WARDYN_RUNNER_LINUX_VM=1` and `WARDYN_RUNNER_VM_QEMU_IMAGE=wardyn/vm-qemu:local` in the runner's environment.
+4. Restart the runner. It logs `Linux VM sandboxes are on` with the machine type, CPU model and QEMU version, or `Linux VM sandboxes are off on this runner` with the reason and its fix.
+
+## Settings
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `WARDYN_RUNNER_LINUX_VM` | (unset, off) | `1` turns Linux VM sandboxes on |
+| `WARDYN_RUNNER_VM_QEMU_IMAGE` | (unset) | The QEMU image every VM container starts from |
+| `WARDYN_RUNNER_VM_CPU_MODEL` | `Haswell-v4` | The named CPU model every VM gets. QEMU starts it with `enforce`, so a host that lacks a feature refuses instead of giving the guest another CPU |
+
+## The probe's refusals
+
+| Log reason | Fix |
+|---|---|
+| this host has no /dev/kvm | Turn on virtualisation in the firmware and load `kvm_intel` or `kvm_amd` |
+| /dev/kvm belongs to group root | Install the udev rule in step 1 |
+| QEMU cannot open /dev/kvm in its container | Fix the group and mode of `/dev/kvm` (step 1), then restart |
+| this host's CPU cannot run the VM CPU model | Set `WARDYN_RUNNER_VM_CPU_MODEL` to a model the host supports, for example `Skylake-Client-v4` or `EPYC-v3` |
+| the Docker engine does not share this runner's filesystem | Use a local engine |
+| no QEMU image | Build the image (step 2) and set `WARDYN_RUNNER_VM_QEMU_IMAGE` |
+| cannot share a folder | The QEMU image's `virtiofsd` did not run. VMs stay on, but a VM run that carries a folder is refused. Use an image built from step 2 |
+
 ## Drives
 
-- A drive bound to this runner mounts in a VM at the same path and mode as in a container, after the same checks on its folder.
-- The runner's version must offer it: an older runner, or a Kubernetes one, is refused at Review.
-- Only the person's own folder on the share is served, by its own `virtiofsd` container.
+- A drive mounts in a VM at the same path and mode as in a container, after the same checks on its folder. Only the person's own folder on the share is served, by its own `virtiofsd` container.
 - A read-only drive is read-only three times: in that container's bind, in `virtiofsd --readonly`, and in the guest's mount.
 
 | A Linux VM run asks for | Answer |
@@ -87,6 +132,10 @@
 - The pause is the person's choice. A sign-in made without it is neither paused nor audited.
 - On a run whose desktop screen is recorded, the recording keeps no frames while the pause is open. A desktop that connects while it is open, after a restart too, keeps none from its first frame.
 - A desktop open on another `wardynd` replica re-reads the pause every second. It stops keeping frames within 2 seconds of the pause, also when a re-read fails or does not answer, and keeps them again once a re-read after the resume answers.
+
+<details>
+<summary>Pause fencing: stale stops and continues, and rolling upgrades</summary>
+
 - A recorded desktop that cannot read whether the agent is paused is refused (`503` `desktop_sign_ins_unavailable`).
 - A process the agent moved out of its process group (`setsid`) is not stopped.
 - If `wardynd` crashes after the guest agent stopped the agent but before the pause was recorded, the agent stays stopped and the run page offers the pause again. Press it, which records the pause (the agent is already stopped), then "Resume the agent".
@@ -97,14 +146,14 @@
 - So a continue that reaches the guest agent late, after a later pause's stop, does not run the agent, and a stop delivered again after the resume does not stop it. The pause-to-resume's audit row says `fenced` true.
 - The guest agent keeps that order in `/run`: a restart of its service keeps it, and the guest's boot clears it.
 - Once it has seen a generation, the guest agent still obeys a stop with none, as a pause only protects a sign-in, and logs it. It drops a continue with none, answering `409` `stale_unfenced_resume`, and the agent stays paused until a resume with a generation.
-- A mixed-version `wardynd` rollout, a `wardynd` rollback, or a `wardyn-runnerd` downgrade mid-run sends requests with none. A resume from the older side then answers `409` and the run stays paused: its failure row's `error` keeps the guest's answer.
-- During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server. Resume it from an upgraded `wardynd`, or reboot the VM, which clears `/run`.
-- The older side's pause still acts and keeps the old order, which the newer side's stop again narrows and does not close.
+- A mixed-version `wardynd` rollout, a `wardynd` rollback, or a `wardyn-runnerd` downgrade mid-run sends requests with none. A resume from the older side then answers `409` and the run stays paused: its failure row's `error` keeps the guest's answer. During a rolling control-plane upgrade, resume from an upgraded `wardynd`, or reboot the VM, which clears `/run`.
 - An older side's pause that failed after its stop leaves the agent stopped with no pause recorded, as a `wardynd` crash above does. Press the pause from an upgraded `wardynd`, then resume.
 - A run whose `wardyn-runnerd` or guest image predates the pause generation keeps the old order, and its audit row says `fenced` false. Its guest agent signals each request as it handles it, in no set order, and ignores a cancel once a request has reached it.
 - On such a run, a continue the guest agent received earlier can still take effect after a later stop, even the stop again. The steps above narrow that gap and do not close it. Upgrade `wardyn-runnerd` and rebuild the guest image to close it.
 - On such a run, a `wardynd` that exits, cannot take the lock again within 30 seconds, or fails to stop the agent again leaves such a continue in place. Nothing retries the stop, and the agent runs while the run page says paused.
 - A failed stop again answers that the agent could not be paused. Press "Resume the agent", then pause again.
+
+</details>
 
 ### Host memory
 
@@ -129,7 +178,7 @@
 
 - The reason is a missing `CC3` pin or a RuntimeClass that does not exist. The runner then offers no VM, and a `linux_vm` run is refused before anything is created.
 - The machine recorded on the run is `runtimeclass:<handler>` in every field, so two runs compare equal only when the same handler started both.
-- Drives are refused at Review. Recording is refused, as on a Docker runner.
+- Drives are refused at Review. The runner's own terminal session recording is refused, as on a Docker runner.
 
 ## When the organisation is unreachable
 
@@ -147,48 +196,6 @@
 - Today the console shows a run stopped for a full spool as an exited agent, with no named reason.
 - The spool is self-reported by the runner, so it is as trustworthy as the computer. A resident credential stops at its own cap ([hybrid laptops](hybrid-laptops.md#offline-and-revocation)).
 - Not in this release: a window that says the organisation is unreachable.
-
-## Requirements
-
-| Requirement | Detail |
-|---|---|
-| Host | x86-64 Linux with hardware virtualisation and the `kvm` module loaded (`/dev/kvm` exists) |
-| Docker engine | A local engine that shares the runner's filesystem. Docker Desktop and a remote `DOCKER_HOST` are refused by the probe |
-| `/dev/kvm` access | Its group is not `root`, or it is open to all (mode `0666`). The QEMU container gets that group, never root's |
-| Runner user | Any user. A runner that runs as root starts its VM containers as uid 65532 |
-| The QEMU image | Built from [`deploy/runner/vm-qemu`](../../deploy/runner/vm-qemu/Dockerfile) and named in `WARDYN_RUNNER_VM_QEMU_IMAGE` |
-| The proxy image | Also carries the network relay (`wardyn-vmnet`), so a `proxy_image` pin in `runnerd.json` pins the relay too |
-
-## Turn it on
-
-1. Give `/dev/kvm` a group the runner can hand to its containers. Stock distributions ship it as `root:kvm 0660`, which already works. If it is `root:root`, install a udev rule and reload it:
-   ```sh
-   echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-wardyn-kvm.rules
-   sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
-   ```
-2. Build the QEMU image on the runner's engine: `docker build -f deploy/runner/vm-qemu/Dockerfile -t wardyn/vm-qemu:local .`
-3. Set `WARDYN_RUNNER_LINUX_VM=1` and `WARDYN_RUNNER_VM_QEMU_IMAGE=wardyn/vm-qemu:local` in the runner's environment.
-4. Restart the runner. It logs `Linux VM sandboxes are on` with the machine type, CPU model and QEMU version, or `Linux VM sandboxes are off on this runner` with the reason and its fix.
-
-## Settings
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `WARDYN_RUNNER_LINUX_VM` | (unset, off) | `1` turns Linux VM sandboxes on |
-| `WARDYN_RUNNER_VM_QEMU_IMAGE` | (unset) | The QEMU image every VM container starts from |
-| `WARDYN_RUNNER_VM_CPU_MODEL` | `Haswell-v4` | The named CPU model every VM gets. QEMU starts it with `enforce`, so a host that lacks a feature refuses instead of giving the guest another CPU |
-
-## The probe's refusals
-
-| Log reason | Fix |
-|---|---|
-| this host has no /dev/kvm | Turn on virtualisation in the firmware and load `kvm_intel` or `kvm_amd` |
-| /dev/kvm belongs to group root | Install the udev rule in step 1 |
-| QEMU cannot open /dev/kvm in its container | Fix the group and mode of `/dev/kvm` (step 1), then restart |
-| this host's CPU cannot run the VM CPU model | Set `WARDYN_RUNNER_VM_CPU_MODEL` to a model the host supports, for example `Skylake-Client-v4` or `EPYC-v3` |
-| the Docker engine does not share this runner's filesystem | Use a local engine |
-| no QEMU image | Build the image (step 2) and set `WARDYN_RUNNER_VM_QEMU_IMAGE` |
-| cannot share a folder | The QEMU image's `virtiofsd` did not run. VMs stay on, but a VM run that carries a folder is refused. Use an image built from step 2 |
 
 ## The guest image contract
 

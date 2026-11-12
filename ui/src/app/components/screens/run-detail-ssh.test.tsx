@@ -28,7 +28,7 @@ vi.mock("../../lib/api/ssh-keys", () => ({
 
 const attachTicketMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
-  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a) },
+  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a), getPolicy: () => new Promise(() => {}) }, // the rule never answers here
 }));
 
 import { ConnectSSHCard } from "./run-detail-ssh";

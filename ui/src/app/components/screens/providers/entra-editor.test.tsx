@@ -65,10 +65,10 @@ describe("EntraEditor", () => {
   it("draws the seven areas in the per-area mock's order, High-risk rows inside their area", () => {
     render(<Harness initial={entraRow()} />);
     const names = ceiling().getAllByRole("checkbox").map((b) => b.getAttribute("aria-label"));
-    expect(names.slice(0, 9)).toEqual(
-      ["code_read", "code_write", "pr", "policy_admin", "policy_bypass", "repo_admin", "work_read", "work_write", "work_admin"].map(name),
+    expect(names.slice(0, 12)).toEqual(
+      ["code_read", "code_write", "pr", "pr_create", "pr_vote", "pr_complete", "policy_admin", "policy_bypass", "repo_admin", "work_read", "work_write", "work_admin"].map(name),
     );
-    expect(names).toHaveLength(28);
+    expect(names).toHaveLength(31);
     expect(screen.getByTestId("entra-ceiling-policy_admin")).toHaveClass("border-l-danger");
     expect(screen.getByTestId("entra-ceiling-code_read")).not.toHaveClass("border-l-danger");
   });
@@ -139,6 +139,35 @@ describe("EntraEditor", () => {
     await userEvent.click(box);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(gitRowInvalid(latest!)).toBe(false);
+  });
+
+  // The server reads pr on a ceiling as pr_create, pr_vote and pr_complete, and the three together as pr (adoscope.Has).
+  it("a pr ceiling leaves each pull-request part a default the row can save", () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow({ default_profile: ["pr_vote", "code_read"] })} onLatest={(r) => (latest = r)} />);
+    for (const cap of ["pr_create", "pr_vote", "pr_complete"]) {
+      expect(defaults().getByRole("checkbox", { name: name(cap) })).toBeEnabled();
+      expect(screen.getByTestId(`entra-default-${cap}`)).not.toHaveAttribute("title", E.DEFAULT_OFF_CEILING_TIP);
+    }
+    expect(defaults().getByRole("checkbox", { name: name("pr_vote") })).toBeChecked();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(gitRowInvalid(latest!)).toBe(false);
+  });
+
+  it("a ceiling of all three pull-request parts leaves pr a default the row can save", () => {
+    let latest: GitProvider | undefined;
+    const initial = entraRow({ capability_ceiling: ["code_read", "pr_create", "pr_vote", "pr_complete"], default_profile: ["pr", "code_read"] });
+    render(<Harness initial={initial} onLatest={(r) => (latest = r)} />);
+    expect(defaults().getByRole("checkbox", { name: name("pr") })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(gitRowInvalid(latest!)).toBe(false);
+  });
+
+  it("a pr default under a ceiling of one part is still off the ceiling", () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow({ capability_ceiling: ["code_read", "pr_create"], default_profile: ["pr", "code_read"] })} onLatest={(r) => (latest = r)} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(E.ERROR_DEFAULT_OFF_CEILING(name("pr")));
+    expect(gitRowInvalid(latest!)).toBe(true);
   });
 
   it("edits land on the row's entra block only, in catalogue order", async () => {

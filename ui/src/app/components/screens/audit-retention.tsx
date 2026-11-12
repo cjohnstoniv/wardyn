@@ -17,7 +17,7 @@ import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { Chip, SectionCard, SectionLabel } from "../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { Mono } from "../wardyn/code-block";
 import { DROP, RETENTION, reasonKey } from "../wardyn/copy/audit-retention";
 import { AuditRetentionDropDialog } from "./audit-retention-drop-dialog";
@@ -53,6 +53,7 @@ export function AuditRetention() {
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
   const [dropping, setDropping] = React.useState<AuditRetentionPartition | null>(null);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setState("loading");
     api
@@ -61,7 +62,10 @@ export function AuditRetention() {
         setStatus(s);
         setState("ready");
       })
-      .catch(() => setState("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setState("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -75,7 +79,7 @@ export function AuditRetention() {
   if (state === "error" || !status) {
     return (
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <ErrorState onRetry={load} />
+        <ErrorState message={loadMessage} onRetry={load} />
       </div>
     );
   }

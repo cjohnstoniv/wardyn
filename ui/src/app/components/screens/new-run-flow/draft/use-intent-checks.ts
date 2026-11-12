@@ -21,7 +21,7 @@ import { PREFLIGHT_FRESH_MS, type PreflightRead } from "./launch-gate";
 export const PREFLIGHT_DEBOUNCE_MS = 800;
 const NEVER_BLOCKS = new Set(["model_credential", "preflight_rate_limited"]);
 /** The sentence a refused or failed check is shown with: the server's own, else this. */
-export const checkFailureText = (error: unknown): string => getErrorMessage(error) || "No reason was given.";
+export const checkFailureText = (error: unknown): string => getErrorMessage(error, "No reason was given.");
 
 type Endpoint = "preflight" | "preview";
 const ENDPOINTS: Endpoint[] = ["preflight", "preview"];

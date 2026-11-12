@@ -18,9 +18,12 @@
 // The strip can carry a Show code control for the one-time code. The window is given only the code file's
 // path; a click reads the file then (wardynScreenReadCode), shows the code in a readout that cannot be selected,
 // and a second click clears it. The code is never in argv, the environment, an event or a log, and there is no
-// copy control: a clipboard can leave the Mac.
+// copy control: a clipboard can leave the Mac. The edit's strip also has a Type code button, which reads the
+// file the same way and presses the code's keys in the VM's view (it does not press Return), and three buttons
+// that call Go (wardynWindowAction), plus a line Go rewrites (wardynScreenSetLive).
 
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h> // kVK_ANSI_* key codes (HIToolbox/Events.h); no Carbon call is made
 #import <CoreGraphics/CoreGraphics.h>
 #import <Virtualization/Virtualization.h>
 #include <stdatomic.h>
@@ -111,6 +114,52 @@ static NSString *const wardynScreenSteps =
 static NSString *const wardynScreenShowCode = @"Show code";
 static NSString *const wardynScreenHideCode = @"Hide code";
 static NSString *const wardynScreenCodeUnreadable = @"Can't read the code file. In Terminal, stop the command and run it again.";
+static NSString *const wardynScreenCodeUntypable = @"Type code can't type this code. Click Show code and type it.";
+
+// The edit strip's buttons, in the order a person uses them, and Trust's words when it has nothing to trust.
+static NSString *const wardynScreenAdminTerminal = @"Open admin Terminal";
+static NSString *const wardynScreenTypeCode = @"Type code";
+static NSString *const wardynScreenTrustCAs = @"Trust the list's CAs";
+static NSString *const wardynScreenFullDiskAccess = @"Full Disk Access";
+static NSString *const wardynScreenInstallRosetta = @"Install Rosetta";
+static NSString *const wardynScreenNoCerts = @"The install list has no certificates.";
+
+void wardynWindowAction(int n); // screen_darwin.go (cgo export): the open edit window's Go callback n
+
+// The numbers the edit window passes to wardynWindowAction (screen_darwin.go's windowAction constants).
+#define WARDYN_WINDOW_ASK_STOP 0
+#define WARDYN_WINDOW_ADMIN_TERMINAL 1
+#define WARDYN_WINDOW_TRUST_CAS 2
+#define WARDYN_WINDOW_FULL_DISK_ACCESS 3
+#define WARDYN_WINDOW_INSTALL_ROSETTA 4
+
+// wardynScreenKeyCode is the key that types c on a US keyboard (kVK_ANSI_*), for the edit code's letters
+// (typableAlphabet in controlcheck.go: on the same key on QWERTY, QWERTZ and AZERTY), or -1 for any other.
+static int wardynScreenKeyCode(unichar c) {
+	switch (c) {
+	case 'b': return kVK_ANSI_B;
+	case 'c': return kVK_ANSI_C;
+	case 'd': return kVK_ANSI_D;
+	case 'e': return kVK_ANSI_E;
+	case 'f': return kVK_ANSI_F;
+	case 'g': return kVK_ANSI_G;
+	case 'h': return kVK_ANSI_H;
+	case 'i': return kVK_ANSI_I;
+	case 'j': return kVK_ANSI_J;
+	case 'k': return kVK_ANSI_K;
+	case 'l': return kVK_ANSI_L;
+	case 'n': return kVK_ANSI_N;
+	case 'o': return kVK_ANSI_O;
+	case 'p': return kVK_ANSI_P;
+	case 'r': return kVK_ANSI_R;
+	case 's': return kVK_ANSI_S;
+	case 't': return kVK_ANSI_T;
+	case 'u': return kVK_ANSI_U;
+	case 'v': return kVK_ANSI_V;
+	case 'x': return kVK_ANSI_X;
+	}
+	return -1;
+}
 
 // wardynScreenReadCode reads the one-time code from the setup-code file at path ({"account":..., "code":...}, as
 // setupcode.go writes it), or returns nil when the file is gone, unreadable or not that record. Only a click calls
@@ -141,16 +190,21 @@ static NSString *wardynScreenReadCode(NSString *path) {
 @property(strong) NSTextField *rest;    // lines 2 on (with a code file)
 @property(strong) NSTextField *readout; // the code, or the unreadable message; empty while hidden
 @property(strong) NSButton *button;     // nil without a code file
+@property(strong) NSTextField *live;    // the edit window's line Go rewrites; nil for other windows
+@property(strong) NSArray<NSButton *> *buttons; // the edit window's button row; empty for other windows
 @property(copy) NSString *codeFile;     // the file's path, not the code
 @property BOOL shown;
-- (instancetype)initWithBox:(NSView *)box steps:(NSString *)steps codeFile:(NSString *)codeFile;
+@property BOOL typing; // Type code's keys are being pressed; a click then does nothing
+- (instancetype)initWithBox:(NSView *)box steps:(NSString *)steps codeFile:(NSString *)codeFile buttons:(BOOL)buttons canTrust:(BOOL)canTrust;
 - (void)toggle:(id)sender;
+- (void)typeCode:(id)sender;
+- (void)act:(id)sender;
 - (void)hide;
 - (void)fit;
 @end
 
 @implementation WardynScreenStrip
-- (instancetype)initWithBox:(NSView *)box steps:(NSString *)steps codeFile:(NSString *)codeFile {
+- (instancetype)initWithBox:(NSView *)box steps:(NSString *)steps codeFile:(NSString *)codeFile buttons:(BOOL)buttons canTrust:(BOOL)canTrust {
 	self = [super init];
 	if (self == nil) {
 		return nil;
@@ -184,11 +238,121 @@ static NSString *wardynScreenReadCode(NSString *path) {
 		self.button.autoresizingMask = NSViewMinXMargin;
 		[box addSubview:self.button];
 	}
+	self.buttons = @[];
+	if (buttons) {
+		self.live = [NSTextField wrappingLabelWithString:@""];
+		self.live.font = [NSFont systemFontOfSize:12];
+		self.live.textColor = NSColor.secondaryLabelColor;
+		self.live.autoresizingMask = NSViewWidthSizable;
+		[box addSubview:self.live];
+		NSMutableArray<NSButton *> *row = [NSMutableArray array];
+		NSButton *(^add)(NSString *, SEL, NSInteger) = ^NSButton *(NSString *title, SEL action, NSInteger tag) {
+			NSButton *b = [NSButton buttonWithTitle:title target:self action:action];
+			b.controlSize = NSControlSizeSmall;
+			b.font = [NSFont systemFontOfSize:[NSFont systemFontSizeForControlSize:NSControlSizeSmall]];
+			b.tag = tag;
+			[box addSubview:b];
+			[row addObject:b];
+			return b;
+		};
+		add(wardynScreenAdminTerminal, @selector(act:), WARDYN_WINDOW_ADMIN_TERMINAL);
+		if (codeFile != nil) {
+			add(wardynScreenTypeCode, @selector(typeCode:), 0);
+		}
+		NSButton *trust = add(wardynScreenTrustCAs, @selector(act:), WARDYN_WINDOW_TRUST_CAS);
+		if (!canTrust) {
+			trust.enabled = NO;
+			trust.toolTip = wardynScreenNoCerts;
+		}
+		add(wardynScreenFullDiskAccess, @selector(act:), WARDYN_WINDOW_FULL_DISK_ACCESS);
+		add(wardynScreenInstallRosetta, @selector(act:), WARDYN_WINDOW_INSTALL_ROSETTA);
+		self.buttons = row;
+	}
 	[self hide];
 	return self;
 }
 
-// toggle is the button's click: the one place the code file is read.
+// act is a click on a button that calls Go: off the main thread, since the callback waits on the guest.
+- (void)act:(id)sender {
+	int n = (int)((NSButton *)sender).tag;
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		wardynWindowAction(n);
+	});
+}
+
+// say shows msg in the readout, in red, instead of the code.
+- (void)say:(NSString *)msg {
+	self.readout.font = [NSFont systemFontOfSize:12];
+	self.readout.textColor = NSColor.systemRedColor;
+	self.readout.stringValue = msg;
+	self.button.title = wardynScreenShowCode; // a click tries again
+	self.shown = NO;
+	[self fit];
+}
+
+// typeCode is Type code's click: it reads the code file, as Show code does, and presses each letter's key in
+// the VM's view, 50 ms apart, then leaves the view focused for the person to press Return. The key, not the
+// letter, reaches the guest, which reads it with its own keyboard layout: the code's letters are on the same
+// key on QWERTY, QWERTZ and AZERTY. A code with any other character is not typed at all. While the keys are
+// being pressed the button is off and a click does nothing, so two codes never interleave.
+- (void)typeCode:(id)sender {
+	if (self.typing) {
+		return;
+	}
+	NSString *code = wardynScreenReadCode(self.codeFile);
+	NSWindow *w = self.box.window;
+	if (code == nil || ![w.contentView isKindOfClass:[VZVirtualMachineView class]]) {
+		[self say:wardynScreenCodeUnreadable];
+		return;
+	}
+	for (NSUInteger i = 0; i < code.length; i++) {
+		if (wardynScreenKeyCode([code characterAtIndex:i]) < 0) {
+			[self say:wardynScreenCodeUntypable];
+			return;
+		}
+	}
+	VZVirtualMachineView *view = (VZVirtualMachineView *)w.contentView;
+	NSTimeInterval t0 = NSApp.currentEvent.timestamp; // the click's
+	NSButton *button = sender;
+	self.typing = YES;
+	button.enabled = NO;
+	[w makeFirstResponder:view];
+	for (NSUInteger i = 0; i < code.length; i++) {
+		unichar c = [code characterAtIndex:i];
+		unsigned short key = (unsigned short)wardynScreenKeyCode(c);
+		NSString *ch = [NSString stringWithCharacters:&c length:1];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 50 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+			if (wardynScreenWindow != w) {
+				return; // the window closed while typing
+			}
+			for (int down = 1; down >= 0; down--) {
+				NSEvent *e = [NSEvent keyEventWithType:(down ? NSEventTypeKeyDown : NSEventTypeKeyUp)
+				                              location:NSZeroPoint
+				                         modifierFlags:0
+				                             timestamp:t0 + i * 0.05
+				                          windowNumber:w.windowNumber
+				                               context:nil
+				                            characters:ch
+				           charactersIgnoringModifiers:ch
+				                             isARepeat:NO
+				                               keyCode:key];
+				if (down) {
+					[view keyDown:e];
+				} else {
+					[view keyUp:e];
+				}
+			}
+		});
+	}
+	// After the last key, on the same queue: the button is on again.
+	__weak WardynScreenStrip *strip = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(code.length * 50 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+		strip.typing = NO;
+		button.enabled = YES;
+	});
+}
+
+// toggle is Show code's click, one of the two places the code file is read (Type code's is the other).
 - (void)toggle:(id)sender {
 	if (self.shown) {
 		[self hide];
@@ -196,18 +360,15 @@ static NSString *wardynScreenReadCode(NSString *path) {
 	}
 	NSString *code = wardynScreenReadCode(self.codeFile);
 	if (code == nil) {
-		self.readout.font = [NSFont systemFontOfSize:12];
-		self.readout.textColor = NSColor.systemRedColor;
-		self.readout.stringValue = wardynScreenCodeUnreadable;
-		self.button.title = wardynScreenShowCode; // a click tries again
-	} else {
-		// Bigger than the steps, and monospaced: the code's alphabet keeps pairs such as c/C and s/S.
-		self.readout.font = [NSFont monospacedSystemFontOfSize:16 weight:NSFontWeightMedium];
-		self.readout.textColor = NSColor.labelColor;
-		self.readout.stringValue = code;
-		self.button.title = wardynScreenHideCode;
-		self.shown = YES;
+		[self say:wardynScreenCodeUnreadable];
+		return;
 	}
+	// Bigger than the steps, and monospaced: setup's code alphabet keeps pairs such as c/C and s/S.
+	self.readout.font = [NSFont monospacedSystemFontOfSize:16 weight:NSFontWeightMedium];
+	self.readout.textColor = NSColor.labelColor;
+	self.readout.stringValue = code;
+	self.button.title = wardynScreenHideCode;
+	self.shown = YES;
 	[self fit];
 }
 
@@ -245,10 +406,38 @@ static NSString *wardynScreenReadCode(NSString *path) {
 		restH = ceil([self.rest.cell cellSizeForBounds:NSMakeRect(0, 0, avail, CGFLOAT_MAX)].height);
 	}
 	CGFloat rowH = MAX(firstH, MAX(rs.height, bs.height));
-	[self.box setFrameSize:NSMakeSize(w, rowH + restH + 8)];
+	// The edit's buttons, left to right, onto more rows when the strip is narrow; frames' y holds the row
+	// until the rows are counted.
+	NSMutableArray<NSValue *> *frames = [NSMutableArray array];
+	CGFloat bx = pad, lineH = 0;
+	NSInteger rows = 0;
+	for (NSButton *b in self.buttons) {
+		[b sizeToFit];
+		NSSize s = b.frame.size;
+		if (bx > pad && bx + s.width > w - pad) {
+			rows++;
+			bx = pad;
+		}
+		[frames addObject:[NSValue valueWithRect:NSMakeRect(bx, rows, s.width, s.height)]];
+		bx += s.width + gap;
+		lineH = MAX(lineH, s.height);
+	}
+	CGFloat buttonsH = self.buttons.count > 0 ? (rows + 1) * (lineH + 4) : 0;
+	CGFloat liveH = 0;
+	if (self.live != nil && self.live.stringValue.length > 0) {
+		liveH = ceil([self.live.cell cellSizeForBounds:NSMakeRect(0, 0, avail, CGFLOAT_MAX)].height) + 4;
+	}
+	[self.box setFrameSize:NSMakeSize(w, rowH + restH + liveH + buttonsH + 8)];
 	// Unflipped: y runs up from the box's bottom.
-	self.rest.frame = NSMakeRect(pad, 4, avail, restH);
-	CGFloat rowY = 4 + restH;
+	for (NSUInteger i = 0; i < self.buttons.count; i++) {
+		NSRect f = frames[i].rectValue;
+		f.origin.y = 4 + (rows - f.origin.y) * (lineH + 4);
+		self.buttons[i].frame = f;
+	}
+	self.live.frame = NSMakeRect(pad, 4 + buttonsH, avail, MAX(liveH - 4, 0));
+	self.live.hidden = liveH == 0;
+	self.rest.frame = NSMakeRect(pad, 4 + buttonsH + liveH, avail, restH);
+	CGFloat rowY = 4 + buttonsH + liveH + restH;
 	self.first.frame = NSMakeRect(pad, rowY + rowH - firstH, firstW, firstH);
 	self.button.frame = NSMakeRect(w - pad - bs.width, rowY + (rowH - bs.height) / 2, bs.width, bs.height);
 	self.readout.frame = NSMakeRect(w - pad - bs.width - gap - rs.width, rowY + (rowH - rs.height) / 2, rs.width, rs.height);
@@ -259,11 +448,11 @@ static NSString *wardynScreenReadCode(NSString *path) {
 static WardynScreenStrip *wardynScreenStrip; // main thread only; the button's target is weak
 
 // wardynScreenAccessory is the strip of steps under the window's title bar, with the Show code control when
-// codeFile is not nil.
-static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width, NSString *steps, NSString *codeFile) {
+// codeFile is not nil, and the edit's buttons and live line when buttons is YES.
+static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width, NSString *steps, NSString *codeFile, BOOL buttons, BOOL canTrust) {
 	// The strip is as tall as the steps are at this width (a narrow window wraps them).
 	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, 0)];
-	wardynScreenStrip = [[WardynScreenStrip alloc] initWithBox:box steps:steps codeFile:codeFile];
+	wardynScreenStrip = [[WardynScreenStrip alloc] initWithBox:box steps:steps codeFile:codeFile buttons:buttons canTrust:canTrust];
 	NSTitlebarAccessoryViewController *a = [[NSTitlebarAccessoryViewController alloc] init];
 	a.layoutAttribute = NSLayoutAttributeBottom;
 	// Else the controller resizes the strip to one title-bar line when given the view (macOS 26: 36 pt, one step).
@@ -272,35 +461,12 @@ static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width, N
 	return a;
 }
 
-void wardynProvisionRequestStop(void *h); // provision_darwin.m
-
-// WardynScreenCloser is the edit window's delegate: its close button asks
-// the guest to shut down, off the main thread, and the window stays until
-// the guest has (wardynScreenClose).
-@interface WardynScreenCloser : NSObject <NSWindowDelegate>
-@property(strong) id handle; // the VM's provision handle
-@end
-
-@implementation WardynScreenCloser
-- (BOOL)windowShouldClose:(NSWindow *)sender {
-	id handle = self.handle;
-	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-		wardynProvisionRequestStop((__bridge void *)handle);
-	});
-	return NO;
-}
-@end
-
-static WardynScreenCloser *wardynScreenCloser; // main thread only; the window's delegate is weak
-
 // wardynScreenShow opens the window on vm, a VZVirtualMachine; the block
 // keeps it until the window closes. title and steps NULL are setup by
-// hand's. stop, the VM's provision handle, gives the window a close button
-// that asks the guest to shut down; NULL gives it none. codeFile, the setup-code file's path, gives the strip
+// hand's. It has no close button. codeFile, the setup-code file's path, gives the strip
 // a Show code control; NULL gives it none (a window that is not setup's or the edit's must pass NULL).
-void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps, const char *codeFile) {
+void wardynScreenShow(void *vm, const char *title, const char *steps, const char *codeFile) {
 	VZVirtualMachine *machine = (__bridge VZVirtualMachine *)vm;
-	id handle = (__bridge id)stop;
 	NSString *t = title == NULL ? @"Wardyn: set up this macOS VM" : [[NSString alloc] initWithUTF8String:title];
 	NSString *s = steps == NULL ? wardynScreenSteps : [[NSString alloc] initWithUTF8String:steps];
 	NSString *cf = codeFile == NULL ? nil : [[NSString alloc] initWithUTF8String:codeFile];
@@ -308,21 +474,13 @@ void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps
 		if (wardynScreenWindow == nil) {
 			NSSize size = wardynScreenSize();
 			NSWindowStyleMask mask = NSWindowStyleMaskTitled | NSWindowStyleMaskResizable;
-			if (handle != nil) {
-				mask |= NSWindowStyleMaskClosable;
-			}
 			NSWindow *w = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, size.width, size.height)
 			                                          styleMask:mask
 			                                            backing:NSBackingStoreBuffered
 			                                              defer:NO];
 			w.releasedWhenClosed = NO;
 			w.title = t;
-			if (handle != nil) {
-				wardynScreenCloser = [[WardynScreenCloser alloc] init];
-				wardynScreenCloser.handle = handle;
-				w.delegate = wardynScreenCloser;
-			}
-			[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf)];
+			[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf, NO, NO)];
 			w.contentAspectRatio = NSMakeSize(16, 9);
 			VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 			view.virtualMachine = machine;
@@ -346,7 +504,24 @@ void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps
 	});
 }
 
+// WardynScreenAskStop is the edit window's delegate: its close button asks the guest to shut down through
+// Go, off the main thread, and the window stays up until the guest has (wardynScreenClose).
+@interface WardynScreenAskStop : NSObject <NSWindowDelegate>
+@end
+
+@implementation WardynScreenAskStop
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		wardynWindowAction(WARDYN_WINDOW_ASK_STOP);
+	});
+	return NO;
+}
+@end
+
+static WardynScreenAskStop *wardynScreenStopper; // main thread only; the window's delegate is weak
+
 static BOOL wardynScreenViewOnly; // main thread only: the window is a run window (see wardynScreenShowWindow)
+static BOOL wardynScreenAsksStop; // main thread only: the run window is the edit's, which a lock leaves up
 
 // wardynScreenTeardown closes the window and lets go of its VM; main thread only. A run window first detaches its
 // view from the VM, which goes on running.
@@ -357,11 +532,12 @@ static void wardynScreenTeardown(void) {
 		((VZVirtualMachineView *)wardynScreenWindow.contentView).virtualMachine = nil;
 	}
 	wardynScreenViewOnly = NO;
+	wardynScreenAsksStop = NO;
 	[wardynScreenWindow orderOut:nil];
 	wardynScreenWindow.contentView = nil;
 	wardynScreenWindow.delegate = nil;
 	wardynScreenWindow = nil;
-	wardynScreenCloser = nil;
+	wardynScreenStopper = nil;
 	atomic_store(&wardynScreenState, 0);
 }
 
@@ -403,7 +579,7 @@ static _Atomic int wardynScreenLockLast;
 	atomic_store(&wardynScreenLockLast, 1);
 	atomic_fetch_add(&wardynScreenLockCount, 1);
 	dispatch_async(dispatch_get_main_queue(), ^{
-		if (wardynScreenViewOnly && wardynScreenWindow != nil) {
+		if (wardynScreenViewOnly && !wardynScreenAsksStop && wardynScreenWindow != nil) {
 			wardynScreenTeardown(); // the state goes to 0, which the Go side polls
 		}
 	});
@@ -440,12 +616,18 @@ long wardynScreenLockNotices(void) { return atomic_load(&wardynScreenLockCount);
 int wardynScreenLockNoticed(void) { return atomic_load(&wardynScreenLockLast); }
 
 // wardynScreenShowWindow opens a run window on vm, a VZVirtualMachine the block keeps until the window closes:
-// close-only (see WardynScreenCloseOnly), not floating, with title and steps (never NULL) and no Show code
-// control. At most one window: with one open it does nothing and the state stays as it was.
-void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
+// close-only (see WardynScreenCloseOnly), not floating, with title and steps (never NULL). A run window passes
+// codeFile NULL (no Show code control), askStop 0 and canTrust 0. The edit window passes its setup-code file's
+// path and askStop 1: its close button asks the guest to shut down (WardynScreenAskStop), a screen lock leaves
+// it up, and its strip has the edit's buttons and live line; canTrust 0 disables Trust the list's CAs.
+// At most one window: with one open it does nothing and the state stays as it was.
+void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop, int canTrust) {
 	VZVirtualMachine *machine = (__bridge VZVirtualMachine *)vm;
 	NSString *t = [[NSString alloc] initWithUTF8String:title];
 	NSString *s = [[NSString alloc] initWithUTF8String:steps];
+	NSString *cf = codeFile == NULL ? nil : [[NSString alloc] initWithUTF8String:codeFile];
+	BOOL edit = askStop != 0;
+	BOOL trust = canTrust != 0;
 	dispatch_async(dispatch_get_main_queue(), ^{
 		if (wardynScreenWindow != nil) {
 			return;
@@ -458,9 +640,14 @@ void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
 		                                              defer:NO];
 		w.releasedWhenClosed = NO;
 		w.title = t;
-		wardynScreenCloseOnly = [[WardynScreenCloseOnly alloc] init];
-		w.delegate = wardynScreenCloseOnly;
-		[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, nil)];
+		if (edit) {
+			wardynScreenStopper = [[WardynScreenAskStop alloc] init];
+			w.delegate = wardynScreenStopper;
+		} else {
+			wardynScreenCloseOnly = [[WardynScreenCloseOnly alloc] init];
+			w.delegate = wardynScreenCloseOnly;
+		}
+		[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf, edit, trust)];
 		w.contentAspectRatio = NSMakeSize(16, 9);
 		VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 		view.virtualMachine = machine;
@@ -470,11 +657,24 @@ void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
 		[w center];
 		wardynScreenWindow = w;
 		wardynScreenViewOnly = YES;
+		wardynScreenAsksStop = edit;
 		// An accessory app's window opens behind the active app, so it orders itself front regardless.
 		[w makeKeyAndOrderFront:nil];
 		[w orderFrontRegardless];
 		[NSApp activate];
 		atomic_store(&wardynScreenState, w.contentView != nil ? 1 : -1);
+	});
+}
+
+// wardynScreenSetLive sets the edit window's live line to text (copied before this returns); a window without
+// one ignores it.
+void wardynScreenSetLive(const char *text) {
+	NSString *t = [[NSString alloc] initWithUTF8String:text] ?: @"";
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (wardynScreenStrip.live != nil) {
+			wardynScreenStrip.live.stringValue = t;
+			[wardynScreenStrip fit];
+		}
 	});
 }
 

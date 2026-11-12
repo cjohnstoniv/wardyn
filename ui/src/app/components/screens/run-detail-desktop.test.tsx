@@ -13,7 +13,7 @@ import type { RunDetail } from "../../lib/types";
 const healthMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => healthMock(...a) } }));
 const attachTicketMock = vi.fn();
-vi.mock("../../lib/api/runs", () => ({ runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a) } }));
+vi.mock("../../lib/api/runs", () => ({ runs: { getPolicy: () => new Promise(() => {}), attachTicket: (...a: unknown[]) => attachTicketMock(...a) } }));
 const signInsGet = vi.fn();
 const signInsPause = vi.fn();
 const signInsResume = vi.fn();

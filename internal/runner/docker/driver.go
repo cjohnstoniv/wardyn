@@ -79,6 +79,11 @@ type Config struct {
 	// controller missing/not delegated). OFF by default — an untrusted
 	// sandbox must not run uncapped. Set only on a trusted host.
 	AllowUnenforceableCaps bool
+	// AllowHostReachableRunNetwork (WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK, default off) starts runs on
+	// a Docker Engine too old to give a run's network no address on the Docker host, and accepts a run
+	// network kept from before that change (run_network_shape.go). Its agent can then reach services on
+	// the Docker host. Set only on a trusted host.
+	AllowHostReachableRunNetwork bool
 	// ProxyServesAnyPeer (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY set off) has
 	// each run's proxy serve any caller. The zero value (the default) serves
 	// only callers on the run's own network, on create and on revive (proxy

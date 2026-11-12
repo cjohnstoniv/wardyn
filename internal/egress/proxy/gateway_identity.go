@@ -39,6 +39,21 @@ const (
 	gatewayCallIDHeader = "X-Wardyn-Call-Id"
 )
 
+// gatewayCutSentence is what the sandbox reads once the control plane has cut
+// the run's gateway access. It carries nothing the control plane sent.
+const gatewayCutSentence = "This run's gateway access was cut when the portal that started it was revoked; the call was not sent. Start a new run if it is still needed."
+
+// gatewayCutCause is the decision row's cause for a call refused by the cut.
+const gatewayCutCause = "gateway access cut: the run's portal was revoked"
+
+// errGatewayAccessCut is a mint refused with the control plane's permanent
+// gateway_access_cut reason, the only reason a refusal body is read for. It
+// makes the holder terminal.
+var errGatewayAccessCut = errors.New("the control plane cut this run's gateway access")
+
+// maxCutReasonBody bounds how much of a refusal is read for its reason.
+const maxCutReasonBody = 1 << 10
+
 // GatewayIdentityRoute is one route that carries the run's signed identity,
 // fixed at dispatch. A request matches on host, exact port and path prefix.
 type GatewayIdentityRoute struct {
@@ -198,6 +213,21 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 		if r.Context().Err() != nil {
 			return false // the caller hung up during the mint and was never refused
 		}
+		if errors.Is(err, errGatewayAccessCut) {
+			if p.sink != nil {
+				log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+				log.GatewayCallID = callID
+				log.Cause = gatewayCutCause
+				p.sink.emit(log)
+			}
+			if shape := p.shapeOf(r, host); shape != shapePlain {
+				p.writeBrokeredFault(w, shape, host, brokeredFault{port: port, ruleSource: ruleSource, reason: reasonGatewayAccessCut}, err)
+			} else {
+				w.Header().Set(egressHeaderWardynReason, reasonGatewayAccessCut)
+				http.Error(w, gatewayCutSentence, http.StatusForbidden)
+			}
+			return false
+		}
 		if p.sink != nil {
 			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
 			log.GatewayCallID = callID
@@ -210,7 +240,7 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 	}
 	h.Set(gatewayIdentityHeader, token)
 	h.Del("Accept-Encoding")
-	rearmBodyDeadline(w) // the mint may have held the request
+	rearmBodyDeadline(w, r) // the mint may have held the request
 	return true
 }
 
@@ -298,8 +328,9 @@ func (s *scrubbedWriter) maskValueCut(v string) string {
 }
 
 // gatewayTokenHolder is one provider's or MCP server's current token. Requests share one mint
-// at a time. From half-life on, a mint runs behind requests that keep using the
-// held token; a failed mint keeps it to exp, with no grace past that. The mask
+// at a time. From half-life on, the next request waits for a mint before it is forwarded, so a
+// cut is seen by the first call after it; a mint that fails but may pass keeps the held token
+// to exp, with no grace past that. A permanent cut ends the holder: it mints no more. The mask
 // set holds the two most recent tokens, each with its signature head: a new one
 // is registered before it is used, then the one before last is dropped, so the
 // set does not grow for the run's life.
@@ -316,23 +347,32 @@ type gatewayTokenHolder struct {
 	lastMinted, priorMinted string    // the values in the mask set
 	lastErr                 error
 	flight                  chan struct{} // non-nil while a mint is out
+	cut                     bool          // the control plane cut this run's gateway access; terminal
 }
 
-// current is the token to send, or why there is none.
+// current is the token to send, or why there is none. A held token serves
+// until half-life; from then on the call waits for a refresh (the mint is
+// bounded by h.timeout), so a refusal is seen before the call is forwarded. A
+// refresh that fails but may pass leaves the held token serving to exp, and
+// is asked again after the retry interval, or after half of what is left of
+// the token's life when that is shorter (settleLocked).
 func (h *gatewayTokenHolder) current(ctx context.Context, p *Proxy) (string, error) {
 	h.mu.Lock()
+	if h.cut {
+		err := h.lastErr
+		h.mu.Unlock()
+		return "", err
+	}
 	now := p.now()
-	if h.token != "" && now.Before(h.expires) {
+	held := h.token != "" && now.Before(h.expires)
+	if held && (now.Before(h.refreshAt) || (h.flight == nil && now.Before(h.nextAsk))) {
 		token := h.token
-		if !now.Before(h.refreshAt) && !now.Before(h.nextAsk) {
-			h.startMintLocked(p)
-		}
 		h.mu.Unlock()
 		return token, nil
 	}
 	// A refused or failed mint is asked again once per interval, not once per
 	// request: a sandbox retrying must not turn into a mint, and an audit row, each time.
-	if h.flight == nil && h.lastErr != nil && now.Before(h.nextAsk) {
+	if !held && h.flight == nil && h.lastErr != nil && now.Before(h.nextAsk) {
 		err := h.lastErr
 		h.mu.Unlock()
 		return "", err
@@ -346,6 +386,9 @@ func (h *gatewayTokenHolder) current(ctx context.Context, p *Proxy) (string, err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.cut {
+		return "", h.lastErr
+	}
 	if h.token != "" && p.now().Before(h.expires) {
 		return h.token, nil
 	}
@@ -383,6 +426,7 @@ func (h *gatewayTokenHolder) settleLocked(p *Proxy, token string, exp time.Time,
 		if drop {
 			h.token = ""
 		}
+		h.cut = h.cut || errors.Is(err, errGatewayAccessCut)
 		// A held token is asked again within half of what is left of its life, so a short-lived
 		// token's next mint still lands before its exp; with none held, or one past its exp, the
 		// usual interval, so an outage longer than a token's life is not asked once a second.
@@ -425,11 +469,13 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 	case resp.StatusCode == http.StatusOK:
 	case resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests:
 		return "", time.Time{}, false, fmt.Errorf("the control plane answered %d for this run's gateway identity", resp.StatusCode)
+	case resp.StatusCode == http.StatusForbidden && refusedAsCut(resp.Body):
+		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d): %w", resp.StatusCode, errGatewayAccessCut)
 	default:
 		return "", time.Time{}, true, fmt.Errorf("the control plane refused this run's gateway identity (HTTP %d); if the provider was changed or turned off, start a new run", resp.StatusCode)
 	}
-	// A refused body is never read, and no error below quotes an answer: what it
-	// carries must not reach a decision row, the sandbox or a log.
+	// A refused body is read only by refusedAsCut, and no error below quotes an
+	// answer: what it carries must not reach a decision row, the sandbox or a log.
 	var answer struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
@@ -442,6 +488,19 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 		return "", time.Time{}, true, err
 	}
 	return answer.Token, exp, false, nil
+}
+
+// refusedAsCut reports whether a refusal body names the one closed reason that
+// ends the holder. It reads at most maxCutReasonBody bytes and keeps nothing
+// else of them: any other body, or one that does not parse in that much, is not it.
+func refusedAsCut(body io.Reader) bool {
+	var refusal struct {
+		Reason string `json:"reason"`
+	}
+	if json.NewDecoder(io.LimitReader(body, maxCutReasonBody)).Decode(&refusal) != nil {
+		return false
+	}
+	return refusal.Reason == reasonGatewayAccessCut
 }
 
 // check reads a minted token's aud and exp, and refuses one for any audience but

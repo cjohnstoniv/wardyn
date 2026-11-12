@@ -495,3 +495,206 @@ func TestUnifiedDiff(t *testing.T) {
 		t.Errorf("deletion = %q", got)
 	}
 }
+
+const previewWeb = "POST /api/v1/workloads/web/preview"
+
+// previewOf is the server's answer for the file's workload: stored (nil = new), the proposed document, and
+// the apply's launch.
+func previewOf(t *testing.T, stored *sdk.Workload, op string, outcome sdk.WorkloadOutcome, launch sdk.WorkloadPreviewLaunch) sdk.WorkloadPreview {
+	t.Helper()
+	doc, err := sdk.ParseWorkload(yamlToJSONForTest(t, webYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pv := sdk.WorkloadPreview{Name: "web", Owner: "person:me", Op: op, Outcome: outcome, Proposed: doc, Digest: "d2", Launch: launch,
+		Changes: sdk.DiffWorkloadDocuments(nil, doc)}
+	if stored != nil {
+		sd := sdk.WorkloadDocument{APIVersion: doc.APIVersion, Kind: doc.Kind, Name: stored.Name, Description: stored.Description,
+			RunIn: stored.RunIn, RestartKey: stored.RestartKey, Intent: stored.Intent}
+		pv.Stored, pv.StoredDigest = &sd, "d1"
+		pv.Changes = sdk.DiffWorkloadDocuments(&sd, doc)
+	}
+	return pv
+}
+
+// runRigWithStderr runs the command and returns stdout, stderr and the error.
+func runRigWithStderr(t *testing.T, rig *routeRig, args ...string) (string, string, error) {
+	t.Helper()
+	root := rootCmd()
+	root.SetArgs(append(args, "--url", rig.URL, "--token", "tok"))
+	var out, errOut strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	err := root.Execute()
+	return out.String(), errOut.String(), err
+}
+
+// TestDiffUsesPreview: diff renders the server's stored and proposed workloads, reads neither the door nor
+// the stored workload itself, and a refusal the apply would meet exits 2.
+func TestDiffUsesPreview(t *testing.T) {
+	stored := storedWeb(t, webYAML)
+	stored.Description = "an older description"
+	file := writeTemplateFile(t, "w.yaml", webYAML)
+	pv := previewOf(t, &stored, "update", sdk.WorkloadUpdated, sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewNoLaunch})
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, pv)})
+	out, errOut, err := runRigWithStderr(t, rig, "diff", "-f", file)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 || errOut != "" {
+		t.Errorf("changed: err = %v, stderr = %q, want exit 1", err, errOut)
+	}
+	for _, want := range []string{"-description: an older description\n", "+description: the web tier\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if len(rig.sent(importPath))+len(rig.sent(getWeb)) != 0 {
+		t.Error("diff read the door or the stored workload beside the preview")
+	}
+
+	refused := previewOf(t, nil, "create", "", sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewNoLaunch})
+	refused.Refusal = &sdk.WorkloadPreviewRefusal{Status: 409, Reason: "workload_source_conflict", Error: "a custom resource owns web"}
+	rig = newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, refused)})
+	_, _, err = runRigWithStderr(t, rig, "diff", "-f", file)
+	if err == nil || exitCodeFor(err) != 2 || !strings.Contains(err.Error(), "workload_source_conflict") {
+		t.Errorf("refusal: err = %v (exit %d), want exit 2 naming the reason", err, exitCodeFor(err))
+	}
+}
+
+// TestApplyDryRunExitsOneOnWouldRefuse: a launch the organisation would refuse, or a store refusal, is
+// exit 1; a launch that would go ahead is exit 0 and says that a run starts.
+func TestApplyDryRunExitsOneOnWouldRefuse(t *testing.T) {
+	file := writeTemplateFile(t, "w.yaml", webYAML)
+	pf := &sdk.PreflightResult{EnforcedConfinementClass: types.CC2, SetupItems: []sdk.PreflightItem{}}
+	run := func(launch sdk.WorkloadPreviewLaunch, refusal *sdk.WorkloadPreviewRefusal) (string, error) {
+		pv := previewOf(t, nil, "create", sdk.WorkloadCreated, launch)
+		pv.Refusal = refusal
+		rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, pv)})
+		out, _, err := runRigWithStderr(t, rig, "apply", "-f", file, "--dry-run")
+		if n := len(rig.sent(putWeb)) + len(rig.sent(preflight)); n != 0 {
+			t.Errorf("a dry run sent %d writes or preflights beside the preview", n)
+		}
+		return out, err
+	}
+	out, err := run(sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldLaunch, Preflight: pf}, nil)
+	if err != nil || !strings.Contains(out, "workload/web would be created; a new run starts") || !strings.Contains(out, "dry run: not launched") {
+		t.Errorf("would launch: err = %v, output:\n%s", err, out)
+	}
+	out, err = run(sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldRefuse, Reason: "run_cap_reached", Message: "too many runs"}, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(out, "the launch would be refused: run_cap_reached: too many runs") {
+		t.Errorf("would refuse: err = %v, output:\n%s", err, out)
+	}
+	out, err = run(sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewNoLaunch}, &sdk.WorkloadPreviewRefusal{Status: 422, Reason: "workload_cap_reached", Error: "100 workloads"})
+	if !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(out, "would be refused: workload_cap_reached: 100 workloads") {
+		t.Errorf("store refusal: err = %v, output:\n%s", err, out)
+	}
+}
+
+// TestApplyDryRunJSONKeepsOldFields: --json still has name, differs, diff and preflight, and adds preview.
+func TestApplyDryRunJSONKeepsOldFields(t *testing.T) {
+	pf := &sdk.PreflightResult{EnforcedConfinementClass: types.CC2, SetupItems: []sdk.PreflightItem{}}
+	pv := previewOf(t, nil, "create", sdk.WorkloadCreated, sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldLaunch, Preflight: pf})
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, pv)})
+	out, _, err := runRigWithStderr(t, rig, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML), "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	var raw []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &raw); err != nil || len(raw) != 1 {
+		t.Fatalf("output = %s (%v)", out, err)
+	}
+	for _, k := range []string{"name", "differs", "diff", "preflight", "preview"} {
+		if _, ok := raw[0][k]; !ok {
+			t.Errorf("--json lacks %q: %s", k, out)
+		}
+	}
+	var reports []workloadDryRunReport
+	if err := json.Unmarshal([]byte(out), &reports); err != nil || !reports[0].Differs || reports[0].Preflight.EnforcedConfinementClass != types.CC2 || reports[0].Preview.Digest != "d2" {
+		t.Errorf("reports = %+v (%v)", reports, err)
+	}
+}
+
+// TestDiffFallsBackOnOldServer: a server without the preview route gets the door and the stored read, and
+// one stderr line says what the preview cannot see. A workload_ 404 is not an old server.
+func TestDiffFallsBackOnOldServer(t *testing.T) {
+	file := writeTemplateFile(t, "w.yaml", webYAML+"---\n"+workerCR)
+	rig := newRouteRig(t, doorRoutes(t, map[string]func(http.ResponseWriter, []byte){
+		getWeb:                         replyJSON(http.StatusNotFound, map[string]string{"error": "workload_not_found"}),
+		"GET /api/v1/workloads/worker": replyJSON(http.StatusNotFound, map[string]string{"error": "workload_not_found"}),
+	}))
+	out, errOut, err := runRigWithStderr(t, rig, "diff", "-f", file)
+	if exitCodeFor(err) != 1 || !strings.Contains(out, "--- workload/web (not stored)\n") {
+		t.Errorf("err = %v, output = %q", err, out)
+	}
+	if strings.Count(errOut, "the server is older than this CLI") != 1 {
+		t.Errorf("stderr = %q, want the skew note once", errOut)
+	}
+
+	rig = newRouteRig(t, doorRoutes(t, map[string]func(http.ResponseWriter, []byte){
+		previewWeb: replyJSON(http.StatusNotFound, map[string]string{"error": "no such workload", "reason": "workload_not_found"}),
+	}))
+	_, errOut, err = runRigWithStderr(t, rig, "diff", "-f", writeTemplateFile(t, "w.yaml", webYAML))
+	// An API 4xx keeps its own exit 3 (docs/CI.md), never the skew fallback.
+	if exitCodeFor(err) != 3 || errOut != "" || len(rig.sent(getWeb)) != 0 {
+		t.Errorf("workload_ 404: err = %v (exit %d), stderr = %q", err, exitCodeFor(err), errOut)
+	}
+}
+
+// TestDiffExitsTwoOnWouldRefuseLaunch: a launch the organisation would refuse is exit 2 with its reason,
+// whether or not the document changed (an unchanged spec whose last launch was refused retries it).
+func TestDiffExitsTwoOnWouldRefuseLaunch(t *testing.T) {
+	file := writeTemplateFile(t, "w.yaml", webYAML)
+	stored := storedWeb(t, webYAML)
+	refuse := sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldRefuse, Reason: "run_cap_reached", Message: "too many runs"}
+	cases := map[string]sdk.WorkloadPreview{
+		"unchanged document": previewOf(t, &stored, "none", sdk.WorkloadUnchanged, refuse),
+	}
+	older := stored
+	older.Description = "an older description"
+	cases["changed document"] = previewOf(t, &older, "update", sdk.WorkloadUpdated, refuse)
+	for name, pv := range cases {
+		if name == "unchanged document" {
+			pv.Changes = []sdk.WorkloadChange{}
+		}
+		rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, pv)})
+		_, _, err := runRigWithStderr(t, rig, "diff", "-f", file)
+		if err == nil || exitCodeFor(err) != 2 || !strings.Contains(err.Error(), "run_cap_reached: too many runs") {
+			t.Errorf("%s: err = %v (exit %d), want exit 2 naming the reason", name, err, exitCodeFor(err))
+		}
+	}
+}
+
+// TestDiffNamesEveryWorkloadItWouldRefuse: a file of several workloads is checked to the end, so one run
+// shows each refusal and the diffs of the workloads that differ.
+func TestDiffNamesEveryWorkloadItWouldRefuse(t *testing.T) {
+	file := writeTemplateFile(t, "w.yaml", webYAML+"---\n"+workerCR)
+	refuse := sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldRefuse, Reason: "run_cap_reached", Message: "too many runs"}
+	web := previewOf(t, nil, "create", sdk.WorkloadCreated, refuse)
+	worker := web
+	worker.Name, worker.Proposed.Name = "worker", "worker"
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+		previewWeb:                              replyJSON(http.StatusOK, web),
+		"POST /api/v1/workloads/worker/preview": replyJSON(http.StatusOK, worker),
+	})
+	out, _, err := runRigWithStderr(t, rig, "diff", "-f", file)
+	if err == nil || exitCodeFor(err) != 2 || !strings.Contains(err.Error(), "workload/web") || !strings.Contains(err.Error(), "workload/worker") {
+		t.Errorf("err = %v (exit %d), want exit 2 naming web and worker", err, exitCodeFor(err))
+	}
+	if !strings.Contains(out, "workload/worker (file)") {
+		t.Errorf("the second workload's diff was not shown:\n%s", out)
+	}
+}
+
+// TestApplyDryRunJSONOmitsAPreflightThePreviewLacks: when the server's preview carries no setup checklist
+// (a launch that would be refused), --json has no "preflight" entry rather than an empty one.
+func TestApplyDryRunJSONOmitsAPreflightThePreviewLacks(t *testing.T) {
+	pv := previewOf(t, nil, "create", sdk.WorkloadCreated, sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldRefuse, Reason: "run_cap_reached", Message: "too many runs"})
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, pv)})
+	out, _, _ := runRigWithStderr(t, rig, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML), "--dry-run", "--json")
+	if strings.Contains(out, `"preflight"`) {
+		t.Errorf("the entry has a preflight the server did not give:\n%s", out)
+	}
+	if !strings.Contains(out, `"preview"`) {
+		t.Errorf("the entry lost its preview:\n%s", out)
+	}
+}

@@ -295,12 +295,19 @@ func (p RunnerPoolUsePolicy) Validate(scope RunnerPoolScope) error {
 	return ValidateRunnerPoolUseSubjects(p.Subjects)
 }
 
+// RunnerPoolSubjectUnit is the subject type of a use-policy row that names a governance unit, by its
+// id. It is a pool-use subject only and not a capability subject type, so no capability switch
+// learns it. The row admits a run launched under that unit or any unit below it, judged by the
+// run's own unit (frozen on the run once it exists). A run in no unit matches no unit row, and a
+// use policy only narrows, so an unknown unit admits nobody.
+const RunnerPoolSubjectUnit CapabilitySubjectType = "unit"
+
 // RunnerPoolUseSubjectsMax bounds a policy's subject list.
 const RunnerPoolUseSubjectsMax = 64
 
 // ValidateRunnerPoolUseSubjects checks a policy's subjects: one to
 // RunnerPoolUseSubjectsMax, each a user, group or user_type with a printable
-// name, none repeated. The "all" subject is refused: it is no narrowing.
+// name, or a unit named by its canonical lowercase id, none repeated. The "all" subject is refused: it is no narrowing.
 func ValidateRunnerPoolUseSubjects(subjects []RunnerPoolSubject) error {
 	if len(subjects) == 0 || len(subjects) > RunnerPoolUseSubjectsMax {
 		return fmt.Errorf("a use policy lists 1 to %d people, groups or roles", RunnerPoolUseSubjectsMax)
@@ -309,8 +316,12 @@ func ValidateRunnerPoolUseSubjects(subjects []RunnerPoolSubject) error {
 	for _, s := range subjects {
 		switch s.SubjectType {
 		case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectUserType:
+		case RunnerPoolSubjectUnit:
+			if id, err := uuid.Parse(s.Subject); err != nil || id.String() != s.Subject {
+				return errors.New("a unit subject is the unit's id, in lowercase")
+			}
 		default:
-			return fmt.Errorf("subject_type %q is not user, group or user_type", s.SubjectType)
+			return fmt.Errorf("subject_type %q is not user, group, user_type or unit", s.SubjectType)
 		}
 		if s.Subject == "" || len(s.Subject) > 256 || s.Subject != strings.TrimSpace(s.Subject) ||
 			strings.IndexFunc(s.Subject, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {

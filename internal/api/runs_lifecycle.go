@@ -117,20 +117,26 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 				// can tell "the task never ran" from "it ran but its own
 				// completion accounting failed".
 				data := map[string]any{"exec_started": false, "error": werr.Error()}
-				applied, uerr := s.casRunState(base, runID, types.RunRunning, types.RunFailed)
+				ctx, unlock, locked := s.lockRunEnd(base, runID) // through the tail's computer folder pass
+				if !locked {
+					s.finishRunOutput(base, runID)
+					return
+				}
+				defer unlock()
+				applied, uerr := s.casRunState(ctx, runID, types.RunRunning, types.RunFailed)
 				if uerr != nil {
 					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
-					s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+					s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 						runID.String(), "failure", mustJSON(data)))
 					return
 				}
 				if !applied {
 					// Already terminal (e.g. killed concurrently) — nothing further to
 					// do, but this process may hold the tail the winner does not.
-					s.finishRunOutput(base, runID)
+					s.finishRunOutput(ctx, runID)
 					return
 				}
-				s.finalizeRunTail(base, runID, ref, "run.complete", "failure", data)
+				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
 				return
 			}
 			// Audit the watcher's exit for forensics either way.
@@ -169,28 +175,34 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// agent, so this read always sees it. A read that fails twice leaves the run RUNNING: this
 		// watcher's lease then lapses, and the stale-watcher sweep (sweepRunWatchers) re-derives it
 		// through reconcileFinalize, which reads whether it is kept. Never a finalize that could not tell.
-		cur, gerr := s.cfg.Store.GetRun(base, runID)
+		// The run's lock is held from this read through the tail's computer folder pass (lockRunEnd).
+		ctx, unlock, locked := s.lockRunEnd(base, runID)
+		if !locked {
+			s.finishRunOutput(base, runID) // the agent exited: its tail is this process's either way
+			return
+		}
+		defer unlock()
+		cur, gerr := s.cfg.Store.GetRun(ctx, runID)
 		if gerr != nil {
 			select {
 			case <-time.After(completionWatcherReadRetryDelay):
-			case <-base.Done():
+			case <-ctx.Done():
 			}
-			cur, gerr = s.cfg.Store.GetRun(base, runID)
+			cur, gerr = s.cfg.Store.GetRun(ctx, runID)
 		}
 		if gerr != nil {
-			slog.WarnContext(base, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
+			slog.WarnContext(ctx, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
 				slog.String("run_id", runID.String()), slog.Int("exit_code", exitCode), slog.Any("err", gerr))
 			return
 		}
 		if runIsKept(cur) {
 			return
 		}
-
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
-		applied, uerr := s.casRunState(base, runID, types.RunRunning, terminal)
+		applied, uerr := s.casRunState(ctx, runID, types.RunRunning, terminal)
 		if uerr != nil {
-			s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"exit_code": exitCode, "error": uerr.Error(),
 				})))
@@ -200,33 +212,23 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			// Run already terminal (e.g. KILLED by a user mid-run). The kill path
 			// already tore the sandbox down; only this process's tail is left, and
 			// finishing it is a no-op when the winner already did.
-			s.finishRunOutput(base, runID)
+			s.finishRunOutput(ctx, runID)
 			return
 		}
-
 		// We won the RUNNING->terminal transition, so this is the authoritative end
 		// of the run. Run the shared terminal tail: audit run.complete, cascade the
-		// kill-switch revocation (matching the docs' revoke-on-every-stop promise,
-		// "including failure"), free the sandbox (auditing a failed teardown so an
-		// abandoned container is never silent), and settle the workspace/record run.
-		// The boot reconciler runs the IDENTICAL sequence via finalizeRunTail, so a
-		// new terminal concern is added in one place, not hand-copied across paths.
-		// A non-zero exit carries no reason of its own; the agent's recording may
-		// (noteModelAccessFromRecording).
+		// kill-switch revocation ("including failure"), free the sandbox (auditing
+		// a failed teardown), and settle the workspace/record run. The boot
+		// reconciler runs the IDENTICAL sequence via finalizeRunTail. A non-zero exit
+		// carries no reason of its own; the agent's recording may (noteModelAccessFromRecording).
 		if terminal == types.RunFailed {
-			s.noteModelAccessFromRecording(base, runID)
+			s.noteModelAccessFromRecording(ctx, runID)
 		}
-		s.finalizeRunTail(base, runID, ref, "run.complete", outcome, map[string]any{
+		s.finalizeRunTail(ctx, runID, ref, "run.complete", outcome, map[string]any{
 			"exit_code": exitCode, "state": terminal,
 		})
 	}()
 }
-
-// isTerminalRunState reports whether a run is in a terminal (already-ended)
-// state. The kill-switch must not re-kill or clobber a run that already ended
-// (COMPLETED/FAILED by the watcher, or KILLED/STOPPED/ARCHIVED earlier). The set
-// itself lives on types.RunState so the CLI and SDK share one definition.
-func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
 
 // casRunState is the one place this package issues a run's state CAS: it delegates to
 // Store.UpdateRunStateIf and, when the transition BOTH won and NEWLY landed
@@ -281,10 +283,12 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 	if serr == nil {
 		return true
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-		ref, "failure", mustJSON(map[string]any{
-			"sandbox_ref": ref, "teardown_error": serr.Error(),
-		})))
+	if s.auditFirstTeardownFailure(ctx, runID, action, serr) {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+			ref, "failure", mustJSON(map[string]any{
+				"sandbox_ref": ref, "teardown_error": serr.Error(),
+			})))
+	}
 	return false
 }
 
@@ -297,7 +301,7 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 	data := s.revokeRunSteps(ctx, runID)
-	if len(data) > 0 {
+	if len(data) > 0 && s.revokeRowDue(ctx, runID) {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(data))))
 	}
 	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
@@ -336,6 +340,7 @@ func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string
 	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
 		data["proxy_config_error"] = perr.Error()
 	}
+	macGUIEnvForget(runID)
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
 	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
@@ -943,6 +948,7 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	if perr := s.dropRunProxyConfig(revokeCtx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
 	}
+	macGUIEnvForget(id)
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),
 	// and the erase of any value its runner holds resident, as revokeRunCascade does.
 	s.revokeRunPATs(revokeCtx, id, adoPATRevokeKill)

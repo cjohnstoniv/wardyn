@@ -183,6 +183,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 	run := types.AgentRun{
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
 		Agent: stepRunAgent, Task: task, ImageInput: &noImage,
+		ImageAdmission:   &types.ImageAdmissionVerdict{Origin: types.ImageOriginWardyn}, // insert-only: the record revive reads
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned, HumanAuthor: requestSponsor(ctx, actor),
 	}

@@ -36,3 +36,4 @@ export * from "./types/policy-preview";
 export * from "./types/components";
 export * from "./types/new-run-contract";
 export * from "./types/templates";
+export * from "./types/model-usage";

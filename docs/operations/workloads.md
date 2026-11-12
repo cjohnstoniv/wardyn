@@ -59,7 +59,7 @@ intent:
 | Command | What it does |
 |---|---|
 | `wardyn apply -f FILE` | Stores each workload the file names, and starts a run when it is new or changed |
-| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing. A service identity's token may run it |
+| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file, from the server's preview. Writes nothing. A service identity's token may run it |
 | `wardyn delete -f FILE` | Ends each workload's run and deletes the workload |
 | `wardyn workload list` | Lists `NAME`, `OWNER`, `SOURCE`, `STATE`, `GENERATION` (current/latest), `RUN` and `REFUSED` (the last refusal's reason) |
 | `wardyn workload get NAME` | Prints the workload, its document and status, as JSON |
@@ -75,7 +75,7 @@ intent:
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait`. A service identity's token may run it |
+| `--dry-run` | Writes nothing. Prints what the apply would do per workload, the diff and the setup checklist. Exits `1` when an apply would be refused. `--json` adds `preview`. Excludes `--wait`. A service token may run it |
 | `--wait` | Follows each launched run: until it is running for a service, until it ends for any other workload |
 | `--timeout` | Gives up waiting after this long, `30m` by default. The run keeps going |
 | `--json` | Prints the results as a JSON array, with progress on stderr |
@@ -91,7 +91,24 @@ intent:
 | `124` | `--wait` timed out |
 | `--wait` outcome | The run's own exit, as `wardyn run --wait`. A service that ends before it is running exits `1` if FAILED, else `2` |
 
-`wardyn diff` exits `0` when every workload equals the stored one, `1` when any differs or is not stored yet, and `2` or more on an error. A file that does not parse and a spec the server refuses exit `2`.
+`wardyn diff` exits `0` when every workload equals the stored one, `1` when any differs or is not stored yet, and `2` or more on an error. A file that does not parse, a spec the server refuses and a spec the apply would be refused exit `2`. Against a server without the preview route, both commands print one note on stderr and compare client side, which cannot see those refusals.
+
+## Preview an apply
+
+`POST /api/v1/workloads/{name}/preview` takes the body of `PUT /api/v1/workloads/{name}` and answers what the PUT would do. It stores nothing and starts nothing. A service identity's token may call it, for its own workloads.
+
+| Field | Meaning |
+|---|---|
+| `op` | `create`, `update` or `none` (a `description`-only change is `none`) |
+| `outcome` | `created`, `updated` or `unchanged`; empty with a `refusal` |
+| `changes` | Each changed field by path, with `op` `add`, `remove` or `change`, and `from` and `to`. Never `null` |
+| `launch` | `would_launch` (`replaces` is the run that ends), `none`, or `would_refuse` with the launch's `reason` and sentence |
+| `refusal` | The `409` or `422` the PUT would answer, in a `200` so `changes` show |
+
+- A preview is one read: another apply can change the workload after it.
+- A launch refused at a gate that audits may leave the dry-run audit row a refused `POST /runs/preflight` leaves.
+- It cannot see two launch refusals: the image or devcontainer inputs, and an identity-provider `422`.
+- Each preview that owes a launch counts against the caller's preflight rate; over it, the answer is the preflight's `429`.
 
 ## What an apply does
 

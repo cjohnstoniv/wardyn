@@ -113,6 +113,8 @@ describe("ProfileReview", () => {
     // Overall risk + a graded risk row render (clone of compose-review).
     expect(await screen.findByText("Overall risk")).toBeInTheDocument();
     expect(screen.getByText("allow_all_egress")).toBeInTheDocument();
+    // The setting is the barrier floor everywhere else in the console, not "Confinement".
+    expect(screen.getByText("Barrier floor")).toBeInTheDocument();
 
     // Observations: egress domains with methods + decision tallies.
     const obs = screen.getByLabelText("Observations");
@@ -152,6 +154,13 @@ describe("ProfileReview", () => {
     render(<ProfileReview runId="run-null-domains" onClose={() => {}} />);
     expect(await screen.findByText("Overall risk")).toBeInTheDocument();
     expect(screen.getByText("0 allowed")).toBeInTheDocument();
+  });
+
+  it("is capped at 680px by its class, with no inline max-width widening it", async () => {
+    render(<ProfileReview runId="run-1" onClose={() => {}} />);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.style.maxWidth).toBe("");
+    expect(dialog.className).toContain("sm:max-w-[680px]");
   });
 
   it("renders a retryable error when synthesis fails", async () => {

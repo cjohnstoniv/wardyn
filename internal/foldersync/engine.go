@@ -6,9 +6,7 @@ package foldersync
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -57,7 +55,15 @@ type Report struct {
 	// Unsynced is set on a --pull pass that was cut short: the sandbox's changed files it had not
 	// brought back yet. The folder runner reports it; `wardyn sync` prints no report for such a pass.
 	Unsynced int `json:"unsynced,omitempty"`
-	seenSet  map[string]bool
+	// UnsyncedPaths names them, in order, with each conflict a runner pass could not keep.
+	UnsyncedPaths []string `json:"unsynced_paths,omitempty"`
+	// NotPreserved, on a runner pass only, is the first reason a change the pass owed the laptop was
+	// not proven kept there: an install, a directory sync or the state save failed.
+	NotPreserved string `json:"not_preserved,omitempty"`
+	// DurabilityWarning is set when a pass could not make every sync (a directory sync the filesystem does not offer,
+	// or on Windows a read-only file's flush): what it wrote stands, but may not survive a power loss. It refuses nothing.
+	DurabilityWarning string `json:"durability_warning,omitempty"`
+	seenSet           map[string]bool
 }
 
 type Rename struct {
@@ -104,6 +110,13 @@ type Options struct {
 	Credential func(rel string) bool
 	// Notify gets the list of laptop deletes before they are applied; nil drops it.
 	Notify io.Writer
+	// RunnerPass turns on the folder runner's rules; `wardyn sync` leaves it off and keeps its
+	// documented ones. A file both sides changed is pulled beside the laptop's as a conflict copy,
+	// named with RunTag, before the laptop's is pushed; a pass that does not pull, or cannot keep the
+	// copy, touches neither side. After LoadStateRecover moved an unreadable record aside, a file on
+	// both sides is compared: equal is recorded, different is a conflict.
+	RunnerPass bool
+	RunTag     string
 }
 
 // Syncer holds one sync's connections. Every read and write on the laptop goes
@@ -116,8 +129,16 @@ type Syncer struct {
 	Opts      Options
 	State     *State
 	StateFile string
+	// StateRoot is the existing directory StateFile's directories are made under (StateRoot for
+	// `wardyn sync`, the runner's state directory for a runner): each save syncs every directory from
+	// the state's up to it. A save without one fails.
+	StateRoot string
 	ig        *syncIgnore // this pass's ignore rules, read by walkLocal
+	dirs      *dirNote    // this pass's directory syncs the filesystem does not offer
 }
+
+// saveState saves the state to StateFile, under StateRoot.
+func (sy *Syncer) saveState() error { return sy.State.saveUnder(sy.StateFile, sy.StateRoot, sy.dirs) }
 
 // ListMeter counts the bytes the sftp client reads while a directory listing
 // is armed, and cancels the listing once it passes maxSyncListBytes.
@@ -195,6 +216,8 @@ func Abort(ctx context.Context, err error) bool {
 	switch {
 	case errors.As(err, &se):
 		return se.FxCode() == sftp.ErrSSHFxNoConnection || se.FxCode() == sftp.ErrSSHFxConnectionLost
+	case errors.As(err, new(*InstallError)):
+		return false
 	case errors.As(err, &pe), errors.As(err, &le):
 		return false
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission), errors.Is(err, fs.ErrExist):
@@ -266,6 +289,7 @@ type passView struct {
 func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 	rep := NewReport()
 	sy.ig = newSyncIgnore(sy.Opts.OrgDeny)
+	sy.dirs = &dirNote{folder: sy.Root.Name(), rep: rep}
 	local, localDirs, localTree, err := sy.walkLocal(rep)
 	if err != nil {
 		return nil, err
@@ -322,8 +346,12 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 			delete(sy.State.Files, rel)
 		}
 	}
-	if err := sy.State.Save(sy.StateFile); err != nil {
-		return nil, fmt.Errorf("save sync state: %w", err)
+	if err := sy.saveState(); err != nil {
+		if !sy.Opts.RunnerPass {
+			return nil, fmt.Errorf("save sync state: %w", err)
+		}
+		rep.notPreserved("save sync state: " + err.Error())
+		return rep, fmt.Errorf("save sync state: %w", err)
 	}
 	return rep, nil
 }
@@ -333,14 +361,18 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 // sides hold it, so State is saved and the report says what was done. Under
 // --pull it also counts the sandbox's changes among left.
 func (sy *Syncer) cut(rep *Report, left []string, v *passView, err error) (*Report, error) {
-	if serr := sy.State.Save(sy.StateFile); serr != nil {
-		return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
+	if serr := sy.saveState(); serr != nil {
+		if !sy.Opts.RunnerPass {
+			return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
+		}
+		rep.notPreserved("save sync state: " + serr.Error())
+		err = errors.Join(err, fmt.Errorf("save sync state: %w", serr))
 	}
 	if sy.Opts.Pull {
 		for _, rel := range left {
 			r, onRemote := v.remote.files[rel]
 			if seen, known := sy.State.Files[rel]; onRemote && (!known || remoteSide(r) != seen.Remote) {
-				rep.Unsynced++
+				rep.unsynced(rel)
 			}
 		}
 	}
@@ -372,12 +404,18 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 	lChanged := hasL && (!known || l.side != seen.Local)
 	rChanged := hasR && (!known || rSide != seen.Remote)
 	if known {
-		if done, err := sy.deleted(ctx, rel, v, rep, hasL, hasR, lChanged, rChanged); done {
+		if done, err := sy.deleted(ctx, rel, v, rep, pulled, hasL, hasR, lChanged, rChanged); done {
 			return err
 		}
 	}
+	if sy.recovering(known, hasL, hasR) {
+		return sy.conflict(ctx, rel, l, r, rep, pulled)
+	}
 	switch {
 	case hasL && hasR && lChanged && rChanged && (known || sy.Opts.Pull):
+		if sy.Opts.RunnerPass {
+			return sy.conflict(ctx, rel, l, r, rep, pulled)
+		}
 		rep.Conflicts = append(rep.Conflicts, rel)
 		return sy.push(ctx, rel, l, rep)
 	case hasL && lChanged:
@@ -386,26 +424,31 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 		return sy.pull(ctx, rel, r, &l, rep, pulled)
 	case !hasL && hasR && sy.Opts.Pull && rChanged:
 		if known {
-			rep.Conflicts = append(rep.Conflicts, rel)
-			return nil
+			return sy.listedConflict(ctx, rel, r, rep, pulled)
 		}
 		return sy.pull(ctx, rel, r, nil, rep, pulled)
 	}
 	return nil
 }
 
+// recovering reports whether rel, on both sides with no record, is in a runner pass after an
+// unreadable record was moved aside: such a file is compared (conflict), never taken as changed on
+// one side.
+func (sy *Syncer) recovering(known, hasL, hasR bool) bool {
+	return sy.Opts.RunnerPass && sy.State.Recovered != "" && !known && hasL && hasR
+}
+
 // deleted handles a file this sync sent that one side has since deleted. A
 // laptop delete removes the sandbox copy unless the sandbox changed it; a
 // sandbox delete of a file the laptop left alone is queued for deleteLocal,
 // under --pull-deletes only. It reports whether rel was handled.
-func (sy *Syncer) deleted(ctx context.Context, rel string, v *passView, rep *Report, hasL, hasR, lChanged, rChanged bool) (bool, error) {
+func (sy *Syncer) deleted(ctx context.Context, rel string, v *passView, rep *Report, pulled *int64, hasL, hasR, lChanged, rChanged bool) (bool, error) {
 	switch {
 	case !hasL && hasR && v.laptopDeleted(rel):
 		if rChanged {
-			rep.Conflicts = append(rep.Conflicts, rel)
-			return true, nil
+			return true, sy.listedConflict(ctx, rel, v.remote.files[rel], rep, pulled)
 		}
-		return true, sy.removeRemote(ctx, rel, v, rep)
+		return true, sy.removeRemote(ctx, rel, v, rep, pulled)
 	case hasL && !hasR && !lChanged && sy.Opts.PullDeletes && len(v.remote.seen) > 0 && v.remote.gone(rel):
 		if syncIsIgnoreFile(rel) {
 			rep.refuse(rel, "ignore file")
@@ -511,7 +554,7 @@ func (sy *Syncer) sameBytes(rel string, lsize int64, remote string, rsize int64)
 	return lerr == nil && rerr == nil && ln == lsize && rn == rsize && bytes.Equal(lh.Sum(nil), rh.Sum(nil))
 }
 
-func (sy *Syncer) removeRemote(ctx context.Context, rel string, v *passView, rep *Report) error {
+func (sy *Syncer) removeRemote(ctx context.Context, rel string, v *passView, rep *Report, pulled *int64) error {
 	p := path.Join(sy.Opts.Remote, rel)
 	// The agent may have written the file since the walk: only the copy the
 	// walk saw is deleted, and a changed one is kept as a conflict.
@@ -519,9 +562,12 @@ func (sy *Syncer) removeRemote(ctx context.Context, rel string, v *passView, rep
 	if err != nil {
 		return sy.pathFailed(ctx, rep, rel, "stat in the sandbox", err)
 	}
-	if !fi.Mode().IsRegular() || remoteSide(fi) != remoteSide(v.remote.files[rel]) {
+	if !fi.Mode().IsRegular() {
 		rep.Conflicts = append(rep.Conflicts, rel)
 		return nil
+	}
+	if remoteSide(fi) != remoteSide(v.remote.files[rel]) {
+		return sy.listedConflict(ctx, rel, fi, rep, pulled)
 	}
 	if err := sy.Client.Remove(p); err != nil {
 		return sy.pathFailed(ctx, rep, rel, "delete in the sandbox", err)
@@ -812,62 +858,38 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 			return nil
 		}
 	}
-	allowed := min(int64(MaxPullFile), sy.Opts.MaxPullBytes-*pulled)
-	switch {
-	case r.Size() > MaxPullFile:
-		rep.refuse(rel, fmt.Sprintf("too large (over %d bytes)", MaxPullFile))
-		return nil
-	case r.Size() > allowed:
-		rep.refuse(rel, "over --max-pull-bytes for this pass")
-		return nil
-	}
 	mode := fs.FileMode(0o644)
 	if walked != nil {
 		mode = walked.mode.Perm() &^ 0o111
 	}
-	if err := sy.Root.MkdirAll(path.Dir(rel), 0o755); err != nil {
-		return sy.pathFailed(ctx, rep, rel, "create the local directory", err)
-	}
-	src, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))
-	if err != nil {
-		return sy.pathFailed(ctx, rep, rel, "read in the sandbox", err)
-	}
-	defer src.Close()
-	tmpName, tmp, err := sy.localTemp(rel)
-	if err != nil {
-		return sy.pathFailed(ctx, rep, rel, "create a local temp file", err)
+	tmpName, tmp, err := sy.fetch(ctx, rel, rel, r, mode, rep, pulled)
+	if tmp == nil {
+		return err
 	}
 	defer sy.Root.Remove(tmpName)
-	n, err := io.Copy(tmp, io.LimitReader(src, allowed+1))
-	*pulled += n
-	rep.BytesIn += n
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
+	defer tmp.Close()
+	// Synced before the re-check, so a save made while the bytes reach the disk is still seen.
+	if err := syncTemp(tmp); err != nil {
+		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
-	if err != nil {
-		return sy.pathFailed(ctx, rep, rel, "read in the sandbox", err)
-	}
-	if n > allowed {
-		rep.refuse(rel, "larger than listed and over the pull limit")
-		return nil
-	}
-	if err := sy.Root.Chmod(tmpName, mode); err != nil {
-		return sy.pathFailed(ctx, rep, rel, "set the local mode", err)
-	}
-	mt := r.ModTime()
-	_ = sy.Root.Chtimes(tmpName, mt, mt)
 	if !sy.unchangedLocally(rel, walked) {
-		rep.Conflicts = append(rep.Conflicts, rel)
-		return nil
+		return sy.listedConflict(ctx, rel, r, rep, pulled)
 	}
-	if err := sy.Root.Rename(tmpName, rel); err != nil {
-		return sy.pathFailed(ctx, rep, rel, "replace the local file", err)
-	}
-	fi, err := sy.Root.Lstat(rel)
+	tfi, err := tmp.Stat()
 	if err != nil {
-		return sy.pathFailed(ctx, rep, rel, "stat the local file", err)
+		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
-	sy.State.Files[rel] = FileSeen{Local: localSide(fi), Remote: remoteSide(r)}
+	if _, err := installSynced(sy.Root, sy.dirs, tmp, tmpName, InstallReplace, rel); err != nil {
+		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
+	}
+	// Recorded only if the file in place is still the one installed: a save just after it wins.
+	kept, err := sy.recordKept(rel, remoteSide(r), func(_ *os.File, fi os.FileInfo) bool { return localSide(fi) == localSide(tfi) })
+	if err != nil {
+		return sy.keptFailed(ctx, rep, rel, "keep the local file", err)
+	}
+	if !kept {
+		return sy.listedConflict(ctx, rel, r, rep, pulled)
+	}
 	rep.Pulled = append(rep.Pulled, rel)
 	return nil
 }
@@ -883,15 +905,55 @@ func (sy *Syncer) unchangedLocally(rel string, walked *syncFile) bool {
 	return err == nil && fi.Mode().IsRegular() && localSide(fi) == walked.side
 }
 
+// fetch copies the sandbox's rel into a new temp file beside dst, with mode and the sandbox's
+// mtime, within the pull budget. A nil file is a refusal (in rep) or the returned error.
+func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mode fs.FileMode, rep *Report, pulled *int64) (string, *os.File, error) {
+	allowed := min(int64(MaxPullFile), sy.Opts.MaxPullBytes-*pulled)
+	switch {
+	case r.Size() > MaxPullFile:
+		rep.refuse(rel, fmt.Sprintf("too large (over %d bytes)", MaxPullFile))
+		return "", nil, nil
+	case r.Size() > allowed:
+		rep.refuse(rel, "over --max-pull-bytes for this pass")
+		return "", nil, nil
+	}
+	if err := sy.Root.MkdirAll(path.Dir(dst), 0o755); err != nil { // the install syncs every directory above dst
+		return "", nil, sy.keptFailed(ctx, rep, rel, "create the local directory", err)
+	}
+	src, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))
+	if err != nil {
+		return "", nil, sy.keptFailed(ctx, rep, rel, "read in the sandbox", err)
+	}
+	defer src.Close()
+	tmpName, tmp, err := sy.localTemp(dst)
+	if err != nil {
+		return "", nil, sy.keptFailed(ctx, rep, rel, "create a local temp file", err)
+	}
+	n, err := copyToLaptop(tmp, io.LimitReader(src, allowed+1))
+	*pulled += n
+	rep.BytesIn += n
+	mt := r.ModTime()
+	switch {
+	case err != nil:
+		err = sy.keptFailed(ctx, rep, rel, "copy into the laptop", err) // the read or the write
+	case n > allowed:
+		rep.refuse(rel, "larger than listed and over the pull limit")
+	default:
+		if err = tmp.Chmod(mode); err != nil {
+			err = sy.keptFailed(ctx, rep, rel, "set the local mode", err)
+			break
+		}
+		_ = sy.Root.Chtimes(tmpName, mt, mt)
+		return tmpName, tmp, nil
+	}
+	_ = tmp.Close()
+	_ = sy.Root.Remove(tmpName)
+	return "", nil, err
+}
+
 // localTemp creates an exclusive 0600 temp file beside rel.
 func (sy *Syncer) localTemp(rel string) (string, *os.File, error) {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", nil, err
-	}
-	name := path.Join(path.Dir(rel), ".wardyn-sync-"+hex.EncodeToString(b[:]))
-	f, err := sy.Root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	return name, f, err
+	return createTemp(sy.Root, path.Dir(rel), ".wardyn-sync-", "")
 }
 
 // laptopDeleted reports whether the laptop deleted rel: its walk read rel's

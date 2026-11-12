@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -67,13 +68,18 @@ func (s *Server) mountGovernanceRoutes(operatorOnly, member chi.Router) {
 	unit.Delete("/governance/units/{id}", s.handleDeleteGovernanceUnit)
 	unit.Post("/governance/units/{id}/admins", s.handleGrantUnitAdmin)
 	unit.Delete("/governance/units/{id}/admins/{admin}", s.handleRevokeUnitAdmin)
+	unit.Put("/governance/units/{id}/deciders", s.handlePutUnitDeciders)
+	unit.Get("/governance/units/{id}/model-usage", s.handleUnitModelUsage)
 	unit.Post("/governance/memberships", s.handleUpsertGovernanceMembership)
 	unit.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
 	unit.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)
 	operatorOnly.Post("/governance/memberships/{id}/promote", s.handlePromoteGovernanceMembership)
+	operatorOnly.Put("/governance/units/{id}/envelope", s.handlePutEnvelope)
+	operatorOnly.Delete("/governance/units/{id}/envelope", s.handleDeleteEnvelope)
 	unit.Post("/governance/check", s.handleGovernanceCheck)
 	unit.Post("/governance/dry-run", s.handleBoundaryDryRun)
 	s.mountGovernanceChangeRoutes(unit)
+	s.mountGovernanceRequestRoutes(member)
 }
 
 // GET /governance
@@ -98,6 +104,13 @@ type governanceResponse struct {
 	UnitAdmins []types.GovernanceUnitAdmin `json:"unit_admins"`
 	// ParentWalls is, for a unit admin, the walls each of their subtrees hangs from (scopeGovernanceRead).
 	ParentWalls []unitParentWalls `json:"parent_walls,omitempty"`
+	// Deciders is each unit's hold-deciding rules and, per kind, the unit whose rule governs it; absent when no unit has any.
+	Deciders []governanceDecidersView `json:"deciders,omitempty"`
+	// Envelopes are the platform envelopes (governance_envelope.go): every one for the security tier,
+	// for a unit admin those on or above their subtrees' roots and those inside them.
+	Envelopes []types.GovernanceEnvelope `json:"envelopes"`
+	// UnitNames is, for a unit admin, the name of every unit above their subtrees, by id (ancestorNames).
+	UnitNames map[uuid.UUID]string `json:"unit_names,omitempty"`
 }
 
 // handleGetGovernance returns the whole governance picture to a security caller, and a unit admin's
@@ -166,13 +179,25 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	envelopes, err := s.governanceEnvelopes(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list envelopes", err)
+		return
+	}
 	resp := governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: &boundary, UnitAdmins: admins,
-		Restrictions: restrictionViews(restrictions)}
+		Restrictions: restrictionViews(restrictions), Envelopes: envelopes}
+	if resp.Deciders, err = s.governanceDeciders(r.Context(), resolved); err != nil {
+		writeServerError(w, r, "list unit deciders", err)
+		return
+	}
 	if !s.isSecurityOperator(r.Context()) {
+		// scopeGovernanceRead builds a fresh response, so the deciders are narrowed from the full list.
+		deciders := resp.Deciders
 		if resp, err = s.scopeGovernanceRead(r.Context(), resp, resolved, boundary, limit); err != nil {
 			writeServerError(w, r, "read unit admin grants", err)
 			return
 		}
+		resp.Deciders = scopeDecidersRead(deciders, resp.Units)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -250,6 +275,15 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	if err := types.ValidAllowedModels(l.AllowedModels); err != nil {
 		return "limits.allowed_models: " + err.Error()
 	}
+	if err := types.ValidRequiredImageSigners(l.RequiredImageSigners); err != nil {
+		return "limits.required_image_signers: " + err.Error()
+	}
+	if err := types.ValidDenyIDs(l.DenyComponents); err != nil {
+		return "limits.deny_components: " + err.Error()
+	}
+	if err := types.ValidDenyIDs(l.DenyModelProviders); err != nil {
+		return "limits.deny_model_providers: " + err.Error()
+	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
 			return "limits.autonomy_rubric." + err.Error()
@@ -272,6 +306,9 @@ type governanceCeiling struct {
 	Limits   types.GovernanceLimits
 	Unit     *ResolvedUnit
 	Warnings []string
+	// ContextExpiresAt is the picked membership's end when it is an elevation; nil otherwise. A run
+	// launched here is capped at it (capAtElevation).
+	ContextExpiresAt *time.Time
 	// MemberDefault is a governed member's size before any ask (composer.MemberDefault from the
 	// deployment's own size, lowered by this ceiling), set when the ceiling is resolved. Read it
 	// through memberSize.

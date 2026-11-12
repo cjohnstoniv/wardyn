@@ -320,6 +320,17 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
+      # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
+      # extra swap lets that peak page out instead of the runner being shut down.
+      - name: Add swap for the coverage compile
+        if: needs.changes.outputs.backend != 'false'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
@@ -1048,6 +1059,8 @@ jobs:
           load: true
           cache-from: type=gha,scope=wardyn-proxy
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
+      - uses: ./.github/actions/kind-binary
+        if: needs.changes.outputs.backend != 'false'
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         if: needs.changes.outputs.backend != 'false'
         with:
@@ -1321,6 +1334,7 @@ jobs:
       # own doc and deploy/kind/Dockerfile.conformance-agent.
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: wardyn-conformance-k8s
@@ -1469,6 +1483,9 @@ jobs:
       # Kubernetes v1.30 by digest, with the kind release that image was built for: the docs claim the
       # backend was tested on v1.30, and kind-action's default node image is newer. The version is
       # printed after the Calico rollout so the log shows what ran.
+      - uses: ./.github/actions/kind-binary
+        with:
+          version: v0.23.0
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           version: v0.23.0
@@ -1503,13 +1520,16 @@ jobs:
           echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
       # sha256 published with the v1.0.9 release. The manifest names the controller by tag, so the one
       # image line is replaced with the index digest, and no image may be left that is not by digest.
-      - name: Fetch agent-sandbox v1.0.9 (sha256-checked) and pin its controller by digest
+      - name: Fetch agent-sandbox v1.0.9 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.9/sandbox.yaml
+          sha256: 3eeb27fa821659593ba92c5454571f08c84abb07096bb9d372c1c6c750f6d7d2
+          path: ${{ runner.temp }}/agent-sandbox.yaml
+      - name: Pin the agent-sandbox controller by digest
         run: |
           set -euo pipefail
           f="$RUNNER_TEMP/agent-sandbox.yaml"
-          curl -fsSL --retry 3 -o "$f" \
-            https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.9/sandbox.yaml
-          echo "3eeb27fa821659593ba92c5454571f08c84abb07096bb9d372c1c6c750f6d7d2  $f" | sha256sum -c -
           tagged='registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.9'
           [ "$(grep -cF "image: $tagged" "$f")" = 1 ] || { echo "::error::expected exactly one '$tagged' image line in sandbox.yaml"; exit 1; }
           sed -i "s|image: $tagged\$|image: $AGENT_SANDBOX_CONTROLLER_IMAGE|" "$f"
@@ -1529,14 +1549,17 @@ jobs:
           key: cache-trivy-${{ steps.cache-date.outputs.date }}
           restore-keys: |
             cache-trivy-
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
       - name: Install trivy 0.70.0 (pinned, checksum-verified)
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/trivy-bin"
           mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
       - name: Trivy scan of the agent-sandbox controller digest
@@ -2073,6 +2096,7 @@ jobs:
   #   - cgo build, vet and tests of the helper, its library and the guest agent, darwin-native tests included
   #   - the darwin runnerd build
   #   - the helper signed ad hoc with its one entitlement, read back with codesign
+  #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
@@ -2177,6 +2201,56 @@ jobs:
           codesign --verify --strict "$agent"
           grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+      # What a tools update pushes: a fresh agent build (the linker's ad hoc signature) signed by Wardyn's own
+      # signer with a throwaway self-signed cert this Mac does not trust, then checked by this Mac's codesign.
+      # TestSignProof makes the identity, writes the signed copy and the requirement it must read back, and runs
+      # the whole host signer, which must pick Wardyn's signer. Not a required check: read it on the train head.
+      - name: Sign the guest agent with Wardyn's signer and check it with codesign
+        id: wardynsign
+        if: ${{ !cancelled() }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$WARDYN_SIGN_PROOF_AGENT" ./cmd/wardyn-guest-agent
+          go test -count=1 -v -run '^TestSignProof$' ./internal/macvm/ | tee "$RUNNER_TEMP/sign-proof.out"
+          grep -q -- '^--- PASS: TestSignProof ' "$RUNNER_TEMP/sign-proof.out"
+          signed="$WARDYN_SIGN_PROOF_DIR/wardyn/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed"
+          dr="$(codesign -d -r- "$signed" 2>&1 | sed -n 's/^designated => //p')"
+          echo "designated => $dr"
+          [ "$dr" = "$(cat "$WARDYN_SIGN_PROOF_DIR/requirement.txt")" ]
+          info="$(codesign -dvvv "$signed" 2>&1)"
+          echo "$info"
+          grep -q 'Hash type=sha256 size=32' <<<"$info"
+          grep -q 'flags=0x0(none)' <<<"$info"
+          if grep -Eq 'adhoc|linker-signed' <<<"$info"; then echo "::error::the signed agent reads ad hoc or linker-signed"; exit 1; fi
+          # It starts: macOS kills a binary whose signature it refuses before flag parsing. Not a gate (exit 2 is -h's).
+          rc=0
+          "$signed" -h >/dev/null 2>&1 || rc=$?
+          echo "signed agent -h exit status: $rc"
+          if [ "$rc" -ge 128 ]; then echo "::warning::the signed agent was killed at start (exit $rc)"; fi
+      # The codesign fallback for real: a temporary keychain on the search list and the requirement as -r= text.
+      # It settles whether codesign signs with a self-signed identity this Mac does not trust. Either answer is a
+      # result, so it does not fail the job; the log says which.
+      - name: Sign the guest agent with the codesign fallback (result only)
+        if: ${{ !cancelled() && steps.wardynsign.outcome == 'success' }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -uo pipefail
+          rc=0
+          go test -count=1 -v -run '^TestSignProofCodesignFallback$' ./internal/macvm/ || rc=$?
+          echo "codesign fallback exit status: $rc"
+          if [ "$rc" -ne 0 ]; then
+            echo "::notice::the codesign fallback did not sign with an untrusted self-signed identity on this Mac"
+            exit 0
+          fi
+          signed="$WARDYN_SIGN_PROOF_DIR/codesign/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed" || echo "::warning::codesign --verify --strict refused the fallback's copy"
+          codesign -d -r- "$signed" 2>&1 || true
       # The release package asserts the same floor on what it ships (release.yml, runner-pkg).
       - name: Every darwin binary loads on macOS 26 (minos 26.0 or lower)
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
@@ -2599,14 +2673,17 @@ jobs:
             cache-trivy-
       # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
       # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
       - name: Install trivy 0.70.0 (pinned, checksum-verified)
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/trivy-bin"
           mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

@@ -198,11 +198,11 @@ export function Cockpit({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto">
       <RunStatusStrip ctx={ctx} />
       <LocalModelsCard run={run} />
       <AllowedModelsCard run={run} />
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-[20rem] flex-1 flex-col">
         <RunCanvas ctx={ctx} />
       </div>
     </div>

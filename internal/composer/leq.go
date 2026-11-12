@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -26,8 +28,9 @@ import (
 // fails a field with no rule here.
 //
 // Each rule is the inverse of the meet's for the same field: ApplyOverlay(b, o)
-// is at most as permissive as b, so Leq(ApplyOverlay(b, o), b) holds. eligible_grants
-// are judged by GrantWithin, the one grant-dominance contract.
+// is at most as permissive as b, so Leq(ApplyOverlay(b, o), b) holds. Both read an
+// allowlist entry's port under the port rule (portCovers). eligible_grants are
+// judged by GrantWithin, the one grant-dominance contract.
 func Leq(a, b types.RunPolicySpec, la, lb types.GovernanceLimits) bool {
 	return leqEgress(a, b) && leqPosture(a, b) && leqPush(a.PushRules, b.PushRules) &&
 		leqLimits(la, lb) && leqRunLimits(la, lb) &&
@@ -51,7 +54,7 @@ func leqSize(a, b, def int) bool {
 }
 
 func leqEgress(a, b types.RunPolicySpec) bool {
-	if a.AllowAllEgress && !b.AllowAllEgress {
+	if a.AllowAllEgress && !b.AllowAllEgress || b.RefuseIPLiterals && !a.RefuseIPLiterals {
 		return false
 	}
 	if firstUseApprovalRank(a.FirstUseApproval) < firstUseApprovalRank(b.FirstUseApproval) ||
@@ -61,7 +64,8 @@ func leqEgress(a, b types.RunPolicySpec) bool {
 	}
 	return leqAllowedDomains(a.AllowedDomains, b.AllowedDomains) &&
 		leqDeniedDomains(a.DeniedDomains, b.DeniedDomains) &&
-		leqSubsetWhenSet(normMethods(a.AllowedMethods), normMethods(b.AllowedMethods))
+		leqSubsetWhenSet(normMethods(a.AllowedMethods), normMethods(b.AllowedMethods)) &&
+		types.HostRuleSetsWithin(a.HostRules, b.HostRules)
 }
 
 // leqSubsetWhenSet is allowed_methods' shape: an empty b is the unrestricted
@@ -84,10 +88,10 @@ func leqCapabilities(a, b []string) bool {
 }
 
 // leqAllowedDomains holds when every entry of a is covered by an entry of b,
-// under the proxy's own matcher. An entry the matcher cannot read is unproven.
-// A b with allow_all_egress never covers an entry (an exact entry also reaches
-// private literal IPs and enrols credential injection), so b's own list is the
-// only thing a is measured against.
+// under the proxy's own matcher and the port rule (coversOnPort). An entry the
+// matcher cannot read is unproven. A b with allow_all_egress never covers an
+// entry (an exact entry also reaches private literal IPs and enrols credential
+// injection), so b's own list is the only thing a is measured against.
 func leqAllowedDomains(a, b []string) bool {
 	var base []domEntry
 	for _, s := range b {
@@ -97,12 +101,24 @@ func leqAllowedDomains(a, b []string) bool {
 	}
 	for _, s := range a {
 		e, ok := parseDomEntry(s)
-		if !ok || !slices.ContainsFunc(base, func(f domEntry) bool { return f.covers(e) }) {
+		if !ok || !slices.ContainsFunc(base, func(f domEntry) bool { return coversOnPort(f, e) }) {
 			return false
 		}
 	}
 	return true
 }
+
+// coversOnPort is f.covers(e) read as a run with the port rule on reads it (every desktop VM run, and a
+// container run whose operator turned it on): a bare entry or wildcard reaches 80 and 443 only, so it
+// covers a port-qualified entry only on those two ports. With the rule off a bare entry reaches every port,
+// so a container run there may see a narrowing judged a widening and held for a second human; that false
+// hold is accepted, never the reverse.
+func coversOnPort(f, e domEntry) bool { return f.covers(e) && portCovers(f.port, e.port) }
+
+// AllowlistWithin reports whether every entry of next is covered by an entry of old on the whole entry,
+// as Leq reads an allowlist (leqAllowedDomains). It compares two lists as written, so a list a policy open
+// to all egress would read differently (ApplyRestrictionOverlay) cannot hide an entry from it.
+func AllowlistWithin(next, old []string) bool { return leqAllowedDomains(next, old) }
 
 // leqDeniedDomains holds when every denial of b is still in force in a: some
 // entry of a covers it. An unreadable b entry must reappear as typed.
@@ -132,8 +148,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 	if confinementRank(a.MinConfinementClass) < confinementRank(b.MinConfinementClass) ||
 		!notLooser(a.AutoStopAfterSec, b.AutoStopAfterSec) ||
 		(a.GitPushAnyBranch && !b.GitPushAnyBranch) ||
-		!leqCapabilities(capStrings(a.AzureDevOpsCapabilities), capStrings(b.AzureDevOpsCapabilities)) ||
-		!leqCapabilities(capStrings(a.GitHubCapabilities), capStrings(b.GitHubCapabilities)) {
+		!leqCapabilities(capStrings(adoscope.ExpandPR(a.AzureDevOpsCapabilities)), capStrings(adoscope.ExpandPR(b.AzureDevOpsCapabilities))) ||
+		!leqCapabilities(capStrings(ghscope.ExpandPR(a.GitHubCapabilities)), capStrings(ghscope.ExpandPR(b.GitHubCapabilities))) {
 		return false
 	}
 	for _, g := range a.EligibleGrants {
@@ -149,13 +165,15 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqToolRules(a.ToolRules, b.ToolRules) &&
 		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls) &&
 		leqDesktop(a.Desktop, b.Desktop) &&
-		a.Recording.Rank() >= b.Recording.Rank()
+		a.Recording.Rank() >= b.Recording.Rank() &&
+		leqDataOut(a.DataOut, b.DataOut)
 }
 
-// leqDesktop holds when a allows no desktop direction b blocks, either side's defaults applied.
+// leqDesktop holds when no desktop direction of a is looser than b's (allowed < review < blocked,
+// types.TransferStrictness), either side's defaults applied.
 func leqDesktop(a, b *types.DesktopControls) bool {
 	x, y := a.Effective(), b.Effective()
-	opens := func(p, q types.TransferRule) bool { return p == types.TransferAllowed && q == types.TransferBlocked }
+	opens := func(p, q types.TransferRule) bool { return types.TransferStrictness(p) < types.TransferStrictness(q) }
 	return !opens(x.PasteIn, y.PasteIn) && !opens(x.CopyOut, y.CopyOut) && !opens(x.Upload, y.Upload) && !opens(x.Download, y.Download)
 }
 
@@ -288,7 +306,7 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 		{a.DenyTaskModeExec, b.DenyTaskModeExec}, {a.DenyInteractive, b.DenyInteractive},
 		{a.DenyUIApps, b.DenyUIApps}, {a.DenyUserDrive, b.DenyUserDrive},
 		{a.DenyMemberDrives, b.DenyMemberDrives}, {a.DenyKeptMachines, b.DenyKeptMachines},
-		{a.DenyBackgroundDesktopWatch, b.DenyBackgroundDesktopWatch},
+		{a.DenyBackgroundDesktopWatch, b.DenyBackgroundDesktopWatch}, {a.DenyScheduledRuns, b.DenyScheduledRuns},
 	} {
 		if p[1] && !p[0] { // a denial the base keeps must stay
 			return false
@@ -297,6 +315,10 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	if slices.ContainsFunc(b.DenyPlacements, func(p types.Placement) bool { return !slices.Contains(a.DenyPlacements, p) }) {
 		return false // a placement denial the base keeps must stay
 	}
+	if slices.ContainsFunc(b.DenyComponents, func(id string) bool { return !slices.Contains(a.DenyComponents, id) }) ||
+		slices.ContainsFunc(b.DenyModelProviders, func(id string) bool { return !slices.Contains(a.DenyModelProviders, id) }) {
+		return false // a component or provider denial the base keeps must stay
+	}
 	if len(b.AllowedMacOSBases) > 0 && (len(a.AllowedMacOSBases) == 0 ||
 		slices.ContainsFunc(a.AllowedMacOSBases, func(n string) bool { return !slices.Contains(b.AllowedMacOSBases, n) })) {
 		return false // a macOS base the base does not allow must stay refused
@@ -304,6 +326,9 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	if len(b.AllowedModels) > 0 && (len(a.AllowedModels) == 0 ||
 		slices.ContainsFunc(a.AllowedModels, func(n string) bool { return !slices.Contains(b.AllowedModels, n) })) {
 		return false // a model the base does not allow must stay refused
+	}
+	if slices.ContainsFunc(b.RequiredImageSigners, func(n string) bool { return !slices.Contains(a.RequiredImageSigners, n) }) {
+		return false // a signer the base requires must stay required
 	}
 	for _, p := range [][2]int{
 		{a.MaxConcurrentRuns, b.MaxConcurrentRuns}, {a.MaxCPUMillis, b.MaxCPUMillis},
@@ -321,12 +346,12 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 func leqRubric(a, b *types.AutonomyRubric) bool {
 	levels := func(r *types.AutonomyRubric) []types.AutonomyLevel {
 		if r == nil {
-			return make([]types.AutonomyLevel, 9)
+			return make([]types.AutonomyLevel, 10)
 		}
 		return []types.AutonomyLevel{
 			r.EgressOpen, r.EgressReviewed, r.EgressSealed,
 			r.SecretsPowerful, r.SecretsBaseline, r.SecretsNone,
-			r.ConfinementCC1, r.ConfinementCC2, r.ConfinementCC3,
+			r.ConfinementCC1, r.ConfinementCC2, r.ConfinementCC3, r.SelfDefinedComponent,
 		}
 	}
 	if b != nil && b.AgentGuardrailLocks && (a == nil || !a.AgentGuardrailLocks) {

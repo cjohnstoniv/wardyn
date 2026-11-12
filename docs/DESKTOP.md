@@ -15,44 +15,28 @@
 | Enrolled daemon (deprecated) | A full `wardynd` enrolled with `WARDYN_ORG_URL` | The org | Enrolled with an organisation (legacy) |
 | Org | The control plane itself, on a cluster or compose host | The org | Organisation |
 
+- The desktop of a VM run, a window on your Mac and desktop sign-ins in a VM are in [macOS virtual machines](operations/macos-vms.md) and [Linux VM sandboxes](operations/linux-vm-sandboxes.md).
 - Org enrolment of a full daemon (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0; use a client-mode runner. Design: [docs/design/0.9/PLAN.md](design/0.9/PLAN.md).
 
 ## Topology
 
 ![On a laptop runner, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and one outbound link brings runs from the organisation and carries audit back.](img/wardyn-laptop.webp)
 
-The figure shows a client-mode runner. The diagram below shows the deprecated enrolled-daemon shape, where the laptop runs its own `wardynd` and takes policy from MDM. A client-mode runner runs no control plane: the organisation schedules its runs and writes its audit ([guide](operations/hybrid-laptops.md)).
+- The figure says most keys are added at the proxy and not placed in the sandbox. An `ssh_key` never enters the sandbox. These do: `env_secret` and `file_secret` values; a `git_pat` token when the PAT broker is off (`WARDYN_GIT_PAT_BROKER=off`); and the AWS role credentials the sandbox's own AWS SDK makes from a `bedrock_sso` provider's sign-in. [Credentials](CREDENTIALS.md#every-kind-side-by-side) lists every kind.
+
+The figure shows a client-mode runner, which runs no control plane: the organisation schedules its runs and writes its audit ([guide](operations/hybrid-laptops.md)). The deprecated enrolled-daemon shape runs its own `wardynd` and takes its envelope from MDM, which renders and re-asserts four files per device:
 
 ```
-       MDM (Jamf / Intune / …)
-                │  renders + re-asserts 4 files per device
-                ▼
-  ┌─────────────────────────────────────────────────┐
-  │  the developer's laptop                         │
-  │                                                 │
-  │   /etc/wardyn/wardyn.env       (envelope)       │
-  │   /etc/wardyn/secret.env       (secrets)        │
-  │   /etc/wardyn/policy.json      (ceiling)        │
-  │   /etc/wardyn/site-config.json (proxy/providers)│
-  │   /etc/wardyn/age.key   ← installer-minted,     │
-  │                            NEVER from MDM       │
-  │                    │                            │
-  │                    ▼                            │
-  │   wardynd  ── 127.0.0.1:PORT ──▶ console        │
-  │      │        (local mode: no SSO,              │
-  │      │         the developer is admin)          │
-  │      │                                          │
-  │      ├──▶ agent sandbox container               │
-  │      └──▶ wardyn-proxy sidecar ──▶ egress       │
-  │                                                 │
-  └─────────┬────────────────────────────┬──────────┘
-            │ audit fanout               │ m′ only (WARDYN_ORG_URL +
-            │ (webhook,                  │ WARDYN_USER_DESKTOP): enrol
-            │ ?device=<serial>)          │ once, then audit rows
-            ▼                            │ forward every 15s from a
-        org SIEM                         │ durable cursor
-                                         ▼
-                                 org control plane
+MDM ──▶ /etc/wardyn/wardyn.env        envelope
+        /etc/wardyn/secret.env        secrets
+        /etc/wardyn/policy.json       ceiling
+        /etc/wardyn/site-config.json  proxy and providers
+
+/etc/wardyn/age.key is minted by the installer, never from MDM.
+
+wardynd ──▶ console at 127.0.0.1:PORT
+   ├──▶ agent sandbox container
+   └──▶ wardyn-proxy sidecar ──▶ egress
 ```
 
 - `PORT` is 8080 unless `WARDYN_UP_PORT` says otherwise, resolved process environment (which includes `secret.env`) first, then `wardyn.env`, then 8080; the launcher probes the same port compose publishes.
@@ -75,7 +59,6 @@ Three properties define it:
 > [!IMPORTANT]
 > **The developer is not the adversary in this tier.**
 
-- Everything below follows from that sentence, so it is worth being blunt about what it does and does not claim.
 - **What the tier is for.**
   - The agent is the thing being governed.
   - An agent that runs unattended, reads a workspace, calls out to the network and edits code is a new and fairly wide surface on a machine that already holds credentials.
@@ -95,7 +78,7 @@ Three properties define it:
 
 - See also [the threat model](../threatmodel/THREAT-MODEL.md) for what Wardyn as a whole does not defend against.
 
-## Tamper posture, stated honestly
+## Tamper posture
 
 - There is one bypass worth naming explicitly, because it needs no root, no file edit and no MDM race — it is an ordinary, documented, supported API call.
 - **A run may carry an `inline_policy`, and an admin's is not clamped.**
@@ -120,8 +103,8 @@ Three properties define it:
 - **The session is still recorded.**
 
 > [!IMPORTANT]
-> So the honest summary is: this tier converts "an agent is running loose on a corporate laptop" into "an agent is running inside a declared envelope, and every departure from that envelope is attributable."
-> That is a governance control, not a containment boundary against the operator, and it should be sold as the first thing and never as the second.
+> So the summary is: this tier converts "an agent is running loose on a corporate laptop" into "an agent is running inside a declared envelope, and every departure from that envelope is attributable."
+> That is a governance control, not a containment boundary against the operator.
 
 ### Where those three claims stop being true
 
@@ -169,7 +152,7 @@ Three more the tier inherits rather than introduces:
 > The developer's own page for this profile is [USERS.md](USERS.md); this section is the operator's.
 
 - Everything above describes **topology a′: the developer is the operator**.
-- It is the default and it is honest about its ceiling — the person at the keyboard sets the policy that bounds them.
+- It is the default; the person at the keyboard sets the policy that bounds them.
 - Some deployments cannot accept that.
 - If the box is org-managed *and* the developer must not be able to reconfigure their own sandbox governance, run the **member-mode profile**:
   - the same daemon, the same MDM envelope,
@@ -343,7 +326,7 @@ Three more the tier inherits rather than introduces:
 ### Posture switches are env vars, never site-config
 
 - Anything that changes the *security posture* of this deployment belongs in `wardyn.env`, not in `site-config.json`.
-- Site-config is applied as a **full-document replace**, so a partial write silently drops whatever the previous document held.
+- `PUT /site-config` keeps most blocks a write leaves out ([OPERATIONS.md](OPERATIONS.md#network-upstream-proxy-and-egress-redirects)), but every other key is replaced, so a partial write can still drop a setting.
 - Keep it to corporate network facts — proxy, mirrors, SCM hosts — and the org's provider policy.
 - Keep posture in the env file, where a missing line is a missing line and not a reverted setting.
 
@@ -380,7 +363,7 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 
 ### `install.sh`
 
-- Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot).
+- Run once per device, as root (an MDM package's postinstall step, or by hand on a test machine).
 - Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root).
 - Registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk.
 - `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both.
@@ -433,7 +416,7 @@ What the plist actually runs. In order, it:
 - `install.sh` branches on `uname -s`: the macOS path is unchanged, and the Linux path installs the systemd unit + timer.
 - They are genuinely different files rather than one portable script because the divergence is not cosmetic — `chown root:wheel` is a **hard failure** on Debian and Ubuntu, which have no `wheel` group, under `set -euo pipefail`.
 - **Two shapes the bundle arrives in.**
-  - Run in place from a checkout (a pilot), `install.sh` registers the converge job at that checkout's path.
+  - Run in place from a checkout (a trial install), `install.sh` registers the converge job at that checkout's path.
   - For a fleet, [`scripts/build-desktop-package.sh`](../scripts/build-desktop-package.sh) builds a `.deb`/tarball (`--rpm` adds a `.rpm`, built inside a Fedora container — it costs a docker pull, so it is opt-in, not the default) from a **clean git tree**
     - never the working directory,
     - because `deploy/compose/.env` on a maintainer's box carries a live `WARDYN_AGE_KEY` and packaging it would make every device's secret store decryptable by anyone holding the package.
@@ -662,18 +645,16 @@ sudo /usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh down  # .deb/.rpm pa
   - `docker compose down` to stop,
   - and remove `~/.wardyn` yourself to uninstall — with the same warning, since `~/.wardyn/.env` holds `WARDYN_AGE_KEY` in cleartext.
 
-## Try it, once, on a real Mac
+## Smoke test on a Mac
 
-- Everything above is verified against a compose stack on a Linux CI runner.
-- Nobody has run the installer against real launchd on a real Mac — that step is still owed.
-- Run this once on a macOS machine you're willing to have `sudo` install a LaunchDaemon on, and paste back the output (not a summary of it):
+- This installs the LaunchDaemon with `sudo`, so use a macOS machine you can change. The stack it brings up is the one the compose stack tests on Linux.
 
 ```sh
 git clone https://github.com/cjohnstoniv/wardyn.git && cd wardyn
 sudo ./deploy/desktop/install.sh
 
-# MDM hasn't delivered wardyn.env/secret.env/policy.json yet on a bare pilot
-# box — stand in for it by hand, using the example + the same demo.json
+# MDM hasn't delivered wardyn.env/secret.env/policy.json yet on a machine
+# MDM has not configured yet — stand in for it by hand, using the example + the same demo.json
 # ceiling the compose stack itself falls back to:
 sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # Three expressions, not one. The example ships both image pins uncommented (a
@@ -683,8 +664,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.10.0-rc.13|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.10.0-rc.13|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.10.0-rc.18|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.10.0-rc.18|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 
@@ -707,6 +688,5 @@ diff <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | python3 -c "${N
 ```
 
 - That last line should print no diff at all.
-- The point is confirming a real launchd job, on a real Mac, against a real Docker Desktop or Colima install,
-  - actually brings the stack up and serves the managed policy (once normalized for the three `omitempty` keys above, a real content difference still shows).
-- Anything else it prints (a launchd load failure, a Colima `WARDYN_DOCKER_SOCK` miss, a healthz timeout) is exactly the gap this smoke run exists to find.
+- It confirms that a launchd job on a Mac with Docker Desktop or Colima brings the stack up and serves the managed policy. Once normalized for the three `omitempty` keys above, a real content difference still shows.
+- Anything else it prints (a launchd load failure, a Colima `WARDYN_DOCKER_SOCK` miss, a healthz timeout) is a failure of the install.

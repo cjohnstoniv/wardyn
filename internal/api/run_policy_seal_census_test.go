@@ -79,9 +79,13 @@ var unionHelpers = []string{"unionAllowedDomains", "unionDeniedDomains", "unionD
 
 // clonedSites hold their site on their own clone of a spec and hand it to no policy: canonicalKnobs
 // is setBy's comparison form, and setBy keeps only a provenance map, so reaching it after a seal
-// (composeChain steps it for path_provenance) adds no host. Each is still a census site; a caller
-// that put its result in a policy would be that caller's own site.
-var clonedSites = []string{"canonicalKnobs"}
+// (composeChain steps it for path_provenance) adds no host. boundarySealEgress builds the boundary's
+// seal overlay on a fresh value cloned from the boundary's lists; outerLayers puts it in a seal layer,
+// whose egress only the seal's own meet (sealPolicy, a narrowing) applies to a policy and the
+// withholding reads to withhold, so a reader of the layers after a seal (runADOCap, which reads a
+// layer's cap) adds no host. Each is still a census site; a caller that put its result in a policy
+// would be that caller's own site.
+var clonedSites = []string{"canonicalKnobs", "boundarySealEgress"}
 
 // sealedPaths is each path that dispatches or revives a run: the ceiling
 // re-assertion that must follow its seal (it withholds credentials against the
@@ -597,10 +601,14 @@ func (s *Server) finishCreateRunLaunchTwin() { s.dispatchRun(nil, nil, nil, nil)
 // walls, each with its fail-closed layer for a read that failed, and the walls' own layer, which the
 // owner's walls and the run's wall preset (read from the run, so it has no failed read) both build. A new layer is listed only once the
 // withholding, the mint door's pre-read and the run.ceiling.reassert row read it as they read these.
+// A restriction's own layer is built by restrictionSealLayer, which restrictionSealLayers alone calls
+// beside building the fail-closed one: the same restriction layer, not a new one.
 var sealLayerCensus = map[string]int{
 	"run_policy_seal.go outerLayers":                   2,
-	"governance_restrictions.go restrictionSealLayers": 2,
+	"governance_restrictions.go restrictionSealLayers": 1,
+	"governance_restrictions.go restrictionSealLayer":  1,
 	"personal_walls.go personalWallsSealLayer":         1,
+	"personal_walls.go wallPresetSealLayer":            1,
 	"personal_walls.go wallsSealLayer":                 1,
 }
 

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +12,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -28,7 +32,8 @@ type reasserted struct {
 // it unions the ceiling's denies into the frozen policy and drops every
 // injection, MCP server, brokered PAT host and MITM host withheld from the run:
 // the ceiling denies it, or a layer the revive's seal read (layers: the Wardyn
-// boundary) denies it or does not allow it (withholding). It runs after that
+// boundary) denies it or does not allow it (withholding), and every injection
+// the policy leaves unbound (withholdUnboundInjections). It runs after that
 // seal, never re-resolves the policy and never widens it.
 //
 // One lane cannot be dropped here. Dispatch withholds the git broker by
@@ -38,13 +43,17 @@ type reasserted struct {
 // so emptying the map would hand the sandbox a GitHub installation token on
 // request. A revive that withholds a broker-managed host is refused, and so is
 // one that withholds the host of the run's Azure CLI door.
-func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling, layers []sealLayer) (reasserted, *reviveError) {
+func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling, layers []sealLayer, edits ...liveEgressEdit) (reasserted, *reviveError) {
 	if cfg.RunID != run.ID {
 		return reasserted{}, reviveRefused(http.StatusConflict, reasonReviveConfigRunMismatch, "the run's proxy config names another run")
+	}
+	if rerr := applyEgressEdits(&c, cfg, edits); rerr != nil { // a live egress edit's hosts, withheld as the ceiling's are
+		return reasserted{}, rerr
 	}
 	var re reasserted
 	w := withholding{deny: c.deny, layers: layers}
 	if !w.binds() {
+		re.droppedInjection = withholdUnboundInjections(cfg)
 		return re, nil
 	}
 	if len(cfg.GitGrants) > 0 && w.withheldAny(gitBrokerManagedHosts) {
@@ -63,7 +72,9 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		closeGitHubDoor(&cfg.Policy)
 		re.droppedLane = append(re.droppedLane, githubDoorLane)
 	}
-	if cfg.AWSSigV4 != nil && w.withheldAny(cfg.AWSSigV4.Hosts) { // the sandbox holds only the placeholder pair, so the re-signer can go
+	// The sandbox holds only the placeholder pair, so the re-signer can go, with its gateways' routes.
+	if sig := cfg.AWSSigV4; sig != nil && w.withheldAny(slices.Concat(sig.Hosts, awsSigV4GatewayHosts(sig.Gateways))) {
+		cfg.GatewayIdentity = dropSignedGatewayRoutes(cfg.GatewayIdentity, sig.Gateways)
 		cfg.AWSSigV4 = nil
 		re.droppedLane = append(re.droppedLane, awsSigV4Lane)
 	}
@@ -97,6 +108,7 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		}
 		return false
 	})
+	re.droppedInjection = append(re.droppedInjection, withholdUnboundInjections(cfg)...)
 	// An MCP server keeps its header credential on its broker entry, not in Injection, so the drop
 	// above never sees it. A server on a withheld host goes, as dispatch drops one (dispatchMCP), and so
 	// do the harness bindings that name it.
@@ -127,6 +139,22 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		return ceilingDenies(c.deny, h) || w.layerWithheld(interceptionEntryHost(h))
 	})
 	return re, nil
+}
+
+// withholdUnboundInjections drops every injection the revived config's policy does not bind exactly
+// and returns their hosts, as dispatch withholds one (reassertCeilingDenies): the proxy refuses to
+// start with it (buildInjectorFor). It reads the policy the proxy starts with, after the seal and the
+// ceiling's denies. A remote MCP server's credential rides its broker entry, never Injection.
+func withholdUnboundInjections(cfg *proxy.Config) (hosts []string) {
+	bound := proxy.CompilePolicy(cfg.Policy).AllowedExactHost
+	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
+		if bound(strings.TrimSpace(in.Host)) { // as buildInjectorFor reads it
+			return false
+		}
+		hosts = append(hosts, in.Host)
+		return true
+	})
+	return hosts
 }
 
 // pruneUnpairedInterception drops every interception entry of a revived
@@ -186,4 +214,46 @@ func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
 		return nil, err
 	}
 	return proxy.LoadConfigBytes(b)
+}
+
+// auditReviveCeilingRefusal writes the denied run.revive row for a ceiling refusal of the git broker or the
+// Azure CLI lane, before reviveRunProxy returns it; any other refusal writes none here.
+func (s *Server) auditReviveCeilingRefusal(ctx context.Context, run types.AgentRun, rerr *reviveError, actorType types.ActorType, actor string) {
+	if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
+	}
+}
+
+// revivedStoredConfig is the revived config as the run row stores it. The stored row stays the
+// organisation's: a run on a runner keeps the inspection corpus its laptop copy drops, as dispatch stores it
+// (classifyLocalDispatch). A remote run's stored config is cfgJSON itself.
+func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Config, corpus inspectionCorpus, cfgJSON []byte) ([]byte, *reviveError) {
+	if remotePlacement(run.Placement) {
+		return cfgJSON, nil
+	}
+	org := *cfg
+	org.Policy = corpus.restoredOn(cfg.Policy)
+	return encodeRevivedConfig(ctx, &org)
+}
+
+// reviveCarryRecordedRules gives the revived policy the rules the stored proxy config leaves off, data_out and
+// recording (sidecarPolicy blanks both: the proxy enforces neither), from the policy the run is recorded
+// under now, so the re-seal and the new generation start from the run's own rules. Without it a revive
+// would keep only what an outer layer imposes. A store that keeps no generations has no new row to carry
+// them into, and a run with no recorded policy keeps what the stored config holds. A recorded policy that
+// cannot be read refuses the revive.
+func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, cfg *proxy.Config) *reviveError {
+	if _, ok := s.cfg.Store.(store.RunPolicyGenerations); !ok {
+		return nil
+	}
+	envelope, _, ok, err := s.runEffectivePolicy(ctx, runID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's recorded policy", err))
+	}
+	if !ok {
+		return nil
+	}
+	cfg.Policy.DataOut, cfg.Policy.Recording = envelope.DataOut, envelope.Recording
+	return nil
 }

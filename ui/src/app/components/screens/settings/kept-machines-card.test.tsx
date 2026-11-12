@@ -4,12 +4,13 @@
  */
 
 // KM-4: Your settings, Your kept machines. Each test names the board frame it draws.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
-import { shortDate } from "../../../lib/format";
+import { mediumDate, shortDate } from "../../../lib/format";
 import { aheadByHours } from "../../../lib/test-clock";
 import { expandCard } from "../../../lib/test-dom";
 import type { KeptMachine, MyMachines } from "../../../lib/types";
@@ -66,7 +67,7 @@ describe("Your kept machines", () => {
     const a = rowOf(card, "dev");
     expect(within(a).getByText(T.CHIP_KEPT)).toBeInTheDocument();
     expect(within(a).getByText(T.META("Maya's MacBook", "Standard", 12))).toBeInTheDocument();
-    expect(within(a).getByText(T.DATES(shortDate(dev().last_used_at), shortDate(dev().expires_at)))).toBeInTheDocument();
+    expect(within(a).getByText(T.DATES(mediumDate(dev().last_used_at), mediumDate(dev().expires_at)))).toBeInTheDocument();
     const b = rowOf(card, "design-review");
     expect(within(b).getByText(T.CHIP_IN_USE)).toBeInTheDocument();
     expect(within(b).getByText(T.META("Maya's MacBook", "Xcode 26", 31))).toBeInTheDocument();
@@ -216,6 +217,19 @@ describe("Your kept machines", () => {
     listMock.mockRejectedValueOnce(new HttpError(500, "boom"));
     const card = await mount();
     expect(within(card).getByText(T.LOAD_FAILED)).toBeInTheDocument();
+  });
+
+  it("a load the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "kept_machine_list_failed"));
+    const card = await mount();
+    expect(within(card).getByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(within(card).queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    listMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+    const card = await mount();
+    expect(within(card).getByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("the link from a run's Machine tile opens the card and focuses it once the list is drawn, and a refresh does not reopen it", async () => {

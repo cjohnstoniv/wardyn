@@ -1595,6 +1595,27 @@ func TestMacWindowEndsWithItsCredential(t *testing.T) {
 			t.Fatalf("opens %d, begin rows %+v, want none and one denied", r.sub.openCount(), b)
 		}
 	})
+	t.Run("an open with no binding is refused with the revocation-unavailable reason", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		a := r.auth()
+		a.Token = true
+		w, rf := r.h.srv.openMacWindow(context.Background(), r.h.run, a, macWindowTriggerCLI)
+		if w != nil || rf == nil {
+			t.Fatalf("window = %v, refusal = %+v, want a refusal", w, rf)
+		}
+		if rf.err != nil || rf.status != http.StatusForbidden || rf.body.Reason != uiDeniedReasonRevocationUnavailable ||
+			rf.body.Error != macWindowRevocationUnavailableMsg {
+			t.Fatalf("refusal = %+v, want 403 %s %q", rf, uiDeniedReasonRevocationUnavailable, macWindowRevocationUnavailableMsg)
+		}
+		b := r.rows("takeover.begin")
+		if r.sub.openCount() != 0 || len(b) != 1 || b[0].Outcome != "denied" ||
+			rowData(t, b[0])["reason"] != uiDeniedReasonRevocationUnavailable {
+			t.Fatalf("opens %d, begin rows %+v, want none and one denied (%s)", r.sub.openCount(), b, uiDeniedReasonRevocationUnavailable)
+		}
+		if r.h.srv.macWindows.open(r.h.run.ID) != nil {
+			t.Fatal("a window was registered")
+		}
+	})
 	t.Run("the person-level revoke still closes a token-bound window", func(t *testing.T) {
 		r := newMacWindowRig(t)
 		id := uuid.New()
@@ -1606,7 +1627,7 @@ func TestMacWindowEndsWithItsCredential(t *testing.T) {
 	})
 	t.Run("the request's CLI session wins over its access token", func(t *testing.T) {
 		tok, sess := uuid.New(), uuid.New()
-		ctx := withCLISessionID(withAPITokenID(context.Background(), tok), sess)
+		ctx := withTokenKind(withCLISessionID(withAPITokenID(context.Background(), tok), sess), types.APITokenKindCLIAccess)
 		if a := macWindowAuthorityFrom(ctx, types.ActorHuman, "alice", time.Now()); !a.Token || a.CLISessionID != sess || a.TokenID != uuid.Nil {
 			t.Fatalf("authority = %+v, want bound to session %s alone", a, sess)
 		}

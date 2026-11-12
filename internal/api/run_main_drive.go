@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -172,3 +173,26 @@ func mainDriveUnenforceableUnpooledMsg() string {
 // requested disk size; composer.WarnResourcesCapped would blame an operator for a policy the person
 // may have written.
 const warnDiskPolicyCut = "Disk size reduced to the size this run's policy sets"
+
+// warnLinuxVMDiskNotCapped is the line a Linux VM run with a requested or default (soft) disk size
+// carries: the size is shown but the guest's disk is not capped to it.
+const warnLinuxVMDiskNotCapped = "A Linux VM run does not cap its disk; the disk size is not enforced"
+
+// warnLinuxVMPidsNotCapped is the line a Linux VM run carries when it got a process limit nobody
+// wrote (a default or the ceiling's fill): the number is shown but the guest has no per-run process limit.
+const warnLinuxVMPidsNotCapped = "A Linux VM run does not cap its processes; the process limit is not enforced"
+
+// linuxVMLimitRefusal refuses what a Linux VM run cannot enforce: a main-drive size the run's policy
+// writes (md is not soft) and a process limit somebody wrote (pidsWritten). Each is refused rather than
+// dropped; nil when the run asks for neither.
+func linuxVMLimitRefusal(md mainDrive, pidsWritten bool) *runRefusal {
+	if !md.Soft && md.MiB > 0 {
+		return runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable,
+			"A Linux VM run can't enforce a disk limit yet; remove disk_mib or use a container run.")
+	}
+	if pidsWritten {
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+			"A Linux VM run can't enforce a process limit yet; remove pids_limit or use a container run.")
+	}
+	return nil
+}

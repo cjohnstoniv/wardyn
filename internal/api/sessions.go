@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -390,13 +391,34 @@ func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, 
 	}
 	now := time.Now().UTC()
 	n := 0
+	ended := map[uuid.UUID]bool{} // the CLI sessions this sweep has ended
 	for _, t := range toks {
 		if t.RevokedAt != nil || (match != nil && !match(t)) {
 			continue
 		}
-		revoked, err := s.cfg.Store.RevokeAPIToken(ctx, t.ID, "", now)
-		if err != nil {
-			return n, err
+		revoked := t
+		if t.CLISessionID != nil && ended[*t.CLISessionID] {
+			// A sibling in a session this sweep already ended (a cli_admin step-up behind its access
+			// token): the end revoked it, so it is not revoked again. Accepted only after reading it back
+			// as no longer live; its row below is the one revoke event it gets.
+			if err := s.requireTokenDead(ctx, t.ID); err != nil {
+				return n, err
+			}
+		} else if t.Kind == types.APITokenKindCLIAccess && t.CLISessionID != nil {
+			// A CLI sign-in's access token is revoked by ending its session, by the session id this
+			// snapshot holds, under the session's row lock (ordered against a rotation, which takes it
+			// too). A refresh that replaced or deleted the token since the list was read still meets the
+			// end: a rotation that won the lock is ended and its new token revoked with it, one that
+			// lost it is refused. Revoking the token itself would miss in that race.
+			if err := s.endCLISessionForSweep(ctx, *t.CLISessionID, now); err != nil {
+				return n, err
+			}
+			ended[*t.CLISessionID] = true
+		} else {
+			var err error
+			if revoked, err = s.cfg.Store.RevokeAPIToken(ctx, t.ID, "", now); err != nil {
+				return n, err
+			}
 		}
 		// One row per credential, naming its owner: an aggregate `tokens_revoked`
 		// on the caller's own event alone cannot answer "which credentials did
@@ -414,6 +436,45 @@ func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, 
 		n++
 	}
 	return n, nil
+}
+
+// endCLISessionForSweep ends the CLI session id for a revoke sweep (reason revoked) and revokes its tokens. A
+// session that is already ended is fine, and only that: a missing or unreadable one is an error, so a sweep
+// never reports a demotion effective for a sign-in it did not end.
+func (s *Server) endCLISessionForSweep(ctx context.Context, id uuid.UUID, now time.Time) error {
+	cs, ok := s.cfg.Store.(store.CLISignInStore)
+	if !ok {
+		return errors.New("the store keeps no CLI sessions")
+	}
+	_, err := cs.EndCLISession(ctx, id, "", types.CLISessionEndRevoked, now)
+	if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	sess, gerr := cs.GetCLISession(ctx, id)
+	if gerr != nil {
+		return gerr
+	}
+	if sess.EndedAt == nil {
+		return err
+	}
+	return nil
+}
+
+// requireTokenDead is nil when token id can no longer authenticate, read back from the store; a token still
+// live, or a store that cannot say, is an error.
+func (s *Server) requireTokenDead(ctx context.Context, id uuid.UUID) error {
+	tr, ok := s.cfg.Store.(store.LiveAPITokenReader)
+	if !ok {
+		return errors.New("the store cannot re-read an API token")
+	}
+	_, err := tr.GetLiveAPIToken(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("api token %s is still live after its CLI session ended", id)
 }
 
 // listAPITokensByIdentityScan is the store-agnostic form of store.APITokensByIdentityLister. The caller may

@@ -24,10 +24,19 @@ import (
 // droppedUnmapped counts events refused for correlating to no run, so "saw
 // nothing" isn't conflated with "saw plenty, correlated none".
 func HeartbeatEventWithDropped(droppedTotal, observedTotal, droppedUnmapped uint64, observedByKind map[string]uint64) types.AuditEvent {
+	return HeartbeatEventForNode("", droppedTotal, observedTotal, droppedUnmapped, observedByKind)
+}
+
+// HeartbeatEventForNode is HeartbeatEventWithDropped for a sensor that runs
+// on one Kubernetes node: node is recorded in data.node and in the event's
+// Target, so each node's liveness can be told apart. An empty node (the
+// Compose sensor) builds the same beat HeartbeatEventWithDropped always has.
+func HeartbeatEventForNode(node string, droppedTotal, observedTotal, droppedUnmapped uint64, observedByKind map[string]uint64) types.AuditEvent {
 	data := heartbeatData{
 		EventData: EventData{
 			Stream:      Stream,
 			Subtype:     "heartbeat",
+			Node:        node,
 			Correlation: CorrelationUnmapped, // host-scoped, not bound to a run
 		},
 		DroppedTotal:    droppedTotal,
@@ -44,6 +53,7 @@ func HeartbeatEventWithDropped(droppedTotal, observedTotal, droppedUnmapped uint
 		ActorType: types.ActorSystem,
 		Actor:     SensorActor,
 		Action:    ActionSensorHeartbeat,
+		Target:    node,
 		Outcome:   "success",
 		Data:      raw,
 	}

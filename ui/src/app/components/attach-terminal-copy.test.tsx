@@ -65,6 +65,7 @@ class FakeWebSocket {
 import { AttachTerminal } from "./attach-terminal";
 import { TERMINAL_COPY } from "./wardyn/copy";
 import { OFFER_TTL_MS } from "./attach-terminal-clipboard";
+import { DATA_OUT_RUN } from "./wardyn/copy/data-out-run";
 
 const modeFrame = (readOnly: boolean) =>
   JSON.stringify({ type: "attach-mode", read_only: readOnly, holder: { held: true, principal: "alice@example.com", since: new Date().toISOString(), cols: 80, rows: 24, source: "web" } });
@@ -355,5 +356,31 @@ describe("AttachTerminal copy offer", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("AttachTerminal on a run that keeps its content in", () => {
+  const note = () => screen.queryByTestId("terminal-keeps-in");
+
+  it("says why copying out is off, as one line above the terminal", async () => {
+    const view = render(<AttachTerminal runId="run_1" keepsIn />);
+    expect(note()?.textContent).toBe(DATA_OUT_RUN.TERMINAL);
+    expect(view.container.querySelector(".xterm")).not.toBeNull();
+  });
+
+  it("draws no line without it", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    expect(note()).toBeNull();
+  });
+
+  it("makes no copy offer for a dragged selection", async () => {
+    const view = render(<AttachTerminal runId="run_1" keepsIn />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(modeFrame(false)));
+    await out(ws, "hello world\r\nsecond line\r\n");
+    dragHello(view.container.querySelector(".xterm-screen") as HTMLElement);
+    await out(ws, tmuxCopy("hello"));
+    expect(toast()).toBeNull();
   });
 });

@@ -52,6 +52,7 @@ const workloadNotFoundMsg = "There is no workload of that name that you may reac
 
 func (s *Server) mountWorkloadRoutes(r, securityOps chi.Router) {
 	r.Put("/workloads/{name}", s.handlePutWorkload)
+	r.Post("/workloads/{name}/preview", s.handlePreviewWorkload)
 	r.Get("/workloads", s.handleListWorkloads)
 	r.Get("/workloads/{name}", s.handleGetWorkload)
 	r.Get("/workloads/{name}/history", s.handleWorkloadHistory)
@@ -122,16 +123,12 @@ func normalizeWorkload(doc client.WorkloadDocument) (store.WorkloadPut, *workloa
 
 // writeWorkloadPutError answers a refused PutWorkload. ok is false when err was answered.
 func writeWorkloadPutError(w http.ResponseWriter, r *http.Request, err error) bool {
-	switch {
-	case err == nil:
+	if err == nil {
 		return true
-	case errors.Is(err, store.ErrWorkloadSourceConflict):
-		writeErrorReason(w, http.StatusConflict, reasonWorkloadSourceConflict,
-			"This workload belongs to its custom resource: change it in Git, not with an apply.")
-	case errors.Is(err, store.ErrWorkloadCapReached):
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkloadCapReached,
-			fmt.Sprintf("You hold %d workloads, the most allowed. Delete one first.", store.MaxWorkloadsPerOwner))
-	default:
+	}
+	if ref, refused := workloadPutRefusal(err); refused {
+		writeErrorReason(w, ref.Status, ref.Reason, ref.Error)
+	} else {
 		writeServerError(w, r, "record workload", err)
 	}
 	return false
@@ -424,6 +421,7 @@ func workloadCreateRequest(r *http.Request, wl store.Workload) (*http.Request, e
 	cr.Method, cr.URL, cr.RequestURI = http.MethodPost, &url.URL{Path: "/api/v1/runs"}, ""
 	cr.Body, cr.ContentLength, cr.GetBody = io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
 	cr.Header.Set("Content-Type", "application/json")
+	cr.Header.Del(idempotencyKeyHeader) // a launch calls handleCreateRun, never the keyed route; this keeps it so
 	return cr, nil
 }
 

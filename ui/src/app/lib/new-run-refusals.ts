@@ -35,6 +35,20 @@ export const NEW_RUN_REASON = {
   RUN_REF_INVALID: "run_ref_invalid",
 } as const;
 
+/**
+ * The refusals of image signature checks (images.admission, internal/api/reasons.go): about the run's one image,
+ * so the console shows them with it, as it does image_digest_required.
+ */
+export const IMAGE_ADMISSION_REASONS = [
+  "image_admission_no_policy",
+  "image_signature_missing",
+  "image_signature_invalid",
+  "image_attestation_missing",
+  "image_admission_unavailable",
+] as const;
+
+export type ImageAdmissionReason = (typeof IMAGE_ADMISSION_REASONS)[number];
+
 export type NewRunReason = (typeof NEW_RUN_REASON)[keyof typeof NEW_RUN_REASON];
 
 /**
@@ -68,6 +82,7 @@ export const PLACEMENT_REASONS = [
   "runner_claim_mismatch",
   "runner_posture_unmet",
   "runner_trust_changed",
+  "runner_trust_required",
   "runner_keystore_unavailable",
   "runner_action_pending",
   "runner_recording_off",

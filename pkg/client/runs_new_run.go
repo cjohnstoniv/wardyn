@@ -513,6 +513,14 @@ type ImageFact struct {
 	Source ImageSource `json:"source"`
 }
 
+// ImageAdmissionFact is the policy preview's image_admission: launch checks the image's signatures
+// (images.admission, or a governance profile's required_image_signers). The preview reads no registry, so it
+// cannot say whether the image passes. Absent when launch checks nothing.
+type ImageAdmissionFact string
+
+// ImageAdmissionCheckedAtLaunch is ImageAdmissionFact's one value.
+const ImageAdmissionCheckedAtLaunch ImageAdmissionFact = "checked at launch"
+
 // HarnessSetFact is the run's included harnesses as this door resolved them.
 // Absent for an older client's request and for a run with no harness.
 type HarnessSetFact struct {

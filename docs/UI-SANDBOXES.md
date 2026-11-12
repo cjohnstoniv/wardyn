@@ -9,51 +9,17 @@
 
 ## The noVNC image, and what relaying a DESKTOP costs
 
-- `deploy/images/novnc/` ships a graphical desktop as a relayed app —
-  `make agent-image-novnc`, declared as `"name": "novnc"`.
-- It changed no server
-  code, which was the whole prediction: an app rides the image, not a seam.
-- **Base:** `agent-base` — the same default the code-server (`vscode/`) image
-  uses.
-- agent-base is the image contract with no vendor CLI and is what this
-  project publishes; an X stack layered on node + npm + a vendor CLI is surface
-  for nothing.
-- **Measured, not estimated:** ~565 MB over agent-base (code-server costs ~228 MiB
-  for comparison — an X stack is simply expensive).
-- Listening ~1s into the 20s
-  `uiEnsureWaitSecs` budget.
-- If a change pushes size past ~1.4 GB, drop `xterm`
-  then `openbox` before raising the ceiling — a relayed app needs neither.
-- **Published with every release**, like `agent-vscode` (#141).
-- The trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
-  desktop turned out to be exactly the supply-chain workstream predicted here,
-  now landed.
-- It is still **not available on the desktop tier by default**
-  (neither image is wired into `WARDYN_AGENT_IMAGES` automatically); see the
-  note at the top.
-- **Confinement: both images run under CC2 (gVisor).** Measured, on a daemon with
-  `runsc` registered — note that is the **native** `dockerd`, not Docker Desktop's
-  socket, so `docker info --format '{{.Runtimes}}'` against the right daemon is
-  the first step:
+- The desktop of a VM run, a window on your Mac and desktop sign-ins in a VM are in [macOS virtual machines](operations/macos-vms.md) and [Linux VM sandboxes](operations/linux-vm-sandboxes.md).
+- `deploy/images/novnc/` ships a graphical desktop as a relayed app: `make agent-image-novnc`, declared as `"name": "novnc"`. It is built `FROM agent-base`, is about 565 MB larger on disk (`agent-vscode` adds about 228 MiB), and listens about 1 second into the 20 s `uiEnsureWaitSecs` budget.
+- Both images are published with every release. Neither is wired into `WARDYN_AGENT_IMAGES` on the desktop tier; see [Deployment](#4-deployment).
+- Both images start under gVisor (`--runtime=runsc`, on a daemon with `runsc` registered):
 
 | Image | Under `--runtime=runsc` |
 |---|---|
 | `agent-vscode` (code-server, Node) | listening in ~1s |
 | `agent-novnc` (Xvfb + openbox + xterm + x11vnc + websockify) | listening in ~1s; X socket present, all five processes up, `x11vnc` serving `RFB 003.008`, noVNC serving its page |
 
-- The X stack was the open question — it does far more with shared memory and
-  ioctls than a Node server does, and gVisor reimplements those.
-- It works
-  unmodified.
-- `runsc` there reports `apparmor: false` and `cgroup v2: false`, which
-  is expected for gVisor and did not matter to either image.
-- **Parity:** `make test-e2e-ui-sandbox` is **Docker-only and has no `-k8s`
-  sibling**, unlike `test-e2e-ssh`.
-- The honest gap is narrow, because the
-  transport itself *is* conformance-covered on both substrates
-  (`ExecStreamLoopbackRelay`); what is Docker-only is the browser-level lane above
-  it.
-- Stated rather than left silent.
+- `make test-e2e-ui-sandbox` runs on Docker only; there is no Kubernetes counterpart. The transport is covered on both substrates (`ExecStreamLoopbackRelay`).
 
 ### Three ceilings a graphical desktop raises that an editor does not
 
@@ -68,14 +34,11 @@
   Ownership, revocation and portal grant are re-checked per new connection and every 30 s on an open one (upgraded streams: at start).
   The role is the sign-in snapshot, bounded by it.
 
-- None of these is new in 0.7 — they are properties of the relay, documented in
-  [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
-- They are repeated here because a desktop makes
-  each of them bigger, and because the decision to ship it anyway was taken with
-  them in view rather than around them.
+- These are properties of the relay, documented in [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md). A desktop makes each of them larger.
 
 ### Signing in to websites inside the desktop (0.10, off by default)
 
+- A run whose `data_out` is `review` or `blocked` opens only its desktop; other web apps are refused.
 - With `WARDYN_DESKTOP_SIGNINS=on`, the creator of a run that declares `novnc`
   can sign in to a website in a browser of their own inside the desktop. The
   agent is stopped meanwhile, and the person can share one site's login with it.
@@ -104,7 +67,7 @@
 - This deployment's own Docker runner only. A run on a self-hosted runner, a
   pool or Kubernetes starts on `agent-novnc` with no sign-in lane, and a
   sign-in on it answers `desktop_signin_runner_unsupported`. The console has no
-  button for it yet.
+  button for a container desktop's sign-in; a VM run's desktop has one ([Sign-ins in the desktop](operations/linux-vm-sandboxes.md#sign-ins-in-the-desktop)).
 - `make test-image-novnc-signin` is the sign-in image's own gate.
 
 ## The desktop's clipboard
@@ -236,6 +199,9 @@
 | `upstream_protocol_mismatch` | 400 `invalid_request_error` | 400 `UpstreamProtocolMismatchException` |
 | `audit_record_too_large` | 414 `invalid_request_error` | 414 `ValidationException` |
 | `audit_spool_unavailable` | 503 `api_error` | 503 `ServiceUnavailableException` |
+| `gateway_access_cut` | 403 `permission_error` | 403 `AccessDeniedException` |
+
+- `gateway_access_cut`: the portal that started the run was revoked with `cut_in_flight=true`, so the run's gateway calls stop for good. The cut lands within half the token lifetime while the control plane is reachable, and up to the token's expiry if it is not. Requests already forwarded and open streams run to completion. Start a new run.
 
 ## Extensions are not installable by default
 
@@ -510,6 +476,8 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 | `429` `inbound_rate_limited`, `Retry-After: 1` | Past 50 requests a second, burst 100: the run's inbound apps together, or one caller over all runs. The owner's browser spends only the run's |
 | `409` `ui_gateway_not_running` | The run is not running, is kept or has no sandbox |
 | `503` `run_unreadable` | The run or its policy is unreadable |
+| `403` `data_out_blocked` | The run's `data_out` is `review` or `blocked` and the app is not the desktop. Audited as `inbound.deny` `data_out` and `run.data_out.deny`, each under `auth.fail`'s bound |
+| `503` `data_out_unreadable` | The run's `data_out` rule is unreadable. No row |
 | `503` `runner_offline` | The runner holding the run is offline. Retry when it reconnects |
 | `403` `ui_gateway_cross_site` | A cookie session request from another site, in host mode (see "What Wardyn checks" below) |
 
@@ -554,6 +522,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 | | Set it when the relay's parent domain is shared with other applications — see "Header hygiene" below |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. |
 | | **The documented default for a production deployment, and the recommendation for any install with more than one user**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below. |
+| | With SSO configured, boot is refused while it is unset unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin (chart: `uiSandbox.originTemplate` or `uiSandbox.acceptSharedOrigin`) |
 | | Put `{run}` in the first host label: the console's CSP turns that label into a wildcard |
 
 - **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
@@ -633,7 +602,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
-| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
+| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes (never the text, nor a digest of it); or app, reason |
 | `ui.input.drop` | a view-only desktop's relay dropped the first key and the first pointer move on a desktop socket (once for each socket a viewer opens) | app, input (never the input itself) |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
@@ -793,7 +762,8 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     binding and the service-worker cap keep another user's app out of that origin
     in your browser, but host mode is the boundary the browser itself enforces.
   - Set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` for any install with more than one
-    user, wherever wildcard DNS is available.
+    user, wherever wildcard DNS is available. With SSO configured, wardynd refuses to start without it
+    unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin.
   - An app's own `Origin` check is not a per-run barrier in path mode.
     - Every run's page carries the same `Origin` there.
     - So the app cannot tell one run's page from another's.
@@ -802,13 +772,12 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 
 - This relay puts a sandbox's UI in a **browser**.
 - Two questions follow it
-  around: what about a native IDE, and what about a desktop?
-- Exactly one of them
-  has an answer today, and this section exists so the other one is not mistaken
-  for one.
-- **Nothing in the table below is built, scheduled, or tested** —
-  [ROADMAP.md](../ROADMAP.md)'s v0.6 entry calls a general native lane
-  *exploratory*, and this is what that word means.
+  around: what about a native IDE, and what about a native desktop client?
+- Only the IDE has a native answer today. A desktop already runs in the browser
+  (the last row below), and this section exists so a native desktop client is not
+  mistaken for something that ships.
+- **No native client in the table below is built, scheduled, or tested**, and
+  [ROADMAP.md](../ROADMAP.md) lists no native IDE or remote-desktop path.
 - **What exists today: VS Code Remote-SSH**, over the SSH gateway, with one
   client setting ([SSH.md §5](SSH.md#5-vs-code-remote-ssh)).
 - That is the whole
@@ -823,12 +792,12 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | JetBrains Gateway | Gateway's normal flow has the **remote** host download a multi-gigabyte IDE backend; the sandbox's only egress is wardyn-proxy under the run's allowlist, so that download has nothing to reach | Nothing built. No Wardyn image carries an IDE backend, and no one has run the client against a sandbox to find out where it stops |
 |  | the same problem `remote.SSH.localServerDownload` solves for VS Code, but with a much larger artifact and no equally simple client switch |  |
 |  | A backend baked into an image, or pushed over the existing SSH transport, is the shape it would take |  |
-| RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client | Nothing built. No image ships an X session, and the desktop's audit/recording story is unwritten |
+| RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client | Nothing built. No image runs `xrdp`, and the native client's audit/recording story is unwritten |
 |  | That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one |  |
 |  | X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route |  |
 | Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
 | Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base`, the same default the vscode image now uses — an X stack does not need a language runtime |
-|  |  | Local-build only. Measured: ~565 MB over the base, listening ~1s into the 20s budget |
+|  |  | Published with every release as `ghcr.io/cjohnstoniv/agent-novnc` ([Verify a release](VERIFY.md)). Measured: ~565 MB over the base, listening ~1s into the 20s budget |
 
 - **Decision criteria.** Before any of these becomes work, all of the following
   have to hold — they are the same properties that made the browser relay

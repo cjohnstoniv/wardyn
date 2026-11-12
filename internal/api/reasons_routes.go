@@ -142,6 +142,8 @@ const (
 	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
 	// that leaves nothing standing (POST /runs/preflight).
 	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
+	// The bounded list reaches past the provider row's capability_ceiling.
+	reasonADOCapabilitiesAboveCeiling = "ado_capabilities_above_ceiling"
 )
 
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field
@@ -224,6 +226,7 @@ const (
 	reasonAdminTokenNotConfigured  = "admin_token_not_configured"
 	reasonMissingBearerToken       = "missing_bearer_token"
 	reasonInvalidAdminToken        = "invalid_admin_token"
+	reasonAdminTokenRateLimited    = "admin_token_rate_limited" // too many failed admin token guesses from this address (429, Retry-After: 10)
 	// reasonIdentityProviderNotConfigured is shared by internalAuth and
 	// internalAuthGroundtruth: the identical cause (no embedded identity
 	// provider wired) refuses both the run-token and the sensor-token chains.
@@ -487,6 +490,7 @@ const (
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditUnitTargetFilter            = "audit_unit_target_filter"
 	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
 	reasonAuditPartitionNotFound           = "audit_partition_not_found"
 	reasonAuditPartitionOpen               = "audit_partition_open"

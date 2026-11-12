@@ -42,15 +42,31 @@ func (s *Server) DecisionIngestFromRunner(ctx context.Context, runnerID uuid.UUI
 	if row.Decision.Request.RunID != *event.RunID {
 		return errSpoolShape
 	}
-	first, err := target.IngestRunnerDecision(ctx, runnerID, row, s.cfg.RunnerAuditPrepare)
+	var first, usageStored bool
+	var err error
+	if counted, ok := s.cfg.Store.(interface {
+		IngestRunnerDecisionUsage(context.Context, uuid.UUID, runnerspool.Record, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, bool, error)
+	}); ok {
+		first, usageStored, err = counted.IngestRunnerDecisionUsage(ctx, runnerID, row, s.cfg.RunnerAuditPrepare)
+	} else {
+		first, err = target.IngestRunnerDecision(ctx, runnerID, row, s.cfg.RunnerAuditPrepare)
+	}
 	if err != nil || !first {
 		return err
+	}
+	// A usage row is a count, not a decision: the token metric moves for a call stored by this commit, never for
+	// a call id already stored (another spool row for it) or one dropped by the opt-out.
+	if row.Decision.Usage != nil {
+		if usageStored {
+			s.metrics.modelTokens(*row.Decision.Usage)
+		}
+		return nil
 	}
 	// The post-audit hooks handlePostDecision runs, once per first-time row, so a spooled
 	// decision moves the same counters and run hint a direct one does. The idle clock is
 	// not touched: the spool is audit only.
 	d := row.Decision
-	if d.Scan != nil && d.Scan.Action == "bypass" {
+	if d.DNS != nil || (d.Scan != nil && d.Scan.Action == "bypass") {
 		return nil
 	}
 	if d.Decision == egress.Deny && row.Count == 0 && isPolicyDeny(d.RuleSource) {

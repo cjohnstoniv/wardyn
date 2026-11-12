@@ -39,8 +39,6 @@ vi.mock("../../../lib/api/runners", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/runners")>("../../../lib/api/runners");
   return { ...actual, runners: { ...actual.runners, list: (...a: unknown[]) => listRunnersMock(...a) } };
 });
-const getProvidersMock = vi.fn();
-vi.mock("../../../lib/api/providers", () => ({ providers: { getWorkspaceProviders: () => getProvidersMock() } }));
 
 import { HttpError } from "../../../lib/api/core";
 import type { UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
@@ -65,10 +63,8 @@ function snapshot(drives: UserDriveListItem[]): UserDrivesSnapshot {
 
 async function renderScreen(snap: UserDrivesSnapshot) {
   getDrivesMock.mockResolvedValue(snap);
-  getProvidersMock.mockResolvedValue({ providers: {}, etag: null });
   render(<DrivesScreen />);
   await screen.findAllByRole("table");
-  await waitFor(() => expect(getProvidersMock).toHaveBeenCalled());
   await act(async () => {});
 }
 
@@ -76,7 +72,7 @@ const editor = () => within(screen.getByTestId("drives-drive-editor"));
 const openEdit = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `${DRIVES.EDIT} ${name}` }));
 
 beforeEach(() => {
-  for (const m of [getDrivesMock, createDriveMock, updateDriveMock, listRunnersMock, getProvidersMock]) m.mockReset();
+  for (const m of [getDrivesMock, createDriveMock, updateDriveMock, listRunnersMock]) m.mockReset();
   updateDriveMock.mockImplementation(async (id: string, input: object) => ({ id, ...input }));
   listRunnersMock.mockResolvedValue([
     { id: MBP, name: "mbp-dev", state: "claimed", owner_kind: "person", owner: "ana@example.com", kind: "self_hosted" },

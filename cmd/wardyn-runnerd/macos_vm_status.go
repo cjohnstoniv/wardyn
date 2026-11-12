@@ -211,8 +211,8 @@ func toolsFailure(baseDir string) string {
 }
 
 // selftestWithheld is a status line for each harness the ready base in baseDir withheld because the
-// launcher's self-test failed for it. The end of the self-test's output is in the base's tools.json,
-// which the line names.
+// launcher's self-test failed for it, then agentSignatureLines. The end of the self-test's output is in
+// the base's tools.json, which the line names.
 func selftestWithheld(baseDir string) []string {
 	rec, err := macvm.ReadToolsRecord(baseDir)
 	if err != nil {
@@ -225,6 +225,34 @@ func selftestWithheld(baseDir string) []string {
 		}
 	}
 	slices.Sort(lines)
+	return append(lines, agentSignatureLines(rec)...)
+}
+
+// agentSignatureLines say how the base's guest agent is signed, by which signer and why others failed, and
+// Full Disk Access as the base last read it. Only an agent signed ad hoc loses the grant at each tools update. A record from before the
+// signature says nothing.
+func agentSignatureLines(rec macvm.ToolsRecord) []string {
+	var lines []string
+	switch {
+	case rec.AgentSignature == macvm.AgentSignedAdHoc:
+		lines = append(lines, "guest agent: signed ad hoc; Full Disk Access is lost at each tools update")
+	case rec.AgentSignature == macvm.AgentSignedThisMac:
+		lines = append(lines, "guest agent: signed on this Mac")
+	}
+	// Which signer the last tools update used, and why each one tried before it failed (path-free).
+	if rec.AgentSigner != "" {
+		lines = append(lines, "guest agent signer: "+rec.AgentSigner)
+	}
+	if len(rec.AgentSignErrors) > 0 {
+		lines = append(lines, "guest agent signing errors: "+strings.Join(rec.AgentSignErrors, "; "))
+	}
+	switch {
+	case rec.Guest != nil && rec.Guest.FullDiskAccess != "":
+		lines = append(lines, "Full Disk Access: "+rec.Guest.FullDiskAccess+" (as the base last read it)")
+	case rec.AgentSignature != "":
+		// The update could not carry the reading across to the new agent (another signature).
+		lines = append(lines, "Full Disk Access: unknown; recheck it in macos-vm edit-base")
+	}
 	return lines
 }
 

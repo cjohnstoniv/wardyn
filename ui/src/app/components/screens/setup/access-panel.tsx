@@ -27,7 +27,7 @@ import { AlertTriangle, Info, Loader2, RotateCw, ShieldOff } from "lucide-react"
 import { access as api, AccessCollisionError, AccessPostureFlipRequiredError } from "../../../lib/api/access";
 import { PendingChangeError } from "../../../lib/api/core";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import type { AccessMapping, AccessResponse, AccessUserType } from "../../../lib/types";
+import type { AccessMapping, AccessResponse, AccessUserType, GovernanceChange } from "../../../lib/types";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
@@ -280,7 +280,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
   const [toDelete, setToDelete] = React.useState<AccessMapping | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A mapping write the server held for a second person (202): nothing has changed yet.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   const [dialogError, setDialogError] = React.useState<WriteErrorKind | null>(null);
   const [ack, setAck] = React.useState(false);
   // SERVER-AUTHORITATIVE, not a client pre-check (§2.2's own precedent, now
@@ -317,12 +317,12 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
     try {
       await api.deleteMapping(toDelete.id, showDeleteGuard ? ack : false);
       closeDelete();
-      setSubmitted(false);
+      setSubmitted(null);
       onReload();
     } catch (e) {
       if (e instanceof PendingChangeError) {
         closeDelete();
-        setSubmitted(true);
+        setSubmitted(e.change);
         onReload();
         return;
       }
@@ -344,7 +344,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
         <h3 className="text-sm font-medium text-foreground">{PEOPLE.TABLE_TITLE}</h3>
         <p className="mt-0.5 text-body text-muted-foreground">{PEOPLE.TABLE_LEAD}</p>
         <Note>{PEOPLE.EFFECT_NOTE}</Note>
-        {submitted && <SubmittedNote />}
+        {submitted && <SubmittedNote change={submitted} />}
       </div>
 
       <div className="mt-4 flex flex-col gap-2">

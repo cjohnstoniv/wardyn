@@ -30,7 +30,29 @@ var (
 	// two phases of it must fit inside the chart's 450s startupProbe, so raising a run's start budget
 	// must never move it.
 	canaryWaitTimeout = 3 * time.Minute
+	// canaryCreateTimeout bounds each create of a canary's pod and policy, and canaryCleanupTimeout
+	// each delete: an API server that takes a request and never answers must not hold up the next
+	// check or the driver's Close. A create that runs out is a check that cannot tell. The deletes run
+	// on a fresh context, so a check cut short still cleans up. A whole canary is at most two phases of
+	// canaryWaitTimeout plus three creates and three deletes: 2x180 + 3x10 + 3x10 = 420s, inside the
+	// chart's 450s startupProbe.
+	canaryCreateTimeout  = 10 * time.Second
+	canaryCleanupTimeout = 10 * time.Second
 )
+
+// createCanaryObject runs one create on a context bounded by canaryCreateTimeout and by ctx.
+func createCanaryObject(ctx context.Context, create func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, canaryCreateTimeout)
+	defer cancel()
+	return create(ctx)
+}
+
+// deleteCanaryObject runs one cleanup delete on its own bounded context.
+func deleteCanaryObject(del func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), canaryCleanupTimeout)
+	defer cancel()
+	_ = del(ctx)
+}
 
 // canaryVerdict is the boot-time egress canary's outcome.
 type canaryVerdict int
@@ -125,12 +147,17 @@ func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyA
 				// Egress left nil: an empty rule set means deny-all outgoing traffic.
 			},
 		}
-		if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, netpol, metav1.CreateOptions{}); err != nil {
+		// Registered before the create: a create that times out may still have been stored, and a delete of an
+		// object that was never made answers NotFound, which deleteCanaryObject ignores.
+		defer deleteCanaryObject(func(ctx context.Context) error {
+			return d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, netpolName, metav1.DeleteOptions{})
+		})
+		if err := createCanaryObject(ctx, func(ctx context.Context) error {
+			_, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, netpol, metav1.CreateOptions{})
+			return err
+		}); err != nil {
 			return canaryPhaseResult{err: fmt.Errorf("%s: create deny-all netpol: %w", phaseName, err)}
 		}
-		defer func() {
-			_ = d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(context.Background(), netpolName, metav1.DeleteOptions{})
-		}()
 	}
 
 	pod := &corev1.Pod{
@@ -155,12 +182,15 @@ func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyA
 	// Same placement as the run pods: the canary must prove enforcement on the nodes runs use.
 	d.placement.apply(pod, runID, componentCanary, nil)
 	pod.Labels = d.stampRunner(pod.Labels)
-	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+	defer deleteCanaryObject(func(ctx context.Context) error { // before the create, as for the policy
+		return d.clientset.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+	})
+	if err := createCanaryObject(ctx, func(ctx context.Context) error {
+		_, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
+		return err
+	}); err != nil {
 		return canaryPhaseResult{err: fmt.Errorf("%s: create canary pod: %w", phaseName, err)}
 	}
-	defer func() {
-		_ = d.clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
-	}()
 
 	reached, code, err := d.waitCanaryTerminal(ctx, ns, podName)
 	if err != nil {

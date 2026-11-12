@@ -163,6 +163,13 @@ func (s *ghWallsStore) PutPrincipalPref(_ context.Context, principal, key string
 // writable git lane, and the launching member's walls (nil for none).
 func githubCLIWallsFixture(t *testing.T, walls *types.PersonalWallsSpec) (*componentFixture, map[string]any) {
 	t.Helper()
+	return githubCLIWallsFixtureWith(t, walls, nil)
+}
+
+// githubCLIWallsFixtureWith is githubCLIWallsFixture with the deployment's policy, the member's
+// ceiling, edited first (nil for none).
+func githubCLIWallsFixtureWith(t *testing.T, walls *types.PersonalWallsSpec, edit func(*types.RunPolicySpec)) (*componentFixture, map[string]any) {
+	t.Helper()
 	cs := &capStore{}
 	h := newHarness(t)
 	st := &componentTestStore{govEscapeStore: newGovEscapeStore(cs), snapshots: map[uuid.UUID][]types.RunComponent{}}
@@ -177,6 +184,9 @@ func githubCLIWallsFixture(t *testing.T, walls *types.PersonalWallsSpec) (*compo
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = govDeployment()
 	cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/app"],"permissions":{"contents":"write"}}`)}}
+	if edit != nil {
+		edit(&cfg.DefaultPolicy)
+	}
 	f := &componentFixture{srv: New(cfg), st: st, cs: cs, rec: rec}
 	ref := f.org(ghCLIRowID, types.ComponentDefinition{CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub,
 		GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite}}}})

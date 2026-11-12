@@ -4,9 +4,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 import type { SetupModelProvider, Workspace, WorkspaceProfile } from "../../lib/types";
 import { baseStatus } from "../../lib/test-fixtures";
 
@@ -59,6 +60,8 @@ import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { setField } from "../../../test/set-field";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 function renderScreen(path = "/") {
   return render(
@@ -87,11 +90,78 @@ describe("WorkspacesScreen — list columns", () => {
     listWorkspacesMock.mockReset();
   });
 
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listWorkspacesMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("reads the search text from the URL, so Back from a workspace lands on the same filtered list", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { id: "ws-1", name: "payments", kind: "repo", source: "acme/payments" }),
+      ws({}, { id: "ws-2", name: "search", kind: "repo", source: "acme/search" }),
+    ]);
+    renderScreen("/?q=pay");
+    expect(await screen.findByText("payments")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search by name or source…")).toHaveValue("pay");
+    expect(screen.queryByText("search")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments", kind: "repo", source: "acme/payments" })]);
+    render(
+      <LaggingRouter>
+        <WorkspacesScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("payments");
+    const box = screen.getByPlaceholderText("Search by name or source…");
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
+  });
+
   it("Workspace + Source columns: the kind icon and name in one cell, the mono sub-line in another", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments", kind: "repo", source: "acme/payments", ref: "main", status: "scanned" })]);
     renderScreen();
     expect(await screen.findByText("payments")).toBeInTheDocument();
     expect(screen.getByText("acme/payments @main")).toBeInTheDocument();
+  });
+
+  it("bounds a long workspace name with a tooltip instead of widening the table past its actions menu", async () => {
+    const name = "payments-platform-service-account-rotation-with-a-very-long-name-12345";
+    listWorkspacesMock.mockResolvedValue([ws({}, { name })]);
+    renderScreen();
+    const label = await screen.findByText(name);
+    expect(label).toHaveAttribute("title", name);
+    expect(label.className).toContain("truncate");
+    expect(screen.getByRole("button", { name: `Workspace actions: ${name}` })).toBeInTheDocument();
+  });
+
+  it("names the actions column for assistive tech", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments" })]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+  });
+
+  it("names the search box, not only by its placeholder", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments" })]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.getByRole("textbox", { name: "Search workspaces" })).toBeInTheDocument();
+  });
+
+  it("each row's actions menu is named after the workspace", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments" }), ws({}, { id: "ws-2", name: "billing" })]);
+    renderScreen();
+    expect(await screen.findByRole("button", { name: "Workspace actions: payments" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace actions: billing" })).toBeInTheDocument();
   });
 
   it("Source column: a multi-source workspace shows the composition summary instead", async () => {
@@ -601,6 +671,29 @@ describe("WorkspaceLLMCredDialog", () => {
     const workspace = ws({}, { llm_cred: { provider_ref: "provider-gone" } });
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
     expect(await screen.findByRole("radio", { name: /provider-gone \(not in the Model providers list\)/i })).toBeChecked();
+  });
+
+  it("a failed providers read says so with Try again, never that the stored provider is gone", async () => {
+    getModelProvidersMock.mockReset().mockRejectedValueOnce(new Error("HTTP 500"));
+    const workspace = ws({}, { llm_cred: { provider_ref: "anthropic-key" } });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    expect(await screen.findByText(/Couldn't load the model providers/)).toBeInTheDocument();
+    expect(screen.queryByText(/Loading model providers/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not in the Model providers list/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /anthropic-key \(current\)/ })).toBeChecked();
+    getModelProvidersMock.mockResolvedValue(providersList([{ id: "anthropic-key", name: "Anthropic API", kind: "anthropic_api_key" }]));
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("radio", { name: /anthropic api/i })).toBeChecked();
+    expect(screen.queryByText(/Couldn't load the model providers/)).not.toBeInTheDocument();
+  });
+
+  it("a successful empty list is not an error: no failure note, only None", async () => {
+    const workspace = ws({}, { llm_cred: {} });
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText(/Loading model providers/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/Couldn't load the model providers/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /none — each run chooses/i })).toBeChecked();
   });
 });
 

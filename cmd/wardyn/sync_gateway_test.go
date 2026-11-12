@@ -79,6 +79,12 @@ func (s *syncStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit
 	return nil, nil
 }
 
+// QueryAuditEvents answers the run's recorded policy, which sets no data_out rule: the gateway reads it once
+// per connection.
+func (s *syncStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: json.RawMessage(`{}`)}}, nil
+}
+
 type syncAudit struct {
 	mu sync.Mutex
 	ev []types.AuditEvent
@@ -456,7 +462,7 @@ func (g *syncRig) syncer(remote string, pull bool) (*foldersync.Syncer, *syncSes
 		g.t.Fatal(err)
 	}
 	g.t.Cleanup(func() { _ = lroot.Close() })
-	return &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, Opts: foldersync.Options{Remote: remote, Pull: pull, MaxPullBytes: foldersync.DefaultMaxPullBytes}, State: st, StateFile: stateFile}, sess, root
+	return &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, Opts: foldersync.Options{Remote: remote, Pull: pull, MaxPullBytes: foldersync.DefaultMaxPullBytes}, State: st, StateFile: stateFile, StateRoot: filepath.Dir(stateFile)}, sess, root
 }
 
 func putSyncFile(t *testing.T, p, body string, mode os.FileMode) {

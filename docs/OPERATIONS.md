@@ -3,46 +3,39 @@
 Backup, upgrade, rotation, monitoring, and the scaling constraint — the questions
 that arrive after the stack is up.
 
-**Scope: mostly the Compose stack.** The backup/state-store, monitoring and
-corporate-network sections are written against
-[`deploy/compose/`](../deploy/compose/); the Helm chart (`deploy/helm/wardyn`,
-[`k8s.enabled`](../deploy/helm/wardyn/README.md)) runs its own
-[Kubernetes runner substrate](operations/kubernetes-known-gaps.md) with its own run/recording
-state — see [Kubernetes: day-2](#kubernetes-day-2) for the chart's own backup,
-restore, upgrade and key-persistence commands.
-"[Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)" and
-"[High availability](#high-availability)" apply to both
-substrates identically: authorization and the per-process constraints live in
-`internal/api`, above the runner seam.
+Backup, restore, upgrade, key rotation, audit retention, erasure, the corporate network and high availability, for a stack that is already up. A first install starts at [README.md](../README.md) or [TRY-IT.md](TRY-IT.md); a second person on an existing install is "[Second user, same host](#second-user-same-host)".
 
-**New here?** Installing for the first time belongs in the front-door docs, not
-here — [README.md](../README.md) (single vs. multi-user) or
-[TRY-IT.md](TRY-IT.md) (a 10-minute walkthrough); this file starts from a stack
-that is already up. Adding the second person to an existing install: "[Second
-user, same host](#second-user-same-host)". Deciding who can do what:
-"[Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)".
+The sections are written against the Compose stack ([`deploy/compose/`](../deploy/compose/)). The Helm chart (`deploy/helm/wardyn`, [`k8s.enabled`](../deploy/helm/wardyn/README.md)) runs its own [Kubernetes runner substrate](operations/kubernetes-known-gaps.md); its backup, restore, upgrade and key commands are in [Kubernetes: day-2](#kubernetes-day-2). "[Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)" and "[High availability](#high-availability)" apply to both.
 
 <details>
 <summary>Table of contents</summary>
 
 - [State stores](#state-stores)
+- [The audit log: integrity, retention, erasure and leavers](#the-audit-log-integrity-retention-erasure-and-leavers)
 - [Monitoring](operations/monitoring.md#monitoring)
 - [Approval notifications](#approval-notifications)
 - [Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)
 - [Run lifetime: lease, extend, revive, ends](operations/run-lifetime.md#run-lifetime-lease-extend-revive-ends)
 - [Exercising member mode as an admin](operations/member-mode.md#exercising-member-mode-as-an-admin)
+- [The policy a run got](#the-policy-a-run-got)
 - [Second user, same host](#second-user-same-host)
+- [Run templates](#run-templates)
+- [Harness images](#harness-images)
 - [Workspaces: three tiers](#workspaces-three-tiers)
 - [Integrations](operations/integrations.md#integrations)
 - [Network: upstream proxy and egress redirects](#network-upstream-proxy-and-egress-redirects)
+- [AWS sign-in per person and starting runs](#aws-sign-in-per-person-and-starting-runs)
+- [Model providers: changes, the internal gateway and a local server](#model-providers-changes-the-internal-gateway-and-a-local-server)
+- [Site config: artifact overrides, probes and directory autocomplete](#site-config-artifact-overrides-probes-and-directory-autocomplete)
 - [Toolchain, build images and recommended builds](operations/build-images.md)
 - [Secrets from files, age-key rotation and external key stores](operations/secrets-and-keys.md)
 - [Renamed in 0.8](#renamed-in-08)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
+- [Member drives, team drives and user drives on Kubernetes](#member-drives-team-drives-and-user-drives-on-kubernetes)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree), [Platform tenancy](operations/platform-tenancy.md), [Model gateways and detectors](operations/model-gateways.md)
 - [Workloads](operations/workloads.md): keep a run declared with `wardyn apply` or a WardynWorkload resource, bind a namespace, read its status, and the Argo CD health check.
 
 </details>
@@ -564,6 +557,8 @@ commands are the ones in "Back them up" and "Restore them", and in
 - Loading a dump into a scratch database proves the SQL loads, and nothing more: a row count does not show that the
   key works, and it does not show that the drive bytes are intact.
 
+## The audit log: integrity, retention, erasure and leavers
+
 ### The audit log can't quietly rot
 
 - "Append-only" here is enforced by the database, not by convention.
@@ -723,6 +718,30 @@ commands are the ones in "Back them up" and "Restore them", and in
   - A slow-but-progressing insert is never aborted by it — and it is deliberately shorter than the drain's 15s pass,
     so the request path yields before the background drain does.
 
+- **Strict audit (`WARDYN_AUDIT_STRICT=on`, flag `-audit-strict`, default off).**
+  - With strict mode on, a covered change is refused if its audit intent row cannot be written first.
+  - Before the change's handler runs, an `audit.intent.record` row is written straight to the store, with no spool
+    fallback.
+  - The row names the method, the resolved path, the route, the path's ids, the caller (`actor`), the request id and the
+    body's SHA-256, never the body.
+  - The path, each id and the request id come from the caller, so each is cut to 512 bytes, as an audit target is.
+  - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
+  - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
+  - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
+    `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`.
+  - Not covered, because each reads and answers and changes nothing: the POSTs `/policies/grade`, `/governance/check`,
+    `/governance/dry-run`, `/governance/approval-rules/dry-run` and `/templates/import` (it parses a document and
+    stores nothing).
+  - The row is written for every covered request that passed sign-in, one its route then refuses included, so it says a
+    change was asked for, not that it happened.
+  - The trade: while the store cannot take writes, covered changes are refused instead of being queued.
+  - Under `WARDYN_AUDIT_SEAL`, a row whose subject key cannot be had is refused too, since such a row waits only in the
+    spool.
+  - Configured sinks get an intent row only after the store has taken it; a store write that failed sends them nothing.
+  - A sink that fails does not undo an intent row the store took, and the change goes ahead.
+  - That is the intent row only: the handler's own row reaches the sinks as every row does, even when the store
+    write failed and the row spooled.
+
 > [!IMPORTANT]
 > **Set the two server-side timeouts** on the database Wardyn uses.
 
@@ -857,7 +876,7 @@ row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
 - The qualifier is load-bearing, because the hashes are computed by the write itself.
 - An event written while Postgres is down still reaches your sinks, but unchained, and the drain does not re-stream
   it — see "Completeness survives an outage too" above.
-- Signed receipts (a key the database role cannot reach) are the next rung and are **not built**.
+- Signed checkpoints and receipts are the next rung: see [Signed checkpoints and receipts](#signed-checkpoints-and-receipts).
 
 **Verifying.** Operator-invoked, never automatic:
 
@@ -885,6 +904,61 @@ curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
   - There is deliberately no server-side time limit on a sweep.
   - A fixed one would cap how large a log can be verified at all.
   - So the bound is your client's: the sweep is walked in pages and stops between them when the caller goes away.
+
+### Signed checkpoints and receipts
+
+A rewrite by someone who holds the database can be re-chained, so the chain alone proves nothing against them. A checkpoint is a signature over the newest rows' hashes, made with a key the database cannot read, so a re-chained tail no longer matches what was signed.
+
+- **The key.** The boot key `wardyn-audit-receipt-key` (Ed25519) is made on first start, held in `secrets` and sealed by the age key like the other boot keys. A row that cannot be decrypted or parsed is never replaced with a new key.
+- **The interval.** Every `WARDYN_AUDIT_CHECKPOINT_INTERVAL` (default `1m`) one replica signs up to 10,000 new chained rows, more than one checkpoint in a tick when there are more. Nothing is signed while nothing new was logged. `0` turns signing off; 1s to 9s refuses to boot.
+- **Each checkpoint** is logged as `audit.checkpoint.create` and the whole signed statement goes to every audit sink. A SIEM that keeps it holds a head hash and a signature Wardyn cannot later disown. The statement chains to the previous one through `prev`, so a removed checkpoint shows.
+- **The latch.** The signer reads the newest stored checkpoint before each one. If a row in the range fails its hash link (`chain_break`), or the newest checkpoint is not signed by a key this install holds (`foreign_row`), it stops signing until `wardynd` restarts and logs one ERROR line. It writes no audit row, since the log is the thing in doubt. Watch the metrics under [Monitoring](operations/monitoring.md).
+- **After `-retire-previous`.** A checkpoint signed by the retired key that is already the newest at the signer's first read after start is chained to. One that appears later raises `foreign_row` and starts a new genesis at the chain head, without latching.
+- **A restart before the first checkpoint** moves the start: the first checkpoint begins after the chain head the signer read at its first tick.
+
+**Get a receipt and check it offline.** Pin the keys once, somewhere the control plane cannot change:
+
+```bash
+wardyn audit keys -o keys.json
+wardyn audit receipt --run <run-id> --wait -o receipt.json
+wardyn audit verify receipt.json --keys keys.json; echo $?
+```
+
+- `wardyn audit receipt <event-id>...` does the same for named events. A row is receiptable once its checkpoint is signed, about a minute after it is written; `--wait` asks again until then (`409 audit_receipt_pending`; a row the chain never covered is `audit_receipt_unchained`).
+- A run's receipt is a page: at most 1,000 events, cut at that cap or at the first row not yet checkpointed. When it ends early the CLI names the next `--after-seq`. Explicit events past a cap get 413. Caps: 10 checkpoints carry their row hashes (at most 100,000 hashes in all), 500 more between them carry only the signed statement so the `prev` chain verifies, and an export page holds 1,000 checkpoints.
+- `wardyn audit checkpoints` downloads the signed checkpoints alone. `verify` reports that as "signature checked, inclusion not checked": it shows none was removed, not that a row is in the log. Only a receipt checks inclusion.
+- Both commands need an administrator or `security_admin`. An administrator's receipt carries every field. A `security_admin` gets host detail withheld from some events; they stay linked into the signed list, but their content is unchecked, which is exit 3.
+- `verify` never fetches. Exit 0: every receipted row is what was signed. 1: a check failed, with the seq and reason. 2: the file or keys could not be read, or bad usage. 3: nothing failed but some events were withheld; the first line says how many.
+- A receipt that carries a run's policy rows also reports each stamped row's `policy_digest` as `linked` (a verified `run.policy.resolve` or `run.policy.generation` row in the bundle has matching policy content), `unlinked`, or `masked` (the row it would link to is host-masked); `unknown` stamps are never a mismatch. The match is by equal digest only. It does not prove the run was enforced under that policy.
+
+**Check one receipt by hand** (`openssl` 3 and `jq`; no Wardyn code):
+
+```bash
+i=0   # the checkpoint
+jq -j ".checkpoints[$i].statement" receipt.json > st.txt
+jq -r ".checkpoints[$i].signature" receipt.json | base64 -d > sig.bin
+jq -r --arg k "$(jq -r .kid st.txt)" '.keys[] | select(.kid==$k and (.retired|not)) | .public_key_pem' keys.json > pub.pem
+openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in st.txt -sigfile sig.bin
+# the row hashes fold to the signed digest (prev is "" for the first checkpoint)
+d=$(printf %s "$(jq -r .prev st.txt)" | sha256sum | cut -c1-64)
+for h in $(jq -r ".checkpoints[$i].row_hashes[]" receipt.json); do d=$(printf %s "$d$h" | sha256sum | cut -c1-64); done
+# the seqs: s_0 = sha256("wardyn-audit-seq-digest/1"), then each (seq, hash) pair
+s=$(printf %s wardyn-audit-seq-digest/1 | sha256sum | cut -c1-64)
+paste -d' ' <(jq -r ".checkpoints[$i].seqs[]" receipt.json) <(jq -r ".checkpoints[$i].row_hashes[]" receipt.json) |
+  while read seq h; do s=$(printf '%s%d:%s%d:%s' "$s" ${#seq} "$seq" ${#h} "$h" | sha256sum | cut -c1-64); echo "$s"; done | tail -n1
+jq -r '.digest, .seq_digest' st.txt   # must equal $d and the last line above
+```
+
+This checks the signature, the two digests and so that each seq belongs to its row hash. It does not recompute a row's `row_hash` from its fields: `wardyn audit verify` does.
+
+**Rotating the key** is a maintenance mode, not a server start: `wardynd -rotate-audit-receipt-key`, with `-retire-previous` if the key may be stolen. It is [described with the other boot keys](operations/secrets-and-keys.md#the-audit-receipt-key). An old receipt keeps verifying against a saved key file; a retired key's receipts fail `key_retired`.
+
+> [!WARNING]
+> **Known limitations.**
+> - History before the first checkpoint is covered by the chain, but it is not receiptable one row at a time.
+> - After a late forged checkpoint from a retired key, the rows between it and the new genesis are not covered by a receipt.
+> - The metrics and the latch are per replica: the replica that signs a tick updates them.
+> - A checkpoint is evidence from the moment it is signed. Rows a database owner rewrote before it was signed are signed as rewritten; the off-box copy of earlier statements is the control.
 
 > [!WARNING]
 > **A break is permanent.**
@@ -1005,7 +1079,7 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
 - In a split-DSN deployment that is the MIGRATE role, so a clean line there is not a promise about the role the serving
   pool uses.
 
-- The costs are honest, and there are two:
+- Two costs:
   - that isolation rule (and the `default_transaction_isolation` default it is read from),
   - and a session that holds a transaction open after inserting into `audit_events` blocks every other audit append
     until it commits or rolls back —
@@ -1256,11 +1330,11 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text, title, description and correlation ID of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title, description and correlation ID of the runs the person created, the launch intents of those runs, and the answers kept for their `POST /runs` idempotency keys |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
-| `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
+| `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would, and the macOS VM machines they kept, each deleted as their own delete would (`kept_machines` in the row's detail); a drive or machine a run still holds, or whose Mac is away, stays and fails the scope, naming it |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`), their delegated tokens, and the Azure DevOps token rows of their runs that are revoked or past their expiry |
 
@@ -1276,15 +1350,21 @@ erases one person's retained records by explicit scope, in one audited act
 - A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
-- Two tables keep a person's name after every scope, on purpose:
+- These records keep a person's name or address after every scope, on purpose. No scope removes them, and Wardyn has no `DELETE /people/{principal}`:
+  - `agent_runs.created_by` stays on every run the person created. The scopes blank a run's task, title, description and correlation ID, not its owner, which the run's access check and its 404 for others rest on.
+  - `people` (`principal`, `email`) stays: its unique-email index (`people_email_lower_uniq`) is what stops a second identity taking the address.
+  - `principal_identities` (`email_lower`, `scim_user_name`, `scim_external_id`) stays, and a SCIM purge makes it a permanent tombstone so the person cannot be reactivated or sign in again.
+  - `ssh_public_keys.principal`, `api_tokens.principal` and `workspaces.owned_by` stay. Reassign a workspace first ([ownership and offboarding](operations/ownership-and-offboarding.md)).
+  - The audit `actor` of a row stays in the clear under the default seal (see "Retention, erasure and GDPR").
   - `aws_sso_spent_tokens.owner` names whose AWS sign-in a spent refresh-token fingerprint came from. It holds no
     credential, and the reaper deletes each row 90 days after it was written.
   - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
     replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
     `secret_owner_generations` below would.
+  - `secret_owner_generations` keeps the subject id (below).
 - The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
-  erasure again once they expire to delete them.
+  erasure again once they expire to delete them. `run_create_keys_deleted` counts their `POST /runs` idempotency keys.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
@@ -1695,6 +1775,7 @@ at tier 0. With `routes` set, the first route that matches an approval chooses i
     expires before that tier can send.
 - `notify` fills `recipients[]` (`{role, email}`) in the body: `run_owner` is the run owner's address,
   `profile_contact` is the leaf profile's contact email after the same re-validation the console applies.
+  `unit_admins` is each person with a user-subject unit-admin grant on the run's unit or above. A group grant is never expanded, and no one outside that chain is read.
   A target with no address is skipped.
 - A channel with `"redact_requester": true` omits `requester` from its body.
 - Boot refuses a route that names an unknown channel or kind,
@@ -1750,11 +1831,6 @@ per run per hour (per replica).
 ## Managed laptops: hybrid enrolment and audit federation
 
 Moved to [hybrid-laptops.md](operations/hybrid-laptops.md#managed-laptops-client-mode-runners).
-
-- Behind a shared ingress, runners and anonymous callers share one rate-limit bucket per route, keyed on the TCP peer unless `WARDYN_TRUSTED_PROXIES` lists it.
-  - The routes are `/api/v1/runners/{id}/stream`, `/api/v1/runners/register` and `/api/v1/devices/enrol`.
-  - Allow-list the networks your runners connect from on those paths, or give runners a dedicated ingress or hostname.
-  - Details and the refusal reasons: [Behind a shared ingress](operations/hybrid-laptops.md#behind-a-shared-ingress).
 
 ## Multi-user: who can change what
 
@@ -1867,7 +1943,7 @@ enforces, not a re-derivation:
   - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
 - **What changed at launch**: each difference's cause:
   `workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`,
-  `overlay`, `profile`, `walls`, `wall_preset`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
+  `overlay`, `unit`, `walls`, `wall_preset`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
   - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the
@@ -1895,6 +1971,8 @@ enforces, not a re-derivation:
 
 - A run that has not reached sandbox setup answers `state: "not_yet"`, and one that ended before it `"never"`; the CLI prints the sentence and exits `1` so a redirect never writes an empty file.
 - A run from before `policy_source` existed answers `complete: false`: its changes list only what the launch rows state.
+
+**A draft before launch.** `POST /runs/policy-preview` makes the same authorization decisions as a launch and leaves credential liveness, autonomy and tool approvals and execution readiness pending. It uses its own `WARDYN_POLICY_PREVIEW_RATE_PER_MIN` bucket. Its dry-run denials share preflight's coalescing key and window, and no credential value is read or renewed. See [the SDK contract](sdk.md#policy-preview).
 
 ## Run lifetime: lease, extend, revive, ends
 
@@ -1979,10 +2057,10 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
        username: "member"
        userID: "member-0001"
-     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a user, once the role map or default role admits them;
+     - email: "person3@wardyn.local"   # not in the operator list ⇒ a user, once the role map or default role admits them;
        hash: "<paste the whole generated hash>"  # domain must clear WARDYN_OIDC_EMAIL_DOMAINS
-       username: "reviewer2"
-       userID: "reviewer2-0001"
+       username: "person3"
+       userID: "person3-0001"
    ```
 
    then reload it — `up -d` does not notice a bind-mounted file's *content*
@@ -1993,14 +2071,14 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
    ```
 
    Then admit the new identity to Wardyn, or Dex authenticates it and Wardyn refuses the login with no role:
-   - add `reviewer2@wardyn.local=user` to the `WARDYN_OIDC_ROLE_MAP` already in `deploy/compose/.env`,
+   - add `person3@wardyn.local=user` to the `WARDYN_OIDC_ROLE_MAP` already in `deploy/compose/.env`,
    - or set `WARDYN_OIDC_DEFAULT_ROLE=user`,
    - then `up -d wardynd` so it reads the new value.
 
 4. **Each person signs in on their own.**
    - The browser is redirected to Dex directly for the login leg.
    - So both `:8080` (wardynd/UI) and `:5556` (Dex) must be reachable from each browser.
-   - That is trivial at a shared console, an `ssh -L 8080:localhost:8080 -L 5556:localhost:5556 <host>` tunnel per person otherwise (a tunnel to the existing loopback bind, not a change to Wardyn's network posture).
+   - At a shared console nothing more is needed; otherwise use an `ssh -L 8080:localhost:8080 -L 5556:localhost:5556 <host>` tunnel per person otherwise (a tunnel to the existing loopback bind, not a change to Wardyn's network posture).
    - Each clicks **Sign in with SSO**.
 
 > [!WARNING]
@@ -2066,13 +2144,7 @@ harness is refused `422` `harness_not_installed`.
 | Codex CLI | The published image carries the CLI | Nothing |
 | Two or more harnesses in one run | No published image carries two CLIs: refused `harness_set_no_image` | Build a set image (`make agent-image-harnesses`) and declare it under a `+` key |
 
-- A set key joins two or more harness ids with `+`, each once and in sorted order:
-  `WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'`. wardynd refuses to start on a
-  malformed set key.
-- Set images are local builds only: no release publishes one. On Kubernetes, push yours to a registry the cluster
-  pulls from and declare that ref.
-- [The image a run's harnesses start from](operations/build-images.md#the-image-a-runs-harnesses-start-from) has the
-  selection rule and the build steps.
+[The image a run's harnesses start from](operations/build-images.md#the-image-a-runs-harnesses-start-from) has the selection rule, the `+` set key, the build steps and the Kubernetes note.
 
 ## Console branding
 
@@ -2084,7 +2156,7 @@ A workspace is not one unit of configuration. Wardyn splits it into three:
 
 1. **Source** (tier 1) — a repo or local directory configured ONCE, in a shared library: its own requirements contract, its own scan profile and status, deduplicated by canonical identity (locator + ref).
    - `GET/POST /api/v1/sources`, `GET/DELETE /api/v1/sources/{id}`, `POST /api/v1/sources/{id}/scan` (`mountLibraryRoutes`, [`internal/api/sources.go`](../internal/api/sources.go)) — there is no separate `/sources/{id}/requirements` route, and no `PUT` either.
-   - A source's own contract is authored by re-`POST`ing an existing identity to `POST /api/v1/sources` with a new requirements body, which APPLIES it (WSPIPE-8); the write-once `handleUpdateSource` that `PUT` used to reach is gone, not stubbed.
+   - A source's own contract is authored by re-`POST`ing an existing identity to `POST /api/v1/sources` with a new requirements body, which applies it; the write-once `handleUpdateSource` that `PUT` used to reach is gone, not stubbed.
 2. **Base image** (tier 2) — a shared catalog row: registry, custom, or BYO.
    - "Recommended" is never a catalog kind — it is a per-workspace DERIVED build, excluded by a database CHECK constraint, not by convention.
    - None runs as-is: the image builder wraps each with runner tools ([ENVBUILD.md](ENVBUILD.md)); without one the run is refused `image_builder_unavailable`; Kubernetes refuses a wrapped image. `wardyn run --experience background --command '<command>' --workspace <id>` (no model) on a recommended image needs no builder.
@@ -2139,12 +2211,10 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 
 ## Network: upstream proxy and egress redirects
 
-- One more piece of operator-wide config lives in Postgres alongside everything in [**State stores**](#state-stores) above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) — the corporate upstream proxy and the list of outbound redirects every run's egress inherits.
-- Unconfigured is a valid, common state.
-- Because it lives in Postgres, `make reset` / `make reset-all` take it with the volume.
-- `wardyn site-config get > corp-baseline.json` before a reset and `wardyn site-config set corp-baseline.json` after is the round-trip — the document carries secret **names**, never values, so it is safe to keep beside the repo.
-- Because values never round-trip, `set` re-attaches the *names* unconditionally even when a named secret was never restored into the fresh store.
-- `set` prints a warning naming every such dangling ref, and the setup checklist's "Site config" row grades `warn` (never the plain `info` of a fully-live config) while one remains.
+- `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) is the operator-wide network config, kept in Postgres beside [State stores](#state-stores): the corporate upstream proxy and the outbound redirects every run's egress inherits. Unconfigured is a valid, common state.
+- `PUT /site-config` replaces the keys the body names. A top-level block the body leaves out keeps its stored value: `agent_providers`, `model_providers`, `workspace_providers`, `components`, `images`, `macos_vm`, `branding`, `policy_help`, `internal_hosts`, `upstream_proxy_no_proxy`, `governance_max_depth`, `sign_in_help_text` and `sign_in_help_url`. Inside `macos_vm`, each switch and limit left out is kept too. `runners`, `recording`, the egress baseline, `integrations` and `onboarding_completed_at` change only through their own routes. To turn something off, send it: `"allow_kept_machines": false`, or `"images": {"admission": {"mode": "off"}}`.
+- It lives in the database, so `make reset` and `make reset-all` take it with the volume. To keep it, run `wardyn site-config get > corp-baseline.json` before and `wardyn site-config set corp-baseline.json` after. The document carries secret **names**, never values, so it is safe to keep beside the repo.
+- Values never round-trip, so `set` re-attaches the names even when a named secret was never restored. It prints a warning for each dangling ref, and the setup checklist's "Site config" row grades `warn` while one remains.
 
 **Restoring the network settings at boot (`WARDYN_SITE_CONFIG_SEED_FILE`).**
 
@@ -2172,29 +2242,18 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 - The file restores the **reference, not the secret**.
 - With the default Postgres secret store a wiped database loses the proxy credential too, so after a rebuild re-create that secret (or keep it in an external secret store).
 - Until then the `site_config` row of `/setup/status` warns that a referenced secret is not set.
-- A captured document carries `onboarding_completed_at` whenever the install it came from had finished the Getting Started funnel, and `set` forwards it verbatim — deliberately.
-- No client strips it, so the same file works through `curl` and as the MDM-delivered `/etc/wardyn/site-config.json`.
-- The server owns that mark, so it is ignored on the write and the STORED one (none on a fresh install; this install's own once its operator has finished the funnel) is carried forward.
-- Applying a captured baseline restores corporate network config, never the funnel's completion state.
-- `PUT` never refuses a body over this field — it cannot be set, cleared or moved through that endpoint whatever it says, so a refusal would only have broken the recovery flows ([`internal/api/site_config.go`](../internal/api/site_config.go), `handlePutSiteConfig`).
-- When the file's copy is dropped — a captured baseline applied after re-onboarding, or the MDM file re-applied to a laptop that has since finished its own funnel — two things happen.
-  - The response says so (`onboarding_completed_at_ignored`).
-  - `set` prints it as a warning.
+- A captured document carries `onboarding_completed_at` when the install it came from finished the Getting Started funnel, and `set` forwards it verbatim, so the same file works through `curl` and as the MDM-delivered `/etc/wardyn/site-config.json`.
+- The server owns that mark. The write ignores the file's copy and carries the stored one forward, so a baseline restores corporate network config and never the funnel's completion state. `PUT` never refuses a body over this field ([`internal/api/site_config.go`](../internal/api/site_config.go), `handlePutSiteConfig`), because a refusal would only have broken the recovery flows.
+- When the file's copy is dropped (a baseline applied after re-onboarding, or the MDM file re-applied to a laptop that has since finished its own funnel), the response says so (`onboarding_completed_at_ignored`) and `set` prints a warning.
 
 > [!IMPORTANT]
 > **A SiteConfig write reaches only runs dispatched after it lands.**
 
-- The fields below that shape a run's own egress — `internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects — are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup.
-- A run already running keeps the config it started with for the rest of its life, however many times you fix the SiteConfig underneath it.
-- `PUT /site-config`'s response says so (`applies_from: "next_dispatch"`), **and since 0.7.2 the console repeats it on save** — BOTH halves of the Network step.
-- The upstream-proxy saves (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress-redirect saves (`setRedirects` in `corp-network-egress.tsx`, the one chokepoint every add, edit and remove passes through) carry it as the toast's description.
-- So the operator who just changed a field reads the lifetime at the moment they change it rather than in this document afterwards.
-- Both matter for the same reason: the redirects are one of the compiled-at-dispatch fields listed above, so a save that said nothing about its lifetime was the one most likely to be acted on twice.
-- Every OTHER console write of site config still repeats nothing — the toast is not a general rule you can rely on elsewhere.
-- A change made through `PUT /site-config` or `wardyn site-config set` has the response field and nothing else.
-- Live sidecar reload is deliberately out of scope: a running sandbox's egress posture must not change under it with no audit row to show why.
-- A run already refused on a field you just corrected stays refused.
-- Kill it and start a new one — a killed run cannot resume, and the new run reads the corrected config from the start.
+- The fields that shape a run's egress (`internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects) are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup. A running run keeps the config it started with, however often you fix the SiteConfig underneath it.
+- `PUT /site-config` says so in its response (`applies_from: "next_dispatch"`).
+- The console repeats it in the toast on saving the upstream proxy (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress redirects (`setRedirects` in `corp-network-egress.tsx`). No other console write of site config does, and `PUT /site-config` or `wardyn site-config set` has the response field and nothing else.
+- Live sidecar reload is out of scope: a running sandbox's egress posture must not change under it with no audit row to show why.
+- A run already refused on a field you just corrected stays refused. Kill it and start a new one; a killed run cannot resume.
 
 ### Upstream proxy: plain URL vs. secret
 
@@ -2369,15 +2428,16 @@ Three things in a run's audit trail say which hop its connections took and why o
 - `WARDYN_DAEMON_PROXY_URL` (+ `WARDYN_DAEMON_NO_PROXY`) is the supported, scoped replacement.
 - It sets `http.DefaultTransport.Proxy` directly at boot (`installDaemonProxy`, beside the same-shaped `WARDYN_TRUSTED_CA_FILE` trust-tier knob), so it reaches exactly wardynd's five outbound consumers above and nothing else.
 - The Kubernetes client builds its own transport (unaffected) and the Docker client speaks a unix socket (unaffected).
-- Unset leaves the transport untouched, byte-identical to today (`ProxyFromEnvironment` still applies if you set the standard variables yourself — unsupported, not rejected).
+- Unset leaves the transport untouched (`ProxyFromEnvironment` still applies if you set the standard variables yourself — unsupported, not rejected).
 
 **The bypass list defends itself.**
 
-- Wardynd auto-appends three hosts to `WARDYN_DAEMON_NO_PROXY` before applying it, because getting this wrong is exactly the outage this knob exists to prevent:
+- Wardynd auto-appends these hosts to `WARDYN_DAEMON_NO_PROXY` before applying it, because a wrong list is exactly the outage this knob exists to prevent:
   - `KUBERNETES_SERVICE_HOST` (the in-cluster API server address);
   - the `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` host when one is configured (a kind Service in a test walk must never be dialed through a corporate proxy);
-  - the `WARDYN_OIDC_INTERNAL_ISSUER` host when one is configured (a cluster-internal issuer wardynd itself dials at boot, before SiteConfig or any other runtime read exists).
-- Every boot that sets a proxy logs one line naming the proxy host (never any embedded credential — `WARDYN_DAEMON_PROXY_URL` refuses to start if the URL carries `user:pass@`) and the effective bypass list:
+  - the `WARDYN_OIDC_INTERNAL_ISSUER` host when one is configured (a cluster-internal issuer wardynd itself dials at boot, before SiteConfig or any other runtime read exists);
+  - the link-local credential endpoints `169.254.169.254`, `169.254.170.2`, `169.254.170.23`, `fd00:ec2::23` and `fd00:ec2::254` (EC2 instance metadata, the ECS task role and the EKS Pod Identity agent).
+- Every boot that sets a proxy logs one line naming the proxy host (never any embedded credential — `WARDYN_DAEMON_PROXY_URL` refuses to start if the URL carries `user:pass@`) and the effective bypass list. A proxy that needs a username and password goes in a file named by `WARDYN_DAEMON_PROXY_SECRET` instead ([ENV.md](ENV.md#wardyn_daemon_proxy_secret)); setting both variables refuses boot:
 
 ```
 grep 'daemon egress proxy configured' <logs>
@@ -2388,7 +2448,7 @@ grep 'daemon egress proxy configured' <logs>
 ### Control-plane to proxy TLS
 
 - Every run's `wardyn-proxy` sidecar calls `wardynd` for everything it does on the run's behalf, and one of those calls — `GET /api/v1/internal/injection/{grant}` — answers with a credential **value**.
-- Since 0.7.12 that hop is TLS on every install shape except a loopback-only local one, and the proxy trusts exactly one root for it.
+- That hop is TLS on every install shape except a loopback-only local one, and the proxy trusts exactly one root for it.
 - **wardynd's end.**
   - On first boot `wardynd` mints an internal CA (ECDSA P-256, ten years) and stores it in the secret store as `wardyn-internal-ca`, beside its signing key.
   - It is age-encrypted in Postgres, in every backup that carries the signing key, reserved from the secrets API and from every grant.
@@ -2431,13 +2491,6 @@ grep 'daemon egress proxy configured' <logs>
   - So a run token or the ground-truth bearer is only ever accepted over the pinned hop, and an Ingress or reverse proxy in front of the console exposes none of that surface.
   - A local install (loopback `http://` control plane) has no internal listener and keeps serving it on the console.
   - Every shipped caller dials `WARDYN_CONTROL_PLANE_URL`, the internal listener: each run's proxy (both runners hand it that URL in its sealed config, and brokered sidecar uploads go through the proxy) and the ingest.
-  - A proxy dispatched before 0.7.12 still dials `http://wardynd:8080` and gets `404` on every call after an upgrade (on the chart it has no route back at all: the runs namespace is never granted the `http` port).
-  - Such a run cannot be restarted on either runner.
-  - On Docker it has no stored proxy config (migration 0093 records one only for runs dispatched from then on).
-  - So `POST /api/v1/admin/runs/restart` answers it `ok:false` with reason `revive_config_not_stored`, and a single revive is a `409` (see [Run lifetime](operations/run-lifetime.md), "Upgrading to this release").
-  - On Kubernetes the substrate implements no `runner.ProxyReviver` (the agent pod pins the proxy pod's IP), so the restart refuses it with `runner.ErrReviveUnsupported` and reason `revive_unsupported`.
-  - On both, stop such runs (before upgrading, or after with `POST /api/v1/runs/{id}/kill`) and start a new run instead.
-  - The restart still replaces the proxy of a run whose config a supported release stored.
   - The proxy authenticates to `wardynd` with its run token (bearer, not mTLS — [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) B6).
 
 ### Serving the console under a sub-path
@@ -2474,7 +2527,22 @@ grep 'daemon egress proxy configured' <logs>
 
 ### Console cookies under TLS
 
-- The console's cookies are the session (`wardyn_session`), the sign-in's one-time cookies (`wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`, `wardyn_oidc_widened`) and the Azure DevOps sign-in's (`wardyn_ado_state`, `wardyn_ado_nonce`, `wardyn_ado_pkce`).
+- The console sets these cookies. Write cookie-stripping, WAF and ingress rules from this list:
+
+| Cookie | Set | Lasts |
+|---|---|---|
+| `wardyn_session` | At sign-in | The session |
+| `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`, `wardyn_oidc_widened`, `wardyn_oidc_silent`, `wardyn_oidc_return` | At the start of a sign-in | That sign-in (10 minutes at most), read once |
+| `wardyn_oidc_reauth`, `wardyn_oidc_hint` | When a sign-in completes | Past the session; sign-out clears them |
+| `wardyn_ado_state`, `wardyn_ado_nonce`, `wardyn_ado_pkce` | At the start of the Azure DevOps sign-in | That sign-in (10 minutes at most) |
+| `wardyn_poidc_state`, `wardyn_poidc_nonce`, `wardyn_poidc_pkce` | At the start of an endpoint connection's OIDC sign-in | That sign-in (10 minutes at most) |
+| `wardyn_az_state`, `wardyn_az_nonce`, `wardyn_az_pkce` | At the start of the Azure AI Foundry sign-in | That sign-in (10 minutes at most) |
+| `wardyn_azcli_state`, `wardyn_azcli_nonce`, `wardyn_azcli_pkce` | At the start of the Azure CLI sign-in | That sign-in (10 minutes at most) |
+
+- A sign-in whose cookies are stripped is refused at its callback, so a connection that depends on it cannot be set up.
+- The UI-sandbox gateway is a separate listener and sets two cookies of its own, `wardyn_ui_sess` and `wardyn_ui_bind_<id>`.
+  - Neither is a console cookie, and neither takes the `__Host-` prefix. [UI sandboxes](UI-SANDBOXES.md) gives their scope and lifetime.
+
 - With secure cookies on (TLS served directly, or `WARDYN_TLS_TERMINATED`), each one is written as a `__Host-` cookie (`__Host-wardyn_session`, and so on): `Secure`, `Path=/` and no `Domain`, also under `WARDYN_BASE_PATH`.
 - A browser refuses to store a `__Host-` cookie that breaks any of those rules, so no other host under the console's registrable domain can plant one.
 - That includes a UI-sandbox app relayed on a sibling host, whose page script can set `Domain=` cookies the console receives.
@@ -2501,7 +2569,7 @@ grep 'daemon egress proxy configured' <logs>
 - The file must hold certificates only — a private key or CSR exported alongside the root is refused at boot (`loadTrustedCA`).
 - The bundle handed to the sidecar and the sandboxes is rebuilt from the parsed certificates, never copied from the raw file.
 - It reaches all three processes: `wardynd` mutates the shared `http.DefaultTransport`; the proxy sidecar and every sandbox get the SAME bundle forwarded per run (`runner.ProxyConfig.TrustedCAPEM`, `runner.InstallSandboxTrustedCA`).
-- Unset is byte-identical to today.
+- Unset changes nothing.
 - A file that does not exist, or whose content has no parseable certificate, refuses boot naming the var.
 
 Delivery per install path:
@@ -2543,7 +2611,7 @@ Delivery per install path:
 - It replaced the old `artifact_overrides` map (one entry per package ecosystem) because a corporate estate redirects container registries and internal appliances too: a list of From → To pairs over any URL, host, or IP.
 - The token comes from either of two places, mutually exclusive — a row setting both is rejected.
 - `token_secret_ref` names a bare secret directly.
-- `token_integration_ref` instead names an [**Integration**](operations/integrations.md) (above) to take the token from: the integration owns the system and its credential, the redirect owns rerouting a public endpoint to it.
+- `token_integration_ref` instead names an [**Integration**](operations/integrations.md) to take the token from: the integration owns the system and its credential, the redirect owns rerouting a public endpoint to it.
 - An integration also supplies its `proxy_header` header and format, so a feed that authenticates with something other than `Authorization: Bearer` can.
 - The credential is the secret that delivery names, whatever role the row gives it.
 - There is no UI control for picking an integration here yet; the seam is usable today via `PUT /site-config` and `wardyn site-config set`.
@@ -2571,7 +2639,7 @@ What you get depends on whether `ecosystem` is set:
 
 - `appendNetworkRedirectDenials` ([`internal/api/workspace_egress.go`](../internal/api/workspace_egress.go)) appends every network-only row's `from` to `policy.DeniedDomains` unconditionally on every dispatch ([`internal/api/runs_dispatch.go`](../internal/api/runs_dispatch.go)), unlike the substitution and the token plan, both of which are scoped to a run that actually reaches one of the redirect's public hosts.
 - Deny beats `allow_all_egress`, so this closes the public route even for a run the redirect's substitution never touches.
-- That is the intended GAP-EGRESS-4 protection against an allow-all Record session reaching the public host the redirect was configured to steer away from.
+- That is the intended protection against an allow-all Record session reaching the public host the redirect was configured to steer away from.
 - But it also means a redirect an operator scoped narrowly still costs every OTHER run that public host, with neither the `to` host nor the token to show for it.
 - The UI labels these rows `network only` so the gap stays visible.
 - **A `to` that is a literal IP** — the normal shape of a private endpoint — is trusted as an egress target for the runs the redirect covers.
@@ -2750,6 +2818,8 @@ The residuals an operator should plan for:
   - A host the corporate proxy cannot reach and that is not on the list fails discovery at boot, and none of the site-config fields above can fix it.
   - For a split-horizon issuer (public URL, internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
 
+## AWS sign-in per person and starting runs
+
 ### AWS SSO per person
 
 - A `bedrock_sso` model provider (Settings → Model providers) means **each person signs in to AWS themselves**, and their runs use their own session.
@@ -2759,6 +2829,7 @@ The residuals an operator should plan for:
   - They open Getting Started (or the New Run screen) and choose the provider's sign-in.
   - Wardyn launches a throwaway container-login sandbox: default-deny egress pinned to the AWS SSO endpoints, a 30-minute idle cap, no workspace, no repo, no credential mounts, never recorded.
   - The sandbox prints a device code; they finish the sign-in in their own browser.
+  - If they are not already signed in to the AWS portal, the portal's sign-in redirect drops the `?user_code=` and lands on the portal home. They open the verification link a second time.
   - The route (`POST /model-providers/{id}/sign-in`, no body) admits anyone who may launch an agent the provider serves and is granted the provider — admins included, each capturing their OWN session.
 - **The sign-in run carries its own allow-list, and a governance profile's `denied_domains` still binds it.**
   - The sign-in sandbox's `allowed_domains` are its own: `*.awsapps.com` (the access portal) and the provider's region-scoped AWS SSO hosts (`oidc.<region>`, `portal.sso.<region>` and `device.sso.<region>` under `amazonaws.com`).
@@ -2869,6 +2940,18 @@ The residuals an operator should plan for:
   - Revoking the session at the IdP ends it too.
   - IAM Identity Center is the system of record, so terminating their Identity Center session (or removing their assignment) stops the refresh token redeeming and their console reads *sign in again* — the offboarding step.
   - The session also dies with its OIDC client registration.
+
+#### How long an AWS sign-in lasts
+
+A `bedrock_sso` sign-in lasts as long as IAM Identity Center's session for it. Wardyn renews the session's access token by itself, but it cannot extend the session. When that session ends, AWS refuses the renewal, the run asks its owner to sign in again, and the message says how long after sign-in it happened. When people sign in to Wardyn and to IAM Identity Center through the same identity provider, three settings outside Wardyn decide how often that happens:
+
+1. **IAM Identity Center session duration.** IAM Identity Center console → Settings → Authentication → Session duration → User interactive sessions. The default is 8 hours; it can be 15 minutes to 90 days. A change applies to new sessions only.
+2. **Your identity provider's session for the IAM Identity Center application.** If the identity provider sends a session end time in its SAML assertion (`SessionNotOnOrAfter`), the shorter of the two applies. A sign-in-frequency or conditional-access policy on that application can also end it. Give it the same policy as the Wardyn console's application, so one doesn't end before the other.
+3. **The same people on both applications.** Assign the Wardyn console application and the IAM Identity Center application to the same groups, so anyone who can start a run can also renew its AWS session.
+
+None of these changes what a role may do, only how long a sign-in lasts.
+
+Wardyn does not turn its own sign-in into an IAM Identity Center token through a trusted token issuer. That AWS call is signed with AWS credentials, so Wardyn would have to hold a standing AWS credential of its own.
 
 ### One live sign-in sandbox per person
 
@@ -3005,6 +3088,13 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 > [!WARNING]
 > Accepted: a runner started against a different Docker daemon than the one holding its sandboxes (another `DOCKER_HOST`) finds every sandbox gone, and its running runs end `FAILED`. No setting turns this off.
 
+### Docker host: run networks
+
+- Docker sandboxes need Docker Engine 28.0.0 or later. Each run's network then has no address on the Docker host, so the agent reaches its proxy and nothing on the host.
+- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`.
+- A network keeps the shape it was created with. A run started before the upgrade is refused a restart or a revive; start a new run instead.
+- A daemon whose `default-network-opts` turn IPv6 on for bridge networks refuses runs.
+
 ### Docker host: one subnet per run
 
 - Every Docker sandbox gets its own internal network, and each network holds one subnet from the daemon's `default-address-pools`.
@@ -3032,49 +3122,44 @@ Or leave `daemon.json` alone and give Wardyn its own range:
 
 ### The start deadlines
 
-The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
+The pane waits; the runner does not. These are the bounds you size:
 
-- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox start, counted from the moment the proxy pod is created and spent across BOTH pods.
-  - That is the proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
+| Setting | Default | Bounds |
+|---|---|---|
+| `WARDYN_SANDBOX_START_TIMEOUT` | 3 minutes | The whole sandbox start, across both pods |
+| `WARDYN_SANDBOX_CAPACITY_WAIT` | 15 minutes | A pod the scheduler cannot place for lack of room |
+| Boot egress canary (`canaryWaitTimeout`, [`internal/runner/k8s/canary.go`](../internal/runner/k8s/canary.go)) | 3 minutes a phase, fixed | The canary; neither setting moves it |
+
+- **The start timeout** is one absolute deadline, counted from the moment the proxy pod is created.
+  - It covers the proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
   - It is not restarted when the agent pod is created, and a change in the reason a pod is stuck never resets it.
-  - A first pull of the `aws-sso` image was measured at **131 seconds** on a reporting estate, which is most of the default; raise it for a slower registry.
-  - Before 0.8.6 this was a fixed 3 minutes for the agent plus a separate fixed 90 seconds for the proxy's IP.
-- `WARDYN_SANDBOX_CAPACITY_WAIT` (default **15 minutes**) is how long a pod the scheduler cannot place for lack of room (`Unschedulable`, for example `Insufficient cpu`) may wait.
+  - A first pull of the `aws-sso` image was measured at 131 seconds on one estate; raise the timeout for a slower registry.
+- **The capacity wait** covers `Unschedulable` pods (for example `Insufficient cpu`).
   - The run stays `STARTING` with "Waiting for a machine with room for this sandbox." and the poll backs off to every few seconds.
-  - That time is counted apart: it spends the capacity wait, not the start timeout, so a run that waited ten minutes for room still has its full start budget to pull an image.
-  - The longest a run can sit in `STARTING` is therefore the two added together (18 minutes by default).
-  - `0` turns the wait off: an unplaceable run fails at the start timeout, which is what 0.8.5 did (at 90 seconds for the proxy).
-- Terminal states never wait: `ImagePullBackOff`, `CrashLoopBackOff`, a failed init and the like fail the run at once, inside a capacity wait as anywhere else.
-- The **boot egress canary** keeps its own fixed budget (`canaryWaitTimeout`, 3 minutes a phase, [`internal/runner/k8s/canary.go`](../internal/runner/k8s/canary.go)) and neither setting moves it: both phases must fit inside the chart's 450 second startup probe.
-- While a run waits, wardynd holds the run's watcher lease with a heartbeat for as long as the sandbox create blocks.
-- So another replica's sweep does not adopt a run that is still being set up.
-- `GET /api/v1/setup/status` reports both values (`runner.sandbox_start`, Kubernetes only) and the checklist shows them as the `sandbox_start` row.
-  - The console's "taking longer than expected" bound for a starting run is the two added together plus 90 seconds, read from there.
+  - That time is counted apart from the start timeout, so a run that waited ten minutes for room still has its full start budget to pull an image.
+  - The longest a run can sit in `STARTING` is the two added together: 18 minutes by default.
+  - `0` turns the wait off: an unplaceable run fails at the start timeout.
+- **Terminal states never wait.** `ImagePullBackOff`, `CrashLoopBackOff`, a failed init and the like fail the run at once, inside a capacity wait as anywhere else.
+- **The canary's two phases** must fit inside the chart's 450 second startup probe.
+- While the sandbox create blocks, wardynd holds the run's watcher lease with a heartbeat, so another replica's sweep does not adopt a run that is still being set up.
+- `GET /api/v1/setup/status` reports both values (`runner.sandbox_start`, Kubernetes only) and the checklist shows them as the `sandbox_start` row. The console's "taking longer than expected" bound for a starting run is the two added together plus 90 seconds, read from there.
+- A pull slower than the start timeout fails the run: it carries a `failure_hint` naming the deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
 
-> [!IMPORTANT]
-> **Upgrading:** a run that cannot be placed now waits up to 15 minutes where 0.8.5 failed it at 90 seconds.
-> Set `WARDYN_SANDBOX_CAPACITY_WAIT` to `0` to keep failing fast.
+**A first pull after an upgrade is not a fault.**
 
-- A pull slower than the start timeout fails the run honestly: the run carries a `failure_hint` naming the deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
-- **A first pull after an upgrade does not fail a run.**
-  - Every image tag changes at a version bump, so the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault.
-  - The Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does not have the image.
-  - Since 0.8 (#807) Kubernetes does too, while the kubelet's `Pulling` Event is the latest thing it has said about the agent container (below).
-  - Without that Event, or with the Events read refused, all Wardyn has is `ContainerCreating`, which the kubelet reports for a pull and for everything else it does before a container runs.
-  - So the console says a first start *can* take a couple of minutes while the image downloads.
-- **The one chart change, and why.**
-  - Every other reason comes from `pods: get`, which the chart already grants.
-  - `Pulling` does not: on Kubernetes it lives only in the pod's Events.
-  - 0.8 (#807) grants `events: list` in the namespaced k8s-runner Role: `list` only (no `get`, no `watch`), never in the ClusterRole, and `make helm-lint` fails a render that widens either.
-  - The runner lists at most once a second, only while the agent container is `ContainerCreating`, field-selected on the pod's kind, name and UID.
-  - Under `k8s.allowRunsInReleaseNamespace=true` that verb reads every co-tenant workload's Events in that namespace: a `fieldSelector` is a client convenience, not something RBAC can enforce.
-  - That is accepted as part of the same namespace blast radius the render-time fail in [`deploy/helm/wardyn/templates/rbac.yaml`](../deploy/helm/wardyn/templates/rbac.yaml) already names for that setting (exec into and delete any pod there, create or delete any Secret there).
-  - Nothing an Event says is surfaced: the image ref comes from the pod spec, and the Event only chooses between two sentences Wardyn wrote.
-  - If you write the Role yourself (`k8s.rbac.create=false`), add `events: list` on upgrade.
-  - Without it the read fails closed: it is switched off for the rest of that start, the create goes on, and a pull reads as `agent: ContainerCreating`, as before.
-- **The fix for a slow registry is to pre-pull, not to wait longer.**
-  - Get the agent and `aws-sso` images onto every node at upgrade time — a DaemonSet that pulls the new tags, or the node cache of whatever registry mirror the cluster uses.
-  - Then the first sign-in after an upgrade is a warm start.
+- Every image tag changes at a version bump, so the first start on each node after an upgrade re-pulls. That is a two-minute wait.
+- The Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does not have the image.
+- Kubernetes does too while the kubelet's `Pulling` Event is the latest thing it has said about the agent container.
+- Without that Event, or with the Events read refused, all Wardyn has is `ContainerCreating`, which the kubelet reports for a pull and for everything else it does before a container runs. The console then says a first start can take a couple of minutes while the image downloads.
+- To avoid the wait, get the agent and `aws-sso` images onto every node at upgrade time: a DaemonSet that pulls the new tags, or the node cache of the cluster's registry mirror.
+
+**The chart change that reads the `Pulling` Event.**
+
+- Every other reason comes from `pods: get`, which the chart already grants. `Pulling` lives only in the pod's Events, so the namespaced k8s-runner Role grants `events: list`: `list` only (no `get`, no `watch`), never in the ClusterRole. `make helm-lint` fails a render that widens either.
+- The runner lists at most once a second, only while the agent container is `ContainerCreating`, field-selected on the pod's kind, name and UID.
+- Under `k8s.allowRunsInReleaseNamespace=true` that verb reads every co-tenant workload's Events in that namespace, because a `fieldSelector` is a client convenience that RBAC cannot enforce. That sits inside the namespace blast radius the render-time fail in [`deploy/helm/wardyn/templates/rbac.yaml`](../deploy/helm/wardyn/templates/rbac.yaml) already names for that setting (exec into and delete any pod there, create or delete any Secret there).
+- Nothing an Event says is surfaced: the image ref comes from the pod spec, and the Event only chooses between two sentences Wardyn wrote.
+- If you write the Role yourself (`k8s.rbac.create=false`), add `events: list`. Without it the read fails closed: it is switched off for the rest of that start, the create goes on, and a pull reads as `agent: ContainerCreating`.
 
 ### Telling an estate-side failure from a Wardyn one
 
@@ -3240,8 +3325,7 @@ Naming these is the point of the walk, not a caveat on it:
 ### A run is holding for a sign-in
 
 - A run on the captured-AWS-SSO Bedrock lane can have its credential lapse **while it is working**.
-- Before 0.7.6 that was terminal: the agent's next model call failed and a mid-task context was lost.
-- Now the proxy **parks** the sandbox's next credential exchange while the credential's owner signs in again.
+- The proxy **parks** the sandbox's next credential exchange while the credential's owner signs in again.
 
 **Renewal comes first.**
 
@@ -3319,27 +3403,12 @@ Naming these is the point of the walk, not a caveat on it:
   3. Start new runs. The `wardyn-proxy` then trusts that CA when it re-originates the sign-in lane.
 - A proxy that cannot reach the AWS hosts is a routing problem, not a TLS one: use `upstream_proxy_no_proxy` and `internal_hosts` ("[Upstream proxy: the bypass list](#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)").
 
-> [!WARNING]
-> **A downgrade to 0.7.5 with `credential_reauth` rows present is UNSUPPORTED.**
-> Migration `0064` is additive (it widens a CHECK), so the upgrade needs nothing; the old CHECK would refuse the rows on the way back.
-> The upgrade runbook's `pg_dump` is the rollback.
+## Model providers: changes, the internal gateway and a local server
 
-### Version combinations
-
-- `claimSingleInstance` excludes a second daemon (outside HA mode).
-- It does not exclude an old sidecar image, an old browser bundle or an old CLI, so:
-
-| combination | behaviour |
-|---|---|
-| 0.7.5 proxy sidecar, 0.7.6 daemon | No hold. The 423 is an unrecognised status, the re-resolve fails closed, and the run's model call fails as it did in 0.7.5. The approval row is still raised and still visible. |
-| 0.7.6 proxy sidecar, 0.7.5 daemon | No 423 is ever answered, so the hold never opens. Byte-identical to 0.7.5. |
-| 0.7.5 console, 0.7.6 daemon | The row renders through `WIRE_TO_COPY`'s fallback (the raw kind string in the chip) and the screen does not crash; the Approve/Deny pair is offered and the server answers 409. Tell people on an old bundle to reload. |
-| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; the 0.7.5 `approvals list` prints it verbatim. |
-
-### Internal model gateway
+### A provider change removes people's credentials
 
 <!-- Provider connection causes: itemised retention and disclosure rules; no additional prose budget. -->
-- Changing a provider’s address, header scheme or kind removes each person’s credential; nothing silently follows the new destination.
+- Changing a provider’s address, header scheme, extra headers or kind removes each person’s credential; nothing silently follows the new destination.
 - Affected people see the reason and new destination host in Your model connections and launch recovery, then review it before connecting again.
 - The owner-scoped change record contains only owner, provider ID and UID, reason, time and the already-disclosed destination host.
   - It contains no secret, encrypted copy, hash or secret-store reference.
@@ -3349,8 +3418,13 @@ Naming these is the point of the walk, not a caveat on it:
 - Older clients retain the neutral unavailable wording because cause fields are optional.
 - Migration `0143_provider_connection_changes` creates an empty history table; pre-upgrade removals have no recorded cause.
 
-- Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`.
+### Internal model gateway
+
+- Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`. [Model gateways and detectors](operations/model-gateways.md) has the LiteLLM, Portkey and OpenRouter recipes.
 - An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by `base_url` alone. Its `fast_model` sets the haiku alias.
+- Codex CLI on a `custom_endpoint` or `local_model` provider calls `<base_url><path>/responses`, the OpenAI Responses API, so the endpoint must serve it.
+  - Set the Model field of the harness entry (it is per harness entry; the console hint is in [`model-providers-copy.ts`](../ui/src/app/lib/model-providers-copy.ts)) to a name the endpoint accepts.
+  - From 0.10.0-rc.15, Codex CLI uses that Model on `custom_endpoint` too.
 
 > [!WARNING]
 > A Claude subscription provider's `base_url` re-points the sign-in token too.
@@ -3441,6 +3515,8 @@ With `local.allow_on_laptop_runners: true` (off by default; set it with the swit
 > [!IMPORTANT]
 > **Upgrade note.** Move the proxy image pin with wardynd, image first, before you add a `local_model` provider.
 > wardynd writes `local_models` into the proxy's config for those runs only, and an older proxy refuses that key at startup.
+
+## Site config: artifact overrides, probes and directory autocomplete
 
 ### Upgrading from `artifact_overrides`
 
@@ -3584,7 +3660,7 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
 - The probe reads curl's own `num_connects`, because a timeout alone cannot tell an accepted-then-tarpitted dial from one that never left the sandbox.
 - `test-redirect` only.
 
-### Directory autocomplete: the one path where the daemon dials out
+### Directory autocomplete: outbound calls to Entra and Graph
 
 - Everything above this line is **sandbox** egress — what a run may reach, brokered by the proxy sidecar.
 - `WARDYN_DIRECTORY_PROVIDER=entra` opts into something different in kind, and it is written here so it is never discovered as a surprise in a firewall log.
@@ -3640,7 +3716,7 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 | `authz.denied` datum | `member_mode: true` | `user_view: true` |
 | `authz.denied` reason | `byoi_member` | `byoi_user` |
 | Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |
-| Go: `internal/auth/oidc` | `SetMemberMode` | `SetUserView` (grew a `typeID` param the same release, #835/UT-13) |
+| Go: `internal/auth/oidc` | `SetMemberMode` | `SetUserView` (grew a `typeID` parameter, #835) |
 | Go: `internal/api` | `auditMemberPolicyDrops`, `authorizeMemberDecision`, `boundMemberSpec`, `denyMemberCapability`, `denyMemberDrive`, `denyMemberGovernance`, `denyMemberRequest`, `denyMemberRunQuota`, `denyMemberSeededImage`, `denyMemberWorkspaceProviders`, `filterMemberGrants`, `handleSetMemberMode`, `memberDropsIntegration`, `memberEnvSecretIsAdminOnly`, `memberModeRequest`, `memberModelAccess`, `memberMountAllowed`, `memberMountPosture`, `memberPreviewApplies`, `memberSafeCapabilities`, `memberSafeIntegration`, `memberSafeIntegrations`, `memberSourcesAllowed`, `memberVisibleOperatorSecretNames`, `narrowMemberInlinePolicy`, `redactSetupStatusForMember`, `redactSpecForMember` | `auditUserPolicyDrops`, `authorizeUserDecision`, `boundUserSpec`, `denyUserCapability`, `denyUserDrive`, `denyUserGovernance`, `denyUserRequest`, `denyUserRunQuota`, `denyUserSeededImage`, `denyUserWorkspaceProviders`, `filterUserGrants`, `handleSetUserView`, `userDropsIntegration`, `userEnvSecretIsAdminOnly`, `userViewRequest`, `userModelAccess`, `userMountAllowed`, `userMountPosture`, `userPreviewApplies`, `userSafeCapabilities`, `userSafeIntegration`, `userSafeIntegrations`, `userSourcesAllowed`, `userVisibleOperatorSecretNames`, `narrowUserInlinePolicy`, `redactSetupStatusForUser`, `redactSpecForUser` |
 | CLI: approvals | `approvals list\|get`, `approve <id>`, `deny <id>` | `wardyn approval list\|get\|approve\|deny` — clean break, no alias, 0.8.4; `--reason`, `--scope`, `--until` unchanged |
 | CLI: run logs | `logs <run-id>` | `wardyn run logs <run-id>` — clean break, no alias, 0.8.4 |
@@ -3659,6 +3735,8 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
   matrix) — a tier classification, not this feature; out of scope.
 
 ## Upgrades
+
+The steps a single release needs are in [CHANGELOG.md](../CHANGELOG.md), under that release's "Before you upgrade".
 
 > [!IMPORTANT]
 > **Upgrading to 0.9 removes three compatibility behaviours.**
@@ -3730,31 +3808,11 @@ There is **no rolling upgrade across this release**:
   - Over a database 0.8.6 or later migrated, the older binary stops earlier, at its boot audit check: `migrate: db: the audit chain canary could not append a row`, ending in `audit_events: rows are appended only through audit_append()`.
   - The audit conversion is one-way (see "Stopped-writer upgrade"); the meaning and the remedy are the same: start the newer release again, or restore the pre-upgrade dump before you run the older version.
 
-> [!IMPORTANT]
-> **Upgrading to 0.8 signs every SSO human out, once, under TLS (#1258).**
+> [!NOTE]
+> **A release that changes the session payload signs every SSO human out, once.**
 
-- With secure cookies on (TLS served directly, or `WARDYN_TLS_TERMINATED`), the session
-  cookie is now `__Host-wardyn_session`, and the old `wardyn_session` is never
-  read, not even as a fallback, so every human re-authenticates at their next
-  request.
-- The old cookie is left to expire.
-- A plain-HTTP install keeps the old
-  names and signs nobody out.
-- Admin-token and API-token auth are unaffected.
-
-> [!IMPORTANT]
-> **Upgrading to 0.7 signs every SSO human out, once.**
-
-- The session payload gained
-  a codec version and `decodeSession` requires an exact match
-  (`SessionCodecVersion`, [`internal/auth/oidc/session_codec.go`](../internal/auth/oidc/session_codec.go)).
-- So every cookie
-  minted by an earlier release decodes as no session and the human re-authenticates
-  at their next request.
-- Nothing is lost but the login: grants, group snapshots and
-  governance assignments are all read from the database.
-- **Admin-token and
-  API-token auth are unaffected** — neither carries a session cookie.
+- `decodeSession` requires an exact `SessionCodecVersion` match ([`internal/auth/oidc/session_codec.go`](../internal/auth/oidc/session_codec.go)), so a cookie minted by an earlier release decodes as no session and the human signs in again at their next request.
+- Grants, group snapshots and governance assignments are read from the database, and admin-token and API-token auth carry no session cookie, so only the login is lost.
 
 ```sh
 git pull && make compose-build          # rebuild wardynd at the new revision
@@ -3767,93 +3825,12 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
   rebuilds them.
 
 > [!IMPORTANT]
-> **0.7 needs the agent images rebuilt, or an allocated drive is unwritable.**
+> **`/home/agent/drive` is reserved: it is refused as an authored mount target.**
 
-- `/home/agent/drive` is the reserved in-container mount point a **user drive**
-  lands on (`runner.DriveTarget`, [`internal/runner/mount.go`](../internal/runner/mount.go)).
-- Every image
-  under [`deploy/images`](../deploy/images) now pre-creates it owned by `agent` — the ones on a public
-  base do it themselves, the ones on a sibling image inherit it.
-- A person's fresh
-  managed volume takes that ownership through Docker's copy-up.
-- **No pre-0.7 image
-  has the directory**: 0.6.6's base image created `/home/agent/work` and nothing
-  else.
-- So the daemon conjures a **root-owned** one at mount time and a drive you
-  allocated *writable* is unwritable by uid 1000 on its very first run.
-- Nothing
-  else goes wrong — the image builds, the container starts, the mount succeeds.
-- So the only symptom is the agent failing to write to its own drive.
-- And wardynd cannot repair it (fixing that ownership would mean re-owning a person's volume, which
-  the control plane never does).
-- Rebuild with `make agent-images-core`, and
-  re-pin anything listed in `WARDYN_AGENT_IMAGES` at the rebuilt tag; a **BYOI**
-  image is yours to fix, one `mkdir` (see "User drives on Docker" and
-  [`deploy/images/README.md`](../deploy/images/README.md)'s image contract).
-- `TestAgentImagesPreCreateDriveDir`
-  holds the rule for every image in this tree.
-- A deployment that registers no
-  drive is unaffected.
-
-> [!IMPORTANT]
-> **0.7 refuses `/home/agent/drive` as an AUTHORED mount target, and a row stored before this release still names it.**
-
-- The reserved target — the whole subtree,
-  so `/home/agent/drive/shared` too — is refused to every policy
-  `workspace_mounts[].target`, every `workspace_repos[].target` and every
-  workspace `local_dir` source target.
-- The check is `ValidateAuthoredTarget` ([`internal/runner/mount.go`](../internal/runner/mount.go)).
-- It is the authored-target arm of the same validator every
-  mount target runs.
-- Before 0.7 the rule was only the allowed-prefix one
-  (`/home/agent`, `/work`, `/workspace`), which admits it.
-- What a stored row does
-  next splits by where it lives.
-- A stored **workspace** source IS re-validated,
-  at run-create — `seedRequestWorkspace` re-runs `ValidateAuthoredTarget` over
-  every `ws.Sources` target ([`internal/api/runs_create.go`](../internal/api/runs_create.go)) — and is
-  refused `422` with `workspace <id> source target: target /home/agent/drive is
-  reserved for the user drive`.
-- A stored **policy**'s `workspace_mounts` or
-  `workspace_repos` row is never re-validated on read — `validatePolicySpec`
-  runs on the two **write** paths only — so it survives the upgrade and reaches
-  dispatch intact.
-- `buildRunMounts` re-checks the reserved target there and
-  **drops** the mount rather than failing the run, logging `wardynd: stored
-  policy binds the reserved user-drive target; dropping that mount` at WARN
-  ([`buildRunMounts` in `internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)).
-- The run starts one bind
-  short.
-- `buildRepoRecords` makes the same drop for a stored policy's
-  `workspace_repos[].target`, folded into its destination validation
-  ([`buildRepoRecords` in `internal/api/runs_scm.go`](../internal/api/runs_scm.go)), but with **no** distinct log line for that
-  arm.
-- That WARN is the *only* run-time signal a stored policy row produces —
-  no HTTP error, nothing the member sees.
-- And `buildRunMounts`' drop means
-  dispatch never reaches the driver-level `docker: denied workspace mount
-  "<source>" -> "<target>": target /home/agent/drive is reserved for the user
-  drive` refusal (the `ValidateAuthoredTarget` check in `Driver.agentMounts`,
-  [`internal/runner/docker/driver_mounts.go`](../internal/runner/docker/driver_mounts.go)) for this
-  case at all.
-- That check now guards only a path a stored policy row can
-  no longer take.
-
-Find both shapes before the upgrade window rather than in
-somebody's run or wardynd's log:
-
-```sh
-for path in policies workspaces; do
-  curl -fsS "$WARDYN_URL/api/v1/$path" -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
-    | grep -o '"target":"/home/agent/drive[^"]*"' || true
-done
-```
-
-- Re-target each hit anywhere else under `/home/agent`, `/work` or `/workspace`
-  and write the policy or workspace back.
-- Nothing migrates them for you, on
-  purpose: a mount target is an operator's authored decision, and silently moving
-  a bind is the outcome this refusal exists to prevent.
+- The whole subtree is refused to every policy `workspace_mounts[].target`, `workspace_repos[].target` and workspace `local_dir` source target (`ValidateAuthoredTarget`, [`internal/runner/mount.go`](../internal/runner/mount.go)).
+- A stored workspace is re-checked at run-create and refused `422`.
+- A stored policy row is not re-checked on read: dispatch drops that mount and logs `wardynd: stored policy binds the reserved user-drive target; dropping that mount` at WARN, so the run starts one bind short and the member sees no error.
+- Re-target any such row under `/home/agent`, `/work` or `/workspace`. Nothing migrates it for you.
 
 > [!NOTE]
 > On Helm, a **mixed-version rollout repeats that logout** for as long as both
@@ -3865,26 +3842,6 @@ done
   old binary never accepts a cookie the new one refuses, only the reverse — but
   plan the window.
 - `--wait` (below) is what keeps it short.
-
-> [!IMPORTANT]
-> **On Helm, a downgrade past 0.6 also stalls the rollout, before migrations ever matter.**
-
-- The chart's readiness probe targets `/readyz`, which the 0.6 images
-  introduced.
-- The empty default `image.tag` resolves to `.Chart.AppVersion`
-  (the chart's own `Chart.yaml`, always the shipped release's version), so a
-  stock install is fine.
-- An `image.tag`
-  explicitly **pinned** at or below `0.5.0`
-  serves only `/healthz`.
-- So the probe 404s forever, the pod never joins the
-  Service's endpoints, and `helm upgrade`/`rollout status` hangs NotReady with
-  nothing crashed and nothing logged.
-- Pin the probe back for such an image with
-  `--set readinessProbe.path=/healthz`, accepting that version's ceiling (a dead
-  Postgres reads healthy again).
-- CI does not catch this — `helm-install-test` and
-  the kind quickstart both build `wardynd` from source.
 
 ### Before you upgrade: a large recording store
 
@@ -3911,7 +3868,6 @@ services:
 - An install created by `curl … | sh` has none — its compose file and `.env` live
   in `~/.wardyn` (or `$WARDYN_HOME`), and the installer's own closing banner says
   only *"re-run this installer at the new version"*.
-- That is the mechanism, and it is genuinely all of it.
 - Re-running
   fetches the new release's compose file and bumps the image pins in `.env`
   (`WARDYN_AGENT_IMAGES` is **merged**, so an image you added by hand survives),
@@ -3964,6 +3920,7 @@ image digests in `wardyn.env`, not a re-run of anything
   owns nothing — fails on the first migration that touches an existing object,
   because PostgreSQL requires ownership for `ALTER TABLE` and for
   `CREATE OR REPLACE FUNCTION`.
+- The list of migrations below names those that change something an earlier release created, so they need the migrator. Some add the app-role grants they need. It is not the grant checklist: step 4's `ALTER DEFAULT PRIVILEGES` gives the app role every table added after the split.
 - That is not hypothetical on a 0.6 → 0.7 upgrade.
 - Every 0.6.x release ships
   through `0049`, so this path applies `0050`–`0062`, and most of it is exactly
@@ -4118,6 +4075,27 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0253` (`0253_agent_runs_kept_machine_id`) adds `agent_runs.kept_machine_id` and `agent_runs.kept_machine_mode` (`0001`'s table): the kept machine a macOS VM run kept or resumed and how, with no foreign key so the run's page can say the machine was deleted. It also adds `kept_machines.reset_run_id` and `kept_machines.reset_unconfirmed` (`0250`'s table): a fresh start its Mac has not confirmed, and an earlier one a later attempt replaced. NULL or false on every existing row; no grant changes.
 - `0254` (`0254_agent_runs_correlation_id`) adds `agent_runs.correlation_id` (`0001`'s table): the caller's own reference for a run, empty on every existing row; no grant changes.
 - `0255` (`0255_agent_runs_allowed_models`) adds `allowed_models` to `agent_runs` (`0001`'s table): the governed allowed-models list the run was dispatched under and the profile that set it, replayed on revive and never changed by a later profile edit; NULL when no list binds the run.
+- `0256` (`0256_agent_runs_policy_digest`) adds `agent_runs.policy_digest` (`0001`'s table): the SHA-256 of the run's effective policy, written at dispatch; empty on every existing row; no grant changes.
+- `0257` (`0257_delegation_actor`) adds `delegated_tokens.actor_sub` and `actor_iss` (`0094`'s table, empty on every existing row), `agent_runs.created_via_actor` (`0001`'s table) and `attach_tickets.via_actor` (`0026`'s table), both NULL on every existing row: the agent a portal named as acting for the person; no grant changes.
+- `0258` (`0258_run_create_keys`) creates `run_create_keys`: one row per `POST /api/v1/runs` `Idempotency-Key`, kept 24 hours. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
+- `0259` (`0259_audit_checkpoints`) creates the append-only `audit_checkpoints` table; a split-role install grants `INSERT, SELECT` on it to each role that may call `audit_append`, and nothing else.
+- `0260` (`0260_delegate_cut_in_flight`) adds `delegates.cut_in_flight_at` (`0094`'s table): when a portal's revoke also cut the gateway access of the runs it launched; NULL on every existing row; no grant changes.
+- `0261` (`0261_groundtruth_sensors`) creates `groundtruth_sensors`: each ground-truth sensor's latest heartbeat, one row per Kubernetes node (`''` for the Compose sensor), which `/healthz` reads to judge every node. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`.
+- `0262` (`0262_agent_runs_image_admission`) adds `agent_runs.image_admission` (`0001`'s table): the image admission verdict a run's create recorded for its member image; NULL on every existing row; no grant changes.
+- `0263` (`0263_agent_runs_policy_generations`) adds `agent_runs.policy_generations` (`0001`'s table): the run's policy generations, one per revive after dispatch's, each with its digest and its proxy's run token ids; `[]` on every existing row; no grant changes.
+- `0264` (`0264_run_model_usage`) creates `run_model_usage`: one row per metered model call, keyed by the call id the proxy made (a retry or a replay stores it once), with the provider-reported token counts, the call's state and reason; rows go with their run. A split-role install grants the app role `SELECT, INSERT` on `run_model_usage`.
+- `0265` (`0265_governance_unit_deciders`) creates `governance_unit_deciders`: one row per unit that has deciders rules of its own, holding the rules as one JSON list; a unit with no row is governed by the nearest ancestor that has one; a row goes with its unit. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_deciders`.
+- `0266` (`0266_governance_envelopes`) creates `governance_envelopes`: one row per platform envelope, the unit that is a platform's root and the IdP groups the security tier approved for it; a row goes with its unit. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_envelopes`.
+- `0267` (`0267_governance_change_note`) adds `governance_changes.note_reason` and `governance_changes.note_ticket` (`0126`'s table): the proposer's note on a held change, why it is wanted and an optional ticket reference, empty on every existing row; no grant changes.
+- `0268` (`0268_delegate_run_in_under`) adds `delegates.run_in_under` (`0094`'s table): the governance unit a portal is pinned to, NULL (unpinned) on every existing row; no grant changes.
+- `0269` (`0269_agent_runs_unit_idx`) creates the partial index `agent_runs_unit_idx` on `agent_runs (unit_id)` where `unit_id` is not NULL; no grant changes. It builds without `CONCURRENTLY`, so writes to `agent_runs` wait while it builds.
+- `0270` (`0270_approvals_decision_basis`) adds `approvals.decision_basis` and `approvals.decision_rule_unit` (`0001`'s table): how a decision under a unit's deciders rule was made and whose rule it was, NULL on every existing row; no grant changes.
+- `0271` (`0271_approval_file_review`) replaces `approvals_kind_check` (`0001`'s table) to admit `file_download` and adds a partial unique index that keeps one pending review of a file per run; no row or grant change.
+- `0272` (`0272_context_pins`) adds `components.owning_unit_id` (a foreign key to `governance_units`, restrict on delete; organisation rows only) and `workspaces.owning_unit_strict` (default false; true needs a pin). No grant change.
+- `0273` (`0273_governance_elevation`) adds `governance_memberships.expires_at` (with a partial index on it) and widens `agent_runs_lifetime_cap_source_check` (`0001`'s table) to admit `elevation`; no row or grant change.
+- `0274` (`0274_attach_ticket_credential`) adds two nullable columns to `attach_tickets` (`0026`'s table) and deletes dead CLI access-token rows; no grant change. Tickets and relay cookies issued before the upgrade carry no credential and keep the old behaviour until they expire.
+- `0275` (`0275_run_proxy_starts`) creates `run_proxy_starts`, one row per proxy start and its policy readback (the start's generation, run token id, mode, the two config hashes, state, deadline and whether a failed start's proxy stop was confirmed), and adds the nullable `proxy_addr` to `agent_runs` (`0001`'s table): the address the run's agent reaches its proxy on; no row or grant change.
+- `0276` (`0276_agent_runs_forced_stop`) adds the nullable `agent_runs.forced_stop_at` (`0001`'s table), set when a kept run's end is taken without its lock, with a partial index on it where it is set. It is cleared in exactly four cases: the sandbox stop is confirmed; the sandbox is kept with its proxy stopped for its computer folder's pass back; its ref is already empty; or its runner is gone (revoked or deleted), when one `sandbox.sweep` failure row says the stop was not confirmed. In every case it clears only once the run's credential revoke has also succeeded. An offline runner keeps the mark; no row or grant change. Going back to an earlier release needs a database restore, as after any migration.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4276,7 +4254,7 @@ single-DSN mode, and no better.
   is reported on a `WARN` line with the `REVOKE`.
 
 > [!NOTE]
-> **Single-DSN installs keep one honest gap.**
+> **Single-DSN installs keep one gap.**
 
 - The one role owns the table, so the INSERT privilege
   cannot be taken from it.
@@ -4387,10 +4365,7 @@ env.WARDYN_OIDC_ISSUER for SSO — [...]
 > That is the case the chart's own render checks exercise.)
 
 - The new pod applies only the migration files `schema_migrations` does not already
-  record.
-- For the `0.5` → `0.6` upgrade this recipe serves, that is
-  `0042_capability_grants` and `0043_ssh_key_role`; re-running the same version
-  applies nothing and the count is `0`:
+  record; re-running the same version applies nothing and the count is `0`:
 
 ```console
 $ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
@@ -4398,7 +4373,7 @@ NAME                      READY   STATUS    RESTARTS   AGE
 wardyn-66c8f746c4-2b5mq   1/1     Running   0          25s
 
 $ kubectl -n wardyn logs deploy/wardyn | grep -c "applied migration"
-2
+<n>
 ```
 
 - A non-zero count is the expected shape of a version bump, not a warning.
@@ -4406,7 +4381,7 @@ $ kubectl -n wardyn logs deploy/wardyn | grep -c "applied migration"
   `0` only when the schema was already current.
 
 > [!IMPORTANT]
-> **`--wait` (or `--atomic`) is the load-bearing flag, not a courtesy.**
+> **`--wait` (or `--atomic`) is required.**
 
 - Without it
   `helm upgrade` reports on the API objects it wrote, not on whether anything came
@@ -4563,6 +4538,8 @@ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn -f your-values.yaml --set ima
 
 ### Restore: rehearse into a scratch database first
 
+`wardynd -recovery-rehearse` proves a whole recovery set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md#kubernetes-the-rehearsal-pod). The manual check below is the fallback for a plain dump.
+
 Two steps are Wardyn's, and both are cheap:
 
 **1. Preserve any current fallback state, then stop the control plane.**
@@ -4589,8 +4566,8 @@ compose (next section for what happens when it is not).
 - Then restore the way your Postgres restores, keeping `-v ON_ERROR_STOP=1` —
   without it `psql` walks past a failed statement and still exits `0`, leaving a
   half-loaded database that looks clean.
-- Before doing that to real data, **rehearse
-  the dump into a scratch database** — it proves the file loads, costs nothing, and
+- Before doing that to real data, rehearse
+  the dump into a scratch database. It proves the file loads, costs nothing, and
   touches no live row:
 
 ```console
@@ -4605,12 +4582,12 @@ $ kubectl -n wardyn exec deploy/postgres -- psql -U wardyn -d wardyn_restorechec
     -c "SELECT name FROM secrets ORDER BY name;"
  audit_events
 --------------
-            9
+          <n>
 (1 row)
 
  migrations
 ------------
-         43
+          <n>
 (1 row)
 
         name
@@ -4635,16 +4612,18 @@ $ kubectl -n wardyn exec deploy/postgres -- dropdb -U wardyn wardyn_restorecheck
 - A
   key that does not match the restored ciphertext is a failed rollout, not a
   surprise at first use — the next section.
+- With signing on (the default) `secrets` also holds `wardyn-audit-receipt-key`. A restore that lacks it mints a new key, and the signer then stops with `foreign_row`, because the newest stored checkpoint is signed by a key it does not hold. Restore the row from the backup ([Signed checkpoints and receipts](#signed-checkpoints-and-receipts)).
 
 ### The age key is a Secret, and the default loses your secrets on boot 2
 
-- Two supported wirings, and the chart refuses both ways of getting it wrong
+- Three ways to wire the key, and the chart refuses both ways of getting it wrong
   ([`deploy/helm/wardyn/templates/secret.yaml`](../deploy/helm/wardyn/templates/secret.yaml)):
 
 | `postgres.dsn` mode | age key value | What injects `WARDYN_AGE_KEY` |
 |---|---|---|
 | inline (`dsn.value`) | `secrets.ageKey` | 🟢 the Secret the chart creates |
 | external (`dsn.secretRef.name`) | an `age-key` entry in **that** Secret | 🟢 `secrets.ageKeyFromSecret=true` |
+| external | a Secret you manage, named by `secrets.ageKeySecretRef` (key `age-key` by default) | 🟢 that Secret |
 | external | `secrets.ageKey` | ⛔ **render fails** — it would be silently dropped |
 | external | none wired at all | ⛔ **render fails** — unless `secrets.allowEphemeralAgeKey=true` |
 
@@ -4661,7 +4640,7 @@ $ kubectl -n wardyn exec deploy/postgres -- dropdb -U wardyn wardyn_restorecheck
 - That is a
   `CrashLoopBackOff`, not a degraded pod.
 - Hence the
-  fourth row: the chart stops the install at render.
+  last row: the chart stops the install at render.
 
 ```console
 $ helm template wardyn ./deploy/helm/wardyn \
@@ -4734,8 +4713,8 @@ WARDYN_PG_DSN='postgres://…@127.0.0.1:15432/wardyn?sslmode=disable' \
 ```
 
 - Then write the new value into the Secret the Deployment reads
-  (`secrets.ageKey`, or the `age-key` entry of the external-DSN Secret — see the
-  table above) and scale back up.
+  (`secrets.ageKey`, the `age-key` entry of the external-DSN Secret or the Secret
+  `secrets.ageKeySecretRef` names — see the table above) and scale back up.
 - Keep the old Secret value **and** the Postgres
   backup until the rotated deployment is confirmed working; on k8s those are the
   rollback, since the Secret, not `<key-file>.bak`, is what the chart reads.
@@ -4774,7 +4753,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
   set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — the
-  documented production default, not an optional extra.
+  documented production default, not an optional extra. With SSO configured the chart refuses to render, and wardynd to boot, without it unless `uiSandbox.acceptSharedOrigin` (`WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`) accepts the shared origin.
 - Leaving it unset puts every run's relayed app on the SAME browser origin, separated only by a path-scoped
   cookie.
 - That shared-origin mode is a published residual
@@ -4787,6 +4766,15 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
   recipe, including the wildcard Ingress, in
   [docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the chart section
   linked above.
+
+### Pre-wrapped images
+
+- A Kubernetes control plane has no image builder, so an image it runs must already carry Wardyn's runner tools.
+- Build one `FROM` agent-base, pin it by digest and add it under Images; the control plane checks it on the cluster
+  before offering it. The recipe and what the check proves are in
+  [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
+
+## Member drives, team drives and user drives on Kubernetes
 
 ### Member drives
 
@@ -5134,7 +5122,7 @@ curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
   offset no drive name or home override can move.
 - This whole collision does not
   exist for an `id`-scheme drive, by construction rather than by convention.
-- `GET /api/v1/drives/{id}` reports which scheme a drive is on.
+- `GET /api/v1/drives` returns each drive's `object_scheme` (`slug` or `id`).
 - A database that no longer holds a `slug` drive cannot get it back: `wardyn drive set` re-creates it as `id`, so its homes get new, empty objects and the old ones are left unused. `set` warns for each such drive.
 
 > [!NOTE]
@@ -5356,23 +5344,17 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 > [!NOTE]
 > **Size is an allocation, not a limit**, and the product says so in one frozen sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee."*
 
-- That is the `enforcement` vocabulary this feature introduces — `filesystem` (the filesystem itself refuses the write, an XFS project quota), `request` (a scheduling request; a block storage class binds it, a network-share provisioner accepts it and enforces nothing),
-  - `external` (something outside Wardyn binds it, such as a NAS's own quota), `none` (nothing binds it), and, since 0.7.2, `eviction` (the kubelet measures the pod's usage periodically and evicts it once it exceeds the limit
-  - the write itself is never refused; since 0.7.5 that metered usage includes the agent's `/tmp` and workdir writes, which land in `emptyDir` volumes the kubelet meters;
-  - what the agent writes anywhere else — the rest of `$HOME` including the toolchain caches, and any authored target outside the workdir — still does not, see the `DiskMiB` gap below):
-- A managed claim is `request`, a share is `external`.
-- It is the same honesty the `DiskMiB` gap below is written with, and the two vocabularies **have now converged on one**:
-  - `disk_mib` reports `filesystem` on Docker when the storage driver can enforce a per-container quota, `eviction` on Kubernetes, and `none` on Docker when the driver cannot enforce a quota at all —
-  - which covers two different outcomes under one word:
-  - a driver that takes no size option (`vfs`, `fuse-overlayfs`) runs the request UNCAPPED with a warning,
-  - while overlay2 over a non-xfs backing filesystem is handed the option anyway and the daemon REFUSES the create, so that run fails closed instead.
-
-### Pre-wrapped images
-
-- A Kubernetes control plane has no image builder, so an image it runs must already carry Wardyn's runner tools.
-- Build one `FROM` agent-base, pin it by digest and add it under Images; the control plane checks it on the cluster
-  before offering it. The recipe and what the check proves are in
-  [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
+- The `enforcement` values:
+  - `filesystem`: the filesystem itself refuses the write (an XFS project quota).
+  - `request`: a scheduling request. A block storage class binds it; a network-share provisioner accepts it and enforces nothing. A managed claim is `request`.
+  - `external`: something outside Wardyn binds it, such as a NAS's own quota. A share is `external`.
+  - `none`: nothing binds it.
+  - `eviction`: the kubelet measures the pod's usage periodically and evicts it once it exceeds the limit. The write itself is never refused.
+    - The metered usage includes the agent's `/tmp` and workdir writes, which land in `emptyDir` volumes the kubelet meters.
+    - What the agent writes anywhere else is not metered: the rest of `$HOME`, including the toolchain caches, and any authored target outside the workdir. See [the `DiskMiB` gap](operations/kubernetes-known-gaps.md#diskmib-enforced-by-eviction-not-a-quota).
+- `disk_mib` uses the same vocabulary: `filesystem` on Docker when the storage driver can enforce a per-container quota, `eviction` on Kubernetes, and `none` on Docker when the driver cannot enforce a quota at all. That `none` covers two outcomes:
+  - a driver that takes no size option (`vfs`, `fuse-overlayfs`) runs the request uncapped, with a warning;
+  - overlay2 over a non-xfs backing filesystem is handed the option anyway and the daemon refuses the create, so that run fails closed.
 
 ## High availability
 
@@ -5453,8 +5435,9 @@ What the switch needs, and refuses to render or boot without:
 - Without `WARDYN_HA` boot is
   unchanged: one instance, the single-instance lock taken, and a second wardynd
   against the same database refuses to start.
-- `GET /setup/status` carries three rows while `WARDYN_HA` is on: `ha_mode`,
-  `recording_store_shared` and `mask_registry_shared`.
+- `GET /setup/status` carries `ha_mode`, `recording_store_shared` and `mask_registry_shared`
+  while `WARDYN_HA` is on, and `registered_runners_ha` when runners are enabled
+  ([why](operations/high-availability.md#blockers)).
 - The last fails when this
   replica's `LISTEN` connection is down or its mask-sync cursor is behind the
   committed generation after one read.
@@ -5470,11 +5453,6 @@ What the switch needs, and refuses to render or boot without:
     given is masked, verbatim, in every artefact Wardyn persists or relays for that
     run, whichever replica serves the request and whether or not any replica
     restarted.
-  - (Until 0.8.6 the registry was an in-memory map that failed open.
-    A recording uploaded to a replica other than the one that handled the run's
-    injection, or after a restart, was persisted with live credentials in it and a
-    `success` audit event.
-    That is why a second replica was never supported.)
   - **A registry miss fails closed for runs dispatched by 0.8.6.**
     - Dispatch commits each run's *masking manifest* to Postgres before the sandbox
       can see a value:
@@ -5490,7 +5468,7 @@ What the switch needs, and refuses to render or boot without:
       — the recording upload, the live attach, the exec relay, the SSH shell and the
       live output read — answer `503` `mask_state_unavailable` for a run whose manifest
       they cannot prove complete.
-    - (See the reason table above.)
+    - (See the [reason table](operations/denials.md#every-denial-that-isnt-a-404).)
     - And audit rows of such
       a run carry `"mask_scope":"globals_only"`.
     - **After any restart, a run that predates 0.8.6 has no manifest and is refused at those doors** (attach, SSH
@@ -5597,7 +5575,7 @@ What the switch needs, and refuses to render or boot without:
     The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
     credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep, the audit checkpoint signer last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.
@@ -5765,8 +5743,6 @@ What the switch needs, and refuses to render or boot without:
 ## Kubernetes: known gaps
 
 Moved to [kubernetes-known-gaps.md](operations/kubernetes-known-gaps.md#kubernetes-known-gaps).
-
-The member draft endpoint `POST /runs/policy-preview` shares the authorization decisions described above, but leaves credential liveness, autonomy/tool approvals and execution readiness pending. It uses its own `WARDYN_POLICY_PREVIEW_RATE_PER_MIN` bucket. Its dry-run denials share preflight's coalescing key and window; no credential value read or renewal occurs. See [the SDK contract](sdk.md#policy-preview).
 
 ### Every denial that isn't a 404
 

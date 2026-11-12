@@ -6,4 +6,18 @@
 # docs/operations/unit-admins.md 790 adds 22 over 768, measured (0.10 rc1): a held change is checked again when decided.
 # docs/operations/unit-admins.md 801 adds 11 over 790, measured (0.10 rc1): a renamed unit tied in priority with another group's unit is held.
 # docs/operations/unit-admins.md 806 adds 5 over 801, measured (rc.8 E4, #2948): a person's walls ignore locks.
-docs/operations/unit-admins.md=806 share=35
+# docs/operations/unit-admins.md 820 adds 14 over 806, measured: the promotion answers security_admin_surface, not unit_scope_denied.
+# docs/operations/unit-admins.md 956 adds 136 over 820, measured: the audit route row and the unit view of audit rows (scope, kept fields, the data keys it serves).
+# docs/operations/unit-admins.md 990 adds 34 over 956, measured: unit-view values are codes (no free text), no held push paths, the target filter rule.
+# docs/operations/unit-admins.md 1007 adds 17 over 990, measured at the rc.16 w3 batch B train: the merged lanes' additions together.
+# docs/operations/unit-admins.md=902 measured (+82 over 820): the deciders pointers, the lock bullet and the held-write row.
+# docs/operations/unit-admins.md 1089 = ours 1007 + theirs 902 - base 820 at the 0.10 W7 merge of the 0.10 W7 merge of lane/016-approvers-docs into the rc.16 w3 batch D train.
+# docs/operations/unit-admins.md 1105 adds 16 over 1089, measured: the audit export serves a unit admin only runs they created.
+# docs/operations/unit-admins.md 1152 adds 47 over 1105, measured: a unit's own held changes are decided strictly from above it.
+# docs/operations/unit-admins.md 1171 adds 19 over 1152, measured: the elevation requests row.
+# docs/operations/unit-admins.md 1179 adds 172 over 1007, measured: the governance rows in the unit view of audit rows (who the actor is, what is left out), the model-usage route row and the actor-filter rule.
+# docs/operations/unit-admins.md 1336 measured with both sides merged: the export, strictly-from-above and elevation requests rows (1171) and the governance rows in the unit view, the model-usage route row and the actor-filter rule (+165).
+# docs/operations/unit-admins.md 1340 adds 4 over 1336, measured: a person's withdrawal of their own request shows them as the actor.
+# docs/operations/unit-admins.md 1405 adds 65 over 1340, measured: the envelope rows in the four-eyes table and the platform tenancy link.
+# docs/operations/unit-admins.md 1421 adds 16 over 1405, measured: the root row says what applies directly and what only security decides.
+docs/operations/unit-admins.md=1421 share=35

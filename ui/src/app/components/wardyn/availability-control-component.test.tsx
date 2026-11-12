@@ -79,7 +79,8 @@ describe("AvailabilityControl, the org component family", () => {
     render(control());
     await screen.findByText("Available to");
     await userEvent.click(screen.getByRole("radio", { name: "Only these" }));
-    expect(await screen.findByText(ADD_FIRST)).toBeInTheDocument();
+    expect(await screen.findByText(ADD_FIRST)).toHaveAttribute("role", "alert");
+    expect(screen.getByRole("radiogroup", { name: "Available to" })).toHaveAccessibleDescription(ADD_FIRST);
     expect(putAvailabilityMock).not.toHaveBeenCalled();
     expect(screen.getByRole("radio", { name: "Everyone" })).toBeChecked();
   });

@@ -74,6 +74,7 @@ func stagedConnect(t *testing.T, proxyAddr, target, flow, stage string) (int, ne
 	return resp.StatusCode, c, br
 }
 
+// rows gives the egress decision rows in buf.
 func rows(t *testing.T, buf *syncBuf) []egress.DecisionLog {
 	t.Helper()
 	var out []egress.DecisionLog
@@ -84,6 +85,9 @@ func rows(t *testing.T, buf *syncBuf) []egress.DecisionLog {
 		var d egress.DecisionLog
 		if err := json.Unmarshal([]byte(l), &d); err != nil {
 			t.Fatalf("row %q: %v", l, err)
+		}
+		if d.DNS != nil {
+			continue // a DNS query row, not an egress decision (dnsRows)
 		}
 		out = append(out, d)
 	}
@@ -107,6 +111,28 @@ func relayServer(p http.Handler) *httptest.Server {
 	srv.Config.ConnContext = laneConnContext
 	srv.Start()
 	return srv
+}
+
+// sinkLogs drains the decisions the proxy queued on its sink. They are the in-process logs, so they carry
+// Request.Relayed, which the JSON rows in the buffer never do (it is not on the wire).
+func sinkLogs(p *Proxy) []egress.DecisionLog {
+	var out []egress.DecisionLog
+	for {
+		select {
+		case d := <-p.sink.ch:
+			out = append(out, d)
+		default:
+			return out
+		}
+	}
+}
+
+// relayedActivity reports Request.Relayed and CountsAsActivity of each log, in order.
+func relayedActivity(logs []egress.DecisionLog) (relayed, counts []bool) {
+	for _, d := range logs {
+		relayed, counts = append(relayed, d.Request.Relayed), append(counts, egress.CountsAsActivity(d))
+	}
+	return relayed, counts
 }
 
 const flowA, flowB = "00112233445566aa", "00112233445566bb"
@@ -142,9 +168,14 @@ func TestVMFlowStaging(t *testing.T) {
 		if dials.Load() != 1 || len(rs) != 1 || rs[0].Decision != egress.Allow || rs[0].Flow != flowA || rs[0].Request.Method != http.MethodConnect {
 			t.Fatalf("%d dials, rows %+v; want one dial and one allow carrying the flow", dials.Load(), rs)
 		}
+		// A relayed allow is not activity.
+		if relayed, counts := relayedActivity(sinkLogs(p)); len(relayed) != 1 || !relayed[0] || counts[0] {
+			t.Fatalf("relayed allow: Relayed = %v, CountsAsActivity = %v; want [true] and [false]", relayed, counts)
+		}
 	})
 	t.Run("a refusal consumes the park: one deny, no dial", func(t *testing.T) {
 		buf.Reset()
+		sinkLogs(p)
 		before := dials.Load()
 		if st, _, _ := stagedConnect(t, addr, "origin.test:8443", flowB, vmnetStageAsk); st != http.StatusForbidden {
 			t.Fatalf("ask :8443 = %d, want 403 (port rule)", st)
@@ -158,6 +189,10 @@ func TestVMFlowStaging(t *testing.T) {
 		rs := waitRows(t, buf, 2)
 		if len(rs) != 2 || rs[0].RuleSource != ruleSourcePort || rs[0].Flow != flowB {
 			t.Fatalf("rows %+v", rs)
+		}
+		// A relayed refusal is not activity, whether the proxy or the relay refused it.
+		if relayed, counts := relayedActivity(sinkLogs(p)); len(relayed) != 2 || counts[0] || counts[1] {
+			t.Fatalf("relayed refusals: Relayed = %v, CountsAsActivity = %v; want both false", relayed, counts)
 		}
 		r := rs[1]
 		if r.Decision != egress.Deny || r.RuleSource != "vmnet:sni-mismatch" || r.Flow != flowB || r.Request.Host != "origin.test" ||
@@ -261,6 +296,10 @@ func TestVMFlowAgentListenerIsAContainers(t *testing.T) {
 	if rs := waitRows(t, buf, 1); len(rs) != 1 || rs[0].Flow != "" {
 		t.Fatalf("rows %+v: the agent listener's row never carries a flow", rs)
 	}
+	// An agent-listener allow is the run's own traffic: activity.
+	if relayed, counts := relayedActivity(sinkLogs(p)); len(relayed) != 1 || relayed[0] || !counts[0] {
+		t.Fatalf("agent-listener allow: Relayed = %v, CountsAsActivity = %v; want [false] and [true]", relayed, counts)
+	}
 
 	buf.Reset()
 	if st, _, _ := stagedConnect(t, relayAddr, "origin.test:443", flowB, vmnetStageAsk); st != http.StatusNoContent || dials.Load() != 1 || buf.Len() != 0 {
@@ -272,12 +311,16 @@ func TestVMFlowAgentListenerIsAContainers(t *testing.T) {
 	if rs := waitRows(t, buf, 1); len(rs) != 1 || rs[0].Flow != "" {
 		t.Fatalf("rows %+v: the agent listener's row never carries a flow", rs)
 	}
+	sinkLogs(p)
 	buf.Reset()
 	if st, _, _ := stagedConnect(t, relayAddr, "origin.test:443", flowB, vmnetStageTunnel); st != http.StatusOK || !dialsReach(dials, 3) {
 		t.Fatalf("tunnel stage on the relay listener = %d after %d dials, want the park resumed (200)", st, dials.Load())
 	}
 	if rs := waitRows(t, buf, 1); len(rs) != 1 || rs[0].Decision != egress.Allow || rs[0].Flow != flowB {
 		t.Fatalf("rows %+v: the resumed tunnel's allow row carries the flow", rs)
+	}
+	if relayed, counts := relayedActivity(sinkLogs(p)); len(relayed) != 1 || !relayed[0] || counts[0] {
+		t.Fatalf("resumed relay tunnel: Relayed = %v, CountsAsActivity = %v; want [true] and [false]", relayed, counts)
 	}
 
 	buf.Reset()

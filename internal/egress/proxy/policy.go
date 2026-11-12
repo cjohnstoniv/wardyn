@@ -74,6 +74,7 @@ type Policy struct {
 	deniedExactPort     map[string]struct{}
 	deniedWildPort      []domainmatch.WildPort
 	allowedMeth         map[string]struct{} // empty == all methods allowed
+	hostRules           []types.HostRuleSet // per-layer host rule sets (host_rules.go); empty imposes nothing
 	firstUse            types.FirstUseMode
 	// toolRules is tool name -> effect, compiled from RunPolicySpec.ToolRules.
 	// Nil/empty means "no rules": every gated call raises an approval. "*" is
@@ -85,6 +86,9 @@ type Policy struct {
 	// unaffected, and AllowedExactHost (credential injection) still requires an
 	// explicit exact allowlist entry.
 	allowAll bool
+	// refuseIPLiterals mirrors RunPolicySpec.RefuseIPLiterals: under allowAll, literalIPGuard refuses
+	// every literal IP host, in any spelling, but one listed exactly in the allowlist.
+	refuseIPLiterals bool
 	// gitPushAnyBranch mirrors RunPolicySpec.GitPushAnyBranch: this run's
 	// brokered pushes skip branch-namespace confinement (handleGitBroker).
 	gitPushAnyBranch bool
@@ -107,6 +111,8 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		allowedMeth:         make(map[string]struct{}),
 		firstUse:            spec.FirstUseApproval.Normalize(),
 		allowAll:            spec.AllowAllEgress,
+		hostRules:           types.CloneHostRuleSets(spec.HostRules),
+		refuseIPLiterals:    spec.RefuseIPLiterals,
 		gitPushAnyBranch:    spec.GitPushAnyBranch,
 		pushRules:           compilePushRules(spec.PushRules),
 	}

@@ -39,7 +39,7 @@ import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { PERM } from "../../../lib/permissions-copy";
-import type { CapabilitySubjectType } from "../../../lib/types";
+import type { CapabilitySubjectType, GovernanceChange } from "../../../lib/types";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -100,9 +100,9 @@ export function AssignmentsBlock({
   const [toRemove, setToRemove] = React.useState<GovernanceMembership | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing changed, and the note says so.
-  const [submitted, setSubmitted] = React.useState(false);
-  const held = () => {
-    setSubmitted(true);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
+  const held = (change: GovernanceChange) => {
+    setSubmitted(change);
     onChanged();
   };
   const profileName = (id: string) => snapshot.unit_names?.[id] ?? snapshot.profiles.find((p) => p.id === id)?.name ?? id;
@@ -113,12 +113,12 @@ export function AssignmentsBlock({
     try {
       await api.deleteAssignment(a.id);
       setToRemove(null);
-      setSubmitted(false);
+      setSubmitted(null);
       onChanged();
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setToRemove(null);
-        held();
+        held(e.change);
         return;
       }
       toast.error(PERM.REMOVE, { description: getErrorMessage(e) });
@@ -136,7 +136,7 @@ export function AssignmentsBlock({
         <div className="px-6 pt-5">
           <h2 className="text-sm font-medium text-foreground">{GOV.ASSIGN_TITLE}</h2>
           {snapshot.assignments.length > 0 && <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>}
-          {submitted && <SubmittedNote />}
+          {submitted && <SubmittedNote change={submitted} />}
         </div>
         <div className="mt-4">
           {snapshot.assignments.length === 0 ? (
@@ -149,7 +149,9 @@ export function AssignmentsBlock({
                   <TableHead>{GOV.COL_PROFILE}</TableHead>
                   <TableHead>{GOV.COL_PRIORITY}</TableHead>
                   <TableHead>{PERM.COL_ADDED}</TableHead>
-                  <TableHead className="w-[90px]" />
+                  <TableHead className="w-[90px]">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -205,7 +207,7 @@ export function AssignmentsBlock({
             disabled={disabled}
             teal={snapshot.profiles.length > 0}
             onAdded={() => {
-              setSubmitted(false);
+              setSubmitted(null);
               onChanged();
             }}
             onSubmitted={held}
@@ -262,7 +264,7 @@ function AddAssignmentForm({
   disabled: boolean;
   teal: boolean;
   onAdded: () => void;
-  onSubmitted: () => void;
+  onSubmitted: (change: GovernanceChange) => void;
 }) {
   const [subjectType, setSubjectType] = React.useState<PickableSubjectType>("group");
   const [subject, setSubject] = React.useState("");
@@ -287,7 +289,7 @@ function AddAssignmentForm({
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setSubject("");
-        onSubmitted();
+        onSubmitted(e.change);
         return;
       }
       toast.error(GOV.ADD_TITLE, { description: getErrorMessage(e) });
@@ -300,7 +302,7 @@ function AddAssignmentForm({
     <div className="mt-4 border-t border-border px-6 py-5">
       <h3 className="text-sm font-medium text-foreground">{GOV.ADD_TITLE}</h3>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr]">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[auto_1fr_1fr]">
         <Field label={PERM.FIELD_WHO} hint={whoHint}>
           <div className="space-y-2">
             <Segmented

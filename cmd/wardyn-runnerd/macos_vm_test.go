@@ -531,7 +531,7 @@ func TestMacOSVMStatusNeverShowsTheSetupCode(t *testing.T) {
 		var text, docText, docJSON strings.Builder
 		st.writeText(&text)
 		js, _ := json.Marshal(st)
-		rep := doctor.Report{Stages: macOSVMDoctorStages()}
+		rep := doctor.Report{Stages: macOSVMDoctorStages(nil, "")}
 		_ = rep.WriteText(&docText)
 		_ = rep.WriteJSON(&docJSON)
 		if named := strings.Contains(docText.String(), docFile); named != (mode == 0o600) {

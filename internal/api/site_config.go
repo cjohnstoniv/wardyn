@@ -627,7 +627,7 @@ func (s *Server) validateSiteConfigBody(cfg types.SiteConfig) ([]string, error) 
 	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages); err != nil {
 		return nil, err
 	}
-	if err := validateSiteConfig(cfg); err != nil {
+	if err := cmp.Or(validateSiteConfig(cfg), validateSiteImageAdmission(cfg.Images)); err != nil {
 		return nil, err
 	}
 	if err := s.validateADOTokenModes(cfg.WorkspaceProviders); err != nil {
@@ -861,7 +861,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	auditComponentSettings(datum, saved.Components, present["components"])
 	auditSiteRecording(datum, saved.Recording, present["recording"])
-	auditSiteImages(datum, saved.Images, present["images"])
+	auditSiteImages(datum, existing.Images, saved.Images, present["images"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}

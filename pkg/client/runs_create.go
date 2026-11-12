@@ -464,16 +464,20 @@ type CreateRunResult struct {
 	// ResourcesApplied is the CPU and memory the run asked for and got, and
 	// which limit bound each.
 	ResourcesApplied *AppliedResources `json:"resources_applied,omitempty"`
+	// Replayed is true when the server answered from an earlier create with the same
+	// Idempotency-Key (the Idempotent-Replayed header) instead of making a run.
+	Replayed bool `json:"-"`
 }
 
 // CreateRun submits a new agent run and answers once the run row exists (state
 // PENDING, never RUNNING) plus any advisory warnings; build and dispatch continue server-side.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
+//
+// It sends a fresh Idempotency-Key and makes ONE attempt: a lost answer is returned as the error
+// and the call is never repeated. To retry, or to choose the key, use CreateRunWith.
 func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
-	var out CreateRunResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs", req, &out)
-	return out, err
+	return c.CreateRunWith(ctx, req, CreateRunOptions{})
 }
 
 // PreflightItem is one row of the preflight setup checklist: something the run

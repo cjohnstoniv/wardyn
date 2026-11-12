@@ -368,6 +368,37 @@ func TestClamp_FirstUseApprovalTakesStricter(t *testing.T) {
 	}
 }
 
+// TestClampMember_PerRunWaitForReviewUnderDenyWithReview pins what a run that asks for
+// first_use_approval=wait_for_review gets under a unit whose ceiling is deny_with_review: the ask is
+// not refused, it is clamped to deny_with_review with a warning, so the first request to an unlisted
+// host is denied (the approval is raised) and passes only on a retry after approval. The looser ask
+// wins nowhere: wait_for_review ranks below deny_with_review (firstUseApprovalRank).
+func TestClampMember_PerRunWaitForReviewUnderDenyWithReview(t *testing.T) {
+	cases := []struct {
+		name              string
+		proposed, ceiling types.FirstUseMode
+		want              types.FirstUseMode
+		wantWarn          bool
+	}{
+		{"wait_for_review under deny_with_review is clamped", types.FirstUseWaitForReview, types.FirstUseDenyWithReview, types.FirstUseDenyWithReview, true},
+		{"wait_for_review stands under a wait_for_review ceiling", types.FirstUseWaitForReview, types.FirstUseWaitForReview, types.FirstUseWaitForReview, false},
+		{"always_deny under deny_with_review stays stricter", types.FirstUseAlwaysDeny, types.FirstUseDenyWithReview, types.FirstUseAlwaysDeny, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ceiling := operatorCeiling(t)
+			ceiling.FirstUseApproval = tc.ceiling
+			got, warns := ClampMember(types.RunPolicySpec{FirstUseApproval: tc.proposed}, ceiling, types.GovernanceLimits{}, types.ResourceLimits{}, types.ResourceLimits{})
+			if got.FirstUseApproval != tc.want {
+				t.Errorf("first_use_approval = %q, want %q", got.FirstUseApproval, tc.want)
+			}
+			if hasWarn(warns, `first_use_approval raised from "`+string(tc.proposed)+`" to operator minimum "`+string(tc.want)+`"`) != tc.wantWarn {
+				t.Errorf("clamp warning present = %v, want %v (warns=%v)", !tc.wantWarn, tc.wantWarn, warns)
+			}
+		})
+	}
+}
+
 // The ceiling's hold window and hold count bound a proposal, through both doors, as meet and Leq
 // read them: a longer window or more holds is cut to the ceiling with a warning, and a tighter or
 // default proposal is kept.

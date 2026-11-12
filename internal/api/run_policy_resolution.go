@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -27,6 +29,9 @@ func (s *Server) boundRunUserSpec(ctx context.Context, r *http.Request, spec typ
 // boundRunUserSpecDrops is the member pipeline without its audit: the bounded
 // spec, the warnings and the structured drops the audit is made from.
 func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string) (types.RunPolicySpec, []string, []capDrop, *runRefusal) {
+	if refusal := githubCapabilitiesDisjoint(spec.GitHubCapabilities, ceiling.Spec.GitHubCapabilities); refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, refusal
+	}
 	domains, literalWarns := dropUncoveredPrivateLiterals(spec.AllowedDomains, ceiling.Spec)
 	spec.AllowedDomains = domains
 	spec, warns := composer.ClampMember(spec, ceiling.Spec, ceiling.Limits, ceiling.authoredSize(), ceiling.memberSize())
@@ -49,6 +54,20 @@ func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spe
 		return types.RunPolicySpec{}, nil, nil, capabilityRunRefusal(cerr)
 	}
 	return spec, append(warns, capWarns...), append(drops, capDrops...), nil
+}
+
+// githubCapabilitiesDisjoint refuses a member's github_capabilities that shares nothing with their
+// ceiling's list (their governance profile's): the run would be left holding no GitHub capability at all, and an empty list
+// reads as the default, so it is refused rather than run. The clamp then bounds a list that does
+// share something (composer.ClampMember).
+func githubCapabilitiesDisjoint(picked, profile []ghscope.Capability) *runRefusal {
+	picked, profile = ghscope.ExpandPR(picked), ghscope.ExpandPR(profile)
+	if len(picked) == 0 || len(profile) == 0 || slices.ContainsFunc(picked, func(c ghscope.Capability) bool { return ghscope.Has(profile, c) }) {
+		return nil
+	}
+	return runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
+		"This run's github_capabilities ("+wallsCapList(picked)+") shares nothing with the GitHub capabilities your runs are limited to ("+
+			wallsCapList(profile)+"), so the run would hold no GitHub capability. Name capabilities from that list, or leave github_capabilities out to take it.")
 }
 
 func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req *createRunRequest, dryRun, credentials bool) (types.RunPolicySpec, *uuid.UUID, []string, policySourceRecord, *runRefusal) {

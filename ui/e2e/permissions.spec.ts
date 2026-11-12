@@ -128,7 +128,8 @@ test.describe("permissions — the admin surface, end to end", () => {
     const row = page.getByTestId(`capability-row-${"workspace"}`);
     await expect(row.getByText(PERM.ROW_ZERO)).toBeVisible();
     await row.getByRole("button", { name: `${PERM.ADD_CTA} ${KIND.workspace.label}` }).click();
-    await expect(page.getByRole("textbox", { name: KIND.workspace.valueLabel, exact: true })).toBeVisible();
+    // The value field is free text until the workspace list loads, then a picker; the label holds for both.
+    await expect(page.getByLabel(KIND.workspace.valueLabel, { exact: true })).toBeVisible();
   });
 
   test("enforcing with nothing granted is the lockout guard, and it is unmissable", async ({ page }) => {

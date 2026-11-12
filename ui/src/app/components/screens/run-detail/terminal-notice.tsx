@@ -32,6 +32,7 @@ import { StartupProgress } from "./startup-progress";
 import { QueuedWait } from "./queued-wait";
 import { KeptOutput } from "./output-pane";
 import { useRunOutput } from "./use-run-output";
+import { useRunDataOut } from "./use-run-data-out";
 
 export function TerminalPane({
   run,
@@ -62,6 +63,8 @@ export function TerminalPane({
   // (#1476: the run's person, or an admin on a run no person owns).
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
+  // The run's data_out rule, read only for a terminal that could open. Unknown draws nothing.
+  const dataOut = useRunDataOut(run.id, attachable);
   // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
   const watchable = !recordingDisabled && run.has_recording !== false;
   // A desktop the Mac lets be watched alone is offered here too, for whoever may enter the run. Never on a
@@ -107,7 +110,7 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    const terminal = <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+    const terminal = <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} keepsIn={dataOut === "review" || dataOut === "blocked"} />;
     // A macOS VM run is RUNNING while its setup runs: the terminal opens at once, so say the setup is still going.
     if (!run.macos_preparing) return terminal;
     return (
@@ -283,9 +286,11 @@ function PaneFrame({
 
 function PaneNotice({ text, action }: { text: string; action?: React.ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-      <p className="max-w-md text-sm text-muted-foreground">{text}</p>
-      {action}
+    <div className="scroll-thin flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-6 text-center">
+      <div className="my-auto flex flex-col items-center gap-2">
+        <p className="max-w-md text-sm text-muted-foreground">{text}</p>
+        {action}
+      </div>
     </div>
   );
 }

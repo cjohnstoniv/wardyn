@@ -341,15 +341,23 @@ func TestPG_MarkRunRevived_ExtendedOutageRunTakesASlot(t *testing.T) {
 	if ok, err := pg.UpdateRunStateIf(ctx, b.ID, types.RunRunning, types.RunFailed); err != nil || !ok {
 		t.Fatalf("end B: ok=%v err=%v", ok, err)
 	}
-	if ok, err := pg.MarkRunRevived(ctx, a.ID, types.LostOutage, nil, 1, true); err != nil || !ok {
+	owedAt, ok, err := pg.MarkRunRevivedOwingStart(ctx, a.ID, types.LostOutage, nil, 1, store.PolicySlot{})
+	if err != nil || !ok {
 		t.Fatalf("revive starting A's agent under the cap = %v, %v; want true", ok, err)
 	}
 	if n, err := pg.CountNonTerminalRuns(ctx, uuid.Nil); err != nil || n != 1 {
 		t.Fatalf("CountNonTerminalRuns = %d, %v; want 1 (A alone)", n, err)
 	}
+	// The claim leaves the agent start owed, on the stamp it returned, until the start lands.
 	var mark *time.Time
+	if err := pool.QueryRow(ctx, `SELECT agent_stopped_at FROM agent_runs WHERE id = $1`, a.ID).Scan(&mark); err != nil || mark == nil || !mark.Equal(owedAt) {
+		t.Fatalf("A's agent_stopped_at after the claim = %v, %v; want the claim's own stamp %v", mark, err, owedAt)
+	}
+	if err := pg.ClearRunAgentStartOwed(ctx, a.ID, 0, owedAt); err != nil {
+		t.Fatalf("clear A's owed start: %v", err)
+	}
 	if err := pool.QueryRow(ctx, `SELECT agent_stopped_at FROM agent_runs WHERE id = $1`, a.ID).Scan(&mark); err != nil || mark != nil {
-		t.Fatalf("A's agent_stopped_at after the revive = %v, %v; want cleared", mark, err)
+		t.Fatalf("A's agent_stopped_at after the start landed = %v, %v; want cleared", mark, err)
 	}
 }
 

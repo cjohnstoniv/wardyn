@@ -114,8 +114,8 @@ function RunDetailPage({ id }: { id: string }) {
   const principal = usePrincipal();
 
   const {
-    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
-    recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, loadMessage, tab, setTab,
+    recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
   const workload = useRunWorkload(run?.id);
@@ -286,6 +286,7 @@ function RunDetailPage({ id }: { id: string }) {
       ) : status === "error" ? (
         <div className="m-6 rounded-xl border border-border bg-card">
           <ErrorState
+            message={loadMessage}
             action={
               <Button variant="outline" size="sm" onClick={() => load(true)}>
                 <RotateCw className="size-3.5" /> Retry
@@ -385,7 +386,7 @@ function RunDetailPage({ id }: { id: string }) {
           {/* Overview is the cockpit: it fills, and the CANVAS owns the only
               scroll inside it (run-detail/canvas.tsx) — <main> still never
               scrolls, which e2e asserts. */}
-          <TabsContent value="overview" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <TabsContent value="overview" className="mt-0 flex min-h-[20rem] flex-1 flex-col">
             <Cockpit
               run={run} view={view}
               terminal={terminal}
@@ -407,7 +408,7 @@ function RunDetailPage({ id }: { id: string }) {
             />
           </TabsContent>
 
-          <TabsContent value="approvals" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+          <TabsContent value="approvals" className="scroll-thin mt-0 min-h-[12rem] flex-1 overflow-y-auto p-4">
             <ApprovalsTab
               approvals={approvals.map((a) => (wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a))}
               presetRefused={presetRefused}
@@ -422,17 +423,18 @@ function RunDetailPage({ id }: { id: string }) {
             />
           </TabsContent>
 
-          <TabsContent value="policy" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+          <TabsContent value="policy" className="scroll-thin mt-0 min-h-[12rem] flex-1 overflow-y-auto p-4">
             <PolicyTab run={run} />
           </TabsContent>
 
-          <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+          <TabsContent value="audit" className="scroll-thin mt-0 min-h-[12rem] flex-1 overflow-y-auto p-4">
             <AuditTab events={audit} runId={run.id} policy={run.policy} hasWallPreset={!!run.wall_preset} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
-          <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+          <TabsContent value="recording" className="scroll-thin mt-0 min-h-[12rem] flex-1 overflow-y-auto p-4">
             <RecordingTab
               state={recState}
+              refusal={recRefusal}
               recording={recording}
               recordingDisabled={recordingDisabled}
               runId={id}
@@ -454,7 +456,7 @@ function RunDetailPage({ id }: { id: string }) {
             />
           </TabsContent>
 
-          <TabsContent value="output" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+          <TabsContent value="output" className="scroll-thin mt-0 min-h-[12rem] flex-1 overflow-y-auto p-4">
             <OutputTab
               runId={run.id}
               live={!terminal}

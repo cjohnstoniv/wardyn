@@ -363,6 +363,9 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.refuseDataOutReader(w, r, run, "output", dataOutKeepsOutputMsg, s.isSecurityOperator(r.Context())) {
+		return
+	}
 	limit := s.cfg.RunOutputTailBytes
 	if v := r.URL.Query().Get("tail"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -420,6 +423,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		if len(out) > limit {
 			out, truncated = out[len(out)-limit:], true
 		}
+		s.auditRunOutputRead(r, run, row.Source)
 		s.writeRunOutput(w, r, id, runOutputResponse{
 			Output: string(out), Truncated: truncated, Complete: true, Source: row.Source, Incomplete: row.Incomplete,
 			CaptureGap: row.CaptureGap, MaskScope: row.MaskScope, CapturedAt: row.CapturedAt,
@@ -456,6 +460,25 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	s.refuseNoRunOutput(w, r, run, row, found, reader)
 }
+
+// auditRunOutputRead is an operator's read of another person's terminal text through a run's output: the
+// pane snapshot or the output recovered from the recording, which recordingReader alone is served. It is
+// audited as a replay of the recording is (recordingAuthorizer); the owner's own read, and the command output
+// of any run, write none.
+func (s *Server) auditRunOutputRead(r *http.Request, run types.AgentRun, source string) {
+	if source != paneSnapshotSource && source != recordingOutputSource {
+		return
+	}
+	if !s.isOperator(r.Context()) || run.CreatedBy == principalFromRequest(r) {
+		return
+	}
+	actorType, actor := actorFromRequest(r)
+	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, auditRunOutputRead, run.ID.String(), "success",
+		mustJSON(map[string]string{"source": source})))
+}
+
+// auditRunOutputRead is the audit action of an operator reading another person's recording-derived output.
+const auditRunOutputRead = "run.output.read"
 
 // servesFinalRow reports whether a read serves runID's stored final row. A
 // recording that yielded nothing does not hide a tail this process holds: the

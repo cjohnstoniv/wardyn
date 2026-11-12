@@ -10,9 +10,13 @@ import {
   canDecideApproval,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
+  isKubeCallRequest,
+  isHostCallRequest,
+  isMCPCallRequest,
   isTerminalRunState,
   type RunDetail,
   type ApprovalRequest,
+  type FileDownloadScope,
   type DecisionOptions,
 } from "../../lib/types";
 import { capabilityAllowed } from "../../lib/capabilities";
@@ -26,6 +30,10 @@ import { RunRef } from "../wardyn/run-ref";
 import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
+import { McpCallCard } from "../wardyn/mcp-call-card";
+import { FileDownloadCard } from "../wardyn/file-download-card";
+import { KubeCallCard } from "../wardyn/kube-call-card";
+import { HostCallCard } from "../wardyn/host-call-card";
 import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { OIDC_HOLD_LANE, REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
 import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
@@ -41,6 +49,8 @@ import { useOwnerName } from "../../lib/use-owner-name";
 import { wallPresetApprovalSentence } from "./run-detail/wall-preset-run-lines";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
 import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
+import { DECIDERS_INBOX } from "../wardyn/copy/deciders-inbox";
+import { DecidedByLine, RequestedByRow, SecondPersonLine, basisSentence } from "../wardyn/decider-lines";
 import { useAgentName } from "../wardyn/use-agent-name";
 import { KIND_ICON, capabilityLabel, deriveTitle, deriveBanner, str } from "./approvals";
 
@@ -61,8 +71,11 @@ export function ApprovalCard({
   onDecline,
   refused = false,
   presetBlocked = false,
+  waiting = false,
 }: {
   item: ApprovalRequest;
+  /** On the Waiting on you tab: the server listed this row because the caller may decide it now. */
+  waiting?: boolean;
   run?: RunDetail;
   /** The server refused this approve because the run's wall preset denies the host (wall_preset_host). */
   presetBlocked?: boolean;
@@ -102,7 +115,12 @@ export function ApprovalCard({
   // The run this approval gates, from the context row below's own fetch (B4 below says why it is read).
   const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const run = runProp ?? fetchedRun;
-  const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
+  // A decider's card (requested_by set) names who asked: the run is not theirs to read, so no run row and no fetch.
+  const runRow = runProp ? null : item.requested_by ? (
+    <RequestedByRow who={item.requested_by} runId={item.run_id} />
+  ) : (
+    <RunContextRow runId={item.run_id} onRun={setRun} />
+  );
   // An endpoint sign-in's hold names its provider row by uid, which setup status maps to the provider: no match
   // (not loaded, removed, or not this person's) reads as the generic wording with no door.
   const oidcHold = oidcHoldProvider(reauth, status);
@@ -137,7 +155,7 @@ export function ApprovalCard({
   // tier's whole purpose; the caps fetch above stays on useOperator because
   // capAllowed does (capabilities.go).
   const securityOperator = useSecurityOperator();
-  const kindDecidable = canDecideApproval(securityOperator, item.kind);
+  const kindDecidable = canDecideApproval(securityOperator, item.kind, item);
   // The `egress_host` capability bounds which hosts a member may DECIDE on —
   // the authorizeUserDecision seam (approvals.go). Advisory here: the server
   // refuses it anyway, this just says so before the click instead of after.
@@ -174,7 +192,11 @@ export function ApprovalCard({
   const agentName = useAgentName();
   const agentCount = run?.agents?.length ?? 0;
   const asker = item.kind === "tool_call" && agentCount >= 2 && typeof scope.harness === "string" && scope.harness ? scope.harness : undefined;
-  const canDecide = kindDecidable && !hostUngranted && !runEnded;
+  // Every row on the Waiting on you tab is one the server says the caller may decide (approvals_decidable_by.go), so
+  // the role-and-kind guess and the host grant do not gate it there. On the Pending tab an own card whose rule leaves
+  // the owner out is not the owner's to decide, unless the viewer is the security tier.
+  const ownerLeftOut = !waiting && !securityOperator && !item.requested_by && !!item.deciders && !item.deciders.includes("owner");
+  const canDecide = waiting ? !runEnded : kindDecidable && !hostUngranted && !runEnded && !ownerLeftOut;
   // T4-c: the requester's own walls deny this host, so no approver can admit it: Approve is off before the click,
   // Deny stays, and the sentence and Why card say whose walls they are. Drawn once the run read has settled, since
   // the owner is the run's creator and "Your walls" would otherwise flash on an approver who is not the owner.
@@ -221,6 +243,7 @@ export function ApprovalCard({
         <AdoCapabilityCard
           item={item}
           securityOperator={securityOperator}
+          listed={waiting}
           viewerPrincipal={principal}
           run={run}
           tokenWidens={tokenWidens}
@@ -265,6 +288,106 @@ export function ApprovalCard({
     );
   }
 
+  // One MCP call gets its own card too: it shows the call's exact arguments and approves that one call, with no scope
+  // menu. Its Approve and Deny take the push card's direct path (no reason dialog, no scope).
+  if (isMCPCallRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <McpCallCard
+          item={item}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // One reviewed file download and one held kubectl write each get their own card, on the MCP card's direct path: no
+  // scope menu and no reason dialog.
+  if (item.kind === "file_download" && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <FileDownloadCard
+          item={item as ApprovalRequest & { requested_scope: FileDownloadScope }}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (isKubeCallRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <KubeCallCard
+          item={item}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (isHostCallRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <HostCallCard
+          item={item}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (isPushContentRequest(item) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
@@ -272,6 +395,7 @@ export function ApprovalCard({
         <PushContentCard
           item={item}
           securityOperator={securityOperator}
+          listed={waiting}
           run={run}
           busy={pushBusy}
           onApprove={async () => {
@@ -321,7 +445,13 @@ export function ApprovalCard({
         <p className="mt-1 text-xs text-muted-foreground">{REAUTH_ROW.PROVIDER(reauthProvider)}</p>
       )}
 
-      {runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} askedBy={asker} />}
+      {runProp ? null : item.requested_by ? (
+        runRow
+      ) : (
+        <RunContextRow runId={item.run_id} onRun={setRun} askedBy={asker} />
+      )}
+      <DecidedByLine item={item} />
+      <SecondPersonLine item={item} />
       {asker && (
         <p className="mt-2 flex items-center gap-2 text-sm">
           <Bot className="size-3.5 shrink-0 text-info" aria-hidden="true" />
@@ -404,7 +534,9 @@ export function ApprovalCard({
                 security admin decides any kind). OPERATOR_ONLY_REASON named
                 a role the caller may not need. */}
             {!canDecide && (
-              <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : SECURITY_ONLY_REASON}</Chip>
+              <Chip tone="neutral">
+                {ownerLeftOut ? DECIDERS_INBOX.SOMEONE_ELSE : hostUngranted ? DENIED.APPROVE_CHIP : SECURITY_ONLY_REASON}
+              </Chip>
             )}
           </>
           )
@@ -448,10 +580,13 @@ export function DecidedRow({
   item,
   showRun = true,
   runTitle,
+  unitNames,
 }: {
   item: ApprovalRequest;
   showRun?: boolean;
   runTitle?: string;
+  /** Unit names by id, for the basis line of a decision made as a unit admin. */
+  unitNames?: Record<string, string>;
 }) {
   const scope = item.requested_scope ?? {};
   // A CANCELLED row carries decided_by="system" (the terminal-run cascade wrote
@@ -468,12 +603,19 @@ export function DecidedRow({
   // A decided endpoint sign-in names its provider like the pending one does: the scope's uid, through setup status.
   const { status } = useShellSetupStatus();
   const hold = oidcHoldProvider({ oidc: scope.lane === OIDC_HOLD_LANE, holdUID: String(scope.provider_id ?? "") }, status);
+  const basis = basisSentence(item.decision_basis, unitNames);
+  const title = deriveTitle(item.kind, scope, hold ? hold.name || hold.id : undefined);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} scope={scope} />
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        {deriveTitle(item.kind, scope, hold ? hold.name || hold.id : undefined)}
+      {/* The title takes the first row at phone width and a 12rem floor from sm up, so the chips and the meta wrap
+          before it is cut down to a few characters; what was decided is also in the tooltip. */}
+      <span
+        className={`min-w-0 grow basis-full text-sm text-foreground sm:min-w-[12rem] sm:basis-0 ${isHostCallRequest(item) ? "break-all" : "truncate"}`}
+        title={title}
+      >
+        {title}
       </span>
       {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}
       <ApprovalStateBadge state={item.state} />
@@ -488,6 +630,8 @@ export function DecidedRow({
       {item.state === "CANCELLED" && (
         <p className="basis-full text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
       )}
+      {/* How the decision was made, under the row like the sentences above and below it. */}
+      {basis && <p className="basis-full text-xs text-muted-foreground">{basis}</p>}
       {/* #181 — a held push that timed out: refused, and honest about why
           (nobody answered), same "basis-full sentence under the row" shape
           the CANCELLED case above uses. */}

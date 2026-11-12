@@ -267,6 +267,30 @@ describe("PolicyTab — changes grouped by cause", () => {
     expect(within(mirror).getByText("registry.npmjs.org").parentElement).toHaveTextContent("Removed at start");
   });
 
+  it("reads the IP-address switch as the setting, labelled, for an addition and a removal", async () => {
+    const ON = "When allow-all egress is on, refuse connections to IP addresses unless they are listed exactly in Allowed hosts.";
+    show(
+      view({
+        changes: [
+          change({ cause: "overlay", field: "refuse_ip_literals", added: ["true"] }),
+          change({ cause: "launch", field: "refuse_ip_literals", removed: ["true"] }),
+        ],
+      }),
+    );
+    await ready();
+    const set = screen.getByRole("heading", { name: CHANGE_HEADING.overlay }).parentElement!;
+    const added = within(set).getByText(ON).parentElement!;
+    expect(added).toHaveTextContent("Added at start");
+    expect(added).toHaveTextContent("IP addresses");
+    expect(within(set).getByText(ON)).not.toHaveClass("font-mono");
+    const launch = screen.getByRole("heading", { name: CHANGE_HEADING.launch }).parentElement!;
+    const removed = within(launch).getByText(ON).parentElement!;
+    expect(removed).toHaveTextContent("Removed at start");
+    expect(removed).toHaveTextContent("IP addresses");
+    expect(removed).not.toHaveTextContent("Refuse IP addresses");
+    expect(screen.queryByText("true")).not.toBeInTheDocument();
+  });
+
   it("an unrecognised cause falls under the generic heading", async () => {
     show(view({ changes: [change({ cause: "something_new", field: "allowed_domains", added: ["x.example"] })] }));
     await ready();

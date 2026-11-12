@@ -41,6 +41,9 @@ export interface EgressRedirect {
 
 export interface RunnerSettings {
   enabled: boolean;
+  // A new local run is refused on a personal-trust runner. Off by default, and always on the wire
+  // (false included); set only by PUT /runners/settings.
+  require_managed_device: boolean;
 }
 
 export interface SiteConfig {
@@ -274,6 +277,9 @@ export interface ModelProvidersRead extends ModelProviders {
   // origin with its base path: what an admin tells a gateway.
   gateway_identity_issuer?: string;
   gateway_jwks_path: string;
+  // Whether a bedrock_sso provider can send run identity on this install: only
+  // while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY).
+  gateway_identity_bedrock_sso: boolean;
 }
 
 // Closed set, server-validated.
@@ -340,6 +346,10 @@ export interface ModelProvider {
   auth?: ProviderAuth;
   // custom_endpoint only: each person signs in at the endpoint's own authority instead of pasting a token.
   oidc?: ProviderOIDC;
+  // custom_endpoint only: non-secret headers the run proxy sets on every request to the gateway, for one that
+  // routes on a header (Portkey's x-portkey-provider). Absent is none. Changing them removes everyone's stored
+  // credential, as changing base_url does.
+  extra_headers?: ProviderHeader[];
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
   // local_model only: the model allowlist and the caps on each request.
@@ -377,6 +387,12 @@ export interface BedrockSettings {
   sso_start_url?: string;
   sso_account_id?: string;
   sso_role_name?: string;
+}
+
+// Go's types.ProviderHeader (internal/types/model_provider.go).
+export interface ProviderHeader {
+  name: string;
+  value: string;
 }
 
 export interface ProviderHarness {
@@ -569,6 +585,51 @@ export interface SiteRecording {
 export interface SiteImages {
   /** Refuse a member's run whose image is not pinned by digest (image@sha256:<digest>). Absent reads off. Operators are not bound. */
   require_digest?: boolean;
+  /** Signature admission for member-chosen images. Absent reads off. */
+  admission?: SiteImageAdmission;
+}
+
+/** Go: types.SiteImageAdmission (SiteImages.admission). */
+export interface SiteImageAdmission {
+  /** Absent reads off. audit records a would-refuse and refuses nothing. */
+  mode?: "off" | "audit" | "enforce";
+  /** Absent reads member; all also covers the convention, harness and architecture images. */
+  scope?: "member" | "all";
+  /** Extra Sigstore trust roots a keyless signer may name; public-good always exists. */
+  trusted_roots?: ImageTrustedRoot[];
+  signers?: ImageSigner[];
+}
+
+/** Go: types.ImageTrustedRoot. */
+export interface ImageTrustedRoot {
+  name: string;
+  /** Absolute path of a Sigstore trusted-root JSON file in /etc/wardyn/sigstore on the control plane. */
+  path: string;
+}
+
+/** Go: types.ImageSigner. Exactly one of keyless and public_key is set. */
+export interface ImageSigner {
+  name: string;
+  /** Registry prefixes (registry.example.com/team/*) and exact references this signer covers. */
+  images: string[];
+  keyless?: ImageKeyless;
+  /** PEM public key: ECDSA P-256/P-384, Ed25519, or RSA of at least 2048 bits. */
+  public_key?: string;
+  /** Absent reads true. */
+  transparency_log?: boolean;
+  require_attestations?: string[];
+  signature_predicates?: string[];
+}
+
+/** Go: types.ImageKeyless. Exactly one of identity and identity_regexp is set. */
+export interface ImageKeyless {
+  issuer: string;
+  identity?: string;
+  /** Anchored: starts with ^ and ends with $. */
+  identity_regexp?: string;
+  source_repository?: string;
+  /** Absent reads public-good. */
+  trusted_root?: string;
 }
 
 /** Go: types.SiteMacOSVM (SiteConfig.macos_vm). */

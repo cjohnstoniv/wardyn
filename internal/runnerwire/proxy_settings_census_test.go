@@ -11,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The census guard for the proxy-settings gate. A 0.9.x runner rebuilds the
@@ -58,12 +60,29 @@ var proxySettingOfField = map[string]string{
 	"ForgeHosts": ProxySettingForgeHosts,
 	// Dropped, the run's proxy holds no model list and admits every model the
 	// governance profile limits.
-	"ModelLimit": ProxySettingAllowedModels,
+	"ModelLimit":     ProxySettingAllowedModels,
+	"MCPApproveEach": ProxySettingMCPApproveEach,
+	// Dropped, the gateway gets the request without the headers its admin set to route it, and may
+	// route it somewhere the admin did not choose: an older remote executor must refuse the run.
+	"LLMHeaders": ProxySettingLLMHeaders,
+	"NoNetwork":  ProxySettingNoNetwork,
+}
+
+// proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.
+var proxyNestedSettings = map[string]string{
+	// Dropped, a newer proxy serves the gateway through its generic forwarder with calls the sandbox
+	// signed with the placeholder: they fail at AWS rather than being refused when placed.
+	ProxySettingAWSSigV4Gateways: "AWSSigV4",
+	// Dropped, an older proxy allows a literal IP host under allow-all.
+	ProxySettingRefuseIPLiterals: "Policy",
+	// Dropped, an older proxy forwards what the rules deny, with no row.
+	ProxySettingHostRules: "Policy",
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
 // dropping it fails closed.
 var proxyFieldExemptions = map[string]string{
+	"ActivityIgnoreHosts": "advisory: an older runner keeps counting boot-host traffic as activity",
 	"DesktopSignins": "the org sets it only when signinTarget holds, which is false for a run with a runner or a pool " +
 		"(internal/api run_desktop_signin.go signinTarget; remote.Substrate is no runner.SigninExecer either), so a " +
 		"wardyn-runnerd never receives it set; dropped, " +
@@ -122,6 +141,9 @@ func TestProxyConfigFieldsNewerThanV098AreGatedOrExempt(t *testing.T) {
 			t.Errorf("setting %s alone reports %v, want [%s]", field, got, setting)
 		}
 	}
+	for setting := range proxyNestedSettings {
+		settings = append(settings, setting)
+	}
 	slices.Sort(settings)
 	if want := slices.Sorted(slices.Values(ProxySettings)); !slices.Equal(settings, want) {
 		t.Errorf("proxySettingOfField settings %v, ProxySettings %v", settings, want)
@@ -170,5 +192,44 @@ func TestProxySettingsCensusFiresOnAPlantedField(t *testing.T) {
 	stale["RunToken"], stale["Gone"] = "planted", "planted"
 	if got := proxyFieldCensus(base, proxySettingOfField, stale); len(got) != 2 {
 		t.Fatalf("stale exemptions: census = %q", got)
+	}
+}
+
+// A re-signing grant with a gateway names the gateway setting beside its own, so a runner that
+// does not carry gateways is refused the run; one without a gateway names only its own.
+func TestProxySettingAWSSigV4GatewaysNamed(t *testing.T) {
+	pc := runner.ProxyConfig{AWSSigV4: &proxy.AWSSigV4Config{}}
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingAWSSigV4}) {
+		t.Errorf("no gateway: %v", got)
+	}
+	pc.AWSSigV4.Gateways = []proxy.AWSSigV4Gateway{{Host: "ai-gw.corp.example", Port: 443, SigningHost: "bedrock-runtime.us-east-1.amazonaws.com"}}
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingAWSSigV4, ProxySettingAWSSigV4Gateways}) {
+		t.Errorf("a gateway: %v", got)
+	}
+}
+
+// refuse_ip_literals acts only under allow_all_egress, so only such a run needs a runner that carries it:
+// on a default-deny run it is not named, and an older runner is not refused the run for it.
+func TestProxySettingsSet_RefuseIPLiteralsUnderAllowAllOnly(t *testing.T) {
+	pc := runner.ProxyConfig{}
+	pc.Policy.RefuseIPLiterals = true
+	if got := ProxySettingsSet(pc); len(got) != 0 {
+		t.Errorf("default-deny with refuse_ip_literals names %v, want none", got)
+	}
+	pc.Policy.AllowAllEgress = true
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingRefuseIPLiterals}) {
+		t.Errorf("allow-all with refuse_ip_literals names %v, want [%s]", got, ProxySettingRefuseIPLiterals)
+	}
+}
+
+// host_rules is named for any run with a rule set, and for no other.
+func TestProxySettingsSet_HostRules(t *testing.T) {
+	pc := runner.ProxyConfig{}
+	if got := ProxySettingsSet(pc); len(got) != 0 {
+		t.Errorf("no rules names %v, want none", got)
+	}
+	pc.Policy.HostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: "api.example.com", Effect: types.HostRuleAllow}}}}
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingHostRules}) {
+		t.Errorf("a rule set names %v, want [%s]", got, ProxySettingHostRules)
 	}
 }

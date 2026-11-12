@@ -16,7 +16,7 @@ object, the share recipe, and the ordered reclaim procedure for someone who has 
 
 - On Kubernetes, Wardyn deletes the claim; what happens to the bytes then follows the StorageClass's `reclaimPolicy`: `Delete` (the usual default) destroys them, `Retain` leaves them on the released PersistentVolume until an operator removes it.
 
-There are two supported ways, and both stay supported: the substrate command by hand (the recipes in "[User drives on Docker](#user-drives-on-docker)" and "[User drives on Kubernetes](../OPERATIONS.md#user-drives-on-kubernetes)" below), or the product's own verb.
+There are two ways: the substrate command by hand (the recipes in "[User drives on Docker](#user-drives-on-docker)" and "[User drives on Kubernetes](../OPERATIONS.md#user-drives-on-kubernetes)" below), or the product's own verb.
 
 **The verb.** `POST /api/v1/drives/{id}/reclaim`, body `{"subject_type":"user","subject":"<the person's sign-in subject>"}`, or from the CLI:
 
@@ -65,12 +65,15 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 ## User drives on Docker
 
 - A **user drive** is persistent storage an admin registers once and allocates to people or groups; a member mounts theirs per run at `/home/agent/drive`.
-  - Turning on a disabled allocation that holds a directory name or a writable exception is a super admin's write.
-- Since `0169_user_drive_grants_per_drive` a subject may hold several (`additional`); a run's others mount at `/home/agent/drives/<slug>` or `/home/agent/shared/<slug>`.
-- A drive bound to a person's own runner mounts only below a drive root that runner advertises, and a folder bound to it only inside one, or the root itself. An installed runner gets its roots with `wardyn-runnerd setup --drive-root <dir>` (repeatable; the roots live in `runnerd.json` as `drive_root`, not in the service definition); see [Drive roots on a laptop runner](hybrid-laptops.md#drive-roots-on-a-laptop-runner).
+- Turning on a disabled allocation that holds a directory name or a writable exception is a super admin's write.
+- A subject may hold several drives (`additional`); a run's others mount at `/home/agent/drives/<slug>` or `/home/agent/shared/<slug>`.
+- A drive bound to a person's own runner mounts only below a drive root that runner advertises, and a folder bound to it only inside one, or the root itself. An installed runner gets its roots with `wardyn-runnerd setup --drive-root <dir>` (repeatable; the roots live in `runnerd.json` as `drive_root`, not in the service definition); see [Sharing a folder: the settings](hybrid-laptops.md#sharing-a-folder-the-settings).
   - That binding also serves Linux VM runs on that runner, once it is updated to a version that offers them. A VM's writes land as the runner's user, not the image's agent, so check the folder's owner before relying on both ([Drives in a Linux VM](linux-vm-sandboxes.md#drives)).
 - On a Docker deployment there are two backends, and the difference is who owns the bytes.
+- A person's own drive can also be a disk image on their Mac (`mac_disk`). It lives only there: [Drives](macos-vms.md#drives).
 - With `storage.user_drive.disabled` set, a run and `POST /drives/preview` answer 422 and `GET /me` reports no allocation, so the console never offers a mount the create path refuses (see "Turning drives OFF deployment-wide").
+
+### The two backends
 
 - **`docker_volume` — Wardyn allocates.** A per-person named volume (`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local` driver and mounted at the reserved target.
   - Nothing to configure.
@@ -83,6 +86,8 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
     - one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview` prints the object name for a principal —
       - paste the sign-in subject FIRST: on a `hash` drive the name keys on the first claim, and the API's `home_subject` says which claim it used (the console does not yet show it);
     - one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>` lists every volume that drive allocated.
+
+### Restoring a volume by hand
 
 - **Restoring one by hand: re-create it with its labels, and with no `--opt`.**
 - Wardyn reuses a volume that already answers to the name, but only when it has Wardyn's own shape —
@@ -112,11 +117,12 @@ docker volume create \
 
 - A managed drive can no longer be *authored* into that state.
 - The rule is `ManagedBackendRejectsTemplate` in [`internal/types/user_drive.go`](../../internal/types/user_drive.go).
-- And as of 0.7 it refuses **every** non-`hash` template on a `docker_volume` or `k8s_pvc` backend — `sub` as well as `email_local` — at **both** enforcement points: the write boundary, and the run-time resolver that derives the home.
-- It used to name `email_local` alone, and the resolver keyed on `email_local` alone, so a `sub` row written by an older binary (or by hand) was refused on write and still mounted.
-- The folded homes `wardyn.subject` discriminates are therefore rows from before that widening, or hand-made ones — which is exactly why the label is still checked rather than assumed away.
+- And it refuses **every** non-`hash` template on a `docker_volume` or `k8s_pvc` backend — `sub` as well as `email_local` — at **both** enforcement points: the write boundary, and the run-time resolver that derives the home.
+- Rows written before that rule, or by hand, can still fold homes. That is why the label is checked rather than assumed away.
 
 - You need not compute the digest for a restore (it is a truncated sha256 of the sign-in subject): **leave `wardyn.subject` off** the `docker volume create` above and the volume mounts, exactly as a label-less `wardyn.drive` does.
+
+### The share recipe
 
 - **`host_path` — you already mount the share.** Wardyn binds **one person's subdirectory** of a tree the *operator* mounted host-side.
 - Wardyn never performs the share mount, never holds a share credential, and never creates a volume with `--opt type=cifs`: those options are stored with the volume and echoed by `docker volume inspect` to anyone who can reach the daemon.
@@ -214,6 +220,8 @@ docker volume create \
    - The paths go to the log, on the same run, as `wardyn: user drive: this share mount was refused at bind time` with `source`, `real_path` and `host_root` attributes (`RefuseUserDriveBind`, [`internal/runner/user_drive_mount.go`](../../internal/runner/user_drive_mount.go)).
    - That split is the rule everywhere on this path — see the member's own refusal vocabulary in [docs/design/user-drives-prompt.md](../design/user-drives-prompt.md) §7.7 and §7.9.
 
+### Seeing the share, and the uid it is written as
+
 - **On the Compose stack, wardynd must be able to SEE the root — set two variables.**
 - The bind's source is resolved by the host daemon (wardynd's sandboxes are sibling containers), but the ceiling check resolves symlinks and fails closed on a path it cannot stat.
 - So a `host_path` drive registered from a containerised wardynd is refused unless the share is visible inside it too.
@@ -286,6 +294,8 @@ so a submount under the share's home could be writable inside the sandbox
 - There is one lever — run the drives that need the recursive guarantee at **CC1**, where the daemon's default `runc` declares `rro`.
 - Nothing in the sandbox is affected when the share carries no submounts.
 
+### Size, caps and ceilings
+
 - **What a drive's SIZE means here.** Quoted verbatim, and the same sentence the console renders:
 
 > Wardyn never enforces a drive's size itself. On Kubernetes the size is the
@@ -351,6 +361,8 @@ so a submount under the share's home could be writable inside the sandbox
 
 - On Docker that clamp is a number and nothing more:
   - `enforcement: none` on a managed volume, `external` on a share — so treat the ceiling as governance over what admins may write down, never as a cap on bytes.
+
+### Turning drives off
 
 - **Turning drives OFF deployment-wide** is `storage.user_drive.disabled` on the same screen, and it is a different question from a profile's `deny_user_drive`.
 - The switch is asked FIRST and says *this install offers no drives*:

@@ -223,6 +223,20 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		return nil, fmt.Errorf("contentscan: mode %q requires at least one detector", mode)
 	}
 
+	// The proxy does not re-run policy validation, so a format it cannot speak must fail here
+	// rather than quietly fall back to Wardyn's own.
+	presidioFormat := false
+	switch strings.ToLower(strings.TrimSpace(spec.DetectorSidecarFormat)) {
+	case "":
+	case types.DetectorSidecarFormatPresidio:
+		if spec.DetectorSidecarURL == "" {
+			return nil, fmt.Errorf("contentscan: detector_sidecar_format %q needs detector_sidecar_url", spec.DetectorSidecarFormat)
+		}
+		presidioFormat = true
+	default:
+		return nil, fmt.Errorf("contentscan: invalid detector_sidecar_format %q", spec.DetectorSidecarFormat)
+	}
+
 	// Filter ONCE and hold on the engine: used both to build the known-secret
 	// detector and to corpus-mask every finding's FieldPath centrally, so a
 	// corpus secret used as a JSON key is masked even with no corpus detector enabled.
@@ -249,7 +263,9 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		dets = append(dets, cd)
 	}
 	if spec.DetectorSidecarURL != "" {
-		dets = append(dets, newSidecarDetector(spec.DetectorSidecarURL, nil))
+		sc := newSidecarDetector(spec.DetectorSidecarURL, nil)
+		sc.presidio = presidioFormat
+		dets = append(dets, sc)
 	}
 	if len(dets) == 0 {
 		// Configured WITH a detector but nothing active (e.g. detect_secrets

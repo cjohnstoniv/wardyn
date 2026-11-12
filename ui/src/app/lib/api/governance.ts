@@ -25,7 +25,9 @@ import type { PlacementValue } from "../types/new-run-contract";
 import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
 import type { GovernanceChangeApprover } from "../types/governance-change";
+import type { GovernanceEnvelope } from "../types/governance-envelope";
 import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
+import type { GovernanceDeciders } from "./deciders";
 import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, asNoContent, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
@@ -57,6 +59,14 @@ export interface GovernanceLimits extends RunLimits {
   // types.GovernanceLimits.DenyKeptMachines — refuses keeping or resuming a macOS VM machine under this profile, on top of
   // the site switch macos_vm.allow_kept_machines. False/absent inherits the switch.
   deny_kept_machines?: boolean;
+  // types.GovernanceLimits.DenyScheduledRuns — refuses a start time (start_at) under this profile and ends a booked run at its
+  // start, on top of the deployment switch WARDYN_SCHEDULED_RUNS. False/absent inherits the switch; deny wins in composition.
+  deny_scheduled_runs?: boolean;
+  // types.GovernanceLimits.DenyComponents / DenyModelProviders — stored component ids and model provider uids a run under this
+  // profile may not attach or use (403 component_denied / model_provider_denied; a hard wall, operators included). Empty denies
+  // none. Deny wins in composition: a child's list is the union, and removing an id is a widening an update holds.
+  deny_components?: string[];
+  deny_model_providers?: string[];
   // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
   // under this profile may not take. A deny list: absent means every placement
   // is permitted. The server refuses a profile denying both.
@@ -70,6 +80,10 @@ export interface GovernanceLimits extends RunLimits {
   // absent or empty is no limit. There is no deny-all value, so the console
   // omits the key when the box is blank and never sends [].
   allowed_models?: string[];
+  // types.GovernanceLimits.RequiredImageSigners — site image signers
+  // (images.admission.signers, or wardyn-release) that must also vouch for a
+  // member's image. A requirement: more names is tighter. Absent requires nothing extra.
+  required_image_signers?: string[];
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
   // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and
@@ -110,10 +124,11 @@ export interface RunLimits {
 // stay internal; the console renders plain labels (#93), not spelled here yet.
 export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
 
-// types.AutonomyRubric — nine closed level fields (three egress postures, three
-// secret postures, three confinement classes), each absent (caps nothing) or
-// one of the four levels, and one boolean, agent_guardrail_locks, that caps no
-// level. See internal/types/governance.go for what each
+// types.AutonomyRubric — ten closed level fields (three egress postures, three
+// secret postures, three confinement classes, and self_defined_component for
+// runs that carry a component their launcher defined), each absent (caps
+// nothing) or one of the four levels, and one boolean, agent_guardrail_locks,
+// that caps no level. See internal/types/governance.go for what each
 // posture means.
 export interface AutonomyRubric {
   egress_open?: AutonomyLevel;
@@ -125,11 +140,14 @@ export interface AutonomyRubric {
   confinement_cc1?: AutonomyLevel;
   confinement_cc2?: AutonomyLevel;
   confinement_cc3?: AutonomyLevel;
+  // Caps a run that carries a component its launcher defined. It can only tighten the deployment's own cap
+  // (components.autonomy_cap), never loosen it; the key is distinct from that cap's custom_component cause.
+  self_defined_component?: AutonomyLevel;
   // Selects the locked L2 managed-settings document for an L2 run; caps no level and is not a row.
   agent_guardrail_locks?: boolean;
 }
 
-// One of AutonomyRubric's nine level-capping field names — what internal/composer/
+// One of AutonomyRubric's ten level-capping field names — what internal/composer/
 // autonomy.go's applicableAutonomyCaps names a cap by, and what
 // AutonomyResolution.BoundBy (below) carries. keyof, not a hand-typed union,
 // so the two can never drift apart.
@@ -150,6 +168,7 @@ export const AUTONOMY_RUBRIC_ROW_KEYS: AutonomyRubricRowKey[] = [
   "confinement_cc1",
   "confinement_cc2",
   "confinement_cc3",
+  "self_defined_component",
 ];
 
 // AutonomyLevel's own weakest -> strongest ladder (internal/types/
@@ -170,6 +189,8 @@ export interface AutonomyPosture {
   egress: AutonomyEgressPosture;
   secrets: AutonomySecretsPosture;
   confinement: ConfinementClass;
+  // Set when the run carries a component its launcher defined; it selects the rubric's self_defined_component row.
+  custom_component?: boolean;
 }
 
 // What bound_by can name: a rubric row, or the organisation's cap on runs that
@@ -283,6 +304,8 @@ export interface GovernanceMembership {
   // before the policy tree; only a person's first legacy membership by precedence is a context.
   home?: boolean;
   legacy?: boolean;
+  // An elevation's end: the membership counts for nothing after it. Absent on a permanent membership.
+  expires_at?: string;
 }
 
 // GET /governance's body: the whole picture in one read.
@@ -299,7 +322,12 @@ export interface GovernanceSnapshot {
   parent_walls?: GovernanceParentWalls[];
   // The deny-only lists that follow people, each with how many people it names.
   restrictions?: RestrictionView[];
-  // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
+  // Each unit's hold-deciding rules and the unit whose rule governs each kind; absent when no unit has any.
+  deciders?: GovernanceDeciders[];
+  // The platform envelopes (a unit admin sees those on or above their units, and inside them).
+  envelopes?: GovernanceEnvelope[];
+  // Every unit's name by id, Default included, for a membership on a unit the list hides. A unit admin's read sends the
+  // names of the units above their subtrees; the console adds every listed unit's.
   unit_names?: Record<string, string>;
 }
 
@@ -502,6 +530,9 @@ export const governance = {
       restrictions?: unknown;
       unit_admins?: unknown;
       parent_walls?: unknown;
+      deciders?: unknown;
+      envelopes?: unknown;
+      unit_names?: Record<string, string>;
     }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
@@ -510,6 +541,9 @@ export const governance = {
       max_depth: body.max_depth,
       unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
       parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),
+      deciders: unwrapList<GovernanceDeciders>(body.deciders),
+      envelopes: unwrapList<GovernanceEnvelope>(body.envelopes),
+      unit_names: body.unit_names,
     };
   },
 
@@ -628,15 +662,27 @@ export const governance = {
   },
 
   // GET /api/v1/governance/changes -> the pending changes (the server's default state), newest first. A
-  // change of a kind the caller may not approve is not listed.
-  async listChanges(): Promise<GovernanceChange[]> {
-    const res = await wfetch("/governance/changes", { method: "GET" });
+  // change of a kind the caller may not approve is not listed. `approver: "security"` narrows it to the
+  // changes only a security admin can decide.
+  async listChanges(opts?: { approver?: "security" }): Promise<GovernanceChange[]> {
+    const res = await wfetch(`/governance/changes${opts?.approver ? `?approver=${opts.approver}` : ""}`, { method: "GET" });
     return unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
   },
 
   // GET /api/v1/governance/changes/{id} -> the change in whatever state it is now (pending, applied, rejected, expired).
   async getChange(id: string): Promise<GovernanceChange> {
     const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}`, { method: "GET" });
+    return asJson<GovernanceChange>(res);
+  },
+
+  // PUT /api/v1/governance/changes/{id}/note -> 200 the change. Only its proposer, only while it is pending; the
+  // note replaces the one before, and both empty clears the note.
+  async noteChange(id: string, note: { reason: string; ticket: string }): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/note`, {
+      method: "PUT",
+      asPerson: true,
+      body: JSON.stringify({ reason: note.reason, ticket: note.ticket }),
+    });
     return asJson<GovernanceChange>(res);
   },
 
@@ -657,6 +703,26 @@ export const governance = {
       body: JSON.stringify(reason ? { reason } : {}),
     });
     return asJson<GovernanceChange>(res);
+  },
+
+  // PUT /api/v1/governance/units/{id}/envelope -> 200 the envelope, or PendingChangeError when held.
+  async setEnvelope(unitId: string, approvedGroups: string[]): Promise<GovernanceEnvelope> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/envelope`, {
+      method: "PUT",
+      asPerson: true,
+      body: JSON.stringify({ approved_groups: approvedGroups }),
+    });
+    return asJson<GovernanceEnvelope>(res);
+  },
+
+  // DELETE /api/v1/governance/units/{id}/envelope -> 204, or PendingChangeError when held.
+  async clearEnvelope(unitId: string): Promise<void> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/envelope`, {
+      method: "DELETE",
+      asPerson: true,
+    });
+    await throwIfPending(res);
+    await asNoContent(res);
   },
 };
 

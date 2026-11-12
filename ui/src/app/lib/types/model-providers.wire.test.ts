@@ -66,6 +66,13 @@ describe("local_model wire", () => {
     expect(goJSONTags(goType, "ModelProvider")).toContain("oidc");
   });
 
+  it("ProviderHeader has full parity with its TS mirror, and the provider carries the headers", () => {
+    const ts = read("ui/src/app/lib/types/site.ts");
+    expect([...tsKeys(ts, "ProviderHeader")].sort()).toEqual([...goJSONTags(goType, "ProviderHeader")].sort());
+    expect(tsKeys(ts, "ModelProvider")).toContain("extra_headers");
+    expect(goJSONTags(goType, "ModelProvider")).toContain("extra_headers");
+  });
+
   it("the setup status row carries uid, sign_in and identity_binding as the server writes them", () => {
     const ts = read("ui/src/app/lib/types/setup.ts");
     const goSetup = read("internal/api/model_providers_api.go");

@@ -5,27 +5,24 @@
 - It authenticates registered **public keys only** (no passwords) and is **owner-only**: a human may SSH into a run they created.
 - A super admin's key reaches a run only when it has no personal owner (an operator-owned service or local run); it opens no shell in a person's run (`run_owner_only`, #1476). That admin carve-out is a bounded-stale stamp, not a live role check; see [Bounds](#bounds) for the ceiling that comes with it.
 - The gateway is off by default. It exists only when `WARDYN_SSH_LISTEN` is set — see [docs/ENV.md](ENV.md) for both variables (`WARDYN_SSH_LISTEN`, `WARDYN_SSH_ADVERTISE`). With it unset there is no listener and no new attack surface: the daemon does not even generate a host key.
-- **Recording ceiling, and 0.7 makes it fleet-wide.** See [Recording](#recording).
+- Recording has limits: see [Recording](#recording).
 
 ## 1. Register a public key
 
-- **SSO deployment (OIDC configured):** User view sidebar → **Settings**
-  (`/account`) → **Add key**.
-- Paste your public key (the console never asks
-  for a private key; the paste field's own helper line says so, and pasting
-  one is refused server-side with a specific error).
-- A key registered against
-  your SSO session lands under your OIDC `sub` — the only principal the
-  gateway's owner check (below) will ever match against a run you created.
-- A
-  key added here is capped: it never carries the admin override, even for a
-  super admin — see [Bounds](#bounds).
+With SSO (OIDC configured):
 
-**An admin key no longer reaches other people's runs.**
+1. In the User view sidebar, open **Settings** (`/account`).
+2. Choose **Add key**.
+3. Paste your public key. The console never asks for a private key, and the server refuses a pasted one with a specific error.
+
+- A key registered against your SSO session lands under your OIDC `sub`, the only principal the gateway's owner check (below) matches against a run you created.
+- A key added here is capped: it never carries the admin override, even for a super admin. See [Bounds](#bounds).
+
+An admin key reaches only runs with no personal owner.
 
 - Admin view → Settings →
-  **Admin SSH keys** (super admins only) still registers a key stamped `admin`,
-  but that stamp now opens only runs with no personal owner.
+  **Admin SSH keys** (super admins only) registers a key stamped `admin`,
+  but that stamp opens only runs with no personal owner.
 - There is no
   break-glass key into a person's run: until the owner-consented support session
   (#1509) a super admin who needs one asks its owner.
@@ -37,7 +34,7 @@ registers the key against the shared, non-human `admin-token` principal, not
 any human's own identity.
 
 - With OIDC configured, `POST` from a bare admin
-  token now 422s for exactly this reason instead of silently writing a key
+  token 422s for exactly this reason instead of silently writing a key
   that can never authorize anyone's run — use the console (above) instead.
 - A
   key already stored under a reserved principal (`admin-token`, the local
@@ -65,9 +62,8 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
 
 ### Reclaiming a squatted fingerprint
 
-> **0.6, migration `0046`:** a direct-SQL registration that sets `role='admin'` must ALSO set
-> `role_checked_at = now()`, or the gateway refuses the override as never-checked
-> (`admin override stale`). The API registration path stamps it for you.
+> A direct-SQL registration that sets `role='admin'` must also set `role_checked_at = now()`, or the gateway refuses the override as never-checked (`admin override stale`). The API registration path stamps it for you.
+> A key registered before migration `0046` has no `role_checked_at` and reads the same way. Its owner logs in again, or deletes and adds the key again, to refresh it.
 
 - The fingerprint primary key is **global** — correct for auth, since a key
   must map to exactly one principal, never two.
@@ -119,7 +115,7 @@ For incident response or offboarding:
      returns `200` with `{"count": N}`.
    - An unresolved email or ambiguous name is `422`;
      a lookup or deletion failure is `500`.
-   - Owners can still remove individual
+   - Owners can remove individual
      keys through **Settings** (`/account`), `wardyn ssh-key delete <fingerprint>`,
      or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
 4. End existing access with `wardyn run kill <run-id>` and verify teardown
@@ -144,7 +140,7 @@ For incident response or offboarding:
   freshness checks apply at this point too, and so does the owner rule: an
   override connection on a run that is not operator-owned is refused.
 - `WARDYN_SSH_ROLE_TTL`
-  still bounds only the admin override (now the operator-owned carve-out), not
+  bounds only the admin override (the operator-owned carve-out), not
   access to runs the key's principal owns.
 - The `ssh_key.add`, `ssh_key.delete`, `session.revoke`, `ssh.authenticate` and
   `ssh.channel.reject` events identify registrations, completed revocations and
@@ -175,7 +171,7 @@ ssh <run-id>@<advertise-host> -p <port>
   console's own terminal uses, so a member needs no admin credential to attach
   to a run they own; `ssh` carries your registered public key over the real
   SSH protocol instead.
-- `<run-id>` **is** the SSH username — the gateway has no session cookie to
+- `<run-id>` is the SSH username — the gateway has no session cookie to
   carry it any other way, so the run id is the addressing, the same way a
   hostname addresses a machine.
 - `<advertise-host>` is whatever the operator set
@@ -201,7 +197,7 @@ Host wardyn-<short-id>
   it only with `--advertised-proxy`:
   - it is a command from the deployment that
     runs on your computer, so without the flag the CLI shows it and stops.
-- **Verify on first connect**: the card also shows the host key fingerprint
+- Verify on first connect: the card also shows the host key fingerprint
   (`ED25519 SHA256:…`).
 - Check it against what your client prompts before
   trusting a new host, same as any SSH server — the fingerprint is
@@ -218,10 +214,14 @@ Host wardyn-<short-id>
 - `wardyn run exec <run-id> -- <command> [args...]` runs one command over the gateway and exits with its status.
   - Each word after `--` reaches the sandbox as one argument.
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
+  - With no SSH key, or with the gateway off, `POST /api/v1/runs/{id}/exec` runs one command over HTTP ([sdk.md](sdk.md#running-a-command-in-a-run)).
+    - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset.
+    - The per-run controls are SSH exec's: a `data_out` rule other than `allowed`, `deny_interactive` and a background-only run each refuse it.
+    - Like SSH exec, its output is neither masked nor recorded.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
 - `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH. Keep that `Include` outside any `Host` or `Match` block, or ssh will not find the run's host.
   - `--dir` picks the sandbox folder (default `/home/agent/work`).
-  - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is still required.
+  - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is required.
 - All three need the gateway on and a key on your account.
   - With the gateway off they stop with one line saying the operator has not turned SSH on.
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
@@ -440,12 +440,15 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - `--git` sends the current branch as a git bundle (no hooks, no config). The sandbox fetches it into a new hook-free repository, or into `refs/remotes/laptop/<branch>` if one exists.
 - `--pull-commits` fetches the sandbox's later commits, as a verified bundle, into the laptop branch `wardyn/sync-<run>`, never the working tree. Both git flags run once, over an SSH exec channel, from the top of a work tree.
 - Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
-- A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed.
+- A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed. Only a runner's pass back keeps a conflict copy ([hybrid laptops](operations/hybrid-laptops.md)).
 - Paths equal under case or Unicode normalisation, and names with invisible characters, are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
 - A pass pulls at most `--max-pull-bytes` (1 GiB), and never a file over 256 MiB; a refused path is listed and the pass goes on.
 - It refuses a plain-http, non-loopback server: the gateway address and host key come from `/healthz`.
 - The directory is a start point, not a boundary; the CLI aborts unless `RealPath(".")` is the directory it asked for.
 - The sandbox's mtime has one-second resolution, so a same-size edit inside that second is not seen.
+- Under a run's [`data_out`](POLICIES.md#data_out) of `review` or `blocked`, the gateway refuses `sftp`, `scp`, commands and `-L` forwards. The shell stays open. A client may print only "request failed" before it reads the reason on the channel; the audit row `run.data_out.deny` carries it.
+- `wardyn sync` then only sends: the sandbox's `sftp-server` starts with `-P read,readlink`, and the gateway ends the sync at the first file-content reply. A rename check reads the sandbox's copy, so a renamed file is sent again.
+- With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
 
 #### Hold the agent for a local folder
 
@@ -494,7 +497,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 "remote.SSH.localServerDownload": "always"
 ```
 
-- **Why**: the sandbox has no internet.
+- The sandbox has no internet.
 - Its only egress is the wardyn-proxy sidecar under the run's own allowlist, which does not include `vscode-cdn`/`update.code.visualstudio.com`/etc.
 - Remote-SSH's default behavior tries to have the **remote host** download its own server binary.
 - Inside a Wardyn sandbox that download has nothing to reach and stalls or fails.
@@ -561,7 +564,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - **`wardyn run wait-ready <run-id>`** ([`cmd/wardyn/run_wait_ready.go`](../cmd/wardyn/run_wait_ready.go)) blocks
   past what `run --wait` waits for.
 - `--wait` waits for a TERMINAL state (and is refused outright on an interactive run, which never reaches one on its own);
-  - `wait-ready` waits for the run to become **usable from outside**: RUNNING,
+  - `wait-ready` waits for the run to become usable from outside: RUNNING,
     *and* its workspace readable through the same in-sandbox exec channel the
     console's Files-changed widget polls (`GET /runs/{id}/files`,
     [`internal/api/run_files.go`](../internal/api/run_files.go)).
@@ -586,7 +589,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   read `--print`/`--config` use, shaped for a program instead of a terminal:
   `{"host", "port", "username", "host_key_fingerprint", "command"}`.
 - `port` is
-  **always populated** — `22` when the gateway's advertised address names none
+  always populated — `22` when the gateway's advertised address names none
   — so a caller never has to reimplement ssh's own default the way a bare
   `--print` command's absent `-p` flag implies it.
 - `host_key_fingerprint` comes
@@ -638,10 +641,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 | `-L`, VM | the guest agent | `forward <port>` (`127.0.0.1` only) |
 
 - Wardyn's own build images (`deploy/images/`) carry both.
-- A **Bring-Your-Own-Image**
-  run that omits either gets a **clean channel error naming the missing
-  binary** — never a hang, never a bare connection reset — the moment that
-  specific feature is used.
+- A Bring-Your-Own-Image
+  run that omits either gets a channel error naming the missing
+  binary when that feature is used.
 - The interactive shell (plain `ssh` with no `-s
   sftp`/`-L`) is unaffected either way, since it rides the existing Attach/tmux
   path and touches neither binary.
@@ -653,7 +655,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 ## Recording
 
 > [!WARNING]
-> **Recording ceiling, and 0.7 makes it fleet-wide.** The desktop envelope now ships `WARDYN_SSH_LISTEN` ON, so every managed laptop runs this gateway. Two halves, in opposite directions: `ssh` **exec** output and **sftp** payloads are **not recorded** (sftp and sync bytes are counted, not content).
+> The desktop envelope ships `WARDYN_SSH_LISTEN` on, so every managed laptop runs this gateway. Two halves, in opposite directions: `ssh` **exec** output and **sftp** payloads are **not recorded** (sftp and sync bytes are counted, not content).
 >
 > So work done over those paths leaves no session evidence — do not present Remote-SSH as the recommended developer path without saying so.
 >
@@ -662,16 +664,12 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - Every SSH **shell** session (`ssh <run-id>@host`, no subsystem/forward) is
   recorded exactly like the browser terminal: same tmux session, same masked
   live recorder (`internal/secretmask`), same asciicast pipeline.
-- It appears in
-  the run detail page's Recording tab with **zero extra UI** — the session
-  picker there already lists every attach session by its audit-trail key.
-- An SSH session's key is simply prefixed `ssh-` instead of a bare session UUID, so
-  it is distinguishable at a glance from a browser attach.
+- It appears in the run page's Recording tab. Its key starts with `ssh-`, where a browser attach uses a bare session UUID.
 - `sftp`/`-L` traffic
   is binary protocol data, not terminal output, and is never recorded (masking
   and asciicast framing both assume text; recording binary transfer bytes
   would neither work nor mean anything).
-- **Masking scope, stated plainly.** `internal/secretmask` masks values registered
+- Masking scope: `internal/secretmask` masks values registered
   for the run, including credentials minted while a session is attached.
 - An
   unregistered value a human **types** into the shell — pastes an API key,
@@ -684,17 +682,16 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - If a human types an unregistered secret
   into an SSH (or browser-attach) session, treat that recording as holding it in
   the clear until retention deletes it.
-- **What is masked at all (0.8.6).** Only the **shell**.
+- What is masked: only the shell.
 - SSH **exec**
-  (`ssh <run-id>@host <command>`), **SFTP** and **direct-tcpip** (`-L`) were never
+  (`ssh <run-id>@host <command>`), **SFTP** and **direct-tcpip** (`-L`) are not
   masked: their bytes go from the sandbox to your client through no masking
   pipeline.
 - So a registered secret a command prints reaches your terminal verbatim.
-- The shell itself now refuses to open, with an error line and an
+- The shell refuses to open, with an error line and an
   `authz.denied` row (`mask_state_unavailable`, target `ssh.shell`), when this
   server cannot prove the run's masking corpus complete:
-  - a run dispatched before
-    0.8.6 after a restart, or a run whose person is being erased.
+  - a run dispatched before 0.8.6, after a restart, or a run whose person is being erased.
 - A shell already
   open ends within about two seconds of that.
 
@@ -704,10 +701,14 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - It closes the connection when no answer comes within the next 30, so a dead peer is dropped within 30 to 60 seconds and frees its run's attach slot.
   - A failure reply counts as an answer; OpenSSH, PuTTY, paramiko and `wardyn sync` all give one.
   - A client suspended or asleep for more than 30 seconds can lose its session, where TCP alone would have kept it for minutes.
-  - The close writes no audit row and no log line.
+  - The same check re-reads each connection's key, so a deleted key or revoked session closes its idle connections too.
+  - The close writes no audit row.
 - **Connections.** At most 64 connections handshake at once (each within 15 seconds), at most 16 of them from one source address, and, counted apart, 64 authenticated ones stay open.
-  - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` and `WARDYN_SSH_MAX_CONNECTIONS` set them. Behind a NAT, raise the per-source one.
+  - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` sets the per-source bound and `WARDYN_SSH_MAX_CONNECTIONS` the authenticated one; the total of 64 handshakes is fixed. Behind a NAT, raise the per-source one.
   - Over a handshake bound a connection is closed before any byte; over the authenticated one, once it authenticates.
+  - One person holds at most 8 authenticated connections, or all of `WARDYN_SSH_MAX_CONNECTIONS` without SSO, where every key is one person. `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` sets it.
+  - A connection over a person's share holds no established-connection slot and writes an `ssh.connection.reject` row. Its refusal work still counts against the handshake and per-source bounds: those slots are released when its handler returns, after that row is written. If the refusal pool admits it and it opens a channel within 5 seconds, it is told why.
+  - The pool holds 8 such connections, one per person; any other is closed at once.
   - Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and logs a `connection refused at a cap` warning, at most once a minute.
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
@@ -716,8 +717,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - These unknown-actor refusals share the `auth.fail` rate bound (burst 5, 1/s), and a drop is counted in `wardyn_auth_failed_suppressed_total`.
   - A refusal that names a registered key's person is recorded at a per-key bounded rate (burst 5, 1/s).
   - Per-key buckets are capped at 1024 live keys; a key past the cap shares the `auth.fail` bound.
-- **Owner-only, and the admin carve-out is a bounded-stale stamp — weaker than
-  the web terminal's, but no longer unboundedly so.**
+- **Owner-only, and the admin carve-out is a bounded-stale stamp, weaker than
+  the web terminal's.**
   - SSH authorization is
     `run.created_by == the key's registered principal`, OR the run has no personal
     owner (`operator_owned`) AND the key's `role` column (migration `0043`) reads
@@ -731,17 +732,18 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - Existing admin-stamped keys are not revoked:
     they keep working on the runs they own and on operator-owned ones.
   - The `role` column is stamped at `POST /me/ssh-keys` time, from the role the registering session actually held **then**.
-  - But it is now also RE-stamped, along with `role_checked_at`, on every OIDC login for that principal (`oidc.Config.OnLogin`, wired to `RefreshSSHKeyRoles` in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)):
+  - It is also re-stamped, along with `role_checked_at`, on every OIDC login for that principal (`oidc.Config.OnLogin`, wired to `RefreshSSHKeyRoles` in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)):
     - a live read of the human's current role, applied to every key they hold, no re-registration required.
-  - The gateway still never
+  - The gateway never
     consults the human's role live at connect time — SSH carries no session for
     `requireOperator` to read.
-  - So this stays **bounded-stale, not live**, unlike
+  - So the stamp is bounded-stale, not live, unlike
     the browser terminal's `requireOperator` gate, which reads the session's role
     fresh on every attach.
-  - What bounds the staleness now: **a demoted admin's already-registered key keeps its override only until whichever comes first:**
-    - **their own next login (re-stamping `role=user`), `role_checked_at` aging past `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again),**
-    - **or the key being deleted/re-registered.**
+  - A demoted admin's already-registered key keeps its override only until whichever comes first:
+    - their own next login (re-stamping `role=user`);
+    - `role_checked_at` aging past `WARDYN_SSH_ROLE_TTL`, which applies even if they never log in again;
+    - the key being deleted or registered again.
   - An operator who wants the override gone
     immediately can use `DELETE /people/{principal}/ssh-keys` as an admin or
     `security_admin`, or revoke the person's sessions to remove their tokens and
@@ -750,13 +752,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     `DELETE /me/ssh-keys/{fingerprint}`.
   - Existing channels still require teardown
     as described under [incident revocation](#revoking-access-during-an-incident).
-  - Re-registration (delete, then re-`POST`)
-    still works too, and still re-stamps immediately.
-  - It is no longer the ONLY way
-    to force a refresh, just the immediate one that does not wait on either a
-    login or the TTL.
-  - There is still no in-place "update this key's role"
-    endpoint.
+  - Deleting a key and registering it again re-stamps it immediately, without waiting for a login or the TTL.
+  - There is no in-place "update this key's role" endpoint.
 - **The run's governance profile is a third door.** Even the owner is refused,
   with an `ssh.authenticate` failure naming the profile, when the profile the run
   was created under carries `deny_interactive`.
@@ -782,30 +779,10 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     it reaches only runs with no personal owner.
   - The `ssh_key.add` audit row marks a
     capped key with `capped: true`.
-- **Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`
-  key, and even an `admin`-stamped key loses the override until it is
-  refreshed.**
-  - `role` is stamped at registration, and migration `0043`
-    backfilled every pre-0.6 row as `member` (`0074` renames it `user`).
-  - The value is fail-closed because
-    nothing in the schema knows what role a pre-0.6 registrant actually held, and
-    guessing `admin` would hand every key already in the deployment a cross-user
-    reach it was never granted.
-  - Migration `0046` adds a second fail-closed backfill on top: `role_checked_at` defaults `NULL` for every pre-existing row, and `sshAuth` treats `NULL` as infinitely stale.
-  - So **an `admin`-stamped key that predates `0046` has no override until its owner does ONE of two things:**
-    - **log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both `role` and `role_checked_at` for every key that principal owns, no re-registration needed)
-    - **or `DELETE`/`POST` the key again** (still supported, still immediate, useful when you want the refresh before your next login rather than after).
-  - Which of your own keys carries the `admin` stamp is
-    visible without reading the database: Settings (`/account`) badges the
-    row **Admin override**.
-  - That badge reflects the STORED `role` only — it does not
-    currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,
-    so a badged key can still be refused by the gateway once its stamp goes stale.
-  - The audit log (`ssh.authenticate`, `outcome=failure`, reason "admin override stale")
-    is the authoritative signal for that, not the badge.
-  - It is still a
-    self-service view only — there is no console listing of another human's keys,
-    for the same reason the API has none.
+- The **Admin override** badge: Settings (`/account`) badges a key **Admin override** from its stored `role`.
+  - The badge does not show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`, so a badged key can still be refused once its stamp goes stale.
+  - The audit log (`ssh.authenticate`, `outcome=failure`, reason "admin override stale") is the authoritative signal.
+  - The view is self-service only. There is no console listing of another person's keys, for the same reason the API has none.
 - An override connection is audited distinctly: the `ssh.authenticate` success event
   carries `override:true` in its data whenever the owner check did NOT match
   and the admin-role check is what let the connection through.
@@ -814,9 +791,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   to infer from `run.created_by` mismatches after the fact.
 - Tracked as
   threat-model residual #15 in
-  [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), which now
-  documents the staleness ceiling above rather than the older "no override at
-  all" gap.
+  [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md), which
+  documents the staleness ceiling above.
 - **Pre-auth listener DoS bounds.** `ssh.NewServerConn` blocks with no default
   timeout, so an unauthenticated pre-auth connection is a real containment
   surface, not a nuisance:

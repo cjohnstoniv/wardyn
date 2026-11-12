@@ -254,6 +254,12 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 	ctx, cancel := context.WithTimeout(r.Context(), spoolAdmitTimeout)
 	defer cancel()
 	id, err := p.sink.reserve(ctx, p.spoolReservationBytes(r))
+	usageID := uuid.Nil
+	if err == nil {
+		if usageID, err = p.reserveUsageRow(ctx, r); err != nil {
+			p.sink.release(id)
+		}
+	}
 	if err != nil {
 		plain, sentence := "egress audit spool unavailable", "the run's egress audit is unavailable, so it was not sent"
 		// Only a full spool or an admission that ran out of time can succeed on a retry; a sealed or
@@ -273,7 +279,8 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 		p.refuseUnaudited(w, r, mitmHost, http.StatusServiceUnavailable, reasonAuditUnavailable, plain, sentence)
 		return nil, nil
 	}
-	return r.WithContext(context.WithValue(r.Context(), spoolTicketKey{}, id)), func() { p.sink.release(id) }
+	ctx = context.WithValue(context.WithValue(r.Context(), spoolTicketKey{}, id), usageTicketKey{}, usageID)
+	return r.WithContext(ctx), func() { p.sink.release(id); p.releaseUsageRow(usageID) }
 }
 
 // ruleSourceAuditRecordTooLarge marks the deny written for a request whose target is too long to record.
@@ -304,7 +311,7 @@ func (p *Proxy) recordTooLarge(r *http.Request, mitmHost string) {
 	}
 	clip := func(v string) string { return strings.ToValidUTF8(v[:min(len(v), tooLargeFieldBytes)], "") }
 	p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: clip(strings.ToLower(host)), Method: clip(strings.ToUpper(r.Method)),
-		Path: clip(path), Time: p.now()}, egress.Deny, ruleSourceAuditRecordTooLarge))
+		Path: clip(path), Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Deny, ruleSourceAuditRecordTooLarge))
 }
 
 // refuseUnaudited answers a request the audit could not record with its status
@@ -390,7 +397,7 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 			err = s.local.Append(ctx, log)
 		}
 	}
-	if err == nil && charged && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout" {
+	if err == nil && charged && egress.CountsAsActivityFor(log, s.activityIgnore) {
 		_ = runneractivity.Record(s.activityDir, held.epoch)
 	}
 	// A served request whose record did not land, for any reason, is an audit gap: it refuses all
@@ -410,13 +417,18 @@ func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client
 		if err != nil {
 			return nil, err
 		}
+		remote.activityIgnore = cfg.ActivityIgnoreHosts
 		return &decisionSink{remote: remote, out: out}, nil
 	}
 	if cfg.DecisionSpoolDir != "" {
 		if err := preparedSpool(cfg.DecisionSpoolDir); err != nil {
 			return nil, err
 		}
-		return newLocalDecisionSink(cfg.DecisionSpoolDir, cfg.RunID, out)
+		s, err := newLocalDecisionSink(cfg.DecisionSpoolDir, cfg.RunID, out)
+		if s != nil {
+			s.activityIgnore = cfg.ActivityIgnoreHosts
+		}
+		return s, err
 	}
 	return newDecisionSink(cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
 }

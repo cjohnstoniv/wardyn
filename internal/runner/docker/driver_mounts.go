@@ -101,6 +101,11 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 			Source:   m.Source,
 			Target:   m.Target,
 			ReadOnly: m.ReadOnly, // Go zero value false == RW only when policy opted in
+			BindOptions: readOnlyBindOptions(m.ReadOnly, rroSupported, func() {
+				slog.Warn("wardyn: workspace mount: this runtime does not support recursively read-only binds, so a submount under the folder could be writable inside the sandbox",
+					slog.String("source", m.Source), slog.String("target", m.Target),
+					slog.String("mount_option", ociMountOptionRRO))
+			}),
 		})
 	}
 
@@ -311,13 +316,23 @@ func (d *Driver) hostPathDriveReal(drive *types.DriveMount) (string, error) {
 // The loss is logged: an operator needing the recursive guarantee must run
 // that drive's workloads on a runtime that declares `rro` (runc does).
 func driveBindOptions(drive *types.DriveMount, readOnly, rroSupported bool) *mount.BindOptions {
+	return readOnlyBindOptions(readOnly, rroSupported, func() {
+		slog.Warn("wardyn: user drive: this runtime does not support recursively read-only binds, so a submount under the share's home could be writable inside the sandbox",
+			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName),
+			slog.String("mount_option", ociMountOptionRRO))
+	})
+}
+
+// readOnlyBindOptions is driveBindOptions' rule for any read-only bind: BindOptions only for a
+// read-only bind on a runtime that declares `rro`, and warn is called when a read-only bind has to
+// go without. A read-only workspace folder takes it too, since a host submount under the folder is
+// just as writable there.
+func readOnlyBindOptions(readOnly, rroSupported bool, warn func()) *mount.BindOptions {
 	if !readOnly {
 		return nil
 	}
 	if !rroSupported {
-		slog.Warn("wardyn: user drive: this runtime does not support recursively read-only binds, so a submount under the share's home could be writable inside the sandbox",
-			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName),
-			slog.String("mount_option", ociMountOptionRRO))
+		warn()
 		return nil
 	}
 	return &mount.BindOptions{ReadOnlyForceRecursive: true}

@@ -5,9 +5,7 @@ package rfbfilter
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -159,11 +157,9 @@ func (h *harness) handshake38() {
 	}
 }
 
-func sum(s string) string { d := sha256.Sum256([]byte(s)); return hex.EncodeToString(d[:]) }
-
 // The lane's gate: with the default rules (paste in allowed, copy out blocked)
-// the desktop's cut text never reaches the browser and is audited by direction,
-// size and hash; the browser's paste goes through and is audited too. Split
+// the desktop's cut text never reaches the browser and is audited by direction and
+// size; the browser's paste goes through and is audited too. Split
 // reads and fragmented messages must not change a byte of the outcome.
 func TestBlockedCopyOutIsDroppedAndAudited(t *testing.T) {
 	for _, split := range []bool{false, true} {
@@ -185,8 +181,8 @@ func TestBlockedCopyOutIsDroppedAndAudited(t *testing.T) {
 				t.Fatalf("an allowed paste was altered: %x", got)
 			}
 			want := []Event{
-				{Direction: CopyOut, Bytes: 15, SHA256: sum("TOP-SECRET-COPY"), Allowed: false},
-				{Direction: PasteIn, Bytes: 11, SHA256: sum("pasted text"), Allowed: true},
+				{Direction: CopyOut, Bytes: 15, Allowed: false},
+				{Direction: PasteIn, Bytes: 11, Allowed: true},
 			}
 			if fmt.Sprint(h.events) != fmt.Sprint(want) {
 				t.Fatalf("audit events = %+v, want %+v", h.events, want)

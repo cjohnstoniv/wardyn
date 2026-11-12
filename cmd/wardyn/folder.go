@@ -34,7 +34,7 @@ var folderCopy = struct {
 		"Only the run's own person can do it, and the agent is stopped first. A kill does not bring the folder back.",
 	progress:    "Bringing changes back…\n",
 	broughtBack: "Last changes synced back at %s. %d files came back to you.\n",
-	deleted:     "The sandbox copy was deleted when the run ended.\n",
+	deleted:     "The run has ended. Its sandbox copy may no longer be available.\n",
 	notDeleted:  "The sandbox copy could not be deleted yet. Wardyn tries again within about two hours (for a runner that is offline, after it reconnects).\n",
 	leftOut:     "left out: %s (%s)\n",
 	notBack:     "the run is stopped, but its folder did not come back: %s",

@@ -33,7 +33,7 @@ import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { SubmittedNote } from "../screens/governance/submitted-note";
 import { SUBJECT_LABEL } from "../screens/permissions";
 import { Segmented } from "./segmented";
-import type { AvailabilityView, CapabilitySubjectType } from "../../lib/types";
+import type { AvailabilityView, CapabilitySubjectType, GovernanceChange } from "../../lib/types";
 import { useSecurityOperator } from "./operator-context";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -133,7 +133,7 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
   const [choiceError, setChoiceError] = React.useState<string | null>(null);
   const [listError, setListError] = React.useState<string | null>(null);
   // A write the server held for a second person (202), said where it was made.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   const typeName = useUserTypeNames();
   // "Only these" picked with nobody listed: held here, never sent, because the server refuses an
   // empty Only list. The first Add writes the allow row, then restricts.
@@ -156,14 +156,14 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
     setBusy(what);
     setChoiceError(null);
     setListError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     try {
       await fn();
       return true;
     } catch (e) {
       if (e instanceof PendingChangeError) {
         // Held for a second person (202): nothing changed, so `view` stays and the list is read again.
-        setSubmitted(true);
+        setSubmitted(e.change);
         await load();
         return true;
       }
@@ -182,7 +182,7 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
   const grants = view.allowed_by;
   return (
     <>
-      {submitted && <SubmittedNote />}
+      {submitted && <SubmittedNote change={submitted} />}
       <AvailabilityFields
         {...family}
         restricted={view.restricted}
@@ -339,6 +339,7 @@ function AvailabilityFields({
     <Field label={AVAILABILITY.LABEL}>
       <RadioGroup
         aria-label={AVAILABILITY.LABEL}
+        aria-describedby={choiceError ? `${id}-choice-error` : undefined}
         value={onlyChosen ? "only" : "first"}
         onValueChange={(v) => onRestrictedChange(v === "only")}
         disabled={disabled}
@@ -373,7 +374,11 @@ function AvailabilityFields({
           {AVAILABILITY.COVERED_BY_PREFIX(c.prefix, chipText(c.who, typeName))}
         </p>
       ))}
-      {choiceError && <p className="text-xs leading-snug text-danger">{choiceError}</p>}
+      {choiceError && (
+        <p id={`${id}-choice-error`} role="alert" className="text-xs leading-snug text-danger">
+          {choiceError}
+        </p>
+      )}
       {onlyChosen && (
         <div className="ml-6 space-y-2" data-testid="availability-audience">
           {pendingOnly && audiences.length === 0 && (
@@ -423,6 +428,8 @@ function AvailabilityFields({
             <Input
               aria-label={AUDIENCES.find((a) => a.value === audienceType)?.hint}
               placeholder={AVAILABILITY.ADD_PLACEHOLDER}
+              aria-invalid={listError ? true : undefined}
+              aria-describedby={listError ? `${id}-list-error` : undefined}
               value={audience}
               onChange={(e) => setAudience(e.target.value)}
               onKeyDown={(e) => {
@@ -445,7 +452,11 @@ function AvailabilityFields({
               {AVAILABILITY.ADD_CTA}
             </Button>
           </div>
-          {listError && <p className="text-xs leading-snug text-danger">{listError}</p>}
+          {listError && (
+            <p id={`${id}-list-error`} role="alert" className="text-xs leading-snug text-danger">
+              {listError}
+            </p>
+          )}
 
         </div>
       )}

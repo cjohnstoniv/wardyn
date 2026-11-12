@@ -198,8 +198,9 @@ function Dock({
           )}
         >
           {/* Same slot the canvas mounts its tiles through: one throwing dock
-              widget degrades to a card inside the dock, not a blanked screen. */}
-          <WidgetSlot region={def.label} resetKey={ctx.run.id}>
+              widget degrades to a card inside the dock, not a blanked screen.
+              Keyed by widget so switching widgets clears the last one's error. */}
+          <WidgetSlot key={open} region={def.label} resetKey={ctx.run.id}>
             {def.component(ctx)}
           </WidgetSlot>
         </section>

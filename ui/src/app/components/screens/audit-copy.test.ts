@@ -207,3 +207,39 @@ describe("a prompt left to a model gateway", () => {
     expect(describeEvent(left("llm.scan.block", "corp-gateway"))).toBe("LLM content scan (block) for gateway.example.com");
   });
 });
+
+describe("the unit admin's Audit copy", () => {
+  const TAIL =
+    ", and the changes made to those units. Sign-ins aren't listed here, and a run's row leaves out names, paths and error text.";
+
+  it("names one unit, and says the units below it", () => {
+    expect(AUDIT.unitNoteBody(["payments"])).toBe(`Showing runs in \`payments\` and the units below it${TAIL}`);
+  });
+
+  it("lists up to three units, comma separated, below them", () => {
+    expect(AUDIT.unitNoteBody(["a", "b", "c"])).toBe(`Showing runs in \`a\`, \`b\`, \`c\` and the units below them${TAIL}`);
+  });
+
+  it("names three of five units and counts the other two", () => {
+    expect(AUDIT.unitNoteBody(["a", "b", "c", "d", "e"])).toBe(
+      `Showing runs in \`a\`, \`b\`, \`c\` and 2 more, and the units below them${TAIL}`,
+    );
+  });
+
+  it("names the first unit in the empty state", () => {
+    expect(AUDIT.unitEmptyBody("payments")).toBe(
+      "Recorded egress decisions, brokered credentials, approvals and enforcement actions of a run in `payments` or below it appears here once that run starts.",
+    );
+  });
+
+  it("holds the fixed unit texts", () => {
+    expect(AUDIT.UNIT_DESCRIPTION).toBe(
+      "Append-only. Recorded egress decisions, brokered credentials, approvals and enforcement actions, across the runs in your units.",
+    );
+    expect(AUDIT.UNIT_NOTE_TITLE).toBe("Runs in your units");
+    expect(AUDIT.UNIT_EMPTY_TITLE).toBe("No runs in your units yet.");
+    expect(AUDIT.UNIT_DRILL_TITLE).toBe("This run is in your unit");
+    expect(AUDIT.UNIT_DRILL_BODY).toBe("Its page isn't open to you. The trail below is what the audit view can show.");
+    expect(AUDIT.UNIT_DRILL_BACK).toBe("Back to all runs in your units");
+  });
+});

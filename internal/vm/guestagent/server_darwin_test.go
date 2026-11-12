@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -125,6 +126,32 @@ func TestDarwinInitSignInsOffRunsAgentOnlyWithNoDesktop(t *testing.T) {
 		t.Errorf("the VNC settings file was written: %v", err)
 	}
 	noArgvHolds(t, r, "Abcd2345")
+}
+
+// A run with a desktop whose guest is still at the login window when the wait after boot ends is refused
+// with the reason before anything is written, so the run fails instead of running. A run with no desktop
+// is not held, and one whose agent is at the console starts.
+func TestDarwinInitFailsARunStillAtTheLoginWindow(t *testing.T) {
+	s, _, h := newDarwinServer(t)
+	s.Cred = &syscall.Credential{Uid: 502}
+	s.Desktop.Console = fakeConsole{err: ErrNoConsoleUser}
+	s.Desktop.LoginWait, s.Desktop.SessionEnvEvery = 20*time.Millisecond, time.Millisecond
+	w := postInit(h, Init{DesktopPassword: "Abcd2345"})
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "the Mac guest never reached the agent's desktop: still at the login window") {
+		t.Fatalf("Init at the login window = %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(s.MarkerDir, initMarkerFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused Init wrote its marker: %v", err)
+	}
+	if w := postInit(h, Init{SignInsOff: true, DesktopPassword: "Abcd2345"}); w.Code != 200 {
+		t.Errorf("Init with no desktop = %d %s, want it not held", w.Code, w.Body)
+	}
+
+	s, _, h = newDarwinServer(t)
+	s.Cred = &syscall.Credential{Uid: 502}
+	if w := postInit(h, Init{DesktopPassword: "Abcd2345"}); w.Code != 200 {
+		t.Fatalf("Init with the agent at the console = %d %s", w.Code, w.Body)
+	}
 }
 
 func TestDarwinInitSignInsOffDisablesTheDesktopEvenIfWritingFails(t *testing.T) {

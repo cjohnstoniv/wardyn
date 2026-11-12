@@ -821,6 +821,7 @@ mock-first tables. `governance-copy.test.ts` parses §7.10–§7.13 the same way
 | `RUBRIC.GROUP_SECRETS` | Secrets |
 | `RUBRIC.GROUP_BARRIER` | Barrier |
 | `RUBRIC.GROUP_BARRIER_HINT` | The enforced barrier — “confinement class” in the API and the docs. |
+| `RUBRIC.GROUP_COMPONENTS` | Custom components |
 | `RUBRIC.ROWS.egress_open.LABEL` | Open |
 | `RUBRIC.ROWS.egress_open.WHY` | The run can reach hosts beyond the baseline, or everything. |
 | `RUBRIC.ROWS.egress_reviewed.LABEL` | Reviewed |
@@ -839,10 +840,12 @@ mock-first tables. `governance-copy.test.ts` parses §7.10–§7.13 the same way
 | `RUBRIC.ROWS.confinement_cc2.WHY` | gVisor userspace kernel. |
 | `RUBRIC.ROWS.confinement_cc3.LABEL` | Vault (CC3) |
 | `RUBRIC.ROWS.confinement_cc3.WHY` | Kata microVM. |
-| `RUBRIC.SET_NOTE(n, level)` | {n} of 9 rows set a cap. The lowest is {level}. |
+| `RUBRIC.ROWS.self_defined_component.LABEL` | Defined by the launcher |
+| `RUBRIC.ROWS.self_defined_component.WHY` | The run uses a component its launcher defined. This can only tighten the organisation's own cap on these runs. |
+| `RUBRIC.SET_NOTE(n, level)` | {n} of 10 rows set a cap. The lowest is {level}. |
 
-`ROWS` is keyed by the nine `AutonomyRubricRowKey` values, iterated in `AUTONOMY_RUBRIC_ROW_KEYS`
-order (egress, then secrets, then confinement) rather than object insertion order, matching the
+`ROWS` is keyed by the ten `AutonomyRubricRowKey` values, iterated in `AUTONOMY_RUBRIC_ROW_KEYS`
+order (egress, then secrets, then confinement, then custom components) rather than object insertion order, matching the
 Go side's own row order. `SET_NOTE`'s `{n}` is a plain count, not a pluralised alternation — it
 is always "rows" regardless of `n`.
 
@@ -888,6 +891,7 @@ keyboard, so the fact that matters is on the chip face itself.
 | `AUTONOMY_BOUND.confinement_cc1` | Bound by this run's barrier: Fence, confinement class CC1. |
 | `AUTONOMY_BOUND.confinement_cc2` | Bound by this run's barrier: Wall, confinement class CC2. |
 | `AUTONOMY_BOUND.confinement_cc3` | Bound by this run's barrier: Vault, confinement class CC3. |
+| `AUTONOMY_BOUND.self_defined_component` | Bound by this run's custom components: your governance profile limits runs that use components you defined. |
 
 Ruling 1 (#96 review): when more than one rubric row ties at the resolved level, the rail names
 **every** tied cause, not just the first — `autonomyBoundSentence` (`governance-copy.ts`)

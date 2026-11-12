@@ -61,7 +61,7 @@ ha:
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.10.0-rc.13 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.10.0-rc.18 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
@@ -529,6 +529,14 @@ defaultPolicy: ""
 # pointing at a path your own volume mounts). See README "Corporate CA trust".
 trustedCA: ""
 
+# Image signature checks (site setting images.admission, docs/operations/image-signature-checks.md).
+# registryAuthSecret names an existing kubernetes.io/dockerconfigjson Secret (often the one
+# k8s.imagePullSecret names) that wardynd reads, mounted read-only, to log in to the registries it
+# checks. Empty (default) => no mount, no WARDYN_REGISTRY_AUTH_FILE, anonymous reads. Wardyn does not
+# create the Secret and never calls the Secrets API. env.WARDYN_REGISTRY_AUTH_FILE, if set, wins.
+imageAdmission:
+  registryAuthSecret: ""
+
 # Optional site-config seed (WARDYN_SITE_CONFIG_SEED_FILE): the network
 # settings wardynd writes at boot into a site config that does not have them,
 # so a wiped or rebuilt database comes back with its upstream proxy and
@@ -709,6 +717,14 @@ k8s:
     controller:
       namespace: agent-sandbox-system
       serviceAccount: agent-sandbox-controller
+    # EXPERIMENTAL. The name of a platform-owned SandboxTemplate in the runs namespace whose annotations under
+    # sandbox-template.wardyn.dev/ the agent pod takes (WARDYN_K8S_AGENT_SANDBOX_TEMPLATE). Wardyn still builds
+    # the whole pod; placement and runtime come only from k8s.sandbox.* and the confinement class, which the
+    # boot canary checks. A template that sets any pod field, or anything else, refuses the run
+    # (docs/operations/kubernetes-agent-sandbox.md). Install only the SandboxTemplate CRD
+    # from the v1.0.9 extensions.yaml, not its controller. Set adds `get` on that one sandboxtemplate to the
+    # runner Role. Empty (default) uses none. Needs enabled=true.
+    template: ""
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu; the chart README has a Kata example). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime
@@ -741,6 +757,39 @@ k8s:
     # is no generically-correct peer to default to. SCOPE THIS in production:
     # e.g. an ipBlock naming your cluster's actual apiserver/LB CIDR.
     to: []
+
+# Kernel ground-truth sensor for Kubernetes (docs/operations/kubernetes-ground-truth.md). Off by
+# default. On, the chart runs a DaemonSet from wardynd's own image (command /wardyn-tetragon-ingest)
+# that tails YOUR Tetragon's JSON export on each node, ties each event to the run whose agent pod
+# raised it, and posts it to wardynd's internal listener. The chart installs no Tetragon and no
+# TracingPolicy: Tetragon must already export to a file on the node. Needs k8s.enabled=true and a
+# k8s.runsNamespace (or allowRunsInReleaseNamespace), or the chart refuses to render.
+#
+# The token reaches the DaemonSet through one Secret, <release>-<namespace>-groundtruth, that wardynd patches
+# (token and control-plane-ca.pem) and the DaemonSet mounts. The wardynd Role gains `patch` on that
+# one Secret and nothing else; there is no new ClusterRole.
+groundtruth:
+  k8s:
+    enabled: false
+    # Where the DaemonSet and its Secret live. Empty means the release namespace. A hostPath
+    # volume needs a Pod Security level of privileged, which `baseline` forbids, so put the
+    # sensor in the namespace Tetragon already runs in (often kube-system) and set it here.
+    namespace: ""
+    # The node directory Tetragon writes its JSON export into, and the file's name. The chart
+    # mounts the DIRECTORY read-only (not the file) so a rotation that renames the file and
+    # creates a new one is followed. 600 root is Tetragon's default file mode, so the sensor runs as uid 0.
+    # Tetragon's chart default is /var/log/tetragon; check your release's exportDirectory.
+    exportDirectory: /var/log/tetragon
+    exportFilename: tetragon.log
+    nodeSelector: {}
+    # Tolerate the taints of every node that can host runs, or the sensor is blind there.
+    tolerations: []
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
 
 # SSH gateway (see docs/SSH.md — native SSH/sftp/-L forwarding into a
 # running sandbox's tmux session). Off by default; a CONDITIONAL second port
@@ -797,6 +846,10 @@ uiSandbox:
   # origin separated only by a path-scoped cookie — a published residual
   # (threatmodel/THREAT-MODEL.md §5 #18), not a detail.
   originTemplate: ""
+  # With SSO configured (env.WARDYN_OIDC_ISSUER) and no originTemplate the chart
+  # refuses to render and wardynd refuses to boot, because every run's apps would
+  # share one origin. true accepts that (WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN).
+  acceptSharedOrigin: false
 
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 # Its podSelector governs the control-plane pod ONLY (app.kubernetes.io/

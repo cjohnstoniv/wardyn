@@ -1,3 +1,4 @@
+activity_ignore_hosts
 ado_grant
 ado_grant.capabilities
 ado_grant.hosts
@@ -20,6 +21,11 @@ attribution.request_url
 attribution.source
 aws_sigv4
 aws_sigv4.account_id
+aws_sigv4.gateways
+aws_sigv4.gateways.host
+aws_sigv4.gateways.path_prefix
+aws_sigv4.gateways.port
+aws_sigv4.gateways.signing_host
 aws_sigv4.grant_id
 aws_sigv4.hosts
 aws_sigv4.portal_host
@@ -44,6 +50,7 @@ decision_sink.key
 decision_sink.spki_sha256
 decision_sink.url
 decision_spool_dir
+disable_model_usage
 forge_hosts
 gateway_identity
 gateway_identity.audience
@@ -91,13 +98,16 @@ internal_hosts.baseline
 internal_hosts.cidrs
 internal_hosts.host_suffix
 kube_api
+kube_api.approve_each
 kube_api.ca_pem
 kube_api.host
 kube_api.namespaces
 kube_api.port
+kube_api.restart
 kube_api.write
 listen
 llm_channel_hosts
+llm_headers
 llm_unavailable_detail
 llm_upstreams
 local_models
@@ -106,6 +116,8 @@ local_models.*.keep_alive_seconds
 local_models.*.max_context
 local_models.*.max_output
 local_models.*.models
+mcp_approve_each
+mcp_approve_each.windows
 mcp_bindings
 mcp_bindings.harness
 mcp_bindings.servers
@@ -119,6 +131,7 @@ mitm_ca_cert_pem
 mitm_ca_key_pem
 mitm_hosts
 mitm_llm
+no_network
 pat_grants
 pat_grants.*.access
 pat_grants.*.api
@@ -132,6 +145,7 @@ policy.allowed_domains
 policy.allowed_methods
 policy.auto_stop_after_sec
 policy.azure_devops_capabilities
+policy.data_out
 policy.denied_domains
 policy.desktop
 policy.desktop.copy_out
@@ -152,6 +166,12 @@ policy.github_capabilities
 policy.harness_inner_walls
 policy.harness_inner_walls.approvals
 policy.harness_inner_walls.sandbox_mode
+policy.host_rules
+policy.host_rules.rules
+policy.host_rules.rules.effect
+policy.host_rules.rules.host
+policy.host_rules.rules.methods
+policy.host_rules.rules.paths
 policy.llm_inspection
 policy.llm_inspection.block_min_severity
 policy.llm_inspection.classified_markers
@@ -159,6 +179,7 @@ policy.llm_inspection.detect_entropy
 policy.llm_inspection.detect_pii
 policy.llm_inspection.detect_secret_patterns
 policy.llm_inspection.detect_secrets
+policy.llm_inspection.detector_sidecar_format
 policy.llm_inspection.detector_sidecar_url
 policy.llm_inspection.inspect_forward_egress
 policy.llm_inspection.intercept_tls
@@ -180,6 +201,7 @@ policy.push_rules.max_file_size_mib
 policy.push_rules.max_inspect_pack_mib
 policy.push_rules.require_review_paths
 policy.recording
+policy.refuse_ip_literals
 policy.resources
 policy.resources.cpu_millis
 policy.resources.disk_mib

@@ -99,7 +99,7 @@ async function expectAdminChrome(page: Page) {
   for (const label of ["Policies", "Permissions", "Audit", "Getting started", "Settings"] as NavLabel[]) {
     await expect(sidebarLink(page, label)).toBeVisible();
   }
-  await expect(page).toHaveTitle(CONSOLE_VIEW.TITLE_ADMIN);
+  await expect(page).toHaveTitle(new RegExp(`(^| - )${CONSOLE_VIEW.TITLE_ADMIN}$`));
 }
 
 async function expectUserChrome(page: Page) {
@@ -112,7 +112,7 @@ async function expectUserChrome(page: Page) {
   for (const label of ["Policies", "Permissions", "Audit"] as NavLabel[]) {
     await expect(sidebarLink(page, label)).toHaveCount(0);
   }
-  await expect(page).toHaveTitle(CONSOLE_VIEW.TITLE_USER);
+  await expect(page).toHaveTitle(new RegExp(`(^| - )${CONSOLE_VIEW.TITLE_USER}$`));
 }
 
 test.describe("the view switch", () => {

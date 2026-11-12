@@ -70,6 +70,10 @@ export interface GuidedFacts {
   windowCleared?: string;
   /** The sentence for a keep or resume a server answer proved invalid, which cleared the choice; until the person chooses again. */
   machineCleared?: string;
+  /** A Run in choice the units no longer offer: the notice saying where the run goes instead. */
+  runInCleared?: string;
+  /** The unit last picked under Run in, by id and the name it had then, so that notice can name it. */
+  runInPicked?: { unitId: string; name: string };
 }
 
 export interface DocDiagnostic {

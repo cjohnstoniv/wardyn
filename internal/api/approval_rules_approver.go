@@ -20,7 +20,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -104,7 +106,8 @@ func policyActor(d *policyDecider) string { return "policy:" + d.m.RuleID.String
 // is not changed, the proxy and toolgate see the decision on their next poll.
 func (s *Server) runApprovalRules(created types.ApprovalRequest) {
 	sw := approvalRulesSwitch()
-	if sw == approvalRulesOff || !policyDecidableKinds[created.Kind] || created.GrantID != nil {
+	// One MCP call returns here too, before any rule is read: its tool rule asks for a person.
+	if sw == approvalRulesOff || !policyDecidableKinds[created.Kind] || created.GrantID != nil || isExactCallRow(created) {
 		return
 	}
 	rs, ok := s.cfg.Store.(store.ApprovalRuleStore)
@@ -237,7 +240,7 @@ func (s *Server) policyDryRunStop(w http.ResponseWriter, r *http.Request, ap typ
 }
 
 // authorizePolicyDecision is authorizeUserDecision's arm for a rule: the kind allow-list, never an Azure DevOps
-// escalation (any tool_call with a grant id), a service identity's run, the rule re-read at the version it matched,
+// escalation (any tool_call with a grant id) or one MCP call (isMCPCallRow), a service identity's run, the rule re-read at the version it matched,
 // its predicates re-run, then the reach bound of the kind. It loads both rows.
 func (s *Server) authorizePolicyDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID, d *policyDecider) (types.ApprovalRequest, types.AgentRun, bool, bool) {
 	ctx := r.Context()
@@ -247,7 +250,7 @@ func (s *Server) authorizePolicyDecision(w http.ResponseWriter, r *http.Request,
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return ap, run, false, false
 	}
-	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil {
+	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isExactCallRow(ap) { // the belt to runApprovalRules' return
 		writeErrorReason(w, http.StatusForbidden, reasonApprovalRuleNotApplicable, "an approval rule never decides this approval")
 		return ap, run, false, false
 	}
@@ -390,7 +393,7 @@ func (s *Server) serviceEgressHostAllowed(ctx context.Context, run types.AgentRu
 // within one; a rule naming neither repos nor presets matches nothing.
 func (s *Server) matchApprovalRule(ctx context.Context, rule types.ApprovalRule, ap types.ApprovalRequest, run types.AgentRun) (types.ApprovalPolicyMatch, bool, error) {
 	var none types.ApprovalPolicyMatch
-	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || !slices.Contains(rule.Kinds, ap.Kind) {
+	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isExactCallRow(ap) || !slices.Contains(rule.Kinds, ap.Kind) {
 		return none, false, nil
 	}
 	matched := map[string]string{}
@@ -428,7 +431,8 @@ func (s *Server) matchApprovalRule(ctx context.Context, rule types.ApprovalRule,
 		if err != nil {
 			return none, false, err
 		}
-		if len(caps) == 0 || slices.ContainsFunc(caps, func(c string) bool { return !slices.Contains(mt.CapabilitiesWithin, c) }) {
+		within := expandPRNames(mt.CapabilitiesWithin)
+		if len(caps) == 0 || slices.ContainsFunc(caps, func(c string) bool { return !slices.Contains(within, c) }) {
 			return none, false, nil
 		}
 		matched["capabilities"] = strings.Join(caps, ",")
@@ -440,22 +444,40 @@ func (s *Server) matchApprovalRule(ctx context.Context, rule types.ApprovalRule,
 // runScopeCapabilities is the run's GitHub and Azure DevOps capability lists from the envelope dispatch recorded (the
 // reader beneath handleGetRunPolicy); a run with no envelope yet has none, so capabilities_within cannot match it.
 func (s *Server) runScopeCapabilities(ctx context.Context, run types.AgentRun) ([]string, error) {
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, effectivePolicyAuditScan)
+	env, _, found, err := s.runEffectivePolicy(ctx, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	env, _, found := latestPolicyResolve(events)
 	if !found {
 		return nil, nil
 	}
 	var caps []string
-	for _, c := range env.GitHubCapabilities {
+	for _, c := range ghscope.ExpandPR(env.GitHubCapabilities) {
 		caps = append(caps, string(c))
 	}
-	for _, c := range env.AzureDevOpsCapabilities {
+	for _, c := range adoscope.ExpandPR(env.AzureDevOpsCapabilities) {
 		caps = append(caps, string(c))
 	}
 	return caps, nil
+}
+
+// expandPRNames is a rule's capabilities_within with pr read as its parts on both providers, so a rule
+// naming pr matches a run recording pr_create. A new slice: it never aliases names.
+func expandPRNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		add := []string{n}
+		if n == string(adoscope.CapPR) {
+			add = []string{string(adoscope.CapPRCreate), string(adoscope.CapPRVote), string(adoscope.CapPRComplete),
+				string(ghscope.CapPRWrite), string(ghscope.CapPRReview)}
+		}
+		for _, a := range add {
+			if !slices.Contains(out, a) {
+				out = append(out, a)
+			}
+		}
+	}
+	return out
 }
 
 // approvalTool is a tool_call row's tool name, "" when it names none (a command-only hold matches no rule).

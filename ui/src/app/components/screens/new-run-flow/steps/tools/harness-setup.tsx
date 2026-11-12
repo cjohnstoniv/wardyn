@@ -162,7 +162,8 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
               labelledBy={labelId}
               value={selected as ToolEffect}
               choices={defaultChoices(fact, name, localMcp)}
-              onChange={(effect) => { setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
+              // The default row greys Approve each call (it names one tool), so it never arrives here.
+              onChange={(effect) => { if (effect === "approve_each") return; setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
             />
             {help && <p className="text-sm text-muted-foreground">{help}</p>}
             {codex && <p className="text-sm text-muted-foreground">{localMcp ? NR_TOOLS.CODEX_NOTE_REMOTE : NR_TOOLS.CODEX_NOTE}</p>}

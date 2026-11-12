@@ -8,8 +8,14 @@ import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
 import { AUTONOMY_META, AUTONOMY_NO_CAP_LABEL } from "./autonomy-meta";
 import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, RUN_COCKPIT, WIRE_TO_COPY } from "./copy";
-import { POSTURE_CHIP_SUFFIX_ACKNOWLEDGED, POSTURE_CHIP_SUFFIX_UNENFORCED } from "./confinement-posture-copy";
-import { useConfinementPosture, type ConfinementPosture } from "./operator-context";
+import {
+  POSTURE_CHIP_SUFFIX_ACKNOWLEDGED,
+  POSTURE_CHIP_SUFFIX_NOT_PROVEN,
+  POSTURE_CHIP_SUFFIX_RUNNER_NOT_PROVEN,
+  POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED,
+  POSTURE_CHIP_SUFFIX_UNENFORCED,
+} from "./confinement-posture-copy";
+import { useConfinementPosture, useConfinementSource, type ConfinementPosture } from "./operator-context";
 import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import {
   Archive,
@@ -191,6 +197,9 @@ const runStateMeta: Record<
   KILLED: { tone: "danger", label: "Killed", Icon: ShieldX, solid: true },
 };
 
+/** The badge's tone for a run state: the one colour a state has, which the runs row's glyph follows. */
+export const runStateTone = (s: string): Tone => metaFor(runStateMeta, s, { tone: "neutral", label: s }).tone;
+
 /** The badge's label for a run state, for surfaces that name states in prose. */
 export const runStateLabel = (s: string): string => metaFor(runStateMeta, s, { tone: "neutral", label: s }).label;
 
@@ -276,13 +285,33 @@ const ccMetaFallback = {
 // #162 — the ring color-mix percentages and the "glyph as well as the ring"
 // rule (mock-approval ruling 1: color alone is never a signal, CONSOLE-RULES
 // §2) are copied from the approved console-0.8 mock, surface 1. Only
-// "unenforced" earns the glyph — the mock's own open-question answer named
-// the unenforced chip specifically, and the ring alone already doubles as
+// "unenforced" (and "refused", below) earns the glyph — the mock's own
+// open-question answer named the unenforced chip specifically, and the ring alone already doubles as
 // "acknowledged"'s (softer) signal without a second word crowding a chip that
 // already carries an icon + a label.
+//
+// A failed re-check of the canary reads the same way: "refused" proved the
+// cluster no longer blocks egress, so runs already going are as exposed as
+// under "unenforced" and get its ring, glyph and suffix; "not_proven" could
+// not tell, so it gets the softer ring and its own suffix.
 const POSTURE_RING: Partial<Record<ConfinementPosture, string>> = {
   unenforced: "shadow-[0_0_0_2px_color-mix(in_oklab,var(--warning)_55%,transparent)]",
+  refused: "shadow-[0_0_0_2px_color-mix(in_oklab,var(--warning)_55%,transparent)]",
   acknowledged: "shadow-[0_0_0_2px_color-mix(in_oklab,var(--warning)_28%,transparent)]",
+  not_proven: "shadow-[0_0_0_2px_color-mix(in_oklab,var(--warning)_28%,transparent)]",
+};
+const POSTURE_SUFFIX: Partial<Record<ConfinementPosture, string>> = {
+  unenforced: POSTURE_CHIP_SUFFIX_UNENFORCED,
+  refused: POSTURE_CHIP_SUFFIX_UNENFORCED,
+  acknowledged: POSTURE_CHIP_SUFFIX_ACKNOWLEDGED,
+  not_proven: POSTURE_CHIP_SUFFIX_NOT_PROVEN,
+};
+// The suffixes for a connected Kubernetes runner's verdict (network_policy_source "runner").
+const RUNNER_POSTURE_SUFFIX: Partial<Record<ConfinementPosture, string>> = {
+  ...POSTURE_SUFFIX,
+  unenforced: POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED,
+  refused: POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED,
+  not_proven: POSTURE_CHIP_SUFFIX_RUNNER_NOT_PROVEN,
 };
 
 export function ConfinementChip({ value }: { value: ConfinementClass }) {
@@ -291,12 +320,7 @@ export function ConfinementChip({ value }: { value: ConfinementClass }) {
   const mechanism = meta?.mechanism ?? String(value);
   const m = metaFor(ccMeta, value as string, ccMetaFallback);
   const posture = useConfinementPosture();
-  const suffix =
-    posture === "unenforced"
-      ? POSTURE_CHIP_SUFFIX_UNENFORCED
-      : posture === "acknowledged"
-        ? POSTURE_CHIP_SUFFIX_ACKNOWLEDGED
-        : "";
+  const suffix = (useConfinementSource() === "runner" ? RUNNER_POSTURE_SUFFIX : POSTURE_SUFFIX)[posture] ?? "";
   const title = `${label} — ${mechanism} · internal class ${value}${suffix}`;
   return (
     <Chip
@@ -314,7 +338,9 @@ export function ConfinementChip({ value }: { value: ConfinementClass }) {
       {/* aria-hidden: the ring already carries "unenforced" for a sighted
           reader and `title`'s suffix carries it for a hover; this glyph is the
           §2 "never colour alone" mark, not a second accessible name. */}
-      {posture === "unenforced" && <AlertTriangle className="size-3 text-warning" aria-hidden="true" />}
+      {(posture === "unenforced" || posture === "refused") && (
+        <AlertTriangle className="size-3 text-warning" aria-hidden="true" />
+      )}
     </Chip>
   );
 }
@@ -408,6 +434,8 @@ const kindTone: Record<ApprovalKind, Tone> = {
   push_content: "warning",
   // The agent is waiting on a person, like the two above.
   human_takeover: "warning",
+  // A person is waiting to download the file, like the rows above.
+  file_download: "warning",
 };
 export function ApprovalKindChip({ kind, scope }: { kind: ApprovalKind; scope?: Record<string, unknown> }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);

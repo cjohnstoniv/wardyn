@@ -36,6 +36,10 @@ func (s *authzStore) DecideGovernanceChange(context.Context, uuid.UUID, store.Go
 	return types.GovernanceChange{}, store.ErrNotFound
 }
 
+func (s *authzStore) SetGovernanceChangeNote(context.Context, uuid.UUID, types.ChangeNote) (types.GovernanceChange, error) {
+	return types.GovernanceChange{}, store.ErrNotFound
+}
+
 func (s *authzStore) DryRunGovernance(context.Context, func(store.Querier) error) error {
 	return errors.New("authzStore: no database")
 }

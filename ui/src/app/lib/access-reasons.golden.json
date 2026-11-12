@@ -1,5 +1,13 @@
 [
   {
+    "key": "approve_each_default",
+    "text": "Approve each call names one MCP tool. Add it as a rule for that tool."
+  },
+  {
+    "key": "approve_each_no_remote_mcp",
+    "text": "Approve each call works for a tool of a remote MCP server this run reaches through the proxy. Turn one on for this harness."
+  },
+  {
     "key": "attended_no_skip",
     "text": "In an interactive run Claude Code asks you before it acts, and this run's settings don't let it skip asking."
   },
@@ -93,15 +101,15 @@
   },
   {
     "key": "unlisted.deny_with_review.admin",
-    "text": "Anything else is refused the first time the run asks for it and raises a request. Once an admin approves it, the run can try again."
+    "text": "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once an admin approves it, the run can try again."
   },
   {
     "key": "unlisted.deny_with_review.you",
-    "text": "Anything else is refused the first time the run asks for it and raises a request. Once you approve it, the run can try again."
+    "text": "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once you approve it, the run can try again."
   },
   {
     "key": "unlisted.deny_with_review.you_or_admin",
-    "text": "Anything else is refused the first time the run asks for it and raises a request. Once you or an admin approves it, the run can try again."
+    "text": "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once you or an admin approves it, the run can try again."
   },
   {
     "key": "unlisted.hold_timeout",
@@ -113,14 +121,14 @@
   },
   {
     "key": "unlisted.wait_for_review.admin",
-    "text": "Anything else is held for an admin's review the first time the run asks for it."
+    "text": "Another host is held for an admin's review the first time the run asks for it, unless it is always blocked."
   },
   {
     "key": "unlisted.wait_for_review.you",
-    "text": "Anything else is held for your review the first time the run asks for it."
+    "text": "Another host is held for your review the first time the run asks for it, unless it is always blocked."
   },
   {
     "key": "unlisted.wait_for_review.you_or_admin",
-    "text": "Anything else is held for your or an admin's review the first time the run asks for it."
+    "text": "Another host is held for your or an admin's review the first time the run asks for it, unless it is always blocked."
   }
 ]

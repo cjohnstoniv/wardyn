@@ -295,32 +295,29 @@ func rfbClientCheckViewOnlyRows(ctx context.Context, t *testing.T, r *rfbClientR
 	rfbClientCheckPasteRows(t, rows)
 }
 
-// rfbClientCheckPasteRows checks each row is one of the script's two pastes, by size and hash only.
+// rfbClientCheckPasteRows checks each row is one of the script's two pastes, by size only.
 func rfbClientCheckPasteRows(t *testing.T, rows []types.AuditEvent) {
 	t.Helper()
-	sizes := map[string]int{digest(pasteSentinel): len(pasteSentinel), digest(rfbClientExtendedText): len(rfbClientExtendedText)}
-	seen := map[string]int{}
+	seen := map[int]int{}
 	for _, row := range rows {
 		var d struct {
 			App       string `json:"app"`
 			Direction string `json:"direction"`
 			Bytes     int    `json:"bytes"`
-			SHA256    string `json:"sha256"`
 		}
 		if err := json.Unmarshal(row.Data, &d); err != nil {
 			t.Fatal(err)
 		}
-		size, known := sizes[d.SHA256]
-		if !known || d.Bytes != size || d.Direction != "paste_in" || row.Target != "paste_in" || d.App != uiDesktopAppName {
+		if (d.Bytes != len(pasteSentinel) && d.Bytes != len(rfbClientExtendedText)) || d.Direction != "paste_in" || row.Target != "paste_in" || d.App != uiDesktopAppName {
 			t.Errorf("ui.clipboard.transfer row target %q %s is not one of the two pastes", row.Target, row.Data)
 		}
-		seen[d.SHA256]++
-		if strings.Contains(string(row.Data), pasteSentinel) || strings.Contains(string(row.Data), rfbClientExtendedText) {
-			t.Errorf("a ui.clipboard.transfer row carries the text: %s", row.Data)
+		seen[d.Bytes]++
+		if strings.Contains(string(row.Data), pasteSentinel) || strings.Contains(string(row.Data), rfbClientExtendedText) || strings.Contains(string(row.Data), "sha256") {
+			t.Errorf("a ui.clipboard.transfer row carries the text or a digest of it: %s", row.Data)
 		}
 	}
-	if len(seen) != len(sizes) || seen[digest(pasteSentinel)] != seen[digest(rfbClientExtendedText)] {
-		t.Errorf("paste rows by hash = %v, want the plain and the extended paste equally", seen)
+	if len(seen) != 2 || seen[len(pasteSentinel)] != seen[len(rfbClientExtendedText)] {
+		t.Errorf("paste rows by size = %v, want the plain and the extended paste equally", seen)
 	}
 }
 

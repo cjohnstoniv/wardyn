@@ -80,6 +80,7 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 		ModelProviders: block, ConnectedPeople: connected,
 		EntraLoginConfigured: s.providerWriteEnv(nil).EntraLoginConfigured, KindsAvailable: kindsAvailable(),
 		GatewayIdentityIssuer: s.gatewayIdentityIssuer(), GatewayJWKSPath: s.cfg.BasePath + gatewayJWKSRoute,
+		GatewayIdentityBedrockSSO: s.gatewayBedrockSSOAvailable(),
 	})
 }
 
@@ -243,6 +244,9 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 	if len(identity) > 0 { // absent with identity off, so this row reads as it always has
 		data["gateway_identity"] = identity
 	}
+	if names := extraHeaderAuditNames(after); names != nil { // header names only, never a value; absent with none set
+		data["extra_headers"] = names
+	}
 	if len(unbound) > 0 { // absent unless a row signs people in without tying it to their console sign-in
 		data["oidc_unbound"] = unbound
 	}
@@ -253,7 +257,7 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 // person's credential is sent, differs between two versions of one provider.
 func providerAddressChanged(a, b types.ModelProvider) bool {
 	if a.BaseURL != b.BaseURL || bedrockAddress(a) != bedrockAddress(b) || authHeader(a.Auth) != authHeader(b.Auth) ||
-		azureAddress(a) != azureAddress(b) || oidcAddress(a) != oidcAddress(b) {
+		azureAddress(a) != azureAddress(b) || oidcAddress(a) != oidcAddress(b) || extraHeadersAddress(a) != extraHeadersAddress(b) {
 		return true
 	}
 	for _, ha := range a.Harnesses {
@@ -283,6 +287,9 @@ func providerAddressDigest(p types.ModelProvider) string {
 	}
 	if p.OIDC != nil { // likewise: an OIDC row alone appends, so no other row's digest moves
 		parts = append(parts, oidcAddress(p))
+	}
+	if len(p.ExtraHeaders) > 0 { // likewise: only a row with headers appends
+		parts = append(parts, extraHeadersAddress(p))
 	}
 	sum := sha256.Sum256(mustJSON(parts))
 	return hex.EncodeToString(sum[:])

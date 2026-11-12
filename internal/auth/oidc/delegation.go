@@ -85,6 +85,8 @@ func (a *Authenticator) VerifySubjectToken(r *http.Request, raw, portalClientID 
 		}
 	}
 	sess.IssuedAt, sess.Expiry = tok.IssuedAt, tok.Expiry
+	sess.subjectToken = tokenIdentity{sub: tok.Subject, tid: cc.tid, oid: cc.oid}
+	sess.MayAct = readMayAct(tok)
 	return sess, ""
 }
 

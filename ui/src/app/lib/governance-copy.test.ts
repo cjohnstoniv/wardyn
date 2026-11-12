@@ -193,6 +193,7 @@ const rendered: Record<string, string> = {
   "RUBRIC.GROUP_SECRETS": RUBRIC.GROUP_SECRETS,
   "RUBRIC.GROUP_BARRIER": RUBRIC.GROUP_BARRIER,
   "RUBRIC.GROUP_BARRIER_HINT": RUBRIC.GROUP_BARRIER_HINT,
+  "RUBRIC.GROUP_COMPONENTS": RUBRIC.GROUP_COMPONENTS,
   ...Object.fromEntries(
     AUTONOMY_RUBRIC_ROW_KEYS.flatMap((k) => [
       [`RUBRIC.ROWS.${k}.LABEL`, RUBRIC.ROWS[k][0]],
@@ -224,8 +225,8 @@ const rendered: Record<string, string> = {
 const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
 
 describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
-  it("finds all 152 frozen keys in the doc", () => {
-    expect(doc.size).toBe(152);
+  it("finds all 156 frozen keys in the doc", () => {
+    expect(doc.size).toBe(156);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -331,7 +332,7 @@ describe("governance-copy — the reuse rules §7 spells out", () => {
 // and order) and the one key the doc-table comparison can't reach, because it
 // isn't a single renderable string.
 describe("RUBRIC — the profile editor's rubric section", () => {
-  it("has one [label, why] row for every one of the nine AutonomyRubric fields, in the fixed order", () => {
+  it("has one [label, why] row for every one of the ten AutonomyRubric fields, in the fixed order", () => {
     expect(Object.keys(RUBRIC.ROWS).sort()).toEqual([...AUTONOMY_RUBRIC_ROW_KEYS].sort());
     for (const k of AUTONOMY_RUBRIC_ROW_KEYS) {
       const [label, why] = RUBRIC.ROWS[k];

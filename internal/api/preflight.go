@@ -155,11 +155,8 @@ func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) boo
 // answer (a runner that is offline included), is nil — the default then stays
 // at the policy minimum and Review never refuses on it (handlePreflightRun).
 func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest) []types.ConfinementClass {
-	pc, err := s.requestCapabilities(ctx, req)
-	if err != nil {
-		return nil
-	}
-	return pc.ConfinementClasses
+	classes, _ := s.advertisedConfinementRead(ctx, req)
+	return classes
 }
 
 // writeRequestFieldRefusal writes the 400 launch's validation gives a request field the server owns or
@@ -397,7 +394,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		llmAccess = runLLMAccess(req, mpChoice)
 	}
 
-	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs)
+	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs, &f.placed)
 	if e := f.source.edits; e != nil {
 		items = overrideSecretItems(items, e.missingSecrets)
 	}
@@ -421,7 +418,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: f.autonomy.Level,
-		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, bound)...)
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place, comps: f.comps}, bound)...)
 	warnings = append(warnings, f.fitWarnings...)
 	warnings = append(warnings, serviceWarnings(req.Service != nil, ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0, f.end.endSec != nil)...)
 

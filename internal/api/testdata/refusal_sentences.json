@@ -135,6 +135,11 @@
     "sentence": "\"image \" + req.Image + \" is not granted to you — ask an admin for an image grant that covers it, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
   },
   {
+    "reason": "byoi_user",
+    "target": "\"runs.image\"",
+    "sentence": "\"image \" + req.Image + \" is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
+  },
+  {
     "reason": "capKinds[capAgent].reason",
     "target": "\"runs.agent\"",
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
@@ -260,6 +265,11 @@
     "sentence": "\"workspace not found\""
   },
   {
+    "reason": "decision_scope_above_rule",
+    "target": "id.String()",
+    "sentence": "fmt.Sprintf(\"the deciders of unit %s allow this %s request to be decided up to %q; %q reaches further\", v.unit, v.kind, limit, scope)"
+  },
+  {
     "reason": "delegation_scope",
     "target": "id.String()",
     "sentence": "(audit only)"
@@ -346,6 +356,11 @@
   },
   {
     "reason": "governance_unit",
+    "target": "\"runs.component\"",
+    "sentence": "deniedComponentMsg(cand.components[i].name)"
+  },
+  {
+    "reason": "governance_unit",
     "target": "\"runs.desktop_watch\"",
     "sentence": "\"Your organisation's governance profile doesn't allow watching a background run's desktop.\""
   },
@@ -381,6 +396,11 @@
   },
   {
     "reason": "governance_unit",
+    "target": "\"runs.model_provider\"",
+    "sentence": "deniedProviderMsg(cand.providers[i].name)"
+  },
+  {
+    "reason": "governance_unit",
     "target": "\"runs.placement\"",
     "sentence": "fmt.Sprintf(macOSBaseDenied, ceiling.Unit.Name, cmp.Or(base, types.MacOSStandardBase))"
   },
@@ -388,6 +408,11 @@
     "reason": "governance_unit",
     "target": "\"runs.placement\"",
     "sentence": "placementDeniedMsg(p, ceiling.Unit.Name)"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.schedule\"",
+    "sentence": "scheduledRunsDeniedMsg"
   },
   {
     "reason": "governance_unit",
@@ -490,6 +515,11 @@
     "sentence": "fmt.Sprintf(mpRunModelEnvSecret, secretName, name)"
   },
   {
+    "reason": "not_a_decider",
+    "target": "id.String()",
+    "sentence": "\"the deciders of unit \" + v.unit.String() + \" decide this \" + v.kind + \" request: \" + strings.Join(v.deciderList(), \", \")"
+  },
+  {
     "reason": "not_owner",
     "target": "id.String()",
     "sentence": "(audit only)"
@@ -562,12 +592,32 @@
   {
     "reason": "second_human_required",
     "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — it is your run's request, so someone else approves or denies it\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you asked for this download or it is your run's, so someone else approves or denies it\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its Azure DevOps access\""
   },
   {
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies this MCP call\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies this kubectl change\""
   },
   {
     "reason": "second_human_required",

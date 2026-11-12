@@ -22,8 +22,8 @@ function renderRubric(value: AutonomyRubric = {}, disabled = false) {
   return { onChange };
 }
 
-describe("ProfileRubric — the three groups", () => {
-  it("renders the frozen heading, intro and all nine rows across three groups", () => {
+describe("ProfileRubric — the four groups", () => {
+  it("renders the frozen heading, intro and all ten rows across four groups", () => {
     renderRubric();
     expect(screen.getByText(RUBRIC.HEADING)).toBeInTheDocument();
     expect(screen.getByText(RUBRIC.INTRO)).toBeInTheDocument();
@@ -31,11 +31,12 @@ describe("ProfileRubric — the three groups", () => {
     expect(screen.getByText(RUBRIC.GROUP_SECRETS)).toBeInTheDocument();
     expect(screen.getByText(RUBRIC.GROUP_BARRIER)).toBeInTheDocument();
     expect(screen.getByText(RUBRIC.GROUP_BARRIER_HINT)).toBeInTheDocument();
+    expect(screen.getByText(RUBRIC.GROUP_COMPONENTS)).toBeInTheDocument();
     for (const [label, why] of Object.values(RUBRIC.ROWS)) {
       expect(screen.getByText(label)).toBeInTheDocument();
       expect(screen.getByText(why)).toBeInTheDocument();
     }
-    expect(screen.getAllByRole("combobox")).toHaveLength(9);
+    expect(screen.getAllByRole("combobox")).toHaveLength(10);
   });
 
   it("an empty rubric reads EMPTY_NOTE, and every select shows No cap", () => {

@@ -170,7 +170,7 @@ func TestPG_QueuePortalLaunchAfterTheTokenExpired(t *testing.T) {
 		t.Errorf("the start row's via = %v; want the portal and the delegated token", queueAuditData(t, rows[0])["via"])
 	}
 
-	if _, err := e.pg.RevokeDelegate(context.Background(), d.ID, time.Now()); err != nil {
+	if _, _, err := e.pg.RevokeDelegate(context.Background(), d.ID, time.Now(), false); err != nil {
 		t.Fatal(err)
 	}
 	e.free(second)
@@ -513,7 +513,7 @@ func TestPG_QueueReviveRefusedForAFullPool(t *testing.T) {
 	e := newQueueEnv(t)
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice"}
 	rv := fullPoolReviver{pool: "Busy", max: 3}
-	rerr := e.srv.claimRevive(context.Background(), rv, run, true, types.ActorHuman, "alice")
+	rerr := e.srv.claimRevive(context.Background(), rv, run, true, store.PolicySlot{}, types.ActorHuman, "alice")
 	if rerr == nil || rerr.status != http.StatusUnprocessableEntity || rerr.reason != string(runnerpool.ReasonFull) || rerr.msg != runnerpool.FullMsg("Busy", 3) {
 		t.Fatalf("claimRevive = %+v; want 422 runner_pool_full naming the pool and cap", rerr)
 	}

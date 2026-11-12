@@ -108,8 +108,10 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// The stop is decided from that re-read: an end moved before it (the
 		// end edit writes under this lock too) keeps the agent running.
 		// It never waits: a run whose lock is held is skipped and retried next
-		// pass. The expiry teardown above stays outside this, so a run cannot
-		// dodge it by being revived again and again. The busy mark covers the
+		// pass. The expiry teardown above is retried the same way, and a run
+		// cannot dodge it by being revived again and again: a revive is refused
+		// a claim past the expiry (reviveExpiryDue), and a hold past
+		// keptEndHoldOffLimit is cut by forceKeptStop. The busy mark covers the
 		// instant between a revive's mark and its lock.
 		ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
 		if !ok {
@@ -269,7 +271,14 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	// carries, not the pre-claim (nil) one it read before MarkRunEnded.
 	run.LostAt, run.LostReason = &now, types.LostEnded
 	data := map[string]any{"ends_at": run.EndsAt}
-	if s.endKeepsRun(run) {
+	// A target known not to keep an ended sandbox is not asked to; the run is stopped instead. Known
+	// here means an online runner or a local executor: for an offline runner the facts are unknown,
+	// and its substrate answers the end itself (ErrEndUnsupported once the runner said it cannot keep).
+	keeps, known := s.endKeepsRunTarget(ctx, run)
+	if known && !keeps && s.endKeepsRun(run) {
+		data["end_error"] = runner.ErrEndUnsupported.Error()
+	}
+	if keeps || !known {
 		wipeFailed, err := s.endSandbox(ctx, run)
 		if !errors.Is(err, runner.ErrEndUnsupported) {
 			// Cancel/revoke only once the run is sure to be kept: on
@@ -300,11 +309,11 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", data)
 }
 
-// endKeepsRun is whether endRun tries to keep run past its end, its files kept
-// for the grace: the runner can end a sandbox, there is a grace, and the run
-// has a sandbox. A router whose substrate for the run cannot keep one answers
-// only at the end itself (runner.ErrEndUnsupported); a warning ahead of the end
-// asks endKeepsRunTarget.
+// endKeepsRun is whether endRun may keep run past its end, its files kept for
+// the grace: the runner can end a sandbox, there is a grace, and the run has a
+// sandbox. A router whose target for the run cannot keep one is told apart by
+// endKeepsRunTarget, which endRun and the warning ahead of the end ask; when no
+// fact settles it, the end itself answers (runner.ErrEndUnsupported).
 func (s *Server) endKeepsRun(run types.AgentRun) bool {
 	_, canKeep := s.cfg.Runner.(runner.SandboxEnder)
 	return canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != ""
@@ -433,7 +442,21 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 // predicate, so a concurrent kill's outcome is still preserved. Metrics counts
 // this transition itself, mirroring casRunState, since it no longer routes
 // through it.
+//
+// It holds the run's lock across the transition and the tail, or does nothing: a run whose lock is held
+// publishes no end through it and starts no pass, and the next pass retries. A lock found held (not one that could
+// not be asked) keptEndHoldOffLimit past the run's due end is cut by forceKeptStop instead, which takes the
+// same terminal claim without the lock and runs the tail with no pass back.
 func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
+	lctx, unlock, ok, held := s.tryLockRunOpHeld(ctx, run.ID)
+	if !ok {
+		if held {
+			s.forceKeptStop(ctx, leaser, run, terminal, action, data)
+		}
+		return
+	}
+	defer unlock()
+	ctx = lctx
 	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",

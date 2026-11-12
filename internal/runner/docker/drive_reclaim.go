@@ -28,7 +28,7 @@ var (
 func (d *Driver) CanManageDrives(context.Context) error { return nil }
 
 // ReclaimDrive implements runner.DriveReclaimer: the ONE call in this package that destroys
-// a member's data, and the only caller of VolumeRemove.
+// a member's data, and the only caller of VolumeRemove that removes a drive volume.
 //
 // INSPECT, JUDGE, THEN REMOVE — never remove by name. ensureDriveVolume already refuses to
 // mount a volume that answers to a drive's name but is not that drive's object

@@ -77,11 +77,29 @@ func (s PG) SetRunLocalFolderSeed(ctx context.Context, id uuid.UUID, errText str
 }
 
 // RunLocalFolderStatuses is the computer-folder pass record (0198), optional like RunLocalFolders.
+// Every write of the record is guarded (FolderStatusGuard).
 type RunLocalFolderStatuses interface {
 	// RunLocalFolderStatus reads run id's record, zero while no pass has ended.
 	RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error)
-	// SetRunLocalFolderStatus replaces run id's record. False when the run has no local folder.
-	SetRunLocalFolderStatus(ctx context.Context, id uuid.UUID, st types.RunLocalFolderStatus) (bool, error)
+	// SetRunLocalFolderStatusIf replaces run id's record when the stored one meets guard, keeping
+	// guard's generation. False when it does not, or the run has no local folder.
+	SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error)
+	// BumpRunLocalFolderGen moves run id's record from guard's generation to the next, stamped at
+	// (GenAt), changing nothing else, and answers the record as it then stands. False when the stored
+	// record does not meet guard, or the run has no local folder.
+	BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error)
+}
+
+// FolderStatusGuard is what a write of a run's folder record requires of the stored one: the
+// generation its writer read or owns. A record with no generation, or no record, is at 0.
+type FolderStatusGuard struct {
+	Gen int
+}
+
+// sql is guard's predicate on agent_runs.local_folder_status, its arguments numbered from $n, and
+// those arguments. It is the one place a status write's guard is spelled.
+func (g FolderStatusGuard) sql(n int) (string, []any) {
+	return fmt.Sprintf("COALESCE((local_folder_status->>'gen')::int, 0) = $%d", n), []any{g.Gen}
 }
 
 // RunLocalFolderStatus implements RunLocalFolderStatuses.
@@ -94,6 +112,10 @@ func (s PG) RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLo
 	if err != nil {
 		return types.RunLocalFolderStatus{}, fmt.Errorf("store: read run local folder status: %w", err)
 	}
+	return unmarshalFolderStatus(raw)
+}
+
+func unmarshalFolderStatus(raw []byte) (types.RunLocalFolderStatus, error) {
 	var st types.RunLocalFolderStatus
 	if raw != nil {
 		if err := json.Unmarshal(raw, &st); err != nil {
@@ -103,15 +125,37 @@ func (s PG) RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLo
 	return st, nil
 }
 
-// SetRunLocalFolderStatus implements RunLocalFolderStatuses.
-func (s PG) SetRunLocalFolderStatus(ctx context.Context, id uuid.UUID, st types.RunLocalFolderStatus) (bool, error) {
+// SetRunLocalFolderStatusIf implements RunLocalFolderStatuses.
+func (s PG) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
+	st.Gen = guard.Gen
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return false, fmt.Errorf("store: marshal run local folder status: %w", err)
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = $2 WHERE id = $1 AND local_folder IS NOT NULL`, id, raw)
+	pred, args := guard.sql(3)
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = $2 WHERE id = $1 AND local_folder IS NOT NULL AND `+pred,
+		append([]any{id, raw}, args...)...)
 	if err != nil {
 		return false, fmt.Errorf("store: record run local folder status: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// BumpRunLocalFolderGen implements RunLocalFolderStatuses. Only gen and gen_at change, so a write that
+// landed between the caller's read and this bump is kept.
+func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
+	pred, args := guard.sql(4)
+	var raw []byte
+	err := s.Pool.QueryRow(ctx, `UPDATE agent_runs
+		SET local_folder_status = COALESCE(local_folder_status, '{}'::jsonb) || jsonb_build_object('gen', $2::int, 'gen_at', $3::timestamptz)
+		WHERE id = $1 AND local_folder IS NOT NULL AND `+pred+`
+		RETURNING local_folder_status`, append([]any{id, guard.Gen + 1, at}, args...)...).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.RunLocalFolderStatus{}, false, nil
+	}
+	if err != nil {
+		return types.RunLocalFolderStatus{}, false, fmt.Errorf("store: move run local folder status on: %w", err)
+	}
+	st, err := unmarshalFolderStatus(raw)
+	return st, err == nil, err
 }

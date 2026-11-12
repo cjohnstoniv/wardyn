@@ -49,9 +49,10 @@ func TestUnitAdminNarrowingDirect(t *testing.T) {
 	}
 }
 
-// TestUnitAdminWideningHeld: with the switch off, a unit admin's widening is held. Its proposer and an
-// admin beside the unit cannot approve it; a peer admin of the unit, an admin above it and a security
-// admin each can. A lone admin's widening waits for a security admin, the only approver listed.
+// TestUnitAdminWideningHeld: with the switch off, a unit admin's widening is held. Its proposer, an
+// admin beside the unit and a peer admin of the unit cannot approve it, each refused on scope (only an
+// admin above a unit decides its own change, so the scope refusal comes before the second-human one); an
+// admin above it and a security admin each can. A lone admin's widening waits for a security admin, the only approver listed.
 func TestUnitAdminWideningHeld(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	path := "/api/v1/governance/units/" + e.a1.ID.String()
@@ -60,16 +61,19 @@ func TestUnitAdminWideningHeld(t *testing.T) {
 	for _, approver := range []struct {
 		who string
 		c   *http.Cookie
-	}{{"a peer admin of ua-a1", e.peerA1}, {"an admin of ua-a above it", e.adminA}, {"a security admin", e.alice}} {
+	}{{"an admin of ua-a above it", e.adminA}, {"a security admin", e.alice}} {
 		ch := e.pending(e.call(e.adminA1, http.MethodPut, path, wide))
 		if got := e.domainsOf(e.a1); len(got) != 2 {
 			t.Fatalf("a held widening changed ua-a1 to %v before approval", got)
 		}
-		if w := e.call(e.adminA1, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden || wireReason(t, w) != "second_human_required" {
-			t.Errorf("the proposer approving = %d %s, want 403 second_human_required", w.Code, w.Body)
+		if w := e.call(e.adminA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+			t.Errorf("the proposer approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
 		}
 		if w := e.call(e.adminB, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
 			t.Errorf("ua-b's admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+		}
+		if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+			t.Errorf("a peer admin of ua-a1 approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
 		}
 		if w := e.call(approver.c, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
 			t.Fatalf("%s approving = %d %s, want 200", approver.who, w.Code, w.Body)
@@ -98,6 +102,24 @@ func TestUnitAdminWideningHeld(t *testing.T) {
 		t.Errorf("the lone admin's change is %s, want still pending", e.changeState(ch.ID))
 	}
 	e.approve(ch.ID)
+}
+
+// TestUnitAdminOffWebPortRefused: a unit admin's edit that names another port of an entry the walls name bare
+// is refused as an overlay the walls do not cover (the meet reads a bare entry as 80 and 443 only, as Leq does),
+// and one naming 443 applies directly.
+func TestUnitAdminOffWebPortRefused(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	path := "/api/v1/governance/units/" + e.a1.ID.String()
+	w := e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:22", "github.com"), nil))
+	if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonGovernanceOverlayInvalid {
+		t.Fatalf("pypi.org:22 under a bare pypi.org = %d %s, want 400 %s", w.Code, w.Body, reasonGovernanceOverlayInvalid)
+	}
+	if got := e.domainsOf(e.a1); !slices.Equal(got, []string{"pypi.org", "github.com"}) {
+		t.Fatalf("a refused port change altered ua-a1 to %v", got)
+	}
+	if w := e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:443", "github.com"), nil)); w.Code != http.StatusOK {
+		t.Fatalf("pypi.org:443 = %d %s, want 200", w.Code, w.Body)
+	}
 }
 
 // TestUnitAdminOutsideSubtreeAdd: a unit admin adds to their units only people who already belong in
@@ -705,9 +727,9 @@ func (e *unitAdminEnv) legacyRename(st types.CapabilitySubjectType, name string)
 // TestLegacyRenameUnitAdmin: at equal priority the unit name breaks a tie between legacy rows, so a
 // unit admin's rename of ua-a1 past ua-b hands the person ua-b. It is held, with the rows two groups
 // the person is in or the person's own two rows, and ua-a1's peer admin, who does not govern ua-b, is
-// refused; a security admin approves. A rename that keeps the order is decided over ua-a1 alone: its
-// peer admin approves the groups' rename, held as an equal-priority group tie, and the person's own
-// rows' rename applies directly.
+// refused; a security admin approves. A rename that keeps the order is decided over ua-a1 alone, from
+// above it: an admin of ua-a approves the groups' rename, held as an equal-priority group tie, and the
+// person's own rows' rename applies directly.
 func TestLegacyRenameUnitAdmin(t *testing.T) {
 	group, user := types.CapabilitySubjectGroup, types.CapabilitySubjectUser
 	for _, tc := range []struct {
@@ -745,7 +767,7 @@ func TestLegacyRenameUnitAdmin(t *testing.T) {
 			if got := selected(); got != e.a1.ID || e.profile(e.a1.ID).Name != "ua-a1" {
 				t.Fatalf("before approval the person is selected by %s with ua-a1 named %q, want ua-a1 unrenamed", got, e.profile(e.a1.ID).Name)
 			}
-			approver := e.peerA1
+			approver := e.adminA
 			if tc.shifts {
 				if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
 					t.Errorf("ua-a1's peer admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)

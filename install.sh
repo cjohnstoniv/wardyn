@@ -4,7 +4,7 @@
 #
 # install.sh — install Wardyn on this machine.
 #
-#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.13/install.sh | sh
+#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.18/install.sh | sh
 #
 # That URL is a release asset covered by the signed SHA256SUMS. Curling this
 # file from `main` also works, but nothing signs tip-of-main. README.md carries
@@ -32,6 +32,9 @@
 set -eu
 
 REPO=cjohnstoniv/wardyn
+# The release job rewrites this one line (and only this line) with the tag the asset was published under,
+# so install.sh downloaded from a release installs that release. A raw checkout keeps the placeholder.
+RELEASE_VERSION="@WARDYN_VERSION@"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -144,15 +147,69 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 is required (do
 #
 # NOT `releases/latest`: that endpoint EXCLUDES pre-releases, and a Wardyn
 # release may be one — so it can skip the newest release or return HTTP 404 (this
-# script used to die two lines below on every install). `releases?per_page=1`
-# is the newest release of any kind. RELEASING.md says the same thing about
-# `releases/latest/download/`.
+# script used to die two lines below on every install). `releases?per_page=100`
+# lists releases of any kind, newest-created first, which is not the same as
+# highest-version first (a patch on an older line can be published after a newer
+# line), so the highest version is picked here. Releases that are not marked
+# pre-release win; only when none is among the fetched releases does it fall back
+# to the highest pre-release, and the line printed below says which it was. Only
+# the first 100 releases are scanned, so a stable release older than that is not seen. RELEASING.md says the same thing
+# about `releases/latest/download/`.
+#
+# pick_release reads the releases JSON on stdin and prints "<tag> <count> <stable|prerelease>".
+# Drafts are skipped. A tag that is not X.Y.Z[-suffix] is ignored. No jq: the API
+# answers one key per line, and splitting on commas keeps a compact answer working.
+pick_release() {
+  tr ',' '\n' | awk '
+    function gt(a, b,   x, y, i, n, m, sa, sb, pa, pb) {
+      sub(/^v/, "", a); sub(/^v/, "", b)
+      sa = ""; sb = ""
+      if (index(a, "-")) { sa = substr(a, index(a, "-") + 1); a = substr(a, 1, index(a, "-") - 1) }
+      if (index(b, "-")) { sb = substr(b, index(b, "-") + 1); b = substr(b, 1, index(b, "-") - 1) }
+      split(a, x, "."); split(b, y, ".")
+      for (i = 1; i <= 3; i++) {
+        if (x[i] + 0 > y[i] + 0) return 1
+        if (x[i] + 0 < y[i] + 0) return 0
+      }
+      if (sa == sb) return 0
+      if (sa == "") return 1
+      if (sb == "") return 0
+      n = split(sa, pa, "."); m = split(sb, pb, ".")
+      for (i = 1; i <= n && i <= m; i++) {
+        if (pa[i] ~ /^[0-9]+$/ && pb[i] ~ /^[0-9]+$/) {
+          if (pa[i] + 0 > pb[i] + 0) return 1
+          if (pa[i] + 0 < pb[i] + 0) return 0
+        } else if (pa[i] != pb[i]) return (pa[i] > pb[i]) ? 1 : 0
+      }
+      return (n > m) ? 1 : 0
+    }
+    function flush() {
+      if (tag != "" && !draft && tag ~ /^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?$/) {
+        an++; if (best_all == "" || gt(tag, best_all)) best_all = tag
+        if (!pre) { sn++; if (best_s == "" || gt(tag, best_s)) best_s = tag }
+      }
+      tag = ""; draft = 0; pre = 0
+    }
+    /^[ \t{\[]*"tag_name": *"/ { flush(); t = $0; sub(/^[^:]*: *"/, "", t); sub(/".*/, "", t); tag = t; next }
+    /^[ \t{\[]*"draft": *true/ { draft = 1; next }
+    /^[ \t{\[]*"prerelease": *true/ { pre = 1; next }
+    END {
+      flush()
+      if (sn > 0) print best_s, sn, "stable"
+      else if (an > 0) print best_all, an, "prerelease"
+    }'
+}
+
 VERSION="${WARDYN_VERSION:-}"
+# A stamped asset installs its own release; WARDYN_VERSION still overrides it.
+case "$RELEASE_VERSION" in @*) ;; *) [ -n "$VERSION" ] || VERSION="$RELEASE_VERSION" ;; esac
 if [ -z "$VERSION" ]; then
   say "Resolving the latest release"
-  VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=1" 2>/dev/null \
-            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  PICK=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null | pick_release)
+  VERSION=${PICK%% *}
   [ -n "$VERSION" ] || die "could not resolve the latest release — set WARDYN_VERSION=vX.Y.Z"
+  PICK_REST=${PICK#* }
+  say "Installing ${VERSION} (newest of ${PICK_REST%% *} ${PICK_REST#* } releases)"
 fi
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
 # A release TAG — never anything that can act as a URL path. VERSION is

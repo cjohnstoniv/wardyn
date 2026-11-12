@@ -181,10 +181,13 @@ func TestMacVMEndNewestSkipsAReservedEntryWithNoRunDir(t *testing.T) {
 }
 
 // With only macOS VMs on, a container's ref is looked up once: the miss is remembered, so later calls
-// open no run directory for it.
+// open no run directory for it. The engine holds the container: linuxVMRef remembers only a ref it
+// inspected and found to be a container.
 func TestMacVMLookupRemembersAContainer(t *testing.T) {
 	r := newMacRig(t)
-	ref := agentContainerName(uuid.New())
+	id := uuid.New()
+	seedSandbox(r.f.fakeDocker, id)
+	ref := agentContainerName(id)
 	if v, err := r.d.vmLookup(context.Background(), ref); v != nil || err != nil {
 		t.Fatalf("lookup of a container: %v %v", v, err)
 	}

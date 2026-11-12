@@ -193,6 +193,7 @@ func normalizeModelProviders(p *types.ModelProviders) *types.ModelProviders {
 			mp.Azure.Endpoint, mp.Azure.Route = normalizeAzureEndpoint(mp.Azure.Endpoint), strings.TrimSpace(mp.Azure.Route)
 		}
 		normalizeProviderOIDC(mp.OIDC)
+		normalizeProviderHeaders(mp)
 		if mp.Kind == types.ModelProviderCustomEndpoint {
 			if mp.Auth == nil {
 				mp.Auth = &types.ProviderAuth{}
@@ -285,7 +286,7 @@ func validateModelProviders(p *types.ModelProviders, env providerWriteEnv) ([]st
 			return nil, err
 		}
 		for _, check := range []func(types.ModelProvider) error{
-			validateProviderAddress, validateProviderAuth, validateProviderLocal, validateProviderHarnesses, validateProviderGatewayIdentity,
+			validateProviderAddress, validateProviderAuth, validateProviderLocal, validateProviderHarnesses, validateProviderGatewayIdentity, validateProviderHeaders,
 		} {
 			if err := check(mp); err != nil {
 				return nil, err

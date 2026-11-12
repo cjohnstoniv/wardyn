@@ -24,6 +24,8 @@ import (
 type sidecarDetector struct {
 	url    string
 	client *http.Client
+	// presidio sends and reads Presidio's /analyze format instead of Wardyn's own.
+	presidio bool
 }
 
 func newSidecarDetector(url string, client *http.Client) *sidecarDetector {
@@ -70,6 +72,9 @@ func (d *sidecarDetector) Scan(s Span, dst *[]Finding) {
 // letting the Engine mark Result.Skipped/"sidecar_error" so ShouldBlock can
 // honor OnScannerError. The traffic path never blocks on this error directly.
 func (d *sidecarDetector) scanReport(ctx context.Context, s Span, dst *[]Finding) error {
+	if d.presidio {
+		return d.scanPresidio(ctx, s, dst)
+	}
 	body, err := json.Marshal(sidecarRequest{Text: s.Text, FieldPath: s.FieldPath})
 	if err != nil {
 		return fmt.Errorf("sidecar: marshal request: %w", err)

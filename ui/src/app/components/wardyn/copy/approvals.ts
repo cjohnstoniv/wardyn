@@ -4,7 +4,7 @@
  */
 
 import type { ApprovalKind as WireApprovalKind, ApprovalRequest, ApprovalScope } from "../../../lib/types";
-import { isAdoCapabilityRequest } from "../../../lib/types";
+import { isAdoCapabilityRequest, isHostCallRequest } from "../../../lib/types";
 import { shortTime } from "../../../lib/format";
 
 // Said once, where a viewer would actually feel the consequence (the run's
@@ -23,7 +23,7 @@ export const APPROVALS_TAB = {
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.
-export type ApprovalKind = "tool" | "credential" | "egress" | "reauth" | "push" | "takeover";
+export type ApprovalKind = "tool" | "credential" | "egress" | "reauth" | "push" | "takeover" | "download";
 export const APPROVAL_BANNER_LABEL = {
   what: "What you're approving:",
   blast: "Blast radius:",
@@ -43,6 +43,8 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   push: "Push",
   // "Needs you" (M8-Banner-A's Approvals card chip).
   takeover: "Take over",
+  // A reviewed download (desktop.download review).
+  download: "Download",
 };
 
 // The ONE console label for the CANCELLED approval state (the run ended before
@@ -115,6 +117,8 @@ export const DENY_SCOPE_HINT: Record<ApprovalScope, string> = {
 // callers do `new Date(Date.now() + ms)`.
 // Shown beside a picked time that has already passed; the server refuses it with decision_expires_at in the past.
 export const UNTIL_PAST = "That time has already passed. Pick a later one.";
+// Beside the time picker while "Until…" is chosen and no time is, which is why the confirm button is off.
+export const UNTIL_MISSING = "Pick a time for this to run until, or choose another scope.";
 
 export const UNTIL_PRESETS: { label: string; ms: number }[] = [
   { label: "15 minutes", ms: 15 * 60_000 },
@@ -214,6 +218,9 @@ export function approvalScopeBadge(
     if (item.state !== "APPROVED" || !item.decision_scope) return undefined;
     return item.decision_scope === "once" ? "Allowed once" : "Allowed for this run";
   }
+  // A held host request (B5): approving covers the method and path for the rest of the run, whatever scope the row
+  // recorded; a denial needs no badge.
+  if (isHostCallRequest(item)) return item.state === "APPROVED" ? "Allowed for this run" : undefined;
   if (item.kind !== "egress_domain") return undefined;
   if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;
   const scope = item.decision_scope;
@@ -252,6 +259,7 @@ export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
   credential_reauth: "reauth",
   push_content: "push",
   human_takeover: "takeover",
+  file_download: "download",
 };
 
 // Hoisted from approvals.tsx (kept out of live-approvals.tsx's own module,
@@ -292,4 +300,31 @@ export const APPROVAL_ASKED = {
   LINE_PRE: "Asked by ",
   LINE_POST: (n: number) => `, one of ${n} agents in this run`,
   STRIP: (agent: string) => `· Asked by ${agent}`,
+} as const;
+
+// One MCP call's approval card (wardyn/mcp-call-card.tsx). The arguments are shown as the server's exact text.
+export const APPROVAL_MCP_CALL = {
+  TITLE: "Approve one MCP tool call",
+  ONCE: "Once",
+  FIELD_SERVER: "Server",
+  FIELD_TOOL: "Tool",
+  FIELD_SERVER_TOOL: "Server tool",
+  WHAT: (tool: string, server: string) => `the run calls ${tool} on ${server} with the arguments below.`,
+  BLAST:
+    "the server receives exactly these arguments and does what the tool does there. A call with different arguments is not covered.",
+  ARGUMENTS: "Arguments",
+  EXTRA: "Other parameters",
+  COPY_ARGUMENTS: "Copy arguments",
+  COPY_EXTRA: "Copy other parameters",
+  FINGERPRINT: (hex: string) => `Call ${hex}`,
+  APPROVE_NOTE: "Approves this one call with exactly these arguments. A different call asks again.",
+  DENY_NOTE: "Rejects this request and identical retries.",
+  APPROVE: "Approve once",
+  DENY: "Deny",
+  HELD_NOTE:
+    "The agent's call is waiting at the proxy for a short time. Approving sends it now, or the next time the run makes this same call.",
+  HELD_EXPIRED: "No longer waiting. Approving lets the next identical call through, once.",
+  NO_TEXT: "This server did not send the call's exact arguments, so Approve is off. Deny stays available.",
+  CANNOT_DECIDE: "Only the run's owner or an admin can decide this.",
+  LIST_TITLE: (tool: string, server: string) => `Call ${tool} on ${server}`,
 } as const;

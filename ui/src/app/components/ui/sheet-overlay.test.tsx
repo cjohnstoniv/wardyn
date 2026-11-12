@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
-  Sheet, SheetTrigger, SheetContent, SheetTitle, SheetDescription,
+  Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "./sheet";
 
 afterEach(() => vi.restoreAllMocks());
@@ -24,6 +24,14 @@ function Navigation({ side = "right" }: { side?: "top" | "right" | "bottom" | "l
     </Sheet>
   );
 }
+
+describe("SheetHeader", () => {
+  // The Close button sits over the header's top-right corner: the title must never run under it.
+  it("keeps text clear of the Close button unless a caller says otherwise", () => {
+    render(<SheetHeader data-testid="plain" />);
+    expect(screen.getByTestId("plain").className).toContain("pr-8");
+  });
+});
 
 describe("Sheet overlay", () => {
   it.each(["Escape", "Close"])("preserves focus when dismissed with %s", async (method) => {

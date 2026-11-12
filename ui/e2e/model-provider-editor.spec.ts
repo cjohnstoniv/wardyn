@@ -279,7 +279,7 @@ test.describe("Settings — the provider editor: run identity on a gateway", () 
     await expect(toggle).toBeEnabled();
     await expect(dialog.getByText(gateway.DISCLOSURE)).toBeVisible();
     await toggle.click();
-    await expect(dialog.getByText(gateway.CHIP)).toBeVisible();
+    await expect(dialog.getByText(gateway.CHIP, { exact: true })).toBeVisible();
     await expect(dialog.getByText(issuer, { exact: true })).toBeVisible();
     const origin = new URL(page.url()).origin;
     await expect(dialog.getByText(`${origin}${jwksPath}`, { exact: true })).toBeVisible();

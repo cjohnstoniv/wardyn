@@ -44,16 +44,16 @@ fi
 # 404 legitimately name the endpoint.
 grep -n 'api\.github\.com[^"]*releases/latest' "$INSTALL" \
   && fail "$INSTALL resolves a version from releases/latest, which EXCLUDES pre-releases and 404s on this repo"
-for f in "${READMES[@]}"; do
-  grep -n 'api\.github\.com[^"]*releases/latest' "$f" \
-    && fail "$f resolves a version from releases/latest — it 404s, and the empty result makes 'helm --version \"\"' an UNPINNED install"
-done
+# The documented Helm snippets DO use releases/latest: it is the newest release not marked pre-release, the same
+# rule install.sh applies from a checkout. When no such release exists the lookup fails and the guard in section 4
+# (${WARDYN_VERSION:?...}) refuses to install unpinned, so an empty answer cannot reach helm.
 
 # ── 3. …and that it still resolves SOMETHING ──────────────────────────────
 grep -q 'releases?per_page=1' "$INSTALL" \
   || fail "$INSTALL no longer resolves a version from releases?per_page=1"
 for f in "${READMES[@]}"; do
-  grep -q 'releases?per_page=1' "$f" || fail "$f no longer resolves a version from releases?per_page=1"
+  grep -q 'api.github.com/repos/[^"]*/releases/latest"' "$f" || fail "$f no longer resolves a version from releases/latest"
+  ! grep -q 'releases?per_page=1"' "$f" || fail "$f takes the first row of the releases list, which is not the highest stable version"
 done
 
 # ── 4. An unresolved version must REFUSE, never install unpinned ──────────
@@ -133,5 +133,56 @@ grep -qE 'ghcr\.io/[^"]*/agent-claude-code' "$INSTALL" \
   && fail "$INSTALL pins agent-claude-code, which this project does not publish — it 404s on every install"
 grep -q 'agent-base' "$INSTALL" \
   || fail "$INSTALL never names agent-base, the image published in agent-claude-code's place"
+
+# ── 8. With no WARDYN_VERSION it picks the HIGHEST stable version, not the first row ──
+# The API lists newest-created first; a patch on an older line published after a newer line comes first.
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+sed -n '/^pick_release() {/,/^}/p' "$INSTALL" > "$tmp/pick.sh"
+[ -s "$tmp/pick.sh" ] || fail "$INSTALL has no pick_release function"
+cat > "$tmp/releases.json" <<'JSON'
+[
+  { "tag_name": "v0.9.10", "draft": false, "prerelease": false },
+  { "tag_name": "v0.10.0-rc.17", "draft": false, "prerelease": true },
+  { "tag_name": "v0.10.0", "draft": false, "prerelease": false },
+  { "tag_name": "v0.9.8", "draft": false, "prerelease": false },
+  { "tag_name": "v1.0.0", "draft": true, "prerelease": false }
+]
+JSON
+got="$(sh -c '. "$1"; pick_release < "$2"' _ "$tmp/pick.sh" "$tmp/releases.json")"
+[ "$got" = "v0.10.0 3 stable" ] || fail "with v0.9.10 listed before v0.10.0 (and an rc and a draft), install.sh picked '$got', want 'v0.10.0 3 stable'"
+got="$(printf '[{"tag_name":"v0.10.0-rc.9","prerelease":true},{"tag_name":"v0.10.0-rc.17","prerelease":true}]' | sh -c '. "$1"; pick_release' _ "$tmp/pick.sh")"
+[ "$got" = "v0.10.0-rc.17 2 prerelease" ] || fail "a repo with only pre-releases picked '$got', want 'v0.10.0-rc.17 2 prerelease'"
+got="$(printf '{"message":"API rate limit exceeded"}' | sh -c '. "$1"; pick_release' _ "$tmp/pick.sh")"
+[ -z "$got" ] || fail "an API error body resolved to '$got'"
+
+# ── 9. A stamped install.sh installs its own release; an unstamped one picks the highest stable ──
+# Run the real script under stub docker and curl. It stops at the compose fetch, whose error names the version (the colour codes are ignored).
+stubs="$tmp/stubs"; mkdir -p "$stubs"
+cat > "$stubs/docker" <<'STUB'
+#!/bin/sh
+case "$1" in ps) exit 0 ;; *) exit 0 ;; esac
+STUB
+cat > "$stubs/curl" <<STUB
+#!/bin/sh
+for a in "\$@"; do case "\$a" in *api.github.com/repos/*/releases\?per_page=100*) cat "$tmp/releases.json"; exit 0 ;; esac; done
+exit 22
+STUB
+chmod +x "$stubs/docker" "$stubs/curl"
+resolved() { # install.sh path, extra env -> the version named in the output
+  home="$tmp/home-$$-$RANDOM"; mkdir -p "$home"
+  env -i PATH="$stubs:/usr/bin:/bin" HOME="$home" WARDYN_HOME="$home/.wardyn" "${@:2}" sh "$1" 2>&1 \
+    | sed -n 's/.*could not fetch the compose file for \(.*\)$/\1/p' || true
+}
+sed 's|^RELEASE_VERSION="@WARDYN_VERSION@"$|RELEASE_VERSION="0.10.0-rc.18"|' "$INSTALL" > "$tmp/stamped.sh"
+grep -qx 'RELEASE_VERSION="0.10.0-rc.18"' "$tmp/stamped.sh" || fail "$INSTALL has no RELEASE_VERSION=\"@WARDYN_VERSION@\" line for the release job to stamp"
+got="$(resolved "$tmp/stamped.sh")"
+[ "$got" = "v0.10.0-rc.18" ] || fail "a stamped install.sh resolved '$got', want its own release v0.10.0-rc.18"
+got="$(resolved "$tmp/stamped.sh" WARDYN_VERSION=v0.9.8)"
+[ "$got" = "v0.9.8" ] || fail "WARDYN_VERSION did not override the stamp: '$got'"
+got="$(resolved "$INSTALL")"
+[ "$got" = "v0.10.0" ] || fail "an unstamped install.sh resolved '$got', want the highest stable v0.10.0"
+grep -q 'RELEASE_VERSION=\\"${ver}\\"" assets/install.sh' .github/workflows/release.yml \
+  || fail "release.yml no longer stamps install.sh with the release tag"
+! grep -q 'NOTICE install.sh assets/' .github/workflows/release.yml || fail "release.yml still copies install.sh unstamped"
 
 echo "test-install-sh: PASS (install.sh + ${#READMES[@]} documented install blocks)"

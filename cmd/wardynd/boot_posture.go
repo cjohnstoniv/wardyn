@@ -385,6 +385,35 @@ func validateUISandboxConfig(uiListen, listen, internalListen, sshListen, origin
 	return nil
 }
 
+// validateUISandboxSharedOrigin refuses the UI-sandbox gateway with SSO configured and no per-run origin
+// template, unless allowShared (WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN) accepts it. Without a template every
+// run's apps are served from one origin, separated only by a cookie scoped to the run's path, so a page one
+// run serves can reach another run of the same person; with SSO there is more than one person on the
+// deployment. A deployment with no SSO has one operator and boots as before.
+func validateUISandboxSharedOrigin(uiListen, oidcIssuer, originTemplate string, allowShared bool) error {
+	if uiListen == "" || strings.TrimSpace(oidcIssuer) == "" || originTemplate != "" {
+		return nil
+	}
+	if allowShared {
+		slog.Warn("wardynd: WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN is set: every run's apps are served from one origin, " +
+			"so a page one run serves can reach another run's app; set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE to separate them")
+		return nil
+	}
+	return fmt.Errorf("refusing to start: the UI-sandbox gateway is on with SSO configured but WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE is unset — " +
+		"every run's apps would be served from one origin, so a page one run serves can reach another run's app; " +
+		"set a per-run origin such as \"https://run-{run}.ui.example.com\" (it needs wildcard DNS and a wildcard certificate), " +
+		"or set WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true to accept the shared origin")
+}
+
+// validateUISandboxFlags is validateBootPosture's UI-sandbox gateway checks: the listener and cookie policy
+// (validateUISandboxConfig), then the shared origin (validateUISandboxSharedOrigin).
+func validateUISandboxFlags(f *bootFlags, posture tlsPosture) error {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, boundInternalListen(*f.internalListen, *f.controlURL), *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
+		return err
+	}
+	return validateUISandboxSharedOrigin(*f.uiListen, *f.oidcIssuer, *f.uiOriginTemplate, f.allowUISharedOrigin != nil && *f.allowUISharedOrigin)
+}
+
 // uiCookiePolicy is WARDYN_UI_SANDBOX_STRIP_COOKIES for api.Config. The error
 // is dropped because validateUISandboxConfig already refused boot on it; with
 // the gateway off the policy is never read.
@@ -431,7 +460,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateHAPosture(f); err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, boundInternalListen(*f.internalListen, *f.controlURL), *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
+	if err := validateUISandboxFlags(f, posture); err != nil {
 		return err
 	}
 	if err := validateMetricsListenConfig(*f.metricsListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiListen); err != nil {

@@ -275,7 +275,7 @@ func testGatewayFlags(dsn string) *bootFlags {
 	f.rotateAgeKey = new(string)
 	f.rewrap, f.rewrapPrincipalKeys, f.migrateOnly = new(bool), new(bool), new(bool)
 	f.migrateSecrets, f.reconcile, f.auditSplitLegacy = new(bool), new(bool), new(bool)
-	f.rotateGatewayIdentityKey, f.rotateGatewayIdentityRetirePrevious = new(bool), new(bool)
+	f.rotateGatewayIdentityKey, f.retirePrevious, f.rotateAuditReceiptKey = new(bool), new(bool), new(bool)
 	*f.rotateGatewayIdentityKey = true
 	return f
 }
@@ -287,7 +287,7 @@ func TestRotateGatewayIdentityKeyModeRefusals(t *testing.T) {
 		set  func(f *bootFlags)
 		want string
 	}{
-		"retire alone":    {func(f *bootFlags) { *f.rotateGatewayIdentityKey, *f.rotateGatewayIdentityRetirePrevious = false, true }, "-retire-previous is a mode of"},
+		"retire alone":    {func(f *bootFlags) { *f.rotateGatewayIdentityKey, *f.retirePrevious = false, true }, "-retire-previous is a mode of"},
 		"beside rotate":   {func(f *bootFlags) { *f.rotateAgeKey = "k" }, "mode of its own"},
 		"beside rewrap":   {func(f *bootFlags) { *f.rewrap = true }, "mode of its own"},
 		"beside migrate":  {func(f *bootFlags) { *f.migrateOnly = true }, "mode of its own"},

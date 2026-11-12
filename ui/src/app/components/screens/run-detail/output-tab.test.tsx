@@ -273,6 +273,22 @@ describe("OutputTab — refusals", () => {
     expect(screen.getByText(RUN_OUTPUT.maskUnavailable)).toBeInTheDocument();
   });
 
+  it("data_out_blocked shows the server's sentence and no Retry", async () => {
+    const sentence = "This run's data_out rule keeps its content in: only a security admin can read its output.";
+    getMock.mockRejectedValue(new HttpError(403, sentence, "data_out_blocked"));
+    await mount();
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.loadError)).not.toBeInTheDocument();
+  });
+
+  it("data_out_unreadable keeps Retry", async () => {
+    getMock.mockRejectedValue(new HttpError(503, "This run's data_out rule could not be read. Try again.", "data_out_unreadable"));
+    await mount();
+    expect(screen.getByText(RUN_COCKPIT.loadError)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
   it("any other failure: the load-error message with a retry", async () => {
     getMock.mockRejectedValue(new Error("boom"));
     await mount();

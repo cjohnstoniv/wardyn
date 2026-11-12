@@ -21,15 +21,23 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// maintenance runs -rotate-gateway-identity-key when asked, ahead of every other
-// maintenance mode (rotateGatewayIdentityKeyMode refuses them beside it), and
-// maintenanceMode otherwise.
+// maintenance runs a key rotation mode (-rotate-gateway-identity-key or
+// -rotate-audit-receipt-key) when asked, ahead of every other maintenance mode
+// (each refuses the others beside it), and maintenanceMode otherwise.
 func (f *bootFlags) maintenance() (bool, error) {
-	if *f.rotateGatewayIdentityKey || *f.rotateGatewayIdentityRetirePrevious {
+	switch {
+	case *f.rotateGatewayIdentityKey:
 		return true, withBootTransport(f, rotateGatewayIdentityKeyMode)
+	case *f.rotateAuditReceiptKey:
+		return true, withBootTransport(f, rotateAuditReceiptKeyMode)
+	case *f.retirePrevious:
+		return true, errRetireAlone
 	}
 	return maintenanceMode(f)
 }
+
+var errRetireAlone = errors.New("refusing to run: -retire-previous is a mode of -rotate-gateway-identity-key or -rotate-audit-receipt-key; " +
+	"run `wardynd -rotate-gateway-identity-key -retire-previous` or `wardynd -rotate-audit-receipt-key -retire-previous`")
 
 // rotateGatewayIdentityKeyMode is `wardynd -rotate-gateway-identity-key`: a
 // maintenance mode that replaces the key an AI gateway's run identity token is
@@ -40,19 +48,30 @@ func (f *bootFlags) maintenance() (bool, error) {
 // this refuses; with it no lock can, so stopping them is the operator's step.
 func rotateGatewayIdentityKeyMode(f *bootFlags) error {
 	if !*f.rotateGatewayIdentityKey {
-		return errors.New("refusing to run: -retire-previous is a mode of -rotate-gateway-identity-key; run `wardynd -rotate-gateway-identity-key -retire-previous`")
+		return errRetireAlone
 	}
-	for _, other := range []bool{
-		strings.TrimSpace(*f.rotateAgeKey) != "", *f.rewrap, *f.rewrapRetirePlatformKey, *f.rewrapAdoptBootKeys, *f.rewrapPrincipalKeys,
+	return withRotationStore(f, "-rotate-gateway-identity-key", *f.rotateAuditReceiptKey, func(ctx context.Context, secrets bootKeyStore, rec audit.Recorder) error {
+		return secrets.rotateGatewayIdentity(ctx, rec, *f.retirePrevious, time.Now())
+	})
+}
+
+// withRotationStore is the scaffolding every boot-key rotation mode shares: it
+// refuses any other maintenance mode beside this one (other is the other
+// rotation mode's flag), connects, takes the single-instance and rekey locks
+// on sessions of their own, builds the audit chain and the secret store, and
+// runs rotate with them.
+func withRotationStore(f *bootFlags, mode string, other bool, rotate func(ctx context.Context, secrets bootKeyStore, rec audit.Recorder) error) error {
+	for _, o := range []bool{
+		other, strings.TrimSpace(*f.rotateAgeKey) != "", *f.rewrap, *f.rewrapRetirePlatformKey, *f.rewrapAdoptBootKeys, *f.rewrapPrincipalKeys,
 		*f.migrateOnly, *f.migrateSecrets, *f.reconcile, *f.auditSplitLegacy,
 		*f.recoveryInventory, *f.recoveryManifest, *f.recoveryVerify, *f.recoveryRehearse,
 	} {
-		if other {
-			return errors.New("refusing to run: -rotate-gateway-identity-key is a mode of its own; run it with no other maintenance mode")
+		if o {
+			return fmt.Errorf("refusing to run: %s is a mode of its own; run it with no other maintenance mode", mode)
 		}
 	}
 	if strings.TrimSpace(*f.dsn) == "" {
-		return errors.New("refusing to rotate: -rotate-gateway-identity-key needs the secret store's database; set WARDYN_PG_DSN")
+		return fmt.Errorf("refusing to rotate: %s needs the secret store's database; set WARDYN_PG_DSN", mode)
 	}
 
 	// The key service (buildStoreClients) keeps its Vault token alive until ctx ends.
@@ -105,7 +124,7 @@ func rotateGatewayIdentityKeyMode(f *bootFlags) error {
 	if err != nil {
 		return err
 	}
-	return newBootKeyStore(secrets, pool, true).rotateGatewayIdentity(ctx, rec, *f.rotateGatewayIdentityRetirePrevious, time.Now())
+	return rotate(ctx, newBootKeyStore(secrets, pool, true), rec)
 }
 
 // rotateGatewayIdentity writes the row that follows the stored one and its audit

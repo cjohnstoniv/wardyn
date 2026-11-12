@@ -47,7 +47,6 @@ test.describe("Run detail: a background run's Desktop tile", () => {
     await expect(desk.getByRole("button", { name: DESKTOP.watch })).toBeVisible();
     await expect(desk.getByText(DESKTOP.backgroundWatchTile)).toBeVisible();
     await expect(desk.getByText(DESKTOP.backgroundWatchExposure)).toBeVisible();
-    await expect(desk.getByText(DESKTOP.loginWindowNote)).toBeVisible();
     await expect(desk.locator("xpath=ancestor::section[1]").getByText(DESKTOP.viewOnlyChip)).toBeVisible();
     await expect(page.getByText("Attach from your terminal")).toHaveCount(0);
 

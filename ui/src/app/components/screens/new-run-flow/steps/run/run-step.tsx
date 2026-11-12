@@ -17,7 +17,7 @@ import { stepIssues } from "../../lenses/local-issues";
 import { keepRunning, mayKeepRunning, setHealth, setPort, setProbe, setRestart } from "../../lenses/service-lens";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
-import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
+import { dropMinimum, minimumFill, refillMinimum, startAtMinimum, type MacOSMinimum } from "../../lenses/limits-lens";
 import { deleteMachine, keepMachine, nameKeptMachine, resumeMachine, startFresh } from "../../lenses/machine-lens";
 import { chooseBarrier, chooseMacOSBase, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
@@ -28,7 +28,7 @@ import { MachineKindSection } from "./machine-kind-section";
 import { KEEP_NEW_RUN } from "../../../../wardyn/copy/keep-machine";
 import { keptChoiceOf, keptReadRetry, useDropProvenMachine } from "./kept-machine-choice";
 import { useKeptMachines } from "./kept-machines-provider";
-import { useMacOSOffer } from "./macos-offer";
+import { macOSOfferOf, useMacOSOffer } from "./macos-offer";
 import { ModeSection } from "./mode-section";
 import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
@@ -36,6 +36,9 @@ import { ServiceSection } from "./service-section";
 import { useRunPreview } from "./use-run-preview";
 import { chooseWindowIn, useClearRefusedWindow } from "./window-choice";
 import { QuestionBlock } from "./question-block";
+import { RunInField } from "./run-in-field";
+import { itemFor, reconcileRunIn, withoutRunIn } from "./run-in-model";
+import { useRunIn, type LoadRunIn } from "./use-run-in";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
 
@@ -45,7 +48,7 @@ const STEP_LABELS = {
 const TITLES = { agent_task: NR_RUN.TITLE_AGENT, environment: NR_RUN.TITLE_ENV, application: NR_RUN.TITLE_APP } as const;
 const titleOf = (intent: RunIntent) => (isServer(intent) ? NR_RUN.TITLE_APP_SERVER : intent.shape ? TITLES[intent.shape] : NR_RUN.TITLE_AGENT);
 
-export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadPools } }) {
+export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadPools; runIn?: LoadRunIn } }) {
   const draft = useNewRunDraft();
   const { intent } = draft;
   const dispatch = useNewRunDispatch();
@@ -65,6 +68,22 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
   const chosen = list && usablePools(list).find((p) => p.id === selectedPoolId(intent, list));
+  // The unit the run runs in. A choice the units no longer offer (a template's or a rerun's) goes home with its notice,
+  // and so does one the units could not be read to confirm.
+  const runIn = useRunIn(deps?.runIn);
+  const homeName = runIn.choices?.home?.name ?? list?.allowance?.unit_name;
+  const lastPicked = draft.guided.runInPicked;
+  React.useEffect(() => {
+    if (!intent.run_in) return;
+    if (runIn.status === "failed") return dispatch({ type: "edit", apply: withoutRunIn });
+    if (runIn.status !== "ready" || !runIn.choices) return;
+    const verdict = reconcileRunIn(intent.run_in, runIn.choices, runIn.list, homeName ?? "", lastPicked);
+    if (verdict.keep) return;
+    dispatch({ type: "edit", apply: withoutRunIn });
+    dispatch({ type: "guided", patch: { runInCleared: verdict.notice } });
+  }, [intent.run_in, runIn.status, runIn.choices, runIn.list, homeName, lastPicked, dispatch]);
+  const picked = itemFor(runIn.choices, intent.run_in);
+  const runInName = picked && !(picked.group === "yours" && picked.home) ? picked.name : undefined;
   // A VM is its own barrier: the container barriers give way to the VM's fixed line.
   const vm = isVMKind(intent.machine_kind);
   // A macOS VM starts its CPU and memory ask at the base's minimum; leaving macOS takes that back.
@@ -79,18 +98,32 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
     edit(apply);
   };
-  const chooseKind = (kind: MachineKind) => {
+  // `min` is the minimum of the pool the kind is chosen in: picking a pool and macOS together must read the picked
+  // pool's offer, never the one the run was refused in.
+  const applyKind = (kind: MachineKind, min: MacOSMinimum | undefined, poolId?: string) => {
     const onMac = intent.machine_kind === "macos_vm";
-    if (kind === "macos_vm" && !onMac && minimum) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, minimum) } });
-    else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
+    if (kind === "macos_vm" && !onMac && min) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, min) } });
+    // Already on macOS: the pool's minimum may raise the figures again, and leaving macOS must take those back too.
+    else if (kind === "macos_vm" && onMac && min) {
+      const next = refillMinimum(intent, fill, min);
+      if (next !== fill) dispatch({ type: "guided", patch: { macosFill: next } });
+    } else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
     // The window goes with macOS (chooseMachineKind), and its cleared notice with it.
     if (kind !== "macos_vm" && draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
     if (kind !== "macos_vm" && draft.guided.windowCleared) dispatch({ type: "guided", patch: { windowCleared: undefined } });
     edit((i) => {
       const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" ? dropMinimum(i, fill) : i;
-      const next = chooseMachineKind(leaving, kind);
-      return kind === "macos_vm" && minimum ? startAtMinimum(next, minimum) : next;
+      const next = chooseMachineKind(poolId ? choosePool(leaving, poolId) : leaving, kind);
+      return kind === "macos_vm" && min ? startAtMinimum(next, min) : next;
     });
+  };
+  const chooseKind = (kind: MachineKind) => applyKind(kind, minimum);
+  // The pools, other than the chosen one, that offer macOS now: the refusal's way out (A3.4). Pool-list order, as the select's.
+  const macPools = list ? usablePools(list).filter((p) => p.availability === "available" && p.macos_vm?.offered && p.id !== chosen?.id).map((p) => ({ id: p.id, name: p.name })) : [];
+  const pickMacPool = (poolId: string) => {
+    const pool = list && usablePools(list).find((p) => p.id === poolId);
+    const picked = macOSOfferOf(pool?.macos_vm, list?.allowance?.unit_name, pool?.scope);
+    applyKind("macos_vm", picked?.ok ? { cpuMillis: picked.minCPUs * 1000, memoryMib: picked.minMemoryMiB } : undefined, poolId);
   };
 
   return (
@@ -134,6 +167,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
           )}
         </CommandSection>
       )}
+      <RunInField run={runIn} runIn={intent.run_in} notice={draft.guided.runInCleared} homeFallbackName={list?.allowance?.unit_name} dispatch={dispatch} />
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
         <MachineKindSection
           kind={intent.machine_kind ?? "container"}
@@ -151,10 +185,12 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
             onResume: (id) => choose((i) => resumeMachine(i, id)),
             onFresh: (fresh) => edit((i) => startFresh(i, fresh)),
           }}
+          macPools={macPools}
+          onPickMacPool={pickMacPool}
           onChoose={chooseKind}
           onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))}
         />
-        <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
+        <PoolSection state={pools} runType={runType} intent={intent} runInName={runInName} onChoose={(id) => edit((i) => choosePool(i, id))} />
         {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>
     </StepShell>

@@ -145,7 +145,7 @@ func DeriveBase(ctx context.Context, o UpdateOptions, name string) (Manifest, bo
 	if err := mkdirPrivate(filepath.Dir(dir)); err != nil {
 		return Manifest{}, false, err
 	}
-	nb, done, err := beginUpdate(ctx, dir, o.Log)
+	nb, done, err := beginUpdateOnce(ctx, dir, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
 	}

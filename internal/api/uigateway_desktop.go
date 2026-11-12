@@ -377,7 +377,7 @@ func (s *Server) serveDesktopViewer(w http.ResponseWriter, r *http.Request, runI
 func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession) {
 	// The run's desktop rules, read once before the socket opens: rules that cannot be read refuse the
 	// stream, never relay it under the defaults (runDesktopPolicy, as the novnc relay does).
-	_, rules, err := s.runDesktopPolicy(r.Context(), sess.Run)
+	_, rules, _, err := s.runDesktopPolicy(r.Context(), sess.Run)
 	if err != nil {
 		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the desktop stream is refused", "run_id", sess.Run, "err", err)
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
@@ -594,7 +594,7 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 }
 
 // desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop
-// copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction, size and hash, never the
+// copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction and size, never the
 // text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
 // so no cut text flows today; the filter holds the rules for when one does. viewOnly also keeps the
 // viewer's input from the display. A background run's watch moves nothing but the picture, whatever the run's

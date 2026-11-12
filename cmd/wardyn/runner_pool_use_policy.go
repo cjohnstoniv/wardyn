@@ -109,7 +109,7 @@ func organizationPoolArg(cmd *cobra.Command, client clientFn, arg string) (sdk.R
 
 // subjectWord is how `show` names a use-policy subject's kind.
 var subjectWord = map[types.CapabilitySubjectType]string{
-	types.CapabilitySubjectGroup: "group", types.CapabilitySubjectUserType: "role", types.CapabilitySubjectUser: "person",
+	types.CapabilitySubjectGroup: "group", types.CapabilitySubjectUserType: "role", types.CapabilitySubjectUser: "person", types.RunnerPoolSubjectUnit: "unit",
 }
 
 // whoMayUse is an organization pool's WHO MAY USE row, and whether there is one: a caller who may use

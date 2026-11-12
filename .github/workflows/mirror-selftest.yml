@@ -98,6 +98,7 @@ jobs:
           docker build --pull -t mirror-selftest:pull -f "$dir/Dockerfile.pull" "$dir"
           docker run --rm hello-world >/dev/null
           docker run --rm busybox:latest true
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: mirror-selftest

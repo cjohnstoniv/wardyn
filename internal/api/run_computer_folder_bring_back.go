@@ -65,6 +65,16 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	actorType, principal := actorFromRequest(r)
+	rule, _, rerr := s.runDataOutRule(r.Context(), id)
+	if rerr != nil {
+		refuseDataOutUnreadable(r.Context(), w, id, rerr)
+		return
+	}
+	if rule != types.TransferAllowed {
+		s.auditDataOutDenied(r.Context(), id, actorType, principal, "computer_folder", rule)
+		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutFolderMsg)
+		return
+	}
 	folder, refusal := s.bringBackRefusal(r.Context(), run)
 	if refusal.write(s, w, r) {
 		return
@@ -75,6 +85,13 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, bringBackKey{}, bringBackActor{actorType, principal})
+	// The run's lock is held from the state write through the pass (lockRunEnd's reason).
+	ctx, unlock, err := s.lockRunOp(ctx, id)
+	if err != nil {
+		writeLockRefused(w, r, err)
+		return
+	}
+	defer unlock()
 	// One winner against a kill or any other end: both move the run from RUNNING.
 	applied, err := s.casRunState(ctx, id, types.RunRunning, types.RunStopped)
 	if err != nil {

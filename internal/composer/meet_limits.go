@@ -31,6 +31,7 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 		{&l.DenyUserDrive, o.DenyUserDrive},
 		{&l.DenyMemberDrives, o.DenyMemberDrives},
 		{&l.DenyKeptMachines, o.DenyKeptMachines},
+		{&l.DenyScheduledRuns, o.DenyScheduledRuns},
 		{&l.DenyBackgroundDesktopWatch, o.DenyBackgroundDesktopWatch},
 	} {
 		if f.ov != nil {
@@ -40,11 +41,15 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	if o.DenyPlacements != nil {
 		l.DenyPlacements = unionPlacements(l.DenyPlacements, *o.DenyPlacements)
 	}
+	m.meetDenyLists(o)
 	if o.AllowedMacOSBases != nil {
 		m.meetMacOSBases(*o.AllowedMacOSBases)
 	}
 	if o.AllowedModels != nil {
 		m.meetAllowedModels(*o.AllowedModels)
+	}
+	if o.RequiredImageSigners != nil {
+		l.RequiredImageSigners = unionSigners(l.RequiredImageSigners, *o.RequiredImageSigners)
 	}
 	for _, f := range []struct {
 		name string
@@ -112,6 +117,28 @@ func (m *meeter) validateMacOSBases(b *[]string) {
 			m.fail(ReasonOverlayInvalid, "allowed_macos_bases", "%q is not a macOS base name", n)
 		}
 	}
+}
+
+// validateRequiredImageSigners refuses an overlay's required_image_signers list that a profile could not hold.
+func (m *meeter) validateRequiredImageSigners(a *[]string) {
+	if a == nil {
+		return
+	}
+	if err := types.ValidRequiredImageSigners(*a); err != nil {
+		m.fail(ReasonOverlayInvalid, "required_image_signers", "%v", err)
+	}
+}
+
+// unionSigners is the requirement meet: every signer either side requires, base order first, each once. More
+// names is tighter, so an overlay can add a requirement and never drop the base's.
+func unionSigners(base, ov []string) []string {
+	out := slices.Clone(base)
+	for _, n := range ov {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // validateAllowedModels refuses an overlay's allowed_models list that a profile could not hold.
@@ -250,6 +277,7 @@ func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 		{"confinement_cc1", &b.ConfinementCC1, o.ConfinementCC1},
 		{"confinement_cc2", &b.ConfinementCC2, o.ConfinementCC2},
 		{"confinement_cc3", &b.ConfinementCC3, o.ConfinementCC3},
+		{"self_defined_component", &b.SelfDefinedComponent, o.SelfDefinedComponent},
 	} {
 		switch {
 		case f.ov == "":

@@ -7,6 +7,7 @@ import * as React from "react";
 import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
 import { getAuthGeneration } from "../../lib/api/core";
 import { onSessionExpiry, sessionExpiry } from "../../lib/api/session-activity";
+import { usePoll } from "../../lib/use-poll";
 import type { Role, UserTypeMeta } from "../wardyn/operator-context";
 import type { ViewUserType } from "../wardyn/view-switch";
 
@@ -52,6 +53,8 @@ export interface ShellMeta {
   // them while `operator` reads false. Fail CLOSED (false) when /me has not
   // answered or an older daemon never sends it — it only gates a link.
   userViewSuperAdmin: boolean;
+  /** /me's unit_admin_of. Fail closed: [] when /me has not answered, failed, or an older server never sends it. Optional only so a ShellMeta built by hand in a test need not name it; absent reads as none. */
+  unitAdminOf?: { unit_id: string; unit_name: string }[];
   // The same B1-derived tier as `operator`, named directly (B3) — fail-open
   // "admin" for the identical three cases (unresolved /me, a failed fetch, an
   // unwrapped test). Kept alongside `operator` rather than replacing it: every
@@ -115,6 +118,14 @@ export interface ShellMeta {
    *  confirm" (a k8s daemon that omitted the verdict) apart. */
   runner: string;
   networkPolicy: string;
+  /** /healthz's `network_policy_checked_at`: the time of the canary check that
+   *  produced networkPolicy, always taken from the same answer as it. Absent
+   *  ("") on an older daemon. Optional only so a ShellMeta built by hand in a
+   *  test need not name it. */
+  networkPolicyCheckedAt?: string;
+  /** /healthz's `network_policy_source`: "runner" when networkPolicy is a connected Kubernetes
+   *  runner's, "" when it is this cluster's own. Optional like networkPolicyCheckedAt. */
+  networkPolicySource?: string;
   /** #510-F6 — /healthz's `demo_video_base_url`, read once here rather than
    *  once per episode card (use-demo-video-base-url.ts's old per-hook fetch
    *  issued 24 requests on one Getting Started mount). undefined means "no
@@ -144,6 +155,7 @@ function identityFromMe(me: Me | null) {
     // this field must fail OPEN like every other identity signal here.
     securityOperator: me?.security_operator ?? true,
     userViewSuperAdmin: me?.user_view_super_admin ?? false,
+    unitAdminOf: me?.unit_admin_of ?? [],
     role: me?.role ?? "admin",
     // F3-F11: a bad string parses to an Invalid Date, not null — guard
     // NaN here so useSessionExpiry never has to. An expiry the server named
@@ -163,6 +175,32 @@ function identityFromMe(me: Me | null) {
     memberPreviewAvailable: me?.user_preview_available ?? false,
   } satisfies Partial<ShellMeta>;
 }
+
+type Posture = Pick<ShellMeta, "runner" | "networkPolicy" | "networkPolicyCheckedAt" | "networkPolicySource">;
+
+/** The confinement posture one /healthz answer carries, or null for an outage: health() answers {}
+ *  for a failed read, and every answer the daemon gives carries status "ok". */
+function postureOf(h: Awaited<ReturnType<typeof api.health>>): Posture | null {
+  if (h.status !== "ok") return null;
+  return {
+    runner: h.runner ?? "",
+    networkPolicy: h.network_policy ?? "",
+    networkPolicyCheckedAt: h.network_policy_checked_at ?? "",
+    networkPolicySource: h.network_policy_source ?? "",
+  };
+}
+
+function postureFields(m: ShellMeta): Posture {
+  return {
+    runner: m.runner,
+    networkPolicy: m.networkPolicy,
+    networkPolicyCheckedAt: m.networkPolicyCheckedAt,
+    networkPolicySource: m.networkPolicySource,
+  };
+}
+
+/** How often the shell re-reads the confinement posture from /healthz. */
+export const POSTURE_POLL_MS = 30_000;
 
 /** The shell's identity, the retry that re-fires /me (B1's banner action), and
  *  adopt() for a /me the reauth dialog already read (#483). */
@@ -186,6 +224,7 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     operator: true,
     securityOperator: true,
     userViewSuperAdmin: false,
+    unitAdminOf: [],
     role: "admin",
     sessionExpiresAt: null,
     memberLocalDirRoot: null,
@@ -201,6 +240,8 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     memberPreviewAvailable: false,
     runner: "",
     networkPolicy: "",
+    networkPolicyCheckedAt: "",
+    networkPolicySource: "",
     demoVideoBaseUrl: undefined,
     sso: false,
   });
@@ -218,8 +259,8 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
           identityRevision: previous.identityRevision + 1,
           authGeneration,
           resolved: true,
-          runner: h.runner ?? "",
-          networkPolicy: h.network_policy ?? "",
+          // An outage keeps the last posture rather than clearing it.
+          ...(postureOf(h) ?? postureFields(previous)),
           // "" (unset) reads the same as absent: both mean "no mirror".
           demoVideoBaseUrl: h.demo_video_base_url || undefined,
           sso: h.sso ?? false,
@@ -235,6 +276,27 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
       alive = false;
     };
   }, [attempt]);
+  // The canary re-checks the cluster every 10 minutes, so the posture is live, not a fact of the mount:
+  // re-read it, runner, verdict and check time together from one answer, so the band and the chips
+  // follow a change in an open console, and a console whose first read failed still learns it. An
+  // outage keeps the last one; the unreachable banner covers that.
+  usePoll(
+    () =>
+      api.health().then((h) => {
+        const next = postureOf(h);
+        if (!next) return;
+        setMeta((m) =>
+          m.runner === next.runner &&
+          m.networkPolicy === next.networkPolicy &&
+          m.networkPolicyCheckedAt === next.networkPolicyCheckedAt &&
+          m.networkPolicySource === next.networkPolicySource
+            ? m
+            : { ...m, ...next },
+        );
+      }),
+    POSTURE_POLL_MS,
+    false,
+  );
   // While the server renews sessions it names the expiry on every answer: follow it, so a renewal
   // moves the expiry banner's deadline instead of the banner warning about a session still live.
   // An answer before this mount may already have named one, so start from it.

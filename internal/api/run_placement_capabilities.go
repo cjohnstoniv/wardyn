@@ -125,7 +125,7 @@ func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (pl
 			NetworkPolicyAcknowledged: cs.NetworkPolicyAcknowledged, SessionRecording: cs.SessionRecording,
 			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles,
 			EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement, Freeze: cs.Freeze,
-			ExecOutputUncaptured: cs.ExecOutputUncaptured,
+			ExecOutputUncaptured: cs.ExecOutputUncaptured, NetworkPolicyCheck: cs.NetworkPolicyCheck,
 		},
 		Source: types.RunEvidenceRunnerAsserted, Capacity: reported.Capacity, AllowedRoots: reported.AllowedRoots, impl: ep.sub,
 	}, nil
@@ -215,6 +215,7 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 		out.StructuralEgress = out.StructuralEgress && s.StructuralEgress
 		out.NetworkPolicy = out.NetworkPolicy && s.NetworkPolicy
 		out.NetworkPolicyAcknowledged = out.NetworkPolicyAcknowledged && s.NetworkPolicyAcknowledged
+		out.NetworkPolicyCheck = runner.WorseNetPolCheck(out.NetworkPolicyCheck, s.NetworkPolicyCheck) // the worst verdict, with its own time
 		out.SessionRecording = out.SessionRecording && s.SessionRecording
 		out.UserDrives = out.UserDrives && s.UserDrives
 		out.ManagedFiles = out.ManagedFiles && s.ManagedFiles
@@ -644,7 +645,7 @@ func macOSMemoryBelowMinimum(rn types.Runner, haveGB, needGB int) string {
 // the pass rested on, or the first check that failed. No device-certificate check exists in 0.10.0.
 func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *placement.Refusal) {
 	if rn.TrustClass != types.RunnerTrustManagedDevice {
-		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security operator to mark it."
+		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security admin to mark it as a managed device."
 		if operator {
 			detail = fmt.Sprintf("%s is not marked as company-managed. Mark it with `wardyn runner trust %s managed_device`.", macRunnerName(rn), rn.ID)
 		}
@@ -809,7 +810,9 @@ func macOSVMHolds(req createRunRequest, spec types.RunPolicySpec) bool {
 		return false
 	}
 	return req.ToolApprovals == "hold" || slices.ContainsFunc(req.Tools, hasPersonalToolRules) ||
-		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool { return r.Effect == types.ToolHold || r.Effect == types.ToolDeny })
+		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool {
+			return r.Effect == types.ToolHold || r.Effect == types.ToolApproveEach || r.Effect == types.ToolDeny
+		})
 }
 
 // macOSVMAskOf is the macOS VM ask of a run: its harness ids (the request's agent when it names no

@@ -28,7 +28,7 @@ The spec is frozen on the run at create, with its defaults filled. It cannot cha
 - A `health` block needs a `port`. A `port` alone is not checked: the supervisor probes only when `health` is set.
 - Any other `health.probe` is `400 run_mode_invalid`, field `service.health.probe`.
 - `port` names the port the health check connects to. It opens that port to nobody.
-- To open a service's port from the run page, mark it **Callable from outside** in New Run. A background run opens only inbound ports, and its owner is always one of the callers. Inbound apps must be turned on for you.
+- To open a service's port from the run page, mark it **Callable from outside the run** in New Run. A background run opens only inbound ports, and its owner is always one of the callers. Inbound apps must be turned on for you.
 - A service created under an idle pause gets this warning on its 201: "Your admin pauses runs nobody is using, so this service will be paused while it waits for requests."
 
 ## What runs in the sandbox
@@ -102,6 +102,7 @@ Renewal moves the end to now plus the lease unit, or to the cap if that is soone
 - A service that stays unknown for a whole lease, such as one on an offline runner, therefore ends.
 - When the cap is the limit, a healthy service is killed at the cap with the reason `max_lifetime_reached`.
 - Changing a service identity's sponsor stops renewal of the services it already runs. They end at their current lease end. Relaunch or apply them again under the new sponsor.
+- A service's gateway access ends when its identity or sponsor is suspended, retired or revoked, and continues under a new sponsor: [When a run's gateway access ends](operations/ai-gateway.md#when-a-runs-gateway-access-ends).
 
 ## Health is the sandbox's claim
 
@@ -140,12 +141,12 @@ Wardyn's check reaches the port through the sandbox, not from the network outsid
 
 ## Images
 
-The supervisor ships in the runner tools of the image. An image wrapped or built before this release has an `agent-run-lib.sh` without it.
+The supervisor ships in the runner tools of the image. An image whose runner tools predate services (before 0.10.0) has an `agent-run-lib.sh` without the supervisor.
 
 - A service on such an image runs the command once. It is not restarted or checked, and no state file is written.
 - After 10 minutes the run reads Health unknown, reason `supervisor_missing`. It is no longer renewed and ends at its lease.
 - The run page says so: "This image's runner tools are older than services, so the command is not restarted or checked. Wrap the image again with this release."
-- Re-wrap with this release: rebuild a convention image at the tag, build a pre-wrapped image again `FROM` this release's agent-base, and wrap a BYOI image again ([deploy/images/README.md](../deploy/images/README.md#bring-your-own-image-byoi)).
+- Re-wrap with 0.10.0 or later: rebuild a convention image at the tag, build a pre-wrapped image again `FROM` that release's agent-base, and wrap a BYOI image again ([deploy/images/README.md](../deploy/images/README.md#bring-your-own-image-byoi)).
 
 ## Audit
 
@@ -168,5 +169,4 @@ At most one `run.service.health` row per source and one `run.service.restart` ro
 - A runner that goes offline leaves the supervisor running. Its last reading stays; once that is 15 minutes old, Health reads unknown and renewal stops.
 - A paused or lost service is not renewed.
 - Nothing in Wardyn renews a lease except a healthy service's own sweep and the owner's `PATCH`.
-- A service is one run. There are no replicas and no autoscaling, and no check from outside the sandbox. A service that must run in several copies, or whose health must not rest on the sandbox, belongs on the sandbox controller directly.
-- Wardyn's check reaches the port through the sandbox, not from the network outside it. A service that answers its health check passes, whatever else is wrong with it. The sandbox's health is its own report.
+- A service is one run. There are no replicas and no autoscaling. The only check from Wardyn's side is [Wardyn's own check](#wardyns-own-check) (`health.probe: control_plane`), which is off by default and reaches the port through the sandbox. A service that must run in several copies, or whose health must not rest on the sandbox, belongs on the sandbox controller directly.

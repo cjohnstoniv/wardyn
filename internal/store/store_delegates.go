@@ -31,7 +31,7 @@ type DelegateStore interface {
 	CreateDelegate(ctx context.Context, d types.Delegate, raw string) (types.Delegate, error)
 	GetDelegateByRaw(ctx context.Context, raw string) (types.Delegate, error)
 	ListDelegates(ctx context.Context) ([]types.Delegate, error)
-	RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (types.Delegate, error)
+	RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time, cut bool) (types.Delegate, int, error)
 	MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw string, now time.Time) (types.DelegatedToken, error)
 	GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error)
 	GetDelegatedTokenByID(ctx context.Context, id uuid.UUID, now time.Time) (types.DelegatedToken, error)
@@ -48,12 +48,15 @@ type DelegateReader interface {
 
 var _ DelegateReader = PG{}
 
-const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at`
+const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at, cut_in_flight_at, run_in_under`
 
-func scanDelegate(row pgx.Row) (types.Delegate, error) {
+func scanDelegate(row pgx.Row) (types.Delegate, error) { return scanDelegateWith(row) }
+
+// scanDelegateWith scans delegateCols, then any columns a query selects after them into extra.
+func scanDelegateWith(row pgx.Row, extra ...any) (types.Delegate, error) {
 	var d types.Delegate
-	err := row.Scan(&d.ID, &d.Name, &d.IdPClientID, &d.Group, &d.CredentialSHA256, &d.RegisteredBy,
-		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt)
+	err := row.Scan(append([]any{&d.ID, &d.Name, &d.IdPClientID, &d.Group, &d.CredentialSHA256, &d.RegisteredBy,
+		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt, &d.CutInFlightAt, &d.RunInUnder}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Delegate{}, ErrNotFound
 	}
@@ -68,10 +71,10 @@ func scanDelegate(row pgx.Row) (types.Delegate, error) {
 // (a reused credential in a 256-bit space).
 func (s PG) CreateDelegate(ctx context.Context, d types.Delegate, raw string) (types.Delegate, error) {
 	const q = `
-		INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by, run_in_under)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		RETURNING ` + delegateCols
-	out, err := scanDelegate(s.Pool.QueryRow(ctx, q, d.ID, d.Name, d.IdPClientID, d.Group, hashToken(raw), d.RegisteredBy))
+	out, err := scanDelegate(s.Pool.QueryRow(ctx, q, d.ID, d.Name, d.IdPClientID, d.Group, hashToken(raw), d.RegisteredBy, d.RunInUnder))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Delegate{}, ErrConflict
@@ -98,25 +101,40 @@ func (s PG) ListDelegates(ctx context.Context) ([]types.Delegate, error) {
 	return collect(ctx, s.Pool, "list", "delegates", q, nil, scanDelegate)
 }
 
-// RevokeDelegate marks id revoked. Unknown or already-revoked is ErrNotFound,
-// so a second revoke writes no second audit row. Outstanding delegated
-// tokens need no write of their own: GetDelegatedTokenByRaw joins on this
-// column.
-func (s PG) RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (types.Delegate, error) {
+// RevokeDelegate marks id revoked and, with cut, stamps cut_in_flight_at, after which no run the
+// portal launched gets a gateway token (api.gatewayMintVia reads it at every mint). A cut of a
+// portal already revoked but not yet cut stamps the cut alone. Unknown, already revoked without a
+// cut, or already cut is ErrNotFound, so a repeat writes no second audit row. One statement, so a
+// revoke and a cut racing each land once. inFlight counts the portal's non-terminal runs, for the
+// audit row. Outstanding delegated tokens need no write of their own: GetDelegatedTokenByRaw joins
+// on revoked_at.
+func (s PG) RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time, cut bool) (_ types.Delegate, inFlight int, _ error) {
+	states := make([]string, 0, len(types.NonTerminalRunStates))
+	for _, st := range types.NonTerminalRunStates {
+		states = append(states, string(st))
+	}
 	const q = `
-		UPDATE delegates SET revoked_at = $2
-		WHERE id = $1 AND revoked_at IS NULL
-		RETURNING ` + delegateCols
-	return scanDelegate(s.Pool.QueryRow(ctx, q, id, now))
+		WITH d AS (
+			UPDATE delegates SET revoked_at = COALESCE(revoked_at, $2),
+				cut_in_flight_at = CASE WHEN $3::boolean THEN COALESCE(cut_in_flight_at, $2) ELSE cut_in_flight_at END
+			WHERE id = $1 AND (revoked_at IS NULL OR ($3::boolean AND cut_in_flight_at IS NULL))
+			RETURNING ` + delegateCols + `
+		)
+		SELECT ` + delegateCols + `,
+			(SELECT count(*) FROM agent_runs r WHERE r.created_via = d.id AND r.state = ANY($4))
+		FROM d`
+	d, err := scanDelegateWith(s.Pool.QueryRow(ctx, q, id, now, cut, states), &inFlight)
+	return d, inFlight, err
 }
 
-const delegatedTokenCols = `t.id, t.delegate_id, t.principal, t.email, t.user_type, t.groups, t.groups_truncated, t.created_at, t.expires_at, t.rev_seq`
+const delegatedTokenCols = `t.id, t.delegate_id, t.principal, t.email, t.user_type, t.groups, t.groups_truncated, t.created_at, t.expires_at, t.rev_seq, t.actor_sub, t.actor_iss`
 
 func scanDelegatedToken(row pgx.Row) (types.DelegatedToken, error) {
 	var t types.DelegatedToken
 	var groups []byte
+	var actorSub, actorIss string
 	err := row.Scan(&t.ID, &t.DelegateID, &t.Principal, &t.Email, &t.UserType, &groups, &t.GroupsTruncated,
-		&t.CreatedAt, &t.ExpiresAt, &t.RevSeq)
+		&t.CreatedAt, &t.ExpiresAt, &t.RevSeq, &actorSub, &actorIss)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.DelegatedToken{}, ErrNotFound
 	}
@@ -127,6 +145,10 @@ func scanDelegatedToken(row pgx.Row) (types.DelegatedToken, error) {
 		if err := json.Unmarshal(groups, &t.Groups); err != nil {
 			return types.DelegatedToken{}, fmt.Errorf("store: scan delegated token groups: %w", err)
 		}
+	}
+	// No actor is stored as two empty strings, so a token minted without one reads back as before.
+	if actorSub != "" {
+		t.Actor = &types.DelegationActor{Sub: actorSub, Iss: actorIss}
 	}
 	return t, nil
 }
@@ -152,11 +174,15 @@ func (s PG) MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw 
 	const q = `
 		WITH swept AS (DELETE FROM delegated_tokens WHERE expires_at <= $11),
 		     touched AS (UPDATE delegates SET last_used_at = $11 WHERE id = $2)
-		INSERT INTO delegated_tokens AS t (id, delegate_id, token_sha256, principal, email, user_type, groups, groups_truncated, created_at, expires_at, rev_seq)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12)
+		INSERT INTO delegated_tokens AS t (id, delegate_id, token_sha256, principal, email, user_type, groups, groups_truncated, created_at, expires_at, rev_seq, actor_sub, actor_iss)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12,$13,$14)
 		RETURNING ` + delegatedTokenCols
+	var actorSub, actorIss string
+	if t.Actor != nil {
+		actorSub, actorIss = t.Actor.Sub, t.Actor.Iss
+	}
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, t.ID, t.DelegateID, hashToken(raw), t.Principal, t.Email,
-		t.UserType, groups, t.GroupsTruncated, createdAt, t.ExpiresAt, now, t.RevSeq))
+		t.UserType, groups, t.GroupsTruncated, createdAt, t.ExpiresAt, now, t.RevSeq, actorSub, actorIss))
 }
 
 // GetDelegatedTokenByRaw is the delegated lane's auth lookup: the token must

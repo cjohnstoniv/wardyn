@@ -21,4 +21,8 @@
 # docs/operations/runner-pools.md 2298 adds 17 over 2281 (0.10 FEAT-2SCHED review r2 L1): a renewal the provider did not answer ends the run.
 # docs/operations/runner-pools.md 2316 adds 18 over 2298 (0.10 FEAT-2SCHED review r3 L1): a stored sign-in already known spent ends the run at the start.
 # docs/operations/runner-pools.md 2386 adds 70 over 2316, measured (rc.8 E5): the runs namespace on an organization runner's membership and its held removal.
-docs/operations/runner-pools.md=2532 share=35 # +146 (rc.11, measured 2532: the wait sentence names the limit)
+# docs/operations/runner-pools.md 2579 adds 47 over 2532, measured: a use policy row can name a unit.
+# docs/operations/runner-pools.md 2598 adds 19 over 2579, measured at the rc.16 w3 batch A train: the merged lanes' additions together.
+# docs/operations/runner-pools.md 2555 adds 23 over 2532, measured: a line links "A pool for one unit" in brokered operations.
+# docs/operations/runner-pools.md 2621 = ours 2598 + theirs 2555 - base 2532 at the 0.10 W7 merge of the 0.10 W7 merge of lane/016-ops-recipes into the rc.16 w3 batch D train.
+docs/operations/runner-pools.md=2668 share=35 # +47 over 2621, measured: a use policy row can also name a person, a group or a user type, and the link to a pool per platform; earlier: +146 (rc.11, measured 2532: the wait sentence names the limit); +47 measured 2579: a use policy row can name a unit

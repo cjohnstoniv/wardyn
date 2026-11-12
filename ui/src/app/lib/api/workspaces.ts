@@ -134,10 +134,13 @@ export const workspaces = {
   // send the WHOLE desired allowlist, not a delta. These operator-approved hosts
   // are unioned into a run's egress allowlist at launch (like the profile's
   // egress_domains). The needs panel calls this to approve/remove a host.
-  async setApprovedEgress(id: string, domains: string[]): Promise<Workspace> {
+  // version is the workspace's `updated_at` the list was read at, sent as If-Match: a save
+  // from a page older than a decision made since answers 412 instead of dropping that decision.
+  async setApprovedEgress(id: string, domains: string[], version?: string): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/approved-egress`, {
       method: "PUT",
       asPerson: true,
+      headers: version ? { "If-Match": version } : undefined,
       body: JSON.stringify({ domains }),
     });
     return asJson<Workspace>(res);
@@ -151,10 +154,11 @@ export const workspaces = {
   // allow at the proxy) — so the workspace detail screen's Denied hosts card
   // is the promised cure for the copy in denyDialogCopy/egressBlastRadius's
   // "always" cases (operator-only, like the route itself).
-  async setDeniedEgress(id: string, domains: string[]): Promise<Workspace> {
+  async setDeniedEgress(id: string, domains: string[], version?: string): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/denied-egress`, {
       method: "PUT",
       asPerson: true,
+      headers: version ? { "If-Match": version } : undefined,
       body: JSON.stringify({ domains }),
     });
     return asJson<Workspace>(res);

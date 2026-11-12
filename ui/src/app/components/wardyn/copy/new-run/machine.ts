@@ -34,11 +34,14 @@ export const NR_MACHINE = {
   MACOS_ABOUT: (guestOS: string) => `${guestOS}, set up on the Mac itself from Apple's download. Each Mac runs at most 2.`, // MV-N03
   MACOS_SIZE: (cpu: string, mem: string) => `CPU and memory start at the macOS minimum, ${cpu} CPU and ${mem} MiB. You can raise them on Review.`, // MV-N04
   MACOS_POOL_NOT_OFFERED: "Every runner in this pool must offer macOS VMs, and at least one doesn't. Choose a pool of Macs that offer them, or ask an admin to make one.", // MV-N05
+  MACOS_POOLS_OFFER: "Pools that offer macOS",
+  /** The accessible name of a pool button under the refusal; the button's text is the pool's name. */
+  MACOS_POOL_PICK: (pool: string | number) => `Use ${pool} and macOS`,
   MACOS_POOL_CANT_NOW: "Every runner in this pool must be able to take a macOS VM, and at least one can't right now. Try again later, or choose another pool.", // MV-N14
   MACOS_PREPARING: (runner: string, percent: number) => `${runner} is still preparing macOS (${percent}%).`, // MV-N06
   MACOS_AT_LIMIT: (runner: string) => `${runner} already runs 2 macOS VMs, the most Apple's licence allows.`, // MV-N07
   MACOS_NOT_MANAGED_OPERATOR: (runner: string, id: string) => `${runner} is not marked as company-managed. Mark it with \`wardyn runner trust ${id} managed_device\`.`, // MV-N08
-  MACOS_NOT_MANAGED_MEMBER: (runner: string) => `${runner} is not marked as company-managed. Ask a security operator to mark it.`, // MV-N09
+  MACOS_NOT_MANAGED_MEMBER: (runner: string) => `${runner} is not marked as company-managed. Ask a security admin to mark it as a managed device.`, // MV-N09
   MACOS_NO_POSTURE: (runner: string, path: string) => `${runner} has no MDM posture file saying it is managed (\`${path}\`).`, // MV-N10
   MACOS_HARNESS_ONE: (runner: string) => `macOS VMs on ${runner} offer only Your own tools until Apple's Command Line Tools finish installing.`, // MV-N11
   MACOS_HARNESS_POOL: (harness: string) => `Every runner in this pool must offer ${harness} in a macOS VM. Until Apple's Command Line Tools finish installing on each Mac, choose Your own tools.`, // MV-N15

@@ -65,12 +65,12 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4, KubeAPI: c.KubeAPI,
 		UpstreamProxyURL: c.UpstreamProxyURL, TrustedCAPEM: c.TrustedCAPEM, InternalHosts: c.InternalHosts,
 		UpstreamProxyNoProxy: c.UpstreamProxyNoProxy, LLMUpstreams: c.LLMUpstreams,
-		LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels, GatewayIdentity: c.GatewayIdentity,
+		LLMHeaders: c.LLMHeaders, LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels, GatewayIdentity: c.GatewayIdentity,
 		ModelLimit: runner.ModelLimitOf(c.AllowedModels, c.BedrockRoutes), Unattended: c.Unattended,
 		ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
 		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, ForgeHosts: c.ForgeHosts, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
-		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings,
-		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "",
+		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings, MCPApproveEach: c.MCPApproveEach, ActivityIgnoreHosts: c.ActivityIgnoreHosts,
+		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "", NoNetwork: c.NoNetwork,
 	}
 	for _, in := range c.Injection {
 		pc.Injection = append(pc.Injection, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule})
@@ -108,6 +108,9 @@ func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun,
 	c, rerr := s.reviveCeiling(ctx, run, actorType, actor)
 	if rerr == nil {
 		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
+	}
+	if rerr == nil {
+		rerr = s.reviveDenyLists(ctx, run, c, actorType, actor)
 	}
 	if rerr == nil {
 		rerr = s.reviveBelowBoundaryFloor(ctx, run, actorType, actor)
@@ -154,6 +157,12 @@ type ownerCeiling struct {
 	// restrictionIDs are the restrictions the revived run is held to (reviveRestrictions), re-captured on
 	// the run before it is sealed.
 	restrictionIDs []uuid.UUID
+	// requiredImageSigners are the image signers the profile and the restrictions require, which a revive's
+	// image admission holds the run's pinned image to.
+	requiredImageSigners []string
+	// denyComponents and denyModelProviders are the profile's and the restrictions' deny lists, unioned,
+	// which a revive holds the run's stored components and model providers to (reviveDenyLists).
+	denyComponents, denyModelProviders []string
 }
 
 // reviveCeiling is the OWNER's current ceiling: the profile captured on the
@@ -174,7 +183,8 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorTyp
 	}
 	var c ownerCeiling
 	if p != nil {
-		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements}
+		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements,
+			requiredImageSigners: p.Limits.RequiredImageSigners, denyComponents: p.Limits.DenyComponents, denyModelProviders: p.Limits.DenyModelProviders}
 		if len(p.Limits.AllowedMacOSBases) > 0 {
 			c.allowedMacOSBases = [][]string{p.Limits.AllowedMacOSBases}
 		}

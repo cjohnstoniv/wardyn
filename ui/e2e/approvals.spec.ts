@@ -287,7 +287,7 @@ test.describe("Approvals screen", () => {
     // #3036: a decided row names its run through RunRef (title, then the short id that copies), never the bare id link.
     const ref = page.getByTestId("run-ref").filter({ has: page.locator(`button[title^="${anyRunId()}"]`) }).first();
     await expect(ref).toContainText(anyRunId().replace(/^run_/, "").slice(0, 8));
-    await expect(ref.getByRole("button", { name: /^[0-9a-f]{8}/ })).toHaveAttribute("title", new RegExp(RUN_REF.CLICK_TO_COPY));
+    await expect(ref.getByRole("button", { name: /^Copy run id [0-9a-f]{8}/ })).toHaveAttribute("title", new RegExp(RUN_REF.CLICK_TO_COPY));
 
     // Decided cards are terminal — no Approve/Deny actions.
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);

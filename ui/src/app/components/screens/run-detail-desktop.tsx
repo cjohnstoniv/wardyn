@@ -176,7 +176,6 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
           <>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.backgroundWatchTile}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.backgroundWatchExposure}</p>
-            <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.loginWindowNote}</p>
           </>
         )}
         {!background && viewOnly && (

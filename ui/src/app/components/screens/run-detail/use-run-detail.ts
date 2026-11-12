@@ -21,7 +21,8 @@ import { heldCredentials } from "../../../lib/held-credentials";
 import { recordings as recordingsApi } from "../../../lib/api/recordings";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../../lib/use-poll";
-import { LIST_LIMIT } from "../../../lib/api/core";
+import { HttpError, LIST_LIMIT } from "../../../lib/api/core";
+import { failureSentence } from "../../wardyn/states";
 import { withNewestEvents } from "./audit-window";
 import { macOSDiskPending } from "./macos-run-facts";
 
@@ -60,6 +61,7 @@ export function useRunDetail(id: string) {
   const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
   const [grantsReadable, setGrantsReadable] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   // ?tab= opens the page on that tab (the Runs list's Review button lands on Approvals).
   const [searchParams] = useSearchParams();
   const [tab, setTab] = React.useState<Tab>(() => {
@@ -69,6 +71,8 @@ export function useRunDetail(id: string) {
   // Recording is fetched lazily the first time the Recording tab opens.
   const [recording, setRecording] = React.useState<Recording | null>(null);
   const [recState, setRecState] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
+  // Set when the replay was refused by the run's data_out rule (403 data_out_blocked, 503 data_out_unreadable); cleared when a new read starts.
+  const [recRefusal, setRecRefusal] = React.useState<{ reason: string; message: string }>();
   // Which cast to replay: the run's own (stored under the bare run id) or one
   // interactive attach session (the composite `<run-id>~<session-uuid>` key).
   const [recKey, setRecKey] = React.useState(id);
@@ -157,7 +161,10 @@ export function useRunDetail(id: string) {
             // keeps last-good data silently (matches the Runs board) rather
             // than replacing a live cockpit every DETAIL_POLL_MS during a
             // control-plane hiccup.
-            if (foreground) setStatus("error");
+            if (foreground) {
+              setLoadMessage(failureSentence(r.reason));
+              setStatus("error");
+            }
             return;
           }
           // The first page is the OLDEST 1000 rows; a run past that joins its newest page on, so the live
@@ -234,6 +241,7 @@ export function useRunDetail(id: string) {
     if (!wantsRecording || !id || recState !== "idle") return;
     const thisRequest = ++recRequest.current;
     setRecState("loading");
+    setRecRefusal(undefined);
     recordingsApi
       .getRecording(id, recKey || id)
       .then((rec) => {
@@ -241,8 +249,12 @@ export function useRunDetail(id: string) {
         setRecording(rec ?? null);
         setRecState("ready");
       })
-      .catch(() => {
-        if (recRequest.current === thisRequest) setRecState("error");
+      .catch((err: unknown) => {
+        if (recRequest.current !== thisRequest) return;
+        if (err instanceof HttpError && (err.reason === "data_out_blocked" || err.reason === "data_out_unreadable")) {
+          setRecRefusal({ reason: err.reason, message: err.message });
+        }
+        setRecState("error");
       });
   }, [wantsRecording, id, recKey, recState]);
   // F1-F2's other half: setState after unmount. The counter must also
@@ -291,8 +303,8 @@ export function useRunDetail(id: string) {
   usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling && !macOSDiskPending(run));
 
   return {
-    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
-    recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, loadMessage, tab, setTab,
+    recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   };
 }

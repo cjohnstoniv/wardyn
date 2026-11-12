@@ -8,7 +8,7 @@
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
 import { KEPT_MACHINE_REASON, type KeptMachineReason } from "../../../../lib/kept-machine-refusals";
-import type { NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
+import type { ImageAdmissionReason, NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
 import type { ScheduleReason } from "../../../../lib/schedule-refusals";
@@ -25,8 +25,8 @@ const groups = (group: ReviewGroupId, names: string): Record<string, ReviewGroup
 const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n}`).join(" ");
 
 const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
-  "allowed_methods eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
-const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection recording min_confinement_class workspace_mounts workspace_repos resources";
+  "allowed_methods host_rules eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
+const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection recording data_out refuse_ip_literals min_confinement_class workspace_mounts workspace_repos resources";
 
 /**
  * Policy rows go to Review, never to Tools and access: that step writes only
@@ -34,7 +34,7 @@ const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection reco
  */
 export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("shape", "shape"),
-  ...homes("run", "experience workload service runner_pool_id confinement_class"),
+  ...homes("run", "experience workload service runner_pool_id confinement_class run_in"),
   ...homes("harnesses", "tools startup"),
   ...homes("files", "workspaces drive drives start_folder no_repositories_or_drives"),
   ...homes("tools", "components overrides"),
@@ -42,7 +42,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base desktop_window run_in wall_preset"),
+  ...homes("excluded", "title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base desktop_window wall_preset"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -64,16 +64,17 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives keep_work_folder repo workspace_id " + policy("workspace_mounts workspace_repos")),
   ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals wall_preset " + policy("desktop")),
-  ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection recording`)),
+  ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection recording data_out refuse_ip_literals`)),
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
-  placement_invalid: "document", image_conflict: "document", image_digest_required: "document", allowed_image_invalid: "document",
+  placement_invalid: "document", image_conflict: "document", image_digest_required: "document", image_admission_no_policy: "document", image_signature_missing: "document",
+  image_signature_invalid: "document", image_attestation_missing: "document", image_admission_unavailable: "document", allowed_image_invalid: "document",
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
   workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",
@@ -82,7 +83,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   override_invalid: "tools", override_refused: "tools",
   placement_unavailable: "run", placement_denied: "run", placement_trusted_output: "run",
   runner_offline: "run", runner_at_capacity: "run", runner_limits_unset: "run", runner_ambiguous: "run", runner_not_found: "run", runner_unclaimed: "run", runner_revoked: "run",
-  runner_token_invalid: "run", runner_claim_mismatch: "run", runner_posture_unmet: "run", runner_trust_changed: "run", runner_keystore_unavailable: "run",
+  runner_token_invalid: "run", runner_claim_mismatch: "run", runner_posture_unmet: "run", runner_trust_changed: "run", runner_trust_required: "run", runner_keystore_unavailable: "run",
   runner_recording_off: "run", recording_store_off: "run",
   runner_action_pending: "run", relay_runner_mismatch: "run", relay_required: "run", relay_route_refused: "run",
   placement_credential: "run", placement_component_self_defined: "tools", placement_capability: "tools",
@@ -139,10 +140,15 @@ export const DESKTOP_WINDOW_FIELD = "desktop_window";
  *  refusal of a window on the Mac names desktop_window, which the Run step sets. */
 export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = {
   machine_kind: "run", macos_base: "run", desktop_window: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review",
+  // The wall preset is chosen on Tools: a run that the No network preset cannot serve goes back there (B1).
+  wall_preset: "tools",
 };
 
+/** The create refusal for a run that needs a host while its wall preset allows none; the console has no typed reason for it. */
+export const NO_NETWORK_NEEDS_EGRESS = "no_network_needs_egress";
+
 /** A refusal's step: its field's, when the console knows that field, else its reason's. */
-export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? homeOfReason(reason);
+export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? (reason === NO_NETWORK_NEEDS_EGRESS ? "tools" : homeOfReason(reason));
 
 /** A document path's home: the longest known subpath, else its top-level field (or `inline_policy.<name>`). */
 export function homeOfPath(path: string): FieldHome | undefined {

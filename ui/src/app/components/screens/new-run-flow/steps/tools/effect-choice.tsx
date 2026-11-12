@@ -12,7 +12,7 @@ import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { cn } from "../../../../ui/utils";
 import type { ChoiceState } from "./tool-facts";
 
-export const EFFECT_LABEL: Record<ToolEffect, string> = { allow: NR_TOOLS.EFFECT_ALLOW, hold: NR_TOOLS.EFFECT_HOLD, deny: NR_TOOLS.EFFECT_DENY };
+export const EFFECT_LABEL: Record<ToolEffect, string> = { allow: NR_TOOLS.EFFECT_ALLOW, hold: NR_TOOLS.EFFECT_HOLD, approve_each: NR_TOOLS.EFFECT_APPROVE_EACH, deny: NR_TOOLS.EFFECT_DENY };
 
 export interface EffectChoiceProps {
   name: string;
@@ -56,7 +56,10 @@ export function EffectChoice({ name, labelledBy, value, choices, onChange, notes
         <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
           {lines.map((c) => (
             <li key={c.effect}>
-              <span className="font-medium text-foreground">{EFFECT_LABEL[c.effect]}</span>{" "}
+              {/* A sentence that already opens with the option's name is shown as the server wrote it. */}
+              {(c.available ? notes?.[c.effect] : c.reason)?.startsWith(EFFECT_LABEL[c.effect]) ? null : (
+                <><span className="font-medium text-foreground">{EFFECT_LABEL[c.effect]}</span>{" "}</>
+              )}
               {c.available ? notes?.[c.effect] : c.reason}
             </li>
           ))}

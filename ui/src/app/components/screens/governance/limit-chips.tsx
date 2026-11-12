@@ -10,6 +10,8 @@ import type { GovernanceLimits, GovernanceUnit } from "../../../lib/api/governan
 import { ALLOWED_MODELS, BACKGROUND_WATCH_DOOR, foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, runLimitsChip, setsRunLimits } from "../../../lib/governance-copy";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
+import { SCHEDULE_DOOR } from "../../wardyn/copy/schedule-door";
+import { DENY_LISTS } from "../../wardyn/copy/deny-lists";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { Chip } from "../../wardyn/primitives";
 
@@ -28,7 +30,10 @@ export function limitChips(limits: GovernanceLimits) {
   if (limits.deny_ui_apps) chips.push(LIMITS_CHIP.UI_APPS);
   if (limits.deny_background_desktop_watch) chips.push(BACKGROUND_WATCH_DOOR.LABEL);
   if (limits.deny_kept_machines) chips.push(KEEP_POLICY.CHIP);
+  if (limits.deny_scheduled_runs) chips.push(SCHEDULE_DOOR.CHIP);
   for (const placement of limits.deny_placements ?? []) chips.push(LIMITS_CHIP.PLACEMENT(placement));
+  if (limits.deny_components?.length) chips.push(DENY_LISTS.COMPONENTS_CHIP(limits.deny_components.length));
+  if (limits.deny_model_providers?.length) chips.push(DENY_LISTS.PROVIDERS_CHIP(limits.deny_model_providers.length));
   // The admin's own list, in the `label: value` form the caps use below; a bases-only profile bounds something.
   if (limits.allowed_macos_bases?.length) chips.push(`${MAC_BASES.B14}: ${limits.allowed_macos_bases.join(", ")}`);
   // Names up to three, a count beyond; a blank list is no limit and has no chip.

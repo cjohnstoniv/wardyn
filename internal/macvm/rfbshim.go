@@ -6,19 +6,19 @@ package macvm
 import (
 	"bufio"
 	"context"
-	"crypto/des"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/bits"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/rfbauth"
 )
 
 // The guest's desktop is Apple's Screen Sharing, a VNC server that asks for VncAuth (RFC 6143 7.2.2).
@@ -270,7 +270,7 @@ func rfbLogin(r *bufio.Reader, w io.Writer, password string) ([]byte, error) {
 	if _, err := io.ReadFull(r, challenge); err != nil {
 		return nil, err
 	}
-	resp, err := vncAuthResponse(password, challenge)
+	resp, err := rfbauth.VNCAuthResponse(password, challenge)
 	if err != nil {
 		return nil, err
 	}
@@ -314,24 +314,6 @@ func rfbReason(r *bufio.Reader) string {
 	b := make([]byte, min(binary.BigEndian.Uint32(n[:]), rfbMaxName))
 	k, _ := io.ReadFull(r, b)
 	return strconv.Quote(string(b[:k]))
-}
-
-// vncAuthResponse is VncAuth's answer to challenge: each half DES-encrypted under the password's
-// first eight bytes, zero-padded, each byte's bits reversed (RFC 6143 7.2.2 and its errata).
-func vncAuthResponse(password string, challenge []byte) ([]byte, error) {
-	var key [8]byte
-	copy(key[:], password)
-	for i, b := range key {
-		key[i] = bits.Reverse8(b)
-	}
-	c, err := des.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	out := make([]byte, 16)
-	c.Encrypt(out[:8], challenge[:8])
-	c.Encrypt(out[8:], challenge[8:])
-	return out, nil
 }
 
 // rfbPresentNone is the server side of RFB 3.8 with security None toward runnerd, ending in si, the

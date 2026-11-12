@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 720" width="1220" height="720" role="img" aria-labelledby="title desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">What runs where for a macOS VM run</title>
+  <desc id="desc">On the Mac, under the runner's login: wardyn-runnerd, one wardyn-macvm helper per VM holding the macOS guest, the run's socket folder, and Docker with the run's relay and proxy. The guest's one NIC reaches only the relay and proxy; its agent and desktop reach the runner over virtual sockets.</desc>
+  <style>
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .zone { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; }
+    .card { fill: #ffffff; stroke: #59636e; stroke-width: 1.5; }
+    .sand { fill: #e6f5f2; stroke: #0f8a7e; stroke-width: 2; stroke-dasharray: 8 5; }
+    .ok { fill: #e6f5f2; stroke: #0f8a7e; stroke-width: 2; }
+    .held { fill: #fff8c5; stroke: #9a6700; stroke-width: 2; }
+    .deny { fill: #ffffff; stroke: #cf222e; stroke-width: 1.5; }
+    .outline { fill: none; stroke: #59636e; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .frame { fill: none; stroke: #59636e; stroke-width: 1.5; }
+    .tab { fill: #f6f8fa; stroke: #59636e; stroke-width: 1.5; }
+    .halo { paint-order: stroke; stroke: #ffffff; stroke-width: 5px; stroke-linejoin: round; }
+    .dot { fill: #59636e; }
+    .pill { fill: #0b766b; stroke: none; }
+    .pt { fill: #ffffff; }
+    .t { fill: #1f2328; }
+    .m { fill: #59636e; }
+    .a { fill: #0b766b; }
+    .r { fill: #cf222e; }
+    .h { fill: #9a6700; }
+    .ln { fill: none; stroke: #59636e; stroke-width: 2; }
+    .lt { fill: none; stroke: #0f8a7e; stroke-width: 2.5; }
+    .lr { fill: none; stroke: #cf222e; stroke-width: 2; }
+    .lh { fill: none; stroke: #9a6700; stroke-width: 2; }
+    .life { fill: none; stroke: #d0d7de; stroke-width: 1.5; stroke-dasharray: 4 4; }
+    .edge { fill: none; stroke: #59636e; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .dash { stroke-dasharray: 6 4; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+  </style>
+  <defs><marker id="h-ln" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#59636e"/></marker><marker id="h-lt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f8a7e"/></marker><marker id="h-lr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#cf222e"/></marker><marker id="h-lh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9a6700"/></marker></defs>
+  <rect class="bg" x="0.5" y="0.5" width="1219" height="719" rx="10"/>
+  <rect class="zone" x="20" y="20" width="880" height="680" rx="12"/>
+  <text class="t" x="40" y="50" font-size="17" font-weight="600">The Mac</text>
+  <rect class="card" x="40" y="66" width="840" height="616" rx="10"/>
+  <text class="t" x="60" y="96" font-size="15" font-weight="600">The runner's login</text>
+  <rect class="card" x="60" y="116" width="260" height="64" rx="8"/>
+  <text class="t mono" x="190" y="154" font-size="16" text-anchor="middle" font-weight="600">wardyn-runnerd</text>
+  <rect class="zone" x="60" y="214" width="440" height="448" rx="10"/>
+  <text class="t" x="76" y="242" font-size="15" font-weight="600">wardyn-macvm, one per VM</text>
+  <rect class="sand" x="76" y="258" width="408" height="330" rx="8"/>
+  <text class="t" x="92" y="284" font-size="14" font-weight="600">macOS guest (Apple's Virtualization framework)</text>
+  <rect class="card" x="96" y="304" width="330" height="52" rx="8"/>
+  <text class="t" x="261" y="336" font-size="15" text-anchor="middle">Guest agent</text>
+  <rect class="card" x="96" y="372" width="330" height="52" rx="8"/>
+  <text class="t" x="261" y="404" font-size="15" text-anchor="middle">Screen Sharing</text>
+  <rect class="card" x="96" y="440" width="330" height="52" rx="8"/>
+  <text class="t" x="261" y="472" font-size="15" text-anchor="middle">The run, as the user agent</text>
+  <rect class="ok" x="96" y="508" width="330" height="52" rx="8"/>
+  <text class="t" x="261" y="540" font-size="15" text-anchor="middle">One virtual NIC</text>
+  <text class="m" x="76" y="616" font-size="14">Window: drawn on this Mac by the helper,</text>
+  <text class="m" x="76" y="638" font-size="14">never through the gateway</text>
+  <rect class="card" x="540" y="214" width="320" height="200" rx="8"/>
+  <text class="t" x="556" y="242" font-size="15" font-weight="600">The run's socket folder, 0700</text>
+  <text class="m mono" x="556" y="266" font-size="13">/Users/Shared/Wardyn/sock/</text>
+  <text class="m mono" x="556" y="286" font-size="13">u&lt;uid&gt;/&lt;run-key&gt;/</text>
+  <rect class="zone" x="556" y="300" width="288" height="30" rx="4"/>
+  <text class="t mono" x="572" y="320" font-size="14">agent.sock</text>
+  <rect class="zone" x="556" y="336" width="288" height="30" rx="4"/>
+  <text class="t mono" x="572" y="356" font-size="14">desktop.sock</text>
+  <rect class="zone" x="556" y="372" width="288" height="30" rx="4"/>
+  <text class="t mono" x="572" y="392" font-size="14">ctl.sock</text>
+  <rect class="zone" x="540" y="440" width="320" height="222" rx="10"/>
+  <text class="t" x="556" y="468" font-size="15" font-weight="600">Docker</text>
+  <rect class="ok" x="556" y="484" width="288" height="56" rx="8"/>
+  <text class="t mono" x="700" y="518" font-size="15" text-anchor="middle">wardyn-vmnet relay</text>
+  <rect class="ok" x="556" y="584" width="288" height="56" rx="8"/>
+  <text class="t mono" x="700" y="618" font-size="15" text-anchor="middle">wardyn-proxy</text>
+  <path class="lt" d="M700 540 L700 582" marker-end="url(#h-lt)"/>
+  <path class="ln" d="M426 330 L554 315" marker-end="url(#h-ln)"/>
+  <path class="ln" d="M426 398 L554 351" marker-end="url(#h-ln)"/>
+  <text class="m" x="436" y="300" font-size="12">virtual sockets</text>
+  <path class="lt" d="M426 534 L554 512" marker-end="url(#h-lt)"/>
+  <path class="ln" d="M320 160 L700 160 L700 212" marker-end="url(#h-ln)"/>
+  <text class="m" x="708" y="196" font-size="13">runnerd dials them</text>
+  <rect class="card" x="940" y="100" width="260" height="100" rx="8"/>
+  <text class="t" x="1070" y="136" font-size="16" text-anchor="middle" font-weight="600">The organisation</text>
+  <text class="m" x="1070" y="160" font-size="14" text-anchor="middle">wardynd and</text>
+  <text class="m" x="1070" y="180" font-size="14" text-anchor="middle">its desktop gateway</text>
+  <path class="ln" d="M320 132 L938 132" marker-end="url(#h-ln)"/>
+  <text class="m" x="620" y="124" font-size="13" text-anchor="middle">dials out; the desktop goes this way to the gateway</text>
+  <rect class="card" x="940" y="586" width="260" height="52" rx="8"/>
+  <text class="t" x="1070" y="618" font-size="16" text-anchor="middle" font-weight="600">Allowed hosts</text>
+  <path class="lt" d="M844 612 L938 612" marker-end="url(#h-lt)"/>
+  <text class="m" x="940" y="250" font-size="14">The guest agent dials out;</text>
+  <text class="m" x="940" y="272" font-size="14">nothing connects in. The NIC</text>
+  <text class="m" x="940" y="294" font-size="14">is the guest's only way out.</text>
+</svg>

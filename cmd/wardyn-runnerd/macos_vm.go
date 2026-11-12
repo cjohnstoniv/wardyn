@@ -122,8 +122,8 @@ type macOSVMs struct {
 
 	mu    sync.Mutex
 	caps  *runnerwire.MacVMCaps
-	drift string      // the base agent version a tools update was last asked for
-	kept  macOSVMKept // the driver's kept machines and this Mac's limit for them
+	drift macOSVMDrift // the tools updates checkAgent asked for (askDrift)
+	kept  macOSVMKept  // the driver's kept machines and this Mac's limit for them
 	items macOSVMItems
 	bases macOSVMBases
 }
@@ -421,16 +421,10 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 }
 
 // checkAgent is the guest agent drift trigger: a base whose agent is not this runner's needs a tools
-// update, asked for once per base agent version. The base keeps serving meanwhile.
+// update, asked for while serving until one starts per base agent version (askDrift). The base keeps
+// serving meanwhile.
 func (m *macOSVMs) checkAgent(man macvm.Manifest) {
-	if man.AgentVersion == "" || man.AgentVersion == m.version {
-		return
-	}
-	m.mu.Lock()
-	asked := m.drift == man.AgentVersion
-	m.drift = man.AgentVersion
-	m.mu.Unlock()
-	if asked {
+	if man.AgentVersion == "" || man.AgentVersion == m.version || !m.askDrift(man.AgentVersion) {
 		return
 	}
 	slog.Warn("macOS VM base: its guest agent is not this runner's; a tools update replaces it", "base_agent", man.AgentVersion, "runner", m.version)
@@ -742,19 +736,34 @@ const toolsUpdateLog = "tools-update.log"
 // its own ledger entry, a guest at the base's minimum CPUs and the per-run memory (or the minimum), and
 // the helper's `update-tools`, which takes the base's update lock, works on a staging copy and swaps it
 // in, so runs keep cloning the old base meanwhile. It is an automatic update, so it passes no --force,
-// which is for an update someone asks for (design 3.12, "an update someone asks for retries every pin"):
-// the helper compares the base's agent with its own build (macvm.NeedsToolsUpdate) and pushes its own.
+// which is for an update someone asks for (design 3.12, "an update someone asks for retries every pin";
+// updateTools): the helper compares the base's agent with its own build (macvm.NeedsToolsUpdate) and pushes its own.
 func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) error {
+	return m.startToolsUpdateWith(ctx, man, false)
+}
+
+// startToolsUpdateWith is startToolsUpdate, with force for an update someone asked for.
+func (m *macOSVMs) startToolsUpdateWith(ctx context.Context, man macvm.Manifest, force bool) error {
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
+	}
+	if slices.ContainsFunc(m.own(admission.KindToolsUpdate), func(e admission.Entry) bool { return !m.vmGone(e) }) {
+		return macvm.ErrToolsUpdateBusy // one at a time, as the helper's update lock has it
 	}
 	items, err := m.baseFileArgs(nil)
 	if err != nil {
 		return err
 	}
-	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
+	if force {
+		items = append(items, "--"+macvm.FlagForce)
+	}
+	err = m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
 		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, ledger: m.ledgerDir, descr: "tools update"})
+	if err == nil {
+		m.driftStarted(m.driftKey(man))
+	}
+	return err
 }
 
 // kindEditBase is an edit's ledger entry: one VM slot for its boots, which run one at a time. serve hands

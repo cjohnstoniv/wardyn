@@ -251,6 +251,11 @@ type Config struct {
 	// host classification only, never LLMUpstreams' reverse lookup (llm_channel_hosts.go).
 	// Control-plane-authored; omitempty because an older proxy refuses a key it does not know.
 	LLMChannelHosts map[string]string `json:"llm_channel_hosts,omitempty"`
+	// LLMHeaders maps a gateway host (the host of an LLMUpstreams value) to the non-secret headers set on
+	// every request to it, after the credential (extra_headers.go). Control-plane-authored, same trust
+	// boundary as LLMUpstreams; omitempty because an older proxy refuses a key it does not know. Empty
+	// (the default) => a gateway request carries what it always has.
+	LLMHeaders map[string]map[string]string `json:"llm_headers,omitempty"`
 	// LLMUnavailableDetail is what the brokered-LLM 404 says about WHY no
 	// credential is behind this run's LLM route, composed by the control plane at
 	// dispatch (internal/api's llmUnavailableDetail) because only it knows the
@@ -357,6 +362,11 @@ type Config struct {
 	// rules set deny_all: an older proxy refuses the key, and a runner that does
 	// not name forge_hosts is refused the run.
 	ForgeHosts []string `json:"forge_hosts,omitempty"`
+	// ActivityIgnoreHosts are hosts whose allowed requests are not the run working, so they do not move its
+	// idle clock (egress.CountsAsActivityFor): a macOS guest's Apple boot hosts, on a run that allows them. A VM
+	// guest's request on the vmnet relay lane never counts either (egress.Request.Relayed), whatever its host.
+	// Control-plane-authored and omitted when empty, because an older proxy refuses a key it does not know.
+	ActivityIgnoreHosts []string `json:"activity_ignore_hosts,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
 	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
 	// route evaluates the set of the harness that raised the call
@@ -384,6 +394,17 @@ type Config struct {
 	// servers turned on for it. Digests only: the token is in that harness's
 	// configuration, never here.
 	MCPBindings []MCPBinding `json:"mcp_bindings,omitempty"`
+	// MCPApproveEach is set exactly when a dispatched tool rule is approve_each; see
+	// MCPApproveEachConfig. An older proxy refuses the key, so the run does not start on it.
+	MCPApproveEach *MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
+	// DisableModelUsage turns off the per-call model-token meter, which is on by
+	// default with nothing in the config. Only an admin's opt-out sets it, so a
+	// default config still loads on an older proxy, which refuses this key.
+	DisableModelUsage bool `json:"disable_model_usage,omitempty"`
+	// NoNetwork is a run launched with the no-network wall preset: every sandbox request is refused
+	// (policy:no-network) and no egress dial is made, while the proxy's own control-plane calls go on.
+	// An older proxy refuses the key, so such a run never starts on one.
+	NoNetwork bool `json:"no_network,omitempty"`
 }
 
 // MCPServerConfig is one remote MCP server on the broker route.
@@ -499,11 +520,17 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	if err := types.ValidatePushRuleSets(c.PushRuleSets); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if err := c.validateHostRules(); err != nil {
+		return nil, err
+	}
 	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := types.ValidateHarnessCredentials(c.HarnessCredentials); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := c.checkMCPApproveEach(); err != nil {
+		return nil, err
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
@@ -658,7 +685,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateLocalModels(); err != nil {
 		return err
 	}
-	return cmp.Or(c.validateAllowedModels(), c.validateBedrockRoutes(), c.validateChannelHosts())
+	return cmp.Or(c.validateAllowedModels(), c.validateBedrockRoutes(), c.validateChannelHosts(), c.validateLLMHeaders())
 }
 
 // validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside

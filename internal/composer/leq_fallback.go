@@ -31,13 +31,13 @@ func equalOutsideLimitRules(a, b types.GovernanceLimits) bool {
 
 // withoutCeilingRules clears every RunPolicySpec field Leq has a rule for.
 func withoutCeilingRules(s types.RunPolicySpec) types.RunPolicySpec {
-	s.AllowedDomains, s.DeniedDomains, s.AllowAllEgress = nil, nil, false
+	s.AllowedDomains, s.DeniedDomains, s.AllowAllEgress, s.RefuseIPLiterals = nil, nil, false, false
 	s.FirstUseApproval, s.FirstUseHoldSeconds, s.MaxHolds = "", 0, 0
-	s.AllowedMethods, s.MinConfinementClass, s.EligibleGrants = nil, "", nil
+	s.AllowedMethods, s.MinConfinementClass, s.EligibleGrants, s.HostRules = nil, "", nil, nil
 	s.AutoStopAfterSec, s.WorkspaceMounts, s.WorkspaceRepos = 0, nil, nil
 	s.LLMInspection, s.UIApps, s.Resources, s.ToolRules = nil, nil, nil, nil
 	s.GitPushAnyBranch, s.PushRules, s.AzureDevOpsCapabilities, s.GitHubCapabilities = false, nil, nil, nil
-	s.HarnessInnerWalls, s.Desktop, s.Recording = nil, nil, ""
+	s.HarnessInnerWalls, s.Desktop, s.Recording, s.DataOut = nil, nil, "", ""
 	return s
 }
 
@@ -45,8 +45,9 @@ func withoutCeilingRules(s types.RunPolicySpec) types.RunPolicySpec {
 func withoutLimitRules(l types.GovernanceLimits) types.GovernanceLimits {
 	l.LocalSelfDefinedComponents = false
 	l.DenyTaskModeExec, l.DenyInteractive, l.DenyUIApps, l.DenyUserDrive, l.DenyMemberDrives = false, false, false, false, false
-	l.DenyBackgroundDesktopWatch, l.DenyKeptMachines = false, false
-	l.DenyPlacements, l.AllowedMacOSBases, l.AllowedModels = nil, nil, nil
+	l.DenyBackgroundDesktopWatch, l.DenyKeptMachines, l.DenyScheduledRuns = false, false, false
+	l.DenyPlacements, l.AllowedMacOSBases, l.AllowedModels, l.RequiredImageSigners = nil, nil, nil, nil
+	l.DenyComponents, l.DenyModelProviders = nil, nil
 	l.MaxConcurrentRuns, l.MaxCPUMillis, l.MaxMemoryMiB = 0, 0, 0
 	l.MaxEphemeralDiskMiB, l.MaxDriveSizeMiB, l.AutonomyRubric = 0, 0, nil
 	l.MaxEndAheadSec, l.DefaultEndSec, l.AllowNoEnd = 0, 0, false

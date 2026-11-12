@@ -108,6 +108,17 @@ describe("Review blockers", () => {
     }
   });
 
+  it("a byoi_user refusal is a blocker in the server's sentence, with and without the Approvals clause", () => {
+    const tail = "or launch with the agent's convention image or an onboarded workspace's base image";
+    const plain = `image ghcr.io/acme/tool:1 is not granted to you — ask an admin for an image grant that covers it, ${tail}`;
+    const offered = `image ghcr.io/acme/tool:1 is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, ${tail}`;
+    for (const text of [plain, offered]) {
+      const out = buildBlockers({ ...NOTHING, refusal: { text, reason: "byoi_user" } });
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ kind: "refusal", text });
+    }
+  });
+
   it("holds Launch for a wall preset that is gone, never swapping it for Open, and links it to the Tools step", () => {
     const [b] = buildBlockers({ ...NOTHING, wallPreset: { name: "Docs triage", unavailable: true } });
     expect(b).toMatchObject({ id: "wall_preset_unknown", kind: "refusal", text: "Docs triage is no longer available. Choose another wall preset to continue.", to: { screen: "step", step: "tools" }, field: "wall_preset" });
@@ -121,6 +132,14 @@ describe("Review blockers", () => {
     expect(out[0].hint).toBe(sentence);
     // A refusal alone, before the list says so, still blocks, with no name invented.
     expect(buildBlockers({ ...NOTHING, refusal: { text: sentence, reason: "wall_preset_unknown" } })[0].text).toContain("The chosen wall preset is no longer available");
+  });
+
+  it("links the no_network_needs_egress create refusal to the Tools step, by its reason or by the wall_preset field it names", () => {
+    const sentence = "This run needs a host that No network refuses: the model provider. Choose another wall preset, or remove what needs it.";
+    for (const refusal of [{ text: sentence, reason: "no_network_needs_egress" }, { text: sentence, reason: "something_new", field: "wall_preset" }]) {
+      const [b] = buildBlockers({ ...NOTHING, refusal });
+      expect(b).toMatchObject({ id: "refusal", kind: "refusal", text: sentence, to: { screen: "step", step: "tools" } });
+    }
   });
 
   it("does not block for a wall preset that is available", () => {

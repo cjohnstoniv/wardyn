@@ -26,13 +26,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
@@ -42,6 +46,30 @@ import (
 // degraded; with no heartbeat ever, it is unavailable. This makes the overclaim
 // structurally impossible: the stream is "healthy" only while events arrive.
 const ebpfHeartbeatTTL = 2 * time.Minute
+
+// runnersNetPolCheck is the worst NetworkPolicy verdict, with its own time, across the connected
+// Kubernetes runners, as runnerNetPolCheck takes each; zero when none has one. A runner sends its caps
+// again after each re-check that changes the verdict or its time, so this is as live as the runner's
+// own. An offline runner is left out: it takes no new sandbox, and its verdict comes back with its caps
+// when it reconnects.
+func (s *Server) runnersNetPolCheck(ctx context.Context) runner.NetPolCheck {
+	s.runnerStreams.subsMu.Lock()
+	eps := slices.Collect(maps.Values(s.runnerStreams.subs))
+	s.runnerStreams.subsMu.Unlock()
+	now := s.cfg.Now()
+	var out runner.NetPolCheck
+	for _, ep := range eps {
+		if _, err := ep.sub.Classes(ctx); err != nil { // offline, or no caps yet
+			continue
+		}
+		if c, ok := ep.sub.Caps(); ok {
+			if check, ok := runnerNetPolCheck(c, now); ok {
+				out = runner.WorseNetPolCheck(out, check)
+			}
+		}
+	}
+	return out
+}
 
 // healthzSSOProvider is "microsoft" when OIDC is configured and its issuer is Entra
 // ID (the one check the person-keying path already uses), "" otherwise.
@@ -62,15 +90,38 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	runnerName := ""
 	caps := []types.ConfinementClass(nil)
 	var substrates map[types.ConfinementClass]string
-	netpolVerdict := ""
+	var own runner.NetPolCheck
+	ownUnread := false // a Kubernetes daemon whose own verdict could not be read
 	if s.cfg.Runner != nil {
 		runnerName = s.cfg.Runner.Name()
 		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
 			caps = c.ConfinementClasses
 			substrates = c.Resolved
-			netpolVerdict = k8sNetpolVerdict(runnerName, c)
+			own.Verdict = k8sNetpolVerdict(runnerName, c)
+			if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
+				own.At = c.NetworkPolicyCheck.At
+			}
+		} else {
+			ownUnread = runnerName == "k8s"
 		}
 	}
+	// The worst of this daemon's verdict and its connected Kubernetes runners', with that one's time.
+	// When the daemon could not read its own, a runner's verdict shows only if it is at least as bad
+	// as not_proven: a better one must not hide that the daemon's own cluster cannot be confirmed.
+	runners := s.runnersNetPolCheck(r.Context())
+	if ownUnread && !runner.NetPolAtLeast(runners.Verdict, runner.NetPolNotProven) {
+		runners = runner.NetPolCheck{}
+	}
+	// The winning check gives the verdict, its time and its source together. A runner's wins only when
+	// it is strictly worse: on a tie the daemon's own check stands, so the band never hides that this
+	// cluster is failing too.
+	netpol, netpolFromRunner := own, false
+	if runner.NetPolWorse(runners.Verdict, own.Verdict) {
+		netpol, netpolFromRunner = runners, true
+	}
+	netpolVerdict, netpolCheckedAt := netpol.Verdict, netpol.At
+	gtStatus := s.ebpfGroundtruthStatus(r.Context())
+	gtPublic := ebpfGroundtruthPublic(gtStatus)
 	body := map[string]any{
 		"status": "ok",
 		// version is the daemon's own build. It is a DELIBERATE disclosure on the
@@ -138,7 +189,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// sidecar is alive but blind (no events), degraded if the beat is stale,
 		// unavailable if no sensor has ever beaten. The overclaim ("we have eBPF
 		// ground truth") is structurally impossible — healthy reflects real events.
-		"ebpf_groundtruth": ebpfGroundtruthPublic(s.ebpfGroundtruthStatus(r.Context())),
+		"ebpf_groundtruth": gtPublic,
 		// llm_egress_inspection advertises that the OPTIONAL outbound content-
 		// inspection capability is built in. Whether a given run actually scans
 		// (and in which mode) is per-run policy (RunPolicySpec.LLMInspection),
@@ -176,13 +227,29 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// its internal CA (internal/hoptls). false only on a local install whose
 		// control-plane URL is loopback http. One bit, no address or cert detail.
 		"proxy_hop_tls": s.cfg.ControlPlaneCAPEM != "",
+		// idempotent_run_create: POST /api/v1/runs honours Idempotency-Key, so a client may retry a create
+		// whose answer it lost. One bit; false only on a store that keeps no keys.
+		"idempotent_run_create": s.keepsRunCreateKeys(),
 	}
-	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
-	// grade, present ONLY on a k8s substrate — omitted from the map entirely
+	// network_policy is k8sNetpolVerdict's "enforced"/"acknowledged"/"unenforced"/
+	// "refused"/"not_proven" grade, present ONLY on a k8s substrate — omitted from the map entirely
 	// (not even a JSON null) on Docker and every other driver, so a Docker
-	// deployment's /healthz shape never sprouts a k8s-only field.
+	// deployment's /healthz shape never sprouts a k8s-only field. A connected
+	// Kubernetes runner's verdict counts too: the worst of all wins.
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
+	}
+	// network_policy_checked_at is when the canary check that produced that grade
+	// ran (RFC 3339, UTC), never a later attempt that did not change it. Absent
+	// when the substrate reports no check (an older daemon or runner).
+	if netpolVerdict != "" && !netpolCheckedAt.IsZero() {
+		body["network_policy_checked_at"] = netpolCheckedAt.UTC().Format(time.RFC3339)
+	}
+	// network_policy_source is "runner" when network_policy is a connected Kubernetes runner's verdict
+	// rather than this daemon's own cluster's, so the console names the right place. Absent otherwise.
+	// No runner id: this body is anonymous.
+	if netpolFromRunner {
+		body["network_policy_source"] = "runner"
 	}
 	// cli_artifact_base is WARDYN_CLI_ARTIFACT_BASE, the operator's internal
 	// mirror of the release assets. Absent (not "") while unset, so a deployment
@@ -230,9 +297,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	}
 	// Which runtime backs each class and which component serves each seam are
 	// for a signed-in caller; an anonymous one learns neither.
+	// So are the per-node sensors: node names are the cluster's topology.
 	if !s.healthzSignedIn(w, r) {
 		delete(body, "confinement_substrates")
 		delete(body, "components")
+	} else if sensors, ok := gtStatus["sensors"]; ok {
+		gtPublic["sensors"] = sensors
 	}
 	writeJSON(w, http.StatusOK, body)
 }
@@ -293,6 +363,13 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	if s.cfg.Store == nil {
 		return out
 	}
+	// A sensor on each Kubernetes node: judge every node, so one live node
+	// cannot mask a dead one. With one node (or the Compose sensor) the
+	// latest beat below is that node's, and the output is unchanged.
+	rows, live, nodeErr := s.groundtruthNodeSensors(ctx)
+	if live >= 2 {
+		return s.ebpfGroundtruthNodesStatus(rows)
+	}
 	ev, err := s.cfg.Store.LatestAuditEventByAction(ctx, groundtruth.ActionSensorHeartbeat)
 	if err != nil {
 		// ErrNotFound (no sensor ever) or any query error: report unavailable.
@@ -301,12 +378,7 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	out["last_heartbeat"] = ev.Time.UTC().Format(time.RFC3339)
 	// dropped_total and observed_total are published by the sensor on the
 	// heartbeat data when available; tolerate their absence.
-	var hb struct {
-		DroppedTotal    uint64            `json:"dropped_total"`
-		ObservedTotal   uint64            `json:"observed_total"`
-		DroppedUnmapped uint64            `json:"dropped_unmapped"`
-		ObservedByKind  map[string]uint64 `json:"observed_by_kind"`
-	}
+	var hb groundtruthBeat
 	if len(ev.Data) > 0 {
 		_ = json.Unmarshal(ev.Data, &hb)
 	}
@@ -316,10 +388,41 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	if len(hb.ObservedByKind) > 0 {
 		out["observed_by_kind"] = hb.ObservedByKind
 	}
-	switch {
-	case s.cfg.Now().Sub(ev.Time) > ebpfHeartbeatTTL:
-		// Heartbeat stale: the sensor process itself has stalled/died.
+	state, reason, missing := s.groundtruthBeatVerdict(ev.Time, hb)
+	out["state"] = state
+	if reason != "" {
+		out["reason"] = reason
+	}
+	if len(missing) > 0 {
+		out["missing_kinds"] = missing
+	}
+	if nodeErr != nil {
+		// The per-node read failed, so whether another node is dead is
+		// unknown: the newest beat anywhere must not read healthy for all
+		// of them. A sensor exists (it has beaten), so this is degraded.
 		out["state"] = "degraded"
+		out["reason"] = groundtruthNodeReadFailed
+		delete(out, "missing_kinds")
+	}
+	return out
+}
+
+// groundtruthBeat is the counts one sensor heartbeat carries on its data.
+type groundtruthBeat struct {
+	DroppedTotal    uint64            `json:"dropped_total"`
+	ObservedTotal   uint64            `json:"observed_total"`
+	DroppedUnmapped uint64            `json:"dropped_unmapped"`
+	ObservedByKind  map[string]uint64 `json:"observed_by_kind"`
+}
+
+// groundtruthBeatVerdict is one sensor's state from its latest beat (taken at
+// at) and that beat's counts, with the reason and the missing kinds that go
+// with it. ebpfGroundtruthStatus's doc comment defines the states.
+func (s *Server) groundtruthBeatVerdict(at time.Time, hb groundtruthBeat) (state, reason string, missing []string) {
+	switch {
+	case s.cfg.Now().Sub(at) > ebpfHeartbeatTTL:
+		// Heartbeat stale: the sensor process itself has stalled/died.
+		return "degraded", "", nil
 	case hb.ObservedTotal == 0:
 		// Process alive and beating, but it has mapped ZERO kernel events: the
 		// sensor is blind (Tetragon dead / wrong export path / no TracingPolicy)
@@ -330,11 +433,10 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		// same: dropped_unmapped>0 means the sensor saw kernel events and could
 		// not bind ANY of them to a run — a broken correlation, which no amount
 		// of waiting fixes.
-		out["state"] = "idle"
-		out["reason"] = "no kernel events observed"
 		if hb.DroppedUnmapped > 0 {
-			out["reason"] = fmt.Sprintf("kernel events observed but none correlated to a run (%d dropped as unmapped)", hb.DroppedUnmapped)
+			return "idle", fmt.Sprintf("kernel events observed but none correlated to a run (%d dropped as unmapped)", hb.DroppedUnmapped), nil
 		}
+		return "idle", "no kernel events observed", nil
 	default:
 		// A single aggregate over every kernel event kind would let a sensor
 		// seeing only process.exec (a mis-scoped TracingPolicy that never fires
@@ -346,12 +448,130 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		// observed_by_kind at all (empty map) cannot be assessed this way —
 		// fall back to the aggregate-only "healthy" rather than downgrading
 		// on missing DATA rather than a missing EVENT KIND.
-		if missing := missingGroundtruthKinds(hb.ObservedByKind); len(hb.ObservedByKind) > 0 && len(missing) > 0 {
-			out["state"] = "partial"
-			out["missing_kinds"] = missing
-		} else {
-			out["state"] = "healthy"
+		if miss := missingGroundtruthKinds(hb.ObservedByKind); len(hb.ObservedByKind) > 0 && len(miss) > 0 {
+			return "partial", "", miss
 		}
+		return "healthy", "", nil
+	}
+}
+
+// groundtruthSensorGone is how long a node sensor may stay silent before it is
+// listed as gone and left out of the state: a node drained or scaled away
+// stops beating for good, and must not hold the verdict at degraded forever.
+const groundtruthSensorGone = 24 * time.Hour
+
+// groundtruthSensorListed is how long a gone node stays listed. Past it the
+// node is not read at all.
+const groundtruthSensorListed = 7 * 24 * time.Hour
+
+// groundtruthNodeSensors returns the per-node sensor rows heard from in the
+// last groundtruthSensorListed, and how many of them beat within
+// groundtruthSensorGone. A store without per-node rows returns none, which
+// leaves the latest-beat reading in charge. A failed read returns its error
+// (logged here): callers must not read it as "one node".
+//
+// groundtruthNodeReadFailed is the reason /healthz gives for it, anonymous
+// view included: it names no node and no error text.
+const groundtruthNodeReadFailed = "Node sensor health could not be read"
+
+func (s *Server) groundtruthNodeSensors(ctx context.Context) ([]store.GroundtruthSensor, int, error) {
+	gs, ok := s.cfg.Store.(store.GroundtruthSensorStore)
+	if !ok {
+		return nil, 0, nil
+	}
+	now := s.cfg.Now()
+	rows, err := gs.ListGroundtruthSensors(ctx, now.Add(-groundtruthSensorListed))
+	if err != nil {
+		slog.WarnContext(ctx, "api: read ground-truth node sensors", slog.Any("err", err))
+		return nil, 0, err
+	}
+	live := 0
+	for _, g := range rows {
+		if now.Sub(g.LastBeat) <= groundtruthSensorGone {
+			live++
+		}
+	}
+	return rows, live, nil
+}
+
+// groundtruthNodeSensor is one node in ebpf_groundtruth.sensors.
+type groundtruthNodeSensor struct {
+	Node          string `json:"node"`
+	State         string `json:"state"`
+	LastHeartbeat string `json:"last_heartbeat"`
+}
+
+// groundtruthStateRank orders the node states for "worst over the nodes".
+var groundtruthStateRank = map[string]int{"healthy": 0, "partial": 1, "idle": 2, "degraded": 3}
+
+// ebpfGroundtruthNodesStatus is ebpfGroundtruthStatus with two or more live
+// node sensors. state is the worst live node's; reason counts the nodes in
+// that state; missing_kinds joins what the partial nodes miss; last_heartbeat
+// is the newest live beat and the counters sum the live nodes. sensors lists
+// every node, gone ones included; handleHealthz shows it to a signed-in
+// caller only, since node names are cluster topology.
+func (s *Server) ebpfGroundtruthNodesStatus(rows []store.GroundtruthSensor) map[string]any {
+	now := s.cfg.Now()
+	var (
+		worst                       = "healthy"
+		inState                     = map[string]int{}
+		missing                     = map[string]bool{}
+		dropped, observed, unmapped uint64
+		byKind                      = map[string]uint64{}
+		newest                      time.Time
+		live                        int
+		sensors                     = make([]groundtruthNodeSensor, 0, len(rows))
+	)
+	for _, g := range rows {
+		beat := g.LastBeat.UTC().Format(time.RFC3339)
+		if now.Sub(g.LastBeat) > groundtruthSensorGone {
+			sensors = append(sensors, groundtruthNodeSensor{Node: g.Node, State: "gone", LastHeartbeat: beat})
+			continue
+		}
+		state, _, miss := s.groundtruthBeatVerdict(g.LastBeat, groundtruthBeat{DroppedTotal: g.DroppedTotal,
+			ObservedTotal: g.ObservedTotal, DroppedUnmapped: g.DroppedUnmapped, ObservedByKind: g.ObservedByKind})
+		sensors = append(sensors, groundtruthNodeSensor{Node: g.Node, State: state, LastHeartbeat: beat})
+		live++
+		inState[state]++
+		if groundtruthStateRank[state] > groundtruthStateRank[worst] {
+			worst = state
+		}
+		for _, k := range miss {
+			missing[k] = true
+		}
+		dropped += g.DroppedTotal
+		observed += g.ObservedTotal
+		unmapped += g.DroppedUnmapped
+		for k, v := range g.ObservedByKind {
+			byKind[k] += v
+		}
+		if g.LastBeat.After(newest) {
+			newest = g.LastBeat
+		}
+	}
+	slices.SortFunc(sensors, func(a, b groundtruthNodeSensor) int { return strings.Compare(a.Node, b.Node) })
+	out := map[string]any{
+		"state":            worst,
+		"last_heartbeat":   newest.UTC().Format(time.RFC3339),
+		"dropped_total":    dropped,
+		"observed_total":   observed,
+		"dropped_unmapped": unmapped,
+		"sensors":          sensors,
+	}
+	if len(byKind) > 0 {
+		out["observed_by_kind"] = byKind
+	}
+	if worst != "healthy" {
+		out["reason"] = fmt.Sprintf("%d of %d node sensors %s", inState[worst], live, worst)
+	}
+	if worst == "partial" {
+		var kinds []string
+		for _, k := range groundtruthKinds {
+			if missing[k] {
+				kinds = append(kinds, k)
+			}
+		}
+		out["missing_kinds"] = kinds
 	}
 	return out
 }

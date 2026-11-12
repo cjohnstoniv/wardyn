@@ -421,7 +421,7 @@ export const BASELINE = {
 export const CHANGES = {
   TAB: "Changes",
   TAB_COUNT: (n: number) => `Changes · ${n}`,
-  LEAD: "Covered governance changes waiting for a second person. A change applies only when someone other than its proposer approves it.",
+  LEAD: "Changes and requests waiting for a second person. A change or request applies only when someone other than its proposer approves it.",
   COL_CHANGE: "Change",
   COL_TARGET: "Target",
   COL_BY: "Proposed by",
@@ -450,7 +450,14 @@ export const CHANGES = {
     governance_boundary: "Wardyn boundary",
     governance_restriction: "Restriction",
     workspace_owning_unit: "Workspace unit",
+    component_owning_unit: "Component unit",
     org_recording: "Recording level",
+    governance_envelope: "Platform envelope",
+    governance_unit_deciders: "Deciders",
+    governance_elevation: "Elevation",
+    governance_image_request: "Image",
+    governance_unit_admin: "Unit admin",
+    approval_rule: "Approval rule",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {
@@ -472,11 +479,11 @@ export const CHANGES = {
   DIFF_UNSET: "Not set",
   DIFF_FULL: "Show full before and after",
   ASSIGNED_PROFILE: "Profile this assigns",
-  REASON_LABEL: "Reason (optional)",
+  REASON_LABEL: "Reason for your decision (optional)",
   REASON_HINT: "Kept on the change and in the audit trail.",
   APPROVE: "Approve",
   REJECT: "Reject",
-  OWN_NOTE: "You proposed this change, so someone else must approve it. You can still reject it to withdraw it.",
+  OWN_NOTE: "You proposed this change, so someone else must approve it. Rejecting it withdraws it.",
   DECIDE_REFUSED_TITLE: "Couldn't decide this change",
   TOAST_APPROVED: "Change approved",
   TOAST_REJECTED: "Change rejected",
@@ -677,6 +684,7 @@ export const RUBRIC = {
   GROUP_SECRETS: "Secrets",
   GROUP_BARRIER: "Barrier",
   GROUP_BARRIER_HINT: "The enforced barrier — “confinement class” in the API and the docs.",
+  GROUP_COMPONENTS: "Custom components",
   // key -> [row label, why]. Iterate AUTONOMY_RUBRIC_ROW_KEYS for a stable,
   // Go-matching order rather than Object.keys.
   ROWS: {
@@ -689,8 +697,9 @@ export const RUBRIC = {
     confinement_cc1: ["Fence (CC1)", "Shared kernel."],
     confinement_cc2: ["Wall (CC2)", "gVisor userspace kernel."],
     confinement_cc3: ["Vault (CC3)", "Kata microVM."],
+    self_defined_component: ["Defined by the launcher", "The run uses a component its launcher defined. This can only tighten the organisation's own cap on these runs."],
   } as Record<AutonomyRubricRowKey, [label: string, why: string]>,
-  SET_NOTE: (n: number, level: string) => `${n} of 9 rows set a cap. The lowest is ${level}.`,
+  SET_NOTE: (n: number, level: string) => `${n} of 10 rows set a cap. The lowest is ${level}.`,
 } as const;
 
 // foldAutonomyRubric summarizes a WHOLE rubric for display — every row that
@@ -854,6 +863,7 @@ const AUTONOMY_BOUND_DETAIL: Record<AutonomyBoundKey, { dimension: string; detai
   confinement_cc1: { dimension: "barrier", detail: "Fence, confinement class CC1" },
   confinement_cc2: { dimension: "barrier", detail: "Wall, confinement class CC2" },
   confinement_cc3: { dimension: "barrier", detail: "Vault, confinement class CC3" },
+  self_defined_component: { dimension: "custom components", detail: "your governance profile limits runs that use components you defined" },
   // The org's cap on runs that use a component the launcher defined; the Go
   // reason names it "your organisation's rule for runs that use your own custom components".
   custom_component: { dimension: "custom components", detail: "your organisation limits runs that use components you defined" },
@@ -899,7 +909,8 @@ export function autonomyBoundSentence(causes: AutonomyBoundKey[]): string {
     const only = AUTONOMY_BOUND_DETAIL[causes[0]];
     return `Bound by this run's ${only.dimension}: ${only.detail}.`;
   }
-  const dims = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension);
+  // Two causes can share a dimension (the profile's and the organisation's cap on custom components): name it once.
+  const dims = [...new Set(causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension))];
   const details = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].detail);
   return `Bound by this run's ${joinAnd(dims)}: ${joinDetails(details)}.`;
 }

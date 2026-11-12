@@ -522,6 +522,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -597,6 +598,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -703,6 +705,17 @@ jobs:
       # suite "docker" (below) is what turns a silent skip back into red.
       - name: Build agent-aws-sso image (local only — the real AWS CLI these tests drive)
         run: docker build -f deploy/images/aws-sso/Dockerfile -t wardyn/agent-aws-sso:local .
+      # The coverage compile of internal/api peaks near 13 GB, about all the hosted runner's memory, and the
+      # runner was shut down mid-suite on the rc.17 candidate. Collecting garbage more often did not lower the
+      # peak (the MON lines below measured it), so extra swap lets the peak page out instead.
+      - name: Add swap for the coverage compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -712,7 +725,22 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t pkgs < <(go list -tags docker ./... | grep -v '^github.com/cjohnstoniv/wardyn/test/e2e/live$')
+          # The hosted runner was shut down mid-suite twice on the rc.17 candidate, which leaves no report
+          # (the upload below never runs). So the log carries the progress and the machine's state as it goes:
+          # each package's result and each failing or still-running top-level test, and every 30 s the memory,
+          # the largest processes by name only (no arguments), the containers and the disk.
+          mkdir -p test/reports/go/docker && : > test/reports/go/docker/test-output.json
+          ( while sleep 30; do
+              echo "MON $(date -u +%T) $(free -m | awk '/^Mem/{print "mem used="$3"M avail="$7"M"} /^Swap/{print "swap used="$3"M"}' | tr '\n' ' ')$(df -h / | awk 'NR==2{print "disk avail="$4}')"
+              ps -eo pid=,rss=,comm= --sort=-rss | head -8 | awk '{printf "MON   pid=%s rss=%dM %s\n", $1, $2/1024, $3}'
+              echo "MON   procs $(ps -eo comm= | sort | uniq -c | sort -rn | head -6 | tr -s ' ' | tr '\n' ';')"
+              echo "MON   containers=$(docker ps -q | wc -l) $(docker ps --format '{{.Image}}' | sort | uniq -c | sort -rn | head -4 | tr -s ' ' | tr '\n' ';')"
+            done ) &
+          ( tail -n0 -F test/reports/go/docker/test-output.json 2>/dev/null | jq -r --unbuffered 'select(.Action=="pass" or .Action=="fail" or .Action=="skip" or .Action=="run") | select((.Test==null and .Action!="run") or (.Test!=null and (.Test|contains("/")|not) and (.Action=="run" or .Action=="fail"))) | "PROGRESS \(.Action) \(.Package|sub("^github.com/cjohnstoniv/wardyn/";"")) \(.Test // "") \(.Elapsed // "")"' ) &
           ./scripts/test-report.sh docker -tags docker "${pkgs[@]}"
+      - name: Kernel memory messages (docker-tagged)
+        if: always()
+        run: sudo dmesg | grep -iE 'oom|out of memory|killed process' | tail -20 || true
       - name: Upload docker-tagged test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1408,6 +1436,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -1591,6 +1620,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -1762,6 +1792,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -1888,6 +1919,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -1963,6 +1995,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -2070,6 +2103,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -2143,6 +2177,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -2223,6 +2258,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -2362,6 +2398,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -2416,6 +2453,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
@@ -2638,14 +2676,17 @@ jobs:
             cache-trivy-
       # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
       # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
       - name: Install trivy 0.70.0 (pinned, checksum-verified)
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/trivy-bin"
           mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
       - name: Trivy strict scan of the published image (CRITICAL, fixed or not)

@@ -717,15 +717,27 @@ func wallsCapList[C ~string](caps []C) string {
 // policy that names a list met the walls at create (personalWallsRunStep).
 func (s *Server) wallsADOCapabilities(ctx context.Context, run types.AgentRun, caps []adoscope.Capability) ([]adoscope.Capability, *wallsCapabilityRefusal) {
 	return wallsCapabilityMeet(ctx, s, run, "azure_devops_capabilities", caps,
-		func(w types.PersonalWallsSpec) *[]adoscope.Capability { return w.AzureDevOpsCapabilities })
+		func(w types.PersonalWallsSpec) *[]adoscope.Capability {
+			if w.AzureDevOpsCapabilities == nil {
+				return nil
+			}
+			expanded := adoscope.ExpandPR(*w.AzureDevOpsCapabilities)
+			return &expanded
+		})
 }
 
-// wallsGitHubCLICapabilities narrows the GitHub CLI's capabilities, the attached rows' default, to the
-// run owner's walls. No GitHub lane reads a policy's github_capabilities, so the walls meet the
-// default on every run.
+// wallsGitHubCLICapabilities narrows the GitHub CLI's capabilities, the attached rows' default after
+// the run's own github_capabilities (persistGitHubCLIGrants), to the run owner's walls. The walls
+// meet them on every run.
 func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.AgentRun, caps []ghscope.Capability) ([]ghscope.Capability, *wallsCapabilityRefusal) {
 	return wallsCapabilityMeet(ctx, s, run, "github_capabilities", caps,
-		func(w types.PersonalWallsSpec) *[]ghscope.Capability { return w.GitHubCapabilities })
+		func(w types.PersonalWallsSpec) *[]ghscope.Capability {
+			if w.GitHubCapabilities == nil {
+				return nil
+			}
+			expanded := ghscope.ExpandPR(*w.GitHubCapabilities)
+			return &expanded
+		})
 }
 
 // wallsBeyondMeet applies to met what the meet alone would place wrongly; before is the policy the meet
@@ -794,11 +806,20 @@ func (s *Server) personalWallsSealLayer(ctx context.Context, run types.AgentRun)
 // wallPresetSealLayer is the run's wall preset as a seal layer, built as the owner's walls' is
 // (wallsSealLayer) from the frozen copy on the run: no store read, so it cannot fail open or seal the
 // run to nothing, and a later edit or delete of the preset changes nothing.
+//
+// The No network preset adds a layer that empties the allowlist and turns open egress off, so the seal
+// removes every host a step after resolve added, at dispatch and at revive alike.
 func wallPresetSealLayer(run types.AgentRun) []sealLayer {
 	if run.WallPreset == nil {
 		return nil
 	}
-	return wallsSealLayer(wallPresetProvenance(run.WallPreset), run.WallPreset.Spec)
+	layers := wallsSealLayer(wallPresetProvenance(run.WallPreset), run.WallPreset.Spec)
+	if noNetworkPreset(run.WallPreset) {
+		off := false
+		layers = append(layers, sealLayer{rec: wallPresetProvenance(run.WallPreset),
+			egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off}})
+	}
+	return layers
 }
 
 // wallsSealLayer is one walls document's seal layer, none when it names nothing the seal re-asserts.
@@ -819,26 +840,39 @@ func wallsSealLayer(rec policyref.Provenance, walls types.PersonalWallsSpec) []s
 // decides. A host outside their allowlist follows their own choice for a site that is not listed, so it
 // is not refused here. Walls that cannot be read refuse the approve (500). ok=false: the answer is
 // written and the approval stays pending. It returns the run, read here when the gates before it had
-// not. A store that keeps neither walls nor stored presets has no host to deny: a built-in denies none.
+// not. A run launched with the No network preset is refused every approval, whatever the store keeps.
+// Otherwise a store that keeps neither walls nor stored presets has no host to deny: a built-in denies
+// none. A run that cannot be read, or a server with no run store, refuses the approve (503
+// run_unreadable): without the run its frozen preset cannot be checked, so the approval stays pending.
 func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
-	if !s.wallsDenyHosts() {
-		return run, haveRun, true
-	}
 	if !haveRun {
-		var err error
-		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
-			writeServerError(w, r, "get run", err)
+		err := errors.New("no run store configured")
+		if s.cfg.Store != nil {
+			run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID)
+		}
+		if err != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable,
+				"This approval's run could not be read to check its network preset, so nothing was decided. Try again.")
 			return run, false, false
 		}
 		haveRun = true
+	}
+	host := approvalHost(ap)
+	owner := principalFromRequest(r) == run.CreatedBy
+	if p := run.WallPreset; noNetworkPreset(p) {
+		msg := "This run was launched with " + wallPresetLabel(p, owner) + ", which refuses every host, " + host + " included. Launch a new run without it."
+		prov := wallPresetProvenance(p)
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonWallPresetHost, msg, policyref.WallPreset(prov.Name, run.CreatedBy), prov)
+		return run, haveRun, false
+	}
+	if !s.wallsDenyHosts() {
+		return run, haveRun, true
 	}
 	walls, err := s.personalWalls(r.Context(), run.CreatedBy)
 	if err != nil {
 		writeServerError(w, r, "read the run owner's walls", err)
 		return run, haveRun, false
 	}
-	host := approvalHost(ap)
-	owner := principalFromRequest(r) == run.CreatedBy
 	if d := walls.DeniedDomains; d != nil && ceilingDenies(*d, host) {
 		msg := run.CreatedBy + "'s walls block " + host + " for this run."
 		if owner {

@@ -57,7 +57,7 @@ export const YOUR_WALLS = {
   CAPS_NO_PUSH: (cap: string, forge: string) => `Without \u201C${cap}\u201D, pushes to ${forge} through Wardyn's git broker are refused.`,
   CAPS_NO_PUSH_BROKER_OFF: "On an install with the git token broker off, a git token in the sandbox can still push; the run carries a warning that says so.",
   TOOLS: "Tool rules",
-  TOOLS_HELP: "Each rule holds a tool for review or refuses it. Rules apply on runs whose tool calls wait for review, and never loosen a rule the run already has.",
+  TOOLS_HELP: "Each rule holds a tool for review, asks for a person's approval of each call of an MCP tool, or refuses it. Rules apply on runs whose tool calls wait for review, except approve_each, which the proxy enforces on any run. A rule never loosens one the run already has.",
   TOOLS_NONE: "No tool rules. Your runs keep their policy's.",
   TOOLS_STAR_HINT: "Type * as the tool to cover every tool no other rule here names.",
   TOOLS_TOOL: "Tool",
@@ -121,6 +121,8 @@ export const GITHUB_CAPABILITY_GROUPS: { name: string; caps: { cap: string; labe
     name: "Pull requests and issues",
     caps: [
       { cap: "pr", label: "Open, update and review pull requests" },
+      { cap: "pr_write", label: "Open, update and comment on pull requests, and request reviewers" },
+      { cap: "pr_review", label: "Submit, approve, request changes on and dismiss pull request reviews" },
       { cap: "issues_read", label: "Read issues, comments, labels and milestones" },
       { cap: "issues_write", label: "Create and change issues, comments, labels and milestones" },
     ],

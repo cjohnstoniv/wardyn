@@ -41,8 +41,9 @@ const (
 // operatorOnly: an org component is admin-authored content that reaches hosts and
 // carries the operator's credential, the same tier as the other content writes.
 // Who may ATTACH one is a different question, answered per row by the permission
-// kind `component` (components_authz.go), not by this tier.
-func (s *Server) mountComponentRoutes(r, operatorOnly chi.Router) {
+// kind `component` (components_authz.go), not by this tier. An org component's unit pin is the
+// security tier's (component_owning_unit.go).
+func (s *Server) mountComponentRoutes(r, operatorOnly, securityOps chi.Router) {
 	r.Get("/me/components", s.handleMyComponents)
 	r.Post("/me/components", s.handleSaveMyComponent)
 	r.Put("/me/components/{id}", s.handleUpdateMyComponent)
@@ -52,6 +53,7 @@ func (s *Server) mountComponentRoutes(r, operatorOnly chi.Router) {
 	operatorOnly.Put("/components/{id}", s.handlePutComponent)
 	operatorOnly.Delete("/components/{id}", s.handleDeleteComponent)
 	operatorOnly.Put("/components/{id}/kubectl-token", s.handlePutKubectlToken)
+	securityOps.Put("/components/{id}/owning-unit", s.handleSetComponentOwningUnit)
 }
 
 func (s *Server) componentStoreOr501(w http.ResponseWriter) (store.ComponentStore, bool) {

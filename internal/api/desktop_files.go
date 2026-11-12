@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -57,7 +58,7 @@ type desktopFile struct {
 }
 
 // desktopFilesView is GET /runs/{id}/desktop/files: the run's effective desktop rules and, only
-// when download is allowed, what is in the transfer folder.
+// when download is allowed or held for review, what is in the transfer folder.
 type desktopFilesView struct {
 	Folder string                `json:"folder"`
 	Rules  types.DesktopControls `json:"rules"`
@@ -68,6 +69,20 @@ type desktopFilesView struct {
 // own temporary name is one), nothing a list line could not carry.
 func validDesktopFileName(name string) bool {
 	return name != "" && len(name) <= 255 && !strings.HasPrefix(name, ".") && !strings.ContainsAny(name, "/\\\x00\n\r\t")
+}
+
+// desktopFileNameParam is the {name} path segment, unescaped once when the client
+// percent-encoded it. chi routes on RawPath when Go kept one (a name with one of
+// ( ) ! * ' next to a space or a non-ASCII letter), and then hands the segment
+// back still encoded; see principalParam. ok is false for a bad escape. A decoded
+// '/' still fails validDesktopFileName.
+func desktopFileNameParam(r *http.Request) (string, bool) {
+	name := chi.URLParam(r, "name")
+	if r.URL.RawPath == "" {
+		return name, true
+	}
+	u, err := url.PathUnescape(name)
+	return u, err == nil
 }
 
 // desktopRun loads the run for a transfer: the person who may enter it, while it runs, with a
@@ -111,7 +126,7 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonUIGatewayNoRunner, "no runner configured; the desktop's files are unavailable")
 		return run, types.DesktopControls{}, false
 	}
-	apps, rules, err := s.runDesktopPolicy(r.Context(), run.ID)
+	apps, rules, dataOut, err := s.runDesktopPolicy(r.Context(), run.ID)
 	if err != nil {
 		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the transfer is refused", "run_id", run.ID, "err", err)
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
@@ -119,8 +134,12 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	}
 	// A Linux VM run's built-in desktop is a desktop with no declared app: its files move under the same rules.
 	if len(apps) == 0 && run.MachineKind != types.MachineLinuxVM {
-		writeErrorReason(w, http.StatusConflict, reasonDesktopTransferUnavailable, "this run's policy declares no UI app, so it has no desktop to move files to")
-		return run, types.DesktopControls{}, false
+		if dataOut != types.TransferReview {
+			writeErrorReason(w, http.StatusConflict, reasonDesktopTransferUnavailable, "this run's policy declares no UI app, so it has no desktop to move files to")
+			return run, types.DesktopControls{}, false
+		}
+		// data_out review: ~/Transfers is open for reviewed downloads alone, on a run with no desktop.
+		rules = types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferReview}
 	}
 	return run, rules, true
 }
@@ -173,7 +192,7 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	view := desktopFilesView{Folder: desktopTransferFolder, Rules: rules, Files: []desktopFile{}}
-	if rules.Download == types.TransferAllowed {
+	if rules.Download == types.TransferAllowed || rules.Download == types.TransferReview { // a reviewed download lists what may be asked for
 		// Reading the folder is an exec, which a paused run refuses, and a look is not a person, so it
 		// never thaws (runPausedReadMsg). With download blocked no exec runs and the rules still answer.
 		if run.PausedAt != nil {
@@ -185,6 +204,9 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 			_, err := io.Copy(&listing, io.LimitReader(o, 64<<10))
 			return err
 		}, strconv.Itoa(maxDesktopListed)); err != nil || code != 0 {
+			if s.refuseReviewUnavailable(w, r, run, err) {
+				return
+			}
 			writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, fmt.Sprintf("could not list %s in the desktop (exit %d)", desktopTransferFolder, code))
 			return
 		}
@@ -211,9 +233,9 @@ func (s *Server) handleUploadDesktopFile(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name, nameOK := desktopFileNameParam(r)
 	switch {
-	case !validDesktopFileName(name):
+	case !nameOK || !validDesktopFileName(name):
 		writeErrorReason(w, http.StatusBadRequest, reasonDesktopTransferBadRequest, "a file name is a plain name: no folder, no leading dot")
 		return
 	case r.ContentLength < 0:
@@ -257,10 +279,13 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name, nameOK := desktopFileNameParam(r)
 	switch {
-	case !validDesktopFileName(name):
+	case !nameOK || !validDesktopFileName(name):
 		writeErrorReason(w, http.StatusBadRequest, reasonDesktopTransferBadRequest, "a file name is a plain name: no folder, no leading dot")
+		return
+	case rules.Download == types.TransferReview:
+		s.serveReviewedDownload(w, r, run, name) // desktop_review.go
 		return
 	case rules.Download != types.TransferAllowed:
 		s.auditDesktopTransfer(r, run, "download", "denied", -1, "")

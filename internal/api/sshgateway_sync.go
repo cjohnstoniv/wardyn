@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/sshsftp"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -164,7 +165,7 @@ func (s *Server) runSyncOpenView(runID uuid.UUID) runSyncView {
 // directory, and records one ssh.sync.transfer row when the channel ends. The
 // directory is a start point, not a boundary: sftp-server reaches whatever the
 // agent uid can.
-func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, env map[string]string, pass *sshSyncPass) {
+func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, env map[string]string, pass *sshSyncPass, dataOut types.TransferRule) {
 	direction := sshSyncDirection(env[sshSyncDirectionEnv])
 	dir, dirErr := sshSyncDir(env[sshSyncDirEnv])
 	// BaseCtx, not ctx: the client may close the channel the moment it sees the
@@ -193,10 +194,17 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	sandboxRef = run.SandboxRef
-	sess, reason, err := s.execSFTPServer(ctx, run, "-d", dir)
+	args := []string{"-d", dir}
+	if dataOut.DataOut() != types.TransferAllowed {
+		args = append(args, "-P", sftpServerDeny) // no file content leaves the run
+	}
+	sess, reason, err := s.execSFTPServer(ctx, run, args...)
 	if err != nil {
 		fail(err.Error(), reason)
 		return
+	}
+	if dataOut.DataOut() != types.TransferAllowed && sess.Stdout != nil {
+		sess.Stdout = s.sshSyncReplyGuard(runID, principal, channel, sess.Stdout, dataOut)
 	}
 	defer s.sshSyncOpened(runID, dir)()
 	pass.start(dir)
@@ -283,20 +291,18 @@ const maxSyncEntriesReported = 1 << 30
 type sftpOpCounter struct {
 	ssh.Channel
 	mu      sync.Mutex
-	head    []byte // the current packet's first bytes, its length included, up to sftpPeek
-	left    uint32 // bytes of the current packet not yet seen after its length
+	f       sshsftp.Framer // the packet framing, read up to sftpPeek bytes of each packet
 	removes int
 	renames int
 }
 
 const (
-	sftpRemove     = 13
-	sftpRmdir      = 15
-	sftpRename     = 18
-	sftpExtended   = 200
-	sftpPosixMove  = "posix-rename@openssh.com"
-	sftpPeek       = 4 + 1 + 4 + 4 + len(sftpPosixMove) // length, type, request id, name length, name
-	sftpLengthSize = 4
+	sftpRemove    = 13
+	sftpRmdir     = 15
+	sftpRename    = 18
+	sftpExtended  = 200
+	sftpPosixMove = "posix-rename@openssh.com"
+	sftpPeek      = 4 + 1 + 4 + 4 + len(sftpPosixMove) // length, type, request id, name length, name
 )
 
 func (c *sftpOpCounter) Read(p []byte) (int, error) {
@@ -308,27 +314,11 @@ func (c *sftpOpCounter) Read(p []byte) (int, error) {
 }
 
 func (c *sftpOpCounter) feed(p []byte) {
-	for len(p) > 0 {
-		if len(c.head) < sftpLengthSize {
-			take := min(sftpLengthSize-len(c.head), len(p))
-			c.head, p = append(c.head, p[:take]...), p[take:]
-			if len(c.head) == sftpLengthSize {
-				if c.left = binary.BigEndian.Uint32(c.head); c.left == 0 {
-					c.head = c.head[:0]
-				}
-			}
-			continue
+	c.f.Feed(p, sftpPeek, func(_, head []byte, done bool) {
+		if done {
+			c.count(head[sshsftp.LengthSize:])
 		}
-		take := int(min(uint64(c.left), uint64(len(p))))
-		if room := sftpPeek - len(c.head); room > 0 {
-			c.head = append(c.head, p[:min(room, take)]...)
-		}
-		p, c.left = p[take:], c.left-uint32(take)
-		if c.left == 0 {
-			c.count(c.head[sftpLengthSize:])
-			c.head = c.head[:0]
-		}
-	}
+	})
 }
 
 func (c *sftpOpCounter) count(body []byte) {

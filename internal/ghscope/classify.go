@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 )
 
 // The two hosts this catalogue classifies. GitHub Enterprise Server, the
@@ -75,17 +77,14 @@ func Classify(req Request) (Verdict, error) {
 	return Verdict{}, fmt.Errorf("ghscope: %q is not a GitHub host this catalogue classifies", req.Host)
 }
 
-// methodOverrideHeaders are the spellings of "act as this method instead"
-// that some servers and frameworks honour.
-var methodOverrideHeaders = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"}
-
 // methodOf is the request's method and whether it is a read. HEAD reads as
 // GET. OPTIONS, TRACE and CONNECT are not API calls and are refused. So is any
 // request carrying a method-override header: whether GitHub honours one is not
-// documented, so the method the server would act on is not knowable.
+// documented, so the method the server would act on is not knowable. The names
+// are armscope's one list (MethodOverrideHeader), refused here whatever they name.
 func methodOf(req Request) (read bool, method string, err error) {
 	for k := range req.Header {
-		if slices.ContainsFunc(methodOverrideHeaders, func(h string) bool { return strings.EqualFold(k, h) }) {
+		if armscope.MethodOverrideHeader(k) { // any case, '-' or '_'
 			return false, "", fmt.Errorf("ghscope: the request carries %s — the method the server acts on is not knowable", k)
 		}
 	}

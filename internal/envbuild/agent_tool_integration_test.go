@@ -92,7 +92,13 @@ func TestBuildFromDevcontainerFiles_BakesAgentCLI(t *testing.T) {
 		case strings.Contains(log, "connection refused"), strings.Contains(log, "dial tcp"):
 			t.Skipf("SKIP (unsupported daemon): the build container could not reach the registry on host loopback. err: %v", err)
 		default:
-			t.Fatalf("BuildFromDevcontainerFiles: %v\nlogs:\n%s", err, log)
+			// The tail names the step that failed (kaniko echoes each RUN and its output). The
+			// job log shows only a failing test's last lines (WARDYN_TEST_REPORT_TAIL in the
+			// Makefile), so the tail is what goes in, not the whole build log.
+			lines := strings.Split(strings.TrimRight(log, "\n"), "\n")
+			t.Logf("envbuilder log, last %d of %d lines:\n%s", min(200, len(lines)), len(lines),
+				strings.Join(lines[max(0, len(lines)-200):], "\n"))
+			t.Fatalf("BuildFromDevcontainerFiles: %v", err)
 		}
 	}
 

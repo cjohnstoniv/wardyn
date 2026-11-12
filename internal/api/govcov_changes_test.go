@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -536,6 +538,82 @@ func TestGovCovRecheckApprover(t *testing.T) {
 			t.Errorf("recheck = %v, want the store error itself", err)
 		}
 	})
+}
+
+func TestGovCovRecheckLiveToken(t *testing.T) {
+	tokenID := uuid.MustParse("cccccccc-0000-0000-0000-000000000003")
+	s, h := govCovServer(t, &govCovStore{})
+	session := govCovHumanReq(http.MethodPost, "/x", "sub-alice", "alice@corp.example", oidc.RoleUser)
+	tokenReq := session.WithContext(withAPITokenID(session.Context(), tokenID))
+
+	t.Run("a session caller has no token to read", func(t *testing.T) {
+		q := &govCovQuerier{}
+		tok, err := s.recheckLiveToken(session.Context(), q)
+		if tok != nil || err != nil || len(q.seen) != 0 {
+			t.Errorf("recheck = %v, %v after %v, want nil, nil and no statement", tok, err, q.seen)
+		}
+	})
+
+	t.Run("a token that is gone is the auth lane's 401", func(t *testing.T) {
+		q := &govCovQuerier{}
+		_, err := s.recheckLiveToken(tokenReq.Context(), q)
+		var refusal *govRefusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("recheck = %v, want a refusal", err)
+		}
+		w := httptest.NewRecorder()
+		refusal.write(w, tokenReq)
+		if w.Code != http.StatusUnauthorized || errorReason(w) != reasonInvalidAdminToken {
+			t.Errorf("refusal = %d %q, want 401 %q", w.Code, errorReason(w), reasonInvalidAdminToken)
+		}
+		if len(q.seen) != 1 || !strings.Contains(q.seen[0], "api_tokens") {
+			t.Errorf("statements = %v, want the one token read", q.seen)
+		}
+		if len(govCovAudits(h, "auth.fail")) == 0 {
+			t.Errorf("a gone token was not audited as an auth failure: %v", govCovAuditActions(h))
+		}
+	})
+
+	t.Run("a failing token read is the store error, never a pass", func(t *testing.T) {
+		boom := errors.New("pg: down")
+		q := &govCovQuerier{rowErr: func(string) error { return boom }}
+		tok, err := s.recheckLiveToken(tokenReq.Context(), q)
+		var refusal *govRefusal
+		if tok != nil || err == nil || errors.As(err, &refusal) || !errors.Is(err, boom) {
+			t.Errorf("recheck = %v, %v, want no token and the store error itself", tok, err)
+		}
+	})
+}
+
+// A proposer outside the change's approver set may withdraw it, and a token-authenticated one is held
+// to a live token inside the decision: a token revoked after the request was authenticated is refused
+// 401 invalid_admin_token, and the change stays pending.
+func TestGovCovWithdrawByRevokedTokenIsRefused(t *testing.T) {
+	st := &govCovStore{}
+	s, h := govCovServer(t, st)
+	ch := govCovGrantDelete(s, "sub-alice", "alice@corp.example")
+	st.got = ch
+	q := &govCovQuerier{} // every token read finds no live row
+	st.decideFn = govCovDecideThrough(q, ch, ch)
+
+	r := govCovHumanReq(http.MethodPost, govCovChangesPath+"/"+ch.ID.String()+"/reject", "sub-alice", "alice@corp.example", oidc.RoleUser)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", ch.ID.String())
+	ctx := withAPITokenID(context.WithValue(r.Context(), chi.RouteCtxKey, rctx), uuid.MustParse("cccccccc-0000-0000-0000-000000000003"))
+	w := httptest.NewRecorder()
+	s.decideGovernanceChange(w, r.WithContext(ctx), false)
+
+	if w.Code != http.StatusUnauthorized || errorReason(w) != reasonInvalidAdminToken {
+		t.Fatalf("withdraw with a revoked token = %d %q (%s), want 401 %q", w.Code, errorReason(w), w.Body.String(), reasonInvalidAdminToken)
+	}
+	if len(q.seen) != 1 || !strings.Contains(q.seen[0], "api_tokens") || len(q.writes()) != 0 {
+		t.Errorf("statements = %v, want only the token read and no write", q.seen)
+	}
+	for _, a := range govCovAuditActions(h) {
+		if a == "governance.change.reject" {
+			t.Errorf("a refused withdrawal audited %s", a)
+		}
+	}
 }
 
 func TestGovCovDenyApproverAndRefusalError(t *testing.T) {

@@ -274,6 +274,7 @@ const (
 	LimitSourceGovernance LimitSource = "governance"
 	LimitSourceDeployment LimitSource = "deployment"
 	LimitSourceRunner     LimitSource = "runner"
+	LimitSourceElevation  LimitSource = "elevation"
 )
 
 // LimitAmount is an effective number. Unlimited is its own value, never a zero.
@@ -347,6 +348,7 @@ const (
 	RunEndQueueTimeout        RunEndReason = "queue_timeout"
 	RunEndQueueSignInTimeout  RunEndReason = "queue_sign_in_timeout"
 	RunEndScheduledRunsOff    RunEndReason = "scheduled_runs_off"
+	RunEndScheduledRunsDenied RunEndReason = "scheduled_runs_denied"
 	RunEndQueueProfileChanged RunEndReason = "queue_profile_changed"
 	RunEndQueuePolicyChanged  RunEndReason = "queue_policy_changed"
 	RunEndQueuePortalRevoked  RunEndReason = "queue_portal_revoked"
@@ -361,6 +363,7 @@ var runEndSentences = map[RunEndReason]string{
 	RunEndQueueTimeout:        "This run waited too long for a free slot and was not started.",
 	RunEndQueueSignInTimeout:  "This run waited for you to sign in to its model provider again, and was not started.",
 	RunEndScheduledRunsOff:    "Scheduled runs were switched off (WARDYN_SCHEDULED_RUNS) before this run's start time, so it was not started.",
+	RunEndScheduledRunsDenied: "Your admin turned off scheduled runs for your team before this run's start time, so it was not started.",
 	RunEndQueueProfileChanged: "Your governance profile changed while this run waited. Start it again.",
 	RunEndQueuePolicyChanged:  "The policy this run used changed while it waited. Start it again to review it.",
 	RunEndQueuePortalRevoked:  "The portal that launched this run was removed while it waited.",

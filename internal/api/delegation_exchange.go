@@ -24,6 +24,13 @@ import (
 // signed-in person's identity-provider token as subject_token. What comes back
 // is an opaque delegated token (wdg_) that acts for that person for
 // delegatedTokenTTL and cannot be refreshed or exchanged again.
+//
+// The portal may name the agent acting for the person with actor_token, a token
+// the identity provider issued to the portal for that agent. It is on by
+// default, with no setting, because it grants nothing: the agent is recorded on
+// the delegated token and in data.via.actor of every row it writes, never
+// authorised, and the person stays the owner at user reach. A request that
+// names an actor was refused before, and one that names none is unchanged.
 
 // delegatedTokenTTL is the delegated token's whole life (owner decision Q4:
 // ten minutes, no refresh). A portal that needs longer exchanges the person's
@@ -71,8 +78,9 @@ func writeOAuthError(w http.ResponseWriter, status int, code, desc string) {
 // first (401 invalid_client), then the request is checked for shape, then the
 // person's own token is verified exactly as a sign-in would admit them
 // (400 invalid_grant), then the person's session cutoff and the portal's group
-// scope are applied (400 invalid_grant / 403 access_denied), and only then is
-// a token minted. Every decision past client authentication writes a
+// scope are applied (400 invalid_grant / 403 access_denied), then any actor
+// token naming the acting agent is verified (400 invalid_grant), and only then
+// is a token minted. Every decision past client authentication writes a
 // delegation.exchange row naming the portal.
 func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	// The authority time, taken before the body is read — handleCreateAPIToken's
@@ -83,7 +91,7 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	subjectToken, ok := tokenExchangeForm(w, r)
+	subjectToken, actorToken, ok := tokenExchangeForm(w, r)
 	if !ok {
 		return
 	}
@@ -145,11 +153,21 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusForbidden, "access_denied", "this portal cannot act for this person")
 		return
 	}
+	// The acting agent, only once the person is admitted, so a refused subject never verifies an actor.
+	var actor *types.DelegationActor
+	if actorToken != "" {
+		a, denied := s.cfg.OIDC.VerifyActorToken(r, actorToken, d.IdPClientID, sess)
+		if denied != "" {
+			deny(http.StatusBadRequest, "invalid_grant", sess.Sub, denied)
+			return
+		}
+		actor = &types.DelegationActor{Sub: a.Sub, Iss: a.Iss}
+	}
 	raw := newBearer(delegatedTokenPrefix)
 	t, err := ds.MintDelegatedToken(r.Context(), types.DelegatedToken{
 		ID: uuid.New(), DelegateID: d.ID, Principal: sess.Sub, Email: sess.Email, UserType: sess.UserType,
 		Groups: sess.Groups, GroupsTruncated: sess.GroupsTruncated,
-		CreatedAt: authorizedAt, ExpiresAt: authorizedAt.Add(delegatedTokenTTL), RevSeq: issue.Seq,
+		CreatedAt: authorizedAt, ExpiresAt: authorizedAt.Add(delegatedTokenTTL), RevSeq: issue.Seq, Actor: actor,
 	}, raw, authorizedAt)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "api: mint delegated token failed", "error", err)
@@ -157,10 +175,12 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cfg.OIDC.RecordAttach(r, sess)
+	data := map[string]any{"grant": t.ID, "expires_at": t.ExpiresAt, "user_type": t.UserType, "role": sess.Role}
+	if actor != nil {
+		data["actor"] = actor
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, delegateActor(d.ID), "delegation.exchange",
-		t.Principal, "success", mustJSON(map[string]any{
-			"grant": t.ID, "expires_at": t.ExpiresAt, "user_type": t.UserType, "role": sess.Role,
-		})))
+		t.Principal, "success", mustJSON(data)))
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":      raw,
@@ -208,28 +228,39 @@ func (s *Server) authenticateDelegate(w http.ResponseWriter, r *http.Request) (t
 }
 
 // tokenExchangeForm checks the exchange request's shape and returns its
-// subject_token. Only the form BODY is read: a token in a query string ends up
+// subject_token and its optional actor_token (empty when the portal named no
+// acting agent). Only the form BODY is read: a token in a query string ends up
 // in access logs.
-func tokenExchangeForm(w http.ResponseWriter, r *http.Request) (string, bool) {
+//
+// RFC 8693 section 2.1: actor_token_type is required with actor_token and must
+// not appear without it; it takes the subject token's types.
+func tokenExchangeForm(w http.ResponseWriter, r *http.Request) (subject, actor string, ok bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxTokenExchangeBody)
 	if err := r.ParseForm(); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "the body must be an application/x-www-form-urlencoded token request")
-		return "", false
+		return "", "", false
 	}
 	f := r.PostForm
+	tokenTypes := []string{tokenTypeAccessToken, tokenTypeIDToken, tokenTypeJWT}
 	switch {
 	case f.Get("grant_type") != grantTypeTokenExchange:
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "only "+grantTypeTokenExchange+" is supported")
-	case f.Has("actor_token"):
-		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "actor_token is not accepted: the authenticated portal is the actor")
 	case f.Get("requested_token_type") != "" && f.Get("requested_token_type") != tokenTypeAccessToken:
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "only an access token can be issued")
 	case f.Get("subject_token") == "":
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "subject_token is required")
-	case !slices.Contains([]string{tokenTypeAccessToken, tokenTypeIDToken, tokenTypeJWT}, f.Get("subject_token_type")):
+	case !slices.Contains(tokenTypes, f.Get("subject_token_type")):
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "subject_token_type must be an access token, an ID token or a JWT")
+	case f.Has("actor_token") && f.Get("actor_token") == "":
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "actor_token is empty")
+	case f.Get("actor_token") != "" && f.Get("actor_token_type") == "":
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "actor_token_type is required with actor_token")
+	case f.Get("actor_token") == "" && f.Has("actor_token_type"):
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "actor_token_type is sent only with actor_token")
+	case f.Get("actor_token") != "" && !slices.Contains(tokenTypes, f.Get("actor_token_type")):
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "actor_token_type must be an access token, an ID token or a JWT")
 	default:
-		return f.Get("subject_token"), true
+		return f.Get("subject_token"), f.Get("actor_token"), true
 	}
-	return "", false
+	return "", "", false
 }

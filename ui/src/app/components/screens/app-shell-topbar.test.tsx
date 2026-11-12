@@ -128,6 +128,40 @@ function renderTopBar(role: Role, tier?: "local-only" | "runner" | "org", over: 
   );
 }
 
+// A long custom trust domain has no break opportunity (dots, hyphens), so it overflowed the 178px sidebar panel
+// and pushed the right-hand header buttons off the screen.
+describe("a long custom trust domain", () => {
+  const LONG = "spiffe.platform-prod.eu-west.contoso-internal.example.com";
+
+  it("is truncated with the full value in a tooltip in the header chip", () => {
+    renderTopBar("admin", undefined, { trustDomain: LONG });
+    const chip = screen.getByText(LONG);
+    expect(chip).toHaveAttribute("title", LONG);
+    expect(chip.className).toContain("truncate");
+    expect(chip.parentElement!.className).toContain("min-w-0");
+    expect(chip.parentElement!.parentElement!.className).toContain("min-w-0");
+  });
+});
+
+// The icon-only states of the header controls: the account trigger shows only
+// initials below sm, and the theme toggle is a two-state switch.
+describe("Header controls announce what they are and their state", () => {
+  it("names the account menu trigger, keeping the signed-in name in it", () => {
+    renderTopBar("admin", undefined, { principal: "alice@example.test", name: "", email: "" });
+    expect(screen.getByRole("button", { name: /account menu.*alice@example\.test/i })).toBeInTheDocument();
+  });
+
+  it("the theme toggle reports whether dark is on", async () => {
+    localStorage.setItem("wardyn-theme", "dark");
+    renderTopBar("admin");
+    const toggle = screen.getByRole("button", { name: "Toggle theme" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    localStorage.removeItem("wardyn-theme");
+  });
+});
+
 // #460 review — every plain <Link> in the header (top-bar.tsx) and the rail
 // goes through the one guardedClick; Settings is the entry the review named
 // explicitly, and since M-2 it lives in the rail's lower slot, not the menu.

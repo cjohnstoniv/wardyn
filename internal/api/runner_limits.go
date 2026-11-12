@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -62,8 +63,54 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session
 		}
 	}
 	s.healthFromRunner(ctx, runnerID, caps)
+	s.auditRunnerNetpol(ctx, runnerID, caps)
 	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
 		s.writeOwedRunnerConnect(ctx, rs, runnerID, session, r.Version)
+	}
+}
+
+// runnerNetPolCheck is the NetworkPolicy check a runner's caps carry, as wardynd takes it: only from a
+// Kubernetes runner (its caps name runs namespaces), only a verdict this build knows, and without a check
+// time later than now plus runnerClockSkew. ok is false when there is none to take.
+func runnerNetPolCheck(c runnerwire.Caps, now time.Time) (runner.NetPolCheck, bool) {
+	check := c.Support.NetworkPolicyCheck
+	if len(c.RunsNamespaces) == 0 || !runner.KnownNetPolVerdict(check.Verdict) {
+		return runner.NetPolCheck{}, false
+	}
+	if check.At.After(now.Add(runnerClockSkew)) {
+		check.At = time.Time{}
+	}
+	return check, true
+}
+
+// auditRunnerNetpol audits the NetworkPolicy verdict a Kubernetes runner's caps carry against the last
+// one this process took from that runner. A change writes "k8s.netpol.update", either way. A first
+// verdict that is not "enforced" writes "k8s.netpol.fail", as wardynd's own boot does for its own
+// cluster. Caps with no verdict to take (runnerNetPolCheck) keep the last one, so a later change is
+// still compared with it. Every row names the runner.
+func (s *Server) auditRunnerNetpol(ctx context.Context, runnerID uuid.UUID, next runnerwire.Caps) {
+	check, ok := runnerNetPolCheck(next, s.cfg.Now())
+	if !ok {
+		return
+	}
+	s.runnerStreams.subsMu.Lock()
+	prev := s.runnerStreams.netpolLast[runnerID]
+	if s.runnerStreams.netpolLast == nil {
+		s.runnerStreams.netpolLast = map[uuid.UUID]string{}
+	}
+	s.runnerStreams.netpolLast[runnerID] = check.Verdict
+	s.runnerStreams.subsMu.Unlock()
+	id := runnerID.String()
+	data := map[string]any{"driver": "k8s", "runner_id": id}
+	switch {
+	case runner.NetPolVerdictChanged(prev, check.Verdict):
+		s.auditNetpolUpdate(ctx, "runner:"+id, id, check.Verdict, prev, check.At, data)
+	case prev == "" && check.Verdict != runner.NetPolEnforced:
+		data["verdict"] = check.Verdict
+		if !check.At.IsZero() {
+			data["checked_at"] = check.At.UTC().Format(time.RFC3339)
+		}
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+id, "k8s.netpol.fail", id, "failure", mustJSON(data)))
 	}
 }
 

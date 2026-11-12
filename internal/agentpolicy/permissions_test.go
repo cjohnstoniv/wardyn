@@ -173,3 +173,16 @@ func TestAgentPolicy_AcceptsEditsNamesTheUnattendedRung(t *testing.T) {
 		}
 	}
 }
+
+// TestWithToolRulesRefusesApproveEach: Claude Code has no list for a rule that
+// asks per call, so a caller that forgot to map approve_each to allow or deny
+// must stop the run rather than write a looser permission.
+func TestWithToolRulesRefusesApproveEach(t *testing.T) {
+	rules := []types.ToolRule{{Tool: "mcp__jira__delete_issue", Effect: types.ToolApproveEach}}
+	if _, err := WithToolRules(nil, rules); err == nil || !strings.Contains(err.Error(), "approve_each has no Claude Code permission list") {
+		t.Fatalf("WithToolRules error = %v, want a refusal naming approve_each", err)
+	}
+	if err := CheckToolRules(rules); err == nil {
+		t.Error("CheckToolRules must refuse an unmapped approve_each")
+	}
+}

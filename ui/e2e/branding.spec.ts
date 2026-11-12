@@ -66,7 +66,7 @@ test.describe("unbranded console (the harness as it stands)", () => {
     expect(read.status()).toBe(200);
     expect(await read.json()).toEqual({});
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Wardyn");
-    await expect(page).toHaveTitle("Wardyn");
+    await expect(page).toHaveTitle(new RegExp(`(^| - )Wardyn$`));
     expect(await favicon(page)).toBe("/favicon.svg");
     await expect(page.locator("style[data-wardyn-brand]")).toHaveCount(0);
     await page.context().close();
@@ -76,7 +76,7 @@ test.describe("unbranded console (the harness as it stands)", () => {
     await gotoConsole(page);
     await expect(page.locator("header").getByText("Wardyn", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: BRAND_HEADER.SUPPORT_CHIP })).toHaveCount(0);
-    await expect(page).toHaveTitle(CONSOLE_VIEW.TITLE_USER);
+    await expect(page).toHaveTitle(new RegExp(`(^| - )${CONSOLE_VIEW.TITLE_USER}$`));
   });
 
   test("a save that breaks a rule is refused with its named reason", async ({ page }) => {
@@ -121,7 +121,7 @@ test.describe("branded console", () => {
     const logo = page.locator(`img[src="${LOGO_URL}"]`);
     await expect(logo).toBeVisible();
     expect(await logo.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
-    await expect(page).toHaveTitle("Example Corp Wardyn");
+    await expect(page).toHaveTitle(new RegExp(`(^| - )Example Corp Wardyn$`));
     expect(await favicon(page)).toBe(LOGO_URL);
     // Dark is the default theme: the dark pair is in effect; light takes the light pair.
     expect(await css(page, "--primary")).toBe("#9058f0");
@@ -142,13 +142,13 @@ test.describe("branded console", () => {
     await expect(support).toHaveAttribute("href", "https://status.example.com");
     await expect(support).toHaveAttribute("target", "_blank");
     await expect(support).toHaveAttribute("rel", "noopener noreferrer");
-    await expect(page).toHaveTitle("Example Corp Wardyn");
+    await expect(page).toHaveTitle(new RegExp(`(^| - )Example Corp Wardyn$`));
   });
 
   test("the Admin view keeps its cue in the tab title, and Settings has the Branding card", async ({ page }) => {
     await serveBrand(page);
     await gotoConsole(page, "admin");
-    await expect(page).toHaveTitle("Example Corp Wardyn admin");
+    await expect(page).toHaveTitle(new RegExp(`(^| - )Example Corp Wardyn admin$`));
     await page.goto("/admin/settings");
     await expect(page.getByRole("heading", { name: new RegExp(`^${BRANDING.TITLE}( |$)`), level: 3 })).toBeVisible();
     await expandCard(page, BRANDING.TITLE);

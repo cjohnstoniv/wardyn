@@ -56,7 +56,7 @@ func normalizeLockedKnobs(knobs []string) ([]string, string) {
 	out := make([]string, 0, len(knobs))
 	for _, k := range knobs {
 		k = strings.TrimSpace(k)
-		if !lockableKnobs[k] {
+		if !lockableKnobs[k] && k != types.DeciderLockKnob {
 			return nil, fmt.Sprintf("locked_knobs: %q is not a knob a unit sets", k)
 		}
 		if !slices.Contains(out, k) {
@@ -302,4 +302,23 @@ func boundaryLockConflicts(units []types.GovernanceUnit, before, after types.Bou
 // locksRemoved reports whether a write takes a lock off a unit: a widening, so never exempt.
 func locksRemoved(before, after []string) bool {
 	return slices.ContainsFunc(before, func(k string) bool { return !slices.Contains(after, k) })
+}
+
+// reparentDropsLocks reports whether re-parenting cur to p's parent leaves a knob locked over the unit
+// (and so over its descendants) before the move and not after it: the same widening as taking a lock
+// off the unit, so never exempt. The locks over a unit are the ones its parents hold; the boundary's
+// are the same on both sides and not compared. A write that keeps the parent drops nothing.
+func (s *Server) reparentDropsLocks(all []types.GovernanceUnit, cur, p types.GovernanceUnit) bool {
+	if sameJSON(cur.ParentID, p.ParentID) {
+		return false
+	}
+	proposed := append(slices.DeleteFunc(slices.Clone(all), func(x types.GovernanceUnit) bool { return x.ID == p.ID }), p)
+	before := s.locksOver(all, cur.ParentID, types.Boundary{}, store.MaxUnitDepthCap)
+	after := s.locksOver(proposed, p.ParentID, types.Boundary{}, store.MaxUnitDepthCap)
+	for k := range before {
+		if _, still := after[k]; !still {
+			return true
+		}
+	}
+	return false
 }

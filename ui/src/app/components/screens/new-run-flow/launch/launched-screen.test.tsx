@@ -14,12 +14,16 @@ import { shortTime } from "../../../../lib/format";
 import { whenText } from "../../../../lib/schedule";
 import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
 import type { RunnerPoolList } from "../../../../lib/types/runner-pools";
-import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
+import { CANCEL_NOT_STARTED } from "../../../wardyn/copy/cancel-not-started";
+import { NR_LAUNCH, NR_LAUNCH_STALE } from "../../../wardyn/copy/new-run/launch";
+import { RUN_NOT_FOUND } from "../../../wardyn/copy/refusal";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type LaunchedState } from "../new-run-route";
 import { LaunchedScreen } from "./launched-screen";
 import type { RunQueue } from "../../../../lib/types/runs";
 import type { LaunchedRun } from "./launched-model";
+import { STATES } from "../../../wardyn/states";
+import { HttpError } from "../../../../lib/api/core";
 
 const ID = "b2222222-2222-4222-8222-222222222222";
 const HOUR = 3_600_000;
@@ -82,6 +86,13 @@ afterEach(() => {
 });
 
 describe("Launched: while the run loads (UXR-48)", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getRun.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    open();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("draws a placeholder for the badge and the title, then the run", async () => {
     let settle!: (r: unknown) => void;
     getRun.mockReturnValue(new Promise((r) => (settle = r)));
@@ -146,6 +157,28 @@ describe("Launched: a scheduled run", () => {
     expect(screen.queryByText(NR_LAUNCH.POSITION)).not.toBeInTheDocument();
     expect(screen.queryByText(NR_LAUNCH.WAITING_BODY("CI jobs", 40))).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).toBeInTheDocument();
+  });
+
+  it("Cancel run asks a plain cancel question, not the sandbox teardown one", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Cancel nightly build?" });
+    expect(confirm).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    expect(within(confirm).queryByRole("button", { name: "End run" })).toBeNull();
+    await userEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
+  });
+});
+
+// A run that waits for a pool slot keeps the End run confirm: only the states known to hold nothing changed.
+describe("Launched: a run waiting for a pool slot", () => {
+  it("still asks the End run question", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue() }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
+    expect(confirm).toHaveTextContent("tears down the sandbox");
   });
 });
 
@@ -253,10 +286,28 @@ describe("Launched: reload and identity", () => {
     expect(getRun).toHaveBeenCalledTimes(2);
   });
 
-  it("says so when the run cannot be found", async () => {
+  it("says the run was not found, with no retry, and a way back to Runs", async () => {
     getRun.mockResolvedValue(undefined);
     open();
-    expect(await screen.findByRole("heading", { level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: RUN_NOT_FOUND.TITLE })).toBeInTheDocument();
     expect(screen.queryByText(NR_LAUNCH.BADGE_STARTING)).not.toBeInTheDocument();
+    expect(screen.queryByText(/isn't answering/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again|retry/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: RUN_NOT_FOUND.CTA })).toHaveAttribute("href", "/runs");
+  });
+
+  it("keeps the run on screen and says it cannot refresh when a later read fails", async () => {
+    vi.useFakeTimers();
+    getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockRejectedValue(new Error("Failed to fetch"));
+    open();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(screen.queryByTestId("launched-stale")).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4100);
+    });
+    expect(screen.getByTestId("launched-stale")).toHaveTextContent(NR_LAUNCH_STALE);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("nightly build");
   });
 });

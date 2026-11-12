@@ -85,10 +85,19 @@ type AWSSigV4Config struct {
 	AccountID  string    `json:"account_id"`
 	RoleName   string    `json:"role_name"`
 	Hosts      []string  `json:"hosts"`
+	// Gateways are the Bedrock gateways the run's calls go to signed as the person
+	// (aws_sigv4_gateway.go). Empty (the default) => none, and the grant renders as before;
+	// omitempty because an older proxy refuses a key it does not know, so the run fails at start.
+	Gateways []AWSSigV4Gateway `json:"gateways,omitempty"`
 }
 
-// awsSigV4Scope is the service and region a host signs for.
-type awsSigV4HostScope struct{ service, region string }
+// awsSigV4HostScope is the service and region a host signs for. A gateway's scope also names the
+// host it signs for, the path prefix it cuts and the one port it serves.
+type awsSigV4HostScope struct {
+	service, region  string
+	signHost, prefix string
+	port             int
+}
 
 // awsSigV4Door is the compiled grant and the role credentials it last obtained.
 type awsSigV4Door struct {
@@ -116,6 +125,7 @@ func newAWSSigV4Door(g *AWSSigV4Config, mitmHosts map[string]bool, mitmPorts map
 		d.scopes[k] = awsSigV4HostScope{service: service, region: region}
 		mitmHosts[k], mitmPorts[k] = true, awsSigV4Port
 	}
+	d.addAWSSigV4Gateways(g.Gateways, mitmHosts, mitmPorts)
 	return d
 }
 
@@ -385,6 +395,19 @@ func awsQueryActions(raw string) ([]string, bool) {
 // serveAWSSigV4 is the door: admit, hash, obtain the role credentials, forward re-signed.
 func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host string, port int) {
 	scope := p.sigv4.scopes[hostKey(host)]
+	var route *GatewayIdentityRoute
+	if scope.signHost != "" {
+		if port != scope.port {
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPort,
+				fmt.Sprintf("this run sends to this gateway only on port %d", scope.port))
+			return
+		}
+		if route = p.awsSigV4GatewayRoute(r, host, port, scope); route == nil {
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPath,
+				"this run sends to this gateway only under its own path, with no dot segments")
+			return
+		}
+	}
 	plan, ref := admitAWSSigV4(r, scope)
 	if ref != nil {
 		p.refuseAWSSigV4(w, r, host, port, scope, ref.code, ref.why)
@@ -397,8 +420,15 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 	if g, ok := awsSigV4ActionGuards[plan.service]; ok {
 		guard, guarded = g, true
 	}
+	// A gateway call goes out only with its body signed, so the gateway cannot change it: no
+	// unsigned payload mode, and its body is always read to check the hash it declares.
+	if route != nil && (plan.payload == "UNSIGNED-PAYLOAD" || strings.HasPrefix(plan.payload, "STREAMING-")) {
+		p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Payload,
+			"it declares an unsigned payload, and Wardyn sends a call to a gateway only with its body signed, so the gateway cannot change it")
+		return
+	}
 	var body []byte
-	if (plan.payload == "" || guarded) && r.Body != nil && r.Body != http.NoBody {
+	if (plan.payload == "" || guarded || route != nil) && r.Body != nil && r.Body != http.NoBody {
 		// Charged to the engine's retained-bytes budget for as long as the request holds it.
 		buf, release, err := p.scan.readBody(r.Context(), r.Body, r.ContentLength, awsSigV4MaxHashedBody)
 		defer release()
@@ -408,6 +438,10 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 			return
 		case err != nil:
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Payload, "Wardyn could not read its body to sign it")
+			return
+		case len(buf) > awsSigV4MaxHashedBody && route != nil:
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4BodyTooLarge, fmt.Sprintf(
+				"its body is over %d MiB, and Wardyn holds all of a gateway call's body to check the hash it signs", awsSigV4MaxHashedBody>>20))
 			return
 		case len(buf) > awsSigV4MaxHashedBody:
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4BodyTooLarge, fmt.Sprintf(
@@ -426,6 +460,14 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 		}
 		payload = "" // signed over the body it was judged on
 	}
+	if route != nil {
+		sum := sha256.Sum256(body)
+		if h := hex.EncodeToString(sum[:]); payload != "" && payload != h {
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Payload,
+				"its x-amz-content-sha256 header is not the hash of its body, and Wardyn signs a gateway call only over its own body")
+			return
+		}
+	}
 	if payload == "" {
 		sum := sha256.Sum256(body)
 		payload = hex.EncodeToString(sum[:])
@@ -440,9 +482,13 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 			"Wardyn could not get this run's AWS role credentials from the run owner's AWS sign-in; the owner may need to sign in to AWS again"))
 		return
 	}
-	rearmBodyDeadline(w) // the credential fetch may have taken a while
+	rearmBodyDeadline(w, r) // the credential fetch may have taken a while
+	far := "aws"
+	if route != nil {
+		far = "model gateway"
+	}
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceAWSSigV4, denied: ruleSourceAWSSigV4Refused,
-		mintFailed: "aws re-signing", upstream: "aws", stream: true,
+		mintFailed: "aws re-signing", upstream: far, stream: true, gateway: route,
 		sign: func(out *http.Request) error {
 			return awsSigV4Sign(p.sigv4.signer, out, plan.signed, payload, scope, creds, time.Now())
 		}})
@@ -450,16 +496,30 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 
 // awsSigV4Sign signs out for scope with creds, over the headers the sandbox signed and no
 // others. It signs a shadow of out, so the query and path go upstream exactly as the sandbox
-// sent them, and copies back the three headers a signature sets.
+// sent them, and copies back the three headers a signature sets. For a gateway the shadow names
+// the regional host and the path with the gateway's prefix cut, which is what AWS verifies once
+// the gateway forwards the call, and leaves out the identity headers the gateway strips.
 func awsSigV4Sign(s *v4.Signer, out *http.Request, signed []string, payload string, scope awsSigV4HostScope, creds aws.Credentials, now time.Time) error {
 	for _, k := range []string{"Authorization", "X-Amz-Date", "X-Amz-Security-Token"} {
 		out.Header.Del(k)
 	}
 	u := *out.URL
-	shadow := &http.Request{Method: out.Method, URL: &u, Host: out.Host, Header: http.Header{}, ContentLength: out.ContentLength}
+	host := out.Host
+	if scope.signHost != "" {
+		raw := cmp.Or(strings.TrimPrefix(out.URL.EscapedPath(), scope.prefix), "/")
+		path, err := url.PathUnescape(raw)
+		if err != nil {
+			return err
+		}
+		host, u.Host, u.Path, u.RawPath = scope.signHost, scope.signHost, path, raw
+	}
+	shadow := &http.Request{Method: out.Method, URL: &u, Host: host, Header: http.Header{}, ContentLength: out.ContentLength}
 	for _, k := range signed {
 		switch k = strings.ToLower(strings.TrimSpace(k)); k {
 		case "host", "content-length", "authorization", "x-amz-date", "x-amz-security-token":
+			continue
+		}
+		if scope.signHost != "" && (strings.EqualFold(k, gatewayIdentityHeader) || strings.EqualFold(k, gatewayCallIDHeader)) {
 			continue
 		}
 		if v := out.Header.Values(k); len(v) > 0 {
@@ -523,7 +583,7 @@ func (p *Proxy) getRoleCredentials(ctx context.Context, header, value string) (a
 	scheme, defaultPort := p.upstreamSchemeFor(host, awsSigV4Port)
 	u := url.URL{Scheme: scheme, Host: upstreamURLHost(host, awsSigV4Port, defaultPort), Path: awsSSOFederationPath,
 		RawQuery: url.Values{"account_id": {d.cfg.AccountID}, "role_name": {d.cfg.RoleName}}.Encode()}
-	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target), http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(context.WithValue(withProxyOwnSend(ctx), vettedIPKey{}, target), http.MethodGet, u.String(), nil)
 	if err != nil {
 		return aws.Credentials{}, err
 	}
@@ -602,8 +662,13 @@ func (p *Proxy) refuseAWSSigV4Tunnel(w http.ResponseWriter, r *http.Request, hos
 	if !p.isAWSSigV4Host(host) {
 		return false
 	}
-	p.refuseAWSSigV4(w, r, host, port, p.sigv4.scopes[hostKey(host)], awsSigV4Scope,
-		"this run reaches this host only through Wardyn's re-signing door on port 443")
+	scope := p.sigv4.scopes[hostKey(host)]
+	doorPort := 443
+	if scope.signHost != "" {
+		doorPort = scope.port // a gateway's door is on the gateway's own port
+	}
+	p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Scope,
+		fmt.Sprintf("this run reaches this host only through Wardyn's re-signing door on port %d", doorPort))
 	return true
 }
 
@@ -631,8 +696,8 @@ func (c *Config) validateAWSSigV4() error {
 	if !awsRoleName.MatchString(g.RoleName) {
 		return fmt.Errorf("config: aws_sigv4.role_name %q is not an IAM role name", g.RoleName)
 	}
-	if len(g.Hosts) == 0 {
-		return fmt.Errorf("config: aws_sigv4.hosts must name at least one host")
+	if len(g.Hosts) == 0 && len(g.Gateways) == 0 {
+		return fmt.Errorf("config: aws_sigv4.hosts or aws_sigv4.gateways must name at least one host")
 	}
 	for i, h := range g.Hosts {
 		if _, _, ok := AWSSigV4Scope(h); !ok || h != hostKey(h) || slices.Contains(g.Hosts[:i], h) {
@@ -649,5 +714,5 @@ func (c *Config) validateAWSSigV4() error {
 			return fmt.Errorf("config: mitm_hosts[%d]: host %q is re-signed by aws_sigv4 and is terminated by it alone", i, m)
 		}
 	}
-	return nil
+	return c.validateAWSSigV4Gateways()
 }

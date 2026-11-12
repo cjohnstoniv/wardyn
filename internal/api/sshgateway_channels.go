@@ -295,8 +295,8 @@ type sshSessionGate struct {
 // shared is set — one a sync-only channel (admitted past the shared cap, see
 // sshOpenSlot) may not make: that one is audited once, answered with the cap
 // text and closed, which frees the sync slot it was holding.
-func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
-	if g.started {
+func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string) bool {
+	if g.started || g.s.sshDataOutRefused(g, path) {
 		_ = req.Reply(false, nil)
 		return false
 	}
@@ -323,11 +323,11 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 	}
 	switch m.Subsystem {
 	case "sftp":
-		if g.mayDispatch(req, true) {
+		if g.mayDispatch(req, true, "sftp") {
 			return func() { s.bridgeSSHSFTP(ctx, runID, principal, channel) }
 		}
 	case sshSyncSubsystem:
-		if !g.mayDispatch(req, false) {
+		if !g.mayDispatch(req, false, "") {
 			return nil
 		}
 		if !g.slot.toSync() {
@@ -341,7 +341,7 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 			sendChannelError(channel, fmt.Sprintf("wardyn: this run already has %d sync sessions (the most it allows); wait for one to end", maxSSHSyncSessionsPerRun))
 			return nil
 		}
-		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv, pass) }
+		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv, pass, g.slot.dataOut) }
 	default:
 		_ = req.Reply(false, nil)
 	}
@@ -440,7 +440,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 
 		case "shell":
-			if !gate.mayDispatch(req, true) {
+			if !gate.mayDispatch(req, true, "") {
 				continue
 			}
 			gate.started = true
@@ -452,7 +452,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "exec":
-			if !gate.mayDispatch(req, true) {
+			if !gate.mayDispatch(req, true, "exec") {
 				continue
 			}
 			var m sshExecReqMsg

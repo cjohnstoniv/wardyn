@@ -44,6 +44,10 @@ import (
 //	POST /v1/tools/desktop_password     DesktopPassword -> DesktopPasswordResult
 //	POST /v1/tools/admin_code           AdminCode -> AdminCodeResult (edit-base)
 //	GET  /v1/tools/posture              ToolsPosture (edit-base's recheck)
+//	POST /v1/tools/base-settings        BaseSettingsResult (the base's settings; macos_basesettings.go)
+//	POST /edit/admin-terminal|trust-cas|full-disk-access   the edit window's buttons (macos_edit_actions.go)
+//	POST /edit/shut-down                the edit window's close: shut down as root (macos_edit_actions.go)
+//	POST /edit/install-rosetta          the edit window's Install Rosetta button (macos_edit_rosetta.go)
 const (
 	VsockToolsPort = 1026
 
@@ -128,6 +132,9 @@ type ToolsPosture struct {
 	// database in this boot answered; "" when that open failed some other way, and absent from an agent
 	// that predates the field. The host reads "" as unknown, never as allowed.
 	FullDiskAccess string `json:"full_disk_access,omitempty"`
+	// FileVault is FileVaultOn or FileVaultOff as `fdesetup status` printed it; "" when that read did not
+	// say, and absent from an agent that predates the field. The host reads "" as unknown.
+	FileVault string `json:"file_vault,omitempty"`
 }
 
 // GuestAccount is one local account, as `dscl . -list /Users UniqueID` lists it.
@@ -192,6 +199,9 @@ type Tools struct {
 	AgentBinary, AgentPlist string
 	// BinDir is MacToolsBinDir when "" (tests set it).
 	BinDir string
+	// EditDir is MacEditDir and ItemStageDir MacItemStageDir when "" (tests set them): where the edit
+	// actions (macos_edit_actions.go) write their scripts and read the staged ca items.
+	EditDir, ItemStageDir string
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
@@ -215,6 +225,12 @@ func (t *Tools) ToolsHandler() http.Handler {
 	mux.HandleFunc("POST /v1/tools/exec", t.handleExec)
 	mux.HandleFunc("POST /v1/tools/admin_code", t.handleAdminCode)
 	mux.HandleFunc("GET /v1/tools/posture", t.handlePosture)
+	mux.HandleFunc("POST /v1/tools/base-settings", t.handleBaseSettings)
+	mux.HandleFunc("POST /edit/admin-terminal", t.handleEditAdminTerminal)
+	mux.HandleFunc("POST /edit/trust-cas", t.handleEditTrustCAs)
+	mux.HandleFunc("POST /edit/full-disk-access", t.handleEditFullDiskAccess)
+	mux.HandleFunc("POST /edit/shut-down", t.handleEditShutDown)
+	mux.HandleFunc("POST /edit/install-rosetta", t.handleEditInstallRosetta)
 	if t.Desktop != nil {
 		mux.HandleFunc("GET /v1/tools/pointer", t.Desktop.servePointer)
 		mux.HandleFunc("POST /v1/tools/desktop_password", t.handleDesktopPassword)
@@ -412,6 +428,7 @@ func (t *Tools) handlePosture(w http.ResponseWriter, r *http.Request) {
 		p.RemoteLogin = true
 	}
 	p.FullDiskAccess = t.fullDiskAccess()
+	p.FileVault = t.fileVault(r.Context())
 	writeJSONAny(w, p)
 }
 
@@ -708,6 +725,22 @@ var ItemSecretPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // ItemAppPattern is the bundle an app item's dmg holds, as it lands in MacApplications.
 var ItemAppPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,95}\.app$`)
 
+// AgentSigningItem is the stage directory of the guest agent's signing certificate: the certificate of the
+// identity the host signs every agent build with. The base does not trust it: the agent's designated requirement
+// holds from build to build on its hash. An install list may not use the name, and a copy an older tools update
+// staged stays harmlessly.
+const AgentSigningItem = "wardyn-agent-signing"
+
+// trustPolicyAllowed says whether tools mode may trust or verify cert for policy: a staged certificate for
+// SSL only.
+func trustPolicyAllowed(policy, cert string) bool {
+	switch policy {
+	case "ssl":
+		return isItemFile(cert, ItemCert)
+	}
+	return false
+}
+
 // ItemDir is item name's stage directory.
 func ItemDir(name string) string { return MacItemStageDir + "/" + name }
 
@@ -719,8 +752,8 @@ func ItemDir(name string) string { return MacItemStageDir + "/" + name }
 // know folds onto one; the write's walk then refuses each by its inode (replaceFileOutside, makeDirAll).
 var (
 	itemDestRoots   = []string{"/Library", "/usr/local", "/opt"}
-	itemDestRefused = []string{MacClaudeCodeManagedDir, MacCodexManagedDir, MacRunDir, MacItemStageDir, MacToolsBinDir,
-		MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains"}
+	itemDestRefused = []string{MacClaudeCodeManagedDir, MacCodexManagedDir, MacRunDir, MacSessionEnvDir, MacItemStageDir,
+		MacToolsBinDir, MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains"}
 )
 
 // ErrItemDest is a file item's destination the guest does not allow.
@@ -830,7 +863,8 @@ var itemForms = map[string]func(a []string) bool{
 	"/usr/bin/hdiutil detach": func(a []string) bool { return len(a) == 4 && a[2] == "-force" && isItemFile(a[3], ItemMount) },
 	"/usr/bin/profiles list":  func(a []string) bool { return len(a) == 2 },
 	"/usr/bin/security add-trusted-cert": func(a []string) bool {
-		return len(a) == 10 && slices.Equal(a[2:9], []string{"-d", "-r", "trustRoot", "-p", "ssl", "-k", MacSystemKeychain}) && isItemFile(a[9], ItemCert)
+		return len(a) == 10 && slices.Equal(a[2:6], []string{"-d", "-r", "trustRoot", "-p"}) && slices.Equal(a[7:9], []string{"-k", MacSystemKeychain}) &&
+			trustPolicyAllowed(a[6], a[9])
 	},
 	"/usr/bin/security remove-trusted-cert": func(a []string) bool {
 		return len(a) == 4 && a[2] == "-d" && isItemFile(a[3], ItemCert)
@@ -844,7 +878,7 @@ var itemForms = map[string]func(a []string) bool{
 	"/usr/sbin/spctl --status":         func(a []string) bool { return len(a) == 2 },
 	"/usr/bin/profiles status":         func(a []string) bool { return len(a) == 4 && a[2] == "-type" && a[3] == "enrollment" },
 	"/usr/bin/security verify-cert": func(a []string) bool {
-		return len(a) == 7 && slices.Equal(a[2:6], []string{"-L", "-p", "ssl", "-c"}) && isItemFile(a[6], ItemCert)
+		return len(a) == 7 && slices.Equal(a[2:4], []string{"-L", "-p"}) && a[5] == "-c" && trustPolicyAllowed(a[4], a[6])
 	},
 }
 

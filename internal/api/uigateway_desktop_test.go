@@ -449,12 +449,12 @@ func TestDesktopRelayFiltersCutTextByTheRunsDesktopRules(t *testing.T) {
 			}
 			outcome := map[bool]string{true: "success", false: "denied"}
 			wantRows := map[string]struct {
-				outcome   string
-				bytes     int
-				sum, text string
+				outcome string
+				bytes   int
+				text    string
 			}{
-				"copy_out": {outcome[tc.copyOut], len(copySentinel), digest(copySentinel), copySentinel},
-				"paste_in": {outcome[tc.pasteIn], len(pasteSentinel), digest(pasteSentinel), pasteSentinel},
+				"copy_out": {outcome[tc.copyOut], len(copySentinel), copySentinel},
+				"paste_in": {outcome[tc.pasteIn], len(pasteSentinel), pasteSentinel},
 			}
 			rows := clipboardRows(t, h, 2)
 			if len(rows) != 2 {
@@ -465,15 +465,14 @@ func TestDesktopRelayFiltersCutTextByTheRunsDesktopRules(t *testing.T) {
 					App       string `json:"app"`
 					Direction string `json:"direction"`
 					Bytes     int    `json:"bytes"`
-					SHA256    string `json:"sha256"`
 				}
 				_ = json.Unmarshal(row.Data, &d)
 				w := wantRows[d.Direction]
-				if row.Outcome != w.outcome || d.Bytes != w.bytes || d.SHA256 != w.sum || row.Target != d.Direction || d.App != uiDesktopAppName {
+				if row.Outcome != w.outcome || d.Bytes != w.bytes || row.Target != d.Direction || d.App != uiDesktopAppName {
 					t.Errorf("ui.clipboard.transfer row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
 				}
-				if strings.Contains(string(row.Data), w.text) {
-					t.Errorf("a ui.clipboard.transfer row carries the text: %s", row.Data)
+				if strings.Contains(string(row.Data), w.text) || strings.Contains(string(row.Data), "sha256") {
+					t.Errorf("a ui.clipboard.transfer row carries the text or a digest of it: %s", row.Data)
 				}
 			}
 		})

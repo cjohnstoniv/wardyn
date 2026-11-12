@@ -126,7 +126,7 @@ Add these only for the capabilities some row's ceiling will reach:
 
 | Scope | Needed by | Grants |
 |---|---|---|
-| `vso.code_write` | `code_write`, `pr`, `policy_admin`, `policy_bypass` | Push commits, move refs, work on pull requests, and edit branch policies |
+| `vso.code_write` | `code_write`, `pr`, `pr_create`, `pr_vote`, `pr_complete`, `policy_admin`, `policy_bypass` | Push commits, move refs, work on pull requests, and edit branch policies |
 | `vso.code_manage` | `repo_admin` | Create, rename, and delete repositories |
 | `vso.security_manage` | `security_admin` | Change Azure DevOps permission assignments |
 | `vso.graph_manage` | `security_admin` | Create and change the organisation's groups and memberships |
@@ -141,7 +141,7 @@ Add these only for the capabilities some row's ceiling will reach:
 | `vso.packaging_manage` | `packaging_manage` | Delete package versions, and create, change, and delete feeds |
 | `vso.project_manage` | `project_admin` | Create, change, and delete projects |
 
-- Several capabilities share one scope (`code_write`, `pr`, `policy_admin` and `policy_bypass` all need `vso.code_write`, and `work_write` and `work_admin` both need `vso.work_write`, because Azure DevOps offers no narrower one), and one capability can need several (`security_admin` needs three).
+- Several capabilities share one scope (`code_write`, `pr`, `pr_create`, `pr_vote`, `pr_complete`, `policy_admin` and `policy_bypass` all need `vso.code_write`, and `work_write` and `work_admin` both need `vso.work_write`, because Azure DevOps offers no narrower one). One capability can need several (`security_admin` needs three).
 - The capability, not the scope, is what Wardyn checks on each request.
 - Also add `openid` and `offline_access` — Wardyn holds a refresh token per person, not a one-time code,
   - so it can renew an access token as runs need one without asking anyone to sign in again for every run.
@@ -247,6 +247,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - Anything else the list names is not standing access: under `deny_with_review` the run asks for it mid-run and a person decides, and under `always_deny` it is refused.
 - A narrower list is always honoured, so a member who picks `["code_read"]` gets exactly `code_read`.
 - A list that leaves nothing they may hold refuses the launch with reason `ado_capabilities_none_permitted`; it never falls back to the default profile.
+- A list that still reaches past the row's ceiling is refused at Review and in the policy preview with `ado_capabilities_above_ceiling`, as launch would.
 - An admin's own run keeps its policy's list, bounded by the ceiling alone.
 
 ## What a member sees
@@ -534,13 +535,17 @@ That has two consequences:
 
 - The capability ceiling is expressed in Azure DevOps' own terms — one read per area, then that area's write and admin rows, following Azure DevOps' read → write → manage ladder — not raw `vso.*` scopes.
 - The row above grants some subset of these, and a run can never be handed one the ceiling does not list.
+- The Wardyn boundary, and a restriction, can cap these for every run they bind ([boundary.md](operations/boundary.md#source-control-capabilities)).
 - **High risk** marks a capability that reaches past the one run: the organisation's rules, other people's work, identities, or credentials.
 
 | Area | Capability | What it allows |
 |---|---|---|
 | Repos | `code_read` | Clone, fetch and browse repositories, commits, branches, pull requests and branch policies; search code |
-| Repos | `code_write` | Push commits, and create or move a ref: push under `refs/heads/wardyn/<run-id>/` (or any branch when the policy sets `git_push_any_branch`) — see [How pushes work](#how-pushes-work). Opening a pull request is `pr`, not this |
-| Repos | `pr` | Open, update, comment on, vote on and complete a pull request, without bypassing a policy |
+| Repos | `code_write` | Push commits, and create or move a ref: push under `refs/heads/wardyn/<run-id>/` (or any branch when the policy sets `git_push_any_branch`) — see [How pushes work](#how-pushes-work). Opening a pull request is `pr_create`, not this |
+| Repos | `pr_create` | Open, update, comment on, label and abandon a pull request; linking a work item can satisfy the "Check for linked work items" branch policy |
+| Repos | `pr_vote` (High risk) | Vote, add or remove reviewers, post pull-request statuses and resolve comment threads: each can count toward a branch policy |
+| Repos | `pr_complete` | Complete or auto-complete a pull request, without bypassing a policy |
+| Repos | `pr` | All three; accepted in every list, never returned by a check |
 | Repos | `policy_admin` (High risk) | Create, change or delete branch policies — required reviewers, build validation, merge strategy |
 | Repos | `policy_bypass` (High risk) | Complete a pull request with `bypassPolicy` — without its required reviewers or checks. Nothing else needs it |
 | Repos | `repo_admin` (High risk) | Create, rename, import into, or delete a repository |
@@ -567,6 +572,8 @@ That has two consequences:
 | Organization | `project_admin` (High risk) | Create, rename, change or delete a project or a team |
 | Organization | `security_admin` (High risk) | Change who can do what across the whole organisation — permissions, groups, directory identities |
 
+- To stop an agent approving pull requests, leave `pr_vote` out of the provider's ceiling or default profile and name `pr_create` in place of `pr`; inside the ceiling a vote is held for the person.
+
 - **Discovery needs no capability of its own.**
 - Azure DevOps' API discovery — the `OPTIONS` location call its SDKs and CLI make first, `connectionData` and `resourceAreas` — returns route templates, not organisation data, and is allowed to any run holding at least one capability.
 - No list names it.
@@ -576,11 +583,18 @@ That has two consequences:
   - and installing or removing extensions.
 - Widening the ceiling does not open them.
 - A sandbox cannot create itself a second credential whatever credential its run carries.
-- **A request beyond what the run currently holds is held, not silently allowed or silently refused.**
-- The person (or an admin) sees it in the Wardyn UI and answers
+- **A request beyond what the run holds follows its `first_use_approval`.**
+  - `always_deny` (the default): refused, `403`.
+  - `deny_with_review`: this attempt is refused (`403`), a request is raised, and a retry passes once a person approves.
+  - `wait_for_review`: held (`423` `capability_pending`) until a person answers.
+  - Above the row's ceiling, in any mode: refused, `403` `capability_above_ceiling`.
+- A member's run takes the stricter of its own `first_use_approval` and its unit's.
+  - A run that asks for `wait_for_review` under a unit set to `deny_with_review` runs as `deny_with_review`, and Review lists the change.
+  - An admin's own run setting is honoured as given.
+- A person (or an admin) sees a raised request in the Wardyn UI and answers
   - **allow once** — this one request only —
   - or **allow for this run** — the capability joins what the rest of the run may do without asking again.
-- Either way, an answer can never reach past the row's capability ceiling: that ceiling is the one thing nobody, including an admin approving in the moment, can grant past.
+- Either way, an answer cannot reach past the row's capability ceiling, not even an admin's approval in the moment.
 
 ### How pushes work
 
@@ -600,10 +614,11 @@ That has two consequences:
 - **`policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy: true`**, the one request whose body asks Azure DevOps to skip its own policies.
   - The switch does not touch it.
   - A held push outside this run's own branch (switch on, `code_write` not yet granted) is shown to the approver as *"Outside this run's own branch"*.
-- **An agent that must push its work and open a pull request needs both `code_write` and `pr`** in the run's `azure_devops_capabilities`; an unattended run has nobody to approve either later.
+- **An agent that must push its work and open a pull request needs `code_write` and `pr_create` (and `pr_complete` if it completes its own pull request)** in the run's `azure_devops_capabilities`; an unattended run has nobody to approve either later.
 - **`push_rules` read what a `git push` leaves out through the Git REST API**, version 7.1, with the run's own credential: see [`require_review_paths`](POLICIES.md#push_rules--pushrulesspec). A push whose paths cannot be worked out is held or refused, and says so.
 - **A push that removes a file at a review path is not held.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file. That is true on every forge: Azure DevOps' own branch policy is what protects that file.
 - **A review-path match on an unattended run stays refused and cannot be approved later.** Git prints what to do: remove those paths, or run the task interactively.
+- **Pipelines.** A push or pull request can start a pipeline. See [Keep run branches from starting pipelines](operations/ci-trigger-guard.md).
 
 ## A template for contributing to a repository
 
@@ -635,47 +650,14 @@ needs_setup:
 
 - The organisation, project and repository names are placeholders. The template carries none; the person picks the repository at launch.
 - It is `partial` because a full template must attach a repository or drive, or say there are none (`template_coverage_invalid` otherwise). A partial template lists what is left under `needs_setup`, each entry a `field` and a `reason`, and a field listed there is not also in the intent.
-- An autonomous agent task that must push and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr`: nobody is there to approve either later. See [Capabilities](#capabilities).
+- An autonomous agent task that must push and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr_create` (and `pr_complete` if it completes its own pull request): nobody is there to approve either later. See [Capabilities](#capabilities).
 - The capabilities are a request. The row's ceiling still applies, and a run is never handed one the ceiling does not list.
 - To check it without storing anything, run `wardyn template import --kind RunTemplate ado-contribute-partial.yaml`. To keep it, save it with `wardyn template save ado-contribute-partial.yaml --scope person`. A shared template holds references, never credentials.
 - At launch the person picks the repository (`workspaces`) and writes the task, then reviews the run as for any other. See [New Run](NEW-RUN.md).
 
 ## Request flow
 
-```mermaid
-sequenceDiagram
-  participant Person
-  participant Wardyn as wardynd
-  participant Entra as Entra ID
-  participant Sandbox
-  participant Proxy as wardyn-proxy
-  participant ADO as Azure DevOps
-
-  Person->>Wardyn: sign in
-  Wardyn->>Entra: browser redirect
-  Entra-->>Wardyn: per-user grant, captured
-  Note over Wardyn,Sandbox: run dispatches as that person<br/>(minted_pat: Wardyn creates the run's PAT here)
-  Sandbox->>Proxy: Azure DevOps request (no token)
-  Proxy->>Wardyn: resolve capability C for this grant
-  alt C already held by the run
-    Wardyn-->>Proxy: 200, the run's credential
-    Proxy->>ADO: forward, credential attached
-    ADO-->>Proxy: response
-    Proxy-->>Sandbox: response
-  else C inside the ceiling, not held
-    Wardyn-->>Proxy: 423 capability_pending
-    Note over Proxy: request held
-    Person->>Wardyn: allow once / allow for this run
-    Proxy->>Wardyn: resolve again with the approval
-    Wardyn-->>Proxy: 200, the run's credential
-    Proxy->>ADO: forward, credential attached
-    ADO-->>Proxy: response
-    Proxy-->>Sandbox: response
-  else C above the ceiling
-    Wardyn-->>Proxy: 403 capability_above_ceiling
-    Proxy-->>Sandbox: refused
-  end
-```
+<picture><source media="(prefers-color-scheme: dark)" srcset="img/ado-request-flow-dark.svg"><img src="img/ado-request-flow.svg" alt="An Azure DevOps request: forwarded with the credential when the run holds the capability, held under wait_for_review, refused under deny_with_review, always_deny and above the ceiling."></picture>
 
 ## Two layers of enforcement
 
@@ -709,7 +691,7 @@ Two things bound what a run can do:
 > - Wardyn's classifier recognizes the Azure DevOps REST routes it has been taught.
 > - A request against a route it does not recognize is refused rather than guessed at — it does not fall back to whatever the token's scope would technically allow.
 > - That means a new Azure DevOps REST API, or a materially reshaped existing one, can require a Wardyn update before a run can use it.
-> - That is a deliberate trade: an unrecognized request being refused is a support ticket; an unrecognized request being classified wrong in the permissive direction is a policy bypass nobody saw coming.
+> - A refused unrecognized request costs a support ticket. One classified wrongly in the permissive direction is a bypass.
 
 ## Why not device-code sign-in
 
@@ -762,7 +744,7 @@ When a redemption is refused — the refresh token has been revoked or has expir
 ## What bounds a token-creating credential
 
 - In `minted_pat` mode the stored refresh token can create PATs, not only read.
-- That is a deliberately larger power than the `bearer` lane's stored token, so be exact about what limits it.
+- That is more power than the `bearer` lane's stored token, so be exact about what limits it.
 
 > [!WARNING]
 > **What a token that can create PATs can do.**

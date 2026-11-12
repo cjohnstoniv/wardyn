@@ -31,6 +31,7 @@ import type {
   CapabilityEffect,
   CapabilityGrant,
   CapabilitySubjectType,
+  GovernanceChange,
   PermissionsSnapshot,
 } from "../../lib/types";
 import { Button } from "../ui/button";
@@ -60,7 +61,7 @@ import { SelfHostRunnerRow } from "./self-host-runner-row";
 import { INBOUND_VALUE, InboundAccessRow, serviceName } from "./inbound-access-row";
 import { Chip } from "../wardyn/primitives";
 import { Segmented } from "../wardyn/segmented";
-import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useUserTypeName, useUserTypes } from "../../lib/use-user-types";
@@ -222,13 +223,14 @@ export function PermissionsScreen() {
   // 403 that answers them is the daemon's verdict on their tier, not an outage
   // to retry.
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [presetKind, setPresetKind] = React.useState<CapabilityKind | undefined>(undefined);
   const [presetValue, setPresetValue] = React.useState<{ value: string } | undefined>(undefined);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing has changed yet.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -240,6 +242,7 @@ export function PermissionsScreen() {
       })
       .catch((e) => {
         setSnap(null);
+        setLoadMessage(failureSentence(e));
         setStatus(loadFailStatus(e));
       });
   }, []);
@@ -262,11 +265,11 @@ export function PermissionsScreen() {
       const saved = await api.putEnforcement(body);
       setSnap((s) => ({ grants: s?.grants ?? [], enforcement: saved }));
       setConfirm(null);
-      setSubmitted(false);
+      setSubmitted(null);
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setConfirm(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -282,11 +285,11 @@ export function PermissionsScreen() {
       await api.deleteGrant(g.id);
       setSnap((s) => (s ? { ...s, grants: s.grants.filter((x) => x.id !== g.id) } : s));
       setToRemove(null);
-      setSubmitted(false);
+      setSubmitted(null);
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setToRemove(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -302,7 +305,7 @@ export function PermissionsScreen() {
     <PageContainer width="list">
       <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
-      {submitted && <SubmittedNote />}
+      {submitted && <SubmittedNote change={submitted} />}
 
       {/* The upgrade-from-0.5 posture: every kind off and no grants at all. */}
       {status === "ready" && nothingEnforced && snap!.grants.length === 0 && (
@@ -323,7 +326,7 @@ export function PermissionsScreen() {
           ) : status === "forbidden" ? (
             <p className="px-6 pb-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
           ) : status === "error" || !snap ? (
-            <ErrorState onRetry={load} />
+            <ErrorState message={loadMessage} onRetry={load} />
           ) : (
             <>
               {CAPABILITY_KINDS.map((kind) => (
@@ -348,10 +351,10 @@ export function PermissionsScreen() {
                 disabled={!securityOperator}
                 onGrants={(grants) => {
                   setSnap((s) => (s ? { ...s, grants } : s));
-                  setSubmitted(false);
+                  setSubmitted(null);
                 }}
-                onSubmitted={() => {
-                  setSubmitted(true);
+                onSubmitted={(change) => {
+                  setSubmitted(change);
                   load();
                 }}
               />
@@ -361,10 +364,10 @@ export function PermissionsScreen() {
                 disabled={!securityOperator}
                 onGrants={(grants) => {
                   setSnap((s) => (s ? { ...s, grants } : s));
-                  setSubmitted(false);
+                  setSubmitted(null);
                 }}
-                onSubmitted={() => {
-                  setSubmitted(true);
+                onSubmitted={(change) => {
+                  setSubmitted(change);
                   load();
                 }}
               />
@@ -406,7 +409,7 @@ export function PermissionsScreen() {
           ) : status === "forbidden" ? (
             <p className="px-6 pb-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
           ) : status === "error" || !snap ? (
-            <ErrorState onRetry={load} />
+            <ErrorState message={loadMessage} onRetry={load} />
           ) : snap.grants.length === 0 ? (
             <EmptyState size="compact" icon={ShieldCheck} title={PERM.EMPTY_TITLE} description={PERM.EMPTY_BODY} />
           ) : (
@@ -418,7 +421,9 @@ export function PermissionsScreen() {
                   <TableHead>{PERM.COL_VALUE}</TableHead>
                   <TableHead>{PERM.COL_EFFECT}</TableHead>
                   <TableHead>{PERM.COL_ADDED}</TableHead>
-                  <TableHead className="w-[80px]" />
+                  <TableHead className="w-[80px]">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -479,7 +484,7 @@ export function PermissionsScreen() {
       <AddGrantForm
         disabled={!securityOperator}
         onAdded={() => {
-          setSubmitted(false);
+          setSubmitted(null);
           load();
         }}
         onSubmitted={load}
@@ -716,7 +721,7 @@ export function AddGrantForm({
   // are still looking at (the dialog itself never closes on a refusal).
   const [error, setError] = React.useState<string | null>(null);
   // The 202 branch: held for a second person, so not added, and said in the form the caller is looking at.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
 
   React.useEffect(() => {
     if (presetKind && !fixed) setKind(presetKind);
@@ -742,7 +747,7 @@ export function AddGrantForm({
     setSaving(true);
     setDuplicate(false);
     setError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     try {
       const res = await api.upsertGrant({
         subject_type: subjectType,
@@ -759,7 +764,7 @@ export function AddGrantForm({
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setValue("");
-        setSubmitted(true);
+        setSubmitted(e.change);
         onSubmitted?.();
         return;
       }
@@ -771,7 +776,7 @@ export function AddGrantForm({
 
   const body = (
     <>
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr_auto]">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[auto_1fr_1fr_auto]">
         <Field label={PERM.FIELD_WHO} hint={fixed ? undefined : whoHint}>
           {fixed ? (
             <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-input-background px-3 text-body">
@@ -909,7 +914,7 @@ export function AddGrantForm({
           {error}
         </Note>
       )}
-      {submitted && <SubmittedNote />}
+      {submitted && <SubmittedNote change={submitted} />}
       <AlertDialog open={confirmWall} onOpenChange={setConfirmWall}>
         <AlertDialogContent>
           <AlertDialogHeader>

@@ -196,7 +196,6 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
         <p className="border-b border-border px-4 py-2 text-xs">
           <span className="font-medium">{boot.view_only ? DESKTOP.viewOnlyTitle : DESKTOP.phoneTitle}</span>{" "}
           <span className="text-muted-foreground">{boot.background ? DESKTOP.backgroundWatchBody : boot.view_only ? DESKTOP.viewOnlyBody : DESKTOP.phoneBody}</span>
-          {boot.view_only && <span className="block text-muted-foreground">{DESKTOP.loginWindowNote}</span>}
         </p>
       )}
       {!viewOnly && phase === "connected" && (

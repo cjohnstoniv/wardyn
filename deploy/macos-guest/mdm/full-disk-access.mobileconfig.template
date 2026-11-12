@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Grants the guest agent Full Disk Access with no person at the guest. MDM only: macOS ignores a Privacy
+  Preferences Policy Control payload from a profile a person installs.
+  Replace each __PLACEHOLDER__ before use. __AGENT_PATH__ is /usr/local/libexec/wardyn-guest-agent.
+  __CODE_REQUIREMENT__ is the agent's designated requirement for this Mac's signing identity:
+  identifier "com.wardyn.guest-agent" and certificate root = H"<SHA-1 of the signing certificate>"
+-->
+<plist version="1.0">
+<dict>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadIdentifier</key>
+	<string>__IDENTIFIER_PREFIX__.full-disk-access</string>
+	<key>PayloadUUID</key>
+	<string>__PROFILE_UUID__</string>
+	<key>PayloadDisplayName</key>
+	<string>Wardyn macOS VM: Full Disk Access</string>
+	<key>PayloadOrganization</key>
+	<string>__ORGANIZATION__</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.TCC.configuration-profile-policy</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>__IDENTIFIER_PREFIX__.full-disk-access.policy</string>
+			<key>PayloadUUID</key>
+			<string>__PAYLOAD_UUID__</string>
+			<key>PayloadDisplayName</key>
+			<string>Full Disk Access for the guest agent</string>
+			<key>Services</key>
+			<dict>
+				<key>SystemPolicyAllFiles</key>
+				<array>
+					<dict>
+						<key>Identifier</key>
+						<string>__AGENT_PATH__</string>
+						<key>IdentifierType</key>
+						<string>path</string>
+						<key>CodeRequirement</key>
+						<string>__CODE_REQUIREMENT__</string>
+						<key>Authorization</key>
+						<string>Allow</string>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -33,6 +33,7 @@ type fakeProxy struct {
 	mu      sync.Mutex
 	events  []string
 	refused []refusal
+	dns     []dnsRecord
 	tunnel  chan []byte
 }
 
@@ -99,6 +100,13 @@ func startFakeProxy(t *testing.T, allowed ...string) *fakeProxy {
 			_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 			b, _ := io.ReadAll(brw)
 			f.tunnel <- b
+		case r.URL.Path == dnsPath && r.URL.Host == "":
+			var q dnsRecord
+			_ = json.NewDecoder(r.Body).Decode(&q)
+			f.mu.Lock()
+			f.dns = append(f.dns, q)
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == refusalsPath && r.URL.Host == "":
 			var rf refusal
 			_ = json.NewDecoder(r.Body).Decode(&rf)

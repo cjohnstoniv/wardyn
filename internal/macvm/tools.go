@@ -27,6 +27,7 @@ import (
 	"time"
 
 	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
@@ -181,6 +182,12 @@ type Stage2Input struct {
 	Previous []ItemRecord
 	// Kept is a derivation's (DeriveBase): the tools.json of the Standard it cloned, whose tools it keeps.
 	Kept *ToolsRecord
+	// AgentSignature is how the guest agent the base held before this stage 2 was signed (a tools
+	// update's), and AgentSigningCertSHA256 the certificate it was signed with: Full Disk Access as the
+	// running agent reads it says something of a newly pushed build only when both are signed on this Mac
+	// with the same certificate, so their designated requirement is the same.
+	AgentSignature         string
+	AgentSigningCertSHA256 string
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -207,6 +214,12 @@ type ToolsResult struct {
 	ItemsDigest string
 	// Guest is the guest posture read at the end of stage 2.
 	Guest *GuestPosture
+	// AgentSignature is how the pushed agent is signed, and AgentSigningCertSHA256 the SHA-256 of the
+	// certificate it is signed with.
+	AgentSignature, AgentSigningCertSHA256 string
+	// BaseSettingsSkipped are the base settings that did not apply, with why.
+	BaseSettingsSkipped []basesettings.Skipped
+	AgentSignRecord
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -240,6 +253,8 @@ type ToolsOptions struct {
 	Desktop DesktopProbe
 	// Items is the operator's install list (none: no items).
 	Items BaseList
+	// Signer signs the guest agent before it is pushed (nil: it is pushed as built).
+	Signer AgentSigner
 }
 
 // ToolsStage is the Stage2 that boots the base through Boot and applies Tooling.
@@ -308,8 +323,17 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	}
 	if err == nil {
 		res.Guest = readPosture(ctx, g, res.Items)
+		// The agent answering is the one this boot started with, not the build just pushed: its answer
+		// holds for the new build only when the same certificate signed both. Otherwise it is unknown
+		// until edit-base reads it again.
+		same := in.AgentSignature == AgentSignedThisMac && res.AgentSignature == AgentSignedThisMac &&
+			in.AgentSigningCertSHA256 != "" && in.AgentSigningCertSHA256 == res.AgentSigningCertSHA256
+		if res.AgentVersion != "" && !same {
+			res.Guest.FullDiskAccess = ""
+		}
 	}
 	if err == nil {
+		applyBaseSettings(ctx, g, &res, o.Log)
 		err = selftestBase(ctx, g, &res, o.Log)
 	}
 	res.Desktop = desktop
@@ -401,15 +425,23 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
-		if err := pushAgent(ctx, g, o.Agent.Path, o.Agent.Dest); err != nil {
+		path, signed, signRec := agentToPush(ctx, o)
+		if signed != nil {
+			defer signed.Done()
+		}
+		if err := pushAgent(ctx, g, path, o.Agent.Dest); err != nil {
 			return res, fmt.Errorf("macvm: replacing the guest agent: %w", err)
 		}
 		res.AgentVersion = o.Agent.Version
 		// The same binary is the run launcher by its name, so a run's agent-run is always this build's.
-		if err := pushAgent(ctx, g, o.Agent.Path, guestagent.MacAgentRunPath); err != nil {
+		if err := pushAgent(ctx, g, path, guestagent.MacAgentRunPath); err != nil {
 			return res, fmt.Errorf("macvm: installing the run launcher: %w", err)
 		}
-		res.AgentRun = true
+		res.AgentRun, res.AgentSignature, res.AgentSignRecord = true, AgentSignedAdHoc, signRec
+		if signed != nil {
+			sum := sha256.Sum256(signed.Cert)
+			res.AgentSignature, res.AgentSigningCertSHA256 = AgentSignedThisMac, hex.EncodeToString(sum[:])
+		}
 	}
 	var cltErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -713,6 +745,14 @@ type ToolsRecord struct {
 	Items       []ItemRecord `json:"items,omitempty"`
 	// Guest is the guest posture read when the base was last prepared, updated or edited.
 	Guest *GuestPosture `json:"guest,omitempty"`
+	// AgentSignature is how the guest agent stage 2 pushed is signed (AgentSignedThisMac or
+	// AgentSignedAdHoc). An older tools.json may carry an agent_signing_cert key, which nothing reads.
+	AgentSignature string `json:"agent_signature,omitempty"`
+	// AgentSigningCertSHA256 is the SHA-256 of the certificate the agent is signed with (this_mac only).
+	AgentSigningCertSHA256 string `json:"agent_signing_cert_sha256,omitempty"`
+	// BaseSettingsSkipped are the base settings the last prepare or tools update could not apply.
+	BaseSettingsSkipped []basesettings.Skipped `json:"base_settings_skipped,omitempty"`
+	AgentSignRecord
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -727,7 +767,9 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
-		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest}
+		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature,
+		AgentSigningCertSHA256: r.AgentSigningCertSHA256, AgentSignRecord: r.AgentSignRecord}
+	rec.BaseSettingsSkipped = r.BaseSettingsSkipped
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
@@ -831,7 +873,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	// Dropped last: the old generation is deleted under a kept machine's lock.
 	defer unlock()
 	base := site.dir
-	nb, done, err := beginUpdate(ctx, base, o.Log)
+	nb, done, err := beginUpdateOnce(ctx, base, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
 	}
@@ -884,7 +926,8 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		DiskPath: filepath.Join(nb, DiskFile), AuxPath: filepath.Join(nb, AuxFile),
 	}
 	prev, _ := ReadToolsRecord(base)
-	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items})
+	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items, AgentSignature: prev.AgentSignature,
+		AgentSigningCertSHA256: prev.AgentSigningCertSHA256})
 	if res.ToolsDial != "" {
 		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial, ToolsDialAt: time.Now().UnixNano()})
 	}

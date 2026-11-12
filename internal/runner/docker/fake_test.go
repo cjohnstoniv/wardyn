@@ -76,6 +76,7 @@ const fakeJoinedNetIP = "172.30.0.9"
 type fakeExec struct {
 	cmd     []string
 	user    string
+	env     []string
 	running bool
 }
 
@@ -93,6 +94,8 @@ type createdContainer struct {
 	// forceRemoved records whether the removal asked for Force, which a
 	// container that may be running needs.
 	forceRemoved bool
+	// removedVolumes records whether the removal asked for the container's anonymous volumes to go.
+	removedVolumes bool
 }
 
 // fakeDocker is an in-memory dockerAPI for unit tests. It is concurrency-safe
@@ -254,6 +257,12 @@ type fakeDocker struct {
 	// run against one drive creates nothing (idempotence is the contract, not
 	// merely the observable end state).
 	volumeCreates int
+	// createConflicts names containers whose create the daemon refuses as a name already in use, for a name
+	// taken between a driver's inspect and its create.
+	createConflicts map[string]bool
+	// apiVersion/apiVersionSet: see ClientVersion.
+	apiVersion    string
+	apiVersionSet bool
 	// failVolumeInspect makes VolumeInspect return a NON-not-found error — the
 	// "the daemon cannot say whether it exists" arm, which must fail closed
 	// rather than create over the top of it.
@@ -543,6 +552,15 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 			resp.Config = &dockerspec.DockerOCIImageConfig{}
 			resp.Config.Labels = map[string]string{proxyReadyLabel: "1"}
 		}
+		if vols := f.imageVolumes[imageID]; len(vols) > 0 {
+			if resp.Config == nil {
+				resp.Config = &dockerspec.DockerOCIImageConfig{}
+			}
+			resp.Config.Volumes = map[string]struct{}{}
+			for _, v := range vols {
+				resp.Config.Volumes[v] = struct{}{}
+			}
+		}
 		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
@@ -612,9 +630,13 @@ func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ cli
 	if _, ok := f.networks[networkID]; !ok {
 		return client.NetworkInspectResult{}, fakeNotFound{msg: "no such network: " + networkID}
 	}
+	opts := f.networks[networkID]
 	var res client.NetworkInspectResult
 	res.Network.Name = networkID
 	res.Network.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[networkID]}}
+	// What the create asked for, as a daemon reports it back.
+	res.Network.Internal, res.Network.Options = opts.Internal, opts.Options
+	res.Network.EnableIPv6 = opts.EnableIPv6 != nil && *opts.EnableIPv6
 	return res, nil
 }
 
@@ -709,6 +731,9 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}
+	if f.createConflicts[name] {
+		return client.ContainerCreateResult{}, fakeConflict{msg: "Conflict. The container name \"/" + name + "\" is already in use"}
+	}
 	if err := f.refuseUnsupportedRRO(opts.HostConfig); err != nil {
 		return client.ContainerCreateResult{}, err
 	}
@@ -754,6 +779,20 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	return client.ContainerCreateResult{ID: id, Warnings: f.createWarnings}, nil
 }
 
+// managedCopies is the CopyToContainer calls that are not a DNS seed's: the managed-file and secret deliveries
+// into an agent, which a test of those counts without the run's resolver seed (driver_dns.go).
+func (f *fakeDocker) managedCopies() []fakeCopy {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []fakeCopy
+	for _, c := range f.copies {
+		if !strings.HasPrefix(c.id, dnsSeedPrefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // fakeCopy records one CopyToContainer: which container, where, the raw
 // archive bytes, and whether that container had already been started.
 type fakeCopy struct {
@@ -765,6 +804,9 @@ type fakeCopy struct {
 }
 
 func (f *fakeDocker) CopyToContainer(ctx context.Context, id string, opts client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	if err := ctx.Err(); err != nil {
+		return client.CopyToContainerResult{}, err
+	}
 	body, err := io.ReadAll(opts.Content)
 	if err != nil {
 		return client.CopyToContainerResult{}, err
@@ -1092,6 +1134,7 @@ func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client
 	}
 	c.removed = true
 	c.forceRemoved = opts.Force
+	c.removedVolumes = opts.RemoveVolumes
 	return client.ContainerRemoveResult{}, nil
 }
 
@@ -1142,7 +1185,7 @@ func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.Exec
 	if f.execCreateErr != nil {
 		return client.ExecCreateResult{}, f.execCreateErr
 	}
-	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, running: c.state != nil && c.state.Running})
+	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, env: opts.Env, running: c.state != nil && c.state.Running})
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd
@@ -1254,7 +1297,8 @@ func (f *fakeDocker) VolumeCreate(ctx context.Context, opts client.VolumeCreateO
 	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Driver: opts.Driver, Labels: opts.Labels}}, nil
 }
 
-// VolumeRemove is ReclaimDrive's destroy call and nothing else's. It answers
+// VolumeRemove is the destroy call of its two callers: ReclaimDrive, and removeDNSVolume for a run's own
+// DNS volume. It answers
 // the two errors the real daemon answers and that the driver branches on: a
 // not-found for a name this fake does not hold, and a CONFLICT (the errdefs
 // shape a live daemon returns for "volume is in use") when volumeInUse names
@@ -1299,3 +1343,17 @@ type fakeAddr struct{}
 
 func (fakeAddr) Network() string { return "fake" }
 func (fakeAddr) String() string  { return "fake" }
+
+// apiVersion is what ClientVersion answers when apiVersionSet: "" is then the client before its first request.
+// Otherwise the answer is a current API.
+func (f *fakeDocker) ClientVersion() string {
+	if f.apiVersionSet {
+		return f.apiVersion
+	}
+	return "1.56"
+}
+
+// volumeOf is the volume a daemon holds for a create request, as an inspect reports it.
+func volumeOf(o client.VolumeCreateOptions) volume.Volume {
+	return volume.Volume{Name: o.Name, Driver: o.Driver, Labels: o.Labels, Options: o.DriverOpts}
+}

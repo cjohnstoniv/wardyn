@@ -190,6 +190,7 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		// A bound drive's runner is the run's (kindTargets holds the run to it).
 		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
+	p.RequireManagedDevice = requiresManagedDevice(sc)
 	// A bound folder's runner is the run's too (kindTargets holds the run to it).
 	mountRunner, refusal := boundMountsRunner(p.Spec.Mounts)
 	if refusal != nil {

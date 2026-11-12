@@ -226,7 +226,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 
   it("RunnerSettings: default-off admission block mirrors the Go wire shape", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "RunnerSettings");
-    expect(goTags).toEqual(["enabled"]);
+    expect(goTags).toEqual(["enabled", "require_managed_device"]);
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "RunnerSettings");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
@@ -463,6 +463,16 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
   });
 
+  it("the policy preview's image_admission fact has the same value in Go and TS", () => {
+    const go = readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
+    const goValues = [...go.matchAll(/ImageAdmissionFact\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
+    const fact = /export type ImageAdmissionFact =([\s\S]*?);/.exec(ts)?.[1] ?? "";
+    const tsValues = [...fact.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(goValues).toEqual(["checked at launch"]);
+    expect(tsValues).toEqual(goValues);
+  });
+
   it("policy-preview pending reasons have the same closed enum in Go and TS", () => {
     const go = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
     const ts = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
@@ -622,6 +632,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/user_drive.go", "UserDriveGrant", "members_can_write", "api/drives.ts", "UserDriveGrant"],
     ["internal/types/user_drive.go", "UserDriveListItem", "single_host", "api/drives.ts", "UserDriveListItem"],
     ["internal/types/workspace_provider.go", "UserDriveProvider", "team_drives", "types/site.ts", "UserDriveProvider"],
+    ["internal/api/user_drives.go", "userDrivesResponse", "team_drives", "api/drives.ts", "UserDrivesSnapshot"],
     ["pkg/client/families.go", "DriveRequest", "team", "api/drives.ts", "UserDriveInput"],
     ["pkg/client/families.go", "DriveGrantRequest", "members_can_write", "api/drives.ts", "UserDriveGrantInput"],
     ["pkg/client/me_drives.go", "MeDrive", "team", "api/me-drives.ts", "MeDrive"],

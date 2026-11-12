@@ -44,6 +44,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// proxyImageSleep is the wait between proxy image tries at start: sleepCtx, a variable only so a test can
+// end the wait.
+var proxyImageSleep = sleepCtx
+
 func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity, stateDir string, opts serveOptions) (runnerRuntime, error) {
 	switch opts.substrate {
 	case "k8s":
@@ -100,7 +104,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
 		ProxyServesAnyPeer: docker.ProxyServesAnyPeerFromEnv(), UserDriveHostRoots: driveRoots,
 		ProxyPeersOnlyByDefault: docker.ProxyPeersOnlyByDefaultFromEnv(), PeersOnlyFallback: opts.offline.peersOnlyChanged,
-		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})
+		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits, AllowHostReachableRunNetwork: docker.AllowHostReachableRunNetworkFromEnv()})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
@@ -115,7 +119,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
 	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
-	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
+	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, stateDir, sub.EndVM)
 	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
 	extras.boundFolders = true
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
@@ -124,7 +128,11 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	rt.hooks.ProxyImage = mirroredProxyImageHook(opts.proxyImageMirror, opts.proxyImagePinned, followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage))
-	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
+	var pair relayPair
+	err = waitForProxyImage(ctx, opts.proxyImage, func(ctx context.Context) (err error) {
+		pair, err = chooseRelay(ctx, sub, opts.proxyImage, eng, want)
+		return err
+	}, opts.offline.waiting, proxyImageSleep)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
 	}
@@ -424,6 +432,9 @@ type runtimeExtras struct {
 	runsNamespaces []string
 	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
 	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
+	// netPolWatch, set by the k8s runner (the driver's OnNetPolChange), takes the hook a canary re-check
+	// calls when the NetworkPolicy verdict changes; the caps go again after it. nil on Docker.
+	netPolWatch func(func())
 }
 
 // proxySettings are the run proxy settings the caps name: every one this build carries, and the
@@ -537,7 +548,10 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return runnerRuntime{}, err
 	}
 	checkLapsesAtStartup(ctx, manager)
-	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
+	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil, netPol: make(chan struct{}, 1)}
+	if extra.netPolWatch != nil {
+		extra.netPolWatch(caps.netPolChanged)
+	}
 	if extra.macOSVM != nil {
 		reportWindowsOn(ctx, caps.online.Load)
 	}
@@ -592,6 +606,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		extra.macOSVM.start(ctx, func() { caps.resendMacOS(ctx) })
 		if w := extra.report.relay; w != nil {
 			go w.run(ctx, func() { caps.resendRelay(ctx) })
+		}
+		if extra.netPolWatch != nil {
+			go caps.resendNetPol(ctx)
 		}
 		go func() {
 			if manager.IsRevoked() {
@@ -928,6 +945,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
 		}
 	}
+	m.reapOrphanHelpers(ctx)
 	m.checkSession(ctx)
 	m.recompute()
 	return m

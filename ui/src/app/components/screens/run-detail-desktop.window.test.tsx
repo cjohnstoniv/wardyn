@@ -15,7 +15,7 @@ import type { MacOSRunFacts } from "./run-detail/macos-run-facts";
 const healthMock = vi.fn();
 const openMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => healthMock(...a) } }));
-vi.mock("../../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(), watchTicket: vi.fn(), openMacWindow: (...a: unknown[]) => openMock(...a) } }));
+vi.mock("../../lib/api/runs", () => ({ runs: { getPolicy: () => new Promise(() => {}), attachTicket: vi.fn(), watchTicket: vi.fn(), openMacWindow: (...a: unknown[]) => openMock(...a) } }));
 vi.mock("../../lib/api/desktop-sign-ins", () => ({ desktopSignIns: { get: vi.fn(async () => ({ store: "run_disk", paused: false, can_pause: true })), pause: vi.fn(), resume: vi.fn() } }));
 
 import { HttpError } from "../../lib/api/core";

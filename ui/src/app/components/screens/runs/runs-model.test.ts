@@ -8,6 +8,7 @@ import type { AgentRun, RunState } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
 import { rowPresentation, isPausedRun, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
+import { runStateTone } from "../../wardyn/primitives";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
 // check-fixture-dates.sh) — every case below offsets from this by a fixed
@@ -159,12 +160,12 @@ describe("rowPresentation — STARTING/PENDING carry the substrate's stage line"
 
 describe("rowPresentation — plain state words with no attention", () => {
   it.each([
-    ["RUNNING", "blue", "Running"],
+    ["RUNNING", "green", "Running"],
     ["STARTING", "blue", "Starting"],
-    ["PENDING", "blue", "Pending"],
-    ["COMPLETED", "grey", "Completed"],
+    ["PENDING", "grey", "Pending"],
+    ["COMPLETED", "green", "Completed"],
     ["FAILED", "red", "Failed"],
-    ["KILLED", "grey", "Killed"],
+    ["KILLED", "red", "Killed"],
     ["STOPPED", "grey", "Stopped"],
     ["ARCHIVED", "grey", "Archived"],
   ] as const)("%s -> hue %s, word %s", (state, hue, word) => {
@@ -173,6 +174,25 @@ describe("rowPresentation — plain state words with no attention", () => {
     expect(p.word).toBe(word);
     expect(p.action).toBeNull();
     expect(p.needsYou).toBe(false);
+  });
+});
+
+// CONSOLE-RULES section 5: the state badge and the row glyph are one state in one colour. The badge's tone is the
+// source; the glyph's hue is its colour name.
+describe("rowPresentation — the glyph hue follows the state badge's tone", () => {
+  const HUE_OF_TONE = { success: "green", info: "blue", neutral: "grey", danger: "red" } as const;
+  it.each(["QUEUED", "RUNNING", "STARTING", "PENDING", "COMPLETED", "FAILED", "KILLED", "STOPPED", "ARCHIVED"] as const)(
+    "%s",
+    (state) => {
+      expect(rowPresentation(run({ state: state as RunState })).hue).toBe(HUE_OF_TONE[runStateTone(state) as keyof typeof HUE_OF_TONE]);
+    },
+  );
+
+  it("a killed run keeps its filled square, though its hue is now red like a failed run's", () => {
+    const p = rowPresentation(run({ state: "KILLED" }));
+    expect(glyphKindFor(p.hue, p.word, "KILLED")).toBe("square-fill");
+    const failed = rowPresentation(run({ state: "FAILED" }));
+    expect(glyphKindFor(failed.hue, failed.word, "FAILED")).toBe("fail");
   });
 });
 
@@ -416,15 +436,16 @@ describe("rowPresentation — a local run is presented as any other (RS8)", () =
 describe("rowPresentation — a QUEUED run (DR-0259)", () => {
   const queue = { pool_id: "p", queued_at: "", deadline_at: "", position: 2, reason: "runner_pool_at_capacity" };
 
-  it("says Queued in the live blue, not the raw state in grey, with its place in line", () => {
+  it("says Queued in grey, like its neutral chip, with its place in line", () => {
+    // Queued is a waiting state, not activity: the blue ring is for work that is under way.
     const p = rowPresentation(run({ state: "QUEUED" as RunState, queue }));
-    expect(p).toMatchObject({ hue: "blue", word: "Queued", subword: "3rd in line", action: null, needsYou: false });
+    expect(p).toMatchObject({ hue: "grey", word: "Queued", subword: "3rd in line", action: null, needsYou: false });
     expect(glyphKindFor(p.hue, p.word, "QUEUED")).toBe("ring");
   });
 
   it("says just Queued when the wire carries no queue", () => {
     const p = rowPresentation(run({ state: "QUEUED" as RunState }));
-    expect(p).toMatchObject({ hue: "blue", word: "Queued" });
+    expect(p).toMatchObject({ hue: "grey", word: "Queued" });
     expect(p.subword).toBeUndefined();
   });
 });
@@ -451,7 +472,8 @@ describe("rowPresentation — a scheduled run", () => {
 
   it("says Scheduled, and offers its owner Cancel run", () => {
     const p = rowPresentation(run({ state: "QUEUED" as RunState, queue: q("scheduled") }), false);
-    expect(p).toMatchObject({ hue: "blue", word: "Scheduled", action: "cancel", needsYou: false });
+    // A scheduled run waits for its time: grey like its neutral chip.
+    expect(p).toMatchObject({ hue: "grey", word: "Scheduled", action: "cancel", needsYou: false });
     expect(p.subword).toBeUndefined();
   });
 

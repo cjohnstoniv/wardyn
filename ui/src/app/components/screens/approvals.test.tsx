@@ -38,18 +38,22 @@ let mockExpiredPushRow = false;
 // fetchAll() failure (Promise.all over the 5 states) without having to race
 // individual calls within one Promise.all.
 let mockFailAllLists = false;
+// What those rejections carry; null is a plain network-style failure.
+let mockListError: Error | null = null;
 // F5-F11: freezes every listApprovals call until resolved, so a test can
 // inspect the DOM DURING an in-flight refresh (decide()'s silent fetchAll()
 // vs. the old load()'s loading-skeleton flash).
 let mockListDeferred: Promise<void> | null = null;
 const denyMock = vi.fn();
 const approveMock = vi.fn();
+// The held elevation requests are read with the lists; these tests are about the approvals, so the route answers as an older server does.
+vi.mock("../../lib/api/governance-requests", () => ({ requests: { list: () => Promise.resolve(null) } }));
 vi.mock("../../lib/api/approvals", () => {
   return {
     approvals: {
       listApprovals: async (state: string) => {
         if (mockListDeferred) await mockListDeferred;
-        if (mockFailAllLists) return Promise.reject(new Error("503"));
+        if (mockFailAllLists) return Promise.reject(mockListError ?? new Error("503"));
         if (state === "PENDING" && !mockPendingEmpty) {
           return Promise.resolve([
             {
@@ -161,10 +165,12 @@ vi.mock("../../lib/api/runs", () => ({
   },
 }));
 
-import { ApprovalsScreen } from "./approvals";
+import { ApprovalsScreen, deriveTitle } from "./approvals";
+import { FILE_DOWNLOAD_CARD, HOST_CALL_CARD, KUBE_CALL_CARD } from "../wardyn/copy/files-review";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import { HttpError } from "../../lib/api/core";
+import { STATES } from "../wardyn/states";
 import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/copy";
 
 // Every describe below assumes a LIVE run unless it says otherwise (B4 gates
@@ -174,6 +180,7 @@ beforeEach(() => {
   mockCancelledRow = false;
   mockExpiredPushRow = false;
   mockFailAllLists = false;
+  mockListError = null;
   mockListDeferred = null;
 });
 
@@ -732,6 +739,21 @@ describe("ApprovalsScreen — the run has ended", () => {
   // The archived side. "Cancelled · by system · 3h ago" could mean anyone
   // withdrew it; the row has to say that NOTHING was decided — which is a
   // different fact from a denial, and the only one true here.
+  it.each([
+    ["Pending", "/approvals"],
+    ["Decided", "/approvals?tab=decided"],
+  ])("a failed %s read the server worded shows its sentence, not the default line", async (_tab, url) => {
+    mockFailAllLists = true;
+    mockListError = new HttpError(500, "Your sentence from the server.", "load_failed");
+    render(
+      <MemoryRouter initialEntries={[url]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("a CANCELLED row in the Decided tab says nothing was approved and nothing denied", async () => {
     mockCancelledRow = true;
     render(
@@ -877,5 +899,33 @@ describe("ApprovalsScreen — a held push (#181)", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText(PUSH.TIMEOUT_BODY)).toBeInTheDocument();
+  });
+});
+
+describe("deriveTitle for the download and kubectl cards", () => {
+  it("names a file_download by its file", () => {
+    expect(deriveTitle("file_download", { name: "build-logs.tar.gz", bytes: 3, sha256: "ab", requested_by: "dana" })).toBe(
+      FILE_DOWNLOAD_CARD.LIST_TITLE("build-logs.tar.gz"),
+    );
+    expect(FILE_DOWNLOAD_CARD.LIST_TITLE("build-logs.tar.gz")).toBe("Download build-logs.tar.gz");
+  });
+
+  it("names a kubectl write by its method and namespace, ahead of the MCP and plain tool_call arms", () => {
+    const scope = { cluster: "k8s.example.com", namespace: "team-a", method: "PATCH", path: "/apis/apps/v1/namespaces/team-a/deployments/web", call_sha256: "ab".repeat(32) };
+    expect(deriveTitle("tool_call", scope)).toBe(KUBE_CALL_CARD.LIST_TITLE("PATCH", "team-a"));
+    expect(KUBE_CALL_CARD.LIST_TITLE("PATCH", "team-a")).toBe("kubectl PATCH in team-a");
+    expect(deriveTitle("tool_call", { tool: "mcp__jira__delete_issue", mcp_server: "jira", call_sha256: "ab".repeat(32) })).toBe("Call mcp__jira__delete_issue on jira");
+  });
+});
+
+describe("deriveTitle for the host call card", () => {
+  it("names a held host request by method, path and host, ahead of the plain tool_call arm", () => {
+    const scope = { host: "api.payments.example.com", method: "POST", path: "/v1/refunds", call_sha256: "ab".repeat(32), hold_seconds: 90 };
+    expect(deriveTitle("tool_call", scope)).toBe("POST /v1/refunds on api.payments.example.com");
+    expect(HOST_CALL_CARD.LIST_TITLE("POST", "/v1/refunds", "api.payments.example.com")).toBe("POST /v1/refunds on api.payments.example.com");
+  });
+  it("leaves an MCP call and a kubectl write to their own arms", () => {
+    expect(deriveTitle("tool_call", { tool: "t", mcp_server: "jira", mcp_host: "jira.example.com", call_sha256: "ab".repeat(32) })).toBe("Call t on jira");
+    expect(deriveTitle("tool_call", { host: "h", cluster: "k8s", namespace: "ns", method: "GET", path: "/", call_sha256: "ab".repeat(32) })).toBe("kubectl GET in ns");
   });
 });

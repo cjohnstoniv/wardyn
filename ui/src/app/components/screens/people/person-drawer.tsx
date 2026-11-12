@@ -128,7 +128,7 @@ export function PersonDrawer({
       <Sheet open onOpenChange={(o) => !o && onClose()}>
         <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[480px]">
           <SheetHeader className="border-b border-border pb-4">
-            <SheetTitle>
+            <SheetTitle className="break-words">
               {label}
               {person.role ? ` · ${roleLabel(person.role)}` : ""}
             </SheetTitle>

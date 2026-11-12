@@ -814,7 +814,7 @@ func TestUIGateway_PortalRevokeEndsDerivedSession(t *testing.T) {
 	if r := uiGet(h, path, cookie); r.Code != http.StatusOK {
 		t.Fatalf("control before the revoke: %d %s", r.Code, r.Body.String())
 	}
-	if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+	if _, _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now(), false); err != nil {
 		t.Fatal(err)
 	}
 	h.clock.advance(uiReassertInterval + time.Second)
@@ -996,7 +996,7 @@ func TestUIGateway_PortalGrant(t *testing.T) {
 	t.Run("redemption after a portal revoke is refused, naming the portal", func(t *testing.T) {
 		h, ds, _, via := portalHarness(t)
 		ticket := h.portalTicket(via)
-		if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+		if _, _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now(), false); err != nil {
 			t.Fatal(err)
 		}
 		rec := h.enterWith(ticket)
@@ -1098,7 +1098,7 @@ func TestUIGateway_PortalGrant(t *testing.T) {
 		if len(cs) != 1 {
 			t.Fatal("no session")
 		}
-		if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+		if _, _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now(), false); err != nil {
 			t.Fatal(err)
 		}
 		h.clock.advance(uiReassertInterval + time.Second)
@@ -1113,7 +1113,7 @@ func TestUIGateway_PortalGrant(t *testing.T) {
 		if len(cs) != 1 {
 			t.Fatal("no session")
 		}
-		if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+		if _, _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now(), false); err != nil {
 			t.Fatal(err)
 		}
 		h.clock.advance(uiReassertInterval + time.Second)

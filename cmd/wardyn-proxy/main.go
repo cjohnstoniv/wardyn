@@ -10,8 +10,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // egressCanaryTimeout bounds the TCP dial the -egress-canary flag performs.
@@ -101,24 +104,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	var (
-		cfg *proxy.Config
-		err error
-	)
-	switch {
-	case *configPath != "":
-		cfg, err = proxy.LoadConfig(*configPath)
-	case os.Getenv(configStdinEnv) == "1":
-		// Docker sidecar path: the driver writes the full config (incl. the
-		// run's egress policy) to stdin once at start.
-		var raw []byte
-		if raw, err = readStdinConfig(os.Stdin, stdinConfigTimeout); err == nil {
-			cfg, err = proxy.LoadConfigBytes(raw)
-		}
-	case os.Getenv("WARDYN_PROXY_CONFIG_JSON") != "":
-		// A host-run or hand-started proxy: the whole config in one env var.
-		cfg, err = proxy.LoadConfigBytes([]byte(os.Getenv("WARDYN_PROXY_CONFIG_JSON")))
-	default:
+	cfg, raw, err := loadConfig(*configPath, os.Stdin)
+	if errors.Is(err, errNoConfigSource) {
 		slog.Error("wardyn-proxy: -config, " + configStdinEnv + "=1 or WARDYN_PROXY_CONFIG_JSON is required")
 		os.Exit(1)
 	}
@@ -128,6 +115,9 @@ func main() {
 	}
 
 	if code := applyLLMScanSwitch(cfg, os.Getenv("WARDYN_LLM_SCAN")); code != 0 {
+		os.Exit(code)
+	}
+	if code := applyModelUsageSwitch(cfg, os.Getenv("WARDYN_MODEL_USAGE")); code != 0 {
 		os.Exit(code)
 	}
 
@@ -157,6 +147,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The agent's resolver on k8s and Docker runs, when the runner set it: a listener that refuses every query
+	// and writes its row, except AAAA for its own name, which gets an empty answer and no row
+	// (internal/egress/proxy/dns_audit.go). A runner that asked for it gets a failed start
+	// rather than an agent whose lookups go unanswered and unrecorded.
+	if addr := os.Getenv(proxy.DNSListenEnv); addr != "" {
+		if err := srv.ListenDNS(ctx, addr); err != nil {
+			slog.Error("wardyn-proxy: dns listener", slog.String("addr", addr), slog.Any("err", err))
+			os.Exit(1)
+		}
+	}
+
 	// The runner holds the agent back until the marker appears: it prints only once :3128 is bound, which for
 	// a self-lapsing proxy is after its first renew. The log line is printed with it, so it is true when read.
 	srv.OnListening(func() {
@@ -165,6 +166,7 @@ func main() {
 			slog.String("run_id", cfg.RunID.String()),
 		)
 		fmt.Fprintln(os.Stdout, proxy.ReadyMarker)
+		go srv.ReportLoaded(ctx, loadedReport(raw))
 	})
 
 	errCh := make(chan error, 1)
@@ -344,4 +346,47 @@ func freeDiskMiB(path string) (int64, error) {
 		return 0, err
 	}
 	return int64(st.Bavail) * int64(st.Bsize) >> 20, nil
+}
+
+// loadedReport is what this proxy reports once it serves: the hash of the exact config bytes it
+// loaded, its version, and the deployment switches set in its environment, applied after the load.
+func loadedReport(raw []byte) proxy.LoadedReport {
+	switches := map[string]string{}
+	for _, k := range []string{"WARDYN_LLM_SCAN", "WARDYN_MODEL_USAGE"} {
+		if v, ok := os.LookupEnv(k); ok {
+			switches[k] = v
+		}
+	}
+	return proxy.LoadedReport{ConfigSHA256: proxy.ConfigSHA256(raw), ProxyVersion: version.String(), Switches: switches}
+}
+
+// errNoConfigSource is loadConfig's answer when no config source is set.
+var errNoConfigSource = errors.New("no config source")
+
+// loadConfig loads the config from the file at path, else stdin (configStdinEnv=1), else
+// WARDYN_PROXY_CONFIG_JSON, and answers the exact bytes it loaded, which the proxy reports the hash of.
+func loadConfig(path string, stdin io.Reader) (*proxy.Config, []byte, error) {
+	var (
+		raw []byte
+		err error
+	)
+	switch {
+	case path != "":
+		if raw, err = os.ReadFile(path); err != nil {
+			return nil, nil, fmt.Errorf("read config: %w", err) // proxy.LoadConfig's wording
+		}
+	case os.Getenv(configStdinEnv) == "1":
+		// Docker sidecar path: the driver writes the full config (incl. the
+		// run's egress policy) to stdin once at start.
+		if raw, err = readStdinConfig(stdin, stdinConfigTimeout); err != nil {
+			return nil, nil, err
+		}
+	case os.Getenv("WARDYN_PROXY_CONFIG_JSON") != "":
+		// A host-run or hand-started proxy: the whole config in one env var.
+		raw = []byte(os.Getenv("WARDYN_PROXY_CONFIG_JSON"))
+	default:
+		return nil, nil, errNoConfigSource
+	}
+	cfg, err := proxy.LoadConfigBytes(raw)
+	return cfg, raw, err
 }

@@ -83,6 +83,7 @@ var serviceAllowed = map[string]bool{
 	"GET /api/v1/workloads/{name}":          true,
 	"DELETE /api/v1/workloads/{name}":       true,
 	"POST /api/v1/workloads/{name}/restart": true,
+	"POST /api/v1/workloads/{name}/preview": true,
 	// Normalising a document for `wardyn diff` and `apply --dry-run` (template_import.go). Safe for a service:
 	// the door only parses and normalises the text it is sent, so it stores nothing, grants nothing and reads
 	// no policy, secret, grant, workload or person. The answer is that text, normalised, and the caller's

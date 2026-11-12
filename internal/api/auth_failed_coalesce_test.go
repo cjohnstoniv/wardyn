@@ -247,10 +247,12 @@ func TestAuthFailedCoalesce_RotatingPeerDripFoldsIntoOneStreak(t *testing.T) {
 // TestAuthFailedCoalesce_BurstFromANewPeerDuringADripIsCounted: folding on
 // (reason, path) must not hide a genuine burst that lands inside a slow drip.
 // The burst's refusals are in the summary's count and its peer is in the
-// summary's peer count.
+// summary's peer count. The burst is as many wrong admin tokens as one address
+// may send before they are answered 429 (admin_token_limiter.go), whose reason
+// is another streak.
 func TestAuthFailedCoalesce_BurstFromANewPeerDuringADripIsCounted(t *testing.T) {
 	c := newCoalesceHarness(t, 5*time.Minute)
-	const drip, burst = 10, 20
+	const drip, burst = 10, int(enrolBurst)
 	for i := range drip {
 		c.advance(time.Minute)
 		meFromPeer(t, c.srv, "10.0.0.9:5555")

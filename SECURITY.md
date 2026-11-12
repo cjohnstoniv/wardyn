@@ -14,22 +14,16 @@ residual risks are listed there and are out of scope for this process (see below
 - Preferred channel: **GitHub private vulnerability reporting** — use the repository's *Security → Report a vulnerability* (private advisory) flow.
 - This works with no email setup and keeps the report confidential until a coordinated fix is released.
 
-> [!NOTE]
-> Email channel `security@<project-domain>` is reserved and will be published once
-> the project name and domain are finalized (the name "Wardyn" is a working
-> placeholder pending trademark search). Until then, the **GitHub private
-> advisory flow above is the canonical reporting channel** — no email address is
-> live yet.
+No security email address is live. Use the GitHub private advisory flow above.
 
 In your report, please include:
 
-- The affected component(s): `wardynd` (control plane and docker runner driver),
-  `wardyn-{proxy,rec,git-helper}`, `wardyn-runnerd`,
-  `wardyn-{toolgate,scan,aws-sso,tetragon-ingest}`, the `wardyn` CLI, or a
-  deployment artifact (`deploy/{compose,helm,desktop}`,
-  [`deploy/runner/install.sh`](deploy/runner/install.sh)).
-- The version / commit, deployment (Compose, Kubernetes/Helm,
-  laptop runner or desktop), runner trust class (`personal|managed_device|org_cluster`),
+- The affected component(s): any binary under [`cmd/`](cmd/) (`wardynd`, `wardyn-proxy`, `wardyn-runnerd`, the `wardyn` CLI and the rest), or a
+  deployment artifact under [`deploy/`](deploy/), including
+  [`deploy/runner/install.sh`](deploy/runner/install.sh).
+- The version / commit and the deployment (Compose, Kubernetes/Helm,
+  laptop runner or desktop).
+- The machine kind (`container`, `linux_vm` or `macos_vm`), runner trust class (`personal|managed_device|org_cluster`),
   and Confinement Class in use (CC1/CC2/CC3 — CC3/Vault is experimental; see
   [`ARCHITECTURE.md`](ARCHITECTURE.md) "Security invariants" #5).
 - A clear description, impact, and the most minimal reproduction you can provide.
@@ -57,6 +51,7 @@ Some kinds do enter the sandbox:
 - The short-lived AWS role credentials that every `bedrock_sso` run and every AWS CLI component derives inside the sandbox.
 - The Wardyn-minted toolgate credential file, a local credential the sandbox's own tool gate reads.
 - The new credential inside a provider sign-in sandbox, which exists to create it.
+- Website logins made in a desktop sign-in (`WARDYN_DESKTOP_SIGNINS=on`, off by default): the person's browser profile, and the cookies of each site they share with the agent.
 
 Each of these is opt-in or depends on a setting. Wardyn scopes them where it can, masks them in the output it relays, and audits each delivery by name. On a laptop runner or a cluster runner, the runner host also holds values for the run. An allowed destination that echoes request headers can send a proxy-added credential back to the sandbox. [docs/CREDENTIALS.md](docs/CREDENTIALS.md) lists every kind, and [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) section 5.1a bounds each one.
 
@@ -120,24 +115,12 @@ disclose them — but a *more severe than documented* instance is in scope):
 
 ## Published residual risk (lives in the threat model)
 
-- Two disclosures that used to be restated here —
-  - the unreachable `golang.org/x/crypto/openpgp` advisory (GO-2026-5932, no fix available, 0 called
-    symbols, `govulncheck` in CI on every push)
-  - and the console admin token's at-rest
-    posture (`sessionStorage` by default, `localStorage` only if you opt in — script
-    that runs in the page can read it, which the response headers bound but do not
-    eliminate) —
-- are residual-risk disclosures, so they live with the others in
-  [`threatmodel/THREAT-MODEL.md` §5](threatmodel/THREAT-MODEL.md).
-- They are published, not hidden; they are out of scope for this process as written, and a
-  *more severe than documented* instance is in scope.
+- Two disclosures live in [`threatmodel/THREAT-MODEL.md` §5](threatmodel/THREAT-MODEL.md) with the other residual risks:
+  - the unreachable `golang.org/x/crypto/openpgp` advisory (GO-2026-5932, no fix available, 0 called symbols, `govulncheck` in CI on every push);
+  - the console admin token's at-rest posture (`sessionStorage` by default, `localStorage` only if you opt in; script that runs in the page can read it, which the response headers bound but do not eliminate).
+- They are out of scope as new reports, and a *more severe than documented* instance is in scope.
 
-Dependency security tracking here is **advisory-lagged**:
-
-- `govulncheck` matches known advisory IDs, so an upstream security release is invisible to it until an advisory is filed against that module —
-  - go-jose/v4 v4.1.5 (2026-09-03) shipped seven upstream-labelled security fixes with no advisory, and the scan stayed green throughout.
-
-Where a dependency sits on a token-verification path, the floor is therefore also held by a behavioural test that fails on a downgrade ([`internal/auth/oidc/r3b_jose_currency_test.go`](internal/auth/oidc/r3b_jose_currency_test.go)), not by the scan alone.
+`govulncheck` matches known advisory IDs, so an upstream security release is invisible to it until an advisory is filed against that module. Where a dependency sits on a token-verification path, the floor is therefore also held by a behavioural test that fails on a downgrade ([`internal/auth/oidc/r3b_jose_currency_test.go`](internal/auth/oidc/r3b_jose_currency_test.go)), not by the scan alone.
 
 ## Coordinated disclosure
 

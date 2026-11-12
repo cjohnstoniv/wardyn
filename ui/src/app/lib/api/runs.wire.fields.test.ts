@@ -238,6 +238,12 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     ]);
   });
 
+  it("AgentRun.policy_digest is an omitempty Go tag and an optional TS key", () => {
+    expect(typesGo).toMatch(/PolicyDigest\s+string\s+`json:"policy_digest,omitempty"`/);
+    const body = /export\s+interface\s+AgentRun\b[^{]*\{([\s\S]*?)\n\}/.exec(runsTs)?.[1] ?? "";
+    expect(body).toMatch(/\bpolicy_digest\?:/);
+  });
+
   it("AgentRun.has_recording is a pointer omitted when unprojected, optional in TS (#3715)", () => {
     expect(typesGo).toMatch(/HasRecording\s+\*bool\s+`json:"has_recording,omitempty"`/);
     expect(typesGo).toMatch(/RecordingBytes\s+int64\s+`json:"recording_bytes,omitempty"`/);
@@ -457,7 +463,7 @@ describe("source parity — five more flat structs", () => {
 });
 
 // #510-F8 — the autonomy wire types (0.8 #97/#93) were hand-mirrored in
-// governance.ts with no entry in this suite: a Go rename of any of the nine
+// governance.ts with no entry in this suite: a Go rename of any of the ten
 // AutonomyRubric fields, or a drift on AutonomyPosture/AutonomyResolution,
 // would have shown up only as a runtime `undefined`. Full parity, base
 // structs — either direction of drift fails, same discipline as
@@ -467,16 +473,16 @@ describe("source parity — autonomy wire types (#510-F8)", () => {
   const governanceGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
   const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
 
-  it("AutonomyRubric: full parity — the nine level caps and the guardrail lock", () => {
+  it("AutonomyRubric: full parity — the ten level caps and the guardrail lock", () => {
     const goTags = goJSONTags(governanceGo, "AutonomyRubric");
-    expect(goTags.length).toBe(10);
+    expect(goTags.length).toBe(11);
     const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyRubric");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
-  it("AutonomyPosture: full parity — the three-axis shape", () => {
+  it("AutonomyPosture: full parity — the three-axis shape and the custom-component flag", () => {
     const goTags = goJSONTags(governanceGo, "AutonomyPosture");
-    expect(goTags.length).toBe(3);
+    expect(goTags.length).toBe(4);
     const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyPosture");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });

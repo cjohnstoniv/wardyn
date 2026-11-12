@@ -61,6 +61,20 @@ const (
 	// the run's rules block is answered with.
 	mcpBlockedCode    = -32001
 	mcpBlockedMessage = "Blocked by this run's tool rules"
+
+	// ruleSourceMCPListFiltered records a tool list the broker left blocked tools
+	// out of, with the count; ruleSourceMCPListUnreadable a tool list or answer it
+	// could not check, replaced or refused (mcp_list_filter.go).
+	ruleSourceMCPListFiltered   = "brokered:mcp:list-filtered"
+	ruleSourceMCPListUnreadable = "brokered:mcp:list-unreadable"
+
+	// An approve_each call (mcp_approve_each.go): forwarded once approved, still waiting when its
+	// window ended, declined, closed undecided, or refused before anyone was asked.
+	ruleSourceMCPApproved        = "brokered:mcp:approved"
+	ruleSourceMCPApprovalWait    = "brokered:mcp:approval-wait"
+	ruleSourceMCPApprovalDenied  = "brokered:mcp:approval-denied"
+	ruleSourceMCPApprovalClosed  = "brokered:mcp:approval-closed"
+	ruleSourceMCPApprovalRefused = "brokered:mcp:approval-refused"
 )
 
 // mcpServerKeyRE is a server key: the <server> of mcp__<server>__<tool>, so
@@ -71,6 +85,9 @@ var mcpServerKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 type mcpBroker struct {
 	servers  map[string]*mcpServer
 	bindings []MCPBinding
+	// calls and windows are the approve_each state (mcp_approve_each.go).
+	calls   mcpCalls
+	windows map[string]int
 }
 
 // mcpServer is one server and its credential, resolved on first use.
@@ -167,6 +184,8 @@ type mcpExchange struct {
 	harness string
 	server  *mcpServer
 	req     egress.Request
+	// approvalID is the approval an approve_each call is forwarded on; nil for any other request.
+	approvalID *uuid.UUID
 }
 
 func (x *mcpExchange) emit(decision egress.Decision, ruleSource string) {
@@ -191,7 +210,7 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		x.server, host, port = s, s.host, s.port
 	}
 	x.req = egress.Request{AuditReservation: spoolTicket(r.Context()), RunID: p.runID, Host: host, Port: port,
-		Method: strings.ToUpper(r.Method), Path: mcpRedactedPath(harness, key), Time: p.now()}
+		Method: strings.ToUpper(r.Method), Path: mcpRedactedPath(harness, key), Time: p.now(), Relayed: p.relayLane(r.Context())}
 	switch {
 	case harness == "":
 		x.deny(w, ruleSourceMCPUnbound, "this MCP address is not bound to a harness of this run", http.StatusForbidden)
@@ -209,7 +228,7 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		if body, ok = x.readBody(w); !ok {
 			return
 		}
-		if x.refuseBlockedCalls(w, body) {
+		if x.refuseBlockedCalls(w, body) || x.holdApproveEach(w, body) {
 			return
 		}
 	}
@@ -246,11 +265,12 @@ func (x *mcpExchange) readBody(w http.ResponseWriter) ([]byte, bool) {
 	return body, true
 }
 
-// mcpMessage is one JSON-RPC message of a request body: its id, and the tool a
-// tools/call names.
+// mcpMessage is one JSON-RPC message of a request body: its id, and the tool and
+// raw params a tools/call names.
 type mcpMessage struct {
-	id   json.RawMessage
-	tool string
+	id     json.RawMessage
+	tool   string
+	params json.RawMessage
 }
 
 // parseMCPMessages reads a JSON-RPC body, one message or a batch. Keys are
@@ -299,6 +319,7 @@ func parseMCPMessage(raw json.RawMessage) (mcpMessage, error) {
 	if err := json.Unmarshal(params["name"], &m.tool); err != nil || m.tool == "" {
 		return mcpMessage{}, errors.New("a tools/call names no tool")
 	}
+	m.params = obj["params"]
 	return m, nil
 }
 
@@ -351,9 +372,7 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 		return true
 	}
 	if !slices.ContainsFunc(msgs, func(m mcpMessage) bool {
-		return m.tool != "" && slices.ContainsFunc(mcpToolNames(x.server.key, m.tool), func(name string) bool {
-			return x.p.mcpToolEffect(x.harness, name) == types.ToolDeny
-		})
+		return m.tool != "" && x.p.mcpCallEffect(x.harness, x.server.key, m.tool) == types.ToolDeny
 	}) {
 		return false
 	}
@@ -437,6 +456,24 @@ func (p *Proxy) mcpToolEffect(harness, tool string) types.ToolEffect {
 		return types.ToolHold
 	}
 	return eff
+}
+
+// mcpCallEffect is the one predicate for a server's tool: refuseBlockedCalls
+// refuses its call, and the tool list filter leaves it out, exactly when this is
+// deny. It is the strictest effect over every name a rule may give the tool
+// (mcpToolNames). An effect this build does not know ranks with deny and is
+// answered as deny, so a rule it cannot read never opens a tool.
+func (p *Proxy) mcpCallEffect(harness, key, tool string) types.ToolEffect {
+	var strictest types.ToolEffect
+	for _, name := range mcpToolNames(key, tool) {
+		if e := p.mcpToolEffect(harness, name); types.ToolEffectStrictness(e) > types.ToolEffectStrictness(strictest) {
+			strictest = e
+		}
+	}
+	if types.ToolEffectStrictness(strictest) >= types.ToolEffectStrictness(types.ToolDeny) {
+		return types.ToolDeny
+	}
+	return strictest
 }
 
 func jsonRPCError(id json.RawMessage, code int, msg string) map[string]any {
@@ -524,6 +561,11 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	if route != nil && !p.attachGatewayIdentity(w, x.r, out.Header, route, s.host, s.port, ruleSourceMCP, callID) {
 		return
 	}
+	// The tool list filter reads the answer, so it asks for identity bytes.
+	listActive := p.mcpListFilterActive(x.harness, s.key)
+	if listActive {
+		out.Header.Set("Accept-Encoding", "identity")
+	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID}, s.host, "MCP upstream error")
@@ -541,8 +583,14 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		return
 	}
 	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)
-	allow.GatewayCallID = callID
+	if x.approvalID != nil {
+		allow.RuleSource, allow.ApprovalID = ruleSourceMCPApproved, x.approvalID
+	}
+	allow.GatewayCallID, allow.Cause = callID, mcpToolCause(body)
 	p.emitDialledAllow(allow, s.host)
+	if listActive && !x.filterToolLists(w, resp, callID) {
+		return
+	}
 	if route != nil {
 		p.relayGatewayRoute(w, x.r, s.host, s.port, resp, ruleSourceMCP, out.Header.Get(gatewayIdentityHeader), callID)
 		return

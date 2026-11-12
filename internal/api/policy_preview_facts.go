@@ -57,6 +57,9 @@ type policyPreviewResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// ImageAdmission is "checked at launch" when launch checks Image's signatures (imageAdmissionPreview);
+	// absent when it checks nothing, so a preview with admission off is unchanged.
+	ImageAdmission client.ImageAdmissionFact `json:"image_admission,omitempty"`
 	// HarnessSet is the preflight's, with the same meaning.
 	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
 	// AllowedModels and AllowedModelsProfile are the preflight's, with the same meaning.
@@ -139,7 +142,7 @@ var previewSafeWarning = regexp.MustCompile(`^(confinement raised from "(CC[1-3]
 func previewSafeWarnings(warnings []string) []string {
 	out := []string{}
 	for _, warning := range warnings {
-		if warning == composer.WarnResourcesCapped || warning == warnDiskPolicyCut || warning == "push_rules inherited from the operator's policy" ||
+		if warning == composer.WarnResourcesCapped || warning == warnDiskPolicyCut || warning == warnLinuxVMDiskNotCapped || warning == warnLinuxVMPidsNotCapped || warning == "push_rules inherited from the operator's policy" ||
 			warning == "allow_all_egress disabled: operator policy does not permit allow-all egress" ||
 			warning == "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on" || previewSafeWarning.MatchString(warning) {
 			out = append(out, warning)

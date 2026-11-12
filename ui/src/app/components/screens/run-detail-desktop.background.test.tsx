@@ -16,7 +16,7 @@ vi.mock("../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => 
 const attachTicketMock = vi.fn();
 const watchTicketMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
-  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a), watchTicket: (...a: unknown[]) => watchTicketMock(...a) },
+  runs: { getPolicy: () => new Promise(() => {}), attachTicket: (...a: unknown[]) => attachTicketMock(...a), watchTicket: (...a: unknown[]) => watchTicketMock(...a) },
 }));
 const signInsGet = vi.fn();
 vi.mock("../../lib/api/desktop-sign-ins", () => ({
@@ -112,7 +112,7 @@ describe("DesktopCard: a background macOS run", () => {
     expect(within(d).getAllByRole("button")).toHaveLength(1);
     expect(within(tile(d)).getByText(DESKTOP.viewOnlyChip)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();
-    for (const line of [DESKTOP.backgroundWatchTile, DESKTOP.backgroundWatchExposure, DESKTOP.loginWindowNote, UI_APPS_LANE.newTab]) {
+    for (const line of [DESKTOP.backgroundWatchTile, DESKTOP.backgroundWatchExposure, UI_APPS_LANE.newTab]) {
       expect(within(d).getByText(line)).toBeInTheDocument();
     }
     expect(within(d).queryByText(DESKTOP.observeOnlyMacOS)).toBeNull();
@@ -194,7 +194,7 @@ describe("DesktopCard: a background macOS run", () => {
     const d = await desk();
     expect(await within(d).findByText(/Off on this deployment/)).toBeInTheDocument();
     expect(within(d).queryByRole("button")).toBeNull();
-    for (const line of [DESKTOP.backgroundWatchTile, DESKTOP.backgroundWatchExposure, DESKTOP.loginWindowNote, UI_APPS_LANE.newTab]) {
+    for (const line of [DESKTOP.backgroundWatchTile, DESKTOP.backgroundWatchExposure, UI_APPS_LANE.newTab]) {
       expect(within(d).queryByText(line)).toBeNull();
     }
   });

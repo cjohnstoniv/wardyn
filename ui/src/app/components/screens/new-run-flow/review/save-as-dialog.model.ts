@@ -60,7 +60,7 @@ export function savePartsOf(kind: TemplateKind, intent: RunIntent): { parts: Sav
     for (const k of Object.keys(overlay)) if (present(overlay[k]) && POLICY_KEY_PART[k]) add(POLICY_KEY_PART[k], `inline_policy.${k}`);
   } else {
     for (const [k, v] of Object.entries(intent)) {
-      if (!present(v) || FIELD_HOME[k] === "excluded" || k === "wall_preset") continue;
+      if (!present(v) || FIELD_HOME[k] === "excluded" || k === "wall_preset" || k === "run_in") continue;
       if (k !== "inline_policy") add(REVIEW_GROUP_OF_FIELD[k], k);
       else for (const p of Object.keys(overlay)) if (present(overlay[p])) add(REVIEW_GROUP_OF_FIELD[`inline_policy.${p}`] ?? "access", `inline_policy.${p}`);
     }

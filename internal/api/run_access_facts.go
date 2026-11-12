@@ -103,8 +103,9 @@ const (
 	credKindAzureARM    = "azure_arm"
 	credKindKubeAPI     = "kube_api"
 
-	// A kube_api credential's access, from its row's read or write.
+	// A kube_api credential's access, from its row's read, restart or write.
 	kubeAccessReadOnly   = "read_only"
+	kubeAccessRestart    = "restart"
 	kubeAccessReadWrite  = "read_write"
 	signInModelProvider  = "model_provider"
 	signInAWSCLI         = "aws_cli"
@@ -413,7 +414,7 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 		forRule = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold"}
 	case !agentHasHoldLane(harness):
 		fact.Lane = toolLaneUnsupported
-		forDefault = map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}
+		forDefault = map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolApproveEach: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}
 		forRule = forDefault
 	case requestIsInteractive(req):
 		fact.Lane, fact.Enforcer = toolLaneAttended, toolEnforcerHarness
@@ -421,11 +422,12 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	case holdLane(false, req.ToolApprovals, req.TaskMode):
 		fact.Lane, fact.Enforcer = toolLaneGated, toolEnforcerGate
 	}
+	forDefault, forRule = approveEachReasons(forDefault, forRule, mcpRemoteServerFor(b.in.comps, harness))
 	policyDefault := policyToolEffect(rules, toolLaneDefault(req), "*")
 	fact.Default = client.ToolDefaultFact{Effective: policyDefault, Source: b.toolRuleSource(types.ToolRule{Tool: "*", Effect: policyDefault}),
 		Options: toolEffectOptions(policyDefault, forDefault, "policy_stricter_default")}
 	if i := slices.IndexFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID == harness }); i >= 0 &&
-		effectRank(req.Tools[i].DefaultEffect) > effectRank(policyDefault) {
+		types.ToolEffectStrictness(req.Tools[i].DefaultEffect) > types.ToolEffectStrictness(policyDefault) {
 		fact.Default.Effective, fact.Default.Source = req.Tools[i].DefaultEffect, client.ProvenanceSource{Kind: provKindPerson}
 	}
 	if fact.Lane == toolLaneAttended {
@@ -474,12 +476,12 @@ func attendedDefaultFact(level types.AutonomyLevel, cannot map[types.ToolEffect]
 // policy is stricter, available otherwise.
 func toolEffectOptions(policy types.ToolEffect, cannot map[types.ToolEffect]string, stricter string) []client.EffectOption {
 	var out []client.EffectOption
-	for _, e := range []types.ToolEffect{types.ToolAllow, types.ToolHold, types.ToolDeny} {
+	for _, e := range []types.ToolEffect{types.ToolAllow, types.ToolHold, types.ToolApproveEach, types.ToolDeny} {
 		opt := client.EffectOption{Effect: e, Available: true}
 		switch {
 		case cannot[e] != "":
 			opt.Available, opt.Reason = false, cannot[e]
-		case effectRank(e) < effectRank(policy):
+		case types.ToolEffectStrictness(e) < types.ToolEffectStrictness(policy):
 			opt.Available, opt.Reason = false, stricter
 		}
 		out = append(out, opt)
@@ -676,12 +678,15 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 			b.addHost(host, viaInjected, row.ID)
 		}
 		access := kubeAccessReadOnly
-		if cli.Kubectl.Access == types.ComponentAccessWrite {
+		switch cli.Kubectl.Access {
+		case types.ComponentAccessWrite:
 			access = kubeAccessReadWrite
+		case types.ComponentAccessRestart:
+			access = kubeAccessRestart
 		}
 		b.addCredential(client.AccessCredential{ID: row.ID + ":kube_api", Kind: credKindKubeAPI, Owner: credOwnerShared,
 			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone,
-			Namespaces: append([]string{}, cli.Kubectl.Namespaces...), Access: access})
+			Namespaces: append([]string{}, cli.Kubectl.Namespaces...), Access: access, ApproveEach: cli.Kubectl.ApproveEach})
 	}
 	for i, sec := range fact.Secrets {
 		c := client.AccessCredential{ID: row.ID + ":secret:" + strconv.Itoa(i), Kind: credKindSecret, Owner: credOwnerOwn,

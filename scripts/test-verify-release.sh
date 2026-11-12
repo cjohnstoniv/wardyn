@@ -69,7 +69,7 @@ cat > "${bin}/gh" <<'STUB'
 echo "gh $*" >> "${LOG}"
 case "$1 $2" in
   "release view")
-    echo "prerelease=false draft=false assets=0"
+    echo "prerelease=false draft=false assets=0 title=\"$(t=${RELEASE_TITLE-Wardyn v${VER}}; printf '%s' "${t//$'\n'/\\n}")\""
     while read -r i; do echo "sbom-$i.cdx.json"; done < "${DIR}/images.txt"
     # The package exists from 0.9.3 (and a test can leave it out).
     # The licence tarball exists from 0.9.4.
@@ -79,12 +79,30 @@ case "$1 $2" in
     if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
-    while [ $# -gt 0 ]; do [ "$1" = "--dir" ] && out="$2"; shift; done
-    echo binary > "${out}/wardyn-linux-amd64"
-    ( cd "${out}" && sha256sum wardyn-linux-amd64 > SHA256SUMS )
+    pats=()
+    while [ $# -gt 0 ]; do [ "$1" = "--dir" ] && out="$2"; [ "$1" = "--pattern" ] && pats+=("$2"); shift; done
+    # Every asset the release lists (the signature material is written below), each with bytes of its own.
+    while read -r n; do
+      case "${n}" in SHA256SUMS*) continue ;; esac
+      echo "bytes of ${n}" > "${out}/${n}"
+    done < <("$0" release view x | tail -n +2)
     echo "releases/download/v${VER}/install.sh" > "${out}/install.sh"
+    ( cd "${out}" && sha256sum -- * > SHA256SUMS )
+    # A published asset that differs from the listed digest, and one the list does not name.
+    # A partial download: OMIT is on the release and not in SHA256SUMS, and was not downloaded.
+    [ -z "${OMIT:-}" ] || { rm -f "${out}/${OMIT}"; ( cd "${out}" && sha256sum -- * > SHA256SUMS ); }
+    [ -z "${DL_FAIL:-}" ] || { echo "HTTP 502" >&2; exit 1; }
+    [ -z "${TAMPER:-}" ] || echo "swapped bytes" > "${out}/${TAMPER}"
+    if [ -n "${UNLISTED:-}" ]; then grep -v " ${UNLISTED}\$" "${out}/SHA256SUMS" > "${out}/.sums"; mv "${out}/.sums" "${out}/SHA256SUMS"; fi
     if [ "${SIGFORM}" = bundle ]; then echo b > "${out}/SHA256SUMS.sigstore.json"
-    else echo s > "${out}/SHA256SUMS.sig"; echo p > "${out}/SHA256SUMS.pem"; fi ;;
+    else echo s > "${out}/SHA256SUMS.sig"; echo p > "${out}/SHA256SUMS.pem"; fi
+    # Like gh: with --pattern, only the files that match one are downloaded.
+    if [ "${#pats[@]}" -gt 0 ]; then
+      for f in "${out}"/*; do
+        keep=""; for pt in "${pats[@]}"; do case "$(basename "${f}")" in ${pt}) keep=1 ;; esac; done
+        [ -n "${keep}" ] || rm -f "${f}"
+      done
+    fi ;;
   *) echo "gh: mutating or unexpected verb: $*" >&2; exit 99 ;;
 esac
 STUB
@@ -104,7 +122,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" OMIT="${OMIT:-}" DL_FAIL="${DL_FAIL:-}" TAMPER="${TAMPER:-}" UNLISTED="${UNLISTED:-}" RELEASE_TITLE="${RELEASE_TITLE-Wardyn v$1}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -137,6 +155,27 @@ for form in bundle sigpem; do
   printf '%s' "${out}" | grep '^fails=[1-9]' >/dev/null || fail "(${form}) fails was not > 0 for the wrong signer tag"
 done
 pass "verify-release binds the signer to the requested tag (images, bundle blob, sig+pem blob)"
+
+# 2b. every asset is checksummed: a swapped binary, or an asset SHA256SUMS does not list, fails the run.
+for tamper in wardyn-darwin-arm64 wardyn-runnerd.pkg; do
+  TAMPER="${tamper}" run 0.10.0 v0.10.0 bundle
+  [ "${rc}" != 0 ] || fail "a swapped ${tamper} still exited 0"
+  grep -q "^${tamper}: FAILED" <<<"${out}" || fail "a swapped ${tamper} was not named as a checksum failure: $(printf '%s' "${out}" | grep -i 'checksum\|FAILED' | head -3)"
+  grep -q '^FAIL checksum$' <<<"${out}" || fail "a swapped ${tamper} did not print FAIL checksum"
+done
+UNLISTED=wardyn-linux-arm64 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] || fail "an asset missing from SHA256SUMS still exited 0"
+grep -q 'wardyn-linux-arm64 is a release asset that SHA256SUMS does not list' <<<"${out}" || fail "the unlisted asset was not named"
+OMIT=wardyn-darwin-arm64 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] || fail "an asset left out of SHA256SUMS and of the download still exited 0"
+grep -q 'wardyn-darwin-arm64 is a release asset that SHA256SUMS does not list' <<<"${out}" || fail "the omitted asset was not named: $(grep FAIL <<<"${out}" | head -3)"
+DL_FAIL=1 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] || fail "a failed release download still exited 0"
+grep -q '^FAIL release download' <<<"${out}" || fail "a failed download was not reported"
+run 0.10.0 v0.10.0 bundle
+[ "${rc}" = 0 ] || fail "an untouched 0.10.0 release exited ${rc}: $(printf '%s' "${out}" | tail -5)"
+! grep -q -- '--ignore-missing' "${VERIFY}" || fail "verify-release still passes --ignore-missing to sha256sum"
+pass "verify-release checksums every asset and refuses a swapped or unlisted one"
 
 # 3. a prerelease version is a version too; its tag is exact as well.
 run 0.8.5-rc.1 v0.8.5-rc.1 bundle
@@ -178,6 +217,21 @@ NO_WINDOWS=1 run 0.10.0 v0.10.0 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-windows-amd64.exe' >/dev/null && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-windows-arm64.exe' >/dev/null \
   || fail "V=0.10.0 without the Windows CLI binaries was accepted"
 pass "install-cli.sh, install-cli.ps1 and the Windows CLI binaries are required from 0.10.0 on, and not before"
+
+# 3b3. the Release title is "Wardyn v<version>" from 0.10.0 on, and not checked before.
+run 0.10.0-rc.14 v0.10.0-rc.14 bundle
+printf '%s' "${out}" | grep '^OK   release title$' >/dev/null || fail "V=0.10.0-rc.14 with its title did not report 'OK   release title': $(printf '%s' "${out}" | grep -i title)"
+RELEASE_TITLE='v0.10.0-rc.14' run 0.10.0-rc.14 v0.10.0-rc.14 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: "v0.10.0-rc.14" (want "Wardyn v0.10.0-rc.14")$' >/dev/null || fail "V=0.10.0-rc.14 with a wrong title was accepted: rc=${rc} $(printf '%s' "${out}" | grep -i title)"
+RELEASE_TITLE='' run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: "" (want "Wardyn v0.10.0")$' >/dev/null || fail "V=0.10.0 with an empty title was accepted: rc=${rc}"
+# A title with a line break must not pass, nor stand in for an asset that is missing.
+NO_PKG=1 RELEASE_TITLE="Wardyn v0.10.0"$'\n'"wardyn-runnerd.pkg" run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: ' >/dev/null && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-runnerd.pkg' >/dev/null \
+  || fail "V=0.10.0 with a two-line title naming a missing asset was accepted: rc=${rc} $(printf '%s' "${out}" | grep -iE 'title|missing')"
+RELEASE_TITLE='0.9.5' run 0.9.5 v0.9.5 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.5 (cut before titles were held) exited ${rc} over its title: $(printf '%s' "${out}" | tail -3)"
+pass "the release title is required from 0.10.0 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle

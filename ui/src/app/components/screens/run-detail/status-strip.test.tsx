@@ -11,7 +11,7 @@ import type { WidgetContext } from "./widget-registry";
 const getFiles = vi.fn();
 const getResources = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { getFiles: (...a: unknown[]) => getFiles(...a), getResources: (...a: unknown[]) => getResources(...a) },
+  runs: { getFiles: (...a: unknown[]) => getFiles(...a), getResources: (...a: unknown[]) => getResources(...a), getModelUsage: () => Promise.resolve({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }) },
 }));
 
 import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
@@ -94,6 +94,31 @@ describe("RunStatusStrip egress denies (UXR-23)", () => {
     render(<RunStatusStrip ctx={ctx({ evidence: { files: 0, sandbox: null }, heldCount: 2, egress: egress(40, 3) })} />);
     expect(egressText()).toBe("2 held · 40 allow · 3 deny");
   });
+});
+
+describe("RunStatusStrip: the four-column grid and the cut-off values", () => {
+  it("goes to four columns only at xl, where the sidebar leaves room, not at lg", () => {
+    render(<RunStatusStrip ctx={ctx({ evidence: { files: 0, sandbox: null } })} />);
+    const grid = screen.getByRole("group");
+    expect(grid.className).toContain("xl:grid-cols-4");
+    expect(grid.className).not.toContain("lg:grid-cols-4");
+  });
+
+  it("carries each value in full as a tooltip, since the tile truncates it", () => {
+    render(
+      <RunStatusStrip
+        ctx={ctx({
+          evidence: { files: 0, sandbox: null },
+          heldCount: 2,
+          egress: [...Array(40).fill("allow"), ...Array(3).fill("deny")].map((decision) => ({ decision })) as unknown as WidgetContext["egress"],
+          grants: [{ id: "g" }] as unknown as WidgetContext["grants"],
+        })}
+      />,
+    );
+    expect(tile("Egress").getByText("3 deny").closest("[title]")).toHaveAttribute("title", "2 held · 40 allow · 3 deny");
+    expect(tile("Credentials").getByText("1 eligible · 0 minted")).toHaveAttribute("title", "1 eligible · 0 minted");
+  
+});
 });
 
 describe("useEvidenceFacts (#3038)", () => {

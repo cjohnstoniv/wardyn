@@ -196,9 +196,12 @@ func TestAuthFailedSuppressionIsCounted(t *testing.T) {
 
 	// The clock does not advance, so the bucket never refills: exactly
 	// authFailedBurst emits are admitted and every further one is dropped.
+	// Each attempt comes from its own address, so every one is the wrong
+	// token's 401 and none meets the admin-token limiter's per-address burst.
 	const attempts = 200
 	for i := 0; i < attempts; i++ {
-		if w := do(t, h.srv, http.MethodGet, "/api/v1/runs", "wrong-token", ""); w.Code != http.StatusUnauthorized {
+		peer := fmt.Sprintf("10.1.%d.%d:4000", i/256, i%256)
+		if w := doFrom(t, h.srv, peer, http.MethodGet, "/api/v1/runs", "wrong-token", ""); w.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d = %d, want 401", i, w.Code)
 		}
 	}

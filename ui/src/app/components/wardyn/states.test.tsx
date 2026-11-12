@@ -6,7 +6,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { EmptyState, ErrorState, STATES } from "./states";
+import { HttpError, TIMEOUT_STATUS } from "../../lib/api/core";
+import { EmptyState, ErrorState, STATES, failureSentence } from "./states";
 
 // #457 (docs/design/signin-first-contact-canon.md): the shared default —
 // every pane that renders ErrorState with no message of its own reads this
@@ -80,5 +81,27 @@ describe("EmptyState / ErrorState — heading level", () => {
   it("ErrorState honors an explicit `as` override", () => {
     render(<ErrorState as="h3" />);
     expect(screen.getByRole("heading", { name: "Something went wrong", level: 3 })).toBeInTheDocument();
+  });
+});
+
+describe("failureSentence", () => {
+  it("shows the server's sentence when it named a reason", () => {
+    expect(failureSentence(new HttpError(500, "Your sentence from the server.", "load_failed"))).toBe("Your sentence from the server.");
+  });
+
+  it("gives an internal_error 500 the neutral line, not the handler's label", () => {
+    expect(failureSentence(new HttpError(500, "list secrets", "internal_error"))).toBe("Couldn't load this. Try again.");
+  });
+
+  it("gives an answered failure with no reason the neutral line", () => {
+    expect(failureSentence(new HttpError(500, "Internal Server Error"))).toBe("Couldn't load this. Try again.");
+  });
+
+  it("leaves a network failure to the isn't-answering default", () => {
+    expect(failureSentence(new TypeError("Failed to fetch"))).toBeUndefined();
+  });
+
+  it("leaves a request that timed out (wfetch's HttpError with the timeout status) to the isn't-answering default", () => {
+    expect(failureSentence(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."))).toBeUndefined();
   });
 });

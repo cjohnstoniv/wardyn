@@ -282,6 +282,15 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
+	// The boundary's or a restriction's cap, read now: a cap saved after dispatch that leaves out a
+	// capability this run holds ends its Azure DevOps access here, and a minted_pat run's tokens with it.
+	vcsCap, status, reason, body := s.adoCapAtResolve(ctx, claims.RunID, snapshot)
+	if status != 0 {
+		if reason == reasonCapabilityCapped {
+			s.revokeRunPATs(ctx, claims.RunID, adoPATRevokeDrift)
+		}
+		return fail(status, reason, body, map[string]any{"owner": snapshot.OwnerSubject})
+	}
 	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
 		return fail(http.StatusForbidden, reasonHostNotOrganisation, adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
@@ -306,7 +315,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	var need []string
 	if r.URL.Query().Get("capability") != "" {
 		var ok bool
-		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, fail); !ok {
+		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, vcsCap, fail); !ok {
 			return true
 		}
 		// Cannot fail: answerADOCapability admits grantable capabilities only.
@@ -367,22 +376,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(access.AccessToken), []byte(value)) {
 		return true
 	}
-	data := map[string]any{
-		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,
-		"owner": snapshot.OwnerSubject, "provider_row": snapshot.ProviderRowID,
-		"organisation": snapshot.Organisation, "capabilities": responseCaps,
-		// What the AUTHORITY said the token carries — not what was asked
-		// for, and not a claim read out of the token.
-		"granted_scope": strings.Join(access.Scopes, " "),
-	}
-	if capAsk.capability != "" {
-		data["capability"] = capAsk.capability
-		if capAsk.once != nil {
-			// The join "approval X let request Z through": Z's jti is now
-			// the approval row's minted_jti.
-			data["approval_id"] = capAsk.once.ID
-		}
-	}
+	data := adoResolveSuccessAudit(grantID, minted.JTI, snapshot, responseCaps, access, capAsk)
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
 	// ExpiresAt is the token's own expiry or the stored-key lease, whichever is
@@ -401,6 +395,30 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true
+}
+
+// adoResolveSuccessAudit is the data of the secret.read success row
+// resolveADOInjection records for an injected Entra access token.
+func adoResolveSuccessAudit(grantID uuid.UUID, jti string, snapshot adoEntraScopeSnapshot,
+	responseCaps []adoscope.Capability, access ADOEntraAccess, capAsk adoCapabilityGrant,
+) map[string]any {
+	data := map[string]any{
+		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": jti,
+		"owner": snapshot.OwnerSubject, "provider_row": snapshot.ProviderRowID,
+		"organisation": snapshot.Organisation, "capabilities": responseCaps,
+		// What the AUTHORITY said the token carries — not what was asked
+		// for, and not a claim read out of the token.
+		"granted_scope": strings.Join(access.Scopes, " "),
+	}
+	if capAsk.capability != "" {
+		data["capability"] = capAsk.capability
+		if capAsk.once != nil {
+			// The join "approval X let request Z through": Z's jti is now
+			// the approval row's minted_jti.
+			data["approval_id"] = capAsk.once.ID
+		}
+	}
+	return data
 }
 
 // adoResolveFailureAnswer maps a redemption failure class onto its answer. Each
@@ -497,7 +515,7 @@ func (sn adoEntraScopeSnapshot) driftFrom(sc types.SiteConfig) string {
 		return "token_mode"
 	case !rowServesOrganisation(row, sn.Organisation):
 		return "organisation"
-	case !subsetOf(sn.Capabilities, row.Entra.CapabilityCeiling):
+	case !subsetOf(adoscope.ExpandPR(sn.Capabilities), row.Entra.Ceiling()):
 		return "capability_ceiling"
 	}
 	return ""

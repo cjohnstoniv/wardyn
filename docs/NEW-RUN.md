@@ -1,6 +1,6 @@
 # New run
 
-The New run flow turns a few plain choices into one governed run. This page is for members who launch runs and for operators who decide what members see. Every path ends at the same review, and the server checks policy and availability again when you launch.
+This page is for members who launch runs and for operators who decide what members see. Every path ends at the same review, and the server checks policy and availability again when you launch.
 
 ## Ways to begin
 
@@ -44,7 +44,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 
 | Shape | Sub-line shown | Runs as |
 |---|---|---|
-| **Agent task** | Interactive · Autonomous · Repeat / schedule coming soon | A one-time coding task, driven by you or running on its own |
+| **Agent task** | Interactive · Autonomous | A one-time coding task, driven by you or running on its own |
 | **Environment** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
 | **Application sandbox** | Automation / script · Application / server | A sandboxed command that runs on its own, or a server you open in your browser |
 
@@ -58,11 +58,21 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
   - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**, plus **Schedule for later** when [scheduled runs](ENV.md#wardyn_scheduled_runs) are on.
 - **What should run?** (Application sandbox only): **Automation / script** or **Application / server**.
 - **Command** is required for an automation. It runs verbatim, and the run ends when it exits.
+- **Keep it running** (a background automation on a container) restarts the command on failure and checks a port: [Services](SERVICES.md#start-a-service).
 - An **Application / server** takes a required **Start command** and one to eight **Ports**, each with a name, a port and a path. The run is interactive and keeps going until you end it or it reaches its lifetime limit.
-  - Each port opens from the run page through the web app gateway, and only people who may enter the run can open it. Review holds Launch when the gateway is off.
+  - Each port opens from the run page through the web app gateway. Only people who may enter the run can open it, unless the port is [callable from outside](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). Review holds Launch when the gateway is off.
+  - **Callable from outside the run** lets the callers under **Who can call it** (people, groups, service identities; **Add a caller**) reach that port through the gateway with no terminal open. It needs inbound access turned on for you.
+- **Machine kind** is **Container** (the default) or **Virtual machine**. A virtual machine has no Fence, Wall or Vault; its barrier reads **The virtual machine**.
+  - **Operating system** is **Linux** or **macOS**. macOS is listed when macOS virtual machines are on.
+  - A macOS VM needs a pool of Macs that offer it. The step names the Mac and the reason when one cannot take the run, and lists the pools that offer macOS as buttons: picking one chooses that pool and macOS.
+  - See [macOS virtual machines](operations/macos-vms.md) and [Linux VM sandboxes](operations/linux-vm-sandboxes.md).
+- **Window** (macOS, while `macos_vm.allow_attended_window` is on): **Open in a window on my Mac** opens a window as the run starts. Be at the Mac with its screen unlocked ([Quickstart](operations/macos-vm-use.md#quickstart-an-interactive-developer-sandbox)).
+- **Between runs** (an interactive macOS VM on your own Mac, while kept machines are on):
+  - **Delete this machine when the run ends**, or **Keep this machine for next time** with an optional **Name**.
+  - **Resume {name}**, with **Start fresh**, picks a machine you kept ([Keeping the machine](operations/macos-vms.md#keeping-the-machine)).
 - **Pool** is required. A pool that cannot take this run stays listed with its reason, such as **No online runners** or **Background only**.
 - The pool panel shows **Total pool capacity**, **Your allowance**, **Waiting**, **Run types** and **Per-run limits**; the strictest limit applies.
-- **Barrier** is **Fence**, **Wall** or **Vault**, weakest to strongest. A barrier that cannot be offered is disabled with its reason. An untouched barrier lets the server choose.
+- **Barrier** is **Fence**, **Wall** or **Vault**, weakest to strongest. A barrier that cannot be offered is disabled with its reason. An untouched barrier lets the server choose. [Which barrier for which agent](CONFINEMENT.md).
 
 ### Step 3: Harnesses
 
@@ -71,11 +81,11 @@ A harness is an agent tool the sandbox holds, such as a coding CLI.
 | Shape | Harnesses |
 |---|---|
 | Agent task, Interactive | At least one. At most one starts with the run, with an optional **Starting prompt** |
-| Agent task, Autonomous | Exactly one, with a required **Task**. **Add another harness** is disabled and marked **Coming soon** |
+| Agent task, Autonomous | One, with a required **Task**. With [`WARDYN_MULTI_AGENT_TASKS`](ENV.md) on, **Add another harness** adds agents that share the sandbox, each with its own **Task**; off, the button is not shown |
 | Environment or Application sandbox | Optional. They are available inside the sandbox and start nothing |
 
 - A harness you cannot pick is disabled with its reason, such as not installed in this server's images or **Not enabled by your admin**.
-- An Autonomous agent task on an Azure DevOps repository that must push its work and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr`; nobody is there to approve either later. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
+- An Autonomous agent task on an Azure DevOps repository that must push its work and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr_create` (and `pr_complete` if it completes its own pull request). Nobody is there to approve either later. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
 - **Start the run in this harness** marks the one that starts. The last harness of an Agent task cannot be removed.
 
 ### Step 4: Files
@@ -84,7 +94,7 @@ The step shows the main drive, one list of items, a starting folder and a mount 
 
 - **Main drive** is the sandbox's own disk, and every run has one. **Size** is in GiB and required. The pool's default fills it, and a size above the cap is clamped with a note naming who set the cap. With no size the step's summary reads "Set a size for the main drive."
 - A chip says whether the runner holds the size: **Enforced**, **Enforced by stopping the run** or **Not enforced on this runner**.
-- **What happens to it** says whether the drive is deleted when the run ends or kept so you can resume. **Reuse it across runs** is disabled and marked **Coming soon**.
+- **What happens to it** says whether the drive is deleted when the run ends or kept so you can resume. **Reuse it across runs** keeps the work folder as one of your drives. It is shown when your admin turns on `keep_main_drive` ([Member drives](OPERATIONS.md#member-drives)), and disabled with a reason when something blocks it.
 
 Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Mount path**.
 
@@ -94,7 +104,7 @@ Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Moun
 | **User drive** | An existing drive of yours |
 | **Shared drive** | An existing shared drive. You get your own folder on it |
 | **Folder on this machine** | A folder already onboarded in Workspaces, on the computer running Wardyn; with none it reads "No folders onboarded yet. Add one in Workspaces." Disabled when the server runs its sandboxes on Kubernetes |
-| **Your computer** | A folder from your own folder-only runner, when the deployment [allows it](ENV.md#wardyn_computer_folders); otherwise disabled with its reason |
+| **Your computer** | A folder from your folder-only runner, when the deployment [allows it](ENV.md#wardyn_computer_folders); otherwise disabled with a reason. [Settings](operations/hybrid-laptops.md#sharing-a-folder-the-settings) |
 
 - A drive that cannot attach is greyed with its reason, such as paused by your admin or not available in this pool's runners.
 - **Mount path** sits inside the sandbox user's home directory, and no two items may overlap. A drive's path is fixed. A repository's or folder's path is fixed too, unless it is its workspace's only item.
@@ -117,6 +127,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | **Add tools and access** | The catalogue of things you can add |
 | **Network** and **Credentials** | The total the run can reach |
 | **Setup still needed** | Open items, each with a button: **Sign in**, **Choose**, **Add** or **Connect Azure DevOps** |
+| **Wall preset** | **Open**, **Read-only**, **Sealed** or **No network** (where the server offers it), and the saved presets under **More presets**. A preset narrows this run only, on top of your walls ([Wall presets](POLICIES.md#wall-presets)) |
 
 - A run that carries an Azure DevOps credential, on a connection that creates a token for each run, says so under **Credentials**: "Azure DevOps: a token for this run with …. It's revoked when the run ends."
 - If you have not connected, that card also reads "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection." beside **Connect Azure DevOps**.
@@ -129,18 +140,19 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 - Each harness has a **Model provider** list. The server's default or only candidate stands in until you choose; when it needs your choice the field reads "Required before launch."
 - **When a tool has no rule** is **Run it**, **Ask first** or **Block it**. Your policy can set a floor; an option below it is disabled with the reason (`policy_stricter_default`).
 - A tool rule names one tool exactly, for example `WebFetch` or `mcp__jira__create_issue`. `codex-cli` cannot pause a tool call (`harness_no_hold`).
+- **Approve each call** is a rule for one tool of a remote MCP server the harness has, never the default; Codex CLI can use it. Otherwise it is disabled (`approve_each_no_remote_mcp`, `approve_each_default`).
 
 **Add tools and access** filters by **All**, **CLIs**, **MCP servers**, **APIs** and **Secrets and hosts**. Each card shows the hosts and credential delivery it brings.
 
 | Item | Notes |
 |---|---|
-| CLIs | Azure, GitHub and AWS cards, each named for the row your admin granted (`cli_not_granted` otherwise). **Google Cloud CLI** and **kubectl** are **Coming soon** |
+| CLIs | Azure, GitHub and AWS cards, each named for the row your admin granted (`cli_not_granted` otherwise). **kubectl** is shown with [`WARDYN_KUBECTL_CLI`](ENV.md#wardyn_kubectl_cli) on. There is no Google Cloud CLI card |
 | GitHub CLI | Works only with this run's GitHub repositories (`cli_no_github_repo`). The proxy adds its token |
 | AWS CLI | Role credentials are issued into the sandbox, short-lived. On a run whose model provider is Bedrock, `AWS_REGION` and `AWS_DEFAULT_REGION` are the provider's region and win over the profile's; pass `--region` for another |
 | Organisation components | MCP servers and APIs your admin published, marked **From your organisation** |
 | **Add a secret** | One of your saved secrets as **Request header** (preferred), **Environment variable** or **File** |
 | **Allow a host** | One more host with no credential. Your organisation's ceiling still applies |
-| **Add an MCP server** | A remote server by HTTPS URL with an optional token. Local-command servers are **Coming soon** |
+| **Add an MCP server** | A remote server by HTTPS URL with an optional token. With [`WARDYN_MCP_LOCAL_SERVERS`](ENV.md#wardyn_mcp_local_servers) on, the dialog also offers **Runs in a sandbox**, a command that runs in this run's sandbox |
 | **Custom component** | Hosts and a secret bundled for reuse. Disabled when your organisation does not let you define components |
 
 - Your admin can turn off environment-variable and file delivery (`resident_off`); use a request header then.
@@ -159,6 +171,7 @@ Review shows what Wardyn will create and where each value came from. The **Prett
 - **Effective policy** shows "What the sandbox can actually do": barrier, network, credentials, files and tool handling. **Only what I changed** filters it.
   - A policy that grants Azure DevOps access adds one line that starts "Azure DevOps:" and names what it grants.
   - A background run whose policy holds pushes for review adds "Nobody is here to answer, so a push that would be held is refused instead."
+- A chosen wall preset shows as its own line with **Change**, and **Effective policy** has a **Pushes** row. A preset that is no longer available holds Launch until you pick another or **Open**.
 - **YAML** and **JSON** show the draft as a read-only `kind: Run` document with **Copy**. **Edit YAML** (or **Edit JSON**) opens the editor.
 
 ### Blockers and notices
@@ -188,7 +201,7 @@ The **Templates** screen lists saved starting points at `/templates` (User view)
 |---|---|---|
 | **Use** | Anyone who can read the row | Opens New run at Review, on the listed revision |
 | **Rename**, **Delete** | The owner of a personal template; an organisation admin for an organisation one; the group's template managers for a group one | `template_scope_forbidden`, `template_group_unverified` |
-| **Publish to organisation** | An organisation admin, in the Admin view only | Copies the current revision to the organisation |
+| **Publish to organization** | An organisation admin, in the Admin view only | Copies the current revision to the organisation |
 | **Save as template**, **Save as policy** (Review) | You, to **Only me** or a group you manage | Never the organisation from Review |
 
 - [`internal/types/template.go#TemplateAuthorize`](../internal/types/template.go) decides authority. A template you cannot read answers `template_not_found`, like a missing one.

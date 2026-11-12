@@ -153,6 +153,8 @@ export interface UseAttachSessionArgs {
   setCopyOffer: React.Dispatch<React.SetStateAction<CopyOffer | null>>;
   setCopyNotice: React.Dispatch<React.SetStateAction<string | null>>;
   copyGateRef: React.MutableRefObject<CopyGate | null>;
+  /** The run's data_out rule keeps its content in: read when a copy is asked, so it follows the rule without a reconnect. */
+  keepsInRef: React.MutableRefObject<boolean>;
   /** Set while an offer card is up: Cmd/Ctrl+C in the terminal copies the offer. */
   offerCopyRef: React.MutableRefObject<(() => void) | null>;
   /** A clicked link that needs the confirm dialog (attach-terminal-links.ts). */
@@ -195,6 +197,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    keepsInRef,
     offerCopyRef,
     setLinkTarget,
     rendererRef,
@@ -345,6 +348,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       isWriter: () => writerWs !== null && writerWs === wsRef.current && writerWs.readyState === WebSocket.OPEN,
       onOffer: setCopyOffer,
       onNotice: setCopyNotice,
+      keepsIn: () => keepsInRef.current,
     });
     copyGateRef.current = copyGate;
 

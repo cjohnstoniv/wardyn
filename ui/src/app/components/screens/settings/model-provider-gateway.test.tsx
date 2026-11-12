@@ -73,6 +73,11 @@ const list = (providers: ModelProvider[] = [], issuer: string | null = ISSUER): 
   gatewayIssuer: issuer ?? undefined,
   gatewayJwksPath: JWKS_PATH,
 });
+// The same answer from an install that does, or does not, sign AWS requests at its proxy.
+const ssoList = (providers: ModelProvider[], signer: boolean | undefined): ModelProvidersList => ({
+  ...list(providers),
+  gatewayIdentityBedrockSso: signer,
+});
 // As the wire carries it: an undefined field is not sent.
 const putBody = () => JSON.parse(JSON.stringify(putMock.mock.calls[0][0])) as { providers: ModelProvider[] };
 const sw = () => screen.getByRole("switch", { name: G.SWITCH });
@@ -150,7 +155,6 @@ describe("the switch, off", () => {
 
   it.each([
     [M.KIND.anthropic_subscription, G.NOT_AVAILABLE.anthropic_subscription],
-    [M.KIND.bedrock_sso, G.NOT_AVAILABLE.bedrock_sso],
     [M.KIND.local_model, G.NOT_AVAILABLE.local_model],
   ])("%s: disabled with %s", async (kind, reason) => {
     await addKind(kind);
@@ -340,7 +344,7 @@ describe("which field a refusal is about", () => {
     ['model_providers: "base_url": gateway_identity: audience is required', "gateway_audience"],
     ['model_providers: "base_url": gateway_identity is not available for anthropic_subscription providers', null],
     ['model_providers: "p": gateway_identity needs a bedrock.base_url, or the token would go to AWS', "base_url"],
-    ['model_providers: "base_url": gateway_identity is not available for bedrock_sso providers; use a bedrock_bearer row, or the gateway as a custom endpoint', null],
+    ['model_providers: "p": gateway_identity on a bedrock_sso provider needs WARDYN_AWS_SIGV4_AT_PROXY on, so Wardyn signs each AWS request at its proxy', null],
     ['model_providers: "local.models": local.max_output: must be between 1 and 99', "max_output"],
     ['model_providers: "local.models": gateway_identity is not available for anthropic_subscription providers', null],
     [MOVED("audience"), "gateway_audience"],
@@ -411,29 +415,122 @@ describe("a Bedrock key row", () => {
     expect(screen.getByLabelText(E.ROUTE_THROUGH)).toBeInvalid();
   });
 
-  it("switching to SSO shows the switch off with its reason; switching back restores it", async () => {
+  it("switching to SSO where the install cannot sign keeps the switch on, still able to turn off, and says why it is unavailable", async () => {
     const { user } = renderEditor(BEDROCK_ON);
     expect(sw()).toHaveAttribute("aria-checked", "true");
     await user.click(sso());
-    expect(sw()).toBeDisabled();
-    expect(sw()).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText(G.NOT_AVAILABLE.bedrock_sso)).toBeInTheDocument();
-    await user.click(bearer());
+    // Already on, so it can still be turned off; only turning it on is refused here.
     expect(sw()).toBeEnabled();
     expect(sw()).toHaveAttribute("aria-checked", "true");
+    expect(document.getElementById(sw().getAttribute("aria-describedby")!)).toHaveTextContent(G.NOT_AVAILABLE.bedrock_sso);
+    expect(screen.queryByText(G.CHIP)).not.toBeInTheDocument();
+    await user.click(bearer());
+    expect(sw()).toBeEnabled();
     expect(audience()).toHaveValue("wardyn-bedrock");
   });
 
-  it("a draft switched to SSO writes no identity, and keeps the stored gateway address", () => {
+  it("a draft switched to SSO keeps its identity and its gateway address", () => {
     const draft = { ...draftFrom(BEDROCK_ON, HARNESSES), kind: "bedrock_sso" as const };
     const out = providerFrom(draft, BEDROCK_ON, []);
-    expect(out.gateway_identity).toBeUndefined();
+    expect(out.gateway_identity).toEqual({ audience: "wardyn-bedrock" });
     expect(out.bedrock?.base_url).toBe("https://gateway.example.com/bedrock");
   });
+});
 
-  it("a sign-in row's reason names both ways out", () => {
-    expect(G.NOT_AVAILABLE.bedrock_sso).toBe(
-      "Not available when people sign in with SSO. Use a bearer key row, or add the gateway as your own endpoint.",
-    );
+describe("a Bedrock sign-in row", () => {
+  const SSO_OFF: ModelProvider = {
+    id: "bedrock-sso",
+    uid: "u-4",
+    name: "Bedrock sign-in",
+    kind: "bedrock_sso",
+    bedrock: { region: "us-east-1", sso_start_url: "https://acme.awsapps.com/start" },
+    harnesses: [{ harness: "claude-code", model: "us.anthropic.profile" }],
+  };
+  const SSO_ON: ModelProvider = {
+    ...SSO_OFF,
+    bedrock: { ...SSO_OFF.bedrock, base_url: "https://gateway.example.com/bedrock" },
+    gateway_identity: { audience: "wardyn-sso" },
+  };
+  const VAR = "WARDYN_AWS_SIGV4_AT_PROXY";
+  const UNAVAILABLE = `Needs Wardyn to sign AWS requests at its proxy. Ask your operator to turn on ${VAR}.`;
+  const DISCLOSURE =
+    "When on, each Bedrock call carries a token naming the person, run and runner, plus an AWS signature. The gateway can resend the signed request while AWS still accepts it, but cannot change it.";
+  const HOST = "bedrock-runtime.us-east-1.amazonaws.com";
+
+  it.each([false, undefined])("the switch is unavailable, with the operator setting named, when the install's answer is %s", (signer) => {
+    renderEditor(SSO_OFF, ssoList([SSO_OFF], signer));
+    expect(G.NOT_AVAILABLE.bedrock_sso).toBe(UNAVAILABLE);
+    expect(sw()).toBeDisabled();
+    const reason = document.getElementById(sw().getAttribute("aria-describedby")!)!;
+    expect(reason).toHaveTextContent(UNAVAILABLE);
+    // The variable is shown as code.
+    expect(within(reason).getByText(VAR).tagName).toBe("CODE");
+    expect(screen.queryByText(G.DISCLOSURE)).not.toBeInTheDocument();
+    expect(screen.queryByText(DISCLOSURE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: G.CLAIMS_LINK })).not.toBeInTheDocument();
+    expect(screen.queryByText(G.CHIP)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(E.ROUTE_THROUGH)).not.toBeInTheDocument();
+  });
+
+  it("asks for a gateway address first when the install can sign", () => {
+    renderEditor(SSO_OFF, ssoList([SSO_OFF], true));
+    expect(sw()).toBeDisabled();
+    expect(screen.getByText(G.NEEDS_ADDRESS(HOST))).toBeInTheDocument();
+    expect(screen.queryByText(DISCLOSURE)).not.toBeInTheDocument();
+    expect(screen.queryByText(G.CHIP)).not.toBeInTheDocument();
+  });
+
+  it("with an address, turns on with the Bedrock disclosure, the chip and the link, and saves the address and audience", async () => {
+    const { user } = renderEditor(SSO_OFF, ssoList([SSO_OFF], true));
+    setField(screen.getByLabelText(E.ROUTE_THROUGH), "https://gateway.example.com/bedrock");
+    expect(sw()).toBeEnabled();
+    expect(G.DISCLOSURE_BEDROCK_SSO).toBe(DISCLOSURE);
+    expect(screen.getByText(DISCLOSURE)).toBeInTheDocument();
+    expect(screen.queryByText(G.DISCLOSURE)).not.toBeInTheDocument();
+    expect(document.getElementById(sw().getAttribute("aria-describedby")!)).toHaveTextContent(DISCLOSURE);
+    expect(screen.getByRole("link", { name: G.CLAIMS_LINK })).toBeInTheDocument();
+    expect(screen.queryByText(G.CHIP)).not.toBeInTheDocument();
+    await user.click(sw());
+    expect(screen.getByText(G.CHIP)).toBeInTheDocument();
+    setField(audience(), " wardyn-sso ");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    expect(putBody().providers[0]).toMatchObject({
+      kind: "bedrock_sso",
+      bedrock: { region: "us-east-1", base_url: "https://gateway.example.com/bedrock", sso_start_url: "https://acme.awsapps.com/start" },
+      gateway_identity: { audience: "wardyn-sso" },
+    });
+  });
+
+  it("shows a stored row's identity on, and clearing the address says it needs one", () => {
+    renderEditor(SSO_ON, ssoList([SSO_ON], true));
+    expect(sw()).toHaveAttribute("aria-checked", "true");
+    expect(audience()).toHaveValue("wardyn-sso");
+    setField(screen.getByLabelText(E.ROUTE_THROUGH), "");
+    expect(screen.getByText(G.ADDRESS_CLEARED)).toBeInTheDocument();
+  });
+
+  it("a stored-on row on an install that cannot sign can be switched off and saved, but not back on", async () => {
+    const { user } = renderEditor(SSO_ON, ssoList([SSO_ON], false));
+    expect(sw()).toHaveAttribute("aria-checked", "true");
+    expect(sw()).toBeEnabled();
+    expect(document.getElementById(sw().getAttribute("aria-describedby")!)).toHaveTextContent(UNAVAILABLE);
+    await user.click(sw());
+    expect(sw()).toHaveAttribute("aria-checked", "false");
+    expect(sw()).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    expect(putBody().providers[0]).not.toHaveProperty("gateway_identity");
+  });
+
+  it("another person still sees a stored-on row's switch dimmed when the install cannot sign", () => {
+    renderEditor(SSO_ON, ssoList([SSO_ON], false), false);
+    expect(sw()).toBeDisabled();
+  });
+
+  it("another person sees the switch dimmed, with the admin-only reason", () => {
+    renderEditor(SSO_ON, ssoList([SSO_ON], true), false);
+    expect(sw()).toBeDisabled();
+    expect(screen.getByText(DISCLOSURE)).toBeInTheDocument();
   });
 });

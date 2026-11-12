@@ -21,8 +21,10 @@ vi.mock("../../../lib/api/run-layout", () => ({
 const getFiles = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
+    getPolicy: () => new Promise(() => {}),
     getFiles: (...a: unknown[]) => getFiles(...a),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
     attachTicket: vi.fn(),
     watchTicket: vi.fn(),
   },
@@ -285,7 +287,7 @@ describe("RunCanvas — Expand", () => {
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    await waitFor(() => expect(parseFloat(document.querySelector<HTMLElement>(".react-grid-item[data-widget], [data-widget='identity']")!.closest<HTMLElement>(".react-grid-item")!.style.height)).toBeLessThan(700));
+    await waitFor(async () => expect(parseFloat((await tile()).style.height)).toBeLessThan(700));
   });
 });
 

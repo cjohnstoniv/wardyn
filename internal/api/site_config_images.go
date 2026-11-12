@@ -8,8 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
+	"github.com/sigstore/sigstore-go/pkg/root"
+
+	"github.com/cjohnstoniv/wardyn/internal/imageadmit"
+	"github.com/cjohnstoniv/wardyn/internal/imageadmit/rootfile"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -138,28 +143,115 @@ func (s *Server) markImageDigestExempt(ctx context.Context, image string, data m
 	}
 }
 
-// markRunCreateExempt is the run.create writers' one call for both exemption marks: governance_exempt
-// (the admin switch) and image_digest_exempt.
+// markRunCreateExempt is the run.create writers' one call for every exemption mark: governance_exempt
+// (the admin switch), image_digest_exempt and image_admission_exempt.
 func (s *Server) markRunCreateExempt(ctx context.Context, image string, data map[string]any) {
 	s.markGovernanceExempt(ctx, data)
 	s.markImageDigestExempt(ctx, image, data)
+	s.markImageAdmissionExempt(ctx, image, data)
 }
 
 // carryForwardSiteImages keeps the stored images block when the body does not name it (an older client or a
 // re-applied managed config cannot name it), and stores an all-default block as none so a GET stays
-// byte-identical to an install that never set one.
+// byte-identical to an install that never set one. An admission block that says nothing a missing one would
+// not (off, member scope, nothing defined) is dropped from the block the same way.
 func carryForwardSiteImages(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
 	if !present["images"] {
 		cfg.Images = existing.Images
-	} else if cfg.Images != nil && *cfg.Images == (types.SiteImages{}) {
+		return
+	}
+	if cfg.Images == nil {
+		return
+	}
+	if cfg.Images.Admission.IsZero() && cfg.Images.Admission != nil {
+		im := *cfg.Images
+		im.Admission = nil
+		cfg.Images = &im
+	}
+	if cfg.Images.IsZero() {
 		cfg.Images = nil
 	}
 }
 
-// auditSiteImages puts the digest rule on the site_config.write row, only once a block is stored or named.
-func auditSiteImages(datum map[string]any, im *types.SiteImages, named bool) {
+// auditSiteImages puts the image rules on the site_config.write row, only once a block is stored or named.
+// The admission keys name signers and never their identities, issuers or keys, and appear only when an
+// admission block is or was stored; the before and after signer sets and the earlier mode appear only when
+// they changed.
+func auditSiteImages(datum map[string]any, before, im *types.SiteImages, named bool) {
 	if im == nil && !named {
 		return
 	}
 	datum["images_require_digest"] = im != nil && im.RequireDigest
+	var was, now *types.SiteImageAdmission
+	if before != nil {
+		was = before.Admission
+	}
+	if im != nil {
+		now = im.Admission
+	}
+	if was == nil && now == nil {
+		return
+	}
+	datum["images_admission_mode"] = now.EffectiveMode()
+	datum["images_admission_scope"] = now.EffectiveScope()
+	datum["images_admission_signers"] = append([]string{}, now.SignerNames()...)
+	if was.EffectiveMode() != now.EffectiveMode() {
+		datum["images_admission_mode_before"] = was.EffectiveMode()
+	}
+	if b, a := was.SignerNames(), now.SignerNames(); !slices.Equal(b, a) {
+		datum["images_admission_signers_before"] = append([]string{}, b...)
+		datum["images_admission_signers_after"] = append([]string{}, a...)
+	}
+}
+
+// imageTrustedRootDir is rootfile.Dir, a variable only so tests can point it at a temporary directory.
+var imageTrustedRootDir = rootfile.Dir
+
+// validateSiteImageAdmission is PUT /site-config's check of images.admission: the block's shape (types) with
+// the image-grant grammar for each images entry, each trust root's file, read here as branding's logo is,
+// and then run create's own compile of the block, so a setting the run check would refuse refuses the write
+// rather than every later run. Every message starts "images.admission". A body with no admission block is
+// valid.
+func validateSiteImageAdmission(im *types.SiteImages) error {
+	if im == nil || im.Admission == nil {
+		return nil
+	}
+	if err := im.Admission.Validate(imageAdmissionEntryOK); err != nil {
+		return fmt.Errorf("images.admission: %w", err)
+	}
+	for _, r := range im.Admission.TrustedRoots {
+		if err := checkImageTrustedRootFile(r.Path); err != nil {
+			return fmt.Errorf("images.admission: trusted root %q: %w", r.Name, err)
+		}
+	}
+	if err := imageadmit.CheckSite(im.Admission, imageadmit.Options{RootDir: imageTrustedRootDir}); err != nil {
+		return fmt.Errorf("images.admission: %w", err)
+	}
+	return nil
+}
+
+// checkImageTrustedRootFile reads path through rootfile (a file in imageTrustedRootDir, never any other) and
+// parses it as a Sigstore trusted root. No message quotes the file.
+func checkImageTrustedRootFile(path string) error {
+	raw, err := rootfile.Read(imageTrustedRootDir, path)
+	if err != nil {
+		return err
+	}
+	if _, err := root.NewTrustedRootFromJSON(raw); err != nil {
+		return errors.New("the file is not a Sigstore trusted root")
+	}
+	return nil
+}
+
+// imageAdmissionEntryOK is the grammar of a signer's images entry: a registry prefix ("host/path/*") or an
+// exact reference, as an image grant is written.
+func imageAdmissionEntryOK(v string) bool {
+	if strings.TrimSpace(v) != v {
+		return false
+	}
+	if strings.HasSuffix(v, imagePrefixSuffix) || strings.Contains(v, "*") {
+		return isImagePrefixGrant(v)
+	}
+	_, ok := imageRepoAsTyped(v)
+	return ok
 }

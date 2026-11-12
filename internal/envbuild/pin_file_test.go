@@ -7,6 +7,7 @@ package envbuild
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,6 +45,21 @@ func TestBuildFromDevcontainerFiles_ReadsThePinFile(t *testing.T) {
 	}
 	if !strings.HasPrefix(f.removedIDs[len(f.removedIDs)-1], "fake-pin-container") {
 		t.Errorf("removed %v: the pin-read container must be removed last", f.removedIDs)
+	}
+}
+
+// The pin-read container is made from the built image, so a VOLUME the image declares gives it an
+// anonymous volume; the removal takes it along.
+func TestBuildFromDevcontainerFiles_PinReadRemovalTakesItsAnonymousVolumes(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.pinFiles = map[string][]byte{pinTestTag: []byte(pinTestFile)}
+	b := newPushBuilder(t, f)
+	if _, err := b.BuildFromDevcontainerFiles(t.Context(), pinTestFiles, pinTestTag, nil); err != nil {
+		t.Fatalf("BuildFromDevcontainerFiles: %v", err)
+	}
+	i := slices.IndexFunc(f.removedIDs, func(id string) bool { return strings.HasPrefix(id, "fake-pin-container") })
+	if i < 0 || !f.removeOpts[i].Force || !f.removeOpts[i].RemoveVolumes {
+		t.Errorf("pin-read removal at %d of %v with options %+v, want Force and RemoveVolumes", i, f.removedIDs, f.removeOpts)
 	}
 }
 

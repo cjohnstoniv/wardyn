@@ -86,6 +86,12 @@ describe("intentToWire (U1)", () => {
     expect(unsupported).toEqual([]);
   });
 
+  it("sends run_in: a launch-time choice, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, run_in: "u-pay" });
+    expect(body.run_in).toBe("u-pay");
+    expect(unsupported).toEqual([]);
+  });
+
   it("sends the document's inline_policy as the policy overlay, never as a whole policy", () => {
     const { body } = intentToWire(INTENT);
     expect(body.policy_overlay).toEqual({ allowed_domains: [], auto_stop_after_sec: 0 });

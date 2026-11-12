@@ -24,9 +24,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { CC_META } from "../../wardyn/cc-meta";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
+import { SCHEDULE_DOOR } from "../../wardyn/copy/schedule-door";
+import { DATA_OUT, type DataOutLevel } from "../../wardyn/copy/data-out";
+import { DENY_LISTS } from "../../wardyn/copy/deny-lists";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
+import { DENY_KEYS, DenyListStrip } from "./deny-list-strip";
 import { ALLOWED_MODELS_KEY, ModelHintText, ModelReadsNote, NarrowEmptyError, ProviderModelStrip } from "./allowed-models";
 import { limitChips, limitsBoundNothing } from "./limit-chips";
 
@@ -134,7 +138,7 @@ export function BasePicker({
 
 // ---- overlay rows ---------------------------------------------------------
 
-type Kind = "list" | "number" | "false" | "true" | "barrier";
+type Kind = "list" | "number" | "false" | "true" | "barrier" | "level";
 type Field = { key: string; kind: Kind; label: string; mono: boolean; hint?: string };
 
 const ceilingField = (key: string, kind: Kind): Field => ({ key, kind, label: key, mono: true });
@@ -149,6 +153,7 @@ export const CEILING_FIELDS: Field[] = [
   ceilingField("min_confinement_class", "barrier"),
   ceilingField("allow_all_egress", "false"),
   ceilingField("git_push_any_branch", "false"),
+  { ...ceilingField("data_out", "level"), hint: DATA_OUT.CEILING_HINT },
   ceilingField("auto_stop_after_sec", "number"),
 ];
 
@@ -166,10 +171,14 @@ export const LIMIT_FIELDS: Field[] = [
   { key: "deny_ui_apps", kind: "true", label: LIMITS_CHIP.UI_APPS, mono: false },
   { key: "deny_background_desktop_watch", kind: "true", label: BACKGROUND_WATCH_DOOR.LABEL, mono: false, hint: BACKGROUND_WATCH_DOOR.HINT },
   { key: "deny_kept_machines", kind: "true", label: KEEP_POLICY.LABEL, mono: false, hint: KEEP_POLICY.HINT },
+  { key: "deny_scheduled_runs", kind: "true", label: SCHEDULE_DOOR.LABEL, mono: false, hint: SCHEDULE_DOOR.HINT },
   ceilingField("deny_placements", "list"),
+  { key: "deny_components", kind: "list", label: DENY_LISTS.COMPONENTS_LABEL, mono: false, hint: DENY_LISTS.COMPONENTS_HINT_COMPOSED },
+  { key: "deny_model_providers", kind: "list", label: DENY_LISTS.PROVIDERS_LABEL, mono: false, hint: DENY_LISTS.PROVIDERS_HINT_COMPOSED },
   { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
   // The hint under this row is chosen by what the base lists (modelsHint), so it carries none here.
   { key: ALLOWED_MODELS_KEY, kind: "list", label: ALLOWED_MODELS.LABEL, mono: false },
+  ceilingField("required_image_signers", "list"),
   ceilingField("local_self_defined_components", "false"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
@@ -213,15 +222,18 @@ const onOff = (v: unknown) => (v ? "On" : "Off");
 function shown(kind: Kind, v: unknown): string {
   if (kind === "list") return Array.isArray(v) && v.length > 0 ? v.join(", ") : GOV.LIMITS_NONE;
   if (kind === "number") return typeof v === "number" && v > 0 ? String(v) : GOV.LIMITS_NONE;
+  if (kind === "level") return DATA_OUT.label(typeof v === "string" ? v : undefined);
   if (kind === "barrier") return typeof v === "string" && v in CC_META ? CC_META[v as ConfinementClass].label : GOV.LIMITS_NONE;
   return onOff(v);
 }
 
 // What a row holds the moment Narrow is switched on: the inherited value for a
 // list, number or barrier (so the admin edits down from it), and the narrowing
-// direction for a boolean. Methods fall back to GET, since an empty list is refused. A models list
+// direction for a boolean. A deny list opens empty: composition unions it with the base's, so the box holds only
+// what this profile adds. Methods fall back to GET, since an empty list is refused. A models list
 // opens empty where the base lists none; the editor never sends that empty list (see profile-editor.tsx).
 function seed(f: Field, inherited: unknown): unknown {
+  if (DENY_KEYS.includes(f.key)) return [];
   switch (f.kind) {
     case "false":
       return false;
@@ -231,6 +243,8 @@ function seed(f: Field, inherited: unknown): unknown {
       return typeof inherited === "number" && inherited > 0 ? inherited : 1;
     case "barrier":
       return typeof inherited === "string" ? inherited : "CC1";
+    case "level":
+      return typeof inherited === "string" ? inherited : "allowed";
     default:
       return Array.isArray(inherited) && inherited.length > 0 ? inherited : f.key === "allowed_methods" ? ["GET"] : [];
   }
@@ -324,6 +338,18 @@ function OverlayValue({
       />
     );
   }
+  if (field.kind === "level") {
+    return (
+      <div className="mt-2">
+        <Segmented
+          value={(typeof value === "string" ? value : "allowed") as DataOutLevel}
+          disabled={disabled}
+          onChange={onChange}
+          options={DATA_OUT.LEVELS.map((o) => ({ value: o.value, label: o.label }))}
+        />
+      </div>
+    );
+  }
   if (field.kind === "barrier") {
     return (
       <div className="mt-2">
@@ -340,6 +366,7 @@ function OverlayValue({
   // Narrow on with nothing listed narrows nothing, and the editor cannot save it.
   const models = field.key === ALLOWED_MODELS_KEY;
   const emptyId = `${id}-empty`;
+  const deny = DENY_KEYS.includes(field.key);
   return (
     <>
       <ListValue
@@ -348,11 +375,14 @@ function OverlayValue({
         value={list}
         disabled={disabled}
         onChange={onChange}
-        placeholder={models ? ALLOWED_MODELS.PLACEHOLDER : undefined}
+        placeholder={models ? ALLOWED_MODELS.PLACEHOLDER : deny ? DENY_LISTS.PLACEHOLDER : undefined}
         invalid={models && list.length === 0}
         describedBy={models && list.length === 0 ? emptyId : undefined}
       />
       {models && list.length === 0 && <NarrowEmptyError id={emptyId} />}
+      {deny && (
+        <DenyListStrip list={field.key === "deny_components" ? "components" : "providers"} listed={list} disabled={disabled} onAdd={(i) => onChange([...list, i])} />
+      )}
       {models && <ProviderModelStrip listed={list} disabled={disabled} onAdd={(m) => onChange([...list, m])} />}
     </>
   );
@@ -455,7 +485,12 @@ export const asOverlay = (b: Bag): CeilingOverlay => b as CeilingOverlay;
 
 // The refusal heading for a server reason, or undefined when the console has
 // none for it. The server's own sentence renders under it, verbatim.
-export function composeRefusalTitle(reason: string): string | undefined {
+// A refused deny list has its own heading: the server's sentence names the list (the composed write's
+// governance_overlay_invalid, or the standalone write's governance_unit_request_invalid).
+export function composeRefusalTitle(reason: string, message = ""): string | undefined {
+  if ((reason === "governance_overlay_invalid" || reason === "governance_unit_request_invalid") && /\bdeny_(components|model_providers):/.test(message)) {
+    return DENY_LISTS.REFUSED_LIST;
+  }
   switch (reason) {
     case "governance_overlay_invalid":
       return GOV.REFUSED_OVERLAY_INVALID;

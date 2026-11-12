@@ -94,6 +94,7 @@ var auditHostReviewed = map[string]auditHostKeep{
 		"a boolean, the overlay's key names, and the starting spec recorded with each mount source already <redacted>"},
 	"run.drive.mount":                {[]string{"object"}, keepObject},
 	"run.egress.confine":             {[]string{"hosts"}, keepEgress},
+	"run.egress.edit":                {[]string{"denied_hosts", "removed_hosts"}, keepEgress},
 	"run.folder.transfer":            {[]string{"remote_dir"}, keepSandbox},
 	"run.git_pat.drop":               {[]string{"dropped_hosts"}, keepEgress},
 	"run.injection.drop":             {[]string{"host"}, keepEgress},

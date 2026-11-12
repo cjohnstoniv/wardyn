@@ -39,6 +39,10 @@ import (
 // labelMachineKind marks the QEMU container: every per-ref method looks for it.
 const labelMachineKind = "wardyn.machine-kind"
 
+// labelAWSProfile marks a QEMU container whose run was staged an AWS profile (runner.AWSProfileRecordEnv).
+// The container carries no env of its own (the run's env goes to the guest), so the kept end reads this.
+const labelAWSProfile = "wardyn.aws-profile"
+
 // envInteractiveStart is the sandbox env the control plane sets for interactive_start: agent.
 const envInteractiveStart = "WARDYN_INTERACTIVE_START"
 
@@ -152,16 +156,23 @@ func (d *Driver) newVMRun(runID uuid.UUID, dir string) *vmRun {
 		agent: guestagent.NewClient(func(ctx context.Context) (net.Conn, error) { return d.dialUnix(ctx, sock) })}
 }
 
-// vmFor is the VM behind ref, or nil for a container (or when VMs are off, which costs nothing).
-// After a runner restart the VM is found again by its container's label. A ref found to be a
-// container is remembered as one until its teardown, so it is inspected once, not on every call.
+// vmFor is the VM behind ref, or nil for a container. It drops vmLookup's error, so it serves only
+// a caller for which nil is safe on a VM too: a stop (stopping the QEMU container contains the
+// guest) or a verb that refuses anything but a VM. A verb that would take a container's path on nil
+// uses vmLookup and stops at its error.
 func (d *Driver) vmFor(ctx context.Context, ref string) *vmRun {
 	v, _ := d.vmLookup(ctx, ref)
 	return v
 }
 
-// vmLookup is vmFor with its failure: a container the engine could not inspect is an error, not "a
-// container". A ref the engine does not hold is nil, nil.
+// errVMUnreachable refuses a verb on a Linux VM this runner can no longer reach: the VM was made
+// while VM sandboxes were on, and they are off now (turned off, or the start-up check failed).
+var errVMUnreachable = errors.New("docker: this run is a Linux VM, and Linux VM sandboxes are off on this runner, so its guest can't be reached; stop the run, or turn Linux VM sandboxes back on")
+
+// vmLookup is vmFor with its failure. A container the engine could not inspect is an error, not "a
+// container", and so is a Linux VM this runner cannot reach (errVMUnreachable). A ref the engine
+// does not hold is nil, nil. After a runner restart the VM is found again by its container's label;
+// a ref found to be a container is remembered as one until its teardown, so it is inspected once.
 func (d *Driver) vmLookup(ctx context.Context, ref string) (*vmRun, error) {
 	if v, ok := d.vms.Load(ref); ok {
 		return v.(*vmRun), nil
@@ -172,30 +183,54 @@ func (d *Driver) vmLookup(ctx context.Context, ref string) (*vmRun, error) {
 	if v := d.macVMLookup(ref); v != nil {
 		return v, nil
 	}
+	id, isVM, err := d.linuxVMRef(ctx, ref)
+	if err != nil || !isVM {
+		return nil, err
+	}
 	vc := d.vmConfig()
 	if vc == nil {
-		if d.macVMConfig() != nil {
-			d.notVMs.Store(ref, struct{}{}) // no run directory: a container, looked up once
-		}
-		return nil, nil
-	}
-	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
-	if isNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("docker: inspect %s: %w", ref, err)
-	}
-	if res.Container.Config == nil || res.Container.Config.Labels[labelMachineKind] != string(types.MachineLinuxVM) {
-		d.notVMs.Store(ref, struct{}{})
-		return nil, nil
-	}
-	id, err := parseRunID(res.Container.Config.Labels[labelRun])
-	if err != nil {
-		return nil, err
+		return nil, errVMUnreachable
 	}
 	v, _ := d.vms.LoadOrStore(ref, d.newVMRun(id, vc.runDir(id)))
 	return v.(*vmRun), nil
+}
+
+// linuxVMRef says whether ref is a Linux VM, from its container: the machine-kind label createVM
+// sets, which needs no VM config, so a VM made before VM sandboxes went off is still a VM. A ref
+// found to be a container is remembered (notVMs); one the engine does not hold is not a VM.
+func (d *Driver) linuxVMRef(ctx context.Context, ref string) (uuid.UUID, bool, error) {
+	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+	if isNotFound(err) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("docker: inspect %s: %w", ref, err)
+	}
+	if !isLinuxVM(res.Container.Config) {
+		d.notVMs.Store(ref, struct{}{})
+		return uuid.Nil, false, nil
+	}
+	id, err := parseRunID(res.Container.Config.Labels[labelRun])
+	if err != nil {
+		return uuid.Nil, true, err
+	}
+	return id, true, nil
+}
+
+// isLinuxVM says whether a container's config is a Linux VM's QEMU container, by the label createVM sets.
+func isLinuxVM(c *container.Config) bool {
+	return c != nil && c.Labels[labelMachineKind] == string(types.MachineLinuxVM)
+}
+
+// MayHoldRuns says whether a Linux VM made under c.StateDir may still exist. A VM's run directory is
+// made before its QEMU container and removed only after it (and, while VM sandboxes are off, not at
+// all), so an absent or empty runs directory means none. One that cannot be read answers true.
+func (c VMConfig) MayHoldRuns() bool {
+	entries, err := os.ReadDir(filepath.Join(c.StateDir, "runs"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	return err != nil || len(entries) > 0
 }
 
 // errVMNoFolderShare refuses a VM run that carries a folder mount on a runner whose probe found no virtiofsd.
@@ -219,6 +254,14 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	}
 	if (len(spec.Mounts) > 0 || len(spec.Drives) > 0) && !d.vmConfig().Virtiofs {
 		return errors.New(errVMNoFolderShare)
+	}
+	if spec.Resources.DiskMiB > 0 {
+		if !spec.Resources.DiskMiBSoft {
+			return errors.New("docker: a Linux VM run can't enforce a disk limit yet; remove disk_mib or use a container run")
+		}
+		// A requested or default size is advisory, as a container's is on a host that cannot cap it: say so, run on.
+		slog.Warn("wardyn/docker: a Linux VM run has no disk cap; the soft disk size is not enforced",
+			slog.Int64("disk_mib", spec.Resources.DiskMiB), slog.String("run_id", spec.RunID.String()))
 	}
 	if spec.RecordWithin(d.cfg.Record) {
 		return errors.New("docker: a Linux VM sandbox is not recorded in this release; turn recording off for this run")
@@ -275,7 +318,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 		}
 		return runner.Sandbox{}, err
 	}
-	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, false)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -346,6 +389,9 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	}
 	labels := d.labels(spec.RunID, componentAgent, spec.Labels)
 	labels[labelMachineKind] = string(types.MachineLinuxVM)
+	if spec.Env[runner.AWSProfileRecordEnv] != "" {
+		labels[labelAWSProfile] = "1"
+	}
 	name := agentContainerName(spec.RunID)
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:       name,
@@ -375,7 +421,8 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	d.vms.Store(name, v)
 	d.keepExecOutput(name, spec.ExecOutput)
 	// A hardware VM boundary: the CC3 family, as Kata and krun microVMs are.
-	return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns}, nil
+	return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
+		ProxyConfigSHA256: proxySHA, ProxyAddr: proxyIP}, nil
 }
 
 func (c VMConfig) user() string { return strconv.Itoa(c.UID) + ":" + strconv.Itoa(c.GID) }
@@ -505,7 +552,7 @@ func (d *Driver) exportImage(ctx context.Context, spec runner.SandboxSpec, path 
 		return fmt.Errorf("docker: create the VM image export: %w", err)
 	}
 	defer func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	}()
 	rc, err := d.cli.ContainerExport(ctx, created.ID, client.ContainerExportOptions{})
 	if err != nil {
@@ -642,23 +689,24 @@ func (d *Driver) startVMNet(ctx context.Context, spec runner.SandboxSpec, netDir
 	return nil
 }
 
-// maxVMShares bounds the virtiofsd names removeVMSidecars tries when removals keep failing.
+// maxVMShares bounds the virtiofsd names removeVMSidecars tries.
 const maxVMShares = 64
 
 // removeVMSidecars removes a run's network relay, virtiofsd and prep containers. Their names are deterministic
-// and their count small, so no list is needed: the shares end at the first absent one. A failed
+// and their count small, so no list is needed: every share index up to maxVMShares is tried. A failed
 // removal does not stop the others; every failure is returned.
 func (d *Driver) removeVMSidecars(ctx context.Context, runID uuid.UUID) error {
 	var errs []error
-	remove := func(name string) bool {
-		_, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
-		if err != nil && !isNotFound(err) {
+	remove := func(name string) {
+		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 			errs = append(errs, fmt.Errorf("docker: remove %s: %w", name, err))
 		}
-		return err == nil || !isNotFound(err)
 	}
 	remove(vmnetName(runID))
-	for n := 0; n < maxVMShares && remove(vmfsName(runID, n)); n++ {
+	// Every bounded index, whether or not an earlier one was already removed: a retry after one
+	// removal failed must still reach the share that failed.
+	for n := 0; n < maxVMShares; n++ {
+		remove(vmfsName(runID, n))
 	}
 	for _, what := range []string{"export", "image", "overlay"} {
 		remove(vmPrepName(runID, what))
@@ -816,12 +864,18 @@ func (d *Driver) vmLogTail(ref string) string {
 
 // EndVM ends the run's Linux VM as the lease end does (EndSandbox): the guest is asked to power down,
 // the QEMU container is stopped and kept, and the proxy is stopped and removed. It reports false and
-// touches nothing for a run that is not a VM, or when VMs are off. An engine that cannot say what the
-// run is answers an error. wardyn-runnerd calls it when a VM
+// touches nothing for a run that is not a VM. A VM this runner can no longer reach (VM sandboxes off
+// since it was made) is still ended: its QEMU container is stopped without the guest's power down.
+// An engine that cannot say what the run is answers an error. wardyn-runnerd calls it when a VM
 // run's audit spool is full.
 func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
 	ref := agentContainerName(runID)
 	v, err := d.vmLookup(ctx, ref)
+	if errors.Is(err, errVMUnreachable) {
+		// EndSandbox finds no VM to tear down here (vmFor is nil with VM sandboxes off), so the
+		// sidecars go by name.
+		return true, errors.Join(d.EndSandbox(ctx, ref), d.removeVMSidecars(ctx, runID))
+	}
 	if err != nil || v == nil {
 		return false, err // an engine that cannot say is an error the caller retries, never "not a VM"
 	}

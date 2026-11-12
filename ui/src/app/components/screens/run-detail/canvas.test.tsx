@@ -25,8 +25,10 @@ vi.mock("../../../lib/api/run-layout", () => ({
 // canvas, not them (widgets.test.tsx owns those).
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
+    getPolicy: () => new Promise(() => {}),
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
   },
 }));
 
@@ -229,6 +231,24 @@ describe("RunCanvas — loading a layout", () => {
     render(<RunCanvas ctx={ctx()} />);
     expect(await screen.findByRole("heading", { name: "Egress" })).toBeInTheDocument();
     expect(screen.getByTestId("run-terminal-pane")).toBeInTheDocument();
+  });
+});
+
+describe("RunCanvas — layout presets", () => {
+  it("offers the presets as a labelled group whose buttons say which one is pressed", async () => {
+    const user = userEvent.setup();
+    render(<RunCanvas ctx={ctx()} />);
+    await screen.findByRole("heading", { name: "Egress" });
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+    const group = screen.getByRole("group", { name: RUN_COCKPIT.layoutPresets });
+    const live = within(group).getByRole("button", { name: RUN_COCKPIT.layoutPreset("Live") });
+    const finished = within(group).getByRole("button", { name: RUN_COCKPIT.layoutPreset("Finished") });
+    expect(live).toHaveAttribute("aria-pressed", "true");
+    expect(finished).toHaveAttribute("aria-pressed", "false");
+    await user.click(finished);
+    expect(finished).toHaveAttribute("aria-pressed", "true");
+    expect(live).toHaveAttribute("aria-pressed", "false");
   });
 });
 

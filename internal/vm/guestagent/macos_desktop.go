@@ -13,11 +13,15 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/rfbauth"
 )
 
 // The macOS desktop is the guest's own Screen Sharing. The agent owns three things about it: setting
@@ -46,7 +50,28 @@ type Desktop struct {
 	Console ConsoleUser
 	// VNCSettings is the settings file SetPassword writes; "" is MacVNCSettingsPath.
 	VNCSettings string
+	// SessionEnvEvery is StartSessionEnv's console poll, and SessionEnvWait bounds its whole GUI step, the set included;
+	// zero is 2 s and 10 min.
+	SessionEnvEvery, SessionEnvWait time.Duration
+	// SetupAssistantWatch bounds endSetupAssistant once the desktop is up; zero is 2 min.
+	SetupAssistantWatch time.Duration
+	// SetupAssistantSwitch is the file that turns endSetupAssistant on; "" is MacSetupAssistantSwitchPath.
+	SetupAssistantSwitch string
+	// LoginWait is how long after boot a run with a desktop waits for the agent account at the console
+	// (awaitAgentConsole); zero is 5 min.
+	LoginWait time.Duration
+	// AgentUID is the agent account's uid: the console view signs in only while it is at the console.
+	AgentUID uint32
+	// KCPassword is the agent account's auto-login password file; "" is MacKCPasswordPath.
+	KCPassword string
+	// ViewStatus is the desktop view's status file; "" is MacDesktopViewStatusPath.
+	ViewStatus string
+	// PeerCheck refuses a Screen Sharing connection whose server end is not root's, before any password
+	// is sent on it; nil is the lsof check through Run.
+	PeerCheck func(ctx context.Context, c net.Conn) error
 
+	ardOnce  sync.Once
+	ard      *rfbauth.ARDClient
 	mu       sync.Mutex
 	password string
 	disabled bool
@@ -95,6 +120,9 @@ func (d *Desktop) Track(c io.Closer) (release func(), ok bool) {
 
 // ErrNoConsoleUser is a guest with nobody logged in at the console (the login window).
 var ErrNoConsoleUser = errors.New("guestagent: nobody is logged in at the guest's console")
+
+// ErrConsoleChanged is SetSessionEnv's refusal when the console is no longer the account it was asked for.
+var ErrConsoleChanged = errors.New("guestagent: the console is no longer the agent account's")
 
 // MacVNCSettingsPath is where Screen Sharing keeps its legacy VNC password: VNCSettingsLine's text,
 // root-owned, mode 0600.
@@ -216,29 +244,55 @@ func parsePointer(s string) (Pointer, error) {
 	return Pointer{X: int(math.Round(v[0])), Y: int(math.Round(v[1]))}, nil
 }
 
-// SetSessionEnv sets env (KEY=VALUE) in the console user's GUI session, so apps started from it after
-// this see it. A session that is not up yet (ErrNoConsoleUser) is skipped, not an error: the caller
-// logs it. That a launched app reads the variables is unproven (MAC-PROOF P11).
-func (d *Desktop) SetSessionEnv(ctx context.Context, env []string) error {
+// SetSessionEnv sets env (KEY=VALUE) in uid's GUI session, so apps started from it after this see it, and says how it took: "asuser" (launchctl asuser, root's identity in the user's
+// namespace) or "user" (the same set as the user, sudo -u). It reads one variable back (WARDYN_RUN_ID
+// when there) after the first form, and redoes the set the second way when the session does not hold it.
+// uid is the account the caller saw at the console: the console is read again first, and anyone else there
+// is ErrConsoleChanged, with nothing set, so a fast user switch never sends the settings to another
+// account's session. A session that is not up yet (ErrNoConsoleUser) is an error the caller handles too. Values appear on the
+// launchctl command lines: env is the run's non-secret half by contract, and never SecretEnv. That a
+// launched app reads the variables is unproven (MAC-PROOF P11).
+func (d *Desktop) SetSessionEnv(ctx context.Context, uid uint32, env []string) (via string, err error) {
 	if len(env) == 0 {
-		return nil
+		return "", nil
 	}
-	uid, err := d.Console.Console(ctx)
+	at, err := d.Console.Console(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
+	if at != uid {
+		return "", ErrConsoleChanged
+	}
+	id := strconv.FormatUint(uint64(uid), 10)
 	for _, kv := range env {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
-			return fmt.Errorf("session variable %q is not KEY=VALUE", k)
+			return "", fmt.Errorf("session variable %q is not KEY=VALUE", k)
 		}
 		// launchctl asuser keeps root's identity in the user's namespace, which is what setenv needs.
-		args := []string{"asuser", strconv.FormatUint(uint64(uid), 10), "/bin/launchctl", "setenv", k, v}
-		if _, err := d.Run.Run(ctx, "/bin/launchctl", args...); err != nil {
-			return fmt.Errorf("set %s in the desktop session: %w", k, err)
+		if _, err := d.Run.Run(ctx, "/bin/launchctl", "asuser", id, "/bin/launchctl", "setenv", k, v); err != nil {
+			return "", fmt.Errorf("set %s in the desktop session: %w", k, err)
 		}
 	}
-	return nil
+	key, want := sessionEnvCheck(env)
+	holds := func() bool {
+		out, err := d.Run.Run(ctx, "/bin/launchctl", "asuser", id, "/bin/launchctl", "getenv", key)
+		return err == nil && strings.TrimSuffix(string(out), "\n") == want
+	}
+	if holds() {
+		return "asuser", nil
+	}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		cmd, args := asUser(uid, "/bin/launchctl", "setenv", k, v)
+		if _, err := d.Run.Run(ctx, cmd, args...); err != nil {
+			return "", fmt.Errorf("set %s in the desktop session as the user: %w", k, err)
+		}
+	}
+	if !holds() {
+		return "", fmt.Errorf("the desktop session does not hold %s after the set", key)
+	}
+	return "user", nil
 }
 
 // servePointer answers the pointer position (Pointer); 409 with nobody at the console. Only tools mode

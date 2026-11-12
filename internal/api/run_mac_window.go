@@ -56,6 +56,10 @@ const (
 	macWindowLockUnknownMsg    = "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed."
 )
 
+// macWindowRevocationUnavailableMsg is the refusal of a window whose grant names no token or CLI session, so
+// its credential cannot be checked.
+const macWindowRevocationUnavailableMsg = "Wardyn can't check the credential this window was asked for with. Open it again with `wardyn window`."
+
 // macWindowNotYourMacMsg is the refusal of a window on a run that is not on a Mac whose runner the caller
 // registered, naming the computer it is on.
 func macWindowNotYourMacMsg(runner string) string {
@@ -183,10 +187,7 @@ type macWindowAuthority struct {
 // macWindowAuthorityFrom is the authority of the request ctx carries, admitted at.
 func macWindowAuthorityFrom(ctx context.Context, actor types.ActorType, principal string, at time.Time) macWindowAuthority {
 	_, via := audit.DelegationFrom(ctx)
-	tokenID, sessionID := apiTokenIDFromContext(ctx), cliSessionIDFromContext(ctx)
-	if sessionID != uuid.Nil {
-		tokenID = uuid.Nil
-	}
+	tokenID, sessionID := credentialBinding(ctx)
 	return macWindowAuthority{ActorType: actor, Principal: principal, Email: oidcEmailFromContext(ctx),
 		Issue: admittedIssue(ctx, principal, at), Token: admittedByToken(ctx), Via: via,
 		TokenID: tokenID, CLISessionID: sessionID}
@@ -485,6 +486,9 @@ func (s *Server) macWindowCheck(ctx context.Context, run types.AgentRun, a macWi
 	if macRunPreparing(run) {
 		return rn, runError(http.StatusConflict, reasonMacWindowPreparing, macWindowPreparingMsg)
 	}
+	if rf := s.macGUIEnvRefusal(ctx, run, ask.reopen); rf != nil { // the settings are still being applied to the desktop
+		return rn, rf
+	}
 	if !ask.reopen && s.macWindows.open(run.ID) != nil {
 		return rn, runError(http.StatusConflict, reasonMacWindowOpen, types.MacWindowOpenMsg(rn.Name))
 	}
@@ -567,6 +571,9 @@ func (s *Server) openMacWindow(ctx context.Context, run types.AgentRun, a macWin
 	revoked, err := s.macWindowRevoked(ctx, a)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: could not check a window's credential", "run_id", run.ID, "err", err)
+		if errors.Is(err, errMacWindowNoBinding) {
+			return refuse(runError(http.StatusForbidden, uiDeniedReasonRevocationUnavailable, macWindowRevocationUnavailableMsg))
+		}
 		return refuse(runServerError("check the session", err))
 	}
 	if revoked {
@@ -902,6 +909,7 @@ func (s *Server) macWindowViewFor(ctx context.Context, run types.AgentRun, a mac
 		slog.WarnContext(ctx, "wardynd: could not read whether a window may open", "run_id", run.ID, "err", rf.err)
 	}
 	v := macWindowStateOf(rf)
+	s.macGUIEnvNote(ctx, run, &v)
 	v.LastClose = s.macWindowLoadLastClose(ctx, run.ID, a.Principal)
 	return &v
 }

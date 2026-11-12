@@ -51,13 +51,19 @@ const (
 
 // KubeAPIGrant is the run's kubectl grant: the API server's host and port, the
 // CA bundle its serving certificate chains to ("" = the egress trust set), the
-// namespaces the row pins and whether the row lets kubectl change them.
+// namespaces the row pins and whether the row lets kubectl change them. Restart
+// admits the one change `kubectl rollout restart` sends (kube_restart.go) and
+// no other; it is ignored when Write is set. ApproveEach holds every admitted
+// write for a person's yes on that exact request (kube_api_hold.go).
 type KubeAPIGrant struct {
 	Host       string   `json:"host"`
 	Port       int      `json:"port"`
 	CAPEM      string   `json:"ca_pem,omitempty"`
 	Namespaces []string `json:"namespaces"`
 	Write      bool     `json:"write,omitempty"`
+	Restart    bool     `json:"restart,omitempty"`
+	// ApproveEach defaults off: an older proxy refuses a config carrying it.
+	ApproveEach bool `json:"approve_each,omitempty"`
 }
 
 // kubeAPIDoor is the compiled grant.
@@ -65,8 +71,12 @@ type kubeAPIDoor struct {
 	host       string
 	namespaces []string
 	write      bool
-	roots      *x509.CertPool // nil: the egress transport's own trust
-	rt         http.RoundTripper
+	restart    bool
+	// approveEach and calls are the held-write state (kube_api_hold.go).
+	approveEach bool
+	calls       mcpCalls
+	roots       *x509.CertPool // nil: the egress transport's own trust
+	rt          http.RoundTripper
 }
 
 // newKubeAPIDoor compiles the grant and adds the server to the MITM-eligible
@@ -78,7 +88,7 @@ func newKubeAPIDoor(g *KubeAPIGrant, mitmHosts map[string]bool, mitmPorts map[st
 	}
 	h := patAPIHost(g.Host)
 	mitmHosts[h], mitmPorts[h] = true, g.Port
-	d := &kubeAPIDoor{host: h, namespaces: slices.Clone(g.Namespaces), write: g.Write}
+	d := &kubeAPIDoor{host: h, namespaces: slices.Clone(g.Namespaces), write: g.Write, restart: g.Restart, approveEach: g.ApproveEach}
 	if g.CAPEM != "" {
 		d.roots = x509.NewCertPool()
 		d.roots.AppendCertsFromPEM([]byte(g.CAPEM))
@@ -170,7 +180,7 @@ func (d *kubeAPIDoor) admitInNamespace(method string, core bool, rest []string) 
 		return fmt.Errorf("%s is not allowed for this run's kubectl", rest[2])
 	case len(rest) == 3 && rest[0] == "serviceaccounts" && rest[2] == "token":
 		return errors.New("this run's kubectl cannot request a service account token")
-	case method != http.MethodGet && !d.write:
+	case method != http.MethodGet && !d.write && !d.restart:
 		return errors.New("this run's kubectl has read access only")
 	}
 	return nil
@@ -226,6 +236,16 @@ func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string
 		p.refuseKubeAPI(w, r, host, port, kubeAPIRefused, kubeAPIRefusedPrefix+err.Error()+".")
 		return
 	}
+	if r.Method != http.MethodGet && p.kube.restartOnly() {
+		if err := p.kube.admitRestart(r, adoRawPath(r)); err != nil {
+			p.refuseKubeAPI(w, r, host, port, kubeAPIRefused, kubeAPIRefusedPrefix+err.Error()+".")
+			return
+		}
+	}
+	approvalID, send := p.holdKubeCall(w, r, host, port) // approve_each: a person's yes on this exact write
+	if !send {
+		return
+	}
 	// After the gate, so a refused request never mints a token.
 	hdr, ok, err := p.inject.resolveCtx(r.Context(), host)
 	switch {
@@ -239,9 +259,9 @@ func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string
 		p.refuseKubeAPI(w, r, host, port, kubeAPICredentialUnavailable, kubeAPINoCredential)
 		return
 	}
-	rearmBodyDeadline(w)
+	rearmBodyDeadline(w, r)
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceKubeAPI, denied: ruleSourceKubeAPIRefused,
-		mintFailed: "cluster credential", upstream: "kubernetes", rt: p.kube.rt,
+		mintFailed: "cluster credential", upstream: "kubernetes", rt: p.kube.rt, approvalID: approvalID,
 		credential: func(context.Context) (string, string, error) { return hdr.name, hdr.value, nil }})
 }
 
@@ -250,6 +270,11 @@ func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string
 // prints. Never 401, which kubectl reads as "sign in again".
 func (p *Proxy) refuseKubeAPI(w http.ResponseWriter, r *http.Request, host string, port int, code, message string) {
 	p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourceKubeAPIRefused)
+	writeKubeStatus(w, code, message)
+}
+
+// writeKubeStatus answers with a 403 Kubernetes Status carrying the `wardyn` code.
+func writeKubeStatus(w http.ResponseWriter, code, message string) {
 	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]any{
 		"kind": "Status", "apiVersion": "v1", "metadata": map[string]any{}, "status": "Failure",
 		"message": message, "reason": "Forbidden", "code": http.StatusForbidden, "wardyn": code,
@@ -316,6 +341,9 @@ func (c *Config) validateKubeAPI() error {
 	}
 	if g.CAPEM != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(g.CAPEM)) {
 		return fmt.Errorf("config: kube_api.ca_pem holds no PEM certificate")
+	}
+	if g.ApproveEach && !g.Write && !g.Restart {
+		return fmt.Errorf("config: kube_api.approve_each holds writes, so it needs write or restart")
 	}
 	rules := 0
 	for i, inj := range c.Injection {

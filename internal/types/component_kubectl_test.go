@@ -77,7 +77,7 @@ func TestComponentCLI_KubectlShape(t *testing.T) {
 		"too many":         {row(func(k *types.CLIKubectl) { k.Namespaces = tooMany }), "1 to 16"},
 		"bad namespace":    {row(func(k *types.CLIKubectl) { k.Namespaces = []string{"a/b"} }), "namespaces[0]"},
 		"twice":            {row(func(k *types.CLIKubectl) { k.Namespaces = []string{"a", "a"} }), "listed twice"},
-		"access":           {row(func(k *types.CLIKubectl) { k.Access = "admin" }), "read or write"},
+		"access":           {row(func(k *types.CLIKubectl) { k.Access = "admin" }), "read, restart or write"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -113,5 +113,18 @@ func TestComponentCLI_KubectlOffIsToday(t *testing.T) {
 	t.Setenv(types.EnvKubectlCLI, "1")
 	if err := cliDef(&types.ComponentCLI{Kind: "kubectl", Kubectl: &k}).Validate(proxy.ValidDomainEntry, false); err != nil {
 		t.Fatalf("switch on: %v", err)
+	}
+}
+
+// A kubectl row may say restart: reads, plus the one patch kubectl rollout
+// restart sends. Any other word is still refused.
+func TestCLIKubectlAccessRestartValid(t *testing.T) {
+	t.Setenv(types.EnvKubectlCLI, "on")
+	for access, ok := range map[string]bool{"read": true, "write": true, "restart": true, "": false, "Restart": false, "restart ": false, "admin": false} {
+		def := cliDef(&types.ComponentCLI{Kind: "kubectl", Kubectl: &types.CLIKubectl{Server: "https://k8s.example.com:6443",
+			ServiceAccount: types.CLIServiceAccount{Namespace: "wardyn", Name: "runs"}, Namespaces: []string{"team-a"}, Access: access}})
+		if err := def.Validate(proxy.ValidDomainEntry, false); (err == nil) != ok {
+			t.Errorf("access %q: err = %v, want accepted = %v", access, err, ok)
+		}
 	}
 }

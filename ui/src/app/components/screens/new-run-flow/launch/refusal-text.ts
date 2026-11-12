@@ -23,7 +23,8 @@ const SCHEDULE_TEXT: Record<ScheduleReason, string> = {
  * back with no sentence (empty, or the code alone), which never shows its code.
  */
 export function refusalText(e: unknown): string {
-  const message = getErrorMessage(e);
+  // "" fallback: a blank message must reach the code-alone check below, not become the generic sentence.
+  const message = getErrorMessage(e, "");
   if (e instanceof HttpError && isScheduleReason(e.reason) && !/\s/.test(message.trim())) return SCHEDULE_TEXT[e.reason];
   return message;
 }

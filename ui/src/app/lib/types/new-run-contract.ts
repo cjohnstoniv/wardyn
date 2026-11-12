@@ -242,6 +242,12 @@ export interface ImageFact {
   source: ImageSource;
 }
 
+/**
+ * The policy preview's image_admission: launch checks the image's signatures. The preview reads no
+ * registry, so it cannot say whether the image passes. Absent when launch checks nothing.
+ */
+export type ImageAdmissionFact = "checked at launch";
+
 /** One included harness's model credential: provider, kind, and where it lands. */
 export interface HarnessModelCredential {
   provider: string;

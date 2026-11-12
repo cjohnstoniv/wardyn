@@ -41,8 +41,20 @@ const (
 	KeptWindowStrip = "What you type goes into this run. Sign-ins stay on this machine while this machine is kept. Close this window to hand back; the run keeps going."
 )
 
-// WindowText is a run window's text: its title and the strip under the title bar.
-type WindowText struct{ Title, Strip string }
+// WindowText is a window's text: its title and the strip under the title bar. A run window has only those.
+// The edit window also has CodeFile, the setup-code file's path (not secret), which gives the strip a Show
+// code control that reads the code from the file on a click (the code never crosses into Go), and AskStop,
+// which its close button calls, off the main thread, instead of closing: it asks the guest to shut down, and
+// the window stays up until Close runs. Its buttons call AdminTerminal, TrustCAs, FullDiskAccess and InstallRosetta the same
+// way (nil: the click does nothing); CanTrust false disables Trust the list's CAs, which then has nothing to
+// trust. Its Type code button needs no callback: it reads the code from CodeFile, as Show code does.
+type WindowText struct {
+	Title, Strip                                            string
+	CodeFile                                                string
+	AskStop                                                 func()
+	AdminTerminal, TrustCAs, FullDiskAccess, InstallRosetta func()
+	CanTrust                                                bool
+}
 
 // ErrNotAtMac is what WindowScreen.Ready wraps when the Mac's screen is locked or its console session is not
 // this process's. ErrLockUnknown is its answer when it can't tell whether the screen is locked. Any other Ready
@@ -161,6 +173,11 @@ type ViewMachine interface {
 
 // nativeWindowScreen is the Mac's WindowScreen; set by the darwin cgo build (screen_darwin.go).
 var nativeWindowScreen WindowScreen
+
+// nativeEditScreen is the Mac's edit window, a WindowScreen whose Ready is setup's window check (a window-server
+// session, not root) and whose window neither checks the console nor ends on a screen lock: the person started
+// edit-base at this Mac, and the window stays until the guest shuts down. Set by the darwin cgo build.
+var nativeEditScreen WindowScreen
 
 // watchWindow ends a native window's channels, polling every interval. locked is closed once lockNotices() is no
 // longer since, its count when the window began to open: a lock notification came (the C side then tears the

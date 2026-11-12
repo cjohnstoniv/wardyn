@@ -27,62 +27,70 @@ var ErrRunnerSpoolRefused = errors.New("runner audit replay refused")
 // receipt. Terminal-run acceptance is audit only: this transaction never touches
 // lifecycle, idle clocks, credentials, grants, approvals or token renewal.
 func (s PG) IngestRunnerDecision(ctx context.Context, runnerID uuid.UUID, row runnerspool.Record, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {
+	first, _, err := s.IngestRunnerDecisionUsage(ctx, runnerID, row, prepare)
+	return first, err
+}
+
+// IngestRunnerDecisionUsage is IngestRunnerDecision that also reports whether the committed replay stored a
+// new model usage row: false for a row of another kind, a call id already stored, a store with the opt-out
+// on, and every failed or rolled-back replay.
+func (s PG) IngestRunnerDecisionUsage(ctx context.Context, runnerID uuid.UUID, row runnerspool.Record, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (first, usageStored bool, err error) {
 	if runnerID == uuid.Nil || prepare == nil || !validRunnerDecision(row) {
-		return false, ErrRunnerSpoolRefused
+		return false, false, ErrRunnerSpoolRefused
 	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is harmless
 	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
-		return false, err
+		return false, false, err
 	}
 	run, err := runnerSpoolRun(ctx, tx, runnerID, row.Decision.Request.RunID)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	cursor, err := lockRunnerSpool(ctx, tx, runnerID, row)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	duplicate, err := cursor.accept(row)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if duplicate {
-		return false, tx.Commit(ctx)
+		return false, false, tx.Commit(ctx)
 	}
-	events, err := runnerDecisionEvents(ctx, tx, runnerID, run.ID, row)
+	events, usageStored, err := runnerRowEvents(ctx, tx, runnerID, run.ID, row, s.ModelUsageOff)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	for i, ev := range events {
 		ev, err = prepare(ctx, ev)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
-			return false, err
+			return false, false, err
 		}
 		events[i] = ev
 	}
 	hashes, err := json.Marshal(cursor.hashes)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$2,recent_hashes=$3,overflow_end=$4::text::numeric,overflow_hash=$5 WHERE run_id=$1`, run.ID, cursor.last, hashes, strconv.FormatUint(cursor.overflow, 10), cursor.overflowHash); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if s.SIEM != nil {
 		for _, ev := range events {
 			_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
 		}
 	}
-	return true, nil
+	return true, usageStored, nil
 }
 
 func validRunnerDecision(r runnerspool.Record) bool {
@@ -215,6 +223,19 @@ func runnerDecisionEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.U
 		return nil, err
 	}
 	d := r.Decision
+	if d.DNS != nil {
+		data := map[string]any{"observed_at": d.Request.Time, "spooled": true, "evidence_source": types.RunEvidenceRunnerAsserted, "spool_id": r.SpoolID, "spool_seq": r.Seq, "spool_hash": r.Hash}
+		if r.Count > 0 {
+			data["count"] = r.Count
+		}
+		d.DNS.AuditFields(data)
+		b, err := json.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
+		return []types.AuditEvent{{ID: uuid.New(), Time: at, RunID: &runID, ActorType: types.ActorAgent, Actor: "runner:" + runnerID.String(),
+			Target: d.DNS.Name, Action: egress.DNSQueryAction, Outcome: d.DNS.AuditOutcome(), Data: b}}, nil
+	}
 	data := map[string]any{"host": d.Request.Host, "port": d.Request.Port, "method": d.Request.Method, "path": d.Request.Path, "rule_source": d.RuleSource, "approval_id": d.ApprovalID, "observed_at": d.Request.Time, "spooled": true, "evidence_source": types.RunEvidenceRunnerAsserted, "spool_id": r.SpoolID, "spool_seq": r.Seq, "spool_hash": r.Hash}
 	if r.Count > 0 {
 		data["count"] = r.Count
@@ -230,6 +251,9 @@ func runnerDecisionEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.U
 	}
 	if d.UpstreamFault != "" {
 		data["upstream_fault"] = d.UpstreamFault
+	}
+	if d.ModelTunnel {
+		data["model_tunnel"] = true
 	}
 	if d.GatewayCallID != "" {
 		data["gateway_call_id"] = d.GatewayCallID

@@ -15,21 +15,14 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 
 ## How long you stay signed in, and signing out
 
-- Your console session ends when your identity provider's sign-in expires, or after `WARDYN_OIDC_SESSION_TTL` if your operator set one. An operator may also send you back through sign-in sooner with `WARDYN_ROLE_STAMP_TTL`. The knobs are in [ENV.md](ENV.md#wardyn_oidc_session_ttl) and [ENV.md](ENV.md#wardyn_role_stamp_ttl).
-- With `WARDYN_OIDC_SESSION_RENEW_CAP` set, using the console keeps the session going, up to that long after you signed in. A terminal open across a renewal reconnects on its own.
-- With `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` set, a console tab left with no activity for that long is signed out, even before the session would otherwise lapse. The knob is in [ENV.md](ENV.md#wardyn_oidc_session_idle_timeout).
-- When it lapses you sign in again. A terminal you had open closes: the server re-checks it every 30 seconds, and a lapse or a cut ends it.
+- Your console session ends when your identity provider's sign-in expires, or sooner if your admin set a limit. The account menu shows "Signed in until". Your admin may also send you back through sign-in sooner, or sign out a console tab left idle. These limits are in [ENV.md](ENV.md#wardyn_oidc_session_ttl).
+- Using the console can keep the session going, up to a cap your admin sets. A terminal open across a renewal reconnects on its own.
+- You may be asked to sign in sooner because an admin ended your session, your access changed, or your access was turned off. The sign-in screen says which.
+- When it lapses you sign in again. A terminal you had open closes: the server re-checks it every 30 seconds, and a lapse or a cut ends it. The page you were on, open editors in that tab and the run itself survive.
 - **Sign out** clears your cookie and ends every console session you have, in every browser. Your personal API tokens, SSH keys and runs keep working, except a console-launched run still waiting in a pool queue, which fails when it would start.
-- Signing out of Wardyn does not sign you out of your identity provider, nor the reverse: back- and front-channel logout are off unless your operator turned them on ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or one of those logouts cuts it.
+- Signing out of Wardyn does not sign you out of your identity provider. Signing out of the identity provider ends your Wardyn sessions only when your admin turned on back- or front-channel logout ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). On a shared computer, sign out of your work account too.
+- A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or one of those logouts cuts it. Signing out or in in one tab updates the others in the same browser at once; another browser or device finds its session ended at its next request.
 - A run's idle clock does not stop when your terminal closes. A lapse that closes your terminal leaves the run under its own idle and end limits, which [run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) explains. A run with idle stop off never stops for inactivity.
-
-## Session lifetime
-
-- How long a console session lasts: your identity provider's ID token expiry, or `WARDYN_OIDC_SESSION_TTL` when your admin sets it. The account menu shows "Signed in until".
-- Why you may be asked to sign in sooner: an admin ended your session, your access changed (`WARDYN_ROLE_STAMP_TTL`), or your access was turned off. The sign-in screen says which.
-- What survives: the page you were on, open editors in that tab, a run's terminal and the run itself. Signing out leaves the run itself unaffected.
-- Shared computers: Sign out ends the Wardyn session only; sign out of your work account too.
-- Tabs: signing out or in in one tab updates the others in the same browser, not other browsers or devices.
 
 ## What you can and cannot do
 
@@ -37,10 +30,15 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
   [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what);
   this page does not restate it.
 - `GET /me/capabilities` tells you which capability grants you personally hold.
-- Your admin can see this page's world for themselves without a second login —
-  [docs/operations/member-mode.md](operations/member-mode.md)
-  — which is worth knowing when you report something: they can usually look at
-  exactly what you are looking at.
+- Your admin can see this page's world for themselves without a second login
+  ([docs/operations/member-mode.md](operations/member-mode.md)), so they can usually look at
+  exactly what you are looking at when you report something.
+
+**Limit your own runs.**
+
+- Your walls are private limits on every run you start. They only narrow what your admin allows. Set them in Settings or with `wardyn walls`.
+- A wall preset narrows one run: `wardyn run --wall-preset <name>`, with `open`, `read-only` or `sealed`.
+- See [Your walls](POLICIES.md#your-walls) and [Wall presets](POLICIES.md#wall-presets).
 
 **Autonomy levels (0.8).**
 
@@ -71,7 +69,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
   lane to derive a hold into, so the same run is refused instead (`runs.agent`) —
   launch claude-code, or launch interactively.
 
-Three things worth naming here, because they read as bugs otherwise:
+Three behaviours that look like bugs:
 
 - A run id that isn't yours answers **404**, not 403 — Wardyn never confirms
   or denies that something exists for a principal who can't see it.
@@ -85,7 +83,7 @@ Three things worth naming here, because they read as bugs otherwise:
     through: onboarding or editing a workspace, scanning or building one, and
     creating a run.
   - Your refusal says the host is not an enabled git provider and tells you to
-    ask an admin — and that is deliberately all of it, identical at every door.
+    ask an admin, and says nothing more, at every door.
   - The allowed addresses are the org's own topology and are never shown to a
     member, and varying the sentence by door would leak the shape of the policy
     one refusal at a time.
@@ -210,7 +208,7 @@ resolves your drive the same way, in a dry run too:
   `workspace_mounts` target is refused with
   `workspace_mounts[0]: target /home/agent/drive is reserved for the user drive`
   (see [POLICIES.md](POLICIES.md)).
-- Preflight is honest about the **allocation**, not about the substrate: a drive
+- Preflight checks the **allocation**, not the substrate: a drive
   whose storage the runner cannot actually provision still passes preflight and
   fails when the run is dispatched.
 - **The size you are shown is an allocation, not a quota.** Quoted as the console
@@ -240,11 +238,11 @@ resolves your drive the same way, in a dry run too:
 - You may decide an `egress_domain` approval on a run you own.
 - `credential` and `tool_call` approvals stay admin-only regardless of who owns
   the run — see [OPERATIONS.md](OPERATIONS.md) for why.
-- One `tool_call` is the exception: an Azure DevOps access request raised by a run you own, which you may decide up to the ceiling an administrator set.
+- Two `tool_call`s on a run you own are the exception. You may decide an Azure DevOps access request up to the ceiling an administrator set, and approve once an MCP call a tool rule marks `approve_each`.
 - If your deployment sets `WARDYN_EGRESS_SECOND_HUMAN=1`, you cannot decide
   your own run's egress approval yourself.
 - That's four-eyes working as intended, not a failure.
-- The same holds for your own run's Azure DevOps access request if it sets
+- The same holds for your own run's Azure DevOps access request or MCP call if it sets
   `WARDYN_CAPABILITY_SECOND_HUMAN=1`: then someone else must decide it.
 
 ## Who approves a governance change
@@ -312,7 +310,7 @@ resolves your drive the same way, in a dry run too:
   endpoint's answer when it has nothing scoped to show you, not an error.
 - The action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - If a run used an organisation component's shared secret, the audit rows and the grant list you read for your own run leave out that secret's name. Administrators and security administrators read the rows as recorded.
-- An admin may replay your runs' session recordings. Each replay writes a `recording.read` row to that run's audit, so you see it here.
+- An admin may replay your runs' session recordings. Each replay writes a `recording.read` row to that run's audit, so you see it here. An admin reading your terminal text through a run's output (a pane snapshot, or output recovered from the recording) writes a `run.output.read` row there too.
 - If your laptop is one your organisation enrolled into a remote control plane,
   this same audit trail is also forwarded upward into the organisation's own table.
 - This is automatic, admin-configured, and nothing you do here changes it.
@@ -355,13 +353,11 @@ resolves your drive the same way, in a dry run too:
   - For a Claude subscription, a typed key/token, or a Bedrock API key, the
     credential injected is yours, proxy-side, and never resident in the
     sandbox.
-  - A Bedrock SSO sign-in is the one exception: the in-sandbox AWS SDK
-    always derives short-lived AWS role credentials that stay resident in the
-    sandbox for the run — see
-    [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) ("Derived
-    AWS role credentials").
-  - The SSO access token itself stays at the proxy; see [ENV.md](ENV.md)
-    (`WARDYN_AWS_SSO_PROXY_INJECT`).
+  - A Bedrock SSO sign-in is the exception. Unless your admin turned on
+    `WARDYN_AWS_SIGV4_AT_PROXY`, the in-sandbox AWS SDK derives short-lived role
+    credentials that stay in the sandbox for the run
+    ([how a credential reaches a run](CREDENTIALS.md#a-cloud-credential-made-inside)).
+    Your SSO access token stays at the proxy.
 
 ## Your model connections
 
@@ -443,10 +439,11 @@ resolves your drive the same way, in a dry run too:
 - A registered runner keeps your sign-in name, and its registration token's maker's, while it exists;
   a retired service identity keeps you as sponsor. Erasing your records removes neither; a SCIM purge
   revokes your runners and deletes your invitations.
-- Wardyn never
-  revokes anything upstream on your behalf: your own AWS, Anthropic or Azure
-  DevOps sign-in stays valid at the provider until you — or your admin, there,
-  not here — revoke it directly.
+- Wardyn does not revoke your sign-in at AWS, Anthropic or Entra: it stays valid
+  there until you, or your admin at the provider, revoke it. The one thing it
+  revokes upstream is a token it created for you in Azure DevOps (`minted_pat`),
+  on pause, at the run's end, on disconnect and on offboarding
+  ([AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-a-runs-token-lives-minted_pat)).
 
 ## What to ask your admin for
 

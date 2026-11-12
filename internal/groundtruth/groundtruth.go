@@ -78,6 +78,8 @@ type EventData struct {
 	CgroupID    uint64   `json:"cgroup_id,omitempty"`    // kernel cgroup id of the observed process (0 if unknown)
 	ContainerID string   `json:"container_id,omitempty"` // (truncated) container id the event was attributed to
 	Argv        []string `json:"argv,omitempty"`         // full process command line for exec events
+	Node        string   `json:"node,omitempty"`         // Kubernetes node the sensor saw the event on (absent on Compose)
+	Pod         string   `json:"pod,omitempty"`          // "namespace/name" of the pod the process ran in (absent on Compose)
 	Dst         string   `json:"dst,omitempty"`          // "ip:port" for network_connect events
 	Path        string   `json:"path,omitempty"`         // written file path for file_write events
 	// Loader is true when the exec'd binary is a dynamic linker (ld-linux /
@@ -107,6 +109,15 @@ type Correlator interface {
 	// RunForContainer returns the run id for a container id (any prefix
 	// length Tetragon emits); ok is false for unknown / non-Wardyn containers.
 	RunForContainer(containerID string) (runID uuid.UUID, ok bool)
+}
+
+// PodCorrelator is an optional extension of Correlator for Kubernetes: it
+// resolves an event by the pod and container it came from. The Mapper tries it
+// first when the event carries a pod block and the Correlator implements it.
+type PodCorrelator interface {
+	// RunForPod returns the run id for a pod's namespace, name and container
+	// name; ok is false for any pod that is not a Wardyn agent pod.
+	RunForPod(namespace, name, container string) (runID uuid.UUID, ok bool)
 }
 
 // loaderPrefixes are dynamic-linker path shapes flagged with loader=true, matched as a prefix check against the resolved binary path.

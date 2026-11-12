@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -362,8 +364,16 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 		t.Fatalf("agent netpol Egress = %d rules, want 1", len(agentNP.Spec.Egress))
 	}
 	eg := agentNP.Spec.Egress[0]
-	if len(eg.Ports) != 1 || eg.Ports[0].Port == nil || eg.Ports[0].Port.IntVal != runner.ProxyListenPort {
-		t.Errorf("agent netpol egress port = %+v, want %d", eg.Ports, runner.ProxyListenPort)
+	// The proxy, and its DNS listener on 53 over TCP and UDP: all on the one proxy-peer rule.
+	wantPorts := []string{fmt.Sprintf("TCP/%d", runner.ProxyListenPort), "TCP/53", "UDP/53"}
+	var gotPorts []string
+	for _, p := range eg.Ports {
+		if p.Protocol != nil && p.Port != nil && p.EndPort == nil {
+			gotPorts = append(gotPorts, fmt.Sprintf("%s/%d", *p.Protocol, p.Port.IntVal))
+		}
+	}
+	if !slices.Equal(gotPorts, wantPorts) || len(eg.Ports) != len(wantPorts) {
+		t.Errorf("agent netpol egress ports = %+v, want exactly %v", eg.Ports, wantPorts)
 	}
 	if len(eg.To) != 1 || eg.To[0].PodSelector == nil || eg.To[0].PodSelector.MatchLabels[labelComponent] != componentProxy {
 		t.Errorf("agent netpol egress peer = %+v, want a podSelector matching the proxy component", eg.To)
@@ -417,8 +427,10 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 	if agentPod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("agent pod RestartPolicy = %q, want Never", agentPod.Spec.RestartPolicy)
 	}
-	if agentPod.Spec.DNSPolicy != corev1.DNSNone || agentPod.Spec.DNSConfig == nil || len(agentPod.Spec.DNSConfig.Nameservers) == 0 {
-		t.Errorf("agent pod DNSPolicy/DNSConfig = %q / %+v, want None with a loopback nameserver", agentPod.Spec.DNSPolicy, agentPod.Spec.DNSConfig)
+	// The agent's one nameserver is its proxy pod, the address its wardyn-proxy alias names.
+	if agentPod.Spec.DNSPolicy != corev1.DNSNone || agentPod.Spec.DNSConfig == nil || len(agentPod.Spec.HostAliases) != 1 ||
+		!slices.Equal(agentPod.Spec.DNSConfig.Nameservers, []string{agentPod.Spec.HostAliases[0].IP}) {
+		t.Errorf("agent pod DNSPolicy/DNSConfig = %q / %+v, want None with the proxy pod as its one nameserver", agentPod.Spec.DNSPolicy, agentPod.Spec.DNSConfig)
 	}
 	ac := agentPod.Spec.Containers[0]
 	// CPU and memory ONLY: ephemeral-storage is deliberately asymmetric (a small
@@ -438,6 +450,16 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 	pc := proxyPod.Spec.Containers[0]
 	if pc.SecurityContext == nil || pc.SecurityContext.RunAsUser != nil {
 		t.Errorf("proxy container RunAsUser = %v, want nil (H2: image default, distroless nonroot)", pc.SecurityContext.RunAsUser)
+	}
+	// The DNS listener binds 53 through the namespaced safe sysctl, never a capability.
+	if sc := proxyPod.Spec.SecurityContext; sc == nil || !slices.Equal(sc.Sysctls, []corev1.Sysctl{{Name: "net.ipv4.ip_unprivileged_port_start", Value: "53"}}) {
+		t.Errorf("proxy pod sysctls = %+v, want only net.ipv4.ip_unprivileged_port_start=53", proxyPod.Spec.SecurityContext)
+	}
+	if pc.SecurityContext.Capabilities == nil || len(pc.SecurityContext.Capabilities.Add) != 0 {
+		t.Errorf("proxy container capabilities = %+v, want none added", pc.SecurityContext.Capabilities)
+	}
+	if !slices.Contains(pc.Env, corev1.EnvVar{Name: proxy.DNSListenEnv, Value: ":53"}) {
+		t.Errorf("proxy container env = %+v, want %s=:53", pc.Env, proxy.DNSListenEnv)
 	}
 }
 
@@ -1361,6 +1383,7 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 	// being ONE list.
 	t.Setenv("WARDYN_CREDENTIAL_REAUTH_TIMEOUT", "45s")
 	t.Setenv("WARDYN_GIT_APPROVAL_TIMEOUT", "10m")
+	t.Setenv("WARDYN_MODEL_USAGE", "off")
 
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
@@ -1383,6 +1406,7 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 		"WARDYN_LLM_SCAN":                     "off",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 		"WARDYN_GIT_APPROVAL_TIMEOUT":         "10m",
+		"WARDYN_MODEL_USAGE":                  "off",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
@@ -1408,6 +1432,7 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 		"WARDYN_LLM_SCAN",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
 		"WARDYN_GIT_APPROVAL_TIMEOUT",
+		"WARDYN_MODEL_USAGE",
 	} {
 		t.Setenv(k, "") // t.Setenv cannot unset; clear then Unsetenv below
 		if err := os.Unsetenv(k); err != nil {
@@ -1426,13 +1451,18 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get proxy pod: %v", err)
 	}
-	// Two, not three: WARDYN_RUN_ID and WARDYN_CONTROL_PLANE_URL. The config
-	// itself is no longer an env var at all (T-28, issue #688) — it reaches
-	// the container as a file via the init-container staging step, mounted
+	// Exactly the three it always has: WARDYN_RUN_ID, WARDYN_CONTROL_PLANE_URL
+	// and the DNS listener address (proxy.DNSListenEnv). The config itself is
+	// no longer an env var at all (T-28, issue #688) — it reaches the
+	// container as a file via the init-container staging step, mounted
 	// read-only off the shared emptyDir tested in netpol_invariant_probe_test.go.
-	if n := len(proxyPod.Spec.Containers[0].Env); n != 2 {
-		t.Errorf("proxy pod carries %d env vars, want the 2 it always has: %+v",
-			n, proxyPod.Spec.Containers[0].Env)
+	want := []string{"WARDYN_RUN_ID", "WARDYN_CONTROL_PLANE_URL", proxy.DNSListenEnv}
+	var got []string
+	for _, e := range proxyPod.Spec.Containers[0].Env {
+		got = append(got, e.Name)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("proxy pod env = %+v, want exactly %v", proxyPod.Spec.Containers[0].Env, want)
 	}
 }
 

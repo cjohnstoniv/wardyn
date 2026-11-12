@@ -191,7 +191,7 @@ type adoStandingBound struct {
 
 // adoStandingFor reads the bound off the launching principal's ceiling.
 func adoStandingFor(c governanceCeiling) adoStandingBound {
-	return adoStandingBound{operator: c.Operator, governance: slices.Clone(c.Spec.AzureDevOpsCapabilities)}
+	return adoStandingBound{operator: c.Operator, governance: adoscope.ExpandPR(c.Spec.AzureDevOpsCapabilities)}
 }
 
 // withPolicyCapabilities puts the run policy's azure_devops_capabilities in
@@ -201,13 +201,14 @@ func adoStandingFor(c governanceCeiling) adoStandingBound {
 // authorADOEntraInjection still refuses a choice outside the row's ceiling,
 // and the resolver re-checks the live ceiling on every request.
 func (a adoEntraRun) withPolicyCapabilities(picked []adoscope.Capability, b adoStandingBound) (adoEntraRun, bool) {
+	picked = adoscope.ExpandPR(picked)
 	if len(picked) == 0 {
 		return a, true
 	}
 	if !b.operator {
 		var kept []adoscope.Capability
 		for _, c := range picked {
-			if slices.Contains(a.caps, c) || slices.Contains(b.governance, c) {
+			if adoscope.Has(a.caps, c) || adoscope.Has(b.governance, c) {
 				kept = append(kept, c)
 			}
 		}
@@ -244,7 +245,7 @@ func (a adoEntraRun) capsSource() string {
 func adoCapsOutside(caps, ceiling []adoscope.Capability) []adoscope.Capability {
 	var out []adoscope.Capability
 	for _, c := range caps {
-		if !slices.Contains(ceiling, c) {
+		if !adoscope.Has(ceiling, c) {
 			out = append(out, c)
 		}
 	}
@@ -466,7 +467,7 @@ func adoEntraLaneForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, 
 		rowID: row.ID, org: org, owner: owner,
 		tenantID: row.Entra.TenantID, clientID: row.Entra.ClientID,
 		tokenMode: cmpTokenMode(row.Entra.TokenMode), credentialSource: row.CredentialSource,
-		caps: row.Entra.Profile(), ceiling: slices.Clone(row.Entra.CapabilityCeiling),
+		caps: row.Entra.Profile(), ceiling: row.Entra.Ceiling(),
 		patHours: row.Entra.PATHours(), residentOptIn: row.Entra.RunnerResident,
 	}, "", true
 }
@@ -726,6 +727,10 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, refused.reason, refused.detail)
 	} else if kept != nil {
 		ado.caps, policy.AzureDevOpsCapabilities = kept, slices.Clone(kept)
+	}
+	ado, capRefused := s.capADOLane(ctx, run, ado, policy)
+	if capRefused != nil {
+		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, capRefused.reason, capRefused.detail)
 	}
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
 	if !ok {

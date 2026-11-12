@@ -58,6 +58,7 @@ func (s *Server) scopeGovernanceRead(ctx context.Context, resp governanceRespons
 			out.UnitAdmins = append(out.UnitAdmins, a)
 		}
 	}
+	out.Envelopes = envelopesInScope(resp.Envelopes, rows, in, roots)
 	byID := map[uuid.UUID]unitResolution{}
 	for _, u := range resolved {
 		byID[u.Row.ID] = u
@@ -80,7 +81,34 @@ func (s *Server) scopeGovernanceRead(ctx context.Context, resp governanceRespons
 		}
 		out.ParentWalls = append(out.ParentWalls, walls)
 	}
+	out.UnitNames = ancestorNames(rows, roots, in, limit)
 	return out, nil
+}
+
+// ancestorNames is the name of every unit above the subtree roots and outside the subtrees, by id, so a unit
+// admin can name an envelope's root or the unit a rule above them comes from. Nothing else about those units is
+// served. The walk up is bounded like subtreeUnits'; nil when there is no unit above.
+func ancestorNames(rows []types.GovernanceUnit, roots []uuid.UUID, in map[uuid.UUID]bool, limit int) map[uuid.UUID]string {
+	byID := unitsByID(rows)
+	var out map[uuid.UUID]string
+	for _, root := range roots {
+		seen := map[uuid.UUID]bool{root: true}
+		for cur := byID[root].ParentID; cur != nil && !seen[*cur] && len(seen) <= limit; {
+			row, ok := byID[*cur]
+			if !ok {
+				break
+			}
+			seen[*cur] = true
+			if !in[*cur] {
+				if out == nil {
+					out = map[uuid.UUID]string{}
+				}
+				out[*cur] = row.Name
+			}
+			cur = row.ParentID
+		}
+	}
+	return out
 }
 
 // subtreeUnits is the units in the subtree of one of grants' units (the unit and every unit below it),

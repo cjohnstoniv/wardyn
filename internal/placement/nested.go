@@ -21,19 +21,21 @@ import (
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants GitPushWithheld PATGrants " +
 		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 KubeAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
-		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase ForgeHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
+		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMHeaders LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir " +
+		"PushRuleSets PushRuleBase ForgeHosts ActivityIgnoreHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach DisableModelUsage " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
-		"VM PortRule SigninListen"),
+		"VM PortRule SigninListen NoNetwork"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),
 	reflect.TypeFor[proxy.ViaOrgRoute]():          strings.Fields("GrantID Host"),
+	reflect.TypeFor[proxy.MCPApproveEachConfig](): strings.Fields("Windows"),
 	reflect.TypeFor[proxy.GatewayIdentityRoute](): strings.Fields("Host Port PathPrefix ProviderID MCPKey Audience ProviderUID InspectionDeferred"),
 	reflect.TypeFor[proxy.ResidentMint]():         strings.Fields("GrantID Kind Username KnownHosts Token ExpiresAt Host"),
 	reflect.TypeFor[proxy.MCPServerConfig]():      strings.Fields("Key URL GrantID Ordinal"),
 	reflect.TypeFor[proxy.MCPBinding]():           strings.Fields("Harness SHA256 Servers"),
 	reflect.TypeFor[types.LocalModelSettings]():   strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
-	reflect.TypeFor[LocalPlan]():                  strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust OwnerKind"),
+	reflect.TypeFor[LocalPlan]():                  strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust OwnerKind RequireManagedDevice"),
 	reflect.TypeFor[CredentialOrigin]():           strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly ResidentOptIn"),
 	reflect.TypeFor[CredentialIntent]():           strings.Fields("Field Origin"),
 	reflect.TypeFor[DeliveryPolicy]():             strings.Fields("Classes ByTrust"),
@@ -48,8 +50,9 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.AzureGateConfig]():      strings.Fields("Host Route Models BodyCap"),
 	reflect.TypeFor[proxy.GitHubAPIGrant]():       strings.Fields("Capabilities Repos Grants"),
 	reflect.TypeFor[proxy.AzureARMGrant]():        strings.Fields("TenantID Subscriptions Write"),
-	reflect.TypeFor[proxy.AWSSigV4Config]():       strings.Fields("GrantID PortalHost AccountID RoleName Hosts"),
-	reflect.TypeFor[proxy.KubeAPIGrant]():         strings.Fields("Host Port CAPEM Namespaces Write"),
+	reflect.TypeFor[proxy.AWSSigV4Config]():       strings.Fields("GrantID PortalHost AccountID RoleName Hosts Gateways"),
+	reflect.TypeFor[proxy.AWSSigV4Gateway]():      strings.Fields("Host Port PathPrefix SigningHost"),
+	reflect.TypeFor[proxy.KubeAPIGrant]():         strings.Fields("Host Port CAPEM Namespaces Write Restart ApproveEach"),
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned WipeAfterRead Content"),
@@ -61,12 +64,14 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement Team RunnerID"),
 	reflect.TypeFor[types.GrantSpec]():            strings.Fields("Kind Scope TTLSeconds RequiresApproval OwnerOnly OwnerOnlyRefs"),
 	reflect.TypeFor[types.InternalHost]():         strings.Fields("HostSuffix CIDRs Baseline"),
-	reflect.TypeFor[types.LLMInspectionSpec]():    strings.Fields("Mode WorkspaceSecretNames WorkspaceSecretValues DetectSecrets DetectSecretPatterns DetectEntropy DetectPII DetectorSidecarURL ClassifiedMarkers ScanAttachments InspectForwardEgress MaxScanBytes OnScannerError RequireInspectableLLM InterceptTLS BlockMinSeverity"),
+	reflect.TypeFor[types.LLMInspectionSpec]():    strings.Fields("Mode WorkspaceSecretNames WorkspaceSecretValues DetectSecrets DetectSecretPatterns DetectEntropy DetectPII DetectorSidecarURL DetectorSidecarFormat ClassifiedMarkers ScanAttachments InspectForwardEgress MaxScanBytes OnScannerError RequireInspectableLLM InterceptTLS BlockMinSeverity"),
 	reflect.TypeFor[types.PushRulesSpec]():        strings.Fields("DenyPaths MaxInspectPackMiB RequireReviewPaths HoldSeconds DenyNewExecutables MaxFileSizeMiB DenyAll"),
 	reflect.TypeFor[types.ResourceLimits]():       strings.Fields("CPUMillis MemoryMiB PidsLimit DiskMiB"),
-	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods MinConfinementClass EligibleGrants AutoStopAfterSec " +
-		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls Desktop Recording"),
+	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress RefuseIPLiterals FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods HostRules MinConfinementClass EligibleGrants AutoStopAfterSec " +
+		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls Desktop Recording DataOut"),
 	reflect.TypeFor[types.ToolRule]():          strings.Fields("Tool Effect"),
+	reflect.TypeFor[types.HostRuleSet]():       strings.Fields("Rules"),
+	reflect.TypeFor[types.HostRule]():          strings.Fields("Host Methods Paths Effect"),
 	reflect.TypeFor[types.PushRuleSet]():       strings.Fields("Provider Host Org BasePath Rules"),
 	reflect.TypeFor[types.HarnessToolRules]():  strings.Fields("Harness Default Rules"),
 	reflect.TypeFor[types.HarnessCredential](): strings.Fields("Harness SHA256"),

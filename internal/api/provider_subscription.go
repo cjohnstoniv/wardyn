@@ -44,7 +44,7 @@ const (
 	mpSubNoStore      = "this install has no secret store to hold your Claude sign-in"
 	mpSubNotPerson    = "the admin token is a shared credential rather than a person, so it has no Claude sign-in of its own"
 	mpSubNoImage      = "the Claude sign-in image it needs is not built on this install"
-	mpRunRemedySignIn = "connect it from Getting started in the console, or from the banner the console shows on every page."
+	mpRunRemedySignIn = "connect it in the console's User view, under Settings, in Your model connections."
 	mpRunRemedyPerson = "sign in to the console, or use your own wdn_ API token."
 	mpSubReadFailed   = "Wardyn couldn't read your Claude sign-in for model provider %s just now — nothing was started. Try again in a moment."
 

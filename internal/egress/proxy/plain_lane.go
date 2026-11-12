@@ -82,16 +82,8 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		writeApprovalPending(w, log)
 		return
 	}
-
-	// require_tls: the operator declared this host's credential may ride only TLS, and this
-	// request is cleartext — refuse the REQUEST before inspection, since a refusal ends it and
-	// scanning first would waste budget. Writes its own 403 since this is an operator-fixable mistake.
-	if p.inject.requiresTLS(host) && !strings.EqualFold(r.URL.Scheme, "https") {
-		if log != nil {
-			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceRequireTLS))
-		}
-		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceRequireTLS)
-		http.Error(w, fmt.Sprintf(injectRequireTLSBody, host), http.StatusForbidden)
+	r, refused := p.plainRefusedAfterPolicy(w, r, host, port, log) // r carries an approved hold to the forward
+	if refused {
 		return
 	}
 
@@ -134,7 +126,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// the allow imply coverage.
 	if scanning && p.isLLMHost(host) && channel == contentscan.ChannelGeneric &&
 		summary == nil && hasScannableBody(r) {
-		p.emitLLMBlindOnce(host, port, r.Method)
+		p.emitLLMBlindOnce(r.Context(), host, port, r.Method)
 	}
 	outReq := r.Clone(context.WithValue(r.Context(), vettedIPKey{}, target))
 	// RequestURI must be empty for client requests.
@@ -165,4 +157,26 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 
 	p.relay(w, resp)
+}
+
+// plainRefusedAfterPolicy is handlePlain's refusals once the policy allows the host, and reports whether
+// it answered. The request it returns is the one to forward (hostRuleRefused).
+func (p *Proxy) plainRefusedAfterPolicy(w http.ResponseWriter, r *http.Request, host string, port int, log *egress.DecisionLog) (*http.Request, bool) {
+	// A request the host rules hold asks a person only now, once the policy allows the host (host_call_hold.go).
+	r, refused := p.hostRuleRefused(w, r, host, port)
+	if refused {
+		return r, true
+	}
+	// require_tls: the operator declared this host's credential may ride only TLS, and this
+	// request is cleartext — refuse the REQUEST before inspection, since a refusal ends it and
+	// scanning first would waste budget. Writes its own 403 since this is an operator-fixable mistake.
+	if p.inject.requiresTLS(host) && !strings.EqualFold(r.URL.Scheme, "https") {
+		if log != nil {
+			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceRequireTLS))
+		}
+		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceRequireTLS)
+		http.Error(w, fmt.Sprintf(injectRequireTLSBody, host), http.StatusForbidden)
+		return r, true
+	}
+	return r, false
 }

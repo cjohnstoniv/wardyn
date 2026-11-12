@@ -144,7 +144,8 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	var req createRunRequest
 	_ = json.Unmarshal(launch.Request, &req) //nolint:errcheck // an unreadable request pins no runner
 	out := queueRoom{pinned: req.RunnerID != ""}
-	rows, refusal := s.queuePermittedPools(ctx, ps)
+	// The run's frozen unit decides a unit row, as it does at the start (queuedStart.bind).
+	rows, refusal := s.queuePermittedPools(withFrozenPoolUnit(ctx, launch.UnitID), ps)
 	if refusal != nil {
 		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
 			return out, fmt.Errorf("read the owner's pools: %w", refusal.err)

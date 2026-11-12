@@ -20,7 +20,8 @@ import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { EmptyState, ErrorState, StaleNote, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
@@ -99,25 +100,40 @@ export function CredentialsScreen() {
   const [inv, setInv] = React.useState<CredentialInventory | null>(null);
   const [screenStatus, setStatus] = React.useState<ScreenStatus | "no_meta">("loading");
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>(undefined);
-  const [filter, setFilter] = React.useState<string | null>(null);
+  const [loadSentence, setLoadSentence] = React.useState<string | undefined>(undefined);
+  const [filters, setFilters] = useUrlFilters();
+  const filterParam = filters.get("provider");
+  const setFilter = (id: string | null) => setFilters({ provider: id ?? "" });
+  // A quiet re-read (after an erase) failed: the list on screen is the last one that loaded.
+  const [stale, setStale] = React.useState(false);
   // The one erase dialog: opened for a row's person, or with no person (the header's search).
   const [erase, setErase] = React.useState<{ person: ErasePerson | null } | null>(null);
 
-  const load = React.useCallback(() => {
-    setStatus("loading");
+  // `quiet` is the re-read after an erase: the content stays mounted, so the key-domain and minted-token sections
+  // keep their toggles and notes, and a failed re-read leaves the list that was already on screen.
+  const load = React.useCallback((quiet = false) => {
+    if (!quiet) setStatus("loading");
     credentialsApi
       .listInventory()
       .then((d) => {
         setInv(d);
+        // The erased person may have held the last credential of the filtered provider: its chip is gone, so "All" is the view.
         setStatus("ready");
+        setStale(false);
       })
       .catch((e) => {
+        if (quiet) {
+          // The list on screen may still show an erased person's row: say it may be old, with a way to read again.
+          setStale(true);
+          return;
+        }
         const msg = getErrorMessage(e);
         setErrorMessage(msg);
+        setLoadSentence(failureSentence(e));
         setStatus(msg === NO_META_ERROR ? "no_meta" : loadFailStatus(e));
       });
   }, []);
-  React.useEffect(load, [load]);
+  React.useEffect(() => load(), [load]);
 
   const rows = inv?.credentials ?? [];
   const providerNames = React.useMemo(() => {
@@ -127,6 +143,8 @@ export function CredentialsScreen() {
   }, [inv]);
   const byProvider = inv?.counts.by_provider ?? {};
   const noProvidersConfigured = Object.keys(byProvider).length === 0;
+  // A provider that has no credential left (the last one was erased) has no chip: "All" is the view.
+  const filter = filterParam && inv?.counts.by_provider[filterParam] ? filterParam : null;
   const filtered = filter ? rows.filter((r) => r.provider === filter) : rows;
   const stores = new Set(rows.map((r) => r.store));
   const mixedStores = stores.size > 1;
@@ -170,12 +188,13 @@ export function CredentialsScreen() {
         <p className="mt-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
+          {stale && screenStatus === "ready" && <StaleNote onRetry={() => load(true)} />}
           {screenStatus === "loading" ? (
             <TableSkeleton rows={5} cols={5} />
           ) : screenStatus === "no_meta" ? (
             <EmptyState icon={KeyRound} title={INVENTORY.NO_META_TITLE} description={errorMessage} />
           ) : screenStatus === "error" ? (
-            <ErrorState onRetry={load} />
+            <ErrorState message={loadSentence} onRetry={() => load()} />
           ) : noProvidersConfigured ? (
             <EmptyState
               icon={KeyRound}
@@ -229,7 +248,9 @@ export function CredentialsScreen() {
                       <TableHead>{INVENTORY.COL_ADDED}</TableHead>
                       <TableHead>{INVENTORY.COL_LAST_USED}</TableHead>
                       {hasKeyDomains && <TableHead>{INVENTORY.COL_DOMAIN}</TableHead>}
-                      <TableHead />
+                      <TableHead>
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -237,7 +258,7 @@ export function CredentialsScreen() {
                       g.rows.map((r, i) => (
                         <TableRow key={`${r.person}-${r.provider}`}>
                           {i === 0 && (
-                            <TableCell rowSpan={g.rows.length} className="whitespace-nowrap align-top font-medium">
+                            <TableCell rowSpan={g.rows.length} className="max-w-[18rem] break-words align-top font-medium whitespace-normal" title={g.email ? `${g.email} ${g.person}` : g.person}>
                               {g.email || g.person}
                               {g.email && <span className="ml-1.5 text-xs text-muted-foreground">{g.person}</span>}
                             </TableCell>
@@ -303,7 +324,7 @@ export function CredentialsScreen() {
         open={erase !== null}
         person={erase?.person}
         onOpenChange={(open) => !open && setErase(null)}
-        onErased={load}
+        onErased={() => load(true)}
       />
     </PageContainer>
   );

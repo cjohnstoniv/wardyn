@@ -21,9 +21,11 @@ var leqRules = map[string]string{
 	"allowed_domains":                  "every entry of a is covered by an entry of b under the proxy's matcher",
 	"denied_domains":                   "every denial of b is covered by a denial of a",
 	"allow_all_egress":                 "a implies b",
+	"refuse_ip_literals":               "b implies a",
 	"first_use_approval":               "rank of a >= rank of b",
 	"first_use_hold_seconds":           "a <= b after normalising",
 	"max_holds":                        "a <= b after normalising",
+	"host_rules":                       "every set of b, in normal form, is a set of a (types.HostRuleSetsWithin)",
 	"allowed_methods":                  "b empty: any a; else a non-empty subset of b",
 	"min_confinement_class":            "rank of a >= rank of b",
 	"eligible_grants":                  "every grant of a is within b's grants (GrantWithin)",
@@ -45,6 +47,7 @@ var leqRules = map[string]string{
 	"desktop.upload":                   "a allows only what b allows, unset read as allowed",
 	"desktop.download":                 "a allows only what b allows, unset read as blocked",
 	"recording":                        "a records at least what b does",
+	"data_out":                         "a is at least as strict as b, unset read as allowed",
 	"push_rules.deny_paths":            "a keeps every path of b",
 	"push_rules.max_inspect_pack_mib":  "a is no looser cap than b, after the default under an active rule",
 	"push_rules.require_review_paths":  "a keeps every path of b",
@@ -64,10 +67,12 @@ var leqRules = map[string]string{
 	"deny_user_drive":                       "b implies a",
 	"deny_member_drives":                    "b implies a",
 	"deny_kept_machines":                    "b implies a",
+	"deny_scheduled_runs":                   "b implies a",
 	"deny_background_desktop_watch":         "b implies a",
 	"deny_placements":                       "every placement b denies is denied by a",
 	"allowed_macos_bases":                   "b allows any: any a; else a is a non-empty subset of b",
 	"allowed_models":                        "b has no limit: any a; else a is a non-empty subset of b",
+	"required_image_signers":                "a names every signer b names (a is a superset of b)",
 	"max_cpu_millis":                        "a is no looser bound than b",
 	"max_memory_mib":                        "a is no looser bound than b",
 	"max_ephemeral_disk_mib":                "a is no looser bound than b",
@@ -89,6 +94,11 @@ var leqRules = map[string]string{
 	"default_wait_sec":                      "a is no looser bound than b, a 0 default read as the maximum",
 	"user_changes_limits":                   "a implies b",
 	"pause_idle_after_sec":                  "a is no looser bound than b",
+
+	"autonomy_rubric.self_defined_component": "b caps nothing: any a; else a caps at a level <= b's",
+
+	"deny_components":      "a names every component id b names (a is a superset of b)",
+	"deny_model_providers": "a names every provider uid b names (a is a superset of b)",
 }
 
 // unleqedFields reports each leaf of spec that has no row in rules, or whose Go

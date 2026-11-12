@@ -47,6 +47,14 @@ export interface HarnessDraft {
   path: string;
 }
 
+// One extra header row (custom_endpoint only). `placeholder` is the row's own value placeholder, shown while
+// the value is empty: UI-only, never sent.
+export interface HeaderDraft {
+  name: string;
+  value: string;
+  placeholder?: string;
+}
+
 export interface ProviderDraft {
   kind: ModelProviderKind;
   name: string;
@@ -89,6 +97,8 @@ export interface ProviderDraft {
   oidcScopes: string[];
   // "Match the person to their console sign-in": on is identity_binding "console", off is "none".
   oidcBound: boolean;
+  // custom_endpoint only: extra_headers, the non-secret headers a gateway routes on.
+  headers: HeaderDraft[];
   harnesses: Record<string, HarnessDraft>;
 }
 
@@ -96,9 +106,10 @@ export interface ProviderDraft {
 export const providerGatewayAddress = (p: ModelProvider) => (isBedrock(p.kind) ? (p.bedrock?.base_url ?? "") : (p.base_url ?? ""));
 // The same address as the draft has it now.
 export const draftGatewayAddress = (d: ProviderDraft) => (isBedrock(d.kind) ? d.bedrockBaseUrl : d.baseUrl);
-// The kinds that may send run identity to a gateway. A Bedrock sign-in row may not: SigV4 signs the Host.
+// The kinds that may send run identity to a gateway. A Bedrock sign-in row may only where the install signs
+// AWS requests at its proxy (the editor asks the server's answer): SigV4 signs the Host.
 export const gatewayKind = (kind: ModelProviderKind) =>
-  kind === "anthropic_api_key" || kind === "openai_api_key" || kind === "custom_endpoint" || kind === "bedrock_bearer";
+  kind === "anthropic_api_key" || kind === "openai_api_key" || kind === "custom_endpoint" || kind === "bedrock_bearer" || kind === "bedrock_sso";
 
 export const isEndpoint = (kind: ModelProviderKind) => kind === "custom_endpoint";
 export const isLocal = (kind: ModelProviderKind) => kind === "local_model";
@@ -174,6 +185,7 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     oidcSecret: "",
     oidcScopes: [],
     oidcBound: true,
+    headers: [],
     harnesses: Object.fromEntries(
       harnesses.map((h) => [h.id, { ticked: !incompatibleReason(kind, h.id), model: "", path: "" }]),
     ),
@@ -215,6 +227,7 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     oidcSecret: p.oidc?.client_secret_ref ?? "",
     oidcScopes: p.oidc?.scopes ?? [],
     oidcBound: p.oidc?.identity_binding !== "none",
+    headers: (p.extra_headers ?? []).map((h) => ({ name: h.name, value: h.value })),
     harnesses: rows,
   };
 }
@@ -247,6 +260,8 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
   const name = draft.name.trim();
+  // Trimmed as the server trims them; the UI-only placeholder never goes. None, or any other kind, is no key.
+  const headers = endpoint ? draft.headers.map((h) => ({ name: h.name.trim(), value: h.value.trim() })) : [];
   const harnesses: ProviderHarness[] = Object.entries(draft.harnesses)
     .filter(([, h]) => h.ticked)
     .map(([id, h]) => ({
@@ -300,12 +315,13 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
       ? {
           ...base?.bedrock,
           region: draft.region.trim() || undefined,
-          base_url: sso ? base?.bedrock?.base_url : draft.bedrockBaseUrl.trim() || undefined,
+          base_url: draft.bedrockBaseUrl.trim() || undefined,
           sso_start_url: sso ? draft.ssoStartUrl.trim() || undefined : undefined,
           sso_account_id: sso ? draft.ssoAccountId.trim() || undefined : undefined,
           sso_role_name: sso ? draft.ssoRoleName.trim() || undefined : undefined,
         }
       : undefined,
+    extra_headers: headers.length > 0 ? headers : undefined,
     harnesses,
   };
 }
@@ -361,9 +377,29 @@ export function oidcChange(a: ModelProvider, b: ModelProvider): OIDCChange | nul
   return !a.oidc ? "to_sign_in" : !b.oidc ? "to_paste" : "edited";
 }
 
+// A name in the case the server stores it (Go's CanonicalMIMEHeaderKey): a name with a character a header
+// cannot carry stays as typed, for the server's own refusal.
+const canonicalHeader = (n: string) =>
+  /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(n)
+    ? n
+        .split("-")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join("-")
+    : n;
+
+// The server's extraHeadersAddress: the rows in name order, `name:value` a line each, after the server's
+// own trimming and canonical case. No headers is "".
+const extraHeadersAddress = (p: ModelProvider): string =>
+  (p.extra_headers ?? [])
+    .map((h) => ({ name: canonicalHeader(h.name.trim()), value: h.value.trim() }))
+    .sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
+    .map((h) => `${h.name}:${h.value}\n`)
+    .join("");
+
 export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
   if (
     a.kind !== b.kind ||
+    extraHeadersAddress(a) !== extraHeadersAddress(b) ||
     oidcAddress(a) !== oidcAddress(b) ||
     normURL(a.base_url) !== normURL(b.base_url) ||
     header(a) !== header(b) ||

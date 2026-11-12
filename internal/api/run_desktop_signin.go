@@ -66,6 +66,10 @@ const (
 // the run itself started normally, without the sign-in lane.
 const desktopSigninRunnerMsg = "This run started without desktop sign-ins: they run on this deployment's own Docker runner, in the sign-in desktop image (agent-novnc-signin), on a run started while WARDYN_DESKTOP_SIGNINS was on"
 
+// desktopSigninVMMsg answers the container sign-in on a virtual machine run, which stops the
+// container's main process: for a VM that is the hypervisor, not the agent.
+const desktopSigninVMMsg = "This run is a virtual machine, which signs in through the machine's own sign-in window, not the container flow"
+
 // signinOffImageNotGranted is desktop_signin_runs.off_reason for a run whose
 // image its person chose, held to the exact ref by the image capability, and
 // whose sign-in variant no grant of theirs names (signinVariantUngranted).
@@ -302,6 +306,10 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	}
 	if !slices.ContainsFunc(apps, func(a types.UIApp) bool { return a.Name == desktopUIApp }) {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNoDesktop, "this run has no desktop: its policy declares no \""+desktopUIApp+"\" app")
+		return
+	}
+	if run.MachineKind.IsVM() {
+		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninVMMsg)
 		return
 	}
 	if !s.signinTarget(ctx, run) {

@@ -207,6 +207,9 @@ type AgentRun struct {
 	// named or an attached workspace's base image set, "" when the run named none (the convention image),
 	// nil for a run created before 0249. A revive re-runs create's decision on it (site_config_images.go).
 	ImageInput *string `json:"-"`
+	// ImageAdmission is the image admission verdict for the member's image (ImageAdmissionVerdict); nil when
+	// admission was off, the run named no member image, an operator started it, or the run predates it.
+	ImageAdmission *ImageAdmissionVerdict `json:"image_admission,omitempty"`
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -218,6 +221,17 @@ type AgentRun struct {
 	// CorrelationID is the caller's own reference for the run (POST /runs correlation_id), stored once at create. It rides in the
 	// data of the run's audit rows as they reach the audit sinks, never in the stored row, and is never a metric label.
 	CorrelationID string `json:"correlation_id,omitempty"`
+	// PolicyDigest is the SHA-256 of the run's current effective policy (RunPolicySpec.Digest), written at dispatch, just before
+	// the run.policy.resolve row that records that policy, and moved by each revive to the policy its run.policy.generation row
+	// records. The run's later audit rows carry their own policy's digest as data.policy_digest. Empty for a run not yet
+	// dispatched, one dispatched before the field, or one whose write failed.
+	PolicyDigest string `json:"policy_digest,omitempty"`
+	// PolicyReadback is the run's current proxy start, as its policy readback stands (RunPolicyReadback);
+	// filled on the single-run read only, nil elsewhere and for a run with no recorded start.
+	PolicyReadback *RunPolicyReadback `json:"policy_readback,omitempty"`
+	// ProxyAddr is the address the run's agent is pinned to for its proxy, from the driver's create
+	// answer (runner.Sandbox.ProxyAddr); empty for an older driver or runner. Never on the wire.
+	ProxyAddr string `json:"-"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
@@ -243,9 +257,10 @@ type AgentRun struct {
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
 	Queue  *RunQueue  `json:"queue,omitempty"`
 	EndsAt *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
-	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
+	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums), or the end of the elevation the run was launched under when that is earlier;
+	// absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool, deployment or elevation).
 	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
-	LifetimeCapSource LimitSource `json:"-"`
+	LifetimeCapSource LimitSource `json:"lifetime_cap_source,omitempty"`
 	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
 	RunLimits RunLimits  `json:"run_limits"`
@@ -275,6 +290,9 @@ type AgentRun struct {
 	BreakGlass bool `json:"break_glass,omitempty"`
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
+	// CreatedViaActor is the agent that portal named when it launched the run (the subject and issuer of the
+	// identity provider token the portal held for it); nil when it named none. It is recorded, never authorised.
+	CreatedViaActor *DelegationActor `json:"created_via_actor,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
 	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
 	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
@@ -398,13 +416,18 @@ const (
 	// to APPROVED with a holder, hand back stamps handed_back_at, decline moves it to DENIED. It
 	// grants the run nothing — the person drives what the agent already has.
 	ApprovalHumanTakeover ApprovalKind = "human_takeover"
+	// ApprovalFileDownload: a person asked to download one file from a run whose desktop.download is review.
+	// Its scope is FileDownloadScope (name, size, hash, who asked), never the content. Decided once, by the
+	// security tier or a unit's file_download deciders, never by the run's own people or the asker; an approval
+	// releases those bytes once (store.PG.SpendFileDownloadApproval).
+	ApprovalFileDownload ApprovalKind = "file_download"
 )
 
 // ApprovalKinds is the closed set, checked by test against the constants above — closedEnumChecks
 // once missed approvals.kind entirely, which would have let a DB-rejected constant pass every gate green.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
-	ApprovalPushContent, ApprovalHumanTakeover,
+	ApprovalPushContent, ApprovalHumanTakeover, ApprovalFileDownload,
 }
 
 // ApprovalState is the approval lifecycle.
@@ -498,6 +521,11 @@ type ApprovalRequest struct {
 	DecisionScope ApprovalScope `json:"decision_scope,omitempty"`
 	// DecisionExpiresAt is set only when DecisionScope is until — a different clock than the EXPIRED-state sweeper, which ages out stale PENDING requests.
 	DecisionExpiresAt *time.Time `json:"decision_expires_at,omitempty"`
+	// DecisionBasis is how a DECIDED row was decided under the unit deciders rule that governed it (owner,
+	// unit_admin:<unit>, group:<name>, security, policy or admin_token), and DecisionRuleUnit is the unit that
+	// holds that rule. Both are stored with the decision and empty when no rule governed it.
+	DecisionBasis    string     `json:"decision_basis,omitempty"`
+	DecisionRuleUnit *uuid.UUID `json:"decision_rule_unit,omitempty"`
 	// ExpiresAt is when a PENDING request stops waiting: min(requested_at+WaitBudgetSec, EndsAt); computed on read, never stored.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
@@ -505,6 +533,21 @@ type ApprovalRequest struct {
 	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
 	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
 	Decidable *bool `json:"decidable,omitempty"`
+	// Deciders is who may decide this PENDING row under the unit deciders rule that governs it (owner,
+	// unit_admins, group:<name>, then security), projected at response time and never stored. Nil when no rule
+	// governs the row.
+	Deciders []string `json:"deciders,omitempty"`
+	// MaxScope and SecondHuman are that rule's own max_scope and second_human, projected beside Deciders and
+	// never stored. A deployment's four-eyes switch can require a second person where the rule does not.
+	MaxScope    ApprovalScope `json:"max_scope,omitempty"`
+	SecondHuman bool          `json:"second_human,omitempty"`
+	// RequestedBy is the run's creator, projected at response time and never stored, on a PENDING row served to
+	// a decider who is not that creator (GET /approvals?decidable_by=me). Absent on the creator's own row.
+	RequestedBy string `json:"requested_by,omitempty"`
+	// CallText is the exact text of an MCP call row's arguments and extra params (MCPCallText), projected at
+	// response time and never stored. The console and the CLI show and copy it as it is, never through a JSON
+	// number. Nil on every other row.
+	CallText *MCPCallText `json:"call_text,omitempty"`
 	// WallsBlock is true on a PENDING egress_domain row whose host the requesting run owner's own walls deny: no
 	// approver can admit it (personal_walls_host), so the console draws Approve disabled. Projected at response time
 	// and never stored; absent when the host is not denied or the walls could not be read.
@@ -542,6 +585,17 @@ type ApprovalDecision struct {
 	Scope     ApprovalScope // meaningful only for an egress_domain approval; others leave the zero value
 	ExpiresAt *time.Time
 	Policy    *ApprovalPolicyMatch // the approval rule that decided, nil for a person or the admin token
+	// Basis is how the decider decides under a unit's deciders rule: owner, unit_admin:<unit>, group:<name>,
+	// security, policy or admin_token. Rule is that rule. Both are empty when no rule governs the request, so
+	// the decision is recorded as it is without deciders.
+	Basis string
+	Rule  *DeciderRuleRef
+}
+
+// DeciderRuleRef names the unit deciders rule a decision was made under: the unit that holds it and the kind.
+type DeciderRuleRef struct {
+	Unit uuid.UUID `json:"unit"`
+	Kind string    `json:"kind"`
 }
 
 // AuditEvent is one append-only audit record. Every credential mint/revoke, approval decision,
@@ -738,6 +792,15 @@ type RunLocalFolderStatus struct {
 	// Resume is set while a pass back that was cut short keeps the run's sandbox for a later
 	// sweep to resume it.
 	Resume *FolderResume `json:"resume,omitempty"`
+	// Gen is the record's generation: a pass back's owner moves it on before its pass and writes the
+	// record only at the generation it moved it to, so a stale owner's write cannot land. Absent is 0.
+	Gen int `json:"gen,omitempty"`
+	// Settled is the latest generation whose pass the runner answered for, or that sent nothing.
+	Settled int `json:"settled,omitempty"`
+	// GenAt is when the record was moved to Gen, so when that generation's pass was sent at the
+	// earliest. Absent (a record from before it) is not taken as long ago: the first pass back that
+	// finds it absent stamps it, and the wait for an unanswered pass runs from there.
+	GenAt time.Time `json:"gen_at,omitzero"`
 }
 
 // FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that

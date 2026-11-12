@@ -111,12 +111,24 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 	return "  interactive: starts " + startup.Command + "; " + attach
 }
 
+// printRunNotes writes what a created run carries besides its id: a replay line when an earlier attempt with the
+// same idempotency key created it, and the server's advisory warnings (workspace collision, dropped ssh grant).
+// The run is live either way, so silence here is a degraded run no CI artifact records.
+func printRunNotes(w io.Writer, run sdk.CreateRunResult) {
+	if run.Replayed {
+		fmt.Fprintf(w, "run %s was already created by an earlier attempt with this key\n", run.ID)
+	}
+	for _, warning := range run.Warnings {
+		fmt.Fprintf(w, "  warning: %s\n", warning)
+	}
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
-	var title, description, file, correlationID string
+	var title, description, file, correlationID, idempotencyKey string
 	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote, runIn string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout, maxWait time.Duration
@@ -218,7 +230,7 @@ func runCmd(client clientFn) *cobra.Command {
 			if dryRun {
 				return printPreflight(cmd.Context(), cmd.OutOrStdout(), client(), body, createJSON)
 			}
-			run, err := client().CreateRun(cmd.Context(), body)
+			run, err := client().CreateRunWith(cmd.Context(), body, sdk.CreateRunOptions{IdempotencyKey: idempotencyKey})
 			if err != nil {
 				return err
 			}
@@ -240,17 +252,12 @@ func runCmd(client clientFn) *cobra.Command {
 					fmt.Fprintln(cmd.OutOrStdout(), interactiveLine(body.Startup, run.ID.String()))
 				}
 			}
-			// Advisory server warnings (workspace collision, dropped ssh grant):
-			// the run is live either way, so silence here is a degraded run no
-			// CI artifact records.
-			for _, w := range run.Warnings {
-				fmt.Fprintf(cmd.ErrOrStderr(), "  warning: %s\n", w)
-			}
+			printRunNotes(cmd.ErrOrStderr(), run)
 			return seedThenWait(cmd, client(), run.ID, localFolder, localFolderRemote, wait, timeout)
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; "+
-		"only --title, --description, --wall-preset, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --correlation-id, --json and --dry-run go with it. "+
+		"only --title, --description, --wall-preset, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --correlation-id, --idempotency-key, --json and --dry-run go with it. "+
 		"A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
@@ -258,6 +265,9 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&correlationID, "correlation-id", "", "your own reference for this run, up to 128 characters of letters, digits and . _ : / - (optional; carried on the run's audit rows sent to audit sinks)")
+	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "make a re-run of this command safe: with the same key, a second launch gets the first run back instead of starting another "+
+		"(1 to 255 visible ASCII characters, kept 24 hours; default a fresh value per call, which protects nothing across processes). "+
+		"In CI use a value stable across a job re-run, such as the build id and job name")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	where.register(cmd)
 	machine.register(cmd) // its flag checks send no request, so they run before the wall preset's lookup
@@ -545,11 +555,15 @@ func approvalCmd(client clientFn) *cobra.Command {
 	var runFilter string
 	var asJSON bool
 	var listLimit, listOffset int
+	var waitingOnMe bool
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List approval requests (optionally filtered by --state and/or --run)",
+		Short: "List approval requests (optionally filtered by --state and/or --run, or --waiting-on-me)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if waitingOnMe {
+				return approvalListWaitingOnMe(cmd, client, asJSON)
+			}
 			runID, err := parseOptionalUUID(runFilter, "--run")
 			if err != nil {
 				return err
@@ -583,6 +597,11 @@ func approvalCmd(client clientFn) *cobra.Command {
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
+	list.Flags().BoolVar(&waitingOnMe, "waiting-on-me", false, "only the pending approvals you may decide now (takes no other filter)")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "state")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "run")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "limit")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "offset")
 	cmd.AddCommand(list)
 
 	// approvalScanPage is the page size `approval get` scans a run with. It
@@ -633,6 +652,7 @@ func approvalCmd(client clientFn) *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "ID:        %s\nRUN:       %s\nKIND:      %s\nSTATE:     %s\nHOST:      %s\nREQUESTED: %s\nSCOPE:     %s\nHOLD:      %s\n",
 						a.ID, a.RunID, a.Kind, a.State, approvalHost(a),
 						a.RequestedAt.Format(time.RFC3339), a.DecisionScope, approvalHoldHint(a))
+					printMCPCall(cmd.OutOrStdout(), a)
 					return nil
 				}
 				if len(aps) < approvalScanPage {

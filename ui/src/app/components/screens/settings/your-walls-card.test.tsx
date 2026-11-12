@@ -13,7 +13,7 @@ import { setField } from "../../../../test/set-field";
 import { HttpError } from "../../../lib/api/core";
 import type { PersonalWalls } from "../../../lib/api/walls";
 import { GITHUB_CAPABILITIES, GITHUB_PUSH_NAME, YOUR_WALLS } from "../../wardyn/copy/personal-walls";
-import { toForm, WallsForm, type Form } from "./walls-form";
+import { toForm, toSpec, WallsForm, type Form } from "./walls-form";
 import { ADO_CAPABILITIES } from "../../../lib/ado-capabilities";
 
 const getMock = vi.fn<() => Promise<PersonalWalls>>();
@@ -376,7 +376,7 @@ describe("Your walls: every limit has a control", () => {
     expect(list.queryByText(YOUR_WALLS.CAPS_NO_PUSH_BROKER_OFF)).not.toBeInTheDocument();
   });
 
-  it("tool rules: no default row, a new rule starts at hold, hold and deny only, * is a rule like any other", async () => {
+  it("tool rules: no default row, a new rule starts at hold, hold, approve_each and deny only, * is a rule like any other", async () => {
     render(<YourWallsCard />);
     await open();
     const rules = within(screen.getByTestId("walls-tool-rules"));
@@ -385,7 +385,7 @@ describe("Your walls: every limit has a control", () => {
     await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
     const effect = rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement;
     expect(effect.value).toBe("hold");
-    expect([...effect.options].map((o) => o.value)).toEqual(["hold", "deny"]);
+    expect([...effect.options].map((o) => o.value)).toEqual(["hold", "approve_each", "deny"]);
     expect(rules.queryByText("*")).not.toBeInTheDocument();
     setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) }), "*");
     await user.selectOptions(effect, "deny");
@@ -393,6 +393,44 @@ describe("Your walls: every limit has a control", () => {
     setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "WebFetch");
     await user.click(save());
     expect(await sent()).toEqual({ tool_rules: [{ tool: "*", effect: "deny" }, { tool: "WebFetch", effect: "hold" }] });
+  });
+
+  it("tool rules: an approve_each rule loads as approve_each and is saved as approve_each, not turned into hold", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "mcp__jira__delete_issue", effect: "approve_each" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect((rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement).value).toBe("approve_each");
+    await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
+    setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "WebFetch");
+    await user.click(save());
+    expect(await sent()).toEqual({ tool_rules: [{ tool: "mcp__jira__delete_issue", effect: "approve_each" }, { tool: "WebFetch", effect: "hold" }] });
+  });
+
+  it.each([
+    ["Bash", true],
+    ["*", true],
+    ["mcp__jira", true],
+    ["mcp__jira__delete_issue", false],
+  ])("tool rules: for %s approve_each greyed is %s, with the reason as text", async (tool, greyed) => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool, effect: "hold" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    const select = rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement;
+    expect([...select.options].find((o) => o.value === "approve_each")?.disabled).toBe(greyed);
+    if (greyed) {
+      expect(document.getElementById(select.getAttribute("aria-describedby")!)).toHaveTextContent("Approve each call names one MCP tool. Add it as a rule for that tool.");
+    }
+  });
+
+  it("tool rules: a loaded approve_each on a name that cannot take it stays selected, and the form says why", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "mcp__jira", effect: "approve_each" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect((rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement).value).toBe("approve_each");
+    expect(rules.getByText(/cannot be approve_each/)).toBeInTheDocument();
   });
 
   it("tool rules: two rules for one tool are marked, say so, and keep Save off", async () => {
@@ -545,5 +583,54 @@ describe("Your walls: every limit has a control", () => {
     expect(box(0)).not.toBeChecked();
     expect(drafts[1].github).toContain("pr");
     expect(drafts[0].github).toEqual(["code_read"]);
+  });
+  it("an unrelated save keeps a stored capability list's order; a changed selection takes the catalogue's order", () => {
+    const stored = { github_capabilities: ["pr", "code_read", "issues_read"], azure_devops_capabilities: ["pr", "code_read"] };
+    expect(GITHUB_CAPABILITIES.indexOf("code_read")).toBeLessThan(GITHUB_CAPABILITIES.indexOf("pr"));
+    expect(JSON.stringify(toSpec(toForm(stored)))).toBe(JSON.stringify(stored));
+    const edited = toSpec({ ...toForm(stored), github: ["pr", "code_read"], ado: ["pr"] });
+    expect(edited.github_capabilities).toEqual(["code_read", "pr"]);
+    expect(edited.azure_devops_capabilities).toEqual(["pr"]);
+    // Picking the same boxes again, in another order, is no change either.
+    expect(toSpec({ ...toForm(stored), github: ["issues_read", "pr", "code_read"] }).github_capabilities).toEqual(stored.github_capabilities);
+  });
+
+  it("each section error is tied to its input by aria-describedby, and two forms on one page share no id", () => {
+    const refused = { sites: "sites bad", never: "never bad", unlisted: "unlisted bad", barrier: "barrier bad", clipboard: "clipboard bad", credentials: "credentials bad", github: "github bad", ado: "ado bad", tools: "tools bad", pushes: "pushes bad", recording: "recording bad", idle: "idle bad" };
+    const bad = { ...toForm({ allowed_domains: [], tool_rules: [{ tool: "a", effect: "deny" }, { tool: "a", effect: "deny" }], push_rules: { deny_paths: [""] }, github_capabilities: [], auto_stop_after_sec: 5 }), idleOn: true, idleText: "x" };
+    render(
+      <>
+        <div data-testid="form-0"><WallsForm form={bad} onEdit={() => {}} errors={refused} /></div>
+        <div data-testid="form-1"><WallsForm form={bad} onEdit={() => {}} errors={refused} /></div>
+      </>,
+    );
+    const ids = [...document.querySelectorAll("[id]")].map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const described = (form: HTMLElement, name: string) => {
+      const el = within(form).getByLabelText(name, { selector: "[aria-describedby]" });
+      return (el.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent);
+    };
+    for (const at of [0, 1]) {
+      const form = screen.getByTestId(`form-${at}`);
+      const alerts = within(form).getAllByRole("alert");
+      // Every error showing is named by exactly one element of its own form.
+      for (const a of alerts) {
+        const users = [...form.querySelectorAll("[aria-describedby]")].filter((e) => e.getAttribute("aria-describedby")!.split(" ").includes(a.id));
+        expect(users.length, a.textContent ?? "").toBeGreaterThan(0);
+      }
+      expect(described(form, YOUR_WALLS.SITES)).toEqual(["sites bad"]);
+      expect(described(form, YOUR_WALLS.NEVER)).toEqual(["never bad"]);
+      expect(described(form, YOUR_WALLS.BARRIER)).toEqual(["barrier bad"]);
+      expect(described(form, YOUR_WALLS.RECORDING)).toEqual(["recording bad"]);
+      expect(described(form, YOUR_WALLS.IDLE_NUMBER)).toEqual([YOUR_WALLS.IDLE_PROBLEM]);
+      expect(described(form, YOUR_WALLS.TOOLS)).toEqual(["tools bad", expect.stringContaining("Two rules")]);
+      expect(described(form, YOUR_WALLS.TOOLS_TOOL_N(1))).toEqual([expect.stringContaining("Two rules")]);
+      expect(described(form, YOUR_WALLS.PATHS_PATH_N(1))).toEqual([YOUR_WALLS.PATHS_BLANK]);
+      expect(described(form, YOUR_WALLS.GITHUB_CAPS)).toEqual(["github bad", YOUR_WALLS.CAPS_EMPTY]);
+      expect(within(form).getByRole("radiogroup", { name: YOUR_WALLS.SITES })).toHaveAttribute("aria-invalid", "true");
+      const only = within(form).getByRole("textbox", { name: YOUR_WALLS.SITES_ONLY });
+      expect(only).toHaveAttribute("aria-invalid", "true");
+      expect(only.getAttribute("aria-describedby")?.split(" ").map((id) => form.querySelector(`[id="${id}"]`)?.textContent)).toEqual(["sites bad"]);
+    }
   });
 });

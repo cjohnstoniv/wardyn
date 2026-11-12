@@ -79,10 +79,23 @@ test("opening or closing it, and a row count that grows, move nothing in the til
       b && tile && { x: b.x - tile.x, y: b.y - tile.y, width: b.width, height: b.height };
     return [tile && { width: tile.width, height: tile.height }, await at(await filesTile(page).locator("section > :first-child").boundingBox()), await at(await control.boundingBox())];
   };
+  // The 2-row state is on screen before it is measured: the last of the two is there and the sixtieth is not.
+  await expect(filesTile(page).getByText("part_01", { exact: false })).toHaveCount(1);
+  await expect(filesTile(page).getByText("part_59", { exact: false })).toHaveCount(0);
   await layoutSettled(filesTile(page));
   const before = await boxes();
   paths = 60;
-  await page.waitForTimeout(4500); // one poll
+  // The next poll brings the sixtieth row in; wait for it rendered, not for a fixed time.
+  await expect(filesTile(page).getByText("part_59", { exact: false })).toHaveCount(1, { timeout: 15_000 });
+  await layoutSettled(filesTile(page));
+  expect(await boxes()).toEqual(before);
+  // Opening the large view and closing it again leaves the header where it was.
+  await control.click();
+  const dialog = page.getByRole("dialog", { name: "Files changed" });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await layoutSettled(filesTile(page));
   expect(await boxes()).toEqual(before);
 });
 

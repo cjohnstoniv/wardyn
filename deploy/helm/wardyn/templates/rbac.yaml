@@ -107,6 +107,9 @@ An extraEnv entry for the override with no literal value (valueFrom) is unreadab
 rather than read as off.
 */}}
 {{- $agentSandbox := (.Values.k8s.agentSandbox | default dict) -}}
+{{- if and $agentSandbox.template (not $agentSandbox.enabled) -}}
+{{- fail "wardyn: k8s.agentSandbox.template needs k8s.agentSandbox.enabled=true: only the agent-sandbox backend reads a SandboxTemplate." -}}
+{{- end -}}
 {{- if $agentSandbox.enabled -}}
 {{- if not .Values.k8s.enabled -}}
 {{- fail "wardyn: k8s.agentSandbox.enabled needs k8s.enabled=true: the backend only changes how the Kubernetes runner creates its agent pod, and without the runner there is no pod to create." -}}
@@ -230,6 +233,13 @@ rules:
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["create", "get", "list", "delete"]
+{{- with $agentSandbox.template }}
+  # The one SandboxTemplate the agent pod takes its annotations from (k8s.agentSandbox.template): read only.
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates"]
+    resourceNames: [{{ . | quote }}]
+    verbs: ["get"]
+{{- end }}
 {{- end }}
   - apiGroups: [""]
     resources: ["pods/ephemeralcontainers"]
@@ -324,6 +334,41 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "wardyn.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if include "wardyn.groundtruthEnabled" . }}
+{{- /* The ground-truth sensor's credential Secret (groundtruth.yaml). wardynd patches `token` and
+control-plane-ca.pem into it. One verb, one resourceName, in the sensor's namespace: no get (it never
+reads a Secret back), no create (the chart makes it), no list or watch (they return every Secret's body),
+and no ClusterRole. */}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "wardyn.groundtruthRole" . }}
+  namespace: {{ include "wardyn.groundtruthNamespace" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ include "wardyn.groundtruthSecret" . | quote }}]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "wardyn.groundtruthRole" . }}
+  namespace: {{ include "wardyn.groundtruthNamespace" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "wardyn.groundtruthRole" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "wardyn.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{/* CLUSTER-SCOPED NAMES CARRY THE NAMESPACE; namespaced ones above must not.
 wardyn.fullname is built from the RELEASE NAME alone, which is enough for every
 namespaced object (two releases in two namespaces get two distinct Roles) but

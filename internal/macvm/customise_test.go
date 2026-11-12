@@ -157,6 +157,7 @@ func TestParseBaseListRefuses(t *testing.T) {
 		"claude managed, another case": listJSON(t, file("/library/application support/claudecode/managed-settings.json")),
 		"codex requirements":           listJSON(t, file(guestagent.MacCodexRequirementsPath)),
 		"the run secrets dir":          listJSON(t, file(guestagent.MacRunDir+"/x")),
+		"the run settings dir":         listJSON(t, file(guestagent.MacSessionEnvPath)),
 		"the stage dir":                listJSON(t, file(guestagent.MacItemStageDir+"/edr/item.pkg")),
 		"a harness CLI":                listJSON(t, file("/usr/local/bin/claude")),
 		"the agent":                    listJSON(t, file(guestagent.MacAgentBinaryPath)),
@@ -507,7 +508,7 @@ func TestCAItemTrustVerifyAndRotation(t *testing.T) {
 		f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "org-ca", Path: ca, SHA256: caPin}}}
 		g := newItemGuest()
 		g.fail = func(argv []string) int { return map[string]int{refused: 1}[argv[1]] }
-		if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old}); err == nil || !strings.Contains(err.Error(), "prepare --reprepare") {
+		if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old}); err == nil || !strings.Contains(err.Error(), "prepare --new-image") {
 			t.Fatalf("a refused %s: %v", refused, err)
 		}
 		if deleted := slices.ContainsFunc(g.steps, func(s string) bool { return strings.Contains(s, "delete-certificate") }); refused == "remove-trusted-cert" && deleted {

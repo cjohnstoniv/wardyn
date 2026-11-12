@@ -45,6 +45,7 @@ import { isVMKind } from "../../lib/types/machine-kind";
 import { WidgetCard } from "../wardyn/primitives";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { UIAppRow } from "./run-detail/ui-app-row";
+import { useRunDataOut } from "./run-detail/use-run-data-out";
 import { cn } from "../ui/utils";
 import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
 import { orgCAFingerprints } from "../../lib/cli-install";
@@ -119,6 +120,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // Desktop tile (run-detail-desktop.tsx).
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
   const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
+  // A run with no UI app has no desktop; under review its Files panel is the reviewed way out, so the rule is read for it.
+  const dataOut = useRunDataOut(run.id, (run.ui_apps ?? []).length === 0);
   React.useEffect(() => {
     if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
@@ -440,6 +443,9 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             {/* A VM run's Files panel is in its Desktop tile; any other run with a declared UI app keeps it here. */}
             {mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && <DesktopFilesPanel runId={run.id} />}
           </>
+        )}
+        {dataOut === "review" && uiApps.length === 0 && mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && (
+          <DesktopFilesPanel runId={run.id} noDesktop />
         )}
       </div>
     </WidgetCard>

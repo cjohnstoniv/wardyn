@@ -17,6 +17,7 @@
 # Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
 # WARDYN_TEST_REPORT_NAME renames the report directory only (the suite name still scopes the skip floor).
 # WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
+# WARDYN_TEST_REPORT_TAIL=<n> echoes the last n output lines of each failing test into the log (default 8).
 # test/go-quarantine.txt (WARDYN_GO_QUARANTINE overrides the path) lists the flaky Go tests every suite
 # skips with `go test -skip`; the file is validated first and an expired or malformed entry exits 1.
 # Its format and rules are the ones in ui/e2e/quarantine.txt (scripts/lib/e2e-quarantine.sh).
@@ -91,6 +92,7 @@ GO_EXIT=$?
 if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
   python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
 import json
+import os
 import sys
 from collections import deque
 
@@ -102,6 +104,7 @@ tail = {}          # Package -> its last few output lines
 test_tail = {}     # (Package, Test) -> that test's last few output lines (#1209)
 panics = {}        # Package -> its first `panic:` line and the lines after it
 panic_test = {}    # Package -> the test that panic was attributed to, if any
+TEST_TAIL = int(os.environ.get("WARDYN_TEST_REPORT_TAIL") or 8)
 
 
 def emit(out):
@@ -126,7 +129,7 @@ with open(sys.argv[1]) as f:
             pkg, out = ev["Package"], ev.get("Output", "")
             tail.setdefault(pkg, deque(maxlen=8)).append(out)
             if ev.get("Test"):
-                test_tail.setdefault((pkg, ev["Test"]), deque(maxlen=8)).append(out)
+                test_tail.setdefault((pkg, ev["Test"]), deque(maxlen=TEST_TAIL)).append(out)
             # A -timeout panic is attributed to the running test but emits no
             # fail event for it, and its last lines are goroutine frames: the
             # `panic:` line and the ones after it are what name the cause.
@@ -233,7 +236,7 @@ esac
 REQUIRE_ALL=""
 if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval TestConformanceDocker/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceDocker/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceDocker/PlacementRouting/AskedPlacementIsHonoured TestConformanceDockerThroughRemote/PlacementRouting/OfflineRunnerIsRefusedNotRoutedLocally'
+    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/DNSAudit TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval TestConformanceDocker/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceDocker/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceDocker/PlacementRouting/AskedPlacementIsHonoured TestConformanceDockerThroughRemote/PlacementRouting/OfflineRunnerIsRefusedNotRoutedLocally'
   fi
   if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
     REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives TestConformanceK8s/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceK8s/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceK8s/PlacementRouting/AskedPlacementIsHonoured'
@@ -251,11 +254,16 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestDeviceCodeLoginRealCLI TestParseRealAWSCLICacheFile TestAWSSSOConfigAcceptedByRealBotocore'
   fi
+  # The gateway recipes run the real LiteLLM, Portkey and Presidio images, which only the hosted job may
+  # pull, so the test self-skips anywhere else; named here only where it can run, a rename or a skip goes red.
+  if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    REQUIRE_ALL="$REQUIRE_ALL TestGatewayRecipes_Live"
+  fi
   # #707: `make test-conformance-docker` ran these through a bare
   # `go test -run`, which exits 0 on "no tests to run" after a rename and on a
   # skip. Named here, the rename and the skip both go red.
   if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil'
+    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil TestL0_DNSQueryIsRecorded TestL0_HostAddressUnreachable'
   fi
   # The SSH gateway's -L forwarding, the editor path over it, the UI relay and the macOS VM Screen Sharing
   # refusal (gateway and guest agent). None needs Postgres or Docker, so they run in the plain unit suite,

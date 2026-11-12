@@ -249,6 +249,8 @@ type providerDispatch struct {
 	detail          string // the brokered-LLM 404's detail
 	// gatewayRoutes is ProxyConfig.GatewayIdentity: the routes that carry the run's signed identity.
 	gatewayRoutes []proxy.GatewayIdentityRoute
+	// extraHeaders is ProxyConfig.LLMHeaders: {gateway host → the non-secret headers its provider sets}.
+	extraHeaders map[string]map[string]string
 }
 
 // addLocalModel records a local_model lane's upstream, allowlist and bounds for
@@ -386,7 +388,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			return nil, nil, injections, providerDispatch{}, false
 		}
 		llms, lanePairs = append(llms, llm), append(lanePairs, pairs[i])
-		if lane.chosen != nil && !s.takeProviderGatewayRoute(ctx, lr, &prov, lane.chosen.provider) {
+		if lane.chosen != nil && !s.takeProviderGatewayRoute(ctx, lr, &prov, lane.chosen.provider, llm) {
 			return nil, nil, injections, providerDispatch{}, false
 		}
 		if lane.chosen == nil || !providerKeyKind(lane.chosen.provider.Kind) {
@@ -410,6 +412,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			}
 			prov.upstreams[lane.key.vendorHost] = lane.key.upstream
 		}
+		prov.addExtraHeaders(lane.key)
 	}
 	return llms, lanePairs, injections, prov, true
 }
@@ -695,8 +698,16 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
 		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
-		if lane.chosen != nil && lane.chosen.provider.Kind == types.ModelProviderLocalModel {
-			sandboxEnv[envCodexModel] = lane.key.model
+		if lane.chosen != nil {
+			switch lane.chosen.provider.Kind {
+			case types.ModelProviderLocalModel:
+				sandboxEnv[envCodexModel] = lane.key.model
+			case types.ModelProviderCustomEndpoint, types.ModelProviderOpenAIAPIKey:
+				// The Model the admin stored on the harness entry; unset leaves codex on its own default.
+				if lane.key.model != "" {
+					sandboxEnv[envCodexModel] = lane.key.model
+				}
+			}
 		}
 	}
 	return llmTransport{provider: lane.chosen}

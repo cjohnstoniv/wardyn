@@ -127,22 +127,22 @@ func TestRecipientsResolveTheTiersTargetsAndSkipWhatHasNoAddress(t *testing.T) {
 	facts := approvalFacts{Kind: types.ApprovalEgressDomain, UnitID: &profile, UnitName: "interns", Email: "owner@corp.example"}
 	contact := []byte(`{"owner":"Platform team","email":"platform@corp.example"}`)
 
-	got := w.recipients(claimed{tier: 0, channel: "a"}, facts, contact)
+	got := w.recipients(claimed{tier: 0, channel: "a"}, facts, contact, nil)
 	want := []recipient{{Role: TargetRunOwner, Email: "owner@corp.example"}, {Role: TargetProfileContact, Email: "platform@corp.example"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("tier 0 = %+v, want %+v", got, want)
 	}
 
 	// Only the tier's own channels resolve, and only tiers the route has.
-	if got := w.recipients(claimed{tier: 0, channel: "b"}, facts, contact); got != nil {
+	if got := w.recipients(claimed{tier: 0, channel: "b"}, facts, contact, nil); got != nil {
 		t.Errorf("a channel outside the tier resolved %+v", got)
 	}
-	if got := w.recipients(claimed{tier: 2, channel: "a"}, facts, contact); got != nil {
+	if got := w.recipients(claimed{tier: 2, channel: "a"}, facts, contact, nil); got != nil {
 		t.Errorf("a tier past the route resolved %+v", got)
 	}
 	// No route matches an approval of another profile or kind: the fixed config answers no one.
 	other := uuid.New()
-	if got := w.recipients(claimed{tier: 0, channel: "a"}, approvalFacts{Kind: facts.Kind, UnitID: &other}, contact); got != nil {
+	if got := w.recipients(claimed{tier: 0, channel: "a"}, approvalFacts{Kind: facts.Kind, UnitID: &other}, contact, nil); got != nil {
 		t.Errorf("an unrouted profile resolved %+v", got)
 	}
 
@@ -153,14 +153,14 @@ func TestRecipientsResolveTheTiersTargetsAndSkipWhatHasNoAddress(t *testing.T) {
 		"an invalid email":        []byte(`{"email":"not-an-email"}`),
 		"a contact with no email": []byte(`{"owner":"Platform team"}`),
 	} {
-		got := w.recipients(claimed{tier: 1, channel: "b"}, facts, stored)
+		got := w.recipients(claimed{tier: 1, channel: "b"}, facts, stored, nil)
 		if len(got) != 0 {
 			t.Errorf("%s: resolved %+v, want no recipient", name, got)
 		}
 	}
 	noOwner := facts
 	noOwner.Email = ""
-	if got := w.recipients(claimed{tier: 0, channel: "a"}, noOwner, nil); len(got) != 0 {
+	if got := w.recipients(claimed{tier: 0, channel: "a"}, noOwner, nil, nil); len(got) != 0 {
 		t.Errorf("a run owner with no email resolved %+v", got)
 	}
 }

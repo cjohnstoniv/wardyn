@@ -40,7 +40,7 @@ var governanceChangeStates = []string{
 	types.GovernanceChangeExpired, types.GovernanceChangeStale,
 }
 
-// mountGovernanceChangeRoutes registers the four /governance/changes routes on the unit-admin tier
+// mountGovernanceChangeRoutes registers the five /governance/changes routes on the unit-admin tier
 // (governance.go): a unit admin lists, reads and decides the changes inside their units, and the
 // per-change approver below decides which those are. The group a mount function receives is decided
 // at the call site, and authz_test.go's chi.Walk matrix is what enforces it.
@@ -49,10 +49,12 @@ func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
 	unit.Get("/governance/changes/{id}", s.handleGetGovernanceChange)
 	unit.Post("/governance/changes/{id}/approve", s.handleApproveGovernanceChange)
 	unit.Post("/governance/changes/{id}/reject", s.handleRejectGovernanceChange)
+	unit.Put("/governance/changes/{id}/note", s.handlePutGovernanceChangeNote)
 }
 
 // handleListGovernanceChanges lists changes newest first. ?state= narrows to one state and defaults to
-// pending, the queue an approver works. A change of a kind the caller may not approve is not listed.
+// pending, the queue an approver works. ?approver=security narrows to the changes only a security admin
+// may decide. A change of a kind the caller may not approve is not listed.
 func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	if state == "" {
@@ -61,6 +63,11 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	if !slices.Contains(governanceChangeStates, state) {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceChangeStateInvalid,
 			"state must be one of "+strings.Join(governanceChangeStates, ", "))
+		return
+	}
+	approver := r.URL.Query().Get("approver")
+	if approver != "" && approver != governanceApproverSecurity {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "approver must be "+governanceApproverSecurity)
 		return
 	}
 	all, err := s.cfg.Store.ListGovernanceChanges(r.Context(), state)
@@ -77,7 +84,7 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	}
 	out := make([]types.GovernanceChange, 0, len(all))
 	for _, ch := range all {
-		if s.canSeeGovernanceChange(r, ch) {
+		if s.canSeeGovernanceChange(r, ch) && (approver == "" || s.securityOnlyChange(r, ch)) {
 			out = append(out, s.changeForRead(r, ch))
 		}
 	}
@@ -192,42 +199,15 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 			return err
 		}
 	}
-	tokenID := apiTokenIDFromContext(ctx)
-	if tokenID == uuid.Nil {
-		if !kind.approver.allowed(s, r.WithContext(withUnitScopeTx(ctx, q))) {
-			return s.denyApprover(kind)
-		}
-		return nil
-	}
-	t, err := store.GetLiveAPITokenQ(ctx, q, tokenID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return &govRefusal{why: "approver token revoked or expired", write: func(w http.ResponseWriter, r *http.Request) {
-			s.auditAuthFailed(r, "invalid_admin_token")
-			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
-		}}
-	case err != nil:
+	t, err := s.recheckLiveToken(ctx, q)
+	if err != nil {
 		return err
 	}
-	if s.cfg.SessionRevocations != nil {
-		status, rerr := s.approverSessionStatus(ctx, q, t)
-		if rerr != nil {
-			return &govRefusal{why: "session revocation unreadable", write: func(w http.ResponseWriter, r *http.Request) {
-				s.metrics.authStoreErrorInc()
-				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
-			}}
+	if t == nil {
+		if tx := r.WithContext(withUnitScopeTx(ctx, q)); !kind.approver.allowed(s, tx) {
+			return s.denyApproverOn(kind, tx)
 		}
-		if status != oidc.SessionLive {
-			return &govRefusal{why: "approver session revoked", write: func(w http.ResponseWriter, r *http.Request) {
-				s.auditAuthFailed(r, "invalid_admin_token")
-				writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
-			}}
-		}
-	}
-	if s.cfg.RoleStampTTL > 0 && !sshRoleFresh(t.IdentityStampedAt, s.cfg.Now().UTC(), s.cfg.RoleStampTTL) {
-		return &govRefusal{why: "approver role stamp stale", write: func(w http.ResponseWriter, r *http.Request) {
-			s.refuseStaleRoleStamp(w, r, t)
-		}}
+		return nil
 	}
 	// A cli_access token publishes the role user whatever the row holds, as apiTokenAuth clamps it.
 	role := t.Role
@@ -235,10 +215,52 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 		role = oidc.RoleUser
 	}
 	fresh := withUnitScopeTx(withHumanIdentity(ctx, t.Principal, t.Email, role, t.UserType, t.Groups, t.GroupsTruncated == nil || *t.GroupsTruncated), q)
-	if !kind.approver.allowed(s, r.WithContext(fresh)) {
-		return s.denyApprover(kind)
+	if tx := r.WithContext(fresh); !kind.approver.allowed(s, tx) {
+		return s.denyApproverOn(kind, tx)
 	}
 	return nil
+}
+
+// recheckLiveToken re-reads a token caller's token on q: revoked or expired, a revoked session and a
+// stale role stamp each refuse as the auth lane does. A session caller (no token) gets nil, nil. A
+// proposer's withdraw takes this check too, so a token revoked after the request was authenticated
+// cannot withdraw.
+func (s *Server) recheckLiveToken(ctx context.Context, q store.Querier) (*types.APIToken, error) {
+	tokenID := apiTokenIDFromContext(ctx)
+	if tokenID == uuid.Nil {
+		return nil, nil
+	}
+	t, err := store.GetLiveAPITokenQ(ctx, q, tokenID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, &govRefusal{why: "approver token revoked or expired", write: func(w http.ResponseWriter, r *http.Request) {
+			s.auditAuthFailed(r, "invalid_admin_token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
+		}}
+	case err != nil:
+		return nil, err
+	}
+	if s.cfg.SessionRevocations != nil {
+		status, rerr := s.approverSessionStatus(ctx, q, t)
+		if rerr != nil {
+			return nil, &govRefusal{why: "session revocation unreadable", write: func(w http.ResponseWriter, r *http.Request) {
+				s.metrics.authStoreErrorInc()
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
+			}}
+		}
+		if status != oidc.SessionLive {
+			return nil, &govRefusal{why: "approver session revoked", write: func(w http.ResponseWriter, r *http.Request) {
+				s.auditAuthFailed(r, "invalid_admin_token")
+				writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
+			}}
+		}
+	}
+	if s.cfg.RoleStampTTL > 0 && !sshRoleFresh(t.IdentityStampedAt, s.cfg.Now().UTC(), s.cfg.RoleStampTTL) {
+		return nil, &govRefusal{why: "approver role stamp stale", write: func(w http.ResponseWriter, r *http.Request) {
+			s.refuseStaleRoleStamp(w, r, t)
+		}}
+	}
+	return &t, nil
 }
 
 // A database-backed revocation check must share the decision's connection.
@@ -254,13 +276,29 @@ func (s *Server) approverSessionStatus(ctx context.Context, q store.Querier, t t
 // denyApprover is the refusal a caller whose tier does not pass the kind's approver predicate gets.
 func (s *Server) denyApprover(kind govKind) *govRefusal {
 	return &govRefusal{why: "approver tier", write: func(w http.ResponseWriter, r *http.Request) {
+		kind := kind // this refusal's own copy: refusal may name the reason
+		if kind.approver.refusal != nil {
+			kind.approver.reason = kind.approver.refusal(s, r)
+		}
 		s.refuse(w, r, authz.Deny(kind.approver.reason, govChangeTarget, ""))
 	}}
 }
 
+// denyApproverOn is denyApprover with the reason named on tx, the in-transaction request whose check
+// refused: the outer request's per-request scope memo still holds the pre-check's answer, so naming
+// the reason there would call a unit admin whose unit moved out a security-admin refusal.
+func (s *Server) denyApproverOn(kind govKind, tx *http.Request) *govRefusal {
+	if kind.approver.refusal != nil {
+		kind.approver.reason = kind.approver.refusal(s, tx)
+		kind.approver.refusal = nil
+	}
+	return s.denyApprover(kind)
+}
+
 // decideGovernanceChange is approve (apply the held write) and reject (apply nothing) in one body,
 // since the two differ only in the apply and the distinct-human rule: the proposer may reject their
-// own change, which applies nothing.
+// own change, which applies nothing. That reject is a withdrawal, allowed to the proposer even outside
+// the change's approvers; approving stays the approvers' alone.
 func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "governance change")
 	if !ok {
@@ -292,7 +330,11 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	kind = kind.forChange(head)
-	if !bypass && !kind.approver.allowed(s, r) {
+	actorType, principal := actorFromRequest(r)
+	email := oidcEmailFromContext(ctx)
+	allowed := bypass || kind.approver.allowed(s, r)
+	withdraw := !allowed && !approve && sameGovernanceHuman(head, principal, email)
+	if !allowed && !withdraw {
 		s.denyApprover(kind).write(w, r)
 		return
 	}
@@ -306,15 +348,38 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		defer unlock()
 		ctx = r.Context()
 	}
-	actorType, principal := actorFromRequest(r)
-	email := oidcEmailFromContext(ctx)
 
 	decision := store.GovernanceDecision{To: types.GovernanceChangeApplied, By: principal, ByEmail: email}
 	if !approve {
 		decision.To, decision.Reason = types.GovernanceChangeRejected, reason
 	}
 	var applied govApplied
-	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, decision, func(q store.Querier, ch types.GovernanceChange) error {
+	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, decision, s.decideInTx(ctx, r, kind, approve, bypass, withdraw, principal, email, &applied))
+	if err != nil {
+		s.answerFailedDecision(w, r, head, approve, bypass, actorType, principal, err)
+		return
+	}
+
+	s.auditDecision(r, out, applied, approve, bypass, actorType, principal, email, reason)
+	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
+}
+
+// decideInTx is the decision transaction's body: a proposer's withdraw re-reads their token and
+// re-matches the proposer on the locked row and applies nothing; an approver decision re-checks the
+// approver (and the distinct-human rule on approve) unless the admin token bypasses, then an approval
+// applies the held write into *applied.
+func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, approve, bypass, withdraw bool,
+	principal, email string, applied *govApplied) store.GovernanceDecideFunc {
+	return func(q store.Querier, ch types.GovernanceChange) error {
+		if withdraw {
+			if _, err := s.recheckLiveToken(ctx, q); err != nil {
+				return err
+			}
+			if !sameGovernanceHuman(ch, principal, email) {
+				return s.denyApprover(kind)
+			}
+			return nil
+		}
 		if !bypass {
 			if err := s.recheckApprover(ctx, r, q, kind); err != nil {
 				return err
@@ -332,14 +397,18 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 			return store.ErrGovernanceChangeStale
 		}
 		var err error
-		applied, err = kind.apply(s, r, q, ch)
+		*applied, err = kind.apply(s, r, q, ch)
 		return err
-	})
-	if err != nil {
-		s.answerFailedDecision(w, r, head, approve, bypass, actorType, principal, err)
-		return
 	}
+}
 
+// auditDecision records a committed decision: an approval writes the target's own row, as a direct
+// write would have, plus governance.change.approve (and the bypass row when the admin token spent
+// one); a reject writes governance.change.reject, marked withdrawn when the proposer made it, and a
+// request kind's own reject row after it.
+func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, applied govApplied, approve, bypass bool,
+	actorType types.ActorType, principal, email, reason string) {
+	ctx := r.Context()
 	data := map[string]any{"target_kind": out.TargetKind, "target_key": out.TargetKey, "proposed_by": out.ProposedBy}
 	if approve {
 		// The target's own row, as a direct write would have written it, with the actor the approver
@@ -367,9 +436,15 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		if reason != "" {
 			data["reason"] = reason
 		}
+		withdrawn := sameGovernanceHuman(out, principal, email)
+		if withdrawn {
+			data["withdrawn"] = true // the proposer rejected their own change
+		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.reject", out.ID.String(), "success", mustJSON(data)))
+		if kind := governanceChangeKinds[out.TargetKind]; kind.rejectAction != "" {
+			s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, kind.rejectAction, out.ID.String(), "success", mustJSON(s.requestRejectData(ctx, out, withdrawn))))
+		}
 	}
-	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
 }
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit

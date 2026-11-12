@@ -21,7 +21,7 @@ import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { Chip, RunStateBadge } from "../../wardyn/primitives";
-import { repoLabel, rowHeadline } from "./board-groups";
+import { repoLabel, rowHeadline, WorkspaceNamesContext } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { isPausedRun, rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
@@ -39,8 +39,8 @@ const RowSignInProbe = React.lazy(() => import("../run-detail/row-sign-in-probe"
 // Lazy for the same reason: the confirm is for the rare scheduled row.
 const CancelRunDialog = React.lazy(() => import("../run-detail/cancel-run-dialog"));
 
-function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
-  const parts: string[] = [repoLabel(run).text];
+function metaLine(run: AgentRun, adminView: boolean, own: boolean, names: Readonly<Record<string, string>>): string {
+  const parts: string[] = [repoLabel(run, names).text];
   // UXR-31: a VM run says which kind; a container run says nothing, as before.
   if (run.machine_kind === "macos_vm") parts.push(RUNS_ROW_WORD.MACOS_VM);
   else if (run.machine_kind === "linux_vm") parts.push(RUNS_ROW_WORD.LINUX_VM);
@@ -72,6 +72,7 @@ function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
 
 export function RunRow({ run }: { run: AgentRun }) {
   const navigate = useNavigate();
+  const workspaceNames = React.useContext(WorkspaceNamesContext);
   const view = useConsoleMode();
   const adminView = view === "admin";
   const principal = usePrincipal();
@@ -115,7 +116,7 @@ export function RunRow({ run }: { run: AgentRun }) {
                 ? REVIVING
                 : REVIVE
               : null;
-  const meta = metaLine(run, adminView, own);
+  const meta = metaLine(run, adminView, own, workspaceNames);
   // A live service says its health in place of "Running". Unhealthy is a warning chip on the same row, under Running:
   // a report is not a request, so the row never moves to Needs you or borrows its glyph.
   const health = p.word === RUNS_ROW_WORD.RUNNING ? serviceBadge(run) : undefined;
@@ -181,6 +182,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             variant="outline"
             className="h-7 shrink-0"
             disabled={p.action === "revive" && reviving}
+            // The visible word first, then which run it acts on, so a list of buttons is not N copies of "Review".
+            aria-label={`${actionLabel}: ${title}`}
             onClick={(e) => {
               e.stopPropagation();
               if (p.action === "revive") void revive(e);

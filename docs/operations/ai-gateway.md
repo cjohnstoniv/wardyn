@@ -3,8 +3,8 @@
 # An external AI gateway: setup
 
 - An AI gateway such as [agentgateway](https://agentgateway.dev) runs beside Wardyn and serves model and MCP traffic for every caller. [Pluggability](../PLUGGABILITY.md#an-external-ai-gateway-for-example-agentgateway) says where it fits.
-- This page is the intended setup: the config, the hostnames and the Wardyn settings that go with them. Its image is `agentgateway` v1.7.0, pinned by digest in [`deploy/kind/gateway/gateway.yaml`](../../deploy/kind/gateway/gateway.yaml).
-- **Status.** The nightly job `ai-gateway-kind` runs this setup and is new. It has no scheduled green run yet, so nothing below is claimed as tested by CI until it has one.
+- This page is the intended setup: the config, the hostnames and the Wardyn settings that go with them.
+- LiteLLM, Portkey, OpenRouter and Presidio have their own page: [Model gateways and detectors](model-gateways.md).
 
 ## What the setup is
 
@@ -30,7 +30,7 @@
 3. Add a `custom_endpoint` provider whose `base_url` is the model hostname and port, for example `https://llm-gw.wardyn.svc.cluster.local:8443`. A person's credential is stored as for any provider.
    - Two providers with identity on can share one gateway only on paths apart, such as `/anthropic` and `/openai`. A run that uses both on one path is refused.
    - A Bedrock provider with a bearer key can send identity too. Put the gateway in its `bedrock.base_url`, and each person's key goes to the gateway.
-   - A Bedrock provider with SSO sign-in cannot, because AWS signs the `Host` header. Use a bearer key row, or the gateway as a custom endpoint.
+   - A Bedrock provider with SSO sign-in can send identity only while Wardyn signs AWS requests at its proxy: [Bedrock with SSO sign-in](#bedrock-with-sso-sign-in).
 4. Add the model hostname to the policy's `allowed_domains`. The model route needs no `internal_hosts` entry, and adding one lifts the private-address guard for that host on every path ([Internal model gateway](../OPERATIONS.md#internal-model-gateway)).
 5. Allow the MCP hostname in the run's policy, and add it to `internal_hosts` when it names a private address. Wardyn then governs whether a run reaches the gateway, and the gateway decides which tools a caller gets.
 6. To have the gateway know which run and person made an MCP call, set `mcp.gateway_audience` on the organisation's MCP component (its `url` is the gateway's MCP address). Run identity is turned on per model provider and makes the signing key, so turn it on for a provider first.
@@ -38,6 +38,43 @@
    - One audience belongs to one address, across model providers and MCP servers.
    - An MCP component edited after a run started is refused a new token for that run, as a changed provider is.
    - An MCP server whose address falls under another destination's identity route is refused (`502`) rather than sent that destination's token.
+
+## Bedrock with SSO sign-in
+
+A `bedrock_sso` provider can send run identity to a gateway, and AWS still checks each person's own signature. It is off unless an admin turns `gateway_identity` on for the row.
+
+- **It needs** `WARDYN_AWS_SIGV4_AT_PROXY` on, with `WARDYN_AWS_SSO_PROXY_INJECT` on and `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` unset. Otherwise turning identity on for the row is refused at save. `gateway_identity_bedrock_sso` in `GET /api/v1/model-providers` says whether this install can.
+- If the install stops signing at the proxy after the save, the row's runs are refused with the reason. They never fall back to role credentials in the sandbox.
+- **Set** `bedrock.base_url` to the gateway, for example `https://ai-gw.corp.example/bedrock`, and `bedrock.region` to the region whose `bedrock-runtime.<region>.amazonaws.com` the gateway forwards to.
+- **Give the gateway a DNS name of your own.** A `bedrock.base_url` on any AWS name is refused, so the token never goes to AWS. That includes a PrivateLink `vpce` name and a name AWS made for the gateway, such as an API Gateway `execute-api` name or a load balancer's `elb` name.
+- The proxy signs each Bedrock call as the person, for that regional address with the gateway's path prefix cut. It sends the call to the gateway with `X-Wardyn-Identity` and `X-Wardyn-Call-Id`. The role credentials stay in the proxy, and the sandbox holds a placeholder key pair.
+
+The gateway must:
+
+- verify the token, then strip `X-Wardyn-Identity` and `X-Wardyn-Call-Id`;
+- cut its path prefix, set `Host` to `bedrock-runtime.<region>.amazonaws.com` and forward the call there;
+- forward the method, the path bytes, `Authorization`, `X-Amz-Date`, `X-Amz-Security-Token`, `X-Amz-Content-Sha256`, every other signed header and the body unchanged. It must not decode or normalise the path: a `%2F` in an inference-profile ARN stays `%2F`.
+
+The body is signed:
+
+- A call goes to the gateway only with its body hash signed. The proxy refuses `UNSIGNED-PAYLOAD`, a streaming unsigned payload, and a declared hash that does not match the body.
+- A body over 16 MiB is refused, because the proxy reads the whole body to hash it.
+
+Limits:
+
+- Bedrock's bidirectional-stream API is refused, because the proxy refuses event-stream request bodies on every call it signs. Converse, InvokeModel and the response-stream calls work.
+- Control-plane calls to `bedrock.<region>.amazonaws.com` go to AWS directly, signed at the proxy, not through the gateway.
+- A signed Bedrock call gets the generic forward scan (`inspect_forward_egress`), as direct signing at the proxy does, not the model prompt checks.
+- A run on a person's own runner is refused, because that runner cannot reach the token mint.
+- A gateway that signs again with an AWS role of its own also works, but AWS then sees the gateway's role, not the person.
+- The signature was checked against an independent SigV4 signer, not against AWS or a named gateway product.
+
+What the gateway gets:
+
+- Each call signed as the person: the prompt, the access key id, the session token and the signature, never the secret key.
+- It cannot change the call or send it to another AWS service or region, because those are signed.
+- It can send the same call again, more than once, for a few minutes after it was signed.
+- A gateway in front of a bearer-key row gets the person's long-lived key instead.
 
 ## The gateway's config
 
@@ -88,11 +125,7 @@ The setup was checked against the pinned image in a one-container trial. These a
 
 ## The image
 
-- The gateway image is the operator's own choice to trust. This setup takes it unmodified and pins it by digest.
-- Trivy 0.70.0 (`trivy image --severity CRITICAL`, run on a `docker save` of the digest) found no CRITICAL findings on the base layers on 2026-11-02. It cannot see the Rust binary's crates.
-- For the crates, `Cargo.lock` at the v1.7.0 tag lists 804 registry packages. Querying them against OSV (`api.osv.dev/v1/querybatch`) flags 6.
-  - The flagged `rmcp` 0.10.0 has six advisory ids. `crates/agentgateway/Cargo.toml` at the tag declares it under `[dev-dependencies]`, so it appears not to be linked into the binary.
-  - The other five (`atomic-polyfill`, `crypto-bigint`, `ctutils`, `paste`, `pulldown-cmark`): whether they are linked is not determined.
+The gateway image is the operator's own choice to trust. This setup uses `agentgateway` v1.7.0 unmodified, pinned by digest in [`deploy/kind/gateway/gateway.yaml`](../../deploy/kind/gateway/gateway.yaml).
 
 ## If the gateway verifies tokens from a JWKS URL
 
@@ -107,9 +140,12 @@ The setup was checked against the pinned image in a one-container trial. These a
 
 ## The claims a gateway receives
 
-- Experimental until 0.11. The token format (`wardyn_format` is `experimental-1`) and the key set's address may change before then.
+- Compatibility. The token format is `1` (`wardyn_format`).
+  - Within format 1, claims are only added: none is removed, renamed or given a different type. A gateway rule should ignore a claim it does not know.
+  - The key set's address is stable through 0.11.
+  - A format 2 is announced a minor release ahead.
 - With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It does the same on an organisation MCP server's address when the component sets `mcp.gateway_audience`. It never uses `Authorization`, which carries a person's own credential.
-- The token is ES256 with the key's `kid` in its header, and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). An MCP server's token always lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
+- The token is ES256 with the key's `kid` in its header (format 1 keeps both), and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). An MCP server's token always lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
 
 | Claim | Value | Notes |
 |---|---|---|
@@ -124,9 +160,11 @@ The setup was checked against the pinned image in a one-container trial. These a
 | `jti` | A fresh UUID per token | |
 | `iat` | When the token was issued | Unix seconds |
 | `exp` | `iat` plus the provider's token lifetime, 10 minutes unless set | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
-| `wardyn_format` | `experimental-1` | |
-| `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape |
+| `wardyn_format` | `1` | |
+| `wardyn_delegate` | The portal's id | Present only on a run a portal launched for the person; see [api-tokens.md](api-tokens.md) |
+| `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape. On a portal run whose portal named the acting agent it nests that agent: `{"sub": "spiffe://<trust domain>/agent-run/<run id>", "act": {"sub": "<agent>", "iss": "<issuer>"}}` |
 
+- The nested agent is provenance. RFC 8693 section 4.1 says prior actors are informational and not to be used in access control decisions, so a gateway rule that reads `act.act.sub` does so on its own judgement.
 - There is no `nbf`. A Wardyn clock ahead of the gateway's drops a token early and one behind gets a `401`: both fail closed.
 - A test holds this table equal to the signer's claim struct.
 
@@ -136,6 +174,7 @@ The setup was checked against the pinned image in a one-container trial. These a
 - A shorter life limits how long a leaked token is good for, and so how long a killed run's token can still be spent.
 - The setting applies to tokens issued after a save. A running run keeps working, because the life is not part of the route the run started with.
 - `wardyn-proxy` asks for a new token at half the remaining life. If the mint fails, it keeps the held token until `exp`, so a run survives a wardynd outage of about half the lifetime.
+- While wardynd is unreachable, the first call after half the life, and then the first in each retry interval, waits up to 15 seconds for that mint before the held token serves it.
 
 | Lifetime | Outage a run survives | A mint, per run and provider, every |
 |---|---|---|
@@ -146,6 +185,25 @@ The setup was checked against the pinned image in a one-container trial. These a
 
 - Each mint is about five store reads. At 60 seconds, 500 concurrent runs come to about 83 reads a second.
 - A rolling wardynd upgrade longer than the outage a run survives fails that run's model calls, so a short life is the admin's trade.
+
+## When a run's gateway access ends
+
+- Each mint checks the run's person, its service identity and sponsor, the portal that launched it, and the provider or MCP server. A refused mint gives no new token.
+- The bound: within half the token lifetime while wardynd is reachable, and up to the held token's expiry if it is not. Requests already forwarded and open streams run to completion.
+
+| Event | A running run's gateway access |
+|---|---|
+| Person suspended or fully revoked | ends: `403` `identity_deactivated` |
+| Service identity suspended or retired | ends: `403` `service_identity_inactive` |
+| Sponsor suspended or fully revoked | ends: `403` `identity_deactivated` |
+| Sponsor handover | continues; new tokens name the new sponsor |
+| Provider or MCP server changed or turned off | ends: `403` `gateway_identity_changed` |
+| Portal revoked | continues, as before |
+| Portal revoked with `cut_in_flight=true` | ends for good: `403` `gateway_access_cut` |
+
+- A cut stops gateway calls only. The run, its files, its other egress, a model key its proxy already holds and an open terminal socket carry on. `POST /api/v1/runs/{id}/kill` stops the run.
+- A token already issued stays valid at the gateway until `exp`, but only the run's proxy holds it. A 60-second `token_lifetime_seconds` cuts within about 30 seconds.
+- A revive of a cut run is refused `409` `gateway_access_cut`.
 
 ## The key set's address
 
@@ -189,6 +247,7 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 - Only a gateway log line that passed the token check is trustworthy. A sandbox that reaches the gateway through an opaque tunnel can send any `X-Wardyn-Call-Id`, so run the gateway's `jwtAuth` in `strict` mode.
 - An attempt refused or failed after the proxy made its id has a row with the id, and no gateway line when nothing was sent. A call refused before that has no id.
 - The id is Wardyn's own. It is not a request id the gateway made.
+- A run's token counts come from the same answers. Compare one call with the gateway's own figure by its call id.
 - An MCP server has a call id. It also gets an identity token when it is an organisation's remote server with `mcp.gateway_audience`, and no token otherwise.
 
 ## Who inspects

@@ -142,6 +142,9 @@ func llm404Detail(configured string) string {
 // over the vetted IP. Shared by the /wardyn/llm/* local routes and the
 // TLS-MITM CONNECT interception (serveMITM).
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
+	if p.llmHostDenied(w, r, host, port) {
+		return
+	}
 	// A local model server's gate runs before anything else (local_model.go);
 	// one with no auth configured is served with no credential at all.
 	lm := p.localModelAt(host, port)
@@ -304,7 +307,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		copyHeader(outReq.Header, r.Header)
 		removeHopByHop(outReq.Header)
 		p.stripGatewayHeaders(outReq.Header)
+		p.stripGatewayRoutingHeaders(outReq.Header, host, ownedHeader)
 		applyCredential(outReq.Header, ownedHeader, hdr)
+		p.applyExtraHeaders(outReq.Header, host, ownedHeader)
 		if gatewayRoute != nil && !p.attachGatewayIdentity(w, r, outReq.Header, gatewayRoute, host, port, ruleSource, callID) {
 			return nil, false
 		}
@@ -319,6 +324,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		// Emitted only AFTER a successful round-trip: a failed dial must NOT
 		// over-report an allow.
 		resp, err := p.roundTripUpstream(outReq)
+		if p.answerHostRuleRefusal(w, p.shapeOf(r, host), err) { // the 403 failUpstream gives
+			return nil, false
+		}
 		if err != nil {
 			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary, GatewayCallID: callID}
 			if p.refuseH2Mismatch(w, p.shapeOf(r, host), err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
@@ -335,6 +343,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 			return nil, false
 		}
 		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, callID, resp)
+		if meteredSource(ruleSource) {
+			p.meterUsage(r, host, port, resp, callID) // each attempt meters its own answer
+		}
 		if nsOff { // once, however many times a credential heal sends
 			p.emitLLMDecision(r, host, port, egress.Allow, ruleSourceGitNSOff, nil)
 			nsOff = false
@@ -483,11 +494,17 @@ func (p *Proxy) inspectForwardedLLM(w http.ResponseWriter, r *http.Request, host
 
 // inspectLLMOn is inspectLLM where deferred, when not nil, is the gateway route that
 // checks this request's prompt itself.
-func (p *Proxy) inspectLLMOn(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel, deferred *GatewayIdentityRoute) (io.Reader, *egress.ScanSummary, func(), bool) {
+func (p *Proxy) inspectLLMOn(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel, deferred *GatewayIdentityRoute) (body io.Reader, sum *egress.ScanSummary, release func(), blocked bool) {
 	noRelease := func() {}
 	if p.scanner == nil || p.scanner.Mode() == contentscan.ModeOff {
 		return r.Body, nil, noRelease, false
 	}
+	// Before the classifier: a route it cannot read (the Responses routes) is checked too (reroute_keys.go).
+	releaseKeys, refused := p.rerouteKeysRefused(w, r, host, port, rest, channel, deferred)
+	if refused {
+		return nil, nil, noRelease, true
+	}
+	defer func() { release = joinRelease(releaseKeys, release) }()
 	switch classifyLLM(channel, r.Method, rest) {
 	case scanMessages:
 		if deferred != nil {
@@ -608,6 +625,9 @@ func (p *Proxy) scanBufferedBodyWith(w http.ResponseWriter, r *http.Request, hos
 	release, rerr := noRelease, error(nil)
 	if held {
 		unread = http.NoBody
+		if rest, ok := r.Context().Value(chargedRestKey{}).(io.ReadCloser); ok { // the held body is a prefix (reroute_keys.go)
+			unread = rest
+		}
 	} else {
 		buffered, release, rerr = p.scan.readBody(r.Context(), r.Body, r.ContentLength, int64(maxLLMScanBody))
 	}
@@ -745,7 +765,7 @@ func (p *Proxy) emitLLMDecision(r *http.Request, host string, port int, decision
 // opaque tunnel (or plain-HTTP forward) inspection couldn't see into, keyed on
 // host and port, with the real port and method on the row. The request is allowed
 // separately; this is purely the honest coverage signal.
-func (p *Proxy) emitLLMBlindOnce(host string, port int, method string) {
+func (p *Proxy) emitLLMBlindOnce(ctx context.Context, host string, port int, method string) {
 	if p.sink == nil {
 		return
 	}
@@ -774,11 +794,12 @@ func (p *Proxy) emitLLMBlindOnce(host string, port int, method string) {
 
 	p.sink.emit(egress.DecisionLog{
 		Request: egress.Request{
-			RunID:  p.runID,
-			Host:   h,
-			Port:   port,
-			Method: method,
-			Time:   p.now(),
+			RunID:   p.runID,
+			Host:    h,
+			Port:    port,
+			Method:  method,
+			Time:    p.now(),
+			Relayed: p.relayLane(ctx),
 		},
 		Decision:   egress.Allow,
 		RuleSource: ruleSourceLLMBlind,

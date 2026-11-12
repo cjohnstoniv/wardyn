@@ -12,7 +12,7 @@ import * as React from "react";
 import { Layers } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { workloads as workloadsApi } from "../../lib/api/workloads";
-import { getErrorMessage } from "../../lib/format";
+import { usePoll } from "../../lib/use-poll";
 import type { Workload } from "../../lib/types/workloads";
 import { Mono } from "../wardyn/code-block";
 import { runPath, useConsoleMode } from "../wardyn/console-view";
@@ -20,7 +20,7 @@ import { agoShort, WORKLOADS as W } from "../wardyn/copy/workloads";
 import { usePrincipal } from "../wardyn/operator-context";
 import { PageContainer } from "../wardyn/page-container";
 import { PageHeader } from "../wardyn/page-header";
-import { ErrorState, TableSkeleton } from "../wardyn/states";
+import { ErrorState, failureSentence, StaleNote, TableSkeleton } from "../wardyn/states";
 import { WorkloadDrawer } from "./workloads/workload-drawer";
 import { WorkloadBadge } from "./workloads/workload-state";
 
@@ -33,25 +33,25 @@ export function WorkloadsScreen() {
   const principal = usePrincipal();
   const [params, setParams] = useSearchParams();
   const [rows, setRows] = React.useState<Workload[] | null>(null);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [failed, setFailed] = React.useState<{ message?: string } | null>(null);
   const [now, setNow] = React.useState(() => Date.now());
 
   // No "loading" flip here: this is also the poll and the refresh after an action, and the first read owns the skeleton.
   const load = React.useCallback(() => {
-    workloadsApi
+    return workloadsApi
       .list()
       .then((list) => {
         setRows(list);
-        setLoadError(null);
+        setFailed(null);
         setNow(Date.now());
       })
-      .catch((e) => setLoadError(getErrorMessage(e)));
+      .catch((e) => setFailed({ message: failureSentence(e) }));
   }, []);
+  // The first read is the effect; usePoll skips a tick while one is in flight and while the tab is hidden.
   React.useEffect(() => {
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => clearInterval(id);
+    void load();
   }, [load]);
+  usePoll(load, POLL_MS, false);
 
   const openName = params.get("workload");
   const openOwner = params.get("owner");
@@ -59,7 +59,7 @@ export function WorkloadsScreen() {
   const open = (w: Workload | null) => setParams(w ? { workload: w.name, owner: w.owner } : {}, { replace: true });
 
   let body: React.ReactNode;
-  if (loadError !== null) body = <ErrorState message={loadError} onRetry={load} />;
+  if (failed && !rows) body = <ErrorState message={failed.message} onRetry={load} />;
   else if (!rows) body = <TableSkeleton rows={4} cols={6} />;
   else if (rows.length === 0)
     body = (
@@ -130,7 +130,10 @@ export function WorkloadsScreen() {
   return (
     <PageContainer width="list" className="space-y-5 pb-24">
       <PageHeader title={W.TITLE} />
-      <div className="overflow-hidden rounded-xl border border-border bg-card">{body}</div>
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        {failed && rows && <StaleNote onRetry={load} />}
+        {body}
+      </div>
       <WorkloadDrawer workload={selected} view={view} now={now} onClose={() => open(null)} onChanged={load} />
     </PageContainer>
   );

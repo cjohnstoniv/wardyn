@@ -70,12 +70,26 @@
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
 - `ado_minted_pat` also needs the connection's opt-in and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
-- A `require_posture` class is refused at launch until per-runner placement lands.
+- A `require_posture` on a class whose mode is not `runner_resident` is refused when the policy is saved (`credential_delivery_invalid`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 - Placement judges the posture on record, the runner's last report, however old. A change on the laptop counts once the runner reports it: at every connect and within 15 minutes of a change.
 - A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`). A class with no `require_posture` places on any runner, one that has never reported posture included; to demand a report, set at least one requirement.
 - `os_min` must name every OS a runner may run: a runner on an OS it leaves out misses it.
+
+### Device posture
+
+Wardyn does not attest a laptop. It has three checks, each weaker than it sounds:
+
+- **The trust mark** (`managed_device`): a security operator, with a second person approving, said this runner is a company-managed device. Check that against your MDM inventory. The runner cannot set it.
+- **The posture file** from your MDM is root-owned and wins over the runner's own probe, but root on the laptop can rewrite it.
+- **`require_posture`** compares the runner's last report to a class's requirement. It gates only `runner_resident` credentials.
+
+Not checked: an MDM device certificate, Apple Managed Device Attestation, or a TPM quote. A runner registers with a token, not proof of the device.
+
+`runners.require_managed_device` (super admin: `PUT /api/v1/runners/settings {"require_managed_device": true}`) refuses a new local run unless the pool has a `managed_device` or `org_cluster` runner. A pool of only `personal` runners answers `runner_trust_required`. Off by default, so an install that does not set it places as before. Runs already started keep their runner.
+
+The switch is only as strong as the mark: review marked runners against your MDM inventory, and unmark (`wardyn runner trust <runner-id> personal --reason "<why>"`) a laptop that leaves management.
 
 ### bedrock_sso on a laptop runner
 
@@ -184,7 +198,27 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - A proxy older than the organisation refuses a configuration that carries a field it does not know, because the proxy reads its configuration strictly. The run then fails to start rather than running with a rule dropped, so pin only an image from the organisation's own release.
 - To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
 
-### Drive roots on a laptop runner
+### Sharing a folder: the settings
+
+<a id="drive-roots-on-a-laptop-runner"></a>
+
+A shared folder has to pass every setting below.
+
+| Setting | Where | Who sets it | macOS VM only |
+|---|---|---|---|
+| Workspace roots, and writable roots for a writable share | The organisation's server: `WARDYN_USER_WORKSPACE_ROOTS` (or a member's entry in `WARDYN_USER_WORKSPACE_ROOTS_MAP`), `WARDYN_USER_WRITABLE_ROOTS` | The server's operator | |
+| Drive roots | The runner: `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` in a managed profile | The machine's person, or the MDM | |
+| Full Disk Access for the guest agent | The base image, once, in `edit-base` ([Editing a base](macos-vm-base-image.md#editing-a-base)) | Whoever edits the base | yes |
+
+What you see tells you which one is missing:
+
+| What you see | Missing | Fix |
+|---|---|---|
+| "is outside every member workspace root", or "configures no member workspace roots" | Workspace roots | The operator sets `WARDYN_USER_WORKSPACE_ROOTS` (and `_MAP`), and `WARDYN_USER_WRITABLE_ROOTS` for a writable share |
+| "which shares no folders", "is outside every --drive-root its runner shares", or "this runner shares no folder" | Drive roots | `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` |
+| A macOS run stops within 10 seconds with "approve Full Disk Access for the Wardyn guest agent in edit-base" | Full Disk Access | Grant it to the guest agent in `edit-base` |
+
+Drive roots:
 
 - A drive bound to a person's own runner mounts only below a **drive root** the runner advertises, and a folder bound to it only inside one, or the root itself. With none, the organisation refuses drives and bound folders on it.
 - The person gives the installed service its roots when they set it up: `wardyn-runnerd setup --drive-root /Volumes/team-share --drive-root /srv/x`. Setup writes them to `runnerd.json` as `drive_root`; a rerun with `--drive-root` replaces the list, and a rerun without it keeps it. The roots are not in the unit or the LaunchAgent.
@@ -311,8 +345,14 @@ What happens:
 - Wardyn copies the folder in, and holds the agent until that copy lands. A
   failed copy fails the run, naming the folder. The run detail shows the first copy's files, bytes and refused paths.
 - One side edits at a time: the sandbox, while the run is live. With **Both ways**, its changes come back when the run
-  ends, before the sandbox is stopped, except as below. A file changed on both sides keeps your computer's copy; nothing there is
-  deleted. With **Copy in only**, nothing comes back.
+  ends, before the sandbox is stopped, except as below. Nothing on your computer is deleted. With **Copy in only**,
+  nothing comes back.
+- A file changed on both sides keeps your computer's copy, and the sandbox's is saved beside it as
+  `<name> (sandbox conflict <run>)<ext>`. If it can't be saved, neither side changes and the file is listed as not
+  brought back. A later run copies these in like any file; a `.wardynignore` line `* (sandbox conflict *)*` leaves
+  them out.
+- On filesystems that cannot sync a directory, and for read-only files on Windows, a power loss can drop a
+  just-written change; Wardyn logs a warning and continues.
 - Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
   [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
 - Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its
@@ -322,7 +362,19 @@ What happens:
 - A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, use Bring
   back (or `wardyn folder bring-back <run>`) before you end the run.
 - If the agent can't be stopped, no pass runs, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
+- If the sandbox's proxy can't be stopped, the sandbox is stopped and its folder changes are not brought back.
+- A run stopped for being idle or for its maximum age brings its changes back the same way, so the stop can take up to 2 more minutes while they come back.
+- A run kept after its end is torn down on the first pass that can take its lock, and brings its changes back the same way. If that lock is held 5 minutes after the end was due, the sandbox is stopped without its changes: about 6 to 7 minutes after, on a sweep running on time.
 - A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
+- A forced stop of an ended run, when its lock is held 5 minutes past the end, normally stops the sandbox. Changes not yet copied back are lost and recorded "not brought back". A runner, a virtual machine and Kubernetes in server mode stop it the same way.
+- The exception is a Docker sandbox hosted on the server. If its folder record could not be read, or its copy back may still be in flight, it is kept with its network proxy stopped. "Not brought back" may then not be recorded.
+- A failed forced stop is retried on the next watcher tick, normally within a minute.
+- A copy back that finds the folder busy keeps a sandbox that can be held until the pass finishes. A virtual machine, or an agent that cannot be stopped alone, is stopped at that visit and recorded "not brought back"; the same holds for such a sandbox whose last pass may still be running.
+- Update the server first, then every laptop runner: a runner from this release answers busy, and an older server reads that as an error and stops the sandbox.
+- Update the Wardyn runner on every laptop: most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older folder sync behaviour.
+- An older runner keeps working. If one of its passes back goes unanswered, the next is sent an hour or more later, on the hourly sweep. That pass can still run beside a stuck one, which only an updated runner prevents. A run started before the server was updated waits the same way for its first pass back.
+- Meanwhile a sandbox on the server's Docker is kept with its agent stopped and no network. One on a runner or on Kubernetes is kept with its agent stopped; its network is not cut. A virtual machine's sandbox cannot be kept that way: its pass is sent at once, as before, and can still run beside a stuck one.
+- Changes still not brought back after two passes in a row that bring nothing back are lost, with a failure record.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:
@@ -403,41 +455,11 @@ Do this when a runner's runs keep failing after an upgrade or after its Docker e
 
 ## Behind a shared ingress
 
-Three routes are open to callers with no credential yet. Each has its own rate-limit bucket per client address: 10 attempts, then one every 10 seconds. The address is the TCP peer unless `WARDYN_TRUSTED_PROXIES` lists that peer, so without it every caller behind a shared ingress, internet traffic included, shares the ingress's bucket.
-
-| Route | Refusal when the bucket is empty |
-| --- | --- |
-| `/api/v1/runners/{id}/stream` | `429` `runner_stream_rate_limited` |
-| `/api/v1/runners/register` | `429` `runner_registration_rate_limited` |
-| `/api/v1/devices/enrol` | `429` `device_enrol_rate_limited` |
-
-- The runner stream charges its bucket only when a handshake ends unproved; a registration that redeems a valid token is refunded. Failed and abandoned attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
-- Reconnecting runners stay reliable only if you do one of these. Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket. Or allow-list your runners' source networks on `/api/v1/runners/*/stream` and the other two paths. Or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
-- The buckets are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
-
-The runner stream has two more anonymous limits and one per-runner limit, all per replica:
-
-| Limit | Value | Spent by |
-| --- | --- | --- |
-| Global handshake bucket | 512, then 10 a second, shared by every address | Handshakes that end unproved |
-| Handshakes in progress per address | 32 (`WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS`) | As below, from one address |
-| Handshakes in progress | 256 connections between arrival and proof | A connection until it proves its key or closes; the 15-second handshake deadline bounds each |
-| Per-runner reconnects | 10, then one every 10 seconds, per runner | Only a runner that has proved its key, so a caller naming a runner it cannot prove never spends that runner's budget |
-
-- Every refusal is `429` `runner_stream_rate_limited`; the message says which limit refused.
-- Memory per replica: each keyed bucket map holds at most 4096 entries of under 128 bytes, and each handshake slot under 64 KiB, so the cap bounds unproved connections under 16 MiB.
+Moved to [Behind a shared ingress](ingress-rate-limits.md): the rate limits on `/api/v1/runners/{id}/stream`, `/api/v1/runners/register` and `/api/v1/devices/enrol`.
 
 ### Trusted proxies
 
-`WARDYN_TRUSTED_PROXIES` (off by default) lists the proxies whose `X-Forwarded-For` Wardyn reads. It applies to the public listener only; the proxy-facing listener runs dial is never read through it.
-
-1. Wardyn reads the header only when the TCP peer is inside the list.
-2. It walks the chain right to left, skipping addresses inside the list; the first address outside it is the client. Entries left of it were written by that client and are never read.
-3. A malformed, loopback or unspecified entry, more than 32 entries or more than 2048 bytes, or a chain made only of listed addresses, keeps the TCP peer.
-4. The client becomes the row's `source_ip`, and the peer is kept as `data.proxy_peer` on every audit row the request writes (`data.device_origin.proxy_peer` on a device-forwarded row).
-
-- List only your proxies' addresses. Any address in the list can name the client, so a range that holds callers lets them choose their own `source_ip`.
-- Your proxy must append the client to `X-Forwarded-For`, or replace the header, never pass a client's value through alone.
+Moved to [Trusted proxies](ingress-rate-limits.md#trusted-proxies): `WARDYN_TRUSTED_PROXIES` and how the client address is chosen.
 
 ## Legacy org enrolment (deprecated)
 

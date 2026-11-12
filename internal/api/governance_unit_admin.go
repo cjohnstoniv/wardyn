@@ -335,7 +335,8 @@ func (s *Server) auditUnitScope(ctx context.Context, unit uuid.UUID, strict bool
 // unitChangeScope is the units a held change of a unit kind touches, which an approving unit admin
 // must govern (strict: strictly above), from the change's key, payload and stored diff. ok is false
 // for a change only a security admin may decide: a promotion, a unit with no parent, a payload that
-// does not decode.
+// does not decode. A unit's own update (its walls, locks, mode, name or parent) is strict: only someone
+// above the unit, and above every other unit it touches, decides it.
 func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok bool) {
 	var diff governanceDiffBody
 	if json.Unmarshal(ch.Diff, &diff) != nil {
@@ -361,13 +362,13 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 				units = append(units, a.UnitID)
 			}
 			if sameJSON(before.ParentID, after.ParentID) {
-				return units, false, true
+				return units, true, true
 			}
 		}
 		if after.ParentID == nil {
 			return nil, false, false
 		}
-		return append(units, *after.ParentID), false, true
+		return append(units, *after.ParentID), ch.Op == "update", true
 	case govKindMembership:
 		unit, _, _, keyed := splitMembershipKey(ch.TargetKey)
 		if !keyed || ch.Op == "promote" {
@@ -388,6 +389,9 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 	case govKindUnitAdmin:
 		unit, _, _, keyed := splitMembershipKey(ch.TargetKey)
 		return []uuid.UUID{unit}, true, keyed
+	case govKindUnitDeciders:
+		unit, err := uuid.Parse(ch.TargetKey)
+		return []uuid.UUID{unit}, true, err == nil
 	}
 	return nil, false, false
 }
@@ -400,7 +404,7 @@ func unitChangeApprover(ch types.GovernanceChange) govApprover {
 	if !ok {
 		return securityApprover
 	}
-	return unitScopeApprover(strict, units...)
+	return envelopeRootApprover(ch, unitScopeApprover(strict, units...)) // an envelope's root is security's
 }
 
 // changeApprover is one who may decide a held change: any security admin, or a unit admin grant (a
@@ -459,15 +463,22 @@ func (s *Server) approversFor(ctx context.Context, units []uuid.UUID, strict boo
 	return out
 }
 
-// changeApprovers is approversFor a held change: unit kinds by the units they touch, every other kind
-// a security admin decides (or, for an operator-tier kind, a super admin: none is listed then).
+// changeApprovers is approversFor a held change: unit kinds by the units they touch, a request kind by
+// its unit's rule (requestApprovers), every other kind a security admin decides (or, for an
+// operator-tier kind, a super admin: none is listed then).
 func (s *Server) changeApprovers(ctx context.Context, ch types.GovernanceChange) []changeApprover {
 	kind, ok := governanceChangeKinds[ch.TargetKind]
 	if !ok {
 		return nil
 	}
 	if units, strict, ok := unitChangeScope(ch); ok {
+		if s.envelopeSecurityOnly(ctx, ch) {
+			return []changeApprover{{Kind: "security"}}
+		}
 		return s.approversFor(ctx, units, strict, ch.ProposedBy, ch.ProposedByEmail)
+	}
+	if name, ok := requestKindOf(ch.TargetKind); ok {
+		return s.requestApprovers(ctx, ch, governanceRequestKinds[name].decider)
 	}
 	if kind.forChange(ch).approver.reason == securityApprover.reason {
 		return []changeApprover{{Kind: "security"}}

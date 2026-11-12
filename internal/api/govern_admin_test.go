@@ -156,7 +156,8 @@ func governSites() []governSite {
 				c := governanceCeiling{Spec: types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{"code_read"},
 					GitHubCapabilities: []ghscope.Capability{"code_read"}}}
 				spec, _, _, err := s.resolvePolicy(ctx, nil, c)
-				return err == nil && len(spec.AzureDevOpsCapabilities) == 0 && len(spec.GitHubCapabilities) == 0
+				// The Azure DevOps list is a bound, never a grant; the GitHub list stays, as the run's wall.
+				return err == nil && len(spec.AzureDevOpsCapabilities) == 0 && slices.Equal(spec.GitHubCapabilities, []ghscope.Capability{"code_read"})
 			}},
 		{"governance_run_doors.go boundUIApps", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
@@ -183,6 +184,10 @@ func governSites() []governSite {
 		{"run_kept_machine.go keptMachineGovernanceRefusal", capSrv(&capStore{}),
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				return s.keptMachineGovernanceRefusal(ctx, walled(types.GovernanceLimits{DenyKeptMachines: true})) != nil
+			}},
+		{"run_schedule_door.go scheduleDoorRefusal", capSrv(&capStore{}),
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				return s.scheduleDoorRefusal(ctx, walled(types.GovernanceLimits{DenyScheduledRuns: true})) != nil
 			}},
 		{"user_drives_run.go driveDoorProfile", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
@@ -353,6 +358,11 @@ var governSiteElsewhere = map[string]string{
 	"unionDirectGitHubEgress":  "none: direct GitHub egress union, no switch-on test",
 	"imageDigestVerdict":       "test: run_image_digest_test.go",
 	"reviveImageDigestRefusal": "test: run_image_digest_test.go",
+	"imageAdmission":           "test: run_image_admission_test.go",
+	"imageAdmissionPreview":    "test: policy_preview_image_admission_test.go",
+	"markImageAdmissionExempt": "test: run_image_admission_exempt_test.go",
+	"reviveImageAdmission":     "test: run_revive_image_admission_test.go",
+	"conventionImageAdmission": "test: run_image_pin_test.go",
 	"macOSBaseAllowedFor":      "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 }
 

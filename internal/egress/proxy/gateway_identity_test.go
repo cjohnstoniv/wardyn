@@ -1568,3 +1568,233 @@ func TestGatewayIdentityConfig(t *testing.T) {
 		t.Error("an unset table must not reach an older proxy's strict decoder")
 	}
 }
+
+// answerBody makes the mint answer status with a fixed body.
+func (g *gwidRig) answerBody(status int, body string) {
+	g.mint.mu.Lock()
+	defer g.mint.mu.Unlock()
+	g.mint.answer = func(w http.ResponseWriter, _ *http.Request, _ int64) {
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}
+}
+
+const (
+	gwidCutBody     = `{"reason":"gateway_access_cut"}`
+	gwidCutSentence = "This run's gateway access was cut when the portal that started it was revoked; the call was not sent. Start a new run if it is still needed."
+)
+
+// A 403 that names gateway_access_cut ends the route for the proxy's life: the sandbox gets a 403
+// with the sentence (not a 502 an SDK would retry), no later request or clock step mints again,
+// and the decision row's cause names the cut. REVERT PROOF: with no terminal state the mint count
+// passes 1 and the status is 502.
+func TestGatewayIdentity_CutIsTerminal(t *testing.T) {
+	const planted = "eyJwbGFudGVk.planted-token-in-a-cut-body.c2ln"
+	for lane := range gwidLanes(newGwidRig(t, gwidRoutes(), false), t) {
+		t.Run(lane, func(t *testing.T) {
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+			g := newGwidRig(t, gwidRoutes(), false)
+			g.answerBody(http.StatusForbidden, `{"reason":"gateway_access_cut","detail":"`+planted+`"}`)
+			send := gwidLanes(g, t)[lane]
+			steps := []time.Duration{0, 0, lastGoodRetry + time.Second, 11 * time.Minute, time.Hour}
+			for i, step := range steps {
+				g.advance(step)
+				rec := send()
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("request %d: status %d, want 403: %s", i, rec.Code, rec.Body)
+				}
+				if !strings.Contains(rec.Body.String(), gwidCutSentence) {
+					t.Errorf("request %d: the sentence is missing: %s", i, rec.Body)
+				}
+				gwidNotIn(t, "sandbox answer", rec.Body.String()+fmt.Sprint(rec.Header()), planted)
+				if n := g.mint.hits.Load(); n != 1 {
+					t.Fatalf("request %d: mints = %d, want 1", i, n)
+				}
+			}
+			if n := g.gw.count(); n != 0 {
+				t.Errorf("the gateway was reached %d times", n)
+			}
+			if !strings.Contains(g.buf.String(), "gateway access cut: the run's portal was revoked") {
+				t.Errorf("no deny row names the cut: %s", g.buf)
+			}
+			gwidNotIn(t, "decision rows", g.buf.String(), planted)
+			gwidNotIn(t, "logs", logs.String(), planted)
+		})
+	}
+}
+
+// Anything but the closed reason on a 403 is handled as before: a 502 for the SDK, asked again
+// once per interval, and the sandbox never sees the cut sentence. The reason is read from a 403 only,
+// from the first KiB of the body, and by exact value.
+func TestGatewayIdentity_UnknownRefusalUnchanged(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		body   string
+	}{
+		"another reason":          {http.StatusForbidden, `{"reason":"identity_deactivated"}`},
+		"free text":               {http.StatusForbidden, "gateway_access_cut"},
+		"longer reason":           {http.StatusForbidden, `{"reason":"gateway_access_cut_later"}`},
+		"other case":              {http.StatusForbidden, `{"reason":"Gateway_Access_Cut"}`},
+		"reason in another field": {http.StatusForbidden, `{"message":"gateway_access_cut"}`},
+		"reason not a string":     {http.StatusForbidden, `{"reason":["gateway_access_cut"]}`},
+		"past the first KiB":      {http.StatusForbidden, `{"pad":"` + strings.Repeat("x", 2048) + `","reason":"gateway_access_cut"}`},
+		"404 with the reason":     {http.StatusNotFound, gwidCutBody},
+		"500 with the reason":     {http.StatusInternalServerError, gwidCutBody},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := newGwidRig(t, gwidRoutes(), false)
+			g.answerBody(c.status, c.body)
+			send := gwidLanes(g, t)["brokered"]
+			rec := send()
+			if rec.Code != http.StatusBadGateway {
+				t.Errorf("status %d, want 502: %s", rec.Code, rec.Body)
+			}
+			if strings.Contains(rec.Body.String(), "gateway access was cut") {
+				t.Errorf("the cut sentence was sent: %s", rec.Body)
+			}
+			send()
+			if n := g.mint.hits.Load(); n != 1 {
+				t.Errorf("mints across repeated sends = %d, want 1", n)
+			}
+			g.advance(lastGoodRetry)
+			send()
+			if n := g.mint.hits.Load(); n != 2 {
+				t.Errorf("mints after the interval = %d, want 2 (asked again)", n)
+			}
+		})
+	}
+}
+
+// Idle past the refresh point, then a call: the refresh runs before the call is forwarded. A cut
+// stops it at once, with no call served by the held token first. REVERT PROOF: the old refresh ran
+// behind the call, so this first call after the half-life reaches the gateway.
+func TestGatewayIdentity_CutStopsTheFirstCallPastRefreshAt(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	send := gwidLanes(g, t)["brokered"]
+	if rec := send(); rec.Code != http.StatusOK {
+		t.Fatalf("first call: %d", rec.Code)
+	}
+	g.answerBody(http.StatusForbidden, gwidCutBody)
+	g.advance(5 * time.Minute) // the refresh point of a ten-minute token
+	reached := g.gw.count()
+	rec := send()
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), gwidCutSentence) {
+		t.Fatalf("the first call past the refresh point: status %d: %s", rec.Code, rec.Body)
+	}
+	if g.gw.count() != reached {
+		t.Errorf("the gateway was reached by the call that found the cut")
+	}
+	send()
+	if n := g.mint.hits.Load(); n != 2 {
+		t.Errorf("mints = %d, want 2 (the first and the refresh)", n)
+	}
+}
+
+// A refresh that succeeds past the refresh point is the token the next call carries.
+func TestGatewayIdentity_RefreshPastRefreshAtIsSynchronous(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	send := gwidLanes(g, t)["brokered"]
+	send()
+	first := g.lastMinted(t)
+	g.advance(5 * time.Minute)
+	if rec := send(); rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := g.gw.last(t).Header.Get(gatewayIdentityHeader); got == first || got != g.lastMinted(t) {
+		t.Errorf("the call past the refresh point carried the held token, not the refreshed one")
+	}
+	if n := g.mint.hits.Load(); n != 2 {
+		t.Errorf("mints = %d, want 2", n)
+	}
+}
+
+// A refresh that fails but may pass keeps the held token to exp: the same call is served by it,
+// and the next calls do not ask again before the interval. Existing installs see no change.
+func TestGatewayIdentity_RefreshOutageKeepsTheHeldToken(t *testing.T) {
+	for name, arrange := range map[string]func(*gwidRig){
+		"503": func(g *gwidRig) { g.answerStatus(http.StatusServiceUnavailable) },
+		"429": func(g *gwidRig) { g.answerStatus(http.StatusTooManyRequests) },
+		"unreachable": func(g *gwidRig) {
+			g.mint.mu.Lock()
+			defer g.mint.mu.Unlock()
+			g.mint.answer = func(w http.ResponseWriter, _ *http.Request, _ int64) {
+				c, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					_ = c.Close()
+				}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newGwidRig(t, gwidRoutes(), false)
+			send := gwidLanes(g, t)["brokered"]
+			send()
+			first := g.lastMinted(t)
+			arrange(g)
+			g.advance(5 * time.Minute)
+			for range 3 {
+				if rec := send(); rec.Code != http.StatusOK || g.gw.last(t).Header.Get(gatewayIdentityHeader) != first {
+					t.Fatalf("the held token did not serve during the outage: %d", rec.Code)
+				}
+			}
+			gwidWaitNoFlight(t, g)
+			if n := g.mint.hits.Load(); n != 2 {
+				t.Errorf("mints during the outage = %d, want 2 (the first and one refresh)", n)
+			}
+		})
+	}
+}
+
+// A call already forwarded runs to completion when the cut lands; the next call is refused.
+func TestGatewayIdentity_OpenStreamSurvivesTheCut(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	if _, err := g.p.gatewayHolders["prov-1"].current(t.Context(), g.p); err != nil {
+		t.Fatal(err)
+	}
+	idle := make(chan struct{})
+	var once sync.Once
+	wake := func() { once.Do(func() { close(idle) }) }
+	var calls atomic.Int64
+	g.gw.respond = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		_, _ = io.WriteString(w, "data: first\n\n")
+		fl.Flush()
+		if calls.Add(1) == 1 {
+			<-idle
+		}
+		_, _ = io.WriteString(w, "data: last\n\n")
+	}
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { g.p.handleLocalRoute(w, r) }))
+	t.Cleanup(front.Close)
+	t.Cleanup(wake)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, front.URL+llmAnthropicPrefix+"messages", strings.NewReader(`{"hi":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	br := bufio.NewReader(resp.Body)
+	if line, err := br.ReadString('\n'); err != nil || line != "data: first\n" {
+		t.Fatalf("first line %q, %v", line, err)
+	}
+	g.answerBody(http.StatusForbidden, gwidCutBody)
+	g.advance(5 * time.Minute)
+	if rec := gwidLanes(g, t)["brokered"](); rec.Code != http.StatusForbidden {
+		t.Fatalf("a new call after the cut: status %d, want 403", rec.Code)
+	}
+	wake()
+	rest, _ := io.ReadAll(br)
+	if !strings.Contains(string(rest), "data: last") {
+		t.Errorf("the open stream did not finish: %q", rest)
+	}
+}

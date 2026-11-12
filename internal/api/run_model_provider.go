@@ -285,13 +285,26 @@ func preflightRenewal(ctx context.Context) bool {
 	return v
 }
 
+type noCredentialCheckKey struct{}
+
+// withNoCredentialCheck marks ctx as a launch refused for its hosts whatever the caller's model
+// credential is (stepModelProvider, for a No network launch), so enforceChosenModelProvider reads none.
+func withNoCredentialCheck(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noCredentialCheckKey{}, true)
+}
+
+func noCredentialCheck(ctx context.Context) bool {
+	v, _ := ctx.Value(noCredentialCheckKey{}).(bool)
+	return v
+}
+
 // enforceChosenModelProvider is enforceRunModelProvider after the choice: the
 // caller's own credential for it, and the model-credential variable refusal.
 func (s *Server) enforceChosenModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, choice runProviderChoice, renew, queued bool,
 ) (runProviderChoice, bool) {
 	ctx := r.Context()
-	if choice.chosen {
+	if choice.chosen && !noCredentialCheck(ctx) {
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
 		// the provider, never anyone else's (runIdentitySubject is the namespace
 		// dispatch reads for this run). Only create renews, and only a Bedrock

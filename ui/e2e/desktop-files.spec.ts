@@ -111,7 +111,7 @@ test.describe("Run detail — Files panel", () => {
     await expect(rows).toHaveCount(2);
     await expect(rows.nth(0)).toContainText("notes.csv");
     await expect(rows.nth(0)).toContainText(C.delivered);
-    await expect(rows.nth(0)).toContainText(/sha256 c3a1…0e9d · \d\d:\d\d/);
+    await expect(rows.nth(0)).toContainText(/sha256 c3a1…0e9d · \d{1,2}:\d\d(?: [AP]M)?/);
     await expect(rows.nth(1)).toContainText(C.tooLarge);
     await expect(rows.nth(1)).toContainText(C.tooLargeSub);
   });
@@ -127,6 +127,6 @@ test.describe("Run detail — Files panel", () => {
     const download = page.waitForEvent("download");
     await row.getByRole("button", { name: `${C.download} refund-report.csv` }).click();
     expect((await download).suggestedFilename()).toBe("refund-report.csv");
-    await expect(row).toContainText(/Downloaded \d\d:\d\d · sha256 [0-9a-f]{4}…[0-9a-f]{4}/);
+    await expect(row).toContainText(/Downloaded \d{1,2}:\d\d(?: [AP]M)? · sha256 [0-9a-f]{4}…[0-9a-f]{4}/);
   });
 });

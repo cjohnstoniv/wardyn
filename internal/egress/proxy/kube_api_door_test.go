@@ -40,15 +40,19 @@ type kubeHarness struct {
 	p      *Proxy
 	mu     sync.Mutex
 	seen   []string // "METHOD raw-target authorization"
+	bodies []string // the body of each request in seen
 	minted atomic.Int32
 	log    func() string
 }
 
 type kubeOpts struct {
 	write   bool
-	caPEM   bool // the grant carries the API server's own certificate as its CA bundle
-	trustCA bool // the egress transport skips verification (the other harnesses' default)
-	allowed []string
+	restart bool // the row says restart
+	// approveEach: the row says approve_each, set through the wire form as restart is.
+	approveEach bool
+	caPEM       bool // the grant carries the API server's own certificate as its CA bundle
+	trustCA     bool // the egress transport skips verification (the other harnesses' default)
+	allowed     []string
 }
 
 func newKubeHarness(t *testing.T, o kubeOpts) *kubeHarness {
@@ -57,6 +61,8 @@ func newKubeHarness(t *testing.T, o kubeOpts) *kubeHarness {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		h.seen = append(h.seen, r.Method+" "+r.RequestURI+" "+r.Header.Get("Authorization"))
+		b, _ := io.ReadAll(r.Body)
+		h.bodies = append(h.bodies, string(b))
 		h.mu.Unlock()
 		_, _ = io.WriteString(w, `{"kind":"PodList","items":[]}`)
 	}))
@@ -82,6 +88,17 @@ func newKubeHarness(t *testing.T, o kubeOpts) *kubeHarness {
 		o.allowed = []string{kubeHost + ":6443"}
 	}
 	grant := &KubeAPIGrant{Host: kubeHost, Port: kubePort, Namespaces: []string{"team-a", "team-b"}, Write: o.write}
+	if o.restart {
+		// Set through the wire form, as the control plane's config reaches the proxy.
+		if err := json.Unmarshal([]byte(`{"restart":true}`), grant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.approveEach {
+		if err := json.Unmarshal([]byte(`{"approve_each":true}`), grant); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if o.caPEM {
 		grant.CAPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}))
 	}

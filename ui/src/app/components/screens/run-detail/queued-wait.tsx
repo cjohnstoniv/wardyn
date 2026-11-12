@@ -25,7 +25,9 @@ import { scheduledWait } from "../runs/scheduled-state";
 import CancelRunDialog from "./cancel-run-dialog";
 import { signInBody, startsLine } from "./scheduled-lines";
 
-const FRAME = "flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 p-6 text-center";
+// The inner column centres with `my-auto`, not `justify-center`, so a pane too short for it scrolls instead of clipping both ends.
+const FRAME = "scroll-thin flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-6 text-center";
+const INNER = "my-auto flex flex-col items-center gap-2.5";
 
 export function QueuedWait({ queue, run }: { queue: RunQueue; run?: RunDetail }) {
   const kind = run && scheduledWait({ state: "QUEUED", queue });
@@ -48,10 +50,12 @@ function PoolWait({ queue }: { queue: RunQueue }) {
   );
   return (
     <div data-testid="run-queued-wait" className={FRAME}>
-      <Clock className="size-7 text-muted-foreground" strokeWidth={1.5} aria-hidden />
-      <h3 className="text-xl font-semibold text-foreground">{RC.queuedTitle}</h3>
-      {body && <p className="max-w-md text-sm text-muted-foreground">{body}</p>}
-      <p data-testid="run-queued-wait-line" className="text-sm text-foreground">{line}</p>
+      <div className={INNER}>
+        <Clock className="size-7 text-muted-foreground" strokeWidth={1.5} aria-hidden />
+        <h3 className="text-xl font-semibold text-foreground">{RC.queuedTitle}</h3>
+        {body && <p className="max-w-md text-sm text-muted-foreground">{body}</p>}
+        <p data-testid="run-queued-wait-line" className="text-sm text-foreground">{line}</p>
+      </div>
     </div>
   );
 }
@@ -71,11 +75,13 @@ function ScheduledWait({ queue, run }: { queue: RunQueue; run: RunDetail }) {
   const starts = startsLine(queue);
   return (
     <div data-testid="run-scheduled-wait" className={FRAME}>
-      <CalendarClock className="size-7 text-muted-foreground" strokeWidth={1.5} aria-hidden />
-      <h3 className="text-xl font-semibold text-foreground">{SCHEDULED_RUN.WORD}</h3>
-      {starts && <p className="text-sm text-foreground">{starts}</p>}
-      <p className="max-w-md text-sm text-muted-foreground">{SCHEDULED_RUN.PAGE_NOTE}</p>
-      <div className="mt-1.5"><CancelRun run={run} /></div>
+      <div className={INNER}>
+        <CalendarClock className="size-7 text-muted-foreground" strokeWidth={1.5} aria-hidden />
+        <h3 className="text-xl font-semibold text-foreground">{SCHEDULED_RUN.WORD}</h3>
+        {starts && <p className="text-sm text-foreground">{starts}</p>}
+        <p className="max-w-md text-sm text-muted-foreground">{SCHEDULED_RUN.PAGE_NOTE}</p>
+        <div className="mt-1.5"><CancelRun run={run} /></div>
+      </div>
     </div>
   );
 }
@@ -92,17 +98,19 @@ function SignInWait({ queue, run }: { queue: RunQueue; run: RunDetail }) {
   const body = signInBody(queue);
   return (
     <div data-testid="run-sign-in-wait" className={FRAME}>
-      <User className="size-7 text-warning" strokeWidth={1.5} aria-hidden />
-      <h3 className="text-xl font-semibold text-foreground">{SCHEDULED_RUN.SIGN_IN_TITLE}</h3>
-      {run.model_provider_name && <p className="text-sm text-foreground">{CONNECTIONS.C6_LINE(run.model_provider_name)}</p>}
-      {body && <p className="max-w-md text-sm text-muted-foreground">{body}</p>}
-      <div className="mt-1.5 flex gap-2">
-        {target && (
-          <Button type="button" onClick={(e) => door.openDoor({ for: { provider }, returnTo: e.currentTarget })}>
-            {SIGN_IN_AGAIN}
-          </Button>
-        )}
-        <CancelRun run={run} />
+      <div className={INNER}>
+        <User className="size-7 text-warning" strokeWidth={1.5} aria-hidden />
+        <h3 className="text-xl font-semibold text-foreground">{SCHEDULED_RUN.SIGN_IN_TITLE}</h3>
+        {run.model_provider_name && <p className="text-sm text-foreground">{CONNECTIONS.C6_LINE(run.model_provider_name)}</p>}
+        {body && <p className="max-w-md text-sm text-muted-foreground">{body}</p>}
+        <div className="mt-1.5 flex gap-2">
+          {target && (
+            <Button type="button" onClick={(e) => door.openDoor({ for: { provider }, returnTo: e.currentTarget })}>
+              {SIGN_IN_AGAIN}
+            </Button>
+          )}
+          <CancelRun run={run} />
+        </div>
       </div>
     </div>
   );

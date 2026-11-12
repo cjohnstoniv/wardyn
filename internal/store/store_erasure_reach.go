@@ -54,3 +54,29 @@ func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (i
 	}
 	return tag.RowsAffected(), nil
 }
+
+// DeleteRunCreateKeysOf deletes every POST /runs Idempotency-Key of one of principals, direct or through
+// a delegate, bound or not: a kept answer names the person's run. It returns the rows it deleted.
+func (s PG) DeleteRunCreateKeysOf(ctx context.Context, principals []string) (int64, error) {
+	if len(principals) == 0 {
+		return 0, nil
+	}
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_create_keys WHERE principal = ANY($1)`, principals)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete idempotency keys: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ClearRunCreateResponsesOf clears the answers kept for the POST /runs Idempotency-Keys that name a run
+// createdBy created, and marks them so no later save refills them; each key stays bound to its run, so a
+// retry is rebuilt from the erased run and never makes a second one. It returns the keys it marked.
+func (s PG) ClearRunCreateResponsesOf(ctx context.Context, createdBy string) (int64, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE run_create_keys k
+		SET response_status = NULL, response_location = NULL, response_body = NULL, response_erased = true
+		FROM agent_runs r WHERE r.id = k.run_id AND r.created_by = $1 AND NOT k.response_erased`, createdBy)
+	if err != nil {
+		return 0, fmt.Errorf("store: clear a person's idempotency key answers: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}

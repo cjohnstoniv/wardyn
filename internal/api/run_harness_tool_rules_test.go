@@ -209,7 +209,7 @@ func permutations(rules []types.ToolRule) [][]types.ToolRule {
 
 // layerRank reads a layer's effect for a tool; a layer with no opinion allows it.
 func layerRank(rules []types.ToolRule, tool string) int {
-	return max(effectRank(effectiveToolEffect(rules, tool)), effectRank(types.ToolAllow))
+	return max(types.ToolEffectStrictness(effectiveToolEffect(rules, tool)), types.ToolEffectStrictness(types.ToolAllow))
 }
 
 // A walls document's rules compose the same way in any order: a rule for a named tool beats "*" within

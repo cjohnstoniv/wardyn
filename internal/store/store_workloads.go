@@ -209,6 +209,7 @@ type WorkloadBinding struct {
 // them 501, as RunnerPoolStore does.
 type WorkloadStore interface {
 	PutWorkload(ctx context.Context, in WorkloadPut) (Workload, WorkloadWrite, error)
+	PlanWorkloadPut(ctx context.Context, in WorkloadPut) (*Workload, WorkloadWrite, error)
 	ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bool, error)
 	SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error)
 	RecordWorkloadRefusal(ctx context.Context, id, claim uuid.UUID, r WorkloadRefusal) error
@@ -399,6 +400,36 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 		return Workload{}, "", err
 	}
 	return out, write, nil
+}
+
+// PlanWorkloadPut answers what PutWorkload would do with in, for the API source, and writes nothing: no
+// lock, no row. It returns the stored row (nil when there is none) and the write, or the error
+// PutWorkload would return for the same state. A new API-source branch in PutWorkload updates this, and
+// TestPG_Workload_PlanWorkloadPutMatchesPut gets its row. The answer is a read at one moment: a
+// concurrent apply can move the row after it.
+func (s PG) PlanWorkloadPut(ctx context.Context, in WorkloadPut) (*Workload, WorkloadWrite, error) {
+	if in.Source != WorkloadSourceAPI {
+		return nil, "", errors.New("store: plan workload put: only the API source is planned")
+	}
+	cur, err := scanWorkload(s.Pool.QueryRow(ctx, `SELECT `+workloadCols+` FROM workloads w WHERE w.owner = $1 AND w.name = $2`, in.Owner, in.Name))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		var n int
+		if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM workloads WHERE owner = $1`, in.Owner).Scan(&n); err != nil {
+			return nil, "", err
+		}
+		if n >= MaxWorkloadsPerOwner {
+			return nil, "", ErrWorkloadCapReached
+		}
+		return nil, WorkloadCreated, nil
+	case err != nil:
+		return nil, "", err
+	case cur.Source != in.Source:
+		return &cur, "", ErrWorkloadSourceConflict
+	case cur.Digest != in.Digest:
+		return &cur, WorkloadUpdated, nil
+	}
+	return &cur, WorkloadUnchanged, nil
 }
 
 // ClaimWorkloadLaunch takes the right to launch the workload's current generation for WorkloadLaunchClaim.

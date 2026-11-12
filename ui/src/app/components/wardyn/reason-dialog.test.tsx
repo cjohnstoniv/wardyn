@@ -12,6 +12,7 @@ import { unsavedSnapshot } from "../../lib/unsaved-registry";
 import { ReasonDialog } from "./reason-dialog";
 import { OperatorProvider } from "./operator-context";
 import { toDatetimeLocalValue } from "../../lib/datetime-local";
+import { UNTIL_MISSING, UNTIL_PRESETS } from "./copy";
 import { aheadByHours } from "../../lib/test-clock";
 
 describe("ReasonDialog", () => {
@@ -22,6 +23,36 @@ describe("ReasonDialog", () => {
       </OperatorProvider>,
     );
     expect(screen.getByLabelText(/^Reason/)).toHaveAttribute("maxlength", "512");
+  });
+
+  it("says a deny needs a reason, and an approve does not", () => {
+    const { unmount } = render(
+      <OperatorProvider operator securityOperator>
+        <ReasonDialog prompt={{ id: "a1", action: "deny", kind: "egress_domain" }} onClose={vi.fn()} onSubmit={vi.fn()} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByLabelText(/^Reason \(required\)/)).toBeRequired();
+    unmount();
+    render(
+      <OperatorProvider operator securityOperator>
+        <ReasonDialog prompt={{ id: "a1", action: "approve", kind: "egress_domain" }} hasWorkspace onClose={vi.fn()} onSubmit={vi.fn()} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByLabelText(/^Reason \(optional\)/)).not.toBeRequired();
+  });
+
+  it("says why Approve is off while Until is chosen with no time, and stops once a time is picked", async () => {
+    render(
+      <OperatorProvider operator securityOperator>
+        <ReasonDialog prompt={{ id: "a1", action: "approve", kind: "egress_domain" }} hasWorkspace onClose={vi.fn()} onSubmit={vi.fn()} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(UNTIL_MISSING)).toBeNull();
+    await userEvent.click(screen.getByRole("radio", { name: /^Until/ }));
+    expect(screen.getByText(UNTIL_MISSING)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { pressed: false, name: UNTIL_PRESETS[0].label }));
+    expect(screen.queryByText(UNTIL_MISSING)).toBeNull();
   });
 
   it("is an unsaved editor while a reason is typed, and not once it is cleared or the dialog closes (DR-0021)", async () => {

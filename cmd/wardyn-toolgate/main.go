@@ -52,6 +52,9 @@ func main() {
 // records the decision, the recording records the session.
 const maxCmdBytes = 4096
 
+// maxInputBytes caps the tool input sent whole beside the summary (create).
+const maxInputBytes = 32 << 10
+
 // defaultDeadline is -deadline's fallback when neither the flag nor
 // WARDYN_APPROVAL_EXPIRY_AFTER says otherwise — the server's own default for
 // the ceiling this mirrors (cmd/wardynd/boot_flags.go's approval-expiry-after).
@@ -346,10 +349,14 @@ func (g *gate) expire(id string) string {
 // create POSTs the tool_call approval through the brokered route and returns
 // the approval id.
 func (g *gate) create(a callArgs) (string, error) {
-	body, _ := json.Marshal(map[string]any{
-		"kind":    "tool_call",
-		"payload": map[string]any{"tool": a.ToolName, "cmd": summarize(a.ToolName, a.Input)},
-	})
+	payload := map[string]any{"tool": a.ToolName, "cmd": summarize(a.ToolName, a.Input)}
+	// The whole input too, so the proxy can ask a person about an MCP call with its exact
+	// arguments. Over the cap it is left out, never cut: the proxy then leaves the question to
+	// the MCP broker, which refuses a call it cannot show whole.
+	if len(a.Input) > 0 && len(a.Input) <= maxInputBytes {
+		payload["input"] = a.Input
+	}
+	body, _ := json.Marshal(map[string]any{"kind": "tool_call", "payload": payload})
 	resp, err := g.client.Post(g.base+"/wardyn/v1/approvals", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", err

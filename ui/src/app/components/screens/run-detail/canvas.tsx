@@ -504,21 +504,24 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                 {RUN_COCKPIT.editing}
               </span>
               <span className="h-5 w-px bg-border" />
-              {(["live", "finished"] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setPreset(p)}
-                  className={cn(
-                    "inline-flex h-8 items-center rounded-lg px-2.5 font-mono text-xs",
-                    p === preset
-                      ? "border border-border bg-card text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {RUN_COCKPIT.layoutPreset(p === "live" ? "Live" : "Finished")}
-                </button>
-              ))}
+              <div role="group" aria-label={RUN_COCKPIT.layoutPresets} className="flex items-center gap-1.5">
+                {(["live", "finished"] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    aria-pressed={p === preset}
+                    onClick={() => setPreset(p)}
+                    className={cn(
+                      "inline-flex h-8 items-center rounded-lg px-2.5 font-mono text-xs",
+                      p === preset
+                        ? "border border-border bg-card text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {RUN_COCKPIT.layoutPreset(p === "live" ? "Live" : "Finished")}
+                  </button>
+                ))}
+              </div>
               <span className="h-5 w-px bg-border" />
               {/* The catalog offers exactly what a tile could appear for. Deriving
                   it from the whole table while the GRID derived from `renderable`

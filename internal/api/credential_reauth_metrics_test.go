@@ -320,11 +320,26 @@ func TestApprovalTallyKeyAgreesWithTheLanes(t *testing.T) {
 		t.Fatal("fixture: a grant-less tool_call must not be an escalation")
 	}
 
+	// One MCP call (an approve_each rule), as the proxy raises it: known by call_sha256, with no grant.
+	// The lane predicate is the one the decide gates use; secondHumanGate reads it.
+	mcpCall := types.ApprovalRequest{ID: uuid.New(), Kind: types.ApprovalToolCall,
+		RequestedScope: mcpCallScopeJSON(t, "jira", "delete_issue", `{"id":1}`)}
+	if name, _ := secondHumanGate(mcpCall); name != envCapabilitySecondHuman {
+		t.Fatal("fixture: the MCP call row is not one the decide gates know")
+	}
+	mcpWithGrant := mcpCall
+	mcpWithGrant.GrantID = &grant
+	if name, _ := secondHumanGate(mcpWithGrant); name != "" {
+		t.Fatal("fixture: a tool_call carrying a grant id is not an MCP call")
+	}
+
 	for _, tc := range []struct {
 		name string
 		ap   types.ApprovalRequest
 		want string
 	}{
+		{"mcp call", mcpCall, approval.TallyToolCallMCP},
+		{"mcp call with a grant id", mcpWithGrant, string(types.ApprovalToolCall)},
 		{"ado escalation", escalation, approval.TallyToolCallADO},
 		{"ado sign-in", signIn, approval.TallyReauthADOSignIn},
 		{"ado consent", consent, approval.TallyReauthADOConsent},

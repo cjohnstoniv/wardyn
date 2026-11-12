@@ -28,7 +28,12 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// A computer folder's changes come back while the sandbox still holds them (run_computer_folder.go).
 	// A pass cut short can keep the sandbox for a resume, its agent stopped and its egress closed:
 	// it is then not stopped, its ref stays, and the caller hears errComputerFolderResumes.
-	keep := s.bringComputerFolderBack(ctx, runID, ref)
+	var keep bool
+	if fe, forced := ctx.Value(forcedEndKey{}).(forcedEnd); forced {
+		keep = fe.keep // a forced end runs no pass: forcedKeepsSandbox decided
+	} else {
+		keep = s.bringComputerFolderBack(ctx, runID, ref)
+	}
 	if keep {
 		errs = append(errs, errComputerFolderResumes)
 	}
@@ -79,6 +84,13 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	}
 	return errors.Join(append(errs, cmp.Or(ctx.Err(), context.Cause(tctx)))...)
 }
+
+// forcedEndKey carries, on the ctx of a forced end's tail (forceKeptStop), the sandbox decision made without the
+// run's lock. The tail then runs no pass back: the run's lock is held by another operation, which may be running
+// one. keep is forcedKeepsSandbox's answer.
+type forcedEndKey struct{}
+
+type forcedEnd struct{ keep bool }
 
 // errComputerFolderResumes is finalizeRunEffects keeping a sandbox for its computer folder's pass
 // back to resume (bringComputerFolderBack).
@@ -189,3 +201,9 @@ func (s *Server) produceRunnerRetirements(ctx context.Context) error {
 	}
 	return errors.Join(errs...)
 }
+
+// isTerminalRunState reports whether a run is in a terminal (already-ended)
+// state. The kill-switch must not re-kill or clobber a run that already ended
+// (COMPLETED/FAILED by the watcher, or KILLED/STOPPED/ARCHIVED earlier). The set
+// itself lives on types.RunState so the CLI and SDK share one definition.
+func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }

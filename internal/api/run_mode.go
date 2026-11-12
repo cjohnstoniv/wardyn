@@ -202,8 +202,8 @@ func toolShapeRefusal(i int, t client.IncludedTool, before []client.IncludedTool
 }
 
 func toolRulesShapeRefusal(i int, t client.IncludedTool) *runRefusal {
-	if t.DefaultEffect != "" && !types.ValidToolEffect(t.DefaultEffect) {
-		return runModeInvalid("tools[%d].default_effect: %q is not one of allow, hold, deny", i, t.DefaultEffect)
+	if t.DefaultEffect != "" && (t.DefaultEffect == types.ToolApproveEach || !types.ValidToolEffect(t.DefaultEffect)) {
+		return runModeInvalid("tools[%d].default_effect: %q is not one of allow, hold, deny; approve_each is a rule for one MCP tool, not a default", i, t.DefaultEffect)
 	}
 	if err := validateToolRules(t.ToolRules); err != nil {
 		return runModeInvalid("tools[%d].%v", i, err)
@@ -550,7 +550,8 @@ func attendedToolNamesRefusal(req createRunRequest, spec types.RunPolicySpec) *r
 			rules, claude = slices.Concat(rules, t.ToolRules), true
 		}
 	}
-	if err := agentpolicy.CheckToolRules(rules); claude && err != nil {
+	// Only the names are checked here; dispatch maps approve_each for real (mapAttendedApproveEach).
+	if err := agentpolicy.CheckToolRules(mapAttendedApproveEach(rules, componentDispatch{})); claude && err != nil {
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"This run's tool rules can't be written into Claude Code's managed settings: "+err.Error())
 	}

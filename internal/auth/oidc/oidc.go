@@ -264,6 +264,14 @@ type Session struct {
 	// attached is the token's own Subject when admission resolved it to a
 	// person set up by object id (RecordAttach). Never encoded: unexported.
 	attached *Subject
+
+	// MayAct is a portal's subject token's may_act claim (RFC 8693 section 4.4), which names who may act
+	// for the person; VerifyActorToken holds an actor to it. Set only by VerifySubjectToken, nil when the
+	// token has none, and never encoded.
+	MayAct *MayAct `json:"-"`
+	// subjectToken is that subject token's own identity, which VerifyActorToken compares an actor with.
+	// Never encoded: unexported.
+	subjectToken tokenIdentity
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.

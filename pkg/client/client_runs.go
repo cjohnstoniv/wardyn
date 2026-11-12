@@ -105,6 +105,65 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 	return out, err
 }
 
+// EditRunEgressRequest is PATCH /api/v1/runs/{id}/egress's body: allowlist entries to remove and
+// hosts to deny. It has no field that adds a host; widening a live run stays an approval.
+type EditRunEgressRequest struct {
+	RemoveHosts []string `json:"remove_hosts,omitempty"`
+	DenyHosts   []string `json:"deny_hosts,omitempty"`
+}
+
+// EditRunEgressResponse is the 200 answer: the policy generation the run's new proxy confirmed.
+type EditRunEgressResponse struct {
+	PolicyGeneration int `json:"policy_generation"`
+}
+
+// EditRunEgress narrows a live run's egress at once: the run's proxy is replaced with one that
+// enforces the edit, and the answer comes only after that proxy reports the config it loaded.
+// A removed host is denied too, for the rest of the run. Any 4xx is a refusal before
+// anything changed (409 egress_edit_in_progress: another edit of the run has not answered yet). A 503
+// egress_edit_unconfirmed means the new proxy did not confirm and its stop is confirmed (the run is
+// lost until revived, or ended when it cannot be kept); a 503 egress_edit_containment_unresolved
+// means it did not confirm and its stop is not confirmed yet, and is being retried; a 503
+// egress_edit_superseded means another revive replaced the edit's start and nothing was stopped for
+// it; its message says whether that revive started from the edited config or the edit was not
+// applied and must be sent again.
+func (c *Client) EditRunEgress(ctx context.Context, runID uuid.UUID, req EditRunEgressRequest) (EditRunEgressResponse, error) {
+	var out EditRunEgressResponse
+	err := c.do(ctx, http.MethodPatch, "/api/v1/runs/"+runID.String()+"/egress", req, &out)
+	return out, err
+}
+
+// ExecRequest is the body of POST /api/v1/runs/{id}/exec: one command, run
+// through /bin/sh -c from the sandbox user's home directory, as an SSH exec
+// runs it. TimeoutSec 0 is the server's default of 60 seconds; the most is 300.
+// The command may be up to 128 KiB.
+type ExecRequest struct {
+	Command    string `json:"command"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
+}
+
+// ExecResult is POST /api/v1/runs/{id}/exec's reply. Each stream keeps its
+// first 1 MiB, and Truncated says a stream had more. TimedOut says the timeout
+// passed and the command's stream was closed; ExitCode is then -1. The command
+// itself may keep running in the sandbox until it ends or the run ends.
+type ExecResult struct {
+	ExitCode  int    `json:"exit_code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Truncated bool   `json:"truncated"`
+	TimedOut  bool   `json:"timed_out"`
+}
+
+// ExecRun runs one command in a running run and waits for it to end, so an
+// HTTPClient with a Timeout needs one longer than the command's. The run's
+// owner may call it. A run whose data_out rule is review or blocked answers
+// 409 data_out_blocked, as SSH commands are refused there.
+func (c *Client) ExecRun(ctx context.Context, id uuid.UUID, req ExecRequest) (ExecResult, error) {
+	var out ExecResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/exec", req, &out)
+	return out, err
+}
+
 // ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
 // Mode): the synthesized least-privilege sandbox profile plus the observations
 // it was built from. Only the fields callers render/save are modeled — the full

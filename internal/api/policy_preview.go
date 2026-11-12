@@ -78,6 +78,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	response.ImageAdmission = s.imageAdmissionPreview(r.Context(), *f.req, f.carriedImage, f.ceiling.Limits.RequiredImageSigners)
 	response.AllowedModels, response.AllowedModelsProfile = modelLimitOf(f.ceiling).models, modelLimitOf(f.ceiling).profile
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
 	response.RunnerPoolSlots = s.runnerPoolSlots(r.Context(), f.place, *f.req)
@@ -171,18 +172,20 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 // before the requirements fold so Review grades it; stepDerivedEgress adds the
 // grant lanes after every gate. The site-config, ADO and model-provider host
 // unions remain pending.
-func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace, trusted []string) {
+//
+// cloned is the run's repositories (runRepoLocators), whose clone hosts alone are added.
+func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace, cloned, trusted []string) {
 	unionWorkspaceEgress(spec, workspaces)
 	for _, ws := range workspaces {
-		kept, _ := runCloneEgress(ws, trusted)
+		kept, _ := runSelectedCloneEgress(ws, cloned, trusted)
 		unionAllowedDomains(spec, kept)
 	}
 }
 
 // previewWorkspaceEgressHosts is what unionPreviewWorkspaceEgress adds to an empty allowlist.
-func previewWorkspaceEgressHosts(workspaces []types.Workspace, trusted []string) []string {
+func previewWorkspaceEgressHosts(workspaces []types.Workspace, cloned, trusted []string) []string {
 	var scratch types.RunPolicySpec
-	unionPreviewWorkspaceEgress(&scratch, workspaces, trusted)
+	unionPreviewWorkspaceEgress(&scratch, workspaces, cloned, trusted)
 	return scratch.AllowedDomains
 }
 

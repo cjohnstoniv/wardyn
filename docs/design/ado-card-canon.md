@@ -1,6 +1,6 @@
 # Azure DevOps card canon — issue #458
 
-Mock packet 6a, owner-approved 2026-09-22 with all three recommendations. This is the decision
+Mock packet 6a, approved 2026-09-22 with all three recommendations. This is the decision
 record for #458; the frozen strings themselves live in `ui/src/app/lib/ado-entra-copy.ts` and
 `ui/src/app/lib/approvals-copy.ts`, and are pinned byte-exact against `ado-entra-prompt.md` §10.7
 by `ado-entra-copy.test.ts` (that doc is the one the parser reads — this file is the human-readable

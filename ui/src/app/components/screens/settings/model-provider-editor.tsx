@@ -17,7 +17,7 @@
 // it the GET /model-providers snapshot it rendered from, and re-reads after
 // onSaved. Every write is the WHOLE document with that snapshot's If-Match.
 import * as React from "react";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
@@ -40,7 +40,6 @@ import {
 } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
 import { DANGER_OUTLINE, INLINE_ACTIONS, STICKY_FOOTER } from "../../wardyn/form-actions";
-import { Checkbox } from "../../ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../ui/dialog";
 import { Input } from "../../ui/input";
 import {
@@ -62,7 +61,11 @@ import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { ModelChips } from "./model-chips";
 import { LaptopRunnersSwitch } from "./model-provider-laptop";
 import { GatewayInspection } from "./model-provider-gateway-inspection";
+import { ExtraHeaders } from "./model-provider-extra-headers";
+import { GatewayPresets } from "./model-provider-gateway-presets";
+import { HarnessBlock } from "./model-provider-harness";
 import { OidcChoice, OidcFields } from "./model-provider-oidc";
+import { applyPreset, type PresetId } from "./model-provider-presets";
 import {
   EDITOR_KINDS,
   addressChanged,
@@ -71,7 +74,6 @@ import {
   draftGatewayAddress,
   editorProvidesLine,
   gatewayKind,
-  incompatibleReason,
   isBedrock,
   isEndpoint,
   isLocal,
@@ -80,11 +82,11 @@ import {
   providerFrom,
   refusedField,
   laptopBaseUrlRefused,
-  refusedHarness,
   refusedModel,
   type HarnessRow,
   type ProviderDraft,
 } from "./model-provider-draft";
+import { withSignerVar } from "./model-provider-signer-var";
 
 export interface ModelProviderEditorProps {
   // The GET /model-providers read the host rendered from: the document a save
@@ -286,6 +288,7 @@ export function ModelProviderEditor({
               people={n}
               gatewayIssuer={list.gatewayIssuer}
               gatewayJwksPath={list.gatewayJwksPath}
+              ssoGateway={list.gatewayIdentityBedrockSso === true}
             />
             {/* After Use with, above the footer (#923 editors.html section 2). An
                 existing provider's list writes at once, never through Save. */}
@@ -428,6 +431,7 @@ function ProviderFields({
   people,
   gatewayIssuer,
   gatewayJwksPath,
+  ssoGateway,
 }: {
   draft: ProviderDraft;
   setDraft: React.Dispatch<React.SetStateAction<ProviderDraft | null>>;
@@ -441,8 +445,12 @@ function ProviderFields({
   people: number;
   gatewayIssuer?: string;
   gatewayJwksPath?: string;
+  // The install signs AWS requests at its proxy, so a sign-in row may send run identity.
+  ssoGateway: boolean;
 }) {
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
+  // The gateway preset last pressed: only decides which placeholders and hints show, and is never saved.
+  const [preset, setPreset] = React.useState<PresetId | null>(null);
   // A new address needs its audience entered again (the server refuses a kept one), so an edit that
   // leaves the saved address clears it, and one that returns to it restores it.
   const setBaseUrl = (value: string) => {
@@ -456,11 +464,12 @@ function ProviderFields({
   const laptopBad = laptopBaseUrlRefused(draft);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
-  const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key" || draft.kind === "bedrock_bearer";
+  const routeThrough =
+    draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key" || draft.kind === "bedrock_bearer" || (sso && ssoGateway);
   const host = directHost(draft);
   // A key kind's gateway address cleared while identity is still on: the server refuses it, so say so first.
   const addressCleared = routeThrough && draft.gatewayOn && !draftGatewayAddress(draft).trim();
-  const [before, after] = PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host).split(host);
+  const [before, after] = (sso ? PROVIDER_EDITOR.ROUTE_THROUGH_HINT_SSO(host) : PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host)).split(host);
   const rows = Object.keys(draft.harnesses).map((id) => harnesses.find((h) => h.id === id) ?? { id, display: id });
   // E3's "How people sign in" toggle — the ONE field that reaches bedrock_bearer
   // (never a kind-step option of its own). A segmented radio group
@@ -510,6 +519,16 @@ function ProviderFields({
             </Button>
           </div>
         </Field>
+      )}
+
+      {endpoint && !editing && (
+        <GatewayPresets
+          value={preset}
+          onPick={(id) => {
+            setPreset(id);
+            setDraft((d) => d && applyPreset(d, id));
+          }}
+        />
       )}
 
       <Field label={PROVIDER_EDITOR.NAME} htmlFor="mp-name" hint={PROVIDER_EDITOR.NAME_HINT}>
@@ -668,6 +687,11 @@ function ProviderFields({
               <Input id="mp-auth-format" className="font-mono" value={draft.authFormat} onChange={(e) => set({ authFormat: e.target.value })} />
             </Field>
           </div>
+          <ExtraHeaders
+            rows={draft.headers}
+            onChange={(headers) => set({ headers })}
+            valueHint={draft.headers.some((h) => h.placeholder && !h.value) ? PROVIDER_EDITOR.PORTKEY_SLUG_HINT : undefined}
+          />
         </>
       ) : (
         routeThrough && (
@@ -699,6 +723,7 @@ function ProviderFields({
         set={set}
         issuer={gatewayIssuer}
         jwksPath={gatewayJwksPath}
+        ssoGateway={ssoGateway}
         addressCleared={addressCleared}
         invalid={badField === "gateway_audience"}
       />
@@ -711,6 +736,8 @@ function ProviderFields({
             harness={h}
             draft={draft}
             refused={refused}
+            modelPlaceholder={preset === "openrouter" && h.id === "codex-cli" ? PROVIDER_EDITOR.OPENROUTER_MODEL_PLACEHOLDER : undefined}
+            modelFieldHint={preset === "openrouter" && h.id === "codex-cli" ? PROVIDER_EDITOR.OPENROUTER_MODEL_HINT : undefined}
             onChange={(patch) =>
               setDraft((d) => d && { ...d, harnesses: { ...d.harnesses, [h.id]: { ...d.harnesses[h.id], ...patch } } })
             }
@@ -733,6 +760,7 @@ function GatewayIdentity({
   set,
   issuer,
   jwksPath,
+  ssoGateway,
   addressCleared,
   invalid,
 }: {
@@ -740,6 +768,7 @@ function GatewayIdentity({
   set: (patch: Partial<ProviderDraft>) => void;
   issuer?: string;
   jwksPath?: string;
+  ssoGateway: boolean;
   addressCleared: boolean;
   invalid: boolean;
 }) {
@@ -748,14 +777,18 @@ function GatewayIdentity({
   const root = React.useRef<HTMLDivElement>(null);
   const noteId = React.useId();
   const reasonId = React.useId();
-  const refusedKind = !gatewayKind(draft.kind);
+  const sso = draft.kind === "bedrock_sso";
+  // A sign-in row is refused only where the install cannot sign AWS requests at its proxy.
+  const refusedKind = !gatewayKind(draft.kind) || (sso && !ssoGateway);
   const needsAddress = !refusedKind && !draft.gatewayOn && !draftGatewayAddress(draft).trim() && draft.kind !== "custom_endpoint";
   const reason = refusedKind
     ? g.NOT_AVAILABLE[draft.kind as keyof typeof g.NOT_AVAILABLE]
     : needsAddress
       ? g.NEEDS_ADDRESS(directHost(draft))
       : undefined;
-  const disabled = !operator || !!reason;
+  // Turning identity off is always safe: a sign-in row already on where the install cannot sign can be switched off.
+  const offOnly = sso && refusedKind && draft.gatewayOn;
+  const disabled = !operator || (!!reason && !offOnly);
   // Switch takes no aria-describedby, so the sentence is attached to the control here, to be read with it.
   const describedBy = reason ? reasonId : [noteId, !operator && reasonId].filter(Boolean).join(" ");
   React.useEffect(() => {
@@ -768,12 +801,12 @@ function GatewayIdentity({
   return (
     <div ref={root} className="space-y-2">
       <div className="flex items-center gap-2.5">
-        <Switch checked={draft.gatewayOn && !refusedKind} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
+        <Switch checked={draft.gatewayOn && gatewayKind(draft.kind)} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
         <span className="text-body">{g.SWITCH}</span>
       </div>
       {reason ? (
         <p id={reasonId} className="text-xs leading-snug text-muted-foreground">
-          {reason}
+          {sso && refusedKind ? withSignerVar(reason ?? "", g.SIGNER_VAR) : reason}
         </p>
       ) : (
         <>
@@ -784,7 +817,7 @@ function GatewayIdentity({
             </p>
           )}
           <p id={noteId} className="text-body">
-            {g.DISCLOSURE}
+            {sso ? g.DISCLOSURE_BEDROCK_SSO : g.DISCLOSURE}
           </p>
           <a href={g.CLAIMS_URL} target="_blank" rel="noreferrer" className="block text-xs text-info underline-offset-2 hover:underline">
             {g.CLAIMS_LINK}
@@ -852,127 +885,6 @@ function CopyValue({ text, label }: { text: string; label: string }) {
       >
         {PROVIDER_EDITOR.GATEWAY.COPY}
       </CopyButton>
-    </div>
-  );
-}
-
-// One agent under "Use with": a checkbox, and under a tick the agent's Model and
-// (endpoint kind) Path. Collapsed unless a required field is empty (QB-2); an
-// agent the kind can't drive is disabled with the catalog's reason, never hidden.
-function HarnessBlock({
-  harness,
-  draft,
-  refused,
-  onChange,
-}: {
-  harness: HarnessRow;
-  draft: ProviderDraft;
-  refused: string | null;
-  onChange: (patch: Partial<ProviderDraft["harnesses"][string]>) => void;
-}) {
-  const row = draft.harnesses[harness.id];
-  const endpoint = isEndpoint(draft.kind);
-  const bedrock = isBedrock(draft.kind);
-  const reason = incompatibleReason(draft.kind, harness.id);
-  const needsPath = endpoint && row.ticked && !row.path.trim();
-  // Model is required on a Bedrock provider (mp400ModelNeed) — E3's colfoot:
-  // "Model is required for Bedrock, so that harness's settings are open until
-  // it is filled" (QB-2), the same rule already applied to an endpoint's Path.
-  const needsModel = bedrock && row.ticked && !row.model.trim();
-  const local = isLocal(draft.kind);
-  // A local model's Model is a pick from the list, so it is always shown.
-  const [open, setOpen] = React.useState(needsPath || needsModel || local);
-  React.useEffect(() => {
-    if (needsPath || needsModel) setOpen(true);
-  }, [needsPath, needsModel]);
-  const expanded = row.ticked && open;
-  const base = `mp-h-${harness.id}`;
-  const pathHint = harness.id === "codex-cli" ? PROVIDER_EDITOR.PATH_HINT_CODEX : PROVIDER_EDITOR.PATH_HINT_CLAUDE;
-  const modelHint = bedrock ? PROVIDER_EDITOR.MODEL_HINT_BEDROCK : PROVIDER_EDITOR.MODEL_HINT;
-  // The pick shown is the one a save sends (providerFrom). A pick no longer in the list stays shown,
-  // so the server's refusal of it points at what is on screen.
-  const picked = row.model || draft.models[0] || "";
-  const models = picked && !draft.models.includes(picked) ? [...draft.models, picked] : draft.models;
-
-  return (
-    <div className="rounded-lg border border-border">
-      <div className="flex items-start gap-2 px-3 py-2">
-        <Checkbox
-          id={base}
-          className="mt-0.5"
-          checked={row.ticked}
-          disabled={!!reason}
-          onCheckedChange={(v) => onChange({ ticked: v === true })}
-        />
-        <div className={reason ? "min-w-0 flex-1 opacity-60" : "min-w-0 flex-1"}>
-          <label htmlFor={base} className="text-body font-normal">
-            {harness.display}
-          </label>
-          {reason && <p className="mt-0.5 text-xs text-muted-foreground">{reason}</p>}
-        </div>
-        {row.ticked && (
-          <button
-            type="button"
-            aria-label={harness.display}
-            aria-expanded={expanded}
-            aria-controls={`${base}-body`}
-            // A required, empty Path or Model stays open: collapsing would
-            // unmount the input its `required` check lives on.
-            disabled={needsPath || needsModel}
-            onClick={() => setOpen(!expanded)}
-            className="text-muted-foreground disabled:opacity-50"
-          >
-            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-          </button>
-        )}
-      </div>
-      {expanded && (
-        <div id={`${base}-body`} className={endpoint ? "grid gap-4 border-t border-border p-3 sm:grid-cols-2" : "border-t border-border p-3"}>
-          {local ? (
-            <Field
-              label={PROVIDER_EDITOR.MODEL}
-              htmlFor={`${base}-model`}
-              hint={harness.id === "claude-code" ? LOCAL_MODEL_EDITOR.MODEL_HINT_CLAUDE : LOCAL_MODEL_EDITOR.MODEL_HINT}
-            >
-              <select
-                id={`${base}-model`}
-                aria-invalid={refusedHarness(refused) === harness.id || undefined}
-                className="border-input bg-input-background aria-invalid:border-destructive h-9 w-full rounded-md border px-3 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring"
-                value={picked}
-                onChange={(e) => onChange({ model: e.target.value })}
-              >
-                {models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          ) : (
-            <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={modelHint} required={bedrock}>
-              <Input
-                id={`${base}-model`}
-                required={bedrock}
-                className="font-mono"
-                value={row.model}
-                onChange={(e) => onChange({ model: e.target.value })}
-              />
-            </Field>
-          )}
-          {endpoint && (
-            <Field label={PROVIDER_EDITOR.PATH} htmlFor={`${base}-path`} hint={pathHint} required>
-              <Input
-                id={`${base}-path`}
-                required
-                className="font-mono"
-                placeholder="/"
-                value={row.path}
-                onChange={(e) => onChange({ path: e.target.value })}
-              />
-            </Field>
-          )}
-        </div>
-      )}
     </div>
   );
 }

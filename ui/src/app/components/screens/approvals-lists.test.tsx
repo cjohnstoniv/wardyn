@@ -9,6 +9,8 @@ import { MemoryRouter } from "react-router-dom";
 
 // #2486 and #2487: which lists the Approvals screen asks for, in which console view, and how often.
 
+// The held elevation requests are read with the lists; these tests are about the approvals, so the route answers as an older server does.
+vi.mock("../../lib/api/governance-requests", () => ({ requests: { list: () => Promise.resolve(null) } }));
 const listMock = vi.fn();
 vi.mock("../../lib/api/approvals", () => ({
   approvals: {
@@ -22,6 +24,7 @@ vi.mock("../../lib/api/runs", () => ({
   runs: { getRun: () => Promise.reject(new Error("unused")), listRuns: () => listRunsMock() },
 }));
 
+import { aheadByHours } from "../../lib/test-clock";
 import { ApprovalsScreen } from "./approvals";
 
 const DECIDED = ["APPROVED", "DENIED", "EXPIRED", "CANCELLED"];
@@ -114,6 +117,52 @@ describe("ApprovalsScreen lists", () => {
     await tick(10_000);
     await tick(10_000);
     expect(screen.getByRole("button", { name: /retry/i })).toBeTruthy();
+  });
+
+  describe("each list has its own state", () => {
+    const row = {
+      id: "ap_1",
+      run_id: "run_1",
+      kind: "egress_domain",
+      requested_scope: { host: "example.com" },
+      state: "APPROVED",
+      requested_at: aheadByHours(-2),
+      decided_at: aheadByHours(-1),
+      decided_by: "alice",
+    };
+    const retry = () => screen.queryByRole("button", { name: /retry/i });
+
+    it("a failed pending read does not hide a history that loaded; the pending tab shows the pending error and retry", async () => {
+      listMock.mockImplementation((state: string) =>
+        state === "PENDING" ? Promise.reject(new Error("boom")) : Promise.resolve(state === "APPROVED" ? [row] : []),
+      );
+      await mountAt("/approvals?tab=decided");
+      expect(screen.getByTestId("run-ref")).toBeTruthy();
+      expect(retry()).toBeNull();
+
+      fireEvent.mouseDown(screen.getByRole("tab", { name: /pending/i }), { button: 0 });
+      expect(retry()).toBeTruthy();
+      const before = calls("PENDING").length;
+      fireEvent.click(retry()!);
+      await tick(0);
+      expect(calls("PENDING").length).toBeGreaterThan(before);
+    });
+
+    it("a failed history read leaves the pending queue alone; the Decided tab shows the history error and retry", async () => {
+      listMock.mockImplementation((state: string) =>
+        DECIDED.includes(state) ? Promise.reject(new Error("boom")) : Promise.resolve([]),
+      );
+      await mountAt("/approvals");
+      expect(retry()).toBeNull();
+      fireEvent.mouseDown(screen.getByRole("tab", { name: /decided/i }), { button: 0 });
+      await tick(0);
+      expect(retry()).toBeTruthy();
+      const before = calls(...DECIDED).length;
+      fireEvent.click(retry()!);
+      await tick(0);
+      expect(calls(...DECIDED).length).toBeGreaterThan(before);
+      expect(calls("PENDING").length).toBe(1);
+    });
   });
 
   it("#3516: with only the Pending tab open, a refresh never fetches the decided lists", async () => {

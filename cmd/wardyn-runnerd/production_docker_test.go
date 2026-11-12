@@ -249,7 +249,9 @@ func rancherLimaV324Arm64() *fakeEngine {
 	return &fakeEngine{os: "Alpine Linux v3.24", name: "lima-rancher-desktop", arch: "aarch64", network: true, image: true}
 }
 
-// serveWith runs productionRunnerHooks against engine.
+// serveWith runs productionRunnerHooks against engine. A proxy image it cannot pull is waited for, as a
+// started runner waits: the first wait stops the runner, as a stop would, so the call returns. It fails
+// the test, rather than hanging the package, if the call does not return within a minute.
 func serveWith(t *testing.T, engine *fakeEngine, relayListen, hostTarget string) error {
 	t.Helper()
 	if engine == nil {
@@ -263,15 +265,32 @@ func serveWith(t *testing.T, engine *fakeEngine, relayListen, hostTarget string)
 		engine.start(t)
 	}
 	opts := serveOptions{proxyImage: "wardyn-proxy:test", relayListen: relayListen, relayHostTarget: hostTarget, network: "wardyn-internal", recording: "off"}
-	runtime, err := productionRunnerHooks(context.Background(), runneridentity.Identity{RunnerID: uuid.New()}, t.TempDir(), opts)
-	if runtime.close != nil {
-		_ = runtime.close()
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	was := proxyImageSleep
+	proxyImageSleep = func(ctx context.Context, _ time.Duration) error { stop(); return ctx.Err() }
+	t.Cleanup(func() { proxyImageSleep = was })
+	stateDir := t.TempDir()
+	done := make(chan error, 1)
+	go func() {
+		runtime, err := productionRunnerHooks(ctx, runneridentity.Identity{RunnerID: uuid.New()}, stateDir, opts)
+		if runtime.close != nil {
+			_ = runtime.close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Minute):
+		t.Fatal("productionRunnerHooks did not return within a minute")
+		return nil
 	}
-	return err
 }
 
 // A runner whose relay or Docker engine cannot serve runs refuses to start,
-// so it never shows online and then refuses every run at create.
+// so it never shows online and then refuses every run at create. A proxy image
+// it cannot pull is waited for until a stop, which serveWith sends.
 func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 	for _, tc := range []struct {
 		name, relayListen, hostTarget, want string
@@ -290,6 +309,9 @@ func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 			err := serveWith(t, tc.engine, tc.relayListen, tc.hostTarget)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("productionRunnerHooks = %v, want an error naming %q", err, tc.want)
+			}
+			if strings.Contains(tc.want, "the proxy image") && !strings.Contains(err.Error(), "stopped while waiting for the proxy image") {
+				t.Errorf("productionRunnerHooks = %v, want the wait for the proxy image to have been ended by the stop", err)
 			}
 			if tc.engine != nil && strings.Contains(tc.want, "relay") && len(tc.engine.created) != 0 {
 				t.Errorf("a refused relay flag still created a network: %q", tc.engine.created)

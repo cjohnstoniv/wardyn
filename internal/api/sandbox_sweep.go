@@ -130,9 +130,12 @@ func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun
 	if serr != nil || st.State != types.RunRunning {
 		return false // already gone (or unprobeable) — the normal, settled case
 	}
-	s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.sweep")
+	// A sandbox kept for its computer folder's pass back (or whose record cannot be read) is left for
+	// resumeComputerFolderBacks with only its proxy stopped, and is not counted as swept. The revoke,
+	// idempotent, runs either way.
+	left, _ := s.stopTerminalSandbox(ctx, run, "sandbox.sweep")
 	s.revokeRunCascade(ctx, run.ID)
-	return true
+	return !left
 }
 
 // killTailRecoveryGrace is how long a KILLED run's own kill tail

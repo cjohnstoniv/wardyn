@@ -169,7 +169,7 @@ func TestMacOSVMStatusTellsAnEditFromSetupByHand(t *testing.T) {
 		}
 		var text, doc strings.Builder
 		st.writeText(&text)
-		_ = doctor.Report{Stages: macOSVMDoctorStages()}.WriteText(&doc)
+		_ = doctor.Report{Stages: macOSVMDoctorStages(nil, "")}.WriteText(&doc)
 		for what, out := range map[string]string{"status": text.String(), "doctor": doc.String()} {
 			if got := strings.Contains(out, "setup by hand"); got != tc.setupBy {
 				t.Errorf("%s log newer: %s says setup by hand %v:\n%s", tc.newer, what, got, out)

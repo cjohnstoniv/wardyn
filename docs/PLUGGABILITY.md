@@ -9,7 +9,7 @@
 
 ## 1. The standard
 
-- **Honesty rule (read this first).**
+- **Shipped versus recommended.**
   - The *shipped out-of-box default* and the *recommended production default* are kept as **two columns** below, and for every seam `/healthz.components` (signed in) covers — exactly `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` —
   - it reports the **running** impl in `components.<seam>.selected`, plus `available` and `source` —
   - the recommended-production column lives in the matrix below and [ROADMAP.md](../ROADMAP.md), because a runtime endpoint reports runtime facts (see §2 step 5).
@@ -19,7 +19,7 @@
 
 - A pluggable seam in Wardyn has five parts.
 - Four seams implement all of parts 1–4 today — identity, secret store, recording, and the confinement substrate ([`internal/runner/substrate/registry.go`](../internal/runner/substrate/registry.go); its `docker` impl self-registers under `-tags docker`).
-- The rest carry the honest per-row "Seam status" in §3:
+- The rest carry the per-row "Seam status" in §3:
 
 1. **An interface** (`identity.Provider`, `secretstore.Store`, `recording.Store`, `runner.Runner`/`substrate.Substrate`, …) — the contract the control plane talks to.
    - Most carry a `Name()` method so the running impl is self-describing.
@@ -44,7 +44,7 @@
 > [!WARNING]
 > **Not every seam is registry-backed, and this rule used to claim they all were.**
 > - `egress.Evaluator` has a real interface AND a conformance suite, but **no registry, no selector env var, and exactly one implementation** — the only override is an in-process `Options.Evaluator` field that nothing outside tests sets.
-> - `/healthz` correspondingly reports `policy_engine: {selected: "builtin"}` with no `available` list, which is honest; step 5 below used to imply otherwise.
+> - `/healthz` correspondingly reports `policy_engine: {selected: "builtin"}` with no `available` list.
 > - An interface plus a conformance suite is a real head start on pluggability.
 > - It is not the same thing as a swappable seam, and the difference is exactly what this document exists to keep straight.
 
@@ -75,7 +75,7 @@
 
 ---
 
-## 2b. The four-layer question, answered honestly
+## 2b. Which layers can be swapped
 
 - An agent-sandboxing platform decomposes into four layers, and the question an architecture review actually asks is which of them you can swap:
 
@@ -83,11 +83,10 @@
 |---|---|
 | **Physical sandbox** — the isolation boundary | **Genuinely pluggable.** See [below](#physical-sandbox). |
 | **Ingress / egress controls** | **Split, and the halves differ.** See [below](#ingress--egress-controls). |
-| **LLM gateway** | **Hard-wired.** See [below](#llm-gateway). |
+| **LLM gateway** | **Hard-wired.** A `custom_endpoint` provider can point at LiteLLM, Portkey or OpenRouter: [setup](operations/model-gateways.md). See [below](#llm-gateway). |
 | **MCP / tool gateway** | **Does not exist.** See [below](#mcp--tool-gateway). |
 
 - **One of four is genuinely pluggable.**
-- That is the honest answer, and it reads better than four seams that are really one seam and three intentions.
 - The strongest thing to say here is the first row: *two implementations, one conformance contract, both enforced in CI* —
   - which is a materially stronger claim than "we have an interface", and it is the only one of the four that has earned it.
 
@@ -139,13 +138,15 @@
 - **Before you set it up.**
   - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
   - The gateway sees `wardyn-proxy` as its caller. Unless a provider opts in, Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
-  - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. Both are experimental until 0.11. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
+  - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
+  - The token format is `1`, and the key set's address is stable through 0.11.
   - A Bedrock key provider opts in with its gateway in `bedrock.base_url`. A Bedrock SSO provider cannot.
   - Without it, a per-person limit can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key. With it, a rule can key on the token's `sub`, `wardyn_run` and `wardyn_runner`.
   - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern. Prompt checks can be left to a provider's gateway, except the run's own secret values: see [Who inspects](operations/ai-gateway.md#who-inspects).
 - **When it is worth it.**
   - It pays off when an organisation already sends all model and MCP traffic through one gateway.
   - For a single team, a provider's settings in Wardyn are enough.
+- LiteLLM, Portkey, OpenRouter and Presidio recipes, with the versions checked, are in [Model gateways and detectors](operations/model-gateways.md).
 - Wardyn's CI has no green run against an external gateway yet. A nightly job for one is new, and [AI gateway setup](operations/ai-gateway.md) is the config it runs. The model route is the same path as any internal gateway.
 
 ### A Kubernetes sandbox controller (for example agent-sandbox)
@@ -156,14 +157,15 @@
   - It has no per-domain egress decisions, and no credential, approval or audit controls.
 - Wardyn's `k8s` substrate creates its own pods by default. An experimental switch (`k8s.agentSandbox.enabled`, off by default) makes the agent pod through a bare `Sandbox` instead.
   - Wardyn keeps its own NetworkPolicies, proxy pod and managed files, and holds the pod behind a scheduling gate until it has read it back.
-  - Server mode only, no warm pools, templates, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - Server mode only, no claims, warm pools, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - Experimental: `k8s.agentSandbox.template` names a platform-owned `SandboxTemplate`. Wardyn takes only its annotations under one prefix and refuses any other field, placement included, until the boot canary covers template placement. The extensions controller stays uninstalled.
   - It trusts the controller with every run's pod. See [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md).
 - A cluster can run both now, each in its own namespace.
 
-### Inner walls: narrowing an organisation's access per person, machine and run
+### Narrowing an organisation's access per person, machine and run
 
-- An organisation's outer wall (identity provider, cloud IAM, network, exemptions) sets the most any run may do.
-- Wardyn's inner walls give each run less. A narrower setting can only narrow, never widen:
+- The organisation's boundary (identity provider, cloud IAM, network, exemptions) sets the most any run may do.
+- Wardyn gives each run less. A narrower setting can only narrow, never widen:
   - a run's drive flag narrows the person's allocation ([who can change what](operations/admin-only-writes.md));
   - an egress decision's scope can hold a domain to one run ([decision scopes](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run)).
 - Going outward is an approval, recorded per domain and per run, never a setting a person changes for good on their own:
@@ -174,14 +176,13 @@
   - compute: the substrate, or a sandbox platform under it (above);
   - network, credentials, approvals and audit: `wardyn-proxy` and `wardynd`;
   - model and tool access: an AI gateway (above), inside what Wardyn lets the run reach.
-- Two gaps today:
-  - the gateway gets no person or run identity (above), so its per-person rules cannot follow a Wardyn run;
-  - stored policies are an administrator's ([who can change what](operations/admin-only-writes.md)), so a person or a machine cannot yet save its own narrower policy.
+- A model gateway can receive a signed person and run token when the provider opts in ([the claims](operations/ai-gateway.md#the-claims-a-gateway-receives)), so its per-person rules can follow a Wardyn run.
+- Stored policies are an administrator's ([who can change what](operations/admin-only-writes.md)). A person saves a synthesized one as their own template with `wardyn record save <run-id> --name <n> --template`; the template is bounded by that person's ceiling when a run uses it.
 
 ## 3. Blessed-default-vs-alternate matrix
 
 - `Shipped` = the out-of-box default that runs today.
-- `Recommended (prod)` = the standard Wardyn recommends for hostile-multi-tenant production (may differ from shipped — see the honesty rule).
+- `Recommended (prod)` = the standard Wardyn recommends for hostile-multi-tenant production (may differ from shipped — see the shipped-versus-recommended note in §1).
 - `Seam status`: **shipped** = the interface + registry + conformance exist today; **planned** = interface lands on the roadmap.
 - Planned entries that carry a MILESTONE — and what they are planned *for* — are enumerated in [`../ROADMAP.md`](../ROADMAP.md) (SPIRE, OpenBao).
   - The rest are seam-ready candidates with no scheduled work.
@@ -199,7 +200,7 @@
 | Interactive access lane | none — the browser terminal (`Runner.Attach`), the SSH gateway ([`internal/api/sshgateway.go`](../internal/api/sshgateway.go)) and the UI-sandbox relay ([`internal/api/uigateway.go`](../internal/api/uigateway.go) over `runner.ExecSession`) are three hard-wired lanes, not implementations of one interface | browser terminal; `ssh`/sftp/`-L` and the `ui_apps` relay both off unless their listener env var is set | same (each lane is opt-in per deployment) | Apps ride the **image**, not a seam; see [below](#interactive-access-lane-registered-alternates). | `test/conformance`'s `ExecStreamLoopbackRelay`, the one layer these lanes share; see [below](#interactive-access-lane-conformance). | no seam yet; native lane exploratory |
 | Git provider kinds | none, and deliberately not one — `GitProviderKind` ([`internal/types/workspace_provider.go`](../internal/types/workspace_provider.go)) is a **CLOSED set**: `github` and `azure_devops`, enumerated in `ClosedGitProviderKinds`, with `ClosedGitLanes` (`app`/`pat`/`ssh`) closed beside it | both kinds ship; a row's `base_urls` cover the self-hosted variants (GHES, ADO Server) of the SAME two kinds over HTTPS | same — a new forge FAMILY is a code change, not a configuration one | none, by construction | — (nothing to conform to) | no seam, on purpose; see [below](#git-provider-kinds-seam-status). |
 | Run-level custom components | none, and deliberately not one — `ComponentKind` ([`internal/types/component.go`](../internal/types/component.go)) is a closed vocabulary; the one open kind, `custom`, is data (a `ComponentDefinition`), not code | no component exists until an admin or a person defines one | same — a component names hosts and secrets, and a new delivery mode is a code change | none, by construction | — (nothing to conform to) | no seam, on purpose; see [below](#run-level-custom-components-seam-status). |
-| Content detection | `contentscan.Detector` | builtin (known-secret / regex / entropy / PII) + sidecar | builtin + **LLM Guard / Presidio** sidecar | `DetectorSidecarURL` (shipped) | — | shipped (detector seam) |
+| Content detection | `contentscan.Detector` | builtin (known-secret / regex / entropy / PII) + sidecar | builtin + **Presidio** sidecar (`detector_sidecar_format: presidio`) | `DetectorSidecarURL` (shipped) | — | shipped (detector seam) |
 | Audit sinks | `audit.Sink` | none (Postgres recorder always) | OpenTelemetry → SIEM | `file` / `webhook` / `syslog` (shipped) via `WARDYN_AUDIT_SINKS` | — | shipped (non-registry: struct-field JSON parse, [`internal/audit/sinks/config.go`](../internal/audit/sinks/config.go) — not a `/healthz` component) |
 | eBPF ground-truth | host sensor ingest | none (honest-degraded `/healthz`) | **Tetragon** (enforcement) | Falco / Tracee (ingest-compatible) | — | shipped (ingest seam) |
 
@@ -280,30 +281,21 @@
 
 ---
 
-## 4. The recommended-vs-shipped tension, made honest
+## 4. Recommended versus shipped
 
 - We recommend SPIRE / OpenBao / OPA / Kata-CC3 / Tetragon for hostile-multi-tenant production while the binary ships embedded / pg / builtin / docker(runc..kata) / heartbeat-only.
 - "Recommended: SPIRE" must never read as "you are running SPIRE", so three things keep the gap visible:
 
 1. The two columns above never merge.
-2. **`/healthz` is machine-honest.** For every seam `components` covers, `components.<seam>.selected` is the *running* impl, `components.<seam>.available` is this build's registry, and `source` distinguishes `default` from `configured`. Signed out, `/healthz` omits it and `confinement_substrates`.
-   - Same anti-overclaim guarantee as `ebpf_groundtruth` and runner `Capabilities`.
+2. **`/healthz` reports the running implementation.** For every seam `components` covers, `components.<seam>.selected` is the *running* impl, `components.<seam>.available` is this build's registry, and `source` distinguishes `default` from `configured`. Signed out, `/healthz` omits it and `confinement_substrates`.
+   - `ebpf_groundtruth` and runner `Capabilities` work the same way.
 3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must pass the *same* `RunConformance` suite the shipped default passes — until an alternate is green, the shipped default is what you run.
 
 ---
 
-## 5. Where the seams live (code map)
+## 5. Where the seams live
 
-- [`internal/component/registry.go`](../internal/component/registry.go) — the shared `Registry[C]`.
-- `internal/identity/{registry.go,revocation.go}` + `identity/embedded/register.go` + `identity/identitytest`.
-- `internal/secretstore/{registry.go,secretstore.go}` + `secretstore/pg/register.go` + `secretstore/secretstoretest`; the KEK seam is `internal/secretstore/kek` (`KEK`, `Versioned`), with Transit in `secretstore/vaultkv/transit.go`.
-  - `Store.For(owner)` (0.7, migration `0050`) is part of the seam contract every implementation must honor — `RunConformance`'s `owner_*` cases hold a future alternate to the same fallback/isolation rules `pg` implements today.
-- [`internal/recording/registry.go`](../internal/recording/registry.go) + `recording/recordingtest`.
-- `internal/runner/substrate/{substrate.go,registry.go}` (the `Substrate` sub-interface + `ClassSupport` + the substrate registry) +
-  - [`internal/runner/docker/register.go`](../internal/runner/docker/register.go) (the OCI substrate's `init()` self-registration, `-tags docker` only) +
-  - `internal/runner/orchestrator/` (the build-tag-free `runner.Runner` that multiplexes substrates by Confinement Class, with a durable pg-backed ref→substrate `RefStore` — [`internal/store/store_sandbox_ref.go`](../internal/store/store_sandbox_ref.go) — so kill-switch routing survives control-plane restarts) +
-  - [`internal/runner/docker/hardening.go`](../internal/runner/docker/hardening.go) (`resolveRuntime`, `capabilitiesForWith`) + `cmd/wardynd` `WARDYN_CONFINEMENT_MAP` — the confinement substrate/runtime seam.
-- [`internal/egress/evaluator.go`](../internal/egress/evaluator.go) (policy evaluator, overridable via `Options.Evaluator` in [`internal/egress/proxy/proxy.go`](../internal/egress/proxy/proxy.go)) + [`internal/egress/proxy/local_routes.go`](../internal/egress/proxy/local_routes.go) (LLM-route forwarding) — the egress seams.
-- [`internal/runner/runner.go`](../internal/runner/runner.go) (`Capabilities.Resolved`) + [`internal/api/healthz.go`](../internal/api/healthz.go) (`/healthz` `confinement_substrates` + `components`).
-- [EXTENDING.md](EXTENDING.md) maps the layers and the interface each extension implements, including the closed sets (model provider kinds, credential classes) that have no seam.
+- [EXTENDING.md](EXTENDING.md#extension-points) lists each seam's interface, registry and test package, including the closed sets (model provider kinds, credential classes) that have no seam.
+- `Store.For(owner)` is part of the secret-store contract: `RunConformance`'s `owner_*` cases hold an alternate to the fallback and isolation rules `pg` implements.
+- `WARDYN_CONFINEMENT_MAP` in `cmd/wardynd` maps a confinement class to a substrate and runtime.
 - Planned impls (seams ready, alternates not built): the non-OCI VMM `Substrate` (SmolVM/Firecracker), SPIRE identity, OPA/Cedar evaluator, an external LLM gateway.

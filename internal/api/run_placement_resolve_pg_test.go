@@ -69,7 +69,9 @@ func (p *poolRunner) CreateSandboxOn(_ context.Context, executor string, spec ru
 	p.onExecutor = append(p.onExecutor, executor)
 	p.fakeRunner.lastSpec = spec
 	p.fakeRunner.mu.Unlock()
-	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: executor, EnforcedClass: spec.ConfinementClass}, nil
+	// A hash, as an executor's driver answers at the readback release (fakeRunner.CreateSandbox).
+	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: executor, EnforcedClass: spec.ConfinementClass,
+		ProxyConfigSHA256: fakeProxyConfigSHA256}, nil
 }
 
 type placementEnv struct {
