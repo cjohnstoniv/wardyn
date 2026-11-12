@@ -1511,7 +1511,7 @@ func d1ServerLab(t *testing.T, cat, script time.Duration) (l *d1Lab, scripts *[]
 // stopped at its due plus the server-mode wait: not before. At the visit that began a second before it, the
 // clock is read when d1Due is asked, so that visit hands it off; StopSandbox returns within 770 s of the run's end. A stop of
 // the agent that fails, or an agent that cannot be stopped, makes it due on that visit.
-func TestContain_HeldKubernetesServerRunStoppedByPC(t *testing.T) {
+func TestContain_HeldKubernetesServerRunStoppedAfterItsHold(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, scripts := d1ServerLab(t, 3*time.Second, 5*time.Second)
 		l.dr.stopFn = d1StopTakes(d1StopPhase - time.Millisecond)
@@ -1571,7 +1571,7 @@ func TestContain_HeldKubernetesServerRunStoppedByPC(t *testing.T) {
 // Ten server-mode runs, owed and with a stoppable agent: the agent is stopped on every visit, with no
 // cache, and each run is stopped no earlier than its due plus the server-mode wait and within 685 s of the
 // first listing.
-func TestContain_OptionCStopsWithinItsBound(t *testing.T) {
+func TestContain_ServerModeRunsStoppedWithinTheirBound(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, _ := d1ServerLab(t, time.Second, time.Second)
 		l.dr.stopFn = d1StopTakes(d1StopPhase - time.Millisecond)
@@ -1607,7 +1607,7 @@ func TestContain_OptionCStopsWithinItsBound(t *testing.T) {
 }
 
 // The agent is stopped on each visit before its due plus the server-mode wait, and the sandbox only after the last of those stops.
-func TestOptionC_AgentStoppedFirstThenStopAtPC(t *testing.T) {
+func TestContain_ServerModeAgentStoppedBeforeTheSandbox(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, scripts := d1ServerLab(t, time.Second, time.Second)
 		row := l.rowDue(-(containServerKeepWait - 30*time.Second), nil, "")
@@ -1636,7 +1636,7 @@ func TestOptionC_AgentStoppedFirstThenStopAtPC(t *testing.T) {
 }
 
 // A VM is never held for a pass: no agent stop, and it is given up and stopped at the first tick past its due.
-func TestOptionC_VMGoesToRuleA(t *testing.T) {
+func TestContain_VMStoppedAtItsDueWithoutAnAgentStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, scripts := d1ServerLab(t, time.Second, time.Second)
 		l.dr.stopFn = d1StopTakes(time.Second)
@@ -2055,6 +2055,43 @@ func TestContain_AgentStopFailureQueuesTheStopAtOnce(t *testing.T) {
 			}
 			if l.st.stamp(row.ID) == nil {
 				t.Errorf("failing %s: no failure stamp", failing)
+			}
+			l.stop()
+		})
+	}
+}
+
+// A server-mode run inside its hold whose call phase answers that it did not finish (errContainCallAbandoned)
+// or ran out (context.DeadlineExceeded, as the "call phase ended before the cut" answer wraps it) is queued
+// for the stop pool on that visit, like a failed agent stop. The call phase's answer is set through the
+// hook's seam; d1Due is the real one. Caught by: d1Due dropping either sentinel from its stalled case, which
+// leaves the run to wait for a second failure.
+func TestContain_ServerModeCallPhaseRunningOutQueuesTheStopAtOnce(t *testing.T) {
+	answers := map[string]error{
+		"abandoned": fmt.Errorf("%w: still running", errContainCallAbandoned),
+		"deadline":  fmt.Errorf("the call phase ended before the cut: %w", context.DeadlineExceeded),
+	}
+	for name, answer := range answers {
+		synctest.Test(t, func(t *testing.T) {
+			l, _ := d1ServerLab(t, time.Second, time.Second)
+			l.srv.contain.containCallFn = func(context.Context, types.AgentRun) error { return answer }
+			row := l.rowDue(-time.Minute, nil, "")
+			l.ds.owe(row.ID)
+			if l.srv.contain.d1DueFn != nil {
+				t.Fatal("a stand-in for d1Due is set: this pin needs the real d1Due")
+			}
+			l.item(row)
+			if got := l.stopQueue(); got != 1 {
+				t.Errorf("%s: stop FIFO = %d, want the run queued on that visit", name, got)
+			}
+			if !l.busy(row.ID) {
+				t.Errorf("%s: the run was released instead of handed to the stop pool", name)
+			}
+			if n := l.rn.callsTo(row.SandboxRef); n != 0 {
+				t.Errorf("%s: cut calls = %d, want none", name, n)
+			}
+			if l.st.stamp(row.ID) == nil {
+				t.Errorf("%s: no failure stamp", name)
 			}
 			l.stop()
 		})
