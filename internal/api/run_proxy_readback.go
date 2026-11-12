@@ -387,8 +387,9 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 // stopUnconfirmedProxyAt is stopUnconfirmedProxy for the failed start of policy generation gen: a running
 // run's lost mark lands only while gen is still the run's newest (loseRunStopped's fence), so a
 // containment whose lock was lost after its generation read does not mark lost a newer revive's run.
-// A kept run's stop below carries no generation: a stale retry can stop a newer revive's proxy (fail
-// closed). 0 fences nothing.
+// A kept run's stop below carries gen: on a runner that honours generations it never stops a newer
+// revive's proxy; elsewhere no newer proxy can exist (no replace path, or revive refused to the runner).
+// 0 fences nothing.
 func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun, gen int) error {
 	switch {
 	case run.State == types.RunStarting:
@@ -399,7 +400,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		}
 		return nil
 	case runIsKept(run) && !isTerminalRunState(run.State):
-		return s.stopLostSandbox(ctx, run, s.cfg.Now())
+		return s.stopLostSandboxAt(ctx, run, s.cfg.Now(), gen)
 	case run.State == types.RunRunning:
 		if handled, err := s.loseUnconfirmedRun(ctx, run, gen); handled {
 			return err
@@ -572,7 +573,7 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun, gen
 	case loseWriteFailed:
 		s.revokeRunBroker(ctx, run.ID)
 		run.LostAt, run.LostReason = &now, types.LostOutage
-		if err := s.stopLostSandbox(ctx, run, now); err != nil {
+		if err := s.stopLostSandboxAt(ctx, run, now, gen); err != nil {
 			return true, err
 		}
 		return true, errLostMarkUnwritten

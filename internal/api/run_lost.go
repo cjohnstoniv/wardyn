@@ -156,8 +156,9 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 // the caller acts for (a revive's, or a failed proxy start's): the lost mark then lands only while it is
 // still the run's newest (store.RunLoserAtGeneration), in the mark's own write, so a caller whose lock
 // was lost does not mark lost a run a newer revive took over. That miss is loseNotApplied and stops
-// nothing. The effects after a mark that landed (approvals, broker, stopLostSandbox) are not fenced: a
-// newer revive that takes the run between the mark and them can have its proxy stopped (fail closed).
+// nothing. The effects after a mark that landed (approvals, broker) are not fenced, and the stop carries
+// fence: on a runner that honours generations it never stops a newer revive's proxy; elsewhere no newer
+// proxy can exist (no replace path, or revive refused to the runner).
 // A mark that errors is loseWriteFailed, as unfenced: the caller's fail-closed stop still runs.
 func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int) (loseOutcome, error) {
 	now := s.cfg.Now()
@@ -184,7 +185,7 @@ func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, lease
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
 	data, outcome := map[string]any{"reason": string(reason)}, "success"
-	stopErr := s.stopLostSandbox(ctx, run, now)
+	stopErr := s.stopLostSandboxAt(ctx, run, now, fence)
 	if err := stopErr; errors.Is(err, runner.ErrPendingOnRunner) {
 		data["containment"] = "pending_runner"
 	} else if err != nil {
