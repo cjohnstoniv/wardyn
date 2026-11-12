@@ -5,7 +5,18 @@
 Stop sharing the admin token: a token per person, what it may reach, the stamp that keeps
 it honest, tokens for a person who never signs in, and the portals that act for a group.
 
-## Per-user API tokens: stop sharing the admin token
+| You need | Use |
+|---|---|
+| Automation that acts as you | [A per-user token](#per-user-api-tokens-stop-sharing-the-admin-token) |
+| Automation under its own name | [A service identity](#service-identities) |
+| A caller of a run's inbound port | [An inbound token](#inbound-tokens) |
+| The CLI signed in as you | [`wardyn login`](#cli-sign-in-wardyn-login) |
+| A portal acting for a group | [A delegated token](#delegated-run-management-portals) |
+| A person who never signs in | [A person record](#tokens-for-a-person-who-never-signs-in) |
+
+<a id="per-user-api-tokens-stop-sharing-the-admin-token"></a>
+
+## Mint, list and revoke
 
 - `WARDYN_ADMIN_TOKEN` is one string, deployment-wide admin, attributable to nobody.
 - A **per-user API token** is the replacement: a human mints one for their own automation, it carries *their* identity and *their* role, and it is revocable on its own.
@@ -29,7 +40,6 @@ it honest, tokens for a person who never signs in, and the portals that act for 
   - The People drawer's "Sign out everywhere" sends it.
 - **No `role` parameter on `POST /me/tokens`.**
   - A token always mints at the caller's own current role; there is no deliberately-downgraded mint.
-  - Still open at 0.8.
 - **Deleting one API token leaves its registered SSH keys in place.**
   - Use session revocation to remove the person's tokens and keys together, or `DELETE /api/v1/people/{principal}/ssh-keys` (admin or `security_admin`) to remove only their keys and receive `{"count": N}`.
   - A deleted key cannot authenticate again or open a new channel on an established SSH connection.
@@ -40,7 +50,6 @@ it honest, tokens for a person who never signs in, and the portals that act for 
   - The session cutoff and token sweep match an exact subject or a case-insensitive email.
   - SSH-key removal resolves the stored principal, giving an exact known subject precedence over an email alias; an ambiguous name or unresolved email cannot be reported as completed key removal.
   - Session revocation also stamps the resolved subject's cutoff, because SSH keys carry a subject without an email.
-  - SSH registration and access check the cutoff so a registration in flight cannot outlive the revoke.
 - A complete revoke answers `204`.
   - A `500` may follow a successful session cutoff if token revocation, SSH-principal resolution, canonical-subject cutoff or key deletion then fails.
   - Both credential operations are attempted, and the `session.revoke` audit records `tokens_revoked`, `ssh_keys_deleted` and outcome `failure` for partial work.
@@ -59,7 +68,7 @@ it honest, tokens for a person who never signs in, and the portals that act for 
   - A token carries the role AND the group snapshot its owner held when they minted it, and every request it authenticates republishes them.
   - So downstream it is that human as they were at mint time, or at their most recent sign-in since — whichever is later.
   - Their next successful sign-in **re-stamps the role, the group snapshot, and the snapshot's own completeness bit** on every unrevoked token they hold.
-  - This is the same `OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to carry groups too.
+  - The same `OnLogin` hook re-stamps their SSH keys.
   - So a demotion, or a group membership change, reaches outstanding tokens at that human's own next login rather than immediately.
   - A token's stamp is timed: `api_tokens.identity_stamped_at` is set at mint and again at every one of those re-stamps.
   - By default nothing ages a stamp out on its own, so a human who is demoted in the identity provider and never signs in again keeps the role and groups their tokens were minted with.
@@ -68,7 +77,6 @@ it honest, tokens for a person who never signs in, and the portals that act for 
   - A console session older than the TTL is sent back through sign-in.
   - So a stamp you can tune is also the age of the longest role a session can carry.
   - (With `WARDYN_OIDC_SESSION_TTL` unset a session already ends at the ID token's own expiry, and with it set at that TTL after sign-in, so the role-stamp TTL only matters when it is shorter than the session.)
-  - The ID token's expiry is today the only identity-provider-driven bound on a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default.
   - So a session lengthened with `WARDYN_OIDC_SESSION_TTL` (at most `24h`) should be paired with a role-stamp TTL, or a person disabled only at the identity provider keeps the console until the session TTL runs out.
   - Wardyn keeps no identity-provider token and cannot re-derive a role on a timer; re-login is the only refresh.
   - Turning the TTL on asks every token holder to sign in once, because the backfill dated existing stamps at mint.
@@ -85,7 +93,7 @@ it honest, tokens for a person who never signs in, and the portals that act for 
   - The cap applies to tokens minted after it is set; it never shortens one already minted, so an operator who wants those gone revokes them.
   - There is no default cap: turning one on is what starts failing CI tokens on its own schedule.
   - Console sessions are unaffected and keep their own cookie expiry.
-- A demotion made on the People page is now one of those explicit revocations.
+- A demotion made on the People page is one of those explicit revocations.
   - When a role-mapping write or delete takes a tier away from a value, Wardyn revokes the outstanding tokens of every principal whose own derivation that edit demotes and whose stamp still carries what was lost.
   - It reports the number as `tokens_revoked` in the response and the audit row.
   - It is scoped to that demotion — a promotion, an unrelated value, and a member-stamped credential naming the same group are all left alone.
@@ -104,7 +112,7 @@ it honest, tokens for a person who never signs in, and the portals that act for 
   - The type arm only compares the edited value's own before/after type against a token's stamp.
   - So consider a holder whose effective type shifts because a different, higher-priority group is the one actually edited — or because the edited value's own prior derivation was empty rather than `standard`.
   - That holder keeps a stale stamp until that holder's next sign-in or an explicit revoke, the same as a `WARDYN_OIDC_ROLE_MAP` edit above.
-- That matters most for the tier 0.7 added.
+- That matters most for the `security_admin` tier.
   - A human demoted out of `security_admin` keeps, through any token they minted while they held it, exactly what the tier governs:
     - profile authoring and assignment, capability-grant writes, session and token revocation, escalated approval decisions on anyone's run, workspace `approved-egress`/`denied-egress` writes, and audit-chain verify.
   - What it does not gain is anything the tier itself never had — a token reaches no shell, no attach ticket on a foreign run, and no capability grant widens it to admin.
@@ -140,6 +148,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 > Offboarding a person means revoking their tokens explicitly.
 > A demoted or departed human who never signs in again is not caught by the login-time re-stamp, and the row outlives their access to your IdP either way.
 > It is published as a residual ([`threatmodel/THREAT-MODEL.md`](../../threatmodel/THREAT-MODEL.md) §5, "A per-user API token's role AND group snapshot are bounded-stale, not frozen").
+
 ## Inbound tokens
 
 - An **inbound token** is a `wdn_` token of kind `inbound`. It calls the inbound ports of runs that name its holder as a caller, through the [UI-sandbox gateway](../UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port), and does nothing else.
@@ -159,7 +168,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 - Lists mark it: `GET /me/tokens`, `GET /tokens` and a service identity's token list carry `"inbound": true` on its row.
 - **Every call is re-checked** against the token's owner as an API call is: revocation, expiry, a person's sign-in, and for a service identity its live record and sponsor.
   - The gateway reuses the result for 30 seconds per token, run and app.
-  - A WebSocket or other upgraded connection an inbound token opened is re-checked every 15 seconds (rc.8) and closed within 30 seconds of its last admitting check once the token no longer holds.
+  - A WebSocket or other upgraded connection an inbound token opened is re-checked every 15 seconds and closed within 30 seconds of its last admitting check once the token no longer holds.
   - A person's inbound token also answers `401` `role_stamp_stale` once `WARDYN_ROLE_STAMP_TTL` has passed since its owner last signed in.
 - **Groups are the ones stamped on the token.** A `group:` caller entry matches a person's token by its stored groups: those of the mint, refreshed each time its owner signs in again. A group change reaches the token at that sign-in, not at once.
 - Revoking a person's sessions revokes their inbound tokens with the rest. Changing a service identity's sponsor revokes its tokens, inbound ones included.
@@ -194,7 +203,7 @@ a new login ends the last.
 
 ## Tokens for a person who never signs in
 
-- **No one can create a token that acts as another person (0.8.5).**
+- **No one can create a token that acts as another person.**
   - An admin or `security_admin` can still set a person up before their first sign-in, but cannot mint a token for them.
   - `POST /api/v1/people/{principal}/tokens` answers every caller `403` with reason `person_token_mint_removed` ("No one can create a token that acts as another person. They sign in and create their own."), whether or not the person exists.
   - No role, flag or environment variable turns it back on.
@@ -251,7 +260,7 @@ a new login ends the last.
   - Setting up an Entra person by email alone is not supported.
   - On an Entra issuer the plain form refuses a `principal` in the `entra:` namespace (`422`, `person_principal_reserved`), since no sign-in can become it.
   - On any other issuer the object-id form is refused `422`, and sign-in keys people by `sub` exactly as before.
-- **After replacing the app registration (Entra ID).**
+- <a id="after-replacing-the-app-registration"></a>**After replacing the app registration (Entra ID).**
   - A new app registration gives every person a new pairwise `sub`.
   - Everyone whose identity row is bound to a `sub` is then refused at sign-in (the log names both principals).
   - People keyed by object id (`entra:<tenant id>:<object id>`) are unaffected.
@@ -266,7 +275,7 @@ a new login ends the last.
   - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it. The next sign-in's bind is not audited; it shows as the identity's new principal on People.
 - `POST /people` answers `409` rather than create an ambiguous identity.
   - That happens when the email already names another known subject, when the subject is already known under a different email, when the subject differs from a known one only by case, or when the subject is another person's email.
-  - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see "Some subjects never sign in").
+  - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see [Some subjects never sign in](who-gets-in.md)).
 - Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`, or the person's own `DELETE /api/v1/me/tokens/{id}`.
 ## Invitations and service identities
 
@@ -392,8 +401,10 @@ A service identity is automation that runs under its own name. It is not a perso
 | `PATCH /runs/{id}`, `POST /runs/{id}/kill` | manage its own runs |
 | `GET /me`, `GET /setup/status` | who am I and what can I reach (`GET /me` adds a `service` block), and which providers are live |
 | `PUT`, `DELETE /model-providers/{id}/credential` | its own model key, in its own namespace |
-| `PUT /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}` | keep a named run request running as the service, and read it |
-| `DELETE /workloads/{name}`, `POST /workloads/{name}/restart` | remove one of its workloads, which ends its run, or start a fresh run of the same spec |
+| `PUT /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}` | keep a named run request running, and read it |
+| `DELETE /workloads/{name}`, `POST /workloads/{name}/restart` | remove a workload (ends its run), or restart it |
+| `POST /workloads/{name}/preview` | what a `PUT` of the same body would do; stores nothing |
+| `POST /templates/import` | the file check `diff` and `apply --dry-run` make; stores nothing |
 
 - Every other route, including any added later, answers `403` `service_scope` with an `authz.denied` row.
   - That covers attach, an inbound app's browser ticket (`POST /runs/{id}/apps/{app}/ticket`), approvals, secrets, tokens, SSH keys, invitations, `GET /audit/export`, `GET /workspaces/{id}` and every admin route.
@@ -436,10 +447,16 @@ A service identity is automation that runs under its own name. It is not a perso
 |---|---|
 | `POST /api/v1/admin/delegates` `{"name":"…","idp_client_id":"<the portal's client id>","group":"<group>"}` | register a portal; the `credential` (`wdp_…`) is in this response only, the row keeps its hash |
 | `GET /api/v1/admin/delegates` | every portal, revoked ones included (admin or `security_admin`) |
-| `DELETE /api/v1/admin/delegates/{id}` | revoke it (admin or `security_admin`) |
+| `DELETE /api/v1/admin/delegates/{id}` | revoke it (admin or `security_admin`); `?cut_in_flight=true` also cuts the gateway access of the runs it launched, and on a revoked portal cuts it then |
 
 - The portal acts only for people in its `group`, matched against the group claim of the person's own token (canonicalized the way a sign-in snapshot is).
 - `idp_client_id` cannot be Wardyn's own client id.
+- **Pin a portal to one unit** with `"run_in_under":"<unit id or exact name>"` at registration. The default is no pin.
+  - A run through a pinned portal must resolve to that unit or one below it, or `POST /runs` and `POST /runs/preflight` answer `403` `portal_unit_scope`. A default context outside the unit is refused too.
+  - The person's restrictions still apply after the pick.
+  - The pin is set at registration only; register a new portal to change it. A deleted unit leaves a portal that refuses every launch. An unreadable portal record answers `503` `portal_unit_unavailable`.
+  - The pin is not checked against any other setting: a super admin may pin any unit.
+  - A platform's tools can travel as inline `components` on the portal's `POST /runs`. Anything naming a secret stays an organisation component.
 
 - **Exchange.**
   - `POST /api/v1/token`, form-encoded, the portal's id and credential as HTTP Basic:
@@ -448,6 +465,8 @@ A service identity is automation that runs under its own name. It is not a perso
 grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 subject_token=<the person's token>
 subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_token, …:jwt)
+actor_token=<the acting agent's token>                              (optional)
+actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required with actor_token; or …:id_token, …:jwt)
 ```
 
 - The subject token must verify against Wardyn's issuer and key set, be unexpired, carry an `iat`, and be either:
@@ -458,24 +477,31 @@ subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_to
 - The person is then admitted exactly as a sign-in would admit them — reserved subjects, the email-domain gate, role and user-type derivation from the token's own claims.
 - On success the answer is `{"access_token":"wdg_…","token_type":"Bearer","expires_in":600,…}`: ten minutes, no refresh token.
 - A portal that needs longer exchanges the person's live token again.
-- `actor_token` is refused (the authenticated portal is the actor), and a delegated token cannot itself be exchanged.
+- A delegated token cannot itself be exchanged.
+- **Naming the acting agent** (`actor_token`, on by default with no setting: it is recorded, never authorised, so it grants nothing).
+  - The actor token must verify against Wardyn's issuer and key set, be unexpired, and carry an `iat` and a `sub`.
+  - Its `aud` must hold the portal's client id and must not hold Wardyn's: a person's own Wardyn token can never name an agent.
+  - It must not name the person (the same `sub`, or on Entra ID the same `tid` and `oid`).
+  - When the person's token carries `may_act`, the agent's `sub` (and `iss`, if named) must match it.
+  - A portal holding tokens for several people could name one person's token as another's agent. The identity provider bounds this; issue `may_act` where it supports it.
 
 | Answer | Why |
 |---|---|
 | `401 invalid_client` | no, wrong or revoked portal credential (`auth.fail`, actor `wardyn/delegation`) |
-| `400 invalid_grant` | the subject token did not verify, was not issued to or for the portal, or its person was refused as a sign-in would be, or their sessions were revoked after it was issued |
+| `400 invalid_grant` | the subject token did not verify, was not issued to or for the portal, or its person was refused as a sign-in would be, or their sessions were revoked after it was issued; or the actor token was refused |
 | `403 access_denied` | the person is not in the portal's group |
 
 - **What a delegated token can do.**
   - Exactly: `POST /runs`, `POST /runs/preflight`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events` (the lifecycle stream, at most 32 open per person across every portal and their own clients), `GET /runs/{id}/output` (command output only; nothing recovered from a recording), `PATCH /runs/{id}` (end and wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also `/attach/ticket`, and the UI-gateway ticket), and `GET /me`.
-  - Every other route answers `403` with reason `delegation_scope` and an `authz.denied` row — including secrets, API tokens, SSH keys, approving or denying the person's own held egress, revive, and every admin route.
+  - Every other route answers `403` with reason `delegation_scope` and an `authz.denied` row — including secrets, API tokens, SSH keys, approving or denying the person's own held egress, revive, and every admin route. A unit's [deciders](deciders.md) never change this: a delegated token decides nothing and lists nothing it could decide.
   - Setting a secret and adding an SSH key also refuse a delegated request in their own handlers, so a later change to the allow-list cannot open them.
   - The person is always treated at **user** reach, whatever their own role: an admin acting through a portal reaches only their own runs.
   - Ownership, secrets, drives and the governance ceiling all resolve on the person.
 - **What is recorded.**
   - Each exchange writes `delegation.exchange` (actor `delegate:<id>`, target the person).
   - Every row a delegated request writes — the API's, the identity provider's, the attach and UI-gateway rows of a ticket it minted — has the person as actor and `data.via = {"delegate":"<portal id>","grant":"<token id>"}`.
-  - A run it launches carries `created_via` (the portal id) on the run row and in the API.
+  - When the exchange named an agent, `data.via.actor = {"sub":"…","iss":"…"}` on the rows the delegated request writes, and on the exchange's success row as `actor`.
+  - A run it launches carries `created_via` (the portal id) on the run row and in the API, and `created_via_actor` (`sub` and `iss`) when the exchange named an agent. The run's gateway tokens and the rows of its queued start and attach tickets carry the same agent.
 - **Revocation.**
   - Revoking the portal ends every delegated token it holds on their next request.
   - `POST /api/v1/sessions/revoke` for the person ends theirs the same way and refuses new exchanges of tokens issued before it.
@@ -486,3 +512,4 @@ subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_to
   - Revoking the portal ends it at the next re-check.
   - Open WebSocket streams are the exception: a terminal or relayed socket already established keeps working until it closes or the run ends.
   - Runs a portal launched keep running after it is revoked: they are the person's runs.
+  - With `?cut_in_flight=true` those runs also get no more gateway tokens ([When a run's gateway access ends](ai-gateway.md#when-a-runs-gateway-access-ends)). It is off by default, so a revoke changes nothing else for the person's work.

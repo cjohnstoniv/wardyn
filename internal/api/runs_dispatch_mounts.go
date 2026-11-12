@@ -637,7 +637,9 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 
 // auditDriveMount records run.drive.mount, one row per drive dispatch attached
 // to this sandbox, in the run's order. Silent when no drive was attached — an audit action
-// that fires on every run is noise an operator learns to skip past.
+// that fires on every run is noise an operator learns to skip past. A macOS VM
+// run's `target` is the guest's path (runner.MacGuestPath); the mount keeps the
+// container path.
 //
 // Called AFTER CreateSandbox has returned, never beside the spec assembly: the
 // driver re-runs the drive's ceiling and deny matrix at bind time and can still
@@ -688,9 +690,13 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, drives []types.DriveMount) {
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount) {
 	for i := range drives {
 		drive := &drives[i]
+		target := drive.Target
+		if machine.IsMacOSVM() {
+			target = runner.MacGuestPath(target)
+		}
 		data := map[string]any{
 			"backend":     drive.Backend,
 			"drive":       drive.HomeName,
@@ -698,7 +704,7 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy
 			"enforcement": drive.Enforcement,
 			"mode":        driveAuditMode(drive.ReadOnly),
 			"object":      driveAuditTarget(drive),
-			"target":      drive.Target,
+			"target":      target,
 		}
 		if drive.Team {
 			data["team"], data["mounted_by"] = true, mountedBy
@@ -779,8 +785,10 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 	if err := s.recordVMMachine(ctx, run, sb); err != nil {
 		return err
 	}
+	s.recordProxyAddr(ctx, run.ID, sb.ProxyAddr)
 	s.recordDesktopVMSignIns(ctx, run, sb)
 	s.auditKeychainTrust(ctx, run, sb)
+	s.auditNoNetworkProxyOnly(ctx, run, sb)
 	return nil
 }
 
@@ -802,6 +810,37 @@ func (s *Server) auditKeychainTrust(ctx context.Context, run types.AgentRun, sb 
 		mustJSON(map[string]any{"note": keychainTrustNote, "keychain_trust": k.Status, "keychain_trust_reason": k.Reason})))
 }
 
+// noNetworkProxyOnlyNote is the note on a No network run's row when nothing proves isolation below its proxy.
+const noNetworkProxyOnlyNote = "Wardyn has no proof that this No network run has isolation below its proxy. Treat it as enforced by the proxy only."
+
+// auditNoNetworkProxyOnly writes a denied run.dispatch row when a No network run on Kubernetes may have the
+// proxy's isolation only (runner.Sandbox.NoNetworkProxyOnly): its namespace's NetworkPolicy was not proven
+// enforced when the sandbox was created. It writes only for a run whose stored preset is No network, whatever
+// the runner sent: the row says "this No network run". "pod_enforced" writes nothing. An empty field writes
+// "not_proven" for a No network run on Kubernetes, since a driver or runner from before this field sent none,
+// and nothing for any other run. Only fixed codes are written, never the runner's text. Denied, not failure,
+// for the reason auditKeychainTrust gives.
+func (s *Server) auditNoNetworkProxyOnly(ctx context.Context, run types.AgentRun, sb runner.Sandbox) {
+	if !noNetworkPreset(run.WallPreset) {
+		return
+	}
+	code := sb.NoNetworkProxyOnly
+	switch code {
+	case "pod_enforced":
+		return
+	case "":
+		if !s.runOnKubernetes(run) {
+			return
+		}
+		code = "not_proven"
+	case "netpol_not_enforced", "netpol_ambient_acknowledged", "netpol_not_proven":
+	default:
+		code = "not_proven"
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "denied",
+		mustJSON(map[string]any{"note": noNetworkProxyOnlyNote, "no_network_isolation": "proxy_only", "network_policy": code})))
+}
+
 // recordVMMachine writes the virtual hardware a VM run was started with (#2996). A VM whose machine is
 // missing from the runner's answer, incomplete for its kind (CompleteFor) or cannot be written never
 // runs: it could not later be checked against a move or a restore. A container run writes nothing.
@@ -818,7 +857,12 @@ func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb run
 	if !ok {
 		return errors.New("this store cannot record a VM's machine")
 	}
-	return st.SetRunVMMachine(ctx, run.ID, *sb.Machine)
+	// One write with the machine, so a later boot's report replaces an earlier one's and a lost write
+	// ends the boot. The report is taken from the Sandbox field, never what the runner put in Machine.
+	m := *sb.Machine
+	m.DesktopViewOnlyAsked = run.MachineKind.IsMacOSVM() && run.BackgroundOnly()
+	m.DesktopForcedViewOnly = m.DesktopViewOnlyAsked && sb.DesktopForcedViewOnly
+	return st.SetRunVMMachine(ctx, run.ID, m)
 }
 
 // abortUnrecordedSandbox ends a dispatch whose sandbox ref could not be recorded, while this dispatch

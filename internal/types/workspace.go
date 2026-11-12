@@ -268,6 +268,9 @@ type Workspace struct {
 	// is the unit's name, joined at read.
 	OwningUnitID   *uuid.UUID `json:"owning_unit_id,omitempty"`
 	OwningUnitName string     `json:"owning_unit_name,omitempty"`
+	// OwningUnitStrict makes the pin strict: only a person whose own unit is the pinned unit or below it
+	// runs on the workspace. Read-only on the wire, like OwningUnitID.
+	OwningUnitStrict bool `json:"owning_unit_strict,omitempty"`
 }
 
 // Integration kinds. An integration is a BASE COMPONENT extended by kind: a

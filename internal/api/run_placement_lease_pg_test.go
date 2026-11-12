@@ -66,6 +66,11 @@ type runnerLeaseFixture struct {
 	// leaseEnds is the end of the last LEASE the runner accepted for each run.
 	leaseMu   sync.Mutex
 	leaseEnds map[uuid.UUID]time.Time
+	// leaseGate, when set, holds the first LEASE frame that carries a stamp after its after, unacknowledged,
+	// until release is closed: a send in flight.
+	leaseGate atomic.Pointer[leaseGate]
+	// leaseFrames is every LEASE frame the runner received, in arrival order, accepted or not.
+	leaseFrames []runnerwire.Lease
 	// dir is the runner's state directory.
 	dir string
 	// streams is the runner's output server.
@@ -75,6 +80,17 @@ type runnerLeaseFixture struct {
 	oldCaps atomic.Bool
 	// execOutput, when set, is the org's sink for each create's output.
 	execOutput io.Writer
+	// skew is added to the server's clock; cancelBase ends the server's base context.
+	skew       *atomic.Int64
+	cancelBase context.CancelFunc
+}
+
+// leaseGate holds one LEASE frame in the runner's hook (runnerLeaseFixture.leaseGate).
+type leaseGate struct {
+	after   time.Time
+	once    sync.Once
+	entered chan struct{} // closed when the frame is held
+	release chan struct{}
 }
 
 // leaseEnd waits for the runner to hold a lease of run that ends at want, and reports the end it holds.
@@ -98,6 +114,15 @@ type stallingSub struct {
 	// goneIsStopped answers Status and AgentStatus for a removed sandbox as
 	// the docker driver does (stopped) instead of the fake's ErrSandboxGone.
 	goneIsStopped atomic.Bool
+	// onReplace, when set, runs with the config of each proxy replacement before the substrate answers: the
+	// new proxy's first act, taken inside the revive that replaced it.
+	onReplace atomic.Pointer[func(cfg []byte)]
+}
+
+func (s *stallingSub) replaced(cfg []byte) {
+	if hook := s.onReplace.Load(); hook != nil {
+		(*hook)(cfg)
+	}
 }
 
 func (s *stallingSub) gone(st runner.Status, err error) (runner.Status, error) {
@@ -138,7 +163,30 @@ func (s *stallingSub) ReplaceProxy(ctx context.Context, ref string, cfg []byte) 
 	if err := s.hang(ctx, "replace_proxy"); err != nil {
 		return err
 	}
+	s.replaced(cfg)
 	return s.Fake.ReplaceProxy(ctx, ref, cfg)
+}
+
+// ReplaceProxyHashed hangs as ReplaceProxy does: the runner's dispatch asks for it when the
+// substrate has it, and the embedded Fake's would answer without the stall.
+func (s *stallingSub) ReplaceProxyHashed(ctx context.Context, ref string, cfg []byte) (string, error) {
+	if err := s.hang(ctx, "replace_proxy"); err != nil {
+		return "", err
+	}
+	s.replaced(cfg)
+	return s.Fake.ReplaceProxyHashed(ctx, ref, cfg)
+}
+
+// ReplaceProxyHashedAt hangs as ReplaceProxy does: a revive that carries the run's policy generation asks the
+// runner for it when the substrate has it, and the embedded Fake's would answer without the stall. It records
+// the replace as ReplaceProxyHashed does, config included, because these tests read the config the runner was
+// handed; the generation's own route is pinned by runneragent's TestDispatch_GenerationRoutesToAt.
+func (s *stallingSub) ReplaceProxyHashedAt(ctx context.Context, ref string, cfg []byte, _ int) (string, error) {
+	if err := s.hang(ctx, "replace_proxy"); err != nil {
+		return "", err
+	}
+	s.replaced(cfg)
+	return s.Fake.ReplaceProxyHashed(ctx, ref, cfg)
 }
 
 func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
@@ -161,7 +209,11 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	}
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
-	cfg.BaseCtx = ctx
+	baseCtx, cancelBase := context.WithCancel(ctx)
+	t.Cleanup(cancelBase)
+	cfg.BaseCtx = baseCtx
+	skew := new(atomic.Int64) // moves the server's clock; read by goroutines the server starts, so set before New
+	cfg.Now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
 	cfg.Runner = orchestrator.New(runnertest.NewFake())
 	cfg.Audit = &syncAudit{}
 	cfg.RunnerOrgURL = admissionOrgURL
@@ -170,7 +222,8 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
 	cfg.RunConfigKey = make([]byte, 32)
 	cfg.ControlPlaneURL = "http://127.0.0.1:8080" // a hop the proxy config loader accepts
-	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake(), h: h, leaseEnds: map[uuid.UUID]time.Time{}}
+	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake(), h: h, leaseEnds: map[uuid.UUID]time.Time{},
+		skew: skew, cancelBase: cancelBase}
 	f.sub = &stallingSub{Fake: f.fake, release: make(chan struct{})}
 	t.Cleanup(func() { close(f.sub.release) })
 
@@ -214,6 +267,18 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 		Clock: m.Clock, Pending: m.Pending, StatePages: m.StatePages,
 		BeforeReady: m.BeforeReady, Revoked: m.Revoked, Offline: m.Offline,
 		Lease: func(ctx context.Context, l runnerwire.Lease) error {
+			f.leaseMu.Lock()
+			f.leaseFrames = append(f.leaseFrames, l)
+			f.leaseMu.Unlock()
+			if g := f.leaseGate.Load(); g != nil && l.TokenRenewedAt.After(g.after) {
+				g.once.Do(func() {
+					close(g.entered)
+					select {
+					case <-g.release:
+					case <-time.After(4 * time.Second):
+					}
+				})
+			}
 			err := m.Lease(ctx, l)
 			if err == nil {
 				f.leaseMu.Lock()
@@ -227,7 +292,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load(), Retire: !f.oldCaps.Load()})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load(), Retire: !f.oldCaps.Load(), ProxyFence: true})
 			if err != nil {
 				return err
 			}
@@ -557,7 +622,7 @@ func TestPG_RunnerLease_OldEndIsNotEnforcedAfterAnEndChange(t *testing.T) {
 	}
 }
 
-// fix-r1 Fable M1: a lease the runner would refuse is never sent, since a refused LEASE ends the runner's
+// A lease the runner would refuse is never sent, since a refused LEASE ends the runner's
 // whole session. The run is refused alone; nothing is persisted for it, and the session carries on.
 func TestPG_RunnerLease_RefusesALeaseTheRunnerWouldRefuse(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
@@ -590,7 +655,7 @@ func TestPG_RunnerLease_RefusesALeaseTheRunnerWouldRefuse(t *testing.T) {
 	}
 }
 
-// fix-r1 Fable M2: a new runner session is leased again once READY. A renewal that could not reach the
+// A new runner session is leased again once READY. A renewal that could not reach the
 // runner while its session was down is carried by the new session, so the run keeps its proxy past the
 // window it was first leased for.
 func TestPG_RunnerLease_NewSessionReLeasesLiveRuns(t *testing.T) {
@@ -619,7 +684,7 @@ func TestPG_RunnerLease_NewSessionReLeasesLiveRuns(t *testing.T) {
 	}
 }
 
-// fix-r1 Opus F3: the organisation refuses a spent generation itself, before any frame reaches the runner.
+// The organisation refuses a spent generation itself, before any frame reaches the runner.
 func TestPG_RunnerLease_OrgRefusesASpentGeneration(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
 	run := f.localRun(t, 0)
@@ -633,7 +698,7 @@ func TestPG_RunnerLease_OrgRefusesASpentGeneration(t *testing.T) {
 	}
 }
 
-// fix-r1 Opus I2, fix-r2 N1: a renewal never waits for the run's lock. While a holder (here a revive) has
+// A renewal never waits for the run's lock. While a holder (here a revive) has
 // it, the renewal yields at once and sends nothing, so it neither lands between the revive's newer lease and
 // its Start nor holds a lock connection waiting. Once the lock is free, a renewal goes through.
 func TestPG_RunnerLease_ConcurrentRenewalYieldsToTheRunLock(t *testing.T) {
@@ -781,7 +846,7 @@ func TestPG_RunnerLease_ReviveKeepsTheOrgInspectionCorpus(t *testing.T) {
 	}
 }
 
-// fix-r1 Fable M3 and Opus I1: a run on a runner revives through the door (reviveRunProxy) on the real
+// A run on a runner revives through the door (reviveRunProxy) on the real
 // runner side: re-leased on the claim's stamp, its proxy replaced, its stopped agent started under a fresh
 // generation. Once the owner's profile denies its placement, the next revive is refused placement_denied.
 func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
@@ -858,6 +923,58 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 	macRun.MachineKind, macRun.VMMachine = types.MachineMacOSVM, &types.VMMachine{MacOSBase: "xcode-16"}
 	if _, rerr := f.srv.reviveCeilingAdmitting(f.ctx, macRun, types.ActorSystem, "test"); rerr == nil || rerr.reason != string(placement.ReasonPlacementDenied) {
 		t.Fatalf("revive of a run on a base its profile no longer lists = %+v, want placement_denied", rerr)
+	}
+}
+
+// #3917: an interactive run's task is its boot seed, which no Exec starts. It is issued no generation at
+// dispatch, its warn-only selftest does not run, and its revive takes the run's first generation. A generation
+// issued for the task would stay unspent, and BeginRunnerExecution would refuse the revive's.
+func TestPG_RunnerLease_InteractiveRunWithATaskRevives(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET interactive = true WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run.Interactive = true
+	if run.Task == "" {
+		t.Fatal("the fixture run has no task")
+	}
+	e, err := f.srv.leaseRunOnRunner(f.ctx, run)
+	if err != nil || e.generation != uuid.Nil || e.operation != "" {
+		t.Fatalf("lease of an interactive run with a task = %+v, %v, want no generation", e, err)
+	}
+	if cur, err := f.st.RunnerExecutionOf(f.ctx, run.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("execution = %+v, %v; want no row", cur, err)
+	}
+	if err := f.create(t, &run); err != nil {
+		t.Fatalf("create of the leased run: %v", err)
+	}
+	f.running(t, &run, nil)
+
+	f.srv.startAgentOrIdle(f.ctx, run, run.SandboxRef, byoiImage, true, e, nil)
+	rows := f.srv.cfg.Audit.(*syncAudit).eventsFor(run.ID, "run.selftest")
+	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive") {
+		t.Fatalf("selftest rows = %+v, want the one saying it did not run", rows)
+	}
+	if n := f.execs.Load(); n != 0 {
+		t.Fatalf("Exec frames = %d, want none", n)
+	}
+
+	if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {
+		t.Fatal(err)
+	}
+	if lost, err := f.st.MarkRunLost(f.ctx, run.ID, types.LostReboot, time.Now(), 0); err != nil || !lost {
+		t.Fatalf("mark lost = %v, %v", lost, err)
+	}
+	stored, err := f.st.GetRun(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", true); rerr != nil || !res.AgentStarted {
+		t.Fatalf("revive = %+v, %+v; want the agent started", res, rerr)
+	}
+	if cur := f.execution(t, run); cur.Operation != runnerwire.MethodStart || cur.ExecID != runner.MainProcessExecID {
+		t.Fatalf("execution after revive = %+v, want a Start generation bound", cur)
 	}
 }
 
@@ -1069,6 +1186,580 @@ func TestPG_RunnerLease_BusyRenewalAnswers503(t *testing.T) {
 	}
 	if w := renew(); w.Code != http.StatusOK {
 		t.Fatalf("renewal once the sender is done = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
+// renewToken posts a token renewal for tok over the run's own runner relay, as a run on a runner's always
+// arrives.
+func (f *runnerLeaseFixture) renewToken(t *testing.T, tok string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/token/renew", nil)
+	r = r.WithContext(context.WithValue(audit.WithRelay(r.Context(), f.rn.ID), relayRunnerKey{}, f.rn.ID))
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	panicFails(t, f.srv.Handler()).ServeHTTP(w, r)
+	return w
+}
+
+// leasesStamped is how many LEASE frames the runner received for run that carry a token stamp after since.
+func (f *runnerLeaseFixture) leasesStamped(run uuid.UUID, since time.Time) int {
+	f.leaseMu.Lock()
+	defer f.leaseMu.Unlock()
+	n := 0
+	for _, l := range f.leaseFrames {
+		if l.RunID == run && l.TokenRenewedAt.After(since) {
+			n++
+		}
+	}
+	return n
+}
+
+// shortenRenewedLeaseRetry makes a deferred lease retry quickly for the test.
+func shortenRenewedLeaseRetry(t *testing.T) {
+	t.Helper()
+	saved := renewedLeaseRetry
+	renewedLeaseRetry = 200 * time.Millisecond
+	t.Cleanup(func() { renewedLeaseRetry = saved })
+}
+
+// shortenRenewedLeaseWindow makes a deferred lease's deadline come d after its renewal, for the test.
+func shortenRenewedLeaseWindow(t *testing.T, d time.Duration) {
+	t.Helper()
+	saved := renewedLeaseWindow
+	renewedLeaseWindow = d
+	t.Cleanup(func() { renewedLeaseWindow = saved })
+}
+
+// deferredLeases is how many runs have a deferred renewal lease pending in the server.
+func deferredLeases(s *Server) int {
+	n := 0
+	s.leaseDeferred.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
+// A renewal whose stamp lands while another holder has the run's lock answers 200 with the new token: the
+// lock being held is no reason to hold the token back. No lease is sent while the lock is held; once it is
+// free, the run's runner gets one, with the stamp the renewal wrote.
+func TestPG_RunnerLease_RenewalUnderAHeldRunLockAnswers200(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	mints := &mintCounter{Provider: f.srv.cfg.Identity}
+	f.srv.cfg.Identity = mints
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	w := f.renewToken(t, tok)
+	took := time.Since(start)
+	if w.Code != http.StatusOK || took > time.Second {
+		unlock()
+		t.Fatalf("renewal under a held run lock = %d %s after %v, want 200 within 1s", w.Code, w.Body, took)
+	}
+	var resp tokenRenewResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	claims, err := f.srv.cfg.Identity.Verify(f.ctx, resp.Token, internalAudience)
+	if err != nil {
+		unlock()
+		t.Fatalf("the renewed token does not verify: %v", err)
+	}
+	var jti string
+	if err := f.st.Pool.QueryRow(f.ctx, `SELECT token_jti FROM agent_runs WHERE id = $1`, run.ID).Scan(&jti); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	if claims.JTI != jti {
+		unlock()
+		t.Fatalf("the renewed token's jti = %q, the run's token_jti = %q", claims.JTI, jti)
+	}
+	if n := mints.n.Load(); n != 1 {
+		unlock()
+		t.Fatalf("the renewal minted %d token(s), want 1", n)
+	}
+	// Past two retry gaps: the deferred send has met the held lock and sent nothing.
+	time.Sleep(3 * renewedLeaseRetry)
+	if n := f.leasesStamped(run.ID, before); n != 0 {
+		unlock()
+		t.Fatalf("%d lease(s) with the renewed stamp were sent while the run's lock was held", n)
+	}
+	unlock()
+	stamp, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil || !stamp.After(before) {
+		t.Fatalf("the run's stamp = %v (%v), want it after %v", stamp, err, before)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for f.leasesStamped(run.ID, before) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(3 * renewedLeaseRetry) // a second send would show here
+	f.leaseMu.Lock()
+	defer f.leaseMu.Unlock()
+	var got []time.Time
+	for _, l := range f.leaseFrames {
+		if l.RunID == run.ID && l.TokenRenewedAt.After(before) {
+			got = append(got, l.TokenRenewedAt)
+		}
+	}
+	if len(got) != 1 || !got[0].Equal(stamp) {
+		t.Fatalf("leases after the unlock carry stamps %v, want exactly one at %v", got, stamp)
+	}
+}
+
+// Many renewals that meet one held run lock (a gated proxy retries every second) schedule one deferred
+// lease, not one each: all answer 200, one deferral is pending, and the runner gets one lease once the lock
+// is free.
+func TestPG_RunnerLease_ManyBusyRenewalsDeferOneLease(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		if w := f.renewToken(t, tok); w.Code != http.StatusOK {
+			unlock()
+			t.Fatalf("renewal %d under a held run lock = %d %s, want 200", i, w.Code, w.Body)
+		}
+	}
+	if n := deferredLeases(f.srv); n != 1 {
+		unlock()
+		t.Fatalf("%d deferred lease(s) pending after 5 busy renewals, want 1", n)
+	}
+	// Past two retry gaps: the one deferral re-arms itself on the held lock and is still the only one.
+	time.Sleep(3 * renewedLeaseRetry)
+	if n := deferredLeases(f.srv); n != 1 {
+		unlock()
+		t.Fatalf("%d deferred lease(s) pending after the retries, want 1", n)
+	}
+	if n := f.leasesStamped(run.ID, before); n != 0 {
+		unlock()
+		t.Fatalf("%d lease(s) with a renewed stamp were sent while the run's lock was held", n)
+	}
+	unlock()
+	deadline := time.Now().Add(10 * time.Second)
+	for f.leasesStamped(run.ID, before) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(3 * renewedLeaseRetry)
+	if n := f.leasesStamped(run.ID, before); n != 1 {
+		t.Fatalf("%d lease(s) with a renewed stamp after the unlock, want exactly 1", n)
+	}
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("%d deferred lease(s) still pending after the send", n)
+	}
+}
+
+// A renewal of a token a revive already retired is still refused while the run's lock is held: nothing is
+// stamped, no token is handed out, and no lease is sent or deferred.
+func TestPG_RunnerLease_StaleTokenUnderAHeldRunLockIsRefused(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	if _, _, err := f.st.RetireRunTokenLineage(f.ctx, run.ID, "fresh-jti"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	w := f.renewToken(t, tok)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonRunRenewStampFailed) {
+		t.Fatalf("renewal of a retired token under a held run lock = %d %s, want 503 %s", w.Code, w.Body, reasonRunRenewStampFailed)
+	}
+	var resp tokenRenewResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil && resp.Token != "" {
+		t.Fatal("a refused renewal handed out a token")
+	}
+	time.Sleep(3 * renewedLeaseRetry)
+	after, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil || !after.Equal(before) {
+		t.Fatalf("token_renewed_at = %v (%v), want it unchanged at %v", after, err, before)
+	}
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("a refused renewal deferred a lease (%d pending)", n)
+	}
+	if n := f.leasesStamped(run.ID, before); n != 0 {
+		t.Fatalf("%d lease(s) were sent after a refused renewal", n)
+	}
+}
+
+// A proxy that a live revive (no agent start) just replaced renews its token inside the revive, whose lock
+// is still held: the renewal answers 200, and no lease with its stamp reaches the runner while the revive
+// holds the lock. After the revive returns the deferred send delivers exactly one. Without the deferral no
+// lease with that stamp would arrive until the next renewal.
+func TestRevive_RunnerReplaceRenewsUnderTheReviveLock(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := f.st.GetRun(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu        sync.Mutex
+		code      int
+		took      time.Duration
+		replaced  int
+		since     time.Time // just before the renewal's stamp
+		underLock = -1      // leases carrying that stamp while the revive held the lock
+	)
+	hook := func(cfg []byte) {
+		var c struct {
+			RunToken string `json:"run_token"`
+		}
+		if err := json.Unmarshal(cfg, &c); err != nil {
+			t.Errorf("the handed-over config: %v", err)
+			return
+		}
+		start := time.Now()
+		w := f.renewToken(t, c.RunToken)
+		// Still inside the revive, which holds the run's lock: the renewal's stamp is the run's now, and
+		// no lease carrying it can have been sent.
+		stamp, serr := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+		if serr != nil {
+			t.Errorf("the run's stamp inside the revive: %v", serr)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		replaced++
+		code, took, since = w.Code, time.Since(start), stamp.Add(-time.Nanosecond)
+		underLock = f.leasesStamped(run.ID, since)
+	}
+	f.sub.onReplace.Store(&hook)
+	t.Cleanup(func() { f.sub.onReplace.Store(nil) })
+	if _, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", false); rerr != nil {
+		t.Fatalf("revive = %+v", rerr)
+	}
+	mu.Lock()
+	gotCode, gotTook, gotReplaced, gotUnder, since := code, took, replaced, underLock, since
+	mu.Unlock()
+	if gotReplaced == 0 {
+		t.Fatal("the revive never replaced the proxy")
+	}
+	if gotCode != http.StatusOK || gotTook > 10*time.Second {
+		t.Fatalf("renewal inside the revive = %d after %v, want 200 within 10s", gotCode, gotTook)
+	}
+	if gotUnder != 0 {
+		t.Fatalf("%d lease(s) with the renewal's stamp reached the runner while the revive held the run's lock, want 0", gotUnder)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for f.leasesStamped(run.ID, since) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(3 * renewedLeaseRetry) // a second send would show here
+	if n := f.leasesStamped(run.ID, since); n != 1 {
+		t.Fatalf("%d lease(s) with the renewal's stamp after the revive, want exactly 1", n)
+	}
+}
+
+// A deferred lease whose deadline passed before its timer ran does no work: with the run's lock free and its
+// stamp valid, a try would have sent a lease. None is sent, and the run's key is cleared.
+func TestPG_RunnerLease_ExpiredDeferredLeaseDoesNoWork(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	shortenRenewedLeaseWindow(t, 50*time.Millisecond)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := f.renewToken(t, tok); w.Code != http.StatusOK {
+		unlock()
+		t.Fatalf("renewal under a held run lock = %d %s, want 200", w.Code, w.Body)
+	}
+	unlock()
+	for deadline := time.Now().Add(5 * time.Second); deferredLeases(f.srv) != 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	time.Sleep(3 * renewedLeaseRetry)
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("%d deferred lease(s) pending after the deadline", n)
+	}
+	if n := f.leasesStamped(run.ID, before); n != 0 {
+		t.Fatalf("%d lease(s) were sent after the deferral's deadline", n)
+	}
+}
+
+// When the server's base context ends while a deferral is pending, the deferral sends nothing, leaves no
+// key and arms no successor.
+func TestPG_RunnerLease_DeferredLeaseStopsAtShutdown(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := f.renewToken(t, tok); w.Code != http.StatusOK {
+		unlock()
+		t.Fatalf("renewal under a held run lock = %d %s, want 200", w.Code, w.Body)
+	}
+	if n := deferredLeases(f.srv); n != 1 {
+		unlock()
+		t.Fatalf("%d deferred lease(s) pending, want 1", n)
+	}
+	f.cancelBase()
+	unlock()
+	for deadline := time.Now().Add(5 * time.Second); deferredLeases(f.srv) != 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	time.Sleep(3 * renewedLeaseRetry) // a successor timer would re-arm the key here
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("%d deferred lease(s) pending after shutdown", n)
+	}
+	if n := f.leasesStamped(run.ID, before); n != 0 {
+		t.Fatalf("%d lease(s) were sent after shutdown", n)
+	}
+}
+
+// A deferred lease stops at its deadline, the stamp's lapse, however long the run's lock stays held: no
+// lease is sent, no timer is left, and the run's key is cleared.
+func TestPG_RunnerLease_DeferredLeaseStopsAtItsDeadlineWhileBusy(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if w := f.renewToken(t, tok); w.Code != http.StatusOK {
+		t.Fatalf("renewal under a held run lock = %d %s, want 200", w.Code, w.Body)
+	}
+	if n := deferredLeases(f.srv); n != 1 {
+		t.Fatalf("%d deferred lease(s) pending, want 1", n)
+	}
+	f.skew.Store(int64(identity.RunTokenLapseAfter + time.Minute)) // the stamp has lapsed
+	for deadline := time.Now().Add(5 * time.Second); deferredLeases(f.srv) != 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("%d deferred lease(s) still pending past the deadline", n)
+	}
+	time.Sleep(3 * renewedLeaseRetry) // a successor timer would re-arm the key here
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("a deferred lease was scheduled past its deadline (%d pending)", n)
+	}
+	if n := f.leasesStamped(run.ID, before); n != 0 {
+		t.Fatalf("%d lease(s) were sent although the lock stayed held", n)
+	}
+}
+
+// A deferred lease whose first try fails for a reason other than the lock (here the runner's session is
+// away) is retried until it goes through: the key stays held while it fails, and once the runner is back
+// its lease arrives and the key is cleared. (The runner's own READY re-lease also sends one, so the count of
+// frames is not pinned here.)
+func TestPG_RunnerLease_DeferredLeaseRetriesATransientFailure(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.disconnect()
+	for deadline := time.Now().Add(5 * time.Second); f.srv.runnerEndpoint(f.rn.ID).link.Online() && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := f.renewToken(t, tok); w.Code != http.StatusOK {
+		unlock()
+		t.Fatalf("renewal under a held run lock = %d %s, want 200", w.Code, w.Body)
+	}
+	unlock()
+	time.Sleep(3 * renewedLeaseRetry) // tries that meet the absent runner fail and are retried
+	if n := deferredLeases(f.srv); n != 1 {
+		t.Fatalf("%d deferred lease(s) pending while the runner is away, want 1", n)
+	}
+	f.disconnect = f.connect(t)
+	for deadline := time.Now().Add(10 * time.Second); (deferredLeases(f.srv) != 0 || f.leasesStamped(run.ID, before) == 0) && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("%d deferred lease(s) still pending after the runner returned", n)
+	}
+	stamp, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.lastStamp(run.ID); !got.Equal(stamp) {
+		t.Fatalf("the runner's last lease carries stamp %v, want %v", got, stamp)
+	}
+}
+
+// lastStamp is the token stamp on the last LEASE frame the runner received for run.
+func (f *runnerLeaseFixture) lastStamp(run uuid.UUID) time.Time {
+	f.leaseMu.Lock()
+	defer f.leaseMu.Unlock()
+	var got time.Time
+	for _, l := range f.leaseFrames {
+		if l.RunID == run {
+			got = l.TokenRenewedAt
+		}
+	}
+	return got
+}
+
+// A deferred lease for a run that ended before its timer fired sends nothing and leaves no key.
+func TestPG_RunnerLease_DeferredLeaseSkipsAnEndedRun(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := f.renewToken(t, tok); w.Code != http.StatusOK {
+		unlock()
+		t.Fatalf("renewal under a held run lock = %d %s, want 200", w.Code, w.Body)
+	}
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET state = 'FAILED' WHERE id = $1`, run.ID); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	for deadline := time.Now().Add(5 * time.Second); deferredLeases(f.srv) != 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	time.Sleep(3 * renewedLeaseRetry)
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("%d deferred lease(s) pending for an ended run", n)
+	}
+	if n := f.leasesStamped(run.ID, before); n != 0 {
+		t.Fatalf("%d lease(s) were sent for an ended run", n)
+	}
+}
+
+// A renewal that stamps a newer token while a deferred send is in flight starts no timer of its own: it
+// marks the pending deferral, which sends once more, with the newer stamp, after its current send.
+// (A real renewal cannot reach the lock during a send, which holds the owner's LEASE slot too; the second
+// stamp is written and deferRenewedLease called as that renewal's last step does.)
+func TestPG_RunnerLease_RenewalDuringADeferredSendIsSentAfterIt(t *testing.T) {
+	shortenRenewedLeaseRetry(t)
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	before, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := &leaseGate{after: before, entered: make(chan struct{}), release: make(chan struct{})}
+	f.leaseGate.Store(gate)
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := f.renewToken(t, tok); w.Code != http.StatusOK {
+		unlock()
+		t.Fatalf("renewal under a held run lock = %d %s, want 200", w.Code, w.Body)
+	}
+	first, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	select {
+	case <-gate.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the deferred send never reached the runner")
+	}
+	// The send is in flight with the first stamp. A newer renewal lands now.
+	var jti string
+	if err := f.st.Pool.QueryRow(f.ctx, `SELECT token_jti FROM agent_runs WHERE id = $1`, run.ID).Scan(&jti); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := f.st.StampRunTokenRenewed(f.ctx, run.ID, "jti-newer", jti); err != nil || !ok {
+		t.Fatalf("second stamp = %v, %v", ok, err)
+	}
+	newer, err := f.st.RunTokenRenewedAt(f.ctx, run.ID)
+	if err != nil || !newer.After(first) {
+		t.Fatalf("newer stamp = %v (%v), want after %v", newer, err, first)
+	}
+	f.srv.deferRenewedLease(run.ID)
+	if n := deferredLeases(f.srv); n != 1 {
+		t.Fatalf("%d deferred lease(s) pending during the send, want 1", n)
+	}
+	close(gate.release)
+	for deadline := time.Now().Add(10 * time.Second); f.leasesStamped(run.ID, before) < 2 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	time.Sleep(3 * renewedLeaseRetry) // a third send would show here
+	f.leaseMu.Lock()
+	var got []time.Time
+	for _, l := range f.leaseFrames {
+		if l.RunID == run.ID && l.TokenRenewedAt.After(before) {
+			got = append(got, l.TokenRenewedAt)
+		}
+	}
+	f.leaseMu.Unlock()
+	if len(got) != 2 || !got[0].Equal(first) || !got[1].Equal(newer) {
+		t.Fatalf("leases after the deferral carry stamps %v, want exactly [%v %v]", got, first, newer)
+	}
+	if n := deferredLeases(f.srv); n != 0 {
+		t.Fatalf("%d deferred lease(s) still pending after both sends", n)
 	}
 }
 

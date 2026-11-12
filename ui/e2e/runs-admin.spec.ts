@@ -15,7 +15,7 @@
 import { test, expect, ADMIN_TOKEN, gotoConsole, sql } from "./fixtures";
 import type { Page, Route } from "@playwright/test";
 import { runsViewSaved } from "../src/app/components/wardyn/copy/runs-landing";
-import { OLDER_LIMITS_CHIP, RESTART_PROGRESS, RESTART_WITH_CURRENT_LIMITS } from "../src/app/components/wardyn/copy/run-lifetime";
+import { END_RUN, OLDER_LIMITS_CHIP, RESTART_PROGRESS, RESTART_WITH_CURRENT_LIMITS } from "../src/app/components/wardyn/copy/run-lifetime";
 
 const RUNS_LIST_RE = /\/api\/v1\/runs(\?.*)?$/;
 
@@ -301,7 +301,7 @@ test.describe("Entry to another person's run (#1476)", () => {
     await expect(page.getByText(/Watch the captured session/)).toBeVisible();
     await expect(page.getByText("Attach from your terminal")).toHaveCount(0);
     await expect(page.getByText("Interactive — attachable")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: END_RUN, exact: true })).toBeEnabled();
     // The server says the same, with a 403 and a reason (not a 404: the admin can see the run).
     const ticket = await page.request.post(`/api/v1/runs/${id}/attach/ticket`, { headers: auth });
     expect(ticket.status()).toBe(403);

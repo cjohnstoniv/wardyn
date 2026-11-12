@@ -98,6 +98,39 @@ Cluster-scoped (ClusterRole+ClusterRoleBinding): RuntimeClass lookups
 (node.k8s.io — RuntimeClass is never namespaced) for the CC2/CC3 floor guard
 (Classes(), resolveRuntimeClassName()).
 */}}
+{{/*
+The experimental agent-sandbox backend (#3863), off by default. `| default dict` makes an absent key (an old
+--reuse-values map) or an explicit null read as OFF, the only direction this default may fail in. It runs on
+the k8s substrate only, and only over an enforced NetworkPolicy: the guards below read the effective env the
+way deployment.yaml renders it (.Values.env, then extraEnv, which wins), so extraEnv cannot slip past them.
+An extraEnv entry for the override with no literal value (valueFrom) is unreadable here, so it is refused
+rather than read as off.
+*/}}
+{{- $agentSandbox := (.Values.k8s.agentSandbox | default dict) -}}
+{{- if and $agentSandbox.template (not $agentSandbox.enabled) -}}
+{{- fail "wardyn: k8s.agentSandbox.template needs k8s.agentSandbox.enabled=true: only the agent-sandbox backend reads a SandboxTemplate." -}}
+{{- end -}}
+{{- if $agentSandbox.enabled -}}
+{{- if not .Values.k8s.enabled -}}
+{{- fail "wardyn: k8s.agentSandbox.enabled needs k8s.enabled=true: the backend only changes how the Kubernetes runner creates its agent pod, and without the runner there is no pod to create." -}}
+{{- end -}}
+{{- $effEnv := dict -}}
+{{- range $k, $v := .Values.env }}{{ $_ := set $effEnv $k (toString $v) }}{{ end -}}
+{{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $effEnv (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $effEnv (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
+{{- $off := list "" "0" "false" "no" "off" -}}
+{{- /* The two settings that let the runner boot without an enforced NetworkPolicy: .Values.k8s key, env name. */ -}}
+{{- $overrides := list (list "allowUnenforcedNetPol" "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") (list "ackAmbientDefaultDeny" "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") -}}
+{{- range $ov := $overrides -}}
+{{- $key := index $ov 0 -}}
+{{- $envName := index $ov 1 -}}
+{{- if eq (get $effEnv $envName) "<valueFrom>" -}}
+{{- fail (printf "wardyn: k8s.agentSandbox.enabled is refused while %s is set through extraEnv valueFrom (a ConfigMap or Secret key): the chart cannot read the value, and the backend must not boot over the unenforced-NetworkPolicy overrides. Set it as a literal value, or remove it." $envName) -}}
+{{- end -}}
+{{- if or (not (has (lower (toString (get $.Values.k8s $key))) $off)) (not (has (lower (toString (get $effEnv $envName))) $off)) -}}
+{{- fail (printf "wardyn: k8s.agentSandbox.enabled is refused with the NetworkPolicy override k8s.%s / %s: the backend relies on the deny-all NetworkPolicy holding before the gated pod is released, so it boots only on an enforced canary verdict, with no ambient default-deny acknowledged. Remove the override, or turn k8s.agentSandbox.enabled off." $key $envName) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.k8s.enabled -}}
 {{- if and (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) -}}
 {{- fail "wardyn: k8s.enabled is set with serviceAccount.create=false and no serviceAccount.name — the RoleBinding/ClusterRoleBinding below would bind the k8s-runner privileges (pods/exec, secrets create/delete, networkpolicies create/delete) to the namespace's default ServiceAccount, handing them to every OTHER pod in the namespace that also uses it. This holds with k8s.rbac.create=false too: wardynd still runs AS that ServiceAccount, and whoever writes the bindings out-of-band binds them to the namespace default SA just the same. Either leave serviceAccount.create=true (the default, a dedicated ServiceAccount), or set serviceAccount.name to an existing ServiceAccount you intend to grant these privileges to." -}}
@@ -192,7 +225,22 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "get", "list", "delete", "deletecollection"]
+    verbs: ["create", "get", "list", "delete", "deletecollection"{{ if $agentSandbox.enabled }}, "patch"{{ end }}]
+{{- if $agentSandbox.enabled }}
+  # Experimental agent-sandbox backend (#3863): the dynamic client creates, reads and removes the Sandbox that
+  # owns the agent pod (pods: patch above releases the pod's scheduling gate once read-back passes). No watch,
+  # no update, no deletecollection, no other agents.x-k8s.io resource. The chart installs no CRD.
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "delete"]
+{{- with $agentSandbox.template }}
+  # The one SandboxTemplate the agent pod takes its annotations from (k8s.agentSandbox.template): read only.
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates"]
+    resourceNames: [{{ . | quote }}]
+    verbs: ["get"]
+{{- end }}
+{{- end }}
   - apiGroups: [""]
     resources: ["pods/ephemeralcontainers"]
     verbs: ["update"]
@@ -286,6 +334,41 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "wardyn.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if include "wardyn.groundtruthEnabled" . }}
+{{- /* The ground-truth sensor's credential Secret (groundtruth.yaml). wardynd patches `token` and
+control-plane-ca.pem into it. One verb, one resourceName, in the sensor's namespace: no get (it never
+reads a Secret back), no create (the chart makes it), no list or watch (they return every Secret's body),
+and no ClusterRole. */}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "wardyn.groundtruthRole" . }}
+  namespace: {{ include "wardyn.groundtruthNamespace" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ include "wardyn.groundtruthSecret" . | quote }}]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "wardyn.groundtruthRole" . }}
+  namespace: {{ include "wardyn.groundtruthNamespace" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "wardyn.groundtruthRole" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "wardyn.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{/* CLUSTER-SCOPED NAMES CARRY THE NAMESPACE; namespaced ones above must not.
 wardyn.fullname is built from the RELEASE NAME alone, which is enough for every
 namespaced object (two releases in two namespaces get two distinct Roles) but

@@ -26,9 +26,8 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
@@ -183,6 +182,12 @@ type Stage2Input struct {
 	Previous []ItemRecord
 	// Kept is a derivation's (DeriveBase): the tools.json of the Standard it cloned, whose tools it keeps.
 	Kept *ToolsRecord
+	// AgentSignature is how the guest agent the base held before this stage 2 was signed (a tools
+	// update's), and AgentSigningCertSHA256 the certificate it was signed with: Full Disk Access as the
+	// running agent reads it says something of a newly pushed build only when both are signed on this Mac
+	// with the same certificate, so their designated requirement is the same.
+	AgentSignature         string
+	AgentSigningCertSHA256 string
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -209,6 +214,12 @@ type ToolsResult struct {
 	ItemsDigest string
 	// Guest is the guest posture read at the end of stage 2.
 	Guest *GuestPosture
+	// AgentSignature is how the pushed agent is signed, and AgentSigningCertSHA256 the SHA-256 of the
+	// certificate it is signed with.
+	AgentSignature, AgentSigningCertSHA256 string
+	// BaseSettingsSkipped are the base settings that did not apply, with why.
+	BaseSettingsSkipped []basesettings.Skipped
+	AgentSignRecord
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -242,6 +253,8 @@ type ToolsOptions struct {
 	Desktop DesktopProbe
 	// Items is the operator's install list (none: no items).
 	Items BaseList
+	// Signer signs the guest agent before it is pushed (nil: it is pushed as built).
+	Signer AgentSigner
 }
 
 // ToolsStage is the Stage2 that boots the base through Boot and applies Tooling.
@@ -310,8 +323,17 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	}
 	if err == nil {
 		res.Guest = readPosture(ctx, g, res.Items)
+		// The agent answering is the one this boot started with, not the build just pushed: its answer
+		// holds for the new build only when the same certificate signed both. Otherwise it is unknown
+		// until edit-base reads it again.
+		same := in.AgentSignature == AgentSignedThisMac && res.AgentSignature == AgentSignedThisMac &&
+			in.AgentSigningCertSHA256 != "" && in.AgentSigningCertSHA256 == res.AgentSigningCertSHA256
+		if res.AgentVersion != "" && !same {
+			res.Guest.FullDiskAccess = ""
+		}
 	}
 	if err == nil {
+		applyBaseSettings(ctx, g, &res, o.Log)
 		err = selftestBase(ctx, g, &res, o.Log)
 	}
 	res.Desktop = desktop
@@ -403,15 +425,23 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
-		if err := pushAgent(ctx, g, o.Agent.Path, o.Agent.Dest); err != nil {
+		path, signed, signRec := agentToPush(ctx, o)
+		if signed != nil {
+			defer signed.Done()
+		}
+		if err := pushAgent(ctx, g, path, o.Agent.Dest); err != nil {
 			return res, fmt.Errorf("macvm: replacing the guest agent: %w", err)
 		}
 		res.AgentVersion = o.Agent.Version
 		// The same binary is the run launcher by its name, so a run's agent-run is always this build's.
-		if err := pushAgent(ctx, g, o.Agent.Path, guestagent.MacAgentRunPath); err != nil {
+		if err := pushAgent(ctx, g, path, guestagent.MacAgentRunPath); err != nil {
 			return res, fmt.Errorf("macvm: installing the run launcher: %w", err)
 		}
-		res.AgentRun = true
+		res.AgentRun, res.AgentSignature, res.AgentSignRecord = true, AgentSignedAdHoc, signRec
+		if signed != nil {
+			sum := sha256.Sum256(signed.Cert)
+			res.AgentSignature, res.AgentSigningCertSHA256 = AgentSignedThisMac, hex.EncodeToString(sum[:])
+		}
 	}
 	var cltErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -715,6 +745,14 @@ type ToolsRecord struct {
 	Items       []ItemRecord `json:"items,omitempty"`
 	// Guest is the guest posture read when the base was last prepared, updated or edited.
 	Guest *GuestPosture `json:"guest,omitempty"`
+	// AgentSignature is how the guest agent stage 2 pushed is signed (AgentSignedThisMac or
+	// AgentSignedAdHoc). An older tools.json may carry an agent_signing_cert key, which nothing reads.
+	AgentSignature string `json:"agent_signature,omitempty"`
+	// AgentSigningCertSHA256 is the SHA-256 of the certificate the agent is signed with (this_mac only).
+	AgentSigningCertSHA256 string `json:"agent_signing_cert_sha256,omitempty"`
+	// BaseSettingsSkipped are the base settings the last prepare or tools update could not apply.
+	BaseSettingsSkipped []basesettings.Skipped `json:"base_settings_skipped,omitempty"`
+	AgentSignRecord
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -729,7 +767,9 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
-		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest}
+		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature,
+		AgentSigningCertSHA256: r.AgentSigningCertSHA256, AgentSignRecord: r.AgentSignRecord}
+	rec.BaseSettingsSkipped = r.BaseSettingsSkipped
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
@@ -743,7 +783,8 @@ func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Ti
 // the guest agent build agentVersion, or its run launcher ("" skips both agent
 // checks: a base without the launcher cannot start a run). A harness
 // withheld at the current pin does not count for ToolsRetryAfter after the
-// attempt; a new pin counts at once.
+// attempt; a new pin counts at once. baseDir may as well be a kept machine's
+// folder, which holds its own tools.json: it is judged by that record alone.
 func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.Time) bool {
 	rec, err := ReadToolsRecord(baseDir)
 	if err != nil {
@@ -779,6 +820,12 @@ type UpdateOptions struct {
 	Layout Layout
 	Slot   int
 	Power  PowerSource
+	// KeptDir, when set, makes this the update of one kept machine instead of the base in Slot: its
+	// folder (Layout.KeptMachineDir), with its own disk and tools record. The update holds LockKept for
+	// its whole run (ErrKeptLocked if a boot, a delete or another update holds it, so the caller must
+	// not hold it) and never touches a base. A folder that is not a kept machine's of this Layout is
+	// refused.
+	KeptDir string
 	// Admit takes the host ledger entry and returns its release; the update
 	// is a VM like any other (nil: the caller already holds one).
 	Admit func(ctx context.Context) (release func(), err error)
@@ -809,13 +856,24 @@ type UpdateOptions struct {
 // shared) sees the old base or the new one, never a mix. A failed or
 // interrupted update leaves the old base as it was. It reports whether
 // anything changed.
+//
+// With KeptDir the same happens to one kept machine's folder, under LockKept:
+// its disk and machine identifier are cloned, stage 2 runs on the clone, and
+// the clone, with the machine's kept.json, is swapped in for the folder. The
+// machine keeps its identity, and a failed update leaves it as it was.
 func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if o.Engine == nil || o.Power == nil || o.Stage == nil || o.Layout.Root == "" {
 		return Manifest{}, false, errors.New("macvm: a tools update needs an engine, a power source, a stage 2 and a root")
 	}
 	o.setDefaults()
-	base := o.Layout.BaseDir(o.Slot)
-	nb, done, err := beginUpdate(ctx, base, o.Log)
+	site, unlock, err := o.openSite()
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	// Dropped last: the old generation is deleted under a kept machine's lock.
+	defer unlock()
+	base := site.dir
+	nb, done, err := beginUpdateOnce(ctx, base, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
 	}
@@ -858,7 +916,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseTools})
-	id, err := cloneStaging(o.Engine, base, nb)
+	id, err := site.clone(o.Engine, nb)
 	if err != nil {
 		return m, false, err
 	}
@@ -868,9 +926,10 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		DiskPath: filepath.Join(nb, DiskFile), AuxPath: filepath.Join(nb, AuxFile),
 	}
 	prev, _ := ReadToolsRecord(base)
-	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items})
+	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items, AgentSignature: prev.AgentSignature,
+		AgentSigningCertSHA256: prev.AgentSigningCertSHA256})
 	if res.ToolsDial != "" {
-		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial})
+		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial, ToolsDialAt: time.Now().UnixNano()})
 	}
 	if err != nil {
 		return m, false, err
@@ -889,7 +948,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err := writeJSONAtomic(filepath.Join(nb, ManifestFile), m, 0o600); err != nil {
 		return m, false, err
 	}
-	if err := swapBase(ctx, nb, base); err != nil {
+	if err := site.swap(ctx, nb); err != nil {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseReady, Fraction: 1})
@@ -911,90 +970,3 @@ func (o *UpdateOptions) setDefaults() {
 		o.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
 }
-
-// beginUpdate takes base's update lock for a tools update or a re-prepare and
-// sweeps what a crashed one left in the staging dir <base>.update (a half-built
-// base, or an old generation after a swap), whether or not the caller goes on
-// to build. It returns the staging dir; done deletes it (after a swap, the old
-// generation, so that goes once the base lock is released) and then drops the
-// update lock.
-//
-// A delete that fails is logged and the dir left, as a crash leaves it: one
-// staging dir per slot that no ledger entry reserves. It occupies live free
-// space, which admission reads at every start, so it only makes admission
-// refuse sooner, until the next prepare, tools update or runnerd start
-// deletes it.
-func beginUpdate(ctx context.Context, base string, log *slog.Logger) (staging string, done func(), err error) {
-	staging = base + ".update"
-	unlock, err := lockFile(ctx, updateLockPath(base), true)
-	if err != nil {
-		return "", nil, err
-	}
-	if err := os.RemoveAll(staging); err != nil {
-		unlock()
-		return "", nil, err
-	}
-	return staging, func() {
-		if err := os.RemoveAll(staging); err != nil {
-			log.Warn("macvm: the update's staging dir was not deleted; the next update sweeps it", "path", staging, "err", err.Error())
-		}
-		unlock()
-	}, nil
-}
-
-// swapBase exchanges the updated base nb with base while holding base's lock
-// exclusively; nb then holds the old generation.
-func swapBase(ctx context.Context, nb, base string) error {
-	unlock, err := lockFile(ctx, baseLockPath(base), true)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if err := swapFn(nb, base); err != nil {
-		if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.ENOSYS) {
-			return fmt.Errorf("macvm: the macOS VM directory must be on an APFS volume, which can swap two directories at once (%v); the base was left as it was", err)
-		}
-		return fmt.Errorf("macvm: swapping in the updated base: %w", err)
-	}
-	// The post-swap file-set check, still under the exclusive lock: the new
-	// base holds only a base's own files, so nothing a stage-2 boot left
-	// (a boot configuration, a socket, a log) reaches a run's clone. If it
-	// holds anything else, the old generation is swapped back.
-	if err := checkBaseFiles(base); err != nil {
-		if berr := swapFn(nb, base); berr != nil {
-			return fmt.Errorf("%w; swapping the old base back failed too: %v", err, berr)
-		}
-		return fmt.Errorf("%w; the old base was kept", err)
-	}
-	return nil
-}
-
-// baseFiles are the files a base dir holds, and requiredBaseFiles those it must (tools.json and admin-password may be absent).
-var baseFiles, requiredBaseFiles = []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile, AdminPasswordFile, ToolsRecordFile},
-	[]string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile}
-
-// checkBaseFiles fails unless dir holds the base's own files only, each a
-// regular file, with the disk, aux storage, identifier and manifest present.
-func checkBaseFiles(dir string) error {
-	des, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	seen := map[string]bool{}
-	for _, de := range des {
-		if !slices.Contains(baseFiles, de.Name()) || !de.Type().IsRegular() {
-			return fmt.Errorf("macvm: the new macOS base holds %q, which is not a base file", de.Name())
-		}
-		seen[de.Name()] = true
-	}
-	for _, f := range requiredBaseFiles {
-		if !seen[f] {
-			return fmt.Errorf("macvm: the new macOS base has no %s", f)
-		}
-	}
-	return nil
-}
-
-// swapFn is swapDirs; tests replace it to force a failing exchange. There is
-// no fallback to two renames: a base that is half swapped is not a base.
-var swapFn = swapDirs

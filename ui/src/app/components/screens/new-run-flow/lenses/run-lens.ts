@@ -17,8 +17,10 @@ import { serviceIssues } from "./service-lens";
 import { issue, type StepIssue, type StepValidator } from "./step-issues";
 
 export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
-  if (intent.shape) return withKeys(intent, shapeCarriers(intent.shape, mode, intent));
-  return withKeys(intent, { experience: mode === "interactive" ? "interactive" : "background" });
+  // Only an interactive run keeps or resumes a machine.
+  const machine = mode === "interactive" ? {} : { machine: undefined };
+  if (intent.shape) return withKeys(intent, { ...shapeCarriers(intent.shape, mode, intent), ...machine });
+  return withKeys(intent, { experience: mode === "interactive" ? "interactive" : "background", ...machine });
 }
 
 /** Organization pools and User pools: the wire's scope is the console's word for the two kinds of pool. */
@@ -29,12 +31,19 @@ export const choosePool = (intent: RunIntent, poolId: string): RunIntent => with
 
 /**
  * The machine kind. A container is the default, so it is the absent key; a VM is its own barrier, so a
- * barrier chosen for a container is dropped with the switch. A macOS base belongs to a macOS VM and goes with it.
+ * barrier chosen for a container is dropped with the switch. A macOS base and a window on the Mac belong to a macOS VM
+ * and go with it.
+ * A VM's terminal opens a shell, not the agent, so a harness that starts the run is cleared with the switch (UXR-1).
  */
 export const chooseMachineKind = (intent: RunIntent, kind: MachineKind): RunIntent =>
   kind === "container"
-    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined })
-    : withKeys(intent, { machine_kind: kind, confinement_class: undefined, ...(kind !== "macos_vm" && { macos_base: undefined }) });
+    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined, desktop_window: undefined, machine: undefined })
+    : withKeys(intent, {
+        machine_kind: kind,
+        confinement_class: undefined,
+        ...(kind !== "macos_vm" && { macos_base: undefined, desktop_window: undefined, machine: undefined }),
+        ...(intent.startup?.kind === "harness" && { startup: undefined }),
+      });
 
 /** The macOS VM's base. Standard is the default, so it is the absent key. */
 export const chooseMacOSBase = (intent: RunIntent, base: string | undefined): RunIntent => withKeys(intent, { macos_base: base });

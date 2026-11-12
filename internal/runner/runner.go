@@ -35,8 +35,7 @@ type Capabilities struct {
 	NetworkPolicy             bool                              `json:"network_policy"`                        // L1 (nftables / NetworkPolicy default-deny)
 	NetworkPolicyAcknowledged bool                              `json:"network_policy_acknowledged,omitempty"` // operator accepted a canary failure as expected rather than proven
 	SessionRecording          bool                              `json:"session_recording"`                     // wardyn-rec sidecar support
-	// UserDrives and ManagedFiles are fail-closed: false means the control
-	// plane refuses rather than admit a request the driver would reject.
+	// UserDrives and ManagedFiles are fail-closed: false means the control plane refuses rather than admit a request the driver would reject.
 	UserDrives   bool `json:"user_drives,omitempty"`
 	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
@@ -49,7 +48,8 @@ type Capabilities struct {
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
-	ExecOutputUncaptured bool `json:"-"`
+	ExecOutputUncaptured bool        `json:"-"`
+	NetworkPolicyCheck   NetPolCheck `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -133,12 +133,19 @@ type SandboxSpec struct {
 	// MacOSBase is the macOS base a macos_vm run is started on: a Mac's other base's name, or "" for its
 	// Standard base. A Mac that has no ready base of that name refuses the create.
 	MacOSBase string `json:"macos_base,omitempty"`
+	// KeptMachine, when set, makes a macos_vm run the session of one person's kept machine: a new one
+	// to keep, or an existing one to resume or reset. Only a macOS VM on the person's own Mac reads it.
+	KeptMachine *KeptMachineSpec `json:"kept_machine,omitempty"`
 	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
 	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
 	ImageArches []string `json:"image_arches,omitempty"`
 	// DesktopSignInsOff makes a VM's sign-in store read-only, so its desktop keeps no sign-ins: the
 	// admin set "Not allowed" for the run's agent (#2972). A container ignores it.
 	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
+	// DesktopViewOnly makes a macOS VM's helper force its desktop view only for this boot, whatever
+	// the base allows. Only dispatch sets it, from the run's stored mode (types.AgentRun.BackgroundOnly),
+	// never from a request or a run token. Every other sandbox ignores it.
+	DesktopViewOnly bool `json:"desktop_view_only,omitempty"`
 }
 
 // RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
@@ -195,6 +202,8 @@ type ProxyConfig struct {
 	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
 	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
 	AzureGates []proxy.AzureGateConfig
+	// GitPushWithheld is the broker hosts whose pushes the run's capabilities withhold (proxy.Config.GitPushWithheld); omitempty, so an older runner gets unchanged bytes while none is.
+	GitPushWithheld map[string]string `json:"git_push_withheld,omitempty"`
 	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
@@ -232,6 +241,9 @@ type ProxyConfig struct {
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
 	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
 	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
+	// LLMHeaders is proxy.Config.LLMHeaders: gateway host -> the non-secret headers set on its requests.
+	// Omitted when empty, so a payload without any is byte for byte what an older runner was sent.
+	LLMHeaders map[string]map[string]string `json:"llm_headers,omitempty"`
 	// VM is proxy.Config.VM. Dispatch leaves it false: the Docker driver adds the
 	// key itself for a desktop VM, whose proxy's only client is the wardyn-vmnet
 	// relay it starts.
@@ -239,12 +251,18 @@ type ProxyConfig struct {
 	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
 	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
 	PortRule string
-	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for
-	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
-	DesktopSignins bool `json:"desktop_signins,omitempty"`
-
-	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
-	LocalModels map[string]types.LocalModelSettings
+	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for the person's sign-in browser; see SandboxSpec.DesktopSignins.
+	DesktopSignins  bool                                `json:"desktop_signins,omitempty"`
+	ForgeHosts      []string                            `json:"forge_hosts,omitempty"` // code hosts the deny_all guard refuses (proxy.Config.ForgeHosts)
+	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
+	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
+	ModelLimit      *ModelLimit                         `json:"model_limit,omitempty"`      // the run's governed model list and its Bedrock gateway routes (model_limit.go); nil when no limit binds the run
+	// MCPApproveEach is proxy.Config.MCPApproveEach: set exactly when a dispatched tool rule is
+	// approve_each, so an older proxy refuses the config and the run does not start on it.
+	MCPApproveEach      *proxy.MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
+	ActivityIgnoreHosts []string                    `json:"activity_ignore_hosts,omitempty"` // proxy.Config.ActivityIgnoreHosts: hosts whose allowed requests are not activity
+	// NoNetwork is proxy.Config.NoNetwork: a run launched with the no-network wall preset.
+	NoNetwork bool `json:"no_network,omitempty"`
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -342,6 +360,9 @@ var ErrImageArch = errors.New("runner: the image's architecture cannot run on th
 // relay_ip_fenced code, so the org ends the run with that reason rather than a daemon fault.
 var ErrRelayIPFenced = errors.New("runner: relay_ip_fenced")
 
+// ErrFolderPassBusy refuses a folder pass for a run whose last pass is still running. Retryable.
+var ErrFolderPassBusy = errors.New("runner: a pass for this run is still running; try again")
+
 // ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
 // exec-scoped environment, and whether it runs under a PTY.
 type ExecSpec struct {
@@ -391,52 +412,24 @@ type Sandbox struct {
 	// keychain; nil when nothing was attempted (a container, a Linux guest, a run with no proxy CA,
 	// or a guest or runner that predates it). Read it through Known.
 	KeychainTrust *KeychainTrust `json:",omitempty"`
-}
-
-// KeychainTrust is a macOS guest's answer to trusting the run's proxy CA: a status and, when not
-// trusted, a fixed reason code. It never carries the guest's own output.
-type KeychainTrust struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
-}
-
-// The KeychainTrust codes. The guest agent sends the same strings (guestagent.KeychainTrusted and
-// its siblings).
-const (
-	KeychainTrusted    = "trusted"
-	KeychainNotTrusted = "not_trusted"
-	// KeychainRefused: macOS refused the trust change.
-	KeychainRefused = "refused"
-	// KeychainFailed: the security command failed for another reason.
-	KeychainFailed = "failed"
-	// KeychainUnavailable: the command could not run, the CA was not one certificate, or the guest
-	// sent a code this host does not know.
-	KeychainUnavailable = "unavailable"
-)
-
-// Known is k with any code this host does not know read as not trusted, unavailable. Nil stays nil:
-// absent means not attempted, never failed.
-func (k *KeychainTrust) Known() *KeychainTrust {
-	if k == nil {
-		return nil
-	}
-	if k.Status == KeychainTrusted && k.Reason == "" {
-		return &KeychainTrust{Status: KeychainTrusted}
-	}
-	switch k.Reason {
-	case KeychainRefused, KeychainFailed, KeychainUnavailable:
-		if k.Status == KeychainNotTrusted {
-			return &KeychainTrust{Status: KeychainNotTrusted, Reason: k.Reason}
-		}
-	}
-	return &KeychainTrust{Status: KeychainNotTrusted, Reason: KeychainUnavailable}
-}
-
-// Status reports observed sandbox state.
-type Status struct {
-	State    types.RunState
-	ExitCode *int
-	Message  string
+	// DesktopForcedViewOnly is what a macOS VM helper's running desktop filter reported in this boot
+	// (macvm.RFBShim.DesktopForcedViewOnly), not an echo of SandboxSpec.DesktopViewOnly. False from
+	// anything else, or a runner or helper that predates it.
+	DesktopForcedViewOnly bool `json:",omitempty"`
+	// KeptScrub and KeptBase are a kept create's boot scrub and cloned base; nil otherwise or from older runners.
+	KeptScrub *KeptScrub `json:",omitempty"`
+	KeptBase  *KeptBase  `json:",omitempty"`
+	// ProxyConfigSHA256 is proxy.ConfigSHA256 of the exact bytes the driver handed this run's proxy,
+	// which that proxy reports back once it loads them; empty from a driver or runner that predates it.
+	ProxyConfigSHA256 string `json:",omitempty"`
+	// ProxyAddr is the proxy address the agent is pinned to (its wardyn-proxy hosts entry); empty
+	// from a driver or runner that predates it.
+	ProxyAddr string `json:",omitempty"`
+	// NoNetworkProxyOnly says, for a No network sandbox, whether it has the proxy layer only: "pod_enforced"
+	// when its namespace's NetworkPolicy is proven enforced; otherwise why not ("netpol_not_enforced" and
+	// "netpol_ambient_acknowledged", which only an override admits, or "netpol_not_proven").
+	// Empty for any other run, and from a driver or runner that predates it.
+	NoNetworkProxyOnly string `json:",omitempty"`
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
@@ -551,6 +544,29 @@ var ErrAgentPauseUnsupported = errors.New("runner: this sandbox's agent cannot b
 // or from a router or runner that cannot open one.
 var ErrDesktopUnsupported = errors.New("runner: this sandbox has no desktop to open")
 
+// MacWindower is an OPTIONAL Runner capability: put an attended window (keyboard and pointer) on a macOS
+// VM run's live screen. The window lives exactly as long as the MacWindow returned; the VM and the run
+// are untouched either way. Refusals are the ErrMacWindow* of mac_window.go.
+type MacWindower interface {
+	OpenWindow(ctx context.Context, ref string, req MacWindowRequest) (MacWindow, error)
+}
+
+// MacWindowRequest is MacWindower's input: GrantID names the org's grant for this open, Title is the
+// window's title (it names the run and the person).
+type MacWindowRequest struct {
+	GrantID string
+	Title   string
+}
+
+// MacWindow is one open window. Ended is closed once the window is over, whoever ended it; Reason is
+// then why, one of MacWindowEnd*, or "" when Close ended it. Close closes the window; it is safe to call
+// more than once.
+type MacWindow interface {
+	Ended() <-chan struct{}
+	Reason() string
+	Close() error
+}
+
 // ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage).
 // The stopped proxy is removed, not kept: the config lives in the run's
@@ -578,33 +594,6 @@ type RunnerSandboxProver interface {
 // sandbox this runner created. Any other error means the substrate could not
 // answer, so the caller retries rather than refusing for good.
 var ErrNotRunnerSandbox = errors.New("runner: not a sandbox this runner created")
-
-// ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
-// sidecar, running or stopped, with a new one while the agent keeps running.
-// The control plane reads the run's stored config (#1176), rewrites its token
-// and denies, and hands it to ReplaceProxy.
-//
-// CanReplaceProxy answers ErrReviveUnsupported when ref's substrate cannot
-// replace a proxy in place. ReplaceProxy removes the old proxy, then starts
-// the new one at the address the agent's hosts entry pins. An error wrapping
-// ErrProxyReplaceFailed means the old proxy is, or may be, gone; any other
-// error left it untouched.
-type ProxyReviver interface {
-	CanReplaceProxy(ctx context.Context, ref string) error
-	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
-	// EnsureProxyImage pulls the proxy sidecar image if not already present.
-	// Called BEFORE the revive claim so a slow pull doesn't widen the window
-	// a watcher sweep must leave the run alone in.
-	EnsureProxyImage(ctx context.Context) error
-}
-
-// ErrReviveUnsupported is ProxyReviver's answer from a router whose substrate
-// for ref cannot replace a proxy in place.
-var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a sandbox's proxy")
-
-// ErrProxyReplaceFailed marks a ReplaceProxy that removed, or may have
-// removed, the old proxy and did not start the new one.
-var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
 
 // Selftester is an OPTIONAL Runner capability: run a BYOI image's contract
 // check (agent-run --selftest) in a runner's sandbox as an execution of its
@@ -929,7 +918,7 @@ type NodeTuplePod struct {
 	ClosingHolderUID string      `json:"closing_holder_uid,omitempty"`
 }
 
-// NodeTuple binds an operator's node record to one run's recorded machine facts (Codex R9-L1). The
+// NodeTuple binds an operator's node record to one run's recorded machine facts. The
 // runner accepts a record only while its own record still equals the tuple both approvers saw.
 type NodeTuple struct {
 	RunID  uuid.UUID      `json:"run_id"`
@@ -960,41 +949,4 @@ func (o ProxyObservation) Exited() bool {
 // every run's proxy pod (the k8s runner's 30 s pod list).
 type ProxyObserver interface {
 	ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uuid.UUID]ProxyObservation, error)
-}
-
-// NodeRecordAcceptor is an OPTIONAL capability: check an operator's node record against the run's
-// own record and accept it as an infrastructure fence, or refuse it with the reason.
-type NodeRecordAcceptor interface {
-	AcceptNodeRecord(ctx context.Context, ref string, rec NodeRecord) error
-}
-
-// Node-record attestations (design K1 §3.1 (b)).
-const (
-	AttestNodePoweredOff = "node_powered_off"
-	AttestNoPriorHolder  = "no_prior_holder"
-)
-
-// NodeRecordApprover is one approver of a node record as the org recorded it.
-type NodeRecordApprover struct {
-	Principal string `json:"principal"`
-	Email     string `json:"email,omitempty"`
-	// Human is false for an admin token, which can never make the record.
-	Human bool `json:"human"`
-}
-
-// ErrNodeRecordRefused marks a node record the runner refused for good: its reason is final for
-// that record, which a new record (with fresh approvals) can replace.
-var ErrNodeRecordRefused = errors.New("node record refused")
-
-// NodeRecord is a security operator's audited record that the machines which may have run a run's
-// pods are powered off, or that no other machine held the name.
-type NodeRecord struct {
-	ID          uuid.UUID            `json:"id"`
-	Attestation string               `json:"attestation"`
-	Tuple       NodeTuple            `json:"tuple"`
-	Approvers   []NodeRecordApprover `json:"approvers"`
-	// FourEyes is the org's four-eyes setting for security-operator writes when the record was made.
-	FourEyes bool   `json:"four_eyes"`
-	Source   string `json:"source"`
-	SourceID string `json:"source_id"`
 }

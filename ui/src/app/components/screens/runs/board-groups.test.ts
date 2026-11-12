@@ -61,6 +61,16 @@ describe("repoLabel", () => {
     });
   });
 
+  it("a run on a named workspace shows its name, not mono", () => {
+    const names = { w1: "fix-login", w2: "feature-search" };
+    expect(repoLabel(run({ repo: "", workspace_path: "", workspace_ids: ["w1"] }), names)).toEqual({ text: "fix-login", mono: false });
+    expect(repoLabel(run({ repo: "", workspace_path: "", workspace_id: "w2" }), names)).toEqual({ text: "feature-search", mono: false });
+  });
+
+  it("a workspace id with no known name is still the no-repo phrase", () => {
+    expect(repoLabel(run({ repo: "", workspace_path: "", workspace_ids: ["gone"] }), { w1: "x" })).toEqual({ text: NO_REPO, mono: false });
+  });
+
   it("neither present reads as the honest no-repo phrase, not mono", () => {
     expect(repoLabel(run({ repo: "", workspace_path: "" }))).toEqual({ text: NO_REPO, mono: false });
   });

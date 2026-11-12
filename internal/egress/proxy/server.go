@@ -12,14 +12,15 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -54,6 +55,8 @@ type Server struct {
 	onListening func()
 	// stopped closes when the HTTP server is shut down, whenever ListenAndServe gets to look.
 	stopped chan struct{}
+	// live holds what a live egress edit needs: the client connections to drop and the report loop to replace.
+	live liveState
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -75,6 +78,14 @@ type serverHooks struct {
 	lapseTune  *lapseRenewTuning
 }
 
+// clock is the boot clock the gates read: the hook's in tests, CLOCK_BOOTTIME otherwise.
+func (h serverHooks) clock() bootClock {
+	if h.lapseClock != nil {
+		return h.lapseClock
+	}
+	return sysBootClock{}
+}
+
 // start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
 // starts none, and its brokered mints and approval polls ride the caller's
 // client too: it is the organisation, and never dials itself.
@@ -87,6 +98,7 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 	}
 	p.maskKey, out.maskKey = h.maskKey, h.maskKey
 	if h.engine {
+		p.engine = true
 		p.localClient = client
 		return
 	}
@@ -94,7 +106,7 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 	if h.lapseTune != nil {
 		tune = *h.lapseTune
 	}
-	startRunTokenRenewer(out, p, ts, cfg, client, tune)
+	startRunTokenRenewer(out, p, ts, cfg, client, tune, h.clock())
 }
 
 // egressTLSConfig is the egress trust set: the system roots plus pemBundle, nil (the default roots) when
@@ -103,14 +115,11 @@ func egressTLSConfig(pemBundle string) (*tls.Config, error) {
 	if pemBundle == "" {
 		return nil, nil
 	}
-	pool, perr := x509.SystemCertPool()
-	if perr != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM([]byte(pemBundle)) {
+	pool, err := hoptls.SystemPoolWith([]byte(pemBundle))
+	if err != nil {
 		return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
 	}
-	return &tls.Config{RootCAs: pool}, nil
+	return &tls.Config{RootCAs: pool, MinVersion: hoptls.MinClientTLSVersion}, nil
 }
 
 // controlPlaneClient returns the client every control-plane caller rides.
@@ -176,6 +185,7 @@ func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*ups
 
 func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
+	pol.live.set(cfg.LiveDenies)
 	// Beside the compile, not inside it: CompilePolicy is a pure function with
 	// several callers, and this is a once-per-boot report about the policy
 	// this sidecar was actually dispatched.
@@ -232,30 +242,12 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("build injector: %w", err)
 	}
+	inj.setLLMHeaders(cfg.LLMHeaders)
 
-	// Build the OPTIONAL outbound content-inspection engine, off unless the
-	// policy carries an llm_inspection block. Register operator-declared
-	// workspace secret values in the proxy-global mask registry FIRST so they
-	// (a) form the scan corpus and (b) are masked from decision-log output
-	// defense-in-depth — then snapshot (buildInjector already registered any
-	// injected credentials above). A global kill-switch
-	// (WARDYN_LLM_SCAN=off) is applied upstream by clearing cfg.Policy.LLMInspection.
-	var scanner *contentscan.Engine
-	if spec := cfg.Policy.LLMInspection; spec != nil {
-		for _, v := range spec.WorkspaceSecretValues {
-			procMaskFor(hooks.maskKey, []byte(v))
-		}
-		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(hooks.maskKey))
-		if eerr != nil {
-			_ = sink.close(context.Background())
-			return nil, fmt.Errorf("build content scanner: %w", eerr)
-		}
-		scanner = eng
-		if eng == nil && spec.Mode != "" && spec.Mode != "off" {
-			// Configured to inspect but the effective secret corpus is empty —
-			// scanning is a no-op. Surface it so the operator is not misled.
-			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled", slog.String("mode", spec.Mode))
-		}
+	scanner, deferred, err := buildScanners(ctx, cfg, hooks.maskKey)
+	if err != nil {
+		_ = sink.close(context.Background())
+		return nil, err
 	}
 
 	// TLS-MITM CA: build whenever the per-run PEMs are provided. MITM serves
@@ -301,6 +293,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		MITMHosts:            cfg.MITMHosts,
 		MITMLLM:              cfg.MITMLLM,
 		GitGrants:            cfg.GitGrants,
+		GitPushWithheld:      cfg.GitPushWithheld,
 		PATGrants:            cfg.PATGrants,
 		BrokeredPATGrantIDs:  cfg.BrokeredPATGrantIDs,
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
@@ -320,9 +313,11 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LLMChannelHosts:      cfg.LLMChannelHosts,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
 		LocalModels:          cfg.LocalModels,
+		GatewayIdentity:      cfg.GatewayIdentity,
 		RunnerLocalModels:    cfg.RunnerLocalModels,
 		Unattended:           cfg.Unattended,
 		ScrubResponses:       cfg.ScrubResponses,
+		NoNetwork:            cfg.NoNetwork,
 		CanonicalPushRepos:   cfg.CanonicalPushRepos,
 		Attribution:          cfg.Attribution,
 		LocalSubnets:         localSubnets,
@@ -331,8 +326,13 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
 	p.residentMints = residentMintsByGrant(cfg.ResidentMints)
+	p.allowedModels = compileAllowedModels(cfg.AllowedModels, cfg.BedrockRoutes)
+	p.deferredScan = deferred
 	p.vm, p.portRule = cfg.VM, effectivePortRule(cfg.VM, cfg.PortRule)
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
+	p.mcp.setApproveEach(cfg.MCPApproveEach)
+	p.forgeHosts = forgeHostSet(cfg.ForgeHosts)
+	p.meterOff = cfg.DisableModelUsage
 	if p.hardDeny, err = compileHardDeny(cfg.HardDeny); err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("hard deny: %w", err)
@@ -340,11 +340,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// k8s runners only: the proxy is closed until its first renew and lapses
 	// for good at the last renew's send time + RunTokenTTL (§6.2).
 	if cfg.SelfLapse {
-		clock := hooks.lapseClock
-		if clock == nil {
-			clock = sysBootClock{}
-		}
-		p.lapse = newLapseGate(clock, selfLapseTTL)
+		p.lapse = newLapseGate(hooks.clock(), selfLapseTTL)
 		if sink.remote != nil {
 			p.lapse.onLapse = sink.remote.lapse
 		}
@@ -380,6 +376,12 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	return out, nil
 }
 
+// gatesFirstRenew is the one rule for which sidecars stay closed until their first token renewal: a
+// proxy with a control plane that the runner started as a replacement (FirstRenewGateEnv).
+func gatesFirstRenew(cfg *Config) bool {
+	return cfg.ControlPlaneURL != "" && os.Getenv(FirstRenewGateEnv) == "1"
+}
+
 // startRunTokenRenewer starts the run-token renewer, which keeps this
 // sidecar's short-TTL token fresh for the life of the run. Without it every
 // control-plane call starts 401ing once the startup token's 1h TTL lapses,
@@ -387,21 +389,29 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 // torn down by Shutdown; NewServer's ctx is a STARTUP context, so the
 // renewer gets its own lifetime instead. Alongside it, the activity reporter
 // streams the pause's presence clock for as long as the renewer runs.
-func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning) {
+func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning, clock bootClock) {
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
+	// A replacement proxy serves nothing until a renewal under its own token has landed: one started
+	// late by a superseded revive, whose token was retired or revoked, never binds. A self-lapsing
+	// proxy (k8s runner) already has its gate; any other gets one with no deadline.
+	selfLapse := p.lapse != nil
+	if !selfLapse && gatesFirstRenew(cfg) {
+		p.lapse = newLapseGate(clock, math.MaxInt64)
+	}
+	gate := p.lapse
 	rctx, cancel := context.WithCancel(context.Background())
 	out.renewStop = cancel
 	out.renewStopped = make(chan struct{})
 	go func() {
 		defer close(out.renewStopped)
-		if p.lapse != nil {
-			go p.lapse.watch(rctx, tune.watchEvery)
-			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, p.lapse, tune)
+		if selfLapse {
+			go gate.watch(rctx, tune.watchEvery)
+			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, gate, tune)
 			return
 		}
-		runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
+		runTokenRenewerGated(rctx, ts, cfg.ControlPlaneURL, client, defaultRenewerTuning(), gate)
 	}()
 	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
 }
@@ -451,9 +461,10 @@ func (s *Server) ListenAndServe() error {
 
 // ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
 // the container's attach stream, which works on any engine, to know the agent may start. It means
-// "listening", nothing more. A self-lapsing proxy (Config self_lapse) binds only after its first token
-// renewal (awaitOpen), so its marker already follows that renewal and the agent never starts behind a
-// proxy that will refuse it.
+// "listening", nothing more. A proxy with a first-renewal gate (a self-lapsing one, Config self_lapse, or a
+// replacement the runner started with FirstRenewGateEnv) binds only after its first token renewal
+// (awaitOpen), so its marker already follows that renewal and the agent never starts behind a proxy that
+// will refuse it.
 const ReadyMarker = "wardyn-proxy: ready"
 
 // OnListening sets fn to run once the main listener is bound, before the first connection is
@@ -463,16 +474,20 @@ func (s *Server) OnListening(fn func()) { s.onListening = fn }
 // listen opens addr, serving only AllowedPeers when they are set.
 func (s *Server) listen(addr string) (net.Listener, error) {
 	ln, err := net.Listen("tcp", addr)
-	if err != nil || len(s.allowedPeers) == 0 {
+	if err != nil {
 		return ln, err
 	}
-	return &peerListener{Listener: ln, allowed: s.allowedPeers}, nil
+	if len(s.allowedPeers) > 0 {
+		ln = &peerListener{Listener: ln, allowed: s.allowedPeers}
+	}
+	return &trackedListener{Listener: ln, set: &s.live}, nil
 }
 
-// awaitOpen holds a self-lapsing proxy (k8s runner) off its listeners until its first renew: it
-// refuses every request until then, so it listens only once it serves, and a connect to it (the
-// runner's readiness probe) is proof of that for this proxy and an older one alike. False when
-// Shutdown comes first, which a lapse before that renew ends in too. A gate-less proxy goes on at once.
+// awaitOpen holds a proxy with a first-renewal gate (a self-lapsing one on the k8s runner, or a replacement
+// the runner started with FirstRenewGateEnv) off its listeners until its first renew: it refuses every
+// request until then, so it listens only once it serves, and a connect to it (the runner's readiness
+// probe) is proof of that for this proxy and an older one alike. False when Shutdown comes first, which a
+// lapse before that renew ends in too. A gate-less proxy goes on at once.
 func (s *Server) awaitOpen() bool {
 	g := s.proxy.lapse
 	if g == nil {
@@ -596,4 +611,37 @@ func resolveControlPlaneIPs(rawURL string) ([]net.IP, bool) {
 		return nil, false
 	}
 	return ips, true
+}
+
+// buildScanners builds the OPTIONAL outbound content-inspection engine, off unless
+// the policy carries an llm_inspection block, and the cut engine a gateway route
+// that inspects prompts itself still runs (gateway_identity.go). It registers
+// operator-declared workspace secret values in the proxy-global mask registry
+// FIRST so they (a) form the scan corpus and (b) are masked from decision-log
+// output defense-in-depth — then snapshots (buildInjector already registered any
+// injected credentials). A global kill-switch (WARDYN_LLM_SCAN=off) is applied
+// upstream by clearing cfg.Policy.LLMInspection.
+func buildScanners(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*contentscan.Engine, *deferredScan, error) {
+	spec := cfg.Policy.LLMInspection
+	if spec == nil {
+		return nil, nil, nil
+	}
+	for _, v := range spec.WorkspaceSecretValues {
+		procMaskFor(maskKey, []byte(v))
+	}
+	corpus := procRegistry.Snapshot(maskKey)
+	eng, err := contentscan.NewEngine(*spec, corpus)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build content scanner: %w", err)
+	}
+	deferred, err := deferredScanFor(eng, *spec, corpus, cfg.GatewayIdentity)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build the secret-value scanner for gateway routes: %w", err)
+	}
+	if eng == nil && spec.Mode != "" && spec.Mode != "off" {
+		// Configured to inspect but the effective secret corpus is empty —
+		// scanning is a no-op. Surface it so the operator is not misled.
+		slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled", slog.String("mode", spec.Mode))
+	}
+	return eng, deferred, nil
 }

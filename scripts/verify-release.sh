@@ -6,7 +6,7 @@
 #   V=X.Y.Z scripts/verify-release.sh      (or: scripts/verify-release.sh X.Y.Z)
 # Every release image is cosign-verified BY INDEX DIGEST against the release workflow run for THIS tag (an exact
 # certificate identity, so another tag's signature is refused), the asset NAMES are compared with the expected set,
-# the SHA256SUMS blob is verified, the install.sh URL is fetched and the helm chart is cosign-verified by digest against the
+# the SHA256SUMS blob is verified and every asset is checked against it, the install.sh URL is fetched and the helm chart is cosign-verified by digest against the
 # same exact identity (docs/VERIFY.md section 4) with its appVersion compared to $V. It never creates,
 # edits, deletes or retags a release or image.
 # The image list is derived from .github/workflows/release.yml (every `- name: <image>` matrix entry); the
@@ -61,7 +61,13 @@ for img in $IMAGES; do
   else echo "FAIL $img cosign verify"; tail -3 "$OUT/cosign-$img.err"; fails=$((fails+1)); fi
 done
 echo "--- assets"
-gh release view "$TAG" --repo cjohnstoniv/wardyn --json isPrerelease,isDraft,assets --jq '"prerelease=\(.isPrerelease) draft=\(.isDraft) assets=\(.assets|length)", (.assets[].name)' | tee "$OUT/assets.txt"
+gh release view "$TAG" --repo cjohnstoniv/wardyn --json isPrerelease,isDraft,name,assets --jq '"prerelease=\(.isPrerelease) draft=\(.isDraft) assets=\(.assets|length) title=\(.name|tojson)", (.assets[].name)' | tee "$OUT/assets.txt"
+# The Release title is "Wardyn $TAG", set by release.yml's draft and by release-patch.sh; releases before 0.10.0 were cut by hand and are not held to it.
+# It is read JSON-encoded, on the first line only, so a title with line breaks can neither pass nor add names to the asset list below.
+if [ "$(printf '%s\n' "${V%%-*}" 0.10.0 | sort -V | head -1)" = 0.10.0 ]; then
+  title=$(head -1 "$OUT/assets.txt" | sed -n 's/^prerelease=[^ ]* draft=[^ ]* assets=[0-9]* title=//p')
+  if [[ "$title" == "\"Wardyn $TAG\"" ]]; then echo "OK   release title"; else echo "FAIL release title: $title (want \"Wardyn $TAG\")"; fails=$((fails+1)); fi
+fi
 expected=$({ for img in $IMAGES; do echo "sbom-$img.cdx.json"; done; echo "$WANT"; echo "wardyn-$V.tgz"; } | sort -u)
 have=$(tail -n +2 "$OUT/assets.txt" | sort -u)
 for name in $(comm -23 <(echo "$expected") <(echo "$have")); do echo "FAIL missing asset: $name"; fails=$((fails+1)); done
@@ -69,7 +75,9 @@ for name in $(comm -13 <(echo "$expected") <(echo "$have")); do echo "FAIL unexp
 [[ "$expected" == "$have" ]] && echo "OK   asset names match the expected set ($(echo "$expected" | wc -l))"
 echo "--- SHA256SUMS"
 rm -rf "$OUT/dl"; mkdir -p "$OUT/dl"
-gh release download "$TAG" --repo cjohnstoniv/wardyn --dir "$OUT/dl" --pattern 'SHA256SUMS*' --pattern 'install.sh' --pattern 'wardyn-linux-amd64' >/dev/null 2>&1
+# Every asset, not a sample: the checksum pass below is only as strong as the set of files it can see.
+gh release download "$TAG" --repo cjohnstoniv/wardyn --dir "$OUT/dl" >"$OUT/download.log" 2>&1 \
+  || { echo "FAIL release download (exit $?)"; tail -3 "$OUT/download.log"; fails=$((fails+1)); }
 ls "$OUT/dl"
 if [[ -f "$OUT/dl/SHA256SUMS" ]]; then
   bundle=$(ls "$OUT/dl"/SHA256SUMS.* 2>/dev/null | head -5 | tr '\n' ' ')
@@ -81,7 +89,14 @@ if [[ -f "$OUT/dl/SHA256SUMS" ]]; then
   elif [[ -f "$OUT/dl/SHA256SUMS.sig" && -f "$OUT/dl/SHA256SUMS.pem" ]]; then
     cosign verify-blob "$OUT/dl/SHA256SUMS" --signature "$OUT/dl/SHA256SUMS.sig" --certificate "$OUT/dl/SHA256SUMS.pem" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" && echo "OK   SHA256SUMS verify-blob (sig+pem)" || { echo "FAIL verify-blob"; fails=$((fails+1)); }
   else echo "FAIL no signature material for SHA256SUMS"; fails=$((fails+1)); fi
-  (cd "$OUT/dl" && sha256sum --ignore-missing -c SHA256SUMS) || { echo "FAIL checksum"; fails=$((fails+1)); }
+  # No ignore-missing flag: a file SHA256SUMS lists that was not downloaded is a failure, and so is a
+  # release asset (other than the signature material) that SHA256SUMS does not list.
+  (cd "$OUT/dl" && sha256sum -c SHA256SUMS) || { echo "FAIL checksum"; fails=$((fails+1)); }
+  listed=$(awk '{x=$2; sub(/^\*/,"",x); sub(/^\.\//,"",x); print x}' "$OUT/dl/SHA256SUMS" | sort -u)
+  # Walk the release's own asset list ($have), not the download folder: a partial download must not hide an asset.
+  for f in $(grep -v '^SHA256SUMS' <<<"$have"); do
+    grep -qxF "$f" <<<"$listed" || { echo "FAIL checksum: $f is a release asset that SHA256SUMS does not list"; fails=$((fails+1)); }
+  done
 else echo "FAIL SHA256SUMS missing"; fails=$((fails+1)); fi
 echo "--- install.sh URL"
 code=$(curl -s -o /dev/null -w '%{http_code}' "https://github.com/cjohnstoniv/wardyn/releases/download/$TAG/install.sh"); echo "install.sh -> HTTP $code"; [[ "$code" == 302 || "$code" == 200 ]] || fails=$((fails+1))

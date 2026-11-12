@@ -46,6 +46,7 @@ scripts/ci-run.sh
 | `WARDYN_CI_TOKEN` | with `WARDYN_URL`: the CI [service identity](operations/api-tokens.md#service-identities)'s `wdn_` token — every `wardyn` call authenticates as it | **required** with `WARDYN_URL` |
 | `WARDYN_CI_MODEL_PROVIDER` | with `WARDYN_URL`, harness mode: the model provider the run uses, checked before launch | **required** there |
 | `WARDYN_CI_TIMEOUT` | `wardyn run --wait` bound | `30m` |
+| `WARDYN_CI_IDEMPOTENCY_KEY` | with `WARDYN_URL`: passed to the launch as `wardyn run --idempotency-key`; see "[Retrying a launch](#driving-an-existing-control-plane-instead)" | unset |
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`, `session.cast` — the run's terminal recording, when it has one) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | throwaway stack: `1` = leave it up for debugging | unset |
 | `WARDYN_CI_SKIP_BUILD` | throwaway stack: `1` = reuse existing local images | unset |
@@ -189,7 +190,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 Don't hand-author the allowlist for a complex task — record it once:
 
 1. In a trusted environment, run the task under a permissive policy.
-2. `wardyn record synthesize <run-id>` previews the least-privilege policy Wardyn derived from the run's audit trail; `wardyn record save <run-id> --name my-ci-task` stores it.
+2. `wardyn record synthesize <run-id>` previews the least-privilege policy Wardyn derived from the run's audit trail; `wardyn record save <run-id> --name my-ci-task` stores it as a policy, which is an administrator's to write. A member runs it with `--template` to keep it as their own template instead.
 3. Export the stored policy's spec to your repo as the pipeline's `WARDYN_CI_POLICY_FILE` (set `first_use_approval` to `always_deny`).
 
 What synthesis does and does not derive:
@@ -287,14 +288,14 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico, stands up a real organisation and enrols the `wardyn-runnerd` chart with it.
   - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
   - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job, one leg per kubelet and suite (`K6_SUITES`); self-skips unless `WARDYN_TEST_K8S=1`.
-  - `K6_SUITES=workload` runs `TestK6Workload` instead (#3804), with a throwaway in-cluster Dex for real sign-ins. A bound namespace's WardynWorkload launches a run on the bound pool; an unbound one is refused on its status. The `k6-workload-e2e` job runs it.
+  - `K6_SUITES=workload` runs `TestK6Workload` instead, with a throwaway in-cluster Dex for real sign-ins. A bound namespace's WardynWorkload launches a run on the bound pool; an unbound one is refused on its status. The `k6-workload-e2e` job runs it.
 - **[`scripts/kind-components-walk.sh`](../scripts/kind-components-walk.sh)** and **[`scripts/kind-run-output-walk.sh`](../scripts/kind-run-output-walk.sh)** each make and delete their own quickstart cluster, and run in `nightly.yml`'s `kind-acceptance-walks` job; self-skip unless `WARDYN_TEST_K8S=1`.
 - **[`scripts/runner-compat-walk.sh`](../scripts/runner-compat-walk.sh)** — runner and organisation version compatibility against the newest published 0.9.Z release:
   - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run. Below 0.9.3 that run must fail instead, with the error that says to upgrade the organisation first.
   - the released `wardyn-runnerd` serves a candidate runner's state directory and completes a run, then registers with this tree's organisation and completes one.
   - Runs in `nightly.yml`'s `runner-compat-walk` job, which `release.yml` watches; needs a native Docker engine; self-skips unless `WARDYN_TEST_DOCKER=1`.
 - **[`scripts/run-e2e-ssh-k8s.sh`](../scripts/run-e2e-ssh-k8s.sh)** (`make test-e2e-ssh-k8s`) — the SSH gateway proven against a **Pod** rather than a container: the run's sandbox confirmed through `kubectl`, `ssh <run-id>@host <cmd>` over the k8s exec lane,
-  - a nonzero exit code surviving that lane's out-of-band status channel, the interactive shell reaching tmux, the `ssh.exec` / `session.attach{transport:ssh}` rows for both,
+  - a nonzero exit code surviving the exec path's out-of-band status channel, the interactive shell reaching tmux, the `ssh.exec` / `session.attach{transport:ssh}` rows for both,
   - and both authorization arms — a second principal's `member` key refused on a run it does not own (audited `ssh.authenticate` failure) and a third principal's `admin` key reaching that same run with `data.override=true`.
   - Those two principals go in through `kubectl exec deploy/postgres`, because the API only ever stamps the *caller's* key and this install has one credential.
   - It does **not** create or delete a cluster — it runs against the one `make kind-quickstart` leaves behind, and cleans up only its own run and the keys it registered.
@@ -303,16 +304,16 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - `helm install`s the chart, waits for a healthy control plane,
   - and prints the URL and admin token it minted.
   - CI proves the same install path through its own `helm-install-test` and `conformance-k8s` jobs rather than by running this target;
-  - an operator runs it to get the cluster the lane above needs, and to rehearse the day-2 commands in [OPERATIONS.md](OPERATIONS.md#kubernetes-day-2).
+  - an operator runs it to get the cluster the target above needs, and to rehearse the day-2 commands in [OPERATIONS.md](OPERATIONS.md#kubernetes-day-2).
   - It binds `127.0.0.1:8080`, so a leftover compose stack on that port fails it loudly at cluster-create.
 
 ## This repository's own CI
 
 Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`. Runner slots constrain throughput: with many open pull requests, queueing outlasts execution. This section measures check counts, runner-minutes and elapsed time.
 
-- `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90), not on `main`, so a filtered trigger gave a stacked PR no checks at all.
+- `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks work on `<kind>/<issue#>-<slug>` branches, not on `main`, so a filtered trigger gave a stacked PR no checks at all.
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
-- It has no `release/**`: `release.yml` accepts CI by tree (#1461), and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there (#1466).
+- It has no `release/**`: `release.yml` accepts CI by tree, and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there.
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
 - [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then a throwaway Postgres (pool guard, `localhost` DSN).
 - `make candidate-preflight` vets release candidates.
@@ -326,38 +327,13 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files, and `WARDYN_TRUSTED_CA_PATH` to a stand-in for the mounted `/etc/wardyn-trusted-ca.pem`.
 The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 
-**Before and after #211**, measured from the GitHub Actions API:
+**`ui-e2e` runs as two shards**, `ui-e2e (1/2)` and `ui-e2e (2/2)`, because it would otherwise be the longest job of a pull request.
 
-- Job times over the 60 most recent completed `ci.yml` runs as of 2026-09-21 05:00Z (a "green run" is one of the 26 whose `build` passed);
-- superseded runs over all 215 `ci.yml` runs created from 2026-09-20 01:34Z to 2026-09-21 05:03Z.
-
-| | Before | After |
-|---|---|---|
-| Checks per pull-request run | 28 | 24 |
-| Required contexts (branch protection) | 14 | 14, same names |
-| Runner-minutes per green run, median | 84.2 | 74.6 (see below) |
-| Longest job per green run, median | 18.4 min (`build`) | 18.4 min (`build`) |
-| Green run, created to completed | median 50 min, range 19 to 86 | re-measure once runs on this workflow accumulate |
-| Pull-request runs still queued or running when a newer push to the same pull request arrived | 24 of 176 | cancelled by the workflow's `concurrency` group |
-
-- The after runner-minutes are the same 26 runs without the three `multi-arch build` cells (now `nightly.yml`'s `buildx-smoke`) and `screenshots-fresh` (now an advisory annotation from `diagrams`); every job that remains is unchanged, so its measured time carries over.
-- No run is shorter than its longest job, so 19 minutes is the floor while `build` is the critical path.
-
-**Where `build`'s time goes**, in one green run (35555137810, pre-#467): `make test-race` 537 s, `make cover-check` 395 s, `make lint` 120 s — two full passes over the same three tag sets (coverage, then race).
-
-- #467 merged them: `cover-check`'s three `test-report` suites now run under `-race -covermode=atomic` in one pass each, and the `build` job no longer runs `make test-race` or `make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
-- `make lint` has since gained the console's ESLint ([`ui/eslint.config.js`](../ui/eslint.config.js)), so the `go (lint)` job also sets up pnpm and node; that install and lint pass are not in the 120 s above.
-
-**Why `ui-e2e` runs as two shards.**
-
-- It used to be one job, because `build` was the critical path and a shard repeats about 90 s of setup.
-- Once `go` ran its tag sets in parallel and `test-pg` was split, `ui-e2e` became the longest job of a pull request: 518 to 531 s of Playwright in a job of about 10.5 minutes (runs 37392974500 and 37391169188).
-- It now runs as `ui-e2e (1/2)` and `ui-e2e (2/2)`.
-- Each shard takes every other spec of the sorted list (`WARDYN_E2E_SHARD`, [`scripts/run-ui-e2e.sh`](../scripts/run-ui-e2e.sh)), with the same three lanes and the same fresh seed per spec, so the per-spec isolation is unchanged.
+- Each shard takes every other spec of the sorted list (`WARDYN_E2E_SHARD`, [`scripts/run-ui-e2e.sh`](../scripts/run-ui-e2e.sh)), with the same three parallel workers and the same fresh seed per spec, so the per-spec isolation is unchanged.
 - The four-eyes run and the `e2etmux` harness pins run once, in shard 1.
 - It is not a required check, so it needs no aggregator.
 
-**Per-job budget.** A job's budget is its `timeout-minutes`, at least twice its measured maximum with a ten-minute floor. Minutes, successful runs only. The old `build` samples (26 runs, median 18.4, maximum 18.9 minutes) preceded the tag-set split below; timings for the current aggregator and the new jobs remain pending:
+**Per-job budget.** A job's budget is its `timeout-minutes`, at least twice its measured maximum with a ten-minute floor. Minutes, successful runs only. A `pending` cell means no measurement yet.
 
 | Check | Runs | Median | Max | Timeout |
 |---|---|---|---|---|
@@ -372,6 +348,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `stop-early-dco` | – | pending | pending | 10 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
+| `conformance-k8s-agent-sandbox` (not required; train and main only) | – | pending | pending | 45 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
 | `macos` (not required) | – | pending | pending | 30 |
 | `macos-xcode-27` (not required) | – | pending | pending | 10 |
@@ -417,9 +394,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
 
-- `helm-install-test` now also runs the old `desktop-envelope` job's proof (#472).
-- Before the merge the two took 3.2 and 2.5 minutes at most, so 20 minutes clears twice their sum.
-- Fill in its row after about ten green runs.
+- `helm-install-test` also runs the desktop-envelope proof; its 20-minute budget is twice the sum of the two jobs' earlier maxima (3.2 and 2.5 minutes).
 
 Re-measure (job name, runs, median and maximum over successful jobs):
 
@@ -440,14 +415,14 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
 - Five jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `migration-merge-check` and `published-image-scan`.
-- `kind-survival-walk`, `k6-kind-conformance`, `k6-workload-e2e`, `kind-acceptance-walks`, `hybrid-walk` and `kind-upgrade-walk` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green (#3439).
+- `kind-survival-walk`, `k6-kind-conformance`, `k6-workload-e2e`, `kind-acceptance-walks`, `hybrid-walk` and `kind-upgrade-walk` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
 - The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on (the default) stages and attests images.
 - [`overlay-proofs.yml`](../.github/workflows/overlay-proofs.yml) runs [`scripts/overlay-proof.sh`](../scripts/overlay-proof.sh) revert proofs; each must exit 1 with its named FAIL. Never dispatch it while a train attempt 1 is queued.
-  - Dispatch it on the bundle branch `proofs/<lane>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.
-  - Lane code can save cache entries under its run's ref whatever the token allows, and `ci.yml` restores `main`'s. So it never runs there, and it uses no cache.
+  - Dispatch it on the bundle branch `proofs/<branch>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.
+  - Code on that branch can save cache entries under its run's ref whatever the token allows, and `ci.yml` restores `main`'s. So it never runs there, and it uses no cache.
   - A run counts only once `git diff --quiet origin/main...<head sha> -- ':(exclude).proofs'` exits 0 locally, so the workflow and script were main's.
   - The `prove` job has the same Postgres service and `WARDYN_TEST_PG` as `test-pg-shard`, so a proof of a PG-backed test in `./internal/store` or `./internal/api` runs there instead of skipping.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
@@ -459,7 +434,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 
 ### Incremental CI
 
-Three mechanisms (#932), on top of the per-job Go cache (#470) and the single race + coverage pass per tag set (#467):
+Three mechanisms, on top of the per-job Go cache and the single race + coverage pass per tag set:
 
 1. **Tag sets in parallel.**
    - The `go-lint` job (reported as `go (lint)`: `make build tidy-check lint`) and the `go` matrix job's `go (unit)`, `go (docker)` and `go (k8s)` (`make test-report`, `-docker`, `-k8s`) run on four runners instead of one after another.
@@ -494,7 +469,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
    | `code` | any ui or backend path | `ui-e2e`, `helm-install-test` |
    | `backend` | any backend path (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
    | `ui` | `ui/**`, the `Makefile`, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | `ui` (whole vitest suite, or only the files that read outside `ui/`) |
-   | `images` | a `backend` path other than a Go `*_test.go` file | the nine `trivy (<image>)` jobs (then narrowed per image by `image-scope`, below) |
+   | `images` | a `backend` path other than a Go `*_test.go` file | the ten `trivy (<image>)` jobs (then narrowed per image by `image-scope`, below) |
    | `notices` | `images`, [`ui/package.json`](../ui/package.json), [`ui/pnpm-lock.yaml`](../ui/pnpm-lock.yaml), `THIRD-PARTY-NOTICES.md` | `notices` |
 
    - A path that matches no earlier rule counts as backend, so a new directory runs everything until someone classifies it.
@@ -539,7 +514,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
 
 **Required checks and skipped jobs.**
 
-- GitHub reports a job skipped by a job-level `if:` as "skipped", and branch protection accepts that as passing (pull request #1863, a console-only change, was mergeable with `envbuild-integration` skipped).
+- GitHub reports a job skipped by a job-level `if:` as "skipped", and branch protection accepts that as passing (a console-only change was once mergeable with `envbuild-integration` skipped).
 - A skipped job takes no runner, where a job that only skips its steps still waits for one:
   - in run 37392974500, a console-only pull request, `conformance` queued 1426 s to run for 6 s, `helm` 1779 s and `test-pg` 1785 s.
 - So a job that a change cannot affect skips at the job level, under two rules:
@@ -547,12 +522,12 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
   - A required job with a **matrix** never skips at the job level.
     - GitHub does not expand a skipped matrix: it reports one check with the name unexpanded (`gates (${{ matrix.gate }})`, the same row [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) documents for the nightly),
       - so `gates (gitleaks)` would never report and the pull request would wait on it forever.
-    - This is why the nine image scans are separate jobs, not a matrix:
+    - This is why the ten image scans are separate jobs, not a matrix:
       - their steps are written once and shared through a YAML anchor, and each job skips on `images == 'false'` or on its own `image-scope` answer.
 
 So:
 
-- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `vm`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
+- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `vm`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the ten `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
 - `vm` boots the reference Linux VM guest under QEMU/KVM through the real Docker driver ([`test/conformance/vm/vm_test.go`](../test/conformance/vm/vm_test.go)), after GitHub's documented udev rule opens `/dev/kvm`. Not a required check.
 - `build` needs `go-lint`, `image-scope` and every `go` leg and runs with `if: always()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
@@ -564,13 +539,13 @@ So:
   - `notify-flaky` skips when both `ui-e2e` shards said their flaky list was empty, and runs on any other answer, including none.
 - `compose`, `dco`, `diagrams` and `gates (…)` do not read the classification and run on every change.
   - (`helm` stays on `backend`, not on the chart's own paths: `make helm-lint` also renders [`examples/policies/demo.json`](../examples/policies/demo.json) and [`cmd/wardynd/testdata/values-0.7.yaml`](../cmd/wardynd/testdata/values-0.7.yaml).)
-- Only a run whose six outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
+- Only a run whose six outputs and ten `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
   - A run that narrowed anything did not test everything, even where every check it reported is green.
   - `build` writes the marker, because only after `image-scope` can it know whether a scan was narrowed.
 
 **Scanning an image only when its inputs change.**
 
-- `changes` sets `images` for nearly every pull request that touches Go, so all nine images were built and scanned each time.
+- `changes` sets `images` for nearly every pull request that touches Go, so all ten images were built and scanned each time.
 - `image-scope` runs [`scripts/image-scope.sh`](../scripts/image-scope.sh) on the changed paths and answers per image. The scan jobs' `TRIVY_IMAGE` and `TRIVY_DOCKERFILE` are its list.
 - A changed path reaches an image when it is:
   - the image's Dockerfile, or that of a local base it builds `FROM` (`agent-vscode` and `agent-novnc` sit on `agent-base`);
@@ -593,7 +568,6 @@ So:
   - so they become ready about half a minute after the long jobs, which by then hold their runners, and share what is left.
 - Nothing reads `diagrams`' result: each of them runs on `!cancelled()`, whether it passed or failed.
 - The job they wait on has to start with the run: one that itself needs `changes` would send the short jobs through the queue a third time when the account is busy.
-- Before this, a nine-minute job could sit behind eight two-minute scans: in run 37403763766 `conformance` queued 98 s and `go (unit)` 90 s while four `trivy` jobs started at once.
 
 **Stop a red run early.**
 
@@ -614,23 +588,6 @@ So:
 - A cancelled run cannot read green: the failed gate keeps `failure`, and every unfinished job ends `cancelled`, which branch protection rejects.
   - `build` and `test-pg` run on `always()`, so they report `failure`, never `skipped`.
 - The cost: one failure shows at a time, a flaky gate stops the run too, and a stop job waits for a slot when the account is at its cap.
-
-**Before and after.**
-
-- "Before" is main's last green run before this change, 35918188245 (a push: every job ran).
-- Wall time runs from the first job's start to the last job's end.
-- The 7.3 minutes the run queued before any job started are not included.
-- `build` itself queued 26.5 minutes for a runner.
-- On this repository, runner slots and not job length set the wall time (see above), so the "after" rows are measured, not predicted.
-
-| Run | `build` | `conformance-k8s` | `ui-e2e` | `test-pg` | Wall |
-|---|---|---|---|---|---|
-| Before: 35918188245, push to main | 22.0 min | 13.1 min | 8.0 min | 6.2 min | 41.1 min |
-| After: 36043678020, full pull-request run | `go` legs: 3.2 (lint), 6.0 (unit), 5.1 (docker), 5.8 (k8s) min | 13.0 min | 11.2 min | 7.0 min | 14.0 min |
-
-- Run 36043678020 changed Go and `ci.yml`, so every job ran.
-- A pull request that touches one Go package, or a train pull request, runs the same full set of jobs.
-- `build` is now only the aggregator, and `conformance-k8s` is the new critical path.
 
 **By kind of change (2026-10-06).**
 
@@ -679,7 +636,7 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - If you already run wardynd somewhere, set `WARDYN_URL` + `WARDYN_CI_TOKEN` and `ci-run.sh` launches there (see "[CI's identity](#cis-identity)" above).
 - Or use the CLI directly — fully non-interactive with `WARDYN_URL` + `WARDYN_TOKEN`, the CI service identity's `wdn_` token, not a person's.
   - The shared `WARDYN_ADMIN_TOKEN` is no substitute: under OIDC it holds no model credential to launch a model run with.
-- `--task-mode exec` runs the task as a plain shell command, so **no `--agent` is needed** — the image is what the run needs, and naming an agent it never invokes was a formality this documentation used to demonstrate.
+- `--task-mode exec` runs the task as a plain shell command, so **no `--agent` is needed** — the image is what the run needs.
 
 ```sh
 wardyn run --image ubuntu:24.04 --task-mode exec \
@@ -688,13 +645,24 @@ wardyn run --image ubuntu:24.04 --task-mode exec \
   --task 'make test' --policy-file ci.json --wait --timeout 30m
 wardyn run get <id> --json     # final state, resolved image
 wardyn run grants <id>         # what the run was ELIGIBLE for (not a service token: 403 service_scope)
-wardyn audit <id> --json       # likewise
+wardyn audit <id> --json       # a service token reads only its own runs' rows
 ```
 
 - `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced.
 - `--placement remote|local` chooses where the sandbox lives. A local run goes to your own runners through `--pool <id>` or your default pool, else is refused `runner_pool_required`. `--runner <id>` pins one of your runners in that pool; unset, the pool picks an online one with room. Other refusals include `runner_offline` and `runner_at_capacity`.
 - `ci-run.sh` calls the same endpoint before launching.
 - A command that must stay up is a [service](SERVICES.md).
+
+**Retrying a launch.** `wardyn run` sends an `Idempotency-Key` and never retries a create itself. To make a job re-run safe, pass a key that is the same on every re-run of the job and differs between jobs and between the legs of a matrix. `ci-run.sh` reads it from `WARDYN_CI_IDEMPOTENCY_KEY`, and both example pipelines set it:
+
+```sh
+WARDYN_CI_IDEMPOTENCY_KEY="${{ github.run_id }}-${{ github.job }}-${{ strategy.job-index }}"   # GitHub Actions (job-index is the matrix leg)
+WARDYN_CI_IDEMPOTENCY_KEY="${BUILD_BUILDID}-${SYSTEM_JOBNAME}-${SYSTEM_JOBPOSITIONINPHASE:-0}"   # Azure Pipelines (position is set under strategy: parallel)
+wardyn run ... --idempotency-key "$WARDYN_CI_IDEMPOTENCY_KEY"      # the CLI directly
+```
+
+- For 24 hours the same key and request get the first run back; `wardyn run` says so on stderr. A different request with the key gets `422` `idempotency_key_reused`.
+- Re-run only once every control-plane replica runs 0.10.0 or later. An older replica ignores the key and starts a second run.
 
 **Provisioning the CI principal, once, against this deployment:**
 
@@ -715,10 +683,22 @@ wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
   '.provider_access[] | select(.provider == $p)'
 ```
 
+## Apply from a pipeline
+
+A pipeline can keep a [workload](operations/workloads.md) declared with `wardyn apply`. Use a service identity's token as `WARDYN_TOKEN`, as above, with `WARDYN_URL`.
+
+- A service identity's token may `apply`, `diff`, `apply --dry-run`, `workload list|get|delete|restart` and read runs.
+- `apply` exits `0` when the workload is applied, `1` when the organisation refuses the new run (the spec is stored and the old run keeps running). [Exit codes](operations/workloads.md#apply)
+- Before the approval gate, run `wardyn apply --dry-run`, as both examples do. It exits `1` when the apply would be refused and stores nothing. It calls `POST /api/v1/workloads/{name}/preview`, which answers created, updated or unchanged, each changed field, whether a run starts, and any refusal. [Preview an apply](operations/workloads.md#preview-an-apply)
+- Put the step behind your platform's approval gate: a GitHub environment with required reviewers, or an Azure DevOps environment with approvals.
+- The workload runs under the service identity's walls and grants, like any run it launches.
+
+These two files are examples. No Wardyn job runs them: [docs/ci/github-actions-apply.yml](ci/github-actions-apply.yml) and [docs/ci/azure-pipelines-apply.yml](ci/azure-pipelines-apply.yml).
+
 ## Images
 
 - `wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main` ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
-- every release tag publishes all nine images (`wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`, `agent-novnc`) cosign-signed, each with an attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
+- every release tag publishes all ten images (`wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`, `agent-novnc`, `agent-novnc-signin`) cosign-signed, each with an attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
 - ([.github/workflows/release.yml](../.github/workflows/release.yml) — see [RELEASING.md](../RELEASING.md) and the Helm chart's [README](../deploy/helm/wardyn/README.md)).
 - This BYOA pipeline (`ci-run.sh`) does not consume them, though: it still builds wardynd, the `wardyn-proxy` sidecar, and the agent image from source on every invocation (a few minutes per job).
 - [`scripts/up.sh`](../scripts/up.sh) now pulls the published images instead, falling back to a build when any is missing; `ci-run.sh` has not yet been switched to the same path, so a pipeline still pays the build.

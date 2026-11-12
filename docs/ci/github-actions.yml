@@ -36,7 +36,7 @@ jobs:
           # that branch would run arbitrary shell in front of your secrets.
           # Bump it deliberately, to a release you verified (docs/VERIFY.md);
           # a full commit sha pins harder still.
-          ref: v0.10.0-rc.10
+          ref: v0.10.0-rc.20
           path: wardyn
 
       - name: Run the governed sandboxed task
@@ -48,6 +48,11 @@ jobs:
           WARDYN_CI_TASK_MODE: exec
           WARDYN_CI_TASK: "echo hello from a governed sandbox && uname -a"
           WARDYN_CI_OUT: ${{ github.workspace }}/ci-artifacts
+          # The same on every re-run of this job (run_id does not change; run_attempt does) and
+          # different for each job and each matrix leg (job-index), so a re-run gets the first
+          # run back instead of launching another. It matters against your own control plane
+          # (WARDYN_URL, below).
+          WARDYN_CI_IDEMPOTENCY_KEY: ${{ github.run_id }}-${{ github.job }}-${{ strategy.job-index }}
           #
           # Variant — run a real agent (claude-code) on the control plane you
           # already run, as a dedicated CI principal that stored its own

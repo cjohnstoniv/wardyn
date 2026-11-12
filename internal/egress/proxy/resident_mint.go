@@ -99,8 +99,7 @@ func (p *Proxy) answerResidentMint(w http.ResponseWriter, r *http.Request, m Res
 		return
 	}
 	p.emitLocalDecision(r, egress.Allow, ruleSourceMint, nil)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(struct {
+	writeJSONStatus(w, http.StatusOK, "application/json", struct {
 		Kind       types.GrantKind `json:"kind"`
 		Token      string          `json:"token"`
 		Username   string          `json:"username,omitempty"`

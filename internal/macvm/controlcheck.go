@@ -76,18 +76,30 @@ func setDesktopPassword(ctx context.Context, g ToolsGuest, pw []byte, which stri
 // codeAlphabet has no look-alikes (no 0/O, 1/l/I).
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
 
+// typableAlphabet is the edit window's one-time code alphabet: 20 lowercase letters on the same key on
+// QWERTY, QWERTZ and AZERTY keyboards (no a, m, q, w, y or z, no digits, no shift), so the window's Type code
+// button, which presses keys by their position, types the same code whichever of those layouts the guest has.
+const typableAlphabet = "bcdefghijklnoprstuvx"
+
 // randomCode is n characters from codeAlphabet, from crypto/rand without
 // modulo bias.
-func randomCode(n int) ([]byte, error) {
+func randomCode(n int) ([]byte, error) { return randomFrom(codeAlphabet, n) }
+
+// typableCode is n characters from typableAlphabet, from crypto/rand without modulo bias. Ten of them
+// carry about 43 bits.
+func typableCode(n int) ([]byte, error) { return randomFrom(typableAlphabet, n) }
+
+// randomFrom is n characters from alphabet (at most 256), from crypto/rand without modulo bias.
+func randomFrom(alphabet string, n int) ([]byte, error) {
 	out := make([]byte, 0, n)
 	b := make([]byte, 1)
-	limit := byte(256 - 256%len(codeAlphabet))
+	limit := 256 - 256%len(alphabet)
 	for len(out) < n {
 		if _, err := rand.Read(b); err != nil {
 			return nil, err
 		}
-		if b[0] < limit {
-			out = append(out, codeAlphabet[int(b[0])%len(codeAlphabet)])
+		if int(b[0]) < limit {
+			out = append(out, alphabet[int(b[0])%len(alphabet)])
 		}
 	}
 	return out, nil

@@ -211,7 +211,7 @@ scripts/record-demo.sh --video 13 \
 - Recording is a **release-cut act**, not a branch act — nothing here is re-shot on `prep/v0.6`.
 - What 0.6 changed about what the series *claims*, so the cut knows exactly what it owes:
 - Numbers below are the **twelve-episode** series `main` renumbered to (`01 why-govern-agents` … `12 audit-and-attach`), plus 0.6's new `V13`.
-- The old 0.5 numbering the campaign was shot in maps:
+- The old 0.5 numbering maps:
   - old 01 → **V02**, 02 → **V04**, 03 → **V05**, 04 → **V06**, 05 → **V07**, 06 → **V09**,
   - 07 → **V10**, 08 stays **V08**, 09 → **V11**, 10 → **V12**.
 
@@ -229,7 +229,7 @@ scripts/record-demo.sh --video 13 \
   - and the verifier's three audit assertions —
   - `ssh.exec` for argv `hostname` at exit 0, an `ssh.exec` row carrying exit 37, and every `ssh.authenticate` success attributed to the run's owner —
   - are exactly the beats the script films.
-- `check_video_13` has been exercised end to end once: the campaign's live lane recorded a take against its `kind-quickstart` cluster and graded it with the verifier's report.
+- `check_video_13` has been exercised end to end once: it was run once against a `kind-quickstart` cluster and graded with the verifier's report.
 - That is why this row says "re-shoot", not "first take".
 - But there is no dry-run mode — the check reads a live cluster's audit trail — and that cluster, the take, and the report are all gone.
 - So the cut re-creates the cluster and re-shoots, and until it does, the series has no V13 to publish.

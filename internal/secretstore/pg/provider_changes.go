@@ -113,8 +113,8 @@ func lockProviderOwners(ctx context.Context, tx pgx.Tx, invalidations []secretst
 
 // providerSecretNames are the credential names a provider uid's connections are stored under.
 func providerSecretNames(uid string) []string {
-	names := make([]string, 0, 4)
-	for _, part := range []string{"key", "oauth", "sso", "entra"} {
+	names := make([]string, 0, 5)
+	for _, part := range []string{"key", "oauth", "sso", "entra", "oidc"} {
 		names = append(names, types.ModelProviderSecretPrefix+uid+"-"+part)
 	}
 	return names

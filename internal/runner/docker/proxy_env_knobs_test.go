@@ -31,6 +31,7 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 	// not, on either substrate, until it rode this list.
 	t.Setenv("WARDYN_CREDENTIAL_REAUTH_TIMEOUT", "45s")
 	t.Setenv("WARDYN_GIT_APPROVAL_TIMEOUT", "10m")
+	t.Setenv("WARDYN_MODEL_USAGE", "off")
 
 	env, _, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
 	if err != nil {
@@ -47,6 +48,7 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 		"WARDYN_LLM_SCAN":                     "off",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 		"WARDYN_GIT_APPROVAL_TIMEOUT":         "10m",
+		"WARDYN_MODEL_USAGE":                  "off",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy container env %s = %q, want %q", name, got[name], want)

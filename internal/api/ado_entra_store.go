@@ -83,6 +83,8 @@ const (
 	// OAuth codes with the same meanings.
 	entraOAuthConsentRequired     = "consent_required"
 	entraOAuthInteractionRequired = "interaction_required"
+	// entraOAuthLoginRequired is OpenID Connect's "the person has to sign in again", the same remedy.
+	entraOAuthLoginRequired = "login_required"
 )
 
 // The failure classes a caller answers differently, as sentinels so a
@@ -202,6 +204,14 @@ type adoEntraBlob struct {
 	// this person on policy grounds (mintADOPAT); the next token created
 	// clears it.
 	MintBlockedAt time.Time `json:"mint_blocked_at,omitzero"`
+	// Issuer and IDPSubject are an endpoint sign-in's authority and the subject it knows the person by,
+	// kept so a review can say which platform account a person connected. Entra blobs carry neither.
+	Issuer     string `json:"issuer,omitempty"`
+	IDPSubject string `json:"idp_sub,omitempty"`
+	// CaptureDigest is the provider address and token URL an endpoint sign-in was captured for
+	// (endpointOIDCCaptureDigest). A redemption posts the refresh token only while it matches; an endpoint
+	// sign-in without one reads as no sign-in. Entra blobs carry none.
+	CaptureDigest string `json:"capture_digest,omitempty"`
 }
 
 // signInEnded reports whether the last renewal found this sign-in unusable
@@ -217,7 +227,7 @@ const adoEntraSourceSignIn = "signin"
 // deployment does not have. Not authentication — the authority is the only
 // oracle for that.
 func (b adoEntraBlob) valid() bool {
-	return b.RefreshToken != "" && len(b.Scopes) > 0 && b.TenantID != "" && b.ClientID != "" && b.Subject != ""
+	return b.RefreshToken != "" && len(b.Scopes) > 0 && (b.TenantID != "" || b.Issuer != "") && b.ClientID != "" && b.Subject != ""
 }
 
 // adoEntraSecretName is the reserved store name holding one provider row's
@@ -494,6 +504,11 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 	if !found {
 		return ADOEntraAccess{}, ErrADOEntraNotCaptured
 	}
+	// Before anything is posted: an endpoint sign-in is presented only where it was captured. A mismatch
+	// answers like no sign-in and touches nothing, so a refusal below can only end a sign-in that matched.
+	if err := s.endpointOIDCStillBound(ctx, ec, blob); err != nil {
+		return ADOEntraAccess{}, err
+	}
 	// The requested subset must be inside the CONSENTED set the capture
 	// recorded. Refusing here saves a round trip and, more importantly, names
 	// the cause: a scope the consent never covered is a consent question, and
@@ -502,11 +517,15 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 		return ADOEntraAccess{}, fmt.Errorf("%w: %q is outside the scopes this sign-in was captured with", ErrADOEntraConsentRequired, want)
 	}
 
-	resp, err := s.postADOEntraToken(ctx, cfg, url.Values{
+	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {blob.RefreshToken},
-		"scope":         {strings.Join(scopes, " ")},
-	})
+	}
+	// An endpoint sign-in sends no scope on a refresh: the authority renews what the person granted.
+	if ec.sendsScopeOnRefresh() {
+		form.Set("scope", strings.Join(scopes, " "))
+	}
+	resp, err := s.postEntraToken(ctx, cfg, ec, form)
 	if err != nil {
 		// Guarded by the revision read above, like the rotation's Put: a holder
 		// that lost the lock must not delete or mark dead a newer row.
@@ -535,6 +554,11 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 	}
 
 	granted := strings.Fields(resp.Scope)
+	if len(granted) == 0 && ec.omittedScopeIsGranted() {
+		// RFC 6749 section 5.1: a response with no scope granted what was asked for, which on a refresh
+		// with no scope is what the sign-in was captured with.
+		granted = slices.Clone(blob.Scopes)
+	}
 	if len(granted) == 0 {
 		// An authority that reports no granted scope has told us nothing about
 		// what this token may do, and since the granted set is routinely WIDER
@@ -641,7 +665,49 @@ type adoEntraTokenResponse struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-// postADOEntraToken performs one token request and classifies its answer.
+// tokenAuthority is where, and as whom, one token request is made. An Entra
+// application derives one (ADOEntraConfig.tokenAuthority); an endpoint's own
+// authority (endpoint_oidc.go) builds its own. Only the authorization_code and
+// refresh_token grants are ever posted through it, and never client_credentials.
+type tokenAuthority struct {
+	tokenURL     string
+	clientID     string
+	clientSecret string
+	// basicAuth sends the client's credentials as an HTTP Basic header
+	// (RFC 6749 section 2.3.1) instead of in the form.
+	basicAuth bool
+}
+
+// tokenAuthority is this application's token endpoint and client: the form
+// every Entra request carries is client_id and, when held, client_secret.
+func (c ADOEntraConfig) tokenAuthority() (tokenAuthority, error) {
+	tokenURL, err := c.tokenURL()
+	if err != nil {
+		return tokenAuthority{}, err
+	}
+	return tokenAuthority{tokenURL: tokenURL, clientID: c.ClientID, clientSecret: c.ClientSecret}, nil
+}
+
+// postADOEntraToken performs one Entra token request: postToken against the
+// application's own authority.
+func (s *Server) postADOEntraToken(ctx context.Context, cfg ADOEntraConfig, form url.Values) (adoEntraTokenResponse, error) {
+	ta, err := cfg.tokenAuthority()
+	if err != nil {
+		return adoEntraTokenResponse{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
+	}
+	return s.postToken(ctx, ta, form)
+}
+
+// postEntraToken is postADOEntraToken for any kind's capture: an endpoint
+// sign-in carries its own authority, every Entra kind uses cfg's.
+func (s *Server) postEntraToken(ctx context.Context, cfg ADOEntraConfig, ec entraCapture, form url.Values) (adoEntraTokenResponse, error) {
+	if ec.authority != nil {
+		return s.postToken(ctx, *ec.authority, form)
+	}
+	return s.postADOEntraToken(ctx, cfg, form)
+}
+
+// postToken performs one token request and classifies its answer.
 //
 // Hand-rolled over net/http rather than through an oauth2.TokenSource for one
 // reason that matters: this lane chooses the requested SCOPE per redemption and
@@ -649,21 +715,23 @@ type adoEntraTokenResponse struct {
 // decisions. http.DefaultTransport is the transport, so the call follows
 // WARDYN_DAEMON_PROXY_URL when set, exactly like every other wardynd-side
 // egress in this package.
-func (s *Server) postADOEntraToken(ctx context.Context, cfg ADOEntraConfig, form url.Values) (adoEntraTokenResponse, error) {
+func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Values) (adoEntraTokenResponse, error) {
 	var out adoEntraTokenResponse
-	form.Set("client_id", cfg.ClientID)
-	if cfg.ClientSecret != "" {
-		form.Set("client_secret", cfg.ClientSecret)
+	if !ta.basicAuth {
+		form.Set("client_id", ta.clientID)
+		if ta.clientSecret != "" {
+			form.Set("client_secret", ta.clientSecret)
+		}
 	}
-	tokenURL, err := cfg.tokenURL()
-	if err != nil {
-		return out, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader([]byte(form.Encode())))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ta.tokenURL, bytes.NewReader([]byte(form.Encode())))
 	if err != nil {
 		return out, fmt.Errorf("%w: build token request: %w", ErrADOEntraUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if ta.basicAuth {
+		// RFC 6749 section 2.3.1: the id and the secret are form-encoded before they are joined.
+		req.SetBasicAuth(url.QueryEscape(ta.clientID), url.QueryEscape(ta.clientSecret))
+	}
 	// CheckRedirect refuses to FOLLOW anything: this body carries the client
 	// secret and the refresh token, and net/http replays a POST body on a
 	// 307/308. The endpoint does not redirect, so a 3xx is answered as the
@@ -717,7 +785,7 @@ func classifyADOEntraError(code, desc string) error {
 	switch {
 	case code == entraOAuthConsentRequired || strings.Contains(desc, entraConsentRequiredCode):
 		return fmt.Errorf("%w: %s (%s)", ErrADOEntraConsentRequired, code, entraConsentRequiredCode)
-	case code == entraOAuthInteractionRequired:
+	case code == entraOAuthInteractionRequired || code == entraOAuthLoginRequired:
 		return fmt.Errorf("%w: %s%s", ErrADOEntraInteractionRequired, code, aadstsSuffix(desc))
 	case code == "invalid_grant":
 		return fmt.Errorf("%w: %s", ErrADOEntraDeadCredential, code)

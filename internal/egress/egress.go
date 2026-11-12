@@ -46,6 +46,11 @@ type Request struct {
 	Method           string // HTTP method, or "CONNECT" for tunneled TLS
 	Path             string // empty for CONNECT (hostname-only visibility)
 	Time             time.Time
+	// Relayed: the request came in on a VM run's relay listener, so it is a guest flow that did not use the
+	// run's proxy settings (the guest OS's own services, apps that ignore HTTPS_PROXY). Never idle activity.
+	// It stays inside the proxy process and is never on the wire: a control plane that decodes runner records
+	// strictly would refuse a new key from a runner upgraded first.
+	Relayed bool `json:"-"`
 }
 
 // DecisionLog is the structured record streamed to the control plane for
@@ -111,6 +116,81 @@ type DecisionLog struct {
 	// policy:tool-deny row: the tool or "*", prefixed "<harness>:" under
 	// per-harness rules. Empty on every other row.
 	MatchedRule string `json:"matched_rule,omitempty"`
+	// GatewayCallID is the id the proxy sent in X-Wardyn-Call-Id on one attempt to a
+	// model gateway route (or to an MCP server on a run that has such a route), so
+	// the gateway's access log and this row join on it. Made by the proxy for every
+	// attempt, never taken from the sandbox. Empty on every row of a run with no
+	// gateway route, and on every row for a host that is neither.
+	GatewayCallID string `json:"gateway_call_id,omitempty"`
+	// Usage, when non-nil, makes this row a model call's token counts (rule source
+	// llm:usage), sent once the answer has been relayed. It is not an egress
+	// decision: the call's own allow row was sent before the answer.
+	Usage *ModelUsage `json:"usage,omitempty"`
+	// ModelTunnel marks the allow of a CONNECT the proxy tunnelled opaquely to a model host: a model call it
+	// could not read, whether or not content inspection is on. Absent on every other row.
+	ModelTunnel bool `json:"model_tunnel,omitempty"`
+	// DNS, when non-nil, makes this row one DNS query from the run's sandbox,
+	// written as run.dns.query and never as an egress decision.
+	DNS *DNSQuery `json:"dns,omitempty"`
+}
+
+// DNSQuery is one DNS query a run's sandbox asked and what it was told. Name is
+// empty when its spelling was refused. Via says who answered: "vm_relay" (a VM
+// guest's relay, from its own name table) or "proxy" (the run proxy's listener,
+// which refuses every query except AAAA for its own name, and records the rest). Neither looks
+// anything up.
+type DNSQuery struct {
+	Name    string `json:"name,omitempty"`
+	Type    string `json:"type"`
+	Outcome string `json:"outcome"` // answered | refused | prep_refused
+	Cause   string `json:"cause,omitempty"`
+	Answer  string `json:"answer,omitempty"` // the synthetic address of an answered A query
+	Via     string `json:"via"`
+	Repeat  int    `json:"repeat,omitempty"`
+}
+
+// DNSQueryAction is the audit action of a DNS query row.
+const DNSQueryAction = "run.dns.query"
+
+// AuditFields adds q's fields to a run.dns.query row's data.
+func (q *DNSQuery) AuditFields(data map[string]any) {
+	data["name"], data["type"], data["outcome"], data["via"] = q.Name, q.Type, q.Outcome, q.Via
+	if q.Cause != "" {
+		data["cause"] = q.Cause
+	}
+	if q.Answer != "" {
+		data["answer"] = q.Answer
+	}
+	if q.Repeat > 0 {
+		data["repeat"] = q.Repeat
+	}
+}
+
+// AuditOutcome is the row's outcome: success for an answered query, denied for a refused one.
+func (q *DNSQuery) AuditOutcome() string {
+	if q.Outcome == "answered" {
+		return "success"
+	}
+	return "denied"
+}
+
+// ModelUsage is one model call's token counts, read from the provider's own
+// answer and never estimated. Numbers, a model name and a host only: no
+// content, no headers. Counts are as the provider reports them: Anthropic and
+// Bedrock Input excludes cache tokens, OpenAI Input includes cached tokens.
+type ModelUsage struct {
+	// CallID is minted by the proxy for each attempt; the store keeps one row per id.
+	CallID     uuid.UUID `json:"call_id"`
+	Vendor     string    `json:"vendor"` // the answer's dialect: anthropic | openai | bedrock | ollama
+	Host       string    `json:"host"`
+	Model      string    `json:"model,omitempty"`
+	Input      int64     `json:"input_tokens"`
+	Output     int64     `json:"output_tokens"`
+	CacheRead  int64     `json:"cache_read_tokens"`
+	CacheWrite int64     `json:"cache_write_tokens"`
+	Reasoning  int64     `json:"reasoning_tokens"`
+	State      string    `json:"state"`            // counted | partial | uncounted
+	Reason     string    `json:"reason,omitempty"` // why a call is partial or uncounted
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.
@@ -124,7 +204,7 @@ type ScanSummary struct {
 	Action     string        `json:"action"`                // "alert" | "block" | "skip" | "bypass" | "fail"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
-	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "body_oversize" | "uninspected_channel" | "findings_capped"
+	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "body_oversize" | "uninspected_channel" | "findings_capped" | "deferred_to_gateway"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
 	// THE WIRE, since Findings above carries at most the cap's worth of rows
@@ -137,6 +217,11 @@ type ScanSummary struct {
 	FindingsCapped  bool `json:"findings_capped,omitempty"`
 	FindingsPastCap int  `json:"findings_past_cap,omitempty"`
 	FindingsTotal   int  `json:"findings_total,omitempty"`
+
+	// DeferredTo is the model provider whose gateway checks this prompt itself: the proxy
+	// looked only for the run's own secret values, or, with no such check on the policy,
+	// for nothing. Empty on every other request.
+	DeferredTo string `json:"deferred_to,omitempty"`
 }
 
 // ScanFinding is one content-free detection record (detector + location only).

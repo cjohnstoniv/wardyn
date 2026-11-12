@@ -148,6 +148,9 @@ type pushRuleSet struct {
 	// denyNewExec refuses a push that adds an executable file or makes one
 	// executable.
 	denyNewExec bool
+	// denyAll refuses every push before its body is read: content, ref
+	// updates and deletes alike.
+	denyAll bool
 }
 
 // compilePushRules builds the compiled form, or nil when the spec carries no
@@ -168,6 +171,7 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 	}
 	rs.maxFileBytes = int64(s.MaxFileSizeMiB) << 20
 	rs.denyNewExec = s.DenyNewExecutables
+	rs.denyAll = s.DenyAll
 	rs.deny = rs.compile(s.DenyPaths)
 	rs.review = rs.compile(s.RequireReviewPaths)
 	return rs
@@ -393,6 +397,10 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	if rules == nil {
 		return body, noRelease, true
 	}
+	if rules.denyAll {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPushDenyAll, http.StatusForbidden, pushDenyAllRefusal)
+		return nil, noRelease, false
+	}
 	buf, review, release, ok := p.inspectPush(w, r, rules, body, subject, deny, forge)
 	if !ok {
 		return nil, noRelease, false
@@ -489,7 +497,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		fcancel()
 		if forge != nil && forge.reads > 0 {
 			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
-				Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+				Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
 		}
 		if why != "" {
 			p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -592,7 +600,7 @@ func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]
 	}
 	if forge != nil && forge.reads > 0 {
 		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
-			Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+			Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,
@@ -787,6 +795,13 @@ func pathsBody(headline string, paths []string, noun, why, remedy string) string
 // remote could not be derived: the push rules cannot be looked up, which is a
 // refusal and never "no rules".
 const ruleSourceGitPushEntry = "brokered:git:push-entry-underivable"
+
+// ruleSourceGitPushDenyAll marks a push refused because the run's push_rules
+// set deny_all: every push to every remote is refused, whatever it carries.
+const ruleSourceGitPushDenyAll = "brokered:git:push-deny-all"
+
+// pushDenyAllRefusal is what git shows for a push deny_all refused.
+const pushDenyAllRefusal = "wardyn: every push is refused for this run"
 
 // rulesForRemote is the content rules of the SCM entry that owns the remote at
 // host and path. With no PushRuleSets the run is on the older run-wide regime

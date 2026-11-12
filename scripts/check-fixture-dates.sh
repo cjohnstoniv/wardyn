@@ -58,11 +58,25 @@ literal_dates() {
 declare -A ALLOWLIST=(
   ["internal/api/uigateway_record_test.go"]=1 # injected clock only: srv.cfg.Now starts here and steps a second per call, never compared to the wall clock
   ["internal/recording/rfb_test.go"]=4 # injected clock only: the recorder's clock starts here and the test advances it, never compared to the wall clock
+  ["cmd/wardyn-runnerd/proxy_image_wait_test.go"]=1 # passthrough only: status.json's next-try time, echoed in the stage detail, never compared to the clock
+  ["internal/auditreceipt/statement_test.go"]=3 # passthrough only: a checkpoint statement's signed_at, compared as bytes, never compared to the clock
+  ["internal/auditreceipt/verify_test.go"]=2 # passthrough only: checkpoint statements' signed_at, signed or parsed as given, never compared to the clock
+  ["internal/api/audit_receipt_test.go"]=1 # passthrough only: a checkpoint statement's signed_at, signed as given, never compared to the clock
+  ["cmd/wardyn/audit_receipt_cmd_test.go"]=2 # passthrough only: a checkpoint statement's signed_at and a served key's created_at, signed or printed as given, never compared to the clock
+  ["pkg/client/audit_receipt_test.go"]=1 # passthrough only: a served key's created_at, decoded as given, never compared to the clock
+  ["internal/egress/proxy/kube_restart_test.go"]=3 # passthrough only: kubectl's restartedAt annotation value, matched as bytes in the patch body, never compared to the clock
+  ["internal/types/kube_call_test.go"]=6 # passthrough only: kubectl's restartedAt annotation values, hashed as bytes into a call key, never compared to the clock
+  ["cmd/wardyn-runnerd/doctor_folders_test.go"]=3 # passthrough only: the edit record's read time and the tools record's tried time, printed in the stage detail, never compared to the clock
+  ["cmd/wardyn-runnerd/doctor_folders_unix_test.go"]=2 # passthrough only: the base manifest's created time copied into the edit record, never compared to the clock
+  ["ui/src/app/components/screens/approvals-mcp-call.test.tsx"]=2 # passthrough only: a wire row's requested_at and decided_at, decoded as given, never compared to the clock
+  ["internal/auditsign/keyring_test.go"]=8 # injected clock only: the keyring's key times start at t0 and the refused documents' created_at and replaced_at are parsed as given, never compared to the wall clock
+  ["internal/modelusage/usage_test.go"]=1 # passthrough only: the created_at of a documented Ollama response, which the parser ignores
   ["cmd/wardyn-runnerd/doctor_status_test.go"]=2 # passthrough only: status.json's last-error time, echoed in the stage detail, never compared to the clock
   ["ui/src/app/components/screens/run-detail/service-panel.test.tsx"]=2 # injected clock only: the panel is rendered at a fixed now and a lease end, both passed in, never compared to the wall clock
   ["ui/src/app/components/wardyn/copy/run-service.test.ts"]=5 # injected clock only: agoText and serviceBadge read a fixed now passed in, never the wall clock
   ["ui/src/app/components/screens/approvals-lists.test.tsx"]=4 # display only: two decided rows' requested and decided times
   ["ui/src/app/components/screens/permissions.test.tsx"]=1 # display only: a deactivated person's deactivated_at
+  ["ui/src/app/components/screens/run-detail/widgets/identity-computer-folder.test.tsx"]=2 # display only: a give-up deadline rendered in three time zones, never compared to the clock
   ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
   ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=24 # passthrough only: audit rows' time, a gap's start/end, a playback's started_at (also in the failed action-feed case) and the stopped-at time read from it, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
@@ -229,7 +243,7 @@ declare -A ALLOWLIST=(
   # A macOS base's created_at and edited_at: the age and edit tests pass a fixed instant in as the clock (statusNow,
   # Now, macOSBaseLimit.Now) and compare only to it; the runnerwire tests only encode and decode them.
   ["cmd/wardyn-runnerd/macos_vm_age_test.go"]=9
-  ["cmd/wardyn-runnerd/macos_vm_edit_test.go"]=1
+  ["cmd/wardyn-runnerd/macos_vm_edit_test.go"]=2
   ["internal/api/run_macos_vm_age_test.go"]=1
   ["internal/macvm/edit_test.go"]=1
   ["internal/runnerwire/macvm_base_age_test.go"]=2
@@ -238,6 +252,10 @@ declare -A ALLOWLIST=(
   ["cmd/wardyn-runnerd/macos_vm_bases_test.go"]=2
   ["internal/api/run_macos_base_test.go"]=4
   ["internal/runnerwire/macvm_edit_test.go"]=2
+  # A kept machine's created_at, expiry and last stop: the machines list prints them as written, and the row test
+  # compares the printed date and time to those literals; the conformance self-test passes a fixed now in as the clock.
+  ["cmd/wardyn-runnerd/macos_vm_machines_test.go"]=5
+  ["test/conformance/macvm/kept_test.go"]=1
 )
 
 fail=0

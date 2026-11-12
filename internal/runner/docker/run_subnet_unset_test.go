@@ -23,8 +23,8 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// updateUnsetGolden rewrites testdata/run-network-unset.golden; it was captured from origin/main's
-// driver (the lane's BASE overlay), before the pool existed.
+// updateUnsetGolden rewrites testdata/run-network-unset.golden: the driver's requests from before the
+// pool existed, with what the run network's shape (run_network_shape.go) added since.
 var updateUnsetGolden = flag.Bool("update-unset-golden", false, "rewrite testdata/run-network-unset.golden")
 
 // unsetPoolGolden is a sandbox create's network calls with WARDYN_DOCKER_RUN_SUBNET_POOL unset, as
@@ -65,7 +65,9 @@ func TestRunSubnetPool_UnsetIsUnchanged(t *testing.T) {
 
 // TestRunSubnetPool_UnsetSendsMainsRequests: with the pool unset, the requests the real Docker client
 // sends to create a run network (probe create, inspect, remove, create) are byte for byte the ones
-// origin/main's driver sent, held in testdata/run-network-unset.golden.
+// the driver sent before the pool existed, held in testdata/run-network-unset.golden, with what the run
+// network's shape adds: the engine version read first, gateway mode "isolated" and IPv6 off on each
+// create, and the read-back of the network made.
 func TestRunSubnetPool_UnsetSendsMainsRequests(t *testing.T) {
 	var mu sync.Mutex
 	var got strings.Builder
@@ -82,8 +84,10 @@ func TestRunSubnetPool_UnsetSendsMainsRequests(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/networks/create"):
 			_, _ = io.WriteString(w, `{"Id":"net1"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info"):
+			_, _ = io.WriteString(w, `{"ServerVersion":"29.4.2"}`)
 		case r.Method == http.MethodGet:
-			_, _ = io.WriteString(w, `{"Id":"net1","IPAM":{"Config":[{"Subnet":"10.88.0.0/16"}]}}`)
+			_, _ = io.WriteString(w, `{"Id":"net1","IPAM":{"Config":[{"Subnet":"10.88.0.0/16"}]},"Options":{"`+bridgeGatewayModeIPv4+`":"`+gatewayModeIsolated+`"}}`)
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}

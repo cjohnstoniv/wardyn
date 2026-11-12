@@ -275,18 +275,33 @@ func (req *governanceUnitRequest) parseComposition() string {
 	return ""
 }
 
-// writeUnit is store.WriteGovernanceUnit for a security caller, whose build is handed no transaction.
+// writeUnit is the write for a security caller. Its build is handed the write's transaction, so a read it
+// makes sees the graph lock's state and takes no second connection while this one is held; a store with no
+// governance transaction (a test double) writes through WriteGovernanceUnit with none. The build judges
+// "applies without a second human" by the caller's tier, not by whether it was handed a transaction.
 func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Querier) store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
-	return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+	var out types.GovernanceUnit
+	err := s.writeGovernance(ctx, func(q store.Querier) (err error) {
+		out, err = store.WriteGovernanceUnitQ(ctx, q, id, build(q))
+		return err
+	})
+	if errors.Is(err, errGovernanceTxUnsupported) {
+		return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+	}
+	return out, err
 }
 
 // unitWriteApplies reports whether a write build accepted applies without a second human: the
 // exemption (unitWriteExempt) judged on the assignments the write commits beside, and for a unit
 // admin's write, whose transaction q is handed in, no rename that changes whose legacy row wins
 // (unitRenameShiftQ, H3), since the unit it hands a person may be outside their units. A security
-// caller's write (q nil) is judged by the exemption alone.
+// caller's write (q nil) is judged by the exemption alone. A unit admin's exemption reads the envelopes
+// (envelopeExempt) on q, the connection this goroutine already holds, not on a second one.
 func (s *Server) unitWriteApplies(ctx context.Context, q store.Querier, all []types.GovernanceUnit, assignments []types.GovernanceMembership,
 	p types.GovernanceUnit, res *ResolvedUnit) (bool, error) {
+	if q != nil {
+		ctx = withUnitScopeTx(ctx, q)
+	}
 	if !s.unitWriteExempt(withGovernanceMemberships(ctx, assignments), all, p, res) {
 		return false, nil
 	}
@@ -316,6 +331,15 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	}
 	if msg := req.parseComposition(); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
+		return
+	}
+	// required_image_signers names must be signers the site defines: on the profile's own limits and on its overlay.
+	msg = s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", req.Limits.RequiredImageSigners)
+	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
+		msg = s.requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
+	}
+	if msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
 		return
 	}
 	write, unitAdmin := s.writeUnit, s.isUnitAdminCaller(r.Context())
@@ -362,13 +386,18 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			}
 			heldReq = kept
 			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, kept, all, b, limit)
+			err = s.checkDeciderLockWrite(r.Context(), q, err, p, all)
 			effective = res
 			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
 			newUnit := !slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id })
 			if err != nil || mode != govQueue || (unitAdmin && newUnit) {
 				return p, err
 			}
-			applies, err := s.unitWriteApplies(r.Context(), q, all, assignments, p, res)
+			appliesQ := q // only a unit admin's write is judged for a rename that shifts whose legacy row wins
+			if !unitAdmin {
+				appliesQ = nil
+			}
+			applies, err := s.unitWriteApplies(r.Context(), appliesQ, all, assignments, p, res)
 			if err == nil && !applies {
 				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval
@@ -399,6 +428,21 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	data := s.unitWriteSuccessData(r, id, saved, effective, unitAdmin, putCreates)
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
+	}
+	warns := s.unitWriteWarnings(r.Context(), saved, effective)
+	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
+}
+
+// unitWriteSuccessData is a stored write's governance.unit.write row data, with the unit admin's scope when one
+// wrote it. A PUT that created the profile is logged here, before the row is recorded.
+func (s *Server) unitWriteSuccessData(r *http.Request, id uuid.UUID, saved types.GovernanceUnit, effective *ResolvedUnit,
+	unitAdmin, putCreates bool,
+) map[string]any {
 	data := unitWriteAuditData(saved, effective)
 	if unitAdmin {
 		data = unitScopeAudit(data, r, s.auditUnitScope(r.Context(), saved.ID, false))
@@ -409,20 +453,21 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY would refuse it",
 			"unit_id", id.String())
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
-	if mode == govBypass {
-		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
-	}
+	return data
+}
+
+// unitWriteWarnings are the saved write's answer warnings: the omissions of an uncomposed profile, the
+// resolution's admin warnings, the rubric posture advisory and the Azure DevOps ceiling warnings, in that order.
+func (s *Server) unitWriteWarnings(ctx context.Context, saved types.GovernanceUnit, effective *ResolvedUnit) []string {
 	var warns []string
 	if !saved.Composed() {
 		warns = governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy, saved.Limits)
 	}
 	warns = append(warns, effective.AdminWarnings...)
-	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
+	if posture := s.rubricPostureAdvisory(ctx, effective); posture != "" {
 		warns = append(warns, posture)
 	}
-	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
+	return append(warns, s.governanceADOCeilingWarnings(ctx, effective)...)
 }
 
 // unitPutCreatesAtID reports a PUT (status 200) naming an id no profile in all holds: it would create a
@@ -537,9 +582,8 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		return p, nil, keep, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
-	if base == nil && overlay != nil && slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == store.DefaultUnitID }) {
-		// Built on the deployment default with no base named: the Default unit is that base, for a
-		// pass-through unit as for an own-walls one (the console sends no parent for either).
+	if base == nil && overlay != nil && defaultIsImpliedBase(all, id, p.Mode) {
+		// Built on the deployment default with no base named: the Default unit is that base.
 		base = &store.DefaultUnitID
 	}
 	if p.Mode == types.UnitModePassThrough {
@@ -609,6 +653,19 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 	}
 	p, res, err = s.checkLockedGraphWrite(p, all, b, limit)
 	return p, res, keep, err
+}
+
+// defaultIsImpliedBase is whether a write of unit id in mode that names no base is built on the Default
+// unit. An own-walls unit is (the console sends no parent). A pass-through unit is only when it already
+// sits under Default (the console's no-op save): a new or moved one must name its parent, with or
+// without an overlay, and is refused alike.
+func defaultIsImpliedBase(all []types.GovernanceUnit, id uuid.UUID, mode string) bool {
+	byID := unitsByID(all)
+	if _, ok := byID[store.DefaultUnitID]; !ok {
+		return false
+	}
+	parent := byID[id].ParentID
+	return mode != types.UnitModePassThrough || (parent != nil && *parent == store.DefaultUnitID)
 }
 
 // requestLockedKnobs is the locks a unit write stores: the request's, normalized, when it sends them,
@@ -908,11 +965,19 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 	return true
 }
 
-// unitPinnedMsg is the 409 a unit delete gets while workspaces name it as their owning unit.
+// unitPinnedMsg is the 409 a unit delete gets while workspaces or organisation components name it as
+// their owning unit.
 func unitPinnedMsg(e *store.ErrUnitPinned) string {
-	names := "a workspace"
+	var parts []string
 	if len(e.Workspaces) > 0 {
-		names = "workspace(s) " + strings.Join(e.Workspaces, ", ")
+		parts = append(parts, "workspace(s) "+strings.Join(e.Workspaces, ", "))
+	}
+	if len(e.Components) > 0 {
+		parts = append(parts, "component(s) "+strings.Join(e.Components, ", "))
+	}
+	names := "a workspace or component"
+	if len(parts) > 0 {
+		names = strings.Join(parts, " and ")
 	}
 	return "this governance profile is pinned by " + names + "; unpin them first"
 }

@@ -29,7 +29,8 @@ import (
 
 // providerSecretPrefix starts every per-person model-provider credential name:
 // wardyn-provider-<uid>-key for a typed key or token, -oauth for a Claude
-// sign-in, -sso for an AWS sign-in, -entra for an Azure Entra sign-in. Keyed by the provider's server-minted UID,
+// sign-in, -sso for an AWS sign-in, -entra for an Azure Entra sign-in, -oidc for a
+// custom endpoint's own sign-in. Keyed by the provider's server-minted UID,
 // never its admin-chosen ID, so a provider deleted and re-added under the same
 // ID starts with nobody's credential.
 const providerSecretPrefix = types.ModelProviderSecretPrefix
@@ -40,23 +41,25 @@ const (
 	providerSSOPart   = "sso"
 	// providerEntraPart is an azure_foundry sign-in: the person's Entra refresh token for the row's audience.
 	providerEntraPart = "entra"
+	// providerOIDCPart is a custom_endpoint's own sign-in: the person's refresh token at the endpoint's authority.
+	providerOIDCPart = "oidc"
 )
 
 // providerSecretParts are every part a person's credential for one provider
 // may be stored under.
-var providerSecretParts = []string{providerKeyPart, providerOAuthPart, providerSSOPart, providerEntraPart}
+var providerSecretParts = []string{providerKeyPart, providerOAuthPart, providerSSOPart, providerEntraPart, providerOIDCPart}
 
 func providerSecretName(uid, part string) string { return providerSecretPrefix + uid + "-" + part }
 
 // providerSignInSecret reports whether name is a per-person sign-in capture
-// (-oauth, -sso, -entra). Those are reserved at every sink and API (reservedSecret): a
+// (-oauth, -sso, -entra, -oidc). Those are reserved at every sink and API (reservedSecret): a
 // sign-in blob is never a header value, so no grant may name one. A -key is
 // not: the injection sink resolves it by name from the namespace a grant
 // snapshots, so it is reserved only at the generic secrets API and the broker.
 func providerSignInSecret(name string) bool {
 	return strings.HasPrefix(name, providerSecretPrefix) &&
 		(strings.HasSuffix(name, "-"+providerOAuthPart) || strings.HasSuffix(name, "-"+providerSSOPart) ||
-			strings.HasSuffix(name, "-"+providerEntraPart))
+			strings.HasSuffix(name, "-"+providerEntraPart) || strings.HasSuffix(name, "-"+providerOIDCPart))
 }
 
 // cliSecretPrefix starts every person's CLI sign-in capture:
@@ -86,6 +89,7 @@ var providerTypedKinds = map[types.ModelProviderKind]bool{
 const (
 	mpcNotFound = "No model provider %q is available to you"
 	mpcSignIn   = "%q is connected by signing in, not with a key"
+	mpcSignsIn  = "%q signs people in, so a token cannot be pasted for it. Use Sign in"
 	mpcNoPerson = "The admin token is a shared credential rather than a person, so it cannot hold a model credential of its own — sign in to the console, or use your own wdn_ API token"
 	mpcBody     = `Body must be {"value":"<your key or token>"}`
 	mpcTooShort = "Your key or token must be at least %d characters"
@@ -139,6 +143,8 @@ func (s *Server) ownSecret(ctx context.Context, owner, name string) ([]byte, boo
 func (s *Server) mountModelProviderCredentialRoutes(r chi.Router) {
 	r.Put("/model-providers/{id}/credential", s.handlePutProviderCredential)
 	r.Delete("/model-providers/{id}/credential", s.handleDeleteProviderCredential)
+	r.Get(endpointOIDCSignInRoute, s.handleEndpointOIDCSignIn)     // endpoint_oidc.go
+	r.Get(endpointOIDCCallbackRoute, s.handleEndpointOIDCCallback) // endpoint_oidc.go
 }
 
 // credentialOwner is the namespace the caller's own model credential lives in
@@ -189,7 +195,11 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, o
 	holdsKey := false
 	if !granted {
 		var err error
-		if holdsKey, err = s.ownsSecretChecked(r.Context(), owner, providerSecretName(p.UID, providerKeyPart)); err != nil {
+		part := providerKeyPart
+		if p.OIDC != nil {
+			part = providerOIDCPart
+		}
+		if holdsKey, err = s.ownsSecretChecked(r.Context(), owner, providerSecretName(p.UID, part)); err != nil {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonSinkStoreUnavailable, loggedMsg(r.Context(), "the secret store is unavailable; try again", err))
 			return types.ModelProvider{}, false
 		}
@@ -199,6 +209,11 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, o
 	}
 	if !providerTypedKinds[p.Kind] {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderCredentialIsSignIn, fmt.Sprintf(mpcSignIn, id))
+		return types.ModelProvider{}, false
+	}
+	// A row that signs people in takes no pasted token. A delete still reaches the person's own sign-in.
+	if p.OIDC != nil && granted {
+		writeErrorReason(w, http.StatusConflict, reasonModelProviderCredentialSignsIn, fmt.Sprintf(mpcSignsIn, id))
 		return types.ModelProvider{}, false
 	}
 	return p, true
@@ -297,7 +312,10 @@ func (s *Server) handleDeleteProviderCredential(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), providerSecretName(p.UID, providerKeyPart)); err != nil {
+	if p.OIDC != nil {
+		s.revokeEndpointOIDC(r.Context(), owner, p)
+	}
+	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), providerCredentialName(p)); err != nil {
 		writeServerError(w, r, "delete model provider credential", err)
 		return
 	}

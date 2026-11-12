@@ -87,10 +87,13 @@ const (
 	// change, or the names a namespace still holds. Only a runner that lists workload namespaces
 	// sends it.
 	EventWorkload = "workload"
+	// EventMacWindowUnexpected carries a MacWindowUnexpected: a window opened on a macOS VM run through
+	// its helper's control socket, not through a mac_window call. Event.RunID is the run.
+	EventMacWindowUnexpected = "mac_window_unexpected"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that
@@ -147,6 +150,14 @@ type Caps struct {
 	// runner (0.10 on). Absent (an older runner) reads as none, so a person sees
 	// "no runner on your computer" rather than a refused call.
 	Folders bool `json:"folders,omitempty"`
+	// FolderPassOnce says the runner runs at most one folder pass per run at a time and refuses a second
+	// with folder_pass_busy (0.10 on). Absent (an older runner), the org starts a pass only once the last
+	// one it started is settled.
+	FolderPassOnce bool `json:"folder_pass_once,omitempty"`
+	// ProxyFence says the runner serves fence_proxy (it cuts the agent off its networks) and honours a policy
+	// generation on replace_proxy, stop_proxy and end (0.10 on). Absent (an older runner), the org sends it
+	// no proxy replace and no generation.
+	ProxyFence bool `json:"proxy_fence,omitempty"`
 	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
@@ -183,13 +194,36 @@ type Caps struct {
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.
 const (
-	ProxySettingAWSSigV4       = "aws_sigv4"
-	ProxySettingScrubResponses = "scrub_responses"
-	ProxySettingVM             = "vm"
-	ProxySettingPortRule       = "port_rule"
-	ProxySettingLocalModels    = "local_models"
-	ProxySettingKubeAPI        = "kube_api"
-	ProxySettingCanonicalRepos = "canonical_push_repos"
+	ProxySettingAWSSigV4        = "aws_sigv4"
+	ProxySettingScrubResponses  = "scrub_responses"
+	ProxySettingVM              = "vm"
+	ProxySettingPortRule        = "port_rule"
+	ProxySettingLocalModels     = "local_models"
+	ProxySettingKubeAPI         = "kube_api"
+	ProxySettingCanonicalRepos  = "canonical_push_repos"
+	ProxySettingGatewayIdentity = "gateway_identity"
+	ProxySettingGitPushWithheld = "git_push_withheld"
+	ProxySettingForgeHosts      = "forge_hosts"
+	ProxySettingAllowedModels   = "allowed_models"
+	// ProxySettingLLMHeaders is llm_headers: the headers a provider's gateway is given. Dropped, the gateway
+	// gets the request without them and may route it where its admin did not choose.
+	ProxySettingLLMHeaders = "llm_headers"
+	// ProxySettingAWSSigV4Gateways is aws_sigv4.gateways, a field inside aws_sigv4: a runner that
+	// predates it decodes the grant without it, and its proxy then sends the gateway calls unsigned
+	// for AWS, so such a runner is refused a run that carries one.
+	ProxySettingAWSSigV4Gateways = "aws_sigv4_gateways"
+	ProxySettingMCPApproveEach   = "mcp_approve_each"
+	// ProxySettingNoNetwork is no_network. Dropped, the run's proxy would serve the doors its allowlist
+	// does not key, so such a runner is refused the run.
+	ProxySettingNoNetwork = "no_network"
+	// ProxySettingRefuseIPLiterals is policy.refuse_ip_literals, a field inside policy: a runner that
+	// predates it decodes the policy without it, and its proxy then allows a literal under allow-all,
+	// so such a runner is refused a run that sets it under allow_all_egress, the only place it acts.
+	ProxySettingRefuseIPLiterals = "refuse_ip_literals"
+	// ProxySettingHostRules is policy.host_rules, a field inside policy: a runner that predates it
+	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
+	// such a runner is refused a run that has rules.
+	ProxySettingHostRules = "host_rules"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -211,13 +245,24 @@ func LocalModelRelayNeeded(pc runner.ProxyConfig) bool {
 
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.
-var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos}
+var ProxySettings = []string{
+	ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels,
+	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
+	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
+	ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals, ProxySettingHostRules,
+}
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
 // Nothing sets VM yet (the Docker driver will, where the desktop relay starts), so the org leaves it false; its gate stays.
 func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
-	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos} {
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0, pc.ModelLimit != nil,
+		pc.AWSSigV4 != nil && len(pc.AWSSigV4.Gateways) != 0,
+		pc.MCPApproveEach != nil,
+		len(pc.LLMHeaders) != 0,
+		pc.NoNetwork,
+		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
+		len(pc.Policy.HostRules) != 0} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
@@ -239,6 +284,9 @@ type VMCaps struct {
 	// SignIns says the runner hands each VM its sign-in store and pauses its agent (pause_agent,
 	// resume_agent) (#2972). A runner without it is never asked.
 	SignIns bool `json:"sign_ins,omitempty"`
+	// Drives says the runner shares a drive bound to it into a VM, by virtiofs (#3846). A runner
+	// without it (older, or a Kubernetes one) takes no VM run that carries a drive.
+	Drives bool `json:"drives,omitempty"`
 }
 
 // MacVMCaps is what a Mac runner's macOS VM sandboxes can be given right now. The org reads it through
@@ -271,6 +319,15 @@ type MacVMCaps struct {
 	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
 	// never sent a macOS VM run with one.
 	DiskDrives bool `json:"disk_drives,omitempty"`
+	// Window says the runner serves mac_window: it opens an attended window onto a macOS VM run it holds.
+	// A runner without it (older) is never sent the call.
+	Window bool `json:"window,omitempty"`
+	// KeptMachines says the runner keeps a person's kept machines (SandboxSpec.KeptMachine) and deletes
+	// them (kept_machine). A runner without it is never sent a macOS VM run with one.
+	KeptMachines bool `json:"kept_machines,omitempty"`
+	// Kept is the Mac's kept machines and the disk they may take; nil when the runner keeps none or has
+	// not counted yet.
+	Kept *MacVMKept `json:"kept,omitempty"`
 	// Bases are the Mac's other bases, each derived from Base (Standard, MAC-B04) with its operator's own
 	// install list, in name order; absent when it has none. A run names one in its create's macos_base.
 	Bases []MacVMDerivedBase `json:"bases,omitempty"`
@@ -290,6 +347,28 @@ type MacVMCaps struct {
 	// Absent is 0.
 	FreeGB int `json:"free_gb,omitempty"`
 	NeedGB int `json:"need_gb,omitempty"`
+}
+
+// MacVMKept is a Mac's kept machines. LimitBytes is the operator's limit for them all, WorstBytes what
+// they could grow to, AllocatedBytes what they take now.
+type MacVMKept struct {
+	LimitBytes     int64              `json:"limit_bytes"`
+	WorstBytes     int64              `json:"worst_bytes"`
+	AllocatedBytes int64              `json:"allocated_bytes"`
+	Machines       []MacVMKeptMachine `json:"machines,omitempty"`
+}
+
+// MacVMKeptMachine is one kept machine on the Mac, by the id the org gave it.
+type MacVMKeptMachine struct {
+	ID        string    `json:"id"`
+	Bytes     int64     `json:"bytes"`
+	InUse     bool      `json:"in_use,omitempty"`
+	Scrubbed  bool      `json:"scrubbed,omitempty"`
+	ExpiresAt time.Time `json:"expires_at"`
+	// RunID is the run booted from the machine now, the one whose helper holds its lock; empty when it is
+	// not in use. The org releases a machine only from the run it names, so an older snapshot cannot
+	// release a newer run's hold.
+	RunID string `json:"run_id,omitempty"`
 }
 
 // MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.
@@ -588,6 +667,46 @@ const (
 	// opened only by the runner, only as the reply stream of a local_attach call, and carries bytes
 	// in that one direction: the org's writes are reset. The org ends the session by resetting it.
 	KindPTYTee = "pty_tee"
+	// KindMacWindow is the stream of one attended window onto a macOS VM run. It is opened only by the
+	// runner, only as the reply stream of a mac_window call. It carries no input: when the window ends
+	// first the runner writes one MacWindowEnd line and half-closes it; the org ends the window by
+	// resetting or closing it.
+	KindMacWindow = "mac_window"
+)
+
+// MacWindowUnexpected is the mac_window_unexpected event's data: Grant is the grant id the helper's window
+// event carried, as seen (empty when it carried none, and never a grant the runner issued), and At is when
+// the runner saw the window open.
+type MacWindowUnexpected struct {
+	Grant string    `json:"grant"`
+	At    time.Time `json:"at"`
+}
+
+// MacWindowEnd is the one line a mac_window stream carries, written by the runner when the window ends
+// before the org ended it. Reason is runner.MacWindowEnd*.
+type MacWindowEnd struct {
+	Reason string `json:"reason"`
+}
+
+// MacWindowOpenSentence is the refusal for a second window on a run that has one open: the helper, the
+// runner and the organisation use these words (macvm.WindowAlreadyOpenSentence), so a person reads the
+// same sentence from any of them.
+const MacWindowOpenSentence = "This run's window is already open."
+
+// The runner's other window refusals, whole. A refusal the helper words itself carries its own sentence.
+const (
+	MacWindowNotMacSentence    = "This run is not a macOS VM, so it has no window to open."
+	MacWindowHelperOldSentence = "This run's macOS VM helper is too old to open a window. End the run and start it again on this runner."
+)
+
+// The helper's two refusals (window_not_at_mac) of a screen that is locked or not the person's, and of one
+// that could not be read, and its refusal (window_lock_unknown) of a screen whose lock it can't tell. The
+// runner's reply carries the sentence and not the code, so the organisation tells them by these words
+// (macvm.WindowNotAtMacSentence, macvm.WindowUnreadableSentence, macvm.WindowLockUnknownSentence).
+const (
+	MacWindowNotAtMacSentence    = "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again."
+	MacWindowUnreadableSentence  = "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again."
+	MacWindowLockUnknownSentence = "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed."
 )
 
 // Open is the OPEN payload.
@@ -603,7 +722,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

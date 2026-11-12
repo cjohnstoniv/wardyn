@@ -18,6 +18,10 @@ export interface ServiceSectionProps {
   onRestart: (restart: RunService["restart"]) => void;
   onPort: (port: number) => void;
   onHealth: (patch: Partial<NonNullable<RunService["health"]>>) => void;
+  /** Wardyn's own check of the port on or off (service.health.probe). */
+  onProbe: (on: boolean) => void;
+  /** The server's refusal of a service field, shown as it said it. */
+  refusal?: string;
   /** The checks say the person's limits pause idle runs, which freezes a service that waits for requests. */
   pauses?: boolean;
 }
@@ -30,7 +34,7 @@ const FIELD_ID: Record<ServiceField, string> = { port: "nr-service-port", path: 
 const FIELD_TEXT: Record<ServiceField, string> = { port: E.PORT_INVALID, path: E.PATH_INVALID, interval: E.EVERY_INVALID, failures: E.FAILURES_INVALID };
 
 /** "Keep it running" under an Automation / script's command: restart it when it fails, and check it on a port inside the sandbox. */
-export function ServiceSection({ service, onKeepRunning, onRestart, onPort, onHealth, pauses }: ServiceSectionProps) {
+export function ServiceSection({ service, onKeepRunning, onRestart, onPort, onHealth, onProbe, refusal, pauses }: ServiceSectionProps) {
   const health = service?.health;
   const problems = serviceProblems(service);
   // A field's invalid mark and the id of the sentence under it (and of its help, when it has one).
@@ -103,6 +107,18 @@ export function ServiceSection({ service, onKeepRunning, onRestart, onPort, onHe
               {error("failures")}
             </div>
           </div>
+          <div className="flex flex-col gap-1.5 border-t border-border pt-4">
+            <div className="flex items-center gap-2.5">
+              <Switch checked={!noCheck && health?.probe === "control_plane"} onChange={onProbe} disabled={noCheck} label={T.PROBE_LABEL} describedBy="nr-service-probe-help" />
+              <span aria-hidden="true" className="text-sm font-medium">{T.PROBE_LABEL}</span>
+            </div>
+            <p id="nr-service-probe-help" className="text-xs leading-snug text-muted-foreground">{noCheck ? T.PROBE_NEEDS_PORT : T.PROBE_HELP}</p>
+          </div>
+          {refusal && (
+            <p role="alert" className="rounded-lg border border-danger/25 bg-danger-subtle px-3 py-2 font-mono text-xs text-danger">
+              {refusal}
+            </p>
+          )}
         </>
       )}
     </div>

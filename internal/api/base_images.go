@@ -8,8 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
+	"unicode"
 
+	"github.com/distribution/reference"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
@@ -73,6 +77,270 @@ func imageRefPathSafe(ref string) bool {
 		}
 	}
 	return true
+}
+
+// image400Prefix — %s is the quoted value. A `*` in an image grant is only ever the registry-prefix form.
+const image400Prefix = `%s is not an image prefix — a prefix grant is "<registry host>/<path>/*": a lowercase registry host (a first segment holding a "." or ":", or "localhost"), plain path segments, and one "*" as the whole last segment, with no tag, digest, whitespace, "." or ".." segment`
+
+// imagePrefixSuffix ends an image capability value that grants a registry
+// prefix instead of one exact reference.
+const imagePrefixSuffix = "/*"
+
+// imagePrefixGrant reports whether an image capability value is a well-formed
+// prefix grant ("registry.example.com/team/*") and returns the part before
+// "/*". Any other value holding a "*" besides the bare wildcard is not a
+// grant of any kind: capValueMatches gives it no match at all (imageStarRow),
+// so a row stored before this form existed cannot start matching by accident.
+func imagePrefixGrant(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if !strings.HasSuffix(v, imagePrefixSuffix) {
+		return "", false
+	}
+	prefix := strings.TrimSuffix(v, imagePrefixSuffix)
+	return prefix, validImagePrefix(prefix)
+}
+
+// isImagePrefixGrant: v is a well-formed image prefix grant.
+func isImagePrefixGrant(v string) bool {
+	_, ok := imagePrefixGrant(v)
+	return ok
+}
+
+// imageStarRow: an image value with a "*" that is neither the bare wildcard nor
+// a well-formed prefix. The write boundary refuses it; a row stored earlier
+// matches nothing.
+func imageStarRow(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == capWildcard || !strings.Contains(v, "*") {
+		return false
+	}
+	_, ok := imagePrefixGrant(v)
+	return !ok
+}
+
+// validImagePrefix: a path-safe "host/seg/..." with no tag, digest, whitespace
+// or "*", whose first segment is a registry host by the same test
+// github.com/distribution/reference uses for a domain (a "." or ":" in it, or
+// exactly "localhost"). Without that, "team/*" would name a Docker Hub
+// namespace by accident. The host and every path segment are ASCII
+// [a-z0-9._-] (the host may also hold one ":port", 1..65535, and may not be
+// only dots). Nothing is normalised: the prefix is compared as typed.
+func validImagePrefix(prefix string) bool {
+	if !imageRefPathSafe(prefix) {
+		return false
+	}
+	segs := strings.Split(prefix, "/")
+	host := segs[0]
+	if !imageIsRegistryHost(host) || strings.Count(host, ":") > 1 {
+		return false
+	}
+	name, port, hasPort := strings.Cut(host, ":")
+	if hasPort {
+		n, err := strconv.Atoi(port)
+		if !allASCIIDigits(port) || err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	if strings.Trim(name, ".") == "" || !imageNameChars(name) {
+		return false
+	}
+	for _, seg := range segs[1:] {
+		if !imageNameChars(seg) {
+			return false
+		}
+	}
+	return true
+}
+
+// imageNameChars: a non-empty run of ASCII [a-z0-9._-].
+func imageNameChars(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// allASCIIDigits: a registry port is one or more ASCII digits.
+func allASCIIDigits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// imageRepoAsTyped is a reference with its @digest and :tag removed, cut on
+// the string as typed (no normalisation: a bare "nginx" stays "nginx", a host
+// keeps its case). ok is false for a reference that cannot be an image: any
+// whitespace, a "*", a "." or ".." or empty segment, a digest holding a "/", or
+// a ":" outside the host and the last segment.
+func imageRepoAsTyped(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if strings.ContainsFunc(ref, unicode.IsSpace) || strings.Contains(ref, "*") || !imageRefPathSafe(ref) {
+		return "", false
+	}
+	if at := strings.Index(ref, "@"); at >= 0 {
+		if strings.Contains(ref[at:], "/") {
+			return "", false
+		}
+		ref = ref[:at]
+	}
+	segs := strings.Split(ref, "/")
+	last := len(segs) - 1
+	for i := 1; i < last; i++ {
+		if strings.Contains(segs[i], ":") {
+			return "", false
+		}
+	}
+	if last > 0 {
+		segs[last], _, _ = strings.Cut(segs[last], ":")
+	}
+	return strings.Join(segs, "/"), true
+}
+
+// imagePrefixCovers: a prefix grant matches want only when want's repository,
+// as typed, starts with prefix + "/" and has at least one more segment. The
+// tag and digest play no part; a want that is not a plausible reference
+// matches nothing.
+func imagePrefixCovers(prefix, want string) bool {
+	repo, ok := imageRepoAsTyped(want)
+	return ok && len(repo) > len(prefix)+1 && strings.HasPrefix(repo, prefix+"/")
+}
+
+// imagePrefixOverlaps is the prefix half of capValueOverlaps, asked only after
+// capValueMatches said no: two prefixes overlap when one is a segment-boundary
+// prefix of the other (or they are equal), and an exact value overlaps a
+// prefix that would match it. A prefix grant against an exact want is
+// capValueMatches' own question, so it is not repeated here.
+func imagePrefixOverlaps(grantValue, want string) bool {
+	wp, wantIsPrefix := imagePrefixGrant(want)
+	if !wantIsPrefix {
+		return false
+	}
+	gp, grantIsPrefix := imagePrefixGrant(grantValue)
+	if !grantIsPrefix {
+		return imagePrefixCovers(wp, grantValue)
+	}
+	return gp == wp || strings.HasPrefix(gp, wp+"/") || strings.HasPrefix(wp, gp+"/")
+}
+
+// imageSpellings lists the spellings of one image reference that name the same
+// registry and image, for the DENY side only (an allow is compared as typed):
+// the reference as typed; with its registry host lowercased, ":443" stripped and
+// the Docker Hub registry aliases read as "docker.io"; for a reference with no
+// registry host or a Docker Hub one, its fully qualified Docker Hub form
+// ("nginx:1" is "docker.io/library/nginx:1"), tag and digest kept; and the two
+// same-image forms of imageSameImageForms (digest alone, implicit ":latest").
+// Without it a deny on "registry.example.com/team/*" is walked around by
+// "REGISTRY.example.com/team/x" or "registry.example.com:443/team/x".
+func imageSpellings(ref string) []string {
+	ref = strings.TrimSpace(ref)
+	out := []string{ref}
+	norm := imageNormalHost(ref)
+	if norm != ref {
+		out = append(out, norm)
+	}
+	if hub, ok := imageDockerHubForm(norm); ok && hub != norm && hub != ref {
+		out = append(out, hub)
+	}
+	return imageAppendForms(out, out[len(out)-1])
+}
+
+// imageDenyForm is a deny row's value read the same way imageSpellings reads a
+// want: host lowercased, ":443" stripped, Docker Hub made fully qualified. A
+// value that cannot be read that way is returned as stored.
+func imageDenyForm(v string) string {
+	v = imageNormalHost(strings.TrimSpace(v))
+	if hub, ok := imageDockerHubForm(v); ok {
+		return hub
+	}
+	return v
+}
+
+// imageDenyForms is every form a deny row (or a restriction) value answers to:
+// as stored, imageDenyForm, and imageSameImageForms of that. Only an exact
+// reference gains the extra forms; a prefix pattern never parses.
+func imageDenyForms(v string) []string {
+	out := []string{v}
+	if d := imageDenyForm(v); d != v {
+		out = append(out, d)
+	}
+	return imageAppendForms(out, out[len(out)-1])
+}
+
+// imageAppendForms adds imageSameImageForms(qualified) to out, skipping repeats.
+func imageAppendForms(out []string, qualified string) []string {
+	for _, f := range imageSameImageForms(qualified) {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// imageSameImageForms are the other ways one exact reference names the same
+// image: with a digest, the digest alone (a runtime pulls by digest, so
+// "app:1@sha256:X" is "app@sha256:X"); with neither tag nor digest, the
+// implicit ":latest". Any registry. Nothing for a value that is not a
+// reference.
+func imageSameImageForms(ref string) []string {
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return nil
+	}
+	if d, ok := named.(reference.Digested); ok {
+		return []string{reference.TrimNamed(named).String() + "@" + d.Digest().String()}
+	}
+	if _, ok := named.(reference.Tagged); !ok {
+		return []string{reference.TagNameOnly(named).String()}
+	}
+	return nil
+}
+
+// imageNormalHost lowercases the registry host of ref (its first segment, when
+// that reads as a host), drops a ":443" port and maps the Docker Hub registry
+// aliases (index.docker.io, registry-1.docker.io, registry.hub.docker.com) to
+// docker.io. The path, tag and digest are left as typed.
+func imageNormalHost(ref string) string {
+	host, rest, hasRest := strings.Cut(ref, "/")
+	if !hasRest || !imageIsRegistryHost(host) {
+		return ref
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ":443")
+	switch host {
+	case "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com":
+		host = "docker.io"
+	}
+	return host + "/" + rest
+}
+
+// imageIsRegistryHost is the test github.com/distribution/reference applies to
+// a first segment: a "." or ":" in it, or exactly "localhost".
+func imageIsRegistryHost(seg string) bool {
+	return strings.ContainsAny(seg, ".:") || seg == "localhost"
+}
+
+// imageDockerHubForm returns the fully qualified Docker Hub spelling of ref
+// ("docker.io/library/nginx:1") when ref names a Docker Hub image, either with
+// no registry host or with docker.io. ok is false for any other registry and
+// for a reference the parser refuses.
+func imageDockerHubForm(ref string) (string, bool) {
+	if host, _, hasRest := strings.Cut(ref, "/"); hasRest && imageIsRegistryHost(host) && host != "docker.io" {
+		return "", false
+	}
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil || reference.Domain(named) != "docker.io" {
+		return "", false
+	}
+	out := named.Name()
+	if t, ok := named.(reference.Tagged); ok {
+		out += ":" + t.Tag()
+	}
+	if d, ok := named.(reference.Digested); ok {
+		out += "@" + d.Digest().String()
+	}
+	return out, true
 }
 
 // handleListBaseImages returns the catalog. A security admin sees the prewrapped rows only: the

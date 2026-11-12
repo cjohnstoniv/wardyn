@@ -6,16 +6,20 @@ package maskmanifest
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // noKeys is a Keys that must never be asked: every path these tests drive
@@ -231,5 +235,154 @@ func TestCoveredLogsWhyItIsNotCovered(t *testing.T) {
 	got := logs.String()
 	if !strings.Contains(got, "reading a run's manifest row failed") || !strings.Contains(got, run.String()) || strings.Contains(got, string(secretValue)) {
 		t.Fatalf("log = %q, want the failed read named with the run id and no value", got)
+	}
+}
+
+// A value another replica removed leaves the registry only after the manifests stop vouching for the run it
+// belonged to, and a process-wide value only after they stop vouching for any run: Held is false by the time
+// the masker is short of it, with no DropFenced in between.
+func TestARegistryDropUnholdsBeforeTheValueGoes(t *testing.T) {
+	m, reg := newManifests(t, nil)
+	run, other := uuid.New(), uuid.New()
+	m.note(run, 1, true, nil)
+	m.note(other, 1, true, nil)
+	reg.Add(run, secretValue)
+
+	var heldWhenGone bool
+	reg.SetDropGuard(func(id uuid.UUID) func() { // wraps the manifests' guard to see the state at the moment the drop begins
+		heldWhenGone = m.Held(run)
+		return m.beginDrop(id)
+	})
+	reg.DropRunValue(run, secretValue)
+	if !heldWhenGone {
+		t.Fatal("the guard did not run before the value was removed")
+	}
+	if m.Held(run) || !m.Held(other) || len(reg.Snapshot(run)) != 0 {
+		t.Fatalf("after a run value drop: run held %v, other held %v, values %d", m.Held(run), m.Held(other), len(reg.Snapshot(run)))
+	}
+}
+
+func TestADroppedProcessWideValueUnholdsEveryRunOnlyWhileItGoes(t *testing.T) {
+	m, reg := newManifests(t, nil)
+	a, b := uuid.New(), uuid.New()
+	m.note(a, 1, true, nil)
+	m.note(b, 1, true, nil)
+	id := uuid.New()
+	reg.ApplyGlobal(id, "alice", "sso", secretValue, time.Time{}, time.Time{})
+
+	var heldDuring bool
+	reg.SetDropGuard(func(rid uuid.UUID) func() { // the manifests' guard, observed while the removal is under way
+		end := m.beginDrop(rid)
+		heldDuring = m.Held(a) || m.Held(b)
+		return end
+	})
+	reg.DropGlobalValue(id)
+	if heldDuring {
+		t.Error("a run was held while a process-wide value was being dropped")
+	}
+	if !m.Held(a) || !m.Held(b) {
+		t.Fatalf("a dropped process-wide value left runs un-held after it: %v %v; every row would be labelled globals_only", m.Held(a), m.Held(b))
+	}
+}
+
+// The sweeper's late eviction takes a held run's values out of the registry; it stops the manifests vouching
+// for the run first, and the audit sinks stop adding the run's correlation id from then on.
+func TestAnEvictionUnholdsTheRunBeforeItsValuesGoAndTheSinkStopsAddingTheID(t *testing.T) {
+	const secret = "zq-throwaway-evict-13"
+	m, reg := newManifests(t, nil)
+	run := uuid.New()
+	m.note(run, 1, true, nil)
+	if err := reg.Add(run, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []types.AuditEvent
+	fan := sinks.NewFanout(sinkFunc(func(ev types.AuditEvent) { mu.Lock(); got = append(got, ev); mu.Unlock() }))
+	fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
+		sinks.Witnessed(func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) }, m.Held, reg.Generation), m.Held)
+	emit := func() {
+		ev := types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}
+		if err := fan.Emit(context.Background(), ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	emit() // held: the id goes out masked
+	if !m.Held(run) {
+		t.Fatal("the run is not held before the eviction")
+	}
+	reg.Evict(run)
+	if m.Held(run) {
+		t.Fatal("the manifests still vouch for the run after its values were evicted")
+	}
+	emit() // the id is cached on the sink; coverage is checked before the cache
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("%d events reached the sink, want 2", len(got))
+	}
+	if !strings.Contains(string(got[0].Data), sinks.CorrelationKey) || strings.Contains(string(got[0].Data), secret) {
+		t.Errorf("held event: %s", got[0].Data)
+	}
+	if strings.Contains(string(got[1].Data), secret) || strings.Contains(string(got[1].Data), sinks.CorrelationKey) {
+		t.Errorf("event after the eviction: %s", got[1].Data)
+	}
+}
+
+type sinkFunc func(types.AuditEvent)
+
+func (sinkFunc) Name() string { return "func" }
+func (f sinkFunc) Emit(_ context.Context, ev types.AuditEvent) error {
+	f(ev)
+	return nil
+}
+
+// The cold sweep's Evict lands between the enricher's coverage check and its masking, and a reload holds the
+// run again before the masking returns: Held is true at both ends and the masker read an empty corpus. The
+// registry's generation is the witness that catches it.
+func TestAnEvictionAndAReloadAroundTheMaskingLeaveTheIDOff(t *testing.T) {
+	const secret = "zq-throwaway-sweep-16"
+	m, reg := newManifests(t, nil)
+	run := uuid.New()
+	m.note(run, 1, true, nil)
+	if err := reg.Add(run, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []types.AuditEvent
+	inLookup, releaseLookup := make(chan struct{}), make(chan struct{})
+	inMask, releaseMask := make(chan struct{}), make(chan struct{})
+	fan := sinks.NewFanout(sinkFunc(func(ev types.AuditEvent) { mu.Lock(); got = append(got, ev); mu.Unlock() }))
+	fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) {
+		close(inLookup)
+		<-releaseLookup
+		return secret, true, nil
+	}, sinks.Witnessed(func(id uuid.UUID, b []byte) []byte {
+		out := reg.JSONVariantMasker(id).Mask(b)
+		close(inMask)
+		<-releaseMask
+		return out
+	}, m.Held, reg.Generation), m.Held)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ev := types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}
+		_ = fan.Emit(context.Background(), ev)
+	}()
+	<-inLookup
+	reg.Evict(run) // the sweeper
+	close(releaseLookup)
+	<-inMask
+	reg.AddLocal(run, []byte(secret)) // the reload registers, then publishes
+	m.note(run, 1, true, nil)
+	if !m.Held(run) {
+		t.Fatal("the reload did not hold the run again")
+	}
+	close(releaseMask)
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || strings.Contains(string(got[0].Data), secret) || strings.Contains(string(got[0].Data), sinks.CorrelationKey) {
+		t.Errorf("the sink got %v", got)
 	}
 }

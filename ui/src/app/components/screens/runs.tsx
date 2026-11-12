@@ -26,7 +26,7 @@ import { RunsFirstRun } from "./runs-first-run";
 import { RunsMemberEmpty } from "./runs-member-empty";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
-import { EmptyState, ErrorState } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { useRole } from "../wardyn/operator-context";
@@ -50,6 +50,8 @@ import {
 } from "./runs/runs-filters";
 import { isTopQuiet, nonAttentionRuns, sectionRuns, type RunSections } from "./runs/runs-model";
 import { groupRunsBy } from "./runs/runs-groups";
+import { WorkspaceNamesContext } from "./runs/board-groups";
+import { useWorkspaceList } from "../../lib/use-workspace-list";
 import { BUILTIN_RUNS_VIEWS, loadSavedRunsViews, saveRunsView, type SavedRunsView } from "./runs/runs-saved-views";
 import {
   RUNS_AGED_WINDOW_LABEL,
@@ -86,6 +88,13 @@ export function RunsScreen() {
     (next: RunsFilterState) => setSearchParams(serializeRunsFilters(next), { replace: true }),
     [setSearchParams],
   );
+
+  const { workspaces: workspaceList, reload: reloadWorkspaces } = useWorkspaceList();
+  // The hook fetches nothing until asked; the names are what a run on a named workspace shows in place of "no repo".
+  React.useEffect(() => {
+    reloadWorkspaces();
+  }, [reloadWorkspaces]);
+  const workspaceNames = React.useMemo(() => Object.fromEntries(workspaceList.map((w) => [w.id, w.name])), [workspaceList]);
 
   const [runsList, setRunsList] = React.useState<AgentRun[]>([]);
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
@@ -147,9 +156,13 @@ export function RunsScreen() {
       );
   }, [view, adminView, filters.scope, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q]);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
-    fetchRuns().catch(() => setStatus("error"));
+    fetchRuns().catch((e) => {
+      setLoadMessage(failureSentence(e));
+      setStatus("error");
+    });
   }, [fetchRuns]);
 
   // Reload whenever the filters (i.e. the URL) or the view change, and on
@@ -257,6 +270,7 @@ export function RunsScreen() {
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
   return (
+    <WorkspaceNamesContext.Provider value={workspaceNames}>
     <PageContainer width="list">
       <PageHeader title="Runs" description={description} />
 
@@ -267,7 +281,7 @@ export function RunsScreen() {
 
       {status === "error" ? (
         <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         </div>
       ) : firstLoad ? (
         <RunsLoadingSkeleton />
@@ -354,7 +368,7 @@ export function RunsScreen() {
                 // H-6: Group by Workspace/Title replaces the time sections
                 // with one section per group — Needs you / Waiting on the
                 // owner above still show their own fixed sections either way.
-                groupRunsBy(nonAttentionRuns(shownRuns), filters.group).map((g) => (
+                groupRunsBy(nonAttentionRuns(shownRuns), filters.group, workspaceNames).map((g) => (
                   <RunsSection key={g.label} title={g.label} runs={g.runs} />
                 ))
               )}
@@ -372,6 +386,7 @@ export function RunsScreen() {
         </>
       )}
     </PageContainer>
+    </WorkspaceNamesContext.Provider>
   );
 }
 

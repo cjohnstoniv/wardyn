@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -50,6 +51,10 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	var stripped runner.SandboxSpec
 	if ref == nil {
 		stripped, ref = placement.LocalEligibility(p)
+	}
+	// A kept machine keeps no lasting credential: refused by kind before the substrate (keptSpecSecretKinds).
+	if ref == nil && spec.KeptMachine != nil && s.keptSecretRefusal(ctx, run, p.Spec, p.Origins) {
+		return false
 	}
 	if ref != nil {
 		// A personal component name stays out of the append-only record and the failure hint.
@@ -334,7 +339,7 @@ func localIdentityLanes(ctx context.Context, run types.AgentRun, sc types.SiteCo
 func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, azure *providerAzureLane, p *placement.LocalPlan) error {
 	spec := p.Spec
 	if g := spec.ProxyConfig.ADOGrant; g != nil && ado.rowID != "" && g.Organization == ado.org &&
-		subsetOf(g.Capabilities, ado.ceiling) && subsetOf(g.Hosts, ado.laneHosts()) {
+		subsetOf(adoscope.ExpandPR(g.Capabilities), ado.ceiling) && subsetOf(g.Hosts, ado.laneHosts()) {
 		origin, err := s.localADOOrigin(ctx, owner, ado)
 		if err != nil {
 			return err

@@ -57,6 +57,9 @@ export const RUNS_COMPOSER = {
   PLACEHOLDER: "Describe the task in your own words. It becomes the run's title.",
   WORKSPACE: "Workspace",
   GO: "Start run",
+  WORKSPACES_LOADING: "Loading workspaces…",
+  WORKSPACES_UNAVAILABLE: "Couldn't load your workspaces, so none are listed.",
+  WORKSPACES_RETRY: "Try again",
 } as const;
 
 export const RUNS_FILTERS = {
@@ -161,7 +164,12 @@ export const RUNS_ROW_WORD = {
   WAITING_SIGN_IN: "Waiting for sign-in",
   SANDBOX_STOPPED: "Sandbox stopped",
   RUNNING: "Running",
+  /** UXR-24: a RUNNING run whose agent is frozen (paused_at set). The run page's banner says why. */
+  PAUSED: "Paused",
   STARTING: "Starting",
+  /** UXR-31: the row's meta part for a run in a virtual machine. */
+  MACOS_VM: "macOS VM",
+  LINUX_VM: "Linux VM",
   /** PENDING, the word the run page's badge uses; QUEUED below is a separate state (waiting for a pool slot). */
   PENDING: "Pending",
   QUEUED: "Queued",

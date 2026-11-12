@@ -642,11 +642,15 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonMissingBearerToken, "missing bearer token")
 			return
 		}
+		if !s.admitAdminTokenGuess(w, r) {
+			return
+		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.AdminToken)) != 1 {
 			s.auditAuthFailed(r, "invalid_admin_token")
 			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
 			return
 		}
+		s.refundAdminTokenGuess(r)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -654,7 +658,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 // auditAuthFailed emits auth.fail (actor system) for an authentication
 // failure on the public API. reason is the adminAuth-local bounded enum
 // ("admin_token_not_configured", "missing_bearer_token",
-// "invalid_admin_token"); it is overridden by a more specific
+// "invalid_admin_token", "admin_token_rate_limited"); it is overridden by a more specific
 // oidc.SessionRejectedFromContext reason ("invalid_session"/"expired_session"/
 // "revoked_session"/"session_revocation_unavailable")
 // when a session cookie was ALSO presented and rejected on this same
@@ -969,7 +973,7 @@ func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 }
 
 func contextWithClaims(ctx context.Context, c *identity.Claims) context.Context {
-	return context.WithValue(ctx, claimsCtxKey{}, c)
+	return context.WithValue(audit.WithPolicyToken(ctx, c.RunID, c.JTI), claimsCtxKey{}, c) // rows it records carry the token's policy generation
 }
 
 // claimsFromContext returns the verified run claims placed by internalAuth.

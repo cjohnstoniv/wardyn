@@ -421,7 +421,7 @@ export const BASELINE = {
 export const CHANGES = {
   TAB: "Changes",
   TAB_COUNT: (n: number) => `Changes · ${n}`,
-  LEAD: "Covered governance changes waiting for a second person. A change applies only when someone other than its proposer approves it.",
+  LEAD: "Changes and requests waiting for a second person. A change or request applies only when someone other than its proposer approves it.",
   COL_CHANGE: "Change",
   COL_TARGET: "Target",
   COL_BY: "Proposed by",
@@ -450,7 +450,14 @@ export const CHANGES = {
     governance_boundary: "Wardyn boundary",
     governance_restriction: "Restriction",
     workspace_owning_unit: "Workspace unit",
+    component_owning_unit: "Component unit",
     org_recording: "Recording level",
+    governance_envelope: "Platform envelope",
+    governance_unit_deciders: "Deciders",
+    governance_elevation: "Elevation",
+    governance_image_request: "Image",
+    governance_unit_admin: "Unit admin",
+    approval_rule: "Approval rule",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {
@@ -472,11 +479,11 @@ export const CHANGES = {
   DIFF_UNSET: "Not set",
   DIFF_FULL: "Show full before and after",
   ASSIGNED_PROFILE: "Profile this assigns",
-  REASON_LABEL: "Reason (optional)",
+  REASON_LABEL: "Reason for your decision (optional)",
   REASON_HINT: "Kept on the change and in the audit trail.",
   APPROVE: "Approve",
   REJECT: "Reject",
-  OWN_NOTE: "You proposed this change, so someone else must approve it. You can still reject it to withdraw it.",
+  OWN_NOTE: "You proposed this change, so someone else must approve it. Rejecting it withdraws it.",
   DECIDE_REFUSED_TITLE: "Couldn't decide this change",
   TOAST_APPROVED: "Change approved",
   TOAST_REJECTED: "Change rejected",
@@ -490,6 +497,53 @@ export const CHANGES = {
 // governance-prompt.md's frozen tables, so a separate export.
 export const MEMBER_DRIVE_DOOR = {
   LABEL: "Can't create drives",
+} as const;
+
+// The background-watch door: the profile limit that refuses watching a background macOS run's desktop
+// (deny_background_desktop_watch). Also not in the frozen tables.
+export const BACKGROUND_WATCH_DOOR = {
+  LABEL: "Deny watching background desktops",
+  HINT: "Stops people watching a background macOS run's desktop. A watch that is open ends within a minute. Deny interactive runs and Deny UI apps stop it too.",
+} as const;
+
+// The allowed-models limit: the hosted models a run under a profile may ask for. A blank list is no limit (there is
+// no deny-all value), so the same box says so in its hint, and a composed profile's row says what Narrow needs.
+// Outside the frozen tables, like the two doors above.
+export const ALLOWED_MODELS = {
+  /** The row label, and the chip's prefix. */
+  LABEL: "Allowed models",
+  PLACEHOLDER: "One model per line",
+  HINT: "The models a run under this profile may ask your model providers for, one per line, written exactly as the provider names them. Local models keep their own lists. Leave blank for no limit.",
+  /** The small model is never added for the admin. */
+  SMALL_HINT: "Claude Code also asks a small model for background work. List it too, or those requests are refused.",
+  /** Under the box while it is not empty. */
+  READS_NOTE:
+    "While this is set, the run's proxy reads each model request to check its model, and the run trusts a certificate Wardyn makes for that run. A request for any model not listed is refused.",
+  /** A composed profile's hint when the base lists models. */
+  NARROW_HINT: "Only models in the inherited list can stay. Remove the ones this profile should not use.",
+  /** A composed profile's hint when the base limits no models. */
+  NARROW_HINT_OPEN: "Choose which models this profile allows. Leave Narrow off for no limit.",
+  /** Narrow is on and the box is empty. */
+  NARROW_EMPTY: "Add at least one model, or turn Narrow off. An empty list here narrows nothing.",
+  STRIP_TITLE: "Models your providers use",
+  ADD: (model: string) => `Add ${model}`,
+  SMALL_TAG: "small model",
+  NO_SMALL: (provider: string) => `${provider} sets no small model, so Claude Code asks for its own. Add that model's name above if you want it allowed.`,
+  NOT_HELD: (provider: string) => `${provider} picks its model in the session. Wardyn does not know which, so add the names by hand.`,
+  /** The profiles list's chip: the names up to three, then a count. */
+  CHIP: (models: string[]) => `Allowed models: ${models.length <= 3 ? models.join(", ") : models.length}`,
+  /** New Run Review. Fill {models} with one slot; the caller sets each name in mono. */
+  REVIEW_LINE: (models: string) => `Your organisation limits the models this run may use: ${models}.`,
+  REVIEW_READS: "The run's proxy reads each model request to check its model.",
+  REVIEW_OFF_LIST: (harness: string, provider: string, model: string) =>
+    `${harness} on ${provider} is set to use ${model}, which is not on that list. Its requests will be refused.`,
+  /** The run page's card. */
+  CARD_TITLE: "Allowed models",
+  CARD_REFUSED: "A request for any other model is refused by this run's proxy.",
+  CARD_FIXED: "This is the list the run started with. Changing the profile does not change a run that is going.",
+  OPEN_PROFILE: "Open profile",
+  /** An Audit row's chip: every refusal of this gate, whatever the cause text says. */
+  AUDIT_REFUSED: "Refused: model limit",
 } as const;
 
 // §7.6-§7.7 — MEMBER
@@ -630,6 +684,7 @@ export const RUBRIC = {
   GROUP_SECRETS: "Secrets",
   GROUP_BARRIER: "Barrier",
   GROUP_BARRIER_HINT: "The enforced barrier — “confinement class” in the API and the docs.",
+  GROUP_COMPONENTS: "Custom components",
   // key -> [row label, why]. Iterate AUTONOMY_RUBRIC_ROW_KEYS for a stable,
   // Go-matching order rather than Object.keys.
   ROWS: {
@@ -642,8 +697,9 @@ export const RUBRIC = {
     confinement_cc1: ["Fence (CC1)", "Shared kernel."],
     confinement_cc2: ["Wall (CC2)", "gVisor userspace kernel."],
     confinement_cc3: ["Vault (CC3)", "Kata microVM."],
+    self_defined_component: ["Defined by the launcher", "The run uses a component its launcher defined. This can only tighten the organisation's own cap on these runs."],
   } as Record<AutonomyRubricRowKey, [label: string, why: string]>,
-  SET_NOTE: (n: number, level: string) => `${n} of 9 rows set a cap. The lowest is ${level}.`,
+  SET_NOTE: (n: number, level: string) => `${n} of 10 rows set a cap. The lowest is ${level}.`,
 } as const;
 
 // foldAutonomyRubric summarizes a WHOLE rubric for display — every row that
@@ -807,6 +863,7 @@ const AUTONOMY_BOUND_DETAIL: Record<AutonomyBoundKey, { dimension: string; detai
   confinement_cc1: { dimension: "barrier", detail: "Fence, confinement class CC1" },
   confinement_cc2: { dimension: "barrier", detail: "Wall, confinement class CC2" },
   confinement_cc3: { dimension: "barrier", detail: "Vault, confinement class CC3" },
+  self_defined_component: { dimension: "custom components", detail: "your governance profile limits runs that use components you defined" },
   // The org's cap on runs that use a component the launcher defined; the Go
   // reason names it "your organisation's rule for runs that use your own custom components".
   custom_component: { dimension: "custom components", detail: "your organisation limits runs that use components you defined" },
@@ -852,7 +909,8 @@ export function autonomyBoundSentence(causes: AutonomyBoundKey[]): string {
     const only = AUTONOMY_BOUND_DETAIL[causes[0]];
     return `Bound by this run's ${only.dimension}: ${only.detail}.`;
   }
-  const dims = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension);
+  // Two causes can share a dimension (the profile's and the organisation's cap on custom components): name it once.
+  const dims = [...new Set(causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension))];
   const details = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].detail);
   return `Bound by this run's ${joinAnd(dims)}: ${joinDetails(details)}.`;
 }

@@ -18,7 +18,7 @@ cd "$ROOT"
 DOCS=(README.md docs/README.md docs/DESKTOP.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md
       docs/operations/monitoring.md docs/operations/run-lifetime.md
       docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md docs/EXTENDING.md
-      RELEASING.md)
+      RELEASING.md docs/TRY-IT.md docs/CREDENTIALS.md docs/operations/boundary.md docs/operations/macos-vms.md)
 RENDER_DIR=""
 [ "${1:-}" = "--render-png" ] && RENDER_DIR="${2:?--render-png needs a dir}"
 
@@ -28,7 +28,8 @@ trap 'rm -rf "$TMP"' EXIT
 # ── extract fences ────────────────────────────────────────────────────────────
 n=0
 for doc in "${DOCS[@]}"; do
-  awk -v doc="$(basename "$doc" .md)" -v tmp="$TMP" '
+  # Named by path, not basename: README.md and docs/README.md would share README-NN.mmd and overwrite.
+  awk -v doc="$(echo "${doc%.md}" | tr / _)" -v tmp="$TMP" '
     /^```mermaid[[:space:]]*$/ { inblock=1; i++; f=sprintf("%s/%s-%02d.mmd", tmp, doc, i); next }
     /^```[[:space:]]*$/ && inblock { inblock=0; next }
     inblock { print > f }
@@ -162,7 +163,7 @@ FAILED	internal/types/types.go
 KILLED	internal/types/types.go
 STOPPED	internal/types/types.go
 minted_jti	internal/broker/broker.go
-kernel.sensor.bypass	internal/api/runs_dispatch.go
+kernel.sensor.bypass	internal/api/runs_dispatch_sensor_bypass.go
 /api/v1/internal/groundtruth	internal/api/internal_relay.go
 wardyn.run-id	cmd/wardyn-tetragon-ingest/main.go
 MANIFEST
@@ -184,13 +185,89 @@ done <<'PROSE'
 WAITING_FOR_CONFIRMATION	internal/types/types.go	ARCHITECTURE.md
 UpdateRunStateIf	internal/api/runs_lifecycle.go	ARCHITECTURE.md
 wait_for_review	internal/types/policy.go	ARCHITECTURE.md
-Internal: true	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
+Internal: true	internal/runner/docker/run_network_shape.go	threatmodel/THREAT-MODEL.md
 agent-run --idle	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
 wardyn-proxy:	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
 HTTP_PROXY	internal/api/runs_dispatch_mounts.go	threatmodel/THREAT-MODEL.md
 # doc half only: the code half is pinned harder by TestRequiredTools_CanonicalUnion.
 agent-run-lib.sh	internal/types/workspace_contract.go	docs/ENVBUILD.md
 PROSE
+
+# ── SVG manifest: a label in a docs/img figure that names code -> its source ──
+# Format: <needle>\t<source file>\t<figure id>. The needle must be at the source and
+# be <text> in BOTH docs/img/<id>.svg and <id>-dark.svg, read directly, so a label is
+# pinned before a doc shows the figure and the two themes cannot drift apart.
+python3 - <<'PY' || fail=1
+import sys
+import xml.etree.ElementTree as ET
+rc = 0
+def labels(path):
+    return [''.join(el.itertext()) for el in ET.parse(path).getroot().iter()
+            if isinstance(el.tag, str) and el.tag.rsplit('}', 1)[-1] == 'text']
+manifest = """
+literalIPGuard	internal/egress/proxy/literal_ip_guard.go	egress-checks
+gateConnect	internal/egress/proxy/connect_gate.go	egress-checks
+privateIPMemoHit	internal/egress/proxy/private_ip_memo.go	egress-checks
+egressTarget	internal/egress/proxy/egress_target.go	egress-checks
+first_use_approval	internal/types/policy.go	egress-checks
+always_deny	internal/types/policy.go	egress-checks
+deny_with_review	internal/types/policy.go	egress-checks
+wait_for_review	internal/types/policy.go	egress-checks
+builtin:private-ip	internal/egress/proxy/literal_ip_guard.go	egress-checks
+builtin:resolve-failed	internal/egress/proxy/proxy.go	egress-checks
+brokered:mcp:direct	internal/egress/proxy/mcp_broker.go	egress-checks
+brokered:local-model	internal/egress/proxy/local_model.go	egress-checks
+policy:denied	internal/egress/proxy/connect_gate.go	egress-checks
+policy:port	internal/egress/proxy/port_rule.go	egress-checks
+policy:method	internal/egress/proxy/connect_gate.go	egress-checks
+brokered:git:push-deny-all-forge	internal/egress/proxy/push_deny_all_forge.go	egress-checks
+policy:default-deny	internal/egress/proxy/proxy.go	egress-checks
+approval:pending	internal/egress/proxy/approvals.go	egress-checks
+approval:denied	internal/egress/proxy/proxy.go	egress-checks
+policy:allowed	internal/egress/proxy/proxy.go	egress-checks
+env_secret	internal/types/types.go	credential-shapes
+file_secret	internal/types/types.go	credential-shapes
+bedrock_sso	internal/types/model_provider.go	credential-shapes
+WARDYN_AWS_SIGV4_AT_PROXY	internal/egress/proxy/aws_sigv4.go	credential-shapes
+boundary	internal/policyref/policyref.go	nested-limits
+restriction	internal/policyref/policyref.go	nested-limits
+member	internal/policyref/policyref.go	nested-limits
+personal	internal/policyref/policyref.go	nested-limits
+wall_preset	internal/policyref/policyref.go	nested-limits
+wardyn-macvm	cmd/wardyn-macvm/main.go	run-placement
+wardyn-macvm	cmd/wardyn-macvm/main.go	macos-vm-run
+wardyn-vmnet	internal/runner/docker/vm.go	macos-vm-run
+agent.sock	internal/macvm/layout.go	macos-vm-run
+desktop.sock	internal/macvm/layout.go	macos-vm-run
+ctl.sock	internal/macvm/layout.go	macos-vm-run
+/Users/Shared/Wardyn/sock	internal/macvm/admission/sock.go	macos-vm-run
+QUEUED	internal/types/types.go	run-states
+PENDING	internal/types/types.go	run-states
+STARTING	internal/types/types.go	run-states
+RUNNING	internal/types/types.go	run-states
+COMPLETED	internal/types/types.go	run-states
+FAILED	internal/types/types.go	run-states
+KILLED	internal/types/types.go	run-states
+STOPPED	internal/types/types.go	run-states
+MintForGrant	internal/broker/broker.go	credential-mint
+minted_jti	internal/broker/broker.go	credential-mint
+requires_approval	internal/types/types.go	credential-mint
+capability_pending	internal/api/injection_ado_capability.go	ado-request-flow
+capability_above_ceiling	internal/api/reasons.go	ado-request-flow
+minted_pat	internal/types/workspace_provider.go	ado-request-flow
+wait_for_review	internal/types/policy.go	ado-request-flow
+deny_with_review	internal/types/policy.go	ado-request-flow
+always_deny	internal/types/policy.go	ado-request-flow
+"""
+for row in manifest.strip().splitlines():
+    needle, src, fig = row.split('\t')
+    if needle not in open(src, encoding='utf-8').read():
+        print(f"  FAIL svg-truth: '{needle}' not found in {src}"); rc = 1
+    for path in (f"docs/img/{fig}.svg", f"docs/img/{fig}-dark.svg"):
+        if not any(needle in t for t in labels(path)):
+            print(f"  FAIL svg-truth: '{needle}' is not <text> in {path}"); rc = 1
+sys.exit(rc)
+PY
 
 # ── style rules: a diagram nobody can read is worse than the table it replaced ─
 # R0 flowcharts only (state/sequence diagrams have their own shape), decided on

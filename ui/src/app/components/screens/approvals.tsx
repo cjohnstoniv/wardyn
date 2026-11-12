@@ -22,27 +22,35 @@ import {
   type DecisionOptions,
 } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
+import { requests as elevationApi } from "../../lib/api/governance-requests";
+import type { GovernanceRequestList } from "../../lib/types/governance-requests";
 import { anyCapabilityEnforced, useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
-import { LIST_LIMIT } from "../../lib/api/core";
+import { HttpError, LIST_LIMIT } from "../../lib/api/core";
+import { governance } from "../../lib/api/governance";
 import { usePoll } from "../../lib/use-poll";
 import { useRunTitles } from "../../lib/use-run-titles";
 import { getErrorMessage } from "../../lib/format";
 import { grantsWrite, scopeRepos } from "../../lib/grant-sentence";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useRefusedApprovals } from "../../lib/hooks/use-refused-approvals";
-import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
-import { useOperator, useRole } from "../wardyn/operator-context";
+import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
+import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
+import { useOperator, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
 import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { PUSH } from "../wardyn/copy/push";
+import { APPROVALS_TAB, APPROVAL_MCP_CALL } from "../wardyn/copy/approvals";
+import { FILE_DOWNLOAD_CARD, HOST_CALL_CARD, KUBE_CALL_CARD } from "../wardyn/copy/files-review";
+import { DECIDERS_INBOX } from "../wardyn/copy/deciders-inbox";
+import { escapeUnsafeRunes } from "../../lib/escape-runes";
 import {
   APPROVAL_KIND_LABEL,
   CAPABILITY,
@@ -51,8 +59,13 @@ import {
   egressBlastRadius,
 } from "../wardyn/copy";
 import { ApprovalCard, DecidedRow } from "./approvals-cards";
+import { ElevationDeciderCard } from "./elevation/elevation-decider-card";
+import { ImageDeciderCard } from "./elevation/image-decider-card";
+import { MyElevationRequests } from "./elevation/my-elevation-requests";
 
-type Filter = "PENDING" | "decided";
+type Filter = "PENDING" | "waiting" | "decided";
+// The server cuts the Waiting on you list here (maxDecidableByMe) and says so with X-Wardyn-Truncated.
+const WAITING_CAP = 500;
 type Scope = Record<string, unknown>;
 
 // Blast-radius derivation (D1) — every approval kind gets a two-line
@@ -115,7 +128,9 @@ export function capabilityLabel(kind: ApprovalKind, scope: Scope): string | unde
   return undefined;
 }
 
-export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
+/** `signIn` is the provider's name for an endpoint sign-in's hold, when the caller has mapped the scope's provider
+ *  uid to it; without it the title reads as the unnamed provider. */
+export function deriveTitle(kind: ApprovalKind, scope: Scope, signIn?: string): string {
   switch (kind) {
     case "egress_domain": {
       const host = str(scope, "host", "domain");
@@ -133,7 +148,21 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       if (ck === "api_key") return host ? `Mint an API credential for ${host}` : "Mint an API credential";
       return "Mint a scoped credential";
     }
+    case "file_download":
+      return FILE_DOWNLOAD_CARD.LIST_TITLE(escapeUnsafeRunes(str(scope, "name") ?? ""));
     case "tool_call": {
+      // One held kubectl write (a call_sha256 and a cluster): the list names its method and namespace.
+      if (str(scope, "call_sha256") && str(scope, "cluster")) {
+        return KUBE_CALL_CARD.LIST_TITLE(escapeUnsafeRunes(str(scope, "method") ?? ""), escapeUnsafeRunes(str(scope, "namespace") ?? ""));
+      }
+      // One held host request (a call_sha256 and a host, no cluster): the list names its method, path and host.
+      if (str(scope, "call_sha256") && str(scope, "host")) {
+        return HOST_CALL_CARD.LIST_TITLE(escapeUnsafeRunes(str(scope, "method") ?? ""), escapeUnsafeRunes(str(scope, "path") ?? ""), escapeUnsafeRunes(str(scope, "host") ?? ""));
+      }
+      // One MCP call (call_sha256 and a server): the list names the tool and the server it was for.
+      if (str(scope, "call_sha256") && str(scope, "mcp_server")) {
+        return APPROVAL_MCP_CALL.LIST_TITLE(escapeUnsafeRunes(str(scope, "tool") ?? ""), escapeUnsafeRunes(str(scope, "mcp_server") ?? ""));
+      }
       const cmd = str(scope, "cmd", "command", "tool");
       return cmd ? `Run ${cmd}` : "Run a tool call";
     }
@@ -141,7 +170,8 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
     // mapping it to "credential" titled it "Mint a scoped credential" and
     // painted a blast-radius banner over a row that grants nothing.
     case "credential_reauth":
-      return REAUTH_TITLE;
+      // An endpoint's sign-in is not AWS's: its hold names its own lane.
+      return scope.lane === OIDC_HOLD_LANE ? OIDC_SIGN_IN.APPROVAL_LABEL(signIn || OIDC_SIGN_IN.APPROVAL_UNNAMED) : REAUTH_TITLE;
     // Only reached by DecidedRow — ApprovalCard's own push_content branch
     // returns before this function is ever called (it renders PUSH.CARD_TITLE
     // directly, which is PENDING-tense and would read wrong on a decided row).
@@ -160,7 +190,7 @@ interface Banner {
 }
 
 // The fail-closed audience: no viewer in hand is "this is not yours to clear".
-const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false };
+const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false, oidc: false, holdUID: "" };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
 // ApprovalCard calls it before any scope has been chosen (the picker lives
@@ -188,7 +218,10 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
       // sign-in clears it, and the sentence naming who CAN clear it for
       // everybody else (W6-U BLOCKER-1/BLOCKER-2). `reauth` is undefined only
       // for a caller with no viewer in hand, which grades as "not yours".
-      return { what: REAUTH_ROW.label + ".", blast: reauthRowHint(reauth ?? NO_REAUTH_AUDIENCE) };
+      return {
+        what: (reauth?.oidc ? OIDC_SIGN_IN.APPROVAL_LABEL(reauth.signIn ?? OIDC_SIGN_IN.APPROVAL_UNNAMED) : REAUTH_ROW.label) + ".",
+        blast: reauthRowHint(reauth ?? NO_REAUTH_AUDIENCE),
+      };
     case "egress_domain": {
       const host = str(scope, "host", "domain");
       // egressBlastRadius (copy.ts) is scope-aware — honesty rule: "we only
@@ -306,6 +339,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const [decidedLongest, setDecidedLongest] = React.useState(0);
   // The decided history is fetched when the Decided tab is open, not on every visit to the page.
   const [decidedStatus, setDecidedStatus] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
+  const [decidedMessage, setDecidedMessage] = React.useState<string | undefined>();
+  const [pendingMessage, setPendingMessage] = React.useState<string | undefined>();
   // The list is asked for in the view the page is in, the scope the nav badge counts: the User view is
   // the person's own runs' approvals, the Admin view everyone's.
   const view = useConsoleMode();
@@ -314,19 +349,51 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // approval" chip links here for an approval that has, by construction,
   // already been decided; the default stays the pending queue.
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filter, setFilter] = React.useState<Filter>(searchParams.get("tab") === "decided" ? "decided" : "PENDING");
+  const tabParam = searchParams.get("tab");
+  const [filter, setFilter] = React.useState<Filter>(tabParam === "decided" ? "decided" : tabParam === "waiting" ? "waiting" : "PENDING");
   // X3-F14: ?tab= must be written back too, not just read at mount, or the
   // Decided view can't be reloaded/shared/reached by Back. Mirrors
   // audit.tsx's run_id filter, the setSearchParams-on-every-change idiom.
   const setFilterParam = React.useCallback(
     (f: Filter) => {
       setFilter(f);
-      setSearchParams(f === "decided" ? { tab: "decided" } : {}, { replace: true });
+      setSearchParams(f === "decided" ? { tab: "decided" } : f === "waiting" ? { tab: "waiting" } : {}, { replace: true });
     },
     [setSearchParams],
   );
-  const { refused, wallsRefused, noteRefusal } = useRefusedApprovals();
-  const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
+  const { refused, wallsRefused, presetRefused, noteRefusal } = useRefusedApprovals();
+  const [prompt, setPrompt] = React.useState<{
+    id: string;
+    action: "approve" | "deny";
+    kind: ApprovalRequest["kind"];
+    maxScope?: ApprovalScope;
+  } | null>(null);
+
+  // Waiting on you: the pending requests this person may decide under a unit's deciders rule, other people's included.
+  // A security operator never gets the tab (their Pending lists every request). Everyone else asks once whether the
+  // server knows the filter, reads the list while it does, and the tab is drawn once a row carried requested_by (a
+  // request on someone else's run) and for as long as this screen is mounted.
+  const securityOperator = useSecurityOperator();
+  const [knows, setKnows] = React.useState<boolean | null>(null);
+  const [waitingRows, setWaitingRows] = React.useState<ApprovalRequest[]>([]);
+  const [waitingTruncated, setWaitingTruncated] = React.useState(false);
+  const [waitingStatus, setWaitingStatus] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
+  const [latched, setLatched] = React.useState(false);
+  // The held elevation requests: the person's own ("Your requests") and the ones they may decide. A failed read
+  // after a good one keeps the last good list.
+  const [elevation, setElevation] = React.useState<GovernanceRequestList | null | "loading" | "error">("loading");
+  const deciderRequests =
+    !securityOperator && typeof elevation === "object" && elevation !== null
+      ? elevation.requests.filter((r) => (r.kind === "elevation" || r.kind === "image") && r.decidable && r.state === "pending")
+      : [];
+  const waitingOn = !securityOperator && knows === true;
+  const waitingOnRef = React.useRef(waitingOn);
+  waitingOnRef.current = waitingOn;
+  const tabDrawn = (waitingOn && latched) || (!securityOperator && deciderRequests.length > 0);
+  const shown: Filter = filter === "waiting" && !tabDrawn ? "PENDING" : filter;
+  // Unit names for the basis line of a decision made as a unit admin, read once and only when such a row is on screen.
+  const [unitNames, setUnitNames] = React.useState<Record<string, string> | undefined>(undefined);
+  const unitNamesAsked = React.useRef(false);
 
   // EXPIRED approvals must be fetched too, or a request that timed out
   // without a human decision silently vanishes from the console. Include
@@ -337,6 +404,20 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const fetchPending = React.useCallback(
     () => api.listApprovals("PENDING", "", view).then(setPendingItems),
     [view],
+  );
+  const fetchWaiting = React.useCallback(
+    () =>
+      api.listDecidableByMe().then(({ rows, truncated }) => {
+        setWaitingRows(rows);
+        setWaitingTruncated(truncated);
+        setWaitingStatus("ready");
+        if (rows.some((r) => !!r.requested_by)) setLatched(true);
+      }),
+    [],
+  );
+  const fetchElevation = React.useCallback(
+    () => elevationApi.list().then(setElevation),
+    [],
   );
   const fetchDecided = React.useCallback(() => {
     return Promise.all([
@@ -361,8 +442,10 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const viewRef = React.useRef(view);
   viewRef.current = view;
   // A refresh that loads the decided lists for the view still on screen also heals a failed first load of the tab.
-  const fetchAll = React.useCallback(
-    () =>
+  // The Waiting on you list rides every refresh while the tab is possible; its failure is its own, never the screen's.
+  const fetchAll = React.useCallback(() => {
+    const waitingRead = waitingOnRef.current ? fetchWaiting().catch(() => undefined) : undefined;
+    const main =
       filterRef.current === "decided"
         ? Promise.all([
             fetchPending(),
@@ -370,14 +453,40 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
               if (viewRef.current === view) setDecidedStatus("ready");
             }),
           ]).then(() => undefined)
-        : fetchPending(),
-    [fetchPending, fetchDecided, view],
-  );
+        : fetchPending();
+    const elevationRead = fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    return Promise.all([main, waitingRead, elevationRead]).then(() => undefined);
+  }, [fetchPending, fetchDecided, fetchWaiting, fetchElevation, view]);
+  const loadWaiting = React.useCallback(() => {
+    setWaitingStatus((st) => (st === "ready" ? st : "loading"));
+    fetchWaiting().catch(() => setWaitingStatus((st) => (st === "ready" ? st : "error")));
+  }, [fetchWaiting]);
+  React.useEffect(() => {
+    if (securityOperator) {
+      setKnows(null);
+      return;
+    }
+    let alive = true;
+    // Any failure, a module that has no such read included, is "does not know": nothing new is drawn.
+    void Promise.resolve()
+      .then(() => api.knowsDecidableBy())
+      .catch(() => false)
+      .then((k) => alive && setKnows(k));
+    return () => {
+      alive = false;
+    };
+  }, [securityOperator]);
+  React.useEffect(() => {
+    if (waitingOn) loadWaiting();
+  }, [waitingOn, loadWaiting]);
   const loadDecided = React.useCallback(() => {
     setDecidedStatus((st) => (st === "ready" ? st : "loading"));
     fetchDecided()
       .then(() => setDecidedStatus("ready"))
-      .catch(() => setDecidedStatus((st) => (st === "ready" ? st : "error")));
+      .catch((e) => {
+        setDecidedMessage(failureSentence(e));
+        setDecidedStatus((st) => (st === "ready" ? st : "error"));
+      });
   }, [fetchDecided]);
   // A view switch keeps this screen mounted: the other view's decided rows are not "ready" for this one.
   React.useEffect(() => setDecidedStatus("idle"), [view]);
@@ -385,11 +494,33 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     if (filter === "decided") loadDecided();
   }, [filter, loadDecided]);
 
+  const wantsUnitNames = filter === "decided" && decidedItems.some((d) => d.decision_basis?.startsWith("unit_admin:"));
+  React.useEffect(() => {
+    if (!wantsUnitNames || unitNamesAsked.current) return;
+    unitNamesAsked.current = true;
+    // The unit-admin tier serves this read: a plain member or a group decider is refused and the row says "a unit admin".
+    governance
+      .getGovernance()
+      .then((s) => setUnitNames({ ...s.unit_names, ...Object.fromEntries(s.profiles.map((p) => [p.id, p.name])) }))
+      .catch(() => undefined);
+  }, [wantsUnitNames]);
+
+  React.useEffect(() => {
+    void fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+  }, [fetchElevation]);
+  const reloadElevation = React.useCallback(() => {
+    setElevation((cur) => (cur === "error" ? "loading" : cur));
+    fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+  }, [fetchElevation]);
+
   const load = React.useCallback(() => {
     setStatus("loading");
     fetchPending()
       .then(() => setStatus("ready"))
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setPendingMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, [fetchPending]);
   React.useEffect(load, [load]);
 
@@ -422,6 +553,16 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // success/failure back to the dialog so it can reset its busy state and
   // only close on success. Returns true on success so ReasonDialog knows
   // whether to close.
+  // The deciders refusals each get their own toast; any other failure keeps the generic one.
+  const refusalToast = (err: unknown): boolean => {
+    if (!(err instanceof HttpError)) return false;
+    if (err.reason === "not_a_decider") toast.error(DECIDERS_INBOX.TOAST_NOT_A_DECIDER, { description: err.message });
+    else if (err.reason === "decision_scope_above_rule") toast.error(DECIDERS_INBOX.TOAST_SCOPE_ABOVE_RULE, { description: err.message });
+    else if (err.reason === "deciders_unreadable") toast.error(DECIDERS_INBOX.TOAST_UNREADABLE, { description: DECIDERS_INBOX.TOAST_UNREADABLE_BODY });
+    else return false;
+    return true;
+  };
+
   const decide = async (reason: string, decisionScope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!prompt) return false;
     try {
@@ -443,10 +584,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       return true;
     } catch (err) {
       noteRefusal(prompt.id, err);
-      toast.error(
-        prompt.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED,
-        { description: getErrorMessage(err) },
-      );
+      if (!refusalToast(err)) {
+        toast.error(
+          prompt.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED,
+          { description: getErrorMessage(err) },
+        );
+      }
       return false;
     }
   };
@@ -467,6 +610,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       });
       onChanged?.();
     } catch (err) {
+      if (refusalToast(err)) return;
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
@@ -496,6 +640,31 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // The pending queue's own tool_call items, and only those — the screen-
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
+  // One card for both lists; the Waiting on you tab passes waiting so the card trusts the server's verdict on it.
+  const elevationDecided = () => {
+    fetchAll().catch(() => {
+      /* transient refresh failure — the decision itself already succeeded */
+    });
+    onChanged?.();
+  };
+  // data-focus-row: when a decision removes the card whose button opened the dialog, focus moves to the next card.
+  const approvalCard = (a: ApprovalRequest, waiting: boolean) => (
+    <div key={a.id} data-focus-row>
+      <ApprovalCard
+        item={wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a}
+        presetBlocked={presetRefused.has(a.id)}
+        caps={caps}
+        waiting={waiting}
+        onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind, maxScope: a.max_scope })}
+        onAdoDecide={decideAdoDirect}
+        onPushDecide={decidePushDirect}
+        onDecline={declineTakeover}
+        refused={refused.has(a.id)}
+      />
+    </div>
+  );
+
+  const waitingCount = (waitingStatus === "ready" ? waitingRows.length : 0) + deciderRequests.length;
   const anyToolCall = pendingItems.some((a) => a.kind === "tool_call") || decidedItems.some((a) => a.kind === "tool_call");
 
   return (
@@ -523,7 +692,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <p className="mb-4 text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
       )}
 
-      <Tabs value={filter} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
+      <MyElevationRequests list={elevation} onReload={reloadElevation} />
+
+      <Tabs value={shown} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
         <TabsList>
           <TabsTrigger value="PENDING" className="gap-2">
             Pending
@@ -533,19 +704,64 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
               </span>
             )}
           </TabsTrigger>
+          {tabDrawn && (
+            <TabsTrigger value="waiting" className="gap-2">
+              {APPROVALS_TAB.WAITING}
+              {waitingCount > 0 && (
+                <span className="rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
+                  {waitingCount}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="decided">Decided</TabsTrigger>
         </TabsList>
       </Tabs>
+      {tabDrawn && <p className="-mt-2 mb-4 text-xs text-muted-foreground">{DECIDERS_INBOX.HELP}</p>}
 
-      {status === "loading" ? (
+      {/* The tab is drawn only after a read has succeeded, so this body never shows a first-read loading or error state. */}
+      {shown === "waiting" ? (
+        waitingRows.length === 0 && deciderRequests.length === 0 ? (
+          <div className="rounded-xl border border-border bg-card">
+            <EmptyState
+              icon={ShieldCheck}
+              title={DECIDERS_INBOX.EMPTY_TITLE}
+              description={DECIDERS_INBOX.EMPTY_BODY}
+              action={
+                <Button variant="outline" size="sm" onClick={() => setFilterParam("decided")}>
+                  {DECIDERS_INBOX.EMPTY_ACTION}
+                </Button>
+              }
+            />
+          </div>
+        ) : (
+          <>
+            {waitingTruncated && (
+              <TruncatedNote count={WAITING_CAP} cap={WAITING_CAP}>
+                {DECIDERS_INBOX.TRUNCATED}
+              </TruncatedNote>
+            )}
+            <div className="space-y-3.5">
+              {deciderRequests.map((r) =>
+                r.kind === "image" ? (
+                  <ImageDeciderCard key={r.id} request={r} onDone={elevationDecided} />
+                ) : (
+                  <ElevationDeciderCard key={r.id} request={r} onDone={elevationDecided} />
+                ),
+              )}
+              {waitingRows.map((a) => approvalCard(a, true))}
+            </div>
+          </>
+        )
+      ) : shown === "PENDING" && status === "loading" ? (
         <div className="rounded-xl border border-border bg-card">
           <TableSkeleton rows={4} cols={3} />
         </div>
-      ) : status === "error" ? (
+      ) : shown === "PENDING" && status === "error" ? (
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState onRetry={load} />
+          <ErrorState message={pendingMessage} onRetry={load} />
         </div>
-      ) : filter === "PENDING" ? (
+      ) : shown === "PENDING" ? (
         pendingItems.length === 0 ? (
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
@@ -561,23 +777,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           </div>
         ) : (
           <div className="space-y-3.5">
-            {pendingItems.map((a) => (
-              <ApprovalCard
-                key={a.id}
-                item={wallsRefused.has(a.id) ? { ...a, walls_block: true } : a}
-                caps={caps}
-                onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
-                onAdoDecide={decideAdoDirect}
-                onPushDecide={decidePushDirect}
-                onDecline={declineTakeover}
-                refused={refused.has(a.id)}
-              />
-            ))}
+            {pendingItems.map((a) => approvalCard(a, false))}
           </div>
         )
       ) : decidedStatus === "error" ? (
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState onRetry={loadDecided} />
+          <ErrorState message={decidedMessage} onRetry={loadDecided} />
         </div>
       ) : decidedStatus !== "ready" ? (
         <div className="rounded-xl border border-border bg-card">
@@ -600,7 +805,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <>
           <div className="overflow-hidden rounded-xl border border-border bg-card">
             {decidedItems.map((d) => (
-              <DecidedRow key={d.id} item={d} runTitle={runTitles.get(d.run_id)} />
+              <DecidedRow key={d.id} item={d} runTitle={runTitles.get(d.run_id)} unitNames={unitNames} />
             ))}
           </div>
           <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">

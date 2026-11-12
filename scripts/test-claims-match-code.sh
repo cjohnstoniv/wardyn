@@ -227,7 +227,7 @@ for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
     new_tables="${new_tables} ${tbl}"
     grep -qF "\`${tbl}\`" <<<"${split_note}" \
       || fail "migration ${num} creates table ${tbl}, and the newest CHANGELOG \"Split-role installs\" bullet does not grant it: a split-role install that follows the note cannot use the table (C8h). Name it there with its grant; after a release cut, start a new bullet and move UNRELEASED_FROM"
-  done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
+  done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?([%0-9$a-z_]+\.)?[a-z_]+' "${f}" | awk '{t = $NF; sub(/.*\./, "", t); print tolower(t)}' | sort -u || true)"
 done
 pass "C8h the split-role upgrade note grants all ${checked} tables created since migration ${UNRELEASED_FROM}"
 

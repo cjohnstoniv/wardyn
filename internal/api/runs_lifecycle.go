@@ -20,7 +20,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -117,20 +116,26 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 				// can tell "the task never ran" from "it ran but its own
 				// completion accounting failed".
 				data := map[string]any{"exec_started": false, "error": werr.Error()}
-				applied, uerr := s.casRunState(base, runID, types.RunRunning, types.RunFailed)
+				ctx, unlock, locked := s.lockRunEnd(base, runID, endHoldDedicated) // through the tail's computer folder pass
+				if !locked {
+					s.finishRunOutput(base, runID)
+					return
+				}
+				defer unlock()
+				applied, uerr := s.casRunState(ctx, runID, types.RunRunning, types.RunFailed)
 				if uerr != nil {
 					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
-					s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+					s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 						runID.String(), "failure", mustJSON(data)))
 					return
 				}
 				if !applied {
 					// Already terminal (e.g. killed concurrently) — nothing further to
 					// do, but this process may hold the tail the winner does not.
-					s.finishRunOutput(base, runID)
+					s.finishRunOutput(ctx, runID)
 					return
 				}
-				s.finalizeRunTail(base, runID, ref, "run.complete", "failure", data)
+				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
 				return
 			}
 			// Audit the watcher's exit for forensics either way.
@@ -169,28 +174,34 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// agent, so this read always sees it. A read that fails twice leaves the run RUNNING: this
 		// watcher's lease then lapses, and the stale-watcher sweep (sweepRunWatchers) re-derives it
 		// through reconcileFinalize, which reads whether it is kept. Never a finalize that could not tell.
-		cur, gerr := s.cfg.Store.GetRun(base, runID)
+		// The run's lock is held from this read through the tail's computer folder pass (lockRunEnd).
+		ctx, unlock, locked := s.lockRunEnd(base, runID, endHoldDedicated)
+		if !locked {
+			s.finishRunOutput(base, runID) // the agent exited: its tail is this process's either way
+			return
+		}
+		defer unlock()
+		cur, gerr := s.cfg.Store.GetRun(ctx, runID)
 		if gerr != nil {
 			select {
 			case <-time.After(completionWatcherReadRetryDelay):
-			case <-base.Done():
+			case <-ctx.Done():
 			}
-			cur, gerr = s.cfg.Store.GetRun(base, runID)
+			cur, gerr = s.cfg.Store.GetRun(ctx, runID)
 		}
 		if gerr != nil {
-			slog.WarnContext(base, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
+			slog.WarnContext(ctx, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
 				slog.String("run_id", runID.String()), slog.Int("exit_code", exitCode), slog.Any("err", gerr))
 			return
 		}
 		if runIsKept(cur) {
 			return
 		}
-
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
-		applied, uerr := s.casRunState(base, runID, types.RunRunning, terminal)
+		applied, uerr := s.casRunState(ctx, runID, types.RunRunning, terminal)
 		if uerr != nil {
-			s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"exit_code": exitCode, "error": uerr.Error(),
 				})))
@@ -200,33 +211,23 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			// Run already terminal (e.g. KILLED by a user mid-run). The kill path
 			// already tore the sandbox down; only this process's tail is left, and
 			// finishing it is a no-op when the winner already did.
-			s.finishRunOutput(base, runID)
+			s.finishRunOutput(ctx, runID)
 			return
 		}
-
 		// We won the RUNNING->terminal transition, so this is the authoritative end
 		// of the run. Run the shared terminal tail: audit run.complete, cascade the
-		// kill-switch revocation (matching the docs' revoke-on-every-stop promise,
-		// "including failure"), free the sandbox (auditing a failed teardown so an
-		// abandoned container is never silent), and settle the workspace/record run.
-		// The boot reconciler runs the IDENTICAL sequence via finalizeRunTail, so a
-		// new terminal concern is added in one place, not hand-copied across paths.
-		// A non-zero exit carries no reason of its own; the agent's recording may
-		// (noteModelAccessFromRecording).
+		// kill-switch revocation ("including failure"), free the sandbox (auditing
+		// a failed teardown), and settle the workspace/record run. The boot
+		// reconciler runs the IDENTICAL sequence via finalizeRunTail. A non-zero exit
+		// carries no reason of its own; the agent's recording may (noteModelAccessFromRecording).
 		if terminal == types.RunFailed {
-			s.noteModelAccessFromRecording(base, runID)
+			s.noteModelAccessFromRecording(ctx, runID)
 		}
-		s.finalizeRunTail(base, runID, ref, "run.complete", outcome, map[string]any{
+		s.finalizeRunTail(ctx, runID, ref, "run.complete", outcome, map[string]any{
 			"exit_code": exitCode, "state": terminal,
 		})
 	}()
 }
-
-// isTerminalRunState reports whether a run is in a terminal (already-ended)
-// state. The kill-switch must not re-kill or clobber a run that already ended
-// (COMPLETED/FAILED by the watcher, or KILLED/STOPPED/ARCHIVED earlier). The set
-// itself lives on types.RunState so the CLI and SDK share one definition.
-func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
 
 // casRunState is the one place this package issues a run's state CAS: it delegates to
 // Store.UpdateRunStateIf and, when the transition BOTH won and NEWLY landed
@@ -240,6 +241,12 @@ func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
 // the same run twice.
 func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
 	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
+	s.runStateMoved(runID, from, to, applied)
+	return applied, err
+}
+
+// runStateMoved is casRunState's count and notice for a transition a store call made (applied).
+func (s *Server) runStateMoved(runID uuid.UUID, from, to types.RunState, applied bool) {
 	if applied && to.IsTerminal() && !from.IsTerminal() {
 		s.metrics.runTerminal(to)
 	}
@@ -250,7 +257,6 @@ func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to type
 			s.kickQueue()
 		}
 	}
-	return applied, err
 }
 
 // stopSandboxOrAudit tears a dispatch-created sandbox down and RECORDS a failed
@@ -272,14 +278,16 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 
 // teardownOrAudit is stopSandboxOrAudit with the teardown verb given.
 func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, action string, teardown func(context.Context, string) error) bool {
-	serr := teardown(ctx, ref)
+	serr := teardownUnlessLost(ctx, ref, teardown)
 	if serr == nil {
 		return true
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-		ref, "failure", mustJSON(map[string]any{
-			"sandbox_ref": ref, "teardown_error": serr.Error(),
-		})))
+	if s.auditFirstTeardownFailure(ctx, runID, action, serr) {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+			ref, "failure", mustJSON(map[string]any{
+				"sandbox_ref": ref, "teardown_error": serr.Error(),
+			})))
+	}
 	return false
 }
 
@@ -291,13 +299,16 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 // It is shared by handleKillRun and the completion watcher so EVERY terminal
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
+	marked := s.markRevokeOwed(ctx, runID)
 	data := s.revokeRunSteps(ctx, runID)
-	if len(data) > 0 {
+	if len(data) > 0 && s.revokeRowDue(ctx, runID) {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(data))))
 	}
 	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
+		s.settleRevokeOwed(ctx, runID, marked, ctx.Err() != nil)
 		return ctx.Err()
 	}
+	s.settleRevokeOwed(ctx, runID, marked, true)
 	return fmt.Errorf("run revoke incomplete: %v", data)
 }
 
@@ -307,10 +318,12 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 // run.revoke row is, without auditing it: the reaper writes that row itself
 // from the map it is handed. An empty map is a clean revoke.
 func (s *Server) RevokeStoppedRun(ctx context.Context, runID uuid.UUID) map[string]string {
+	marked := s.markRevokeOwed(ctx, runID)
 	out := map[string]string{}
 	for k, v := range s.revokeRunSteps(ctx, runID) {
 		out[k] = fmt.Sprint(v)
 	}
+	s.settleRevokeOwed(ctx, runID, marked, len(out) > 0 || ctx.Err() != nil)
 	return out
 }
 
@@ -331,6 +344,7 @@ func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string
 	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
 		data["proxy_config_error"] = perr.Error()
 	}
+	macGUIEnvForget(runID)
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
 	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
@@ -342,55 +356,6 @@ func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string
 		}
 	}
 	return data
-}
-
-// cancelRunApprovals is the approval half of the terminal cascade: every
-// still-PENDING approval of a run that has just ended is moved to CANCELLED, so
-// the operator's queue stops holding a decision nobody can act on and the
-// console stops rendering live Approve/Deny buttons on a run it labels Killed.
-//
-// Nil-safe and best-effort like revokeRunCascade, and for the same reason: the
-// run is already terminal, and a failed cancel must not gate the caller's own
-// outcome. A failure is logged and audited (run.revoke/failure carries the
-// detail) and returned for durable receipt cleanup; the stale-PENDING sweeper (ExpireStale) is
-// still behind it as the backstop it has always been.
-//
-// The reason recorded on each row is derived from the run's state, read back
-// from the store rather than passed in: finalizeRunTail's four callers do not
-// all know which terminal state they landed on (the reconciler passes `to` in
-// its audit data, the probe-reclaim path passes none), and the row is the
-// authority on the transition that just won. One read per terminal transition.
-func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error {
-	if s.cfg.Approvals == nil {
-		return nil
-	}
-	// wardyn_credential_reauth_total{outcome="cancelled"} is a STATE-TRANSITION
-	// counter, so it counts the credential_reauth rows the cancel actually MOVED
-	// — not a pre-read of PENDING rows, which also counted one a human decided
-	// between the read and the CAS (#151). Counting at a later resolve that
-	// meets a terminal row counts retries instead, and never fires once the
-	// sidecar has given up. AWS SSO re-auth rows only, the series' HELP: an
-	// Azure DevOps sign-in or consent row is credential_reauth too, and is not.
-	byKind, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
-	for range byKind[approval.TallyReauthAWSSSO] {
-		s.metrics.credentialReauthRecorded(credentialReauthOutcomeCancelled)
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "wardynd: could not cancel a terminal run's pending approvals",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
-			runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(map[string]any{"approval_cancel_error": err.Error()}))))
-		return err
-	}
-	n := 0
-	for _, c := range byKind {
-		n += c
-	}
-	if n > 0 {
-		slog.InfoContext(ctx, "wardynd: cancelled a terminal run's pending approvals",
-			slog.String("run_id", runID.String()), slog.Int("cancelled", n))
-	}
-	return ctx.Err()
 }
 
 // CancelTerminalRunApprovals is cancelRunApprovals' exported seam for the THIRD
@@ -786,7 +751,8 @@ func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	applied, serr := s.claimKillTransition(ctx, run)
+	// A kill not the kept machine's owner's marks it for delete in the claim itself (kept_machine_delete.go).
+	applied, intent, serr := s.claimKill(ctx, run, killerType, killer)
 	if serr != nil {
 		return false, nil, serr
 	}
@@ -794,6 +760,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 		return false, nil, nil
 	}
 	killData := s.killTeardownTail(ctx, run, killerType, killer, extra, true)
+	s.finishKeptMachineKill(ctx, intent)
 	return true, killData, nil
 }
 
@@ -823,6 +790,12 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 // Returns whether the KILLED transition was ours (a lost CAS is `false`, with
 // nothing else touched).
 func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (bool, error) {
+	return s.claimKillTransitionWith(ctx, run, func() (bool, error) { return s.casRunState(ctx, run.ID, run.State, types.RunKilled) })
+}
+
+// claimKillTransitionWith is claimKillTransition with cas making the KILLED transition (claimKill's
+// also marks a kept machine for delete).
+func (s *Server) claimKillTransitionWith(ctx context.Context, run types.AgentRun, cas func() (bool, error)) (bool, error) {
 	// Win the terminal transition first. Revoking before this CAS meant a
 	// kill that then LOST the CAS to a concurrent dispatch forward-transition
 	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
@@ -831,7 +804,7 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 	// from the (non-terminal) state we read, so a completion watcher winning
 	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
 	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
-	applied, serr := s.casRunState(ctx, run.ID, run.State, types.RunKilled)
+	applied, serr := cas()
 	if serr != nil {
 		return false, serr
 	}
@@ -896,8 +869,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	killData := map[string]any{}
 	queued := false
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
+	var kerr error
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
-		if kerr := s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
+		if kerr = s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
 			if queuedOK && errors.Is(kerr, runner.ErrPendingOnRunner) {
 				queued = true
 			} else {
@@ -909,6 +883,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// use the whole kill deadline, and the revokes must not inherit what is left of it.
 	revokeCtx, revokeCancel := context.WithTimeout(context.WithoutCancel(ctx), killRevokeTimeout)
 	defer revokeCancel()
+	// The revoke is owed from here until step (4) leaves neither error behind; a worker on every replica
+	// retries it meanwhile, whether or not the run still holds a sandbox.
+	marked := s.markRevokeOwed(revokeCtx, id)
 	// (3) Identity revocation: deny every (current+future) token for the run. A
 	// bounded retry guards against a transient store error leaving the run's
 	// JWT-SVID valid (until its <=1h TTL) while the kill is reported as success.
@@ -926,10 +903,14 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 			killData["broker_error"] = berr.Error()
 		}
 	}
+	_, identityFailed := killData["identity_error"]
+	_, brokerFailed := killData["broker_error"]
+	s.settleRevokeOwed(revokeCtx, id, marked, identityFailed || brokerFailed)
 	// (5) The run's stored proxy config (#1176) has nothing left to rebuild.
 	if perr := s.dropRunProxyConfig(revokeCtx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
 	}
+	macGUIEnvForget(id)
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),
 	// and the erase of any value its runner holds resident, as revokeRunCascade does.
 	s.revokeRunPATs(revokeCtx, id, adoPATRevokeKill)
@@ -966,9 +947,26 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// for interactive mode (which has no completion watcher), so capture here.
 	s.reconcileWorkspaceRun(revokeCtx, id)
 	s.reconcileRecordRun(revokeCtx, id)
+	// A confirmed kill leaves the ref meaning nothing: clear it, after reconcileRecordRun, which reads the ref
+	// to tell a sandbox that never started from an empty capture (reconcileRecordRun in workspace_run.go).
+	if kerr == nil && !queued && s.cfg.Runner != nil && run.SandboxRef != "" {
+		if c, ok := s.cfg.Store.(sandboxRefRetainingClearer); ok {
+			_ = c.ClearSandboxRefRetaining(revokeCtx, id)
+		}
+	}
 
 	return killData
 }
+
+// sandboxRefRetainingClearer is the one store method the kill tail's ref clear needs, asked for on its own
+// as store.RevokeOwed is. store.PG satisfies it, so the clear in production is the retaining clear
+// clearSandboxRef also takes there. store.Store does not carry it, so a test fake that embeds a nil
+// store.Store does not satisfy it and its kill skips the clear instead of calling through a nil interface.
+type sandboxRefRetainingClearer interface {
+	ClearSandboxRefRetaining(ctx context.Context, runID uuid.UUID) error
+}
+
+var _ sandboxRefRetainingClearer = store.PG{}
 
 // killCascadeTimeout bounds a detached kill cascade. The teardown and both
 // revocations are a handful of store/runner calls; 30s is the generous bound the

@@ -47,7 +47,7 @@ var sentenceConstFragments = map[string]string{
 	"mpBRRenewing": whyRunRefusalClause, "mpBRRemedyRetry": whyRunRefusalClause, "mpBRPersistFailed": whyRunRefusalClause,
 	"mpRunRemedy": whyRunRefusalClause, "mpRunStateMissing": whyRunRefusalClause, "mpRunStateOff": whyRunRefusalClause,
 	"mpRunStateNotServing": whyRunRefusalClause, "mpRunNoKey": whyRunRefusalClause, "mpRunNoToken": whyRunRefusalClause,
-	"mpRunRemedyService": whyRunRefusalClause,
+	"mpRunRemedyService": whyRunRefusalClause, "mpRunNotSignedIn": whyRunRefusalClause, "mpRunSignInEnded": whyRunRefusalClause,
 
 	"laneAppReason": whyLaneReason, "laneSSHReason": whyLaneReason, "adoSSHRetired": whyLaneReason, "adoPATRetired": whyLaneReason,
 
@@ -64,6 +64,7 @@ var sentenceConstFragments = map[string]string{
 	"residentRunnerTooOld":                           "same as residentPATBrokered",
 	"boundaryLocker":                                 "the locker's name inside \"<knob> is locked by <locker>; ask <contact>\", " + whyAfterPrefix,
 	"componentAutonomySource":                        "the phrase an autonomy refusal names (\"... because <phrase> ...\"), " + whyAfterPrefix,
+	"macWindowRunnerFallbackMsg":                     "the runner's name in macWindowNotYourMacMsg's \"This run is on <runner>, so ...\" when the runner is unknown (run_mac_window.go), " + whyAfterPrefix,
 }
 
 // sentenceConstNotSentences are named string consts that #585 never covered
@@ -84,6 +85,7 @@ var sentenceConstNotSentences = map[string]string{
 	"maskFencedReason":      "the session.detach audit reason, " + whyReasonToken,
 	"sshCapReasonChannels":  "an ssh.channel_rejected audit reason, " + whyReasonToken,
 	"sshCapReasonSync":      "an ssh.channel_rejected audit reason, " + whyReasonToken,
+	"sshCapReasonPrincipal": "an ssh.connection.reject audit reason, " + whyReasonToken,
 	"desktopPauseSignin":    "a recorded pause reason the console splices into \"Paused: <reason>\" (recording-level.ts), " + whyReasonToken,
 
 	"bedrockBearerNotRecorded": "opens with the retired grant kind bedrock-api-key, a wire name that is case-significant",

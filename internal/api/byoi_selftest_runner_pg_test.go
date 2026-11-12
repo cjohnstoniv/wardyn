@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -202,5 +203,63 @@ func TestPG_RunnerBYOI_OldRunnerFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(reason, "does not support the BYOI selftest") {
 		t.Fatalf("selftest failure audit = %q, want the runner's missing support", reason)
+	}
+}
+
+// An interactive BYOI run with no task on a runner holds no generation and is issued none for its selftest.
+// It records no failure, reaches the runner with no call, and leaves no execution row, so the run stays one
+// that revives under a first generation of its own. Its warn-only check never widens what the runner admits.
+func TestPG_RunnerBYOI_InteractiveNoTask_NoGenerationNoFailure(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET task = '' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run.Task = ""
+	e, err := f.srv.leaseRunOnRunner(f.ctx, run)
+	if err != nil || e.generation != [16]byte{} {
+		t.Fatalf("lease = %+v, %v; want no generation", e, err)
+	}
+	sb, err := f.srv.createSandboxAtTarget(f.ctx, run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1, Image: byoiImage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.SandboxRef = sb.Ref
+	if err := f.st.SetSandboxRef(f.ctx, run.ID, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	f.running(t, &run, nil)
+
+	f.srv.startAgentOrIdle(f.ctx, run, run.SandboxRef, byoiImage, true, e, nil)
+
+	audit := f.srv.cfg.Audit.(*syncAudit)
+	if audit.has(run.ID, "run.selftest", "failure") {
+		t.Fatalf("selftest rows = %+v, want no failure", audit.eventsFor(run.ID, "run.selftest"))
+	}
+	rows := audit.eventsFor(run.ID, "run.selftest")
+	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive") {
+		t.Fatalf("selftest rows = %+v, want the one saying it did not run", rows)
+	}
+	if !audit.has(run.ID, "run.interactive.start", "success") {
+		t.Fatal("no run.interactive.start success audit")
+	}
+	if got, _ := f.st.GetRun(f.ctx, run.ID); got.State != types.RunRunning {
+		t.Fatalf("run state = %q, want RUNNING", got.State)
+	}
+	if got := selftestsOf("fake-" + run.ID.String()); len(got) != 0 {
+		t.Fatalf("selftests on the runner = %v, want none", got)
+	}
+	if n := f.execs.Load(); n != 0 {
+		t.Fatalf("Exec frames = %d, want none", n)
+	}
+	if cur, err := f.st.RunnerExecutionOf(f.ctx, run.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("execution = %+v, %v; want no row", cur, err)
+	}
+	// Nothing was issued, so the selftest and an Exec are both still refused before reaching the runner.
+	if _, err := f.srv.cfg.Runner.(runner.Selftester).Selftest(e.selftest().bind(f.ctx), run.SandboxRef); !errors.Is(err, errRunnerExecutionUnbound) {
+		t.Fatalf("selftest with no generation = %v, want refused", err)
+	}
+	if _, err := f.srv.cfg.Runner.Exec(e.bind(f.ctx), run.SandboxRef, []string{"/bin/sh"}); !errors.Is(err, errRunnerExecutionUnbound) {
+		t.Fatalf("Exec with no generation = %v, want refused", err)
 	}
 }

@@ -85,7 +85,7 @@ export function runnerAvailability(status: SetupStatus): { noDriver: boolean; no
 // The canon danger card + fix line, byte-identical wherever a caller needs
 // to say "nothing can launch here" — Getting started's EnvironmentStep and
 // Settings' Host card both mount this rather than each authoring their own.
-export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
+export function NoRunnerCard({ noDriver, k8s = false }: { noDriver: boolean; k8s?: boolean }) {
   return (
     <div className="rounded-xl border border-danger/40 bg-danger-subtle p-5">
       <div className="flex items-start gap-3">
@@ -97,6 +97,8 @@ export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
               <>
                 Fix: start wardynd with <Mono>-runner docker</Mono> (built with <Mono>-tags docker</Mono>).
               </>
+            ) : k8s ? (
+              "Fix: this cluster reports no barrier. Check the chart's k8s.runtimeClasses settings and the control plane's boot log for the runner check, then Re-check."
             ) : (
               "Fix: start the Docker daemon (or install a container runtime) so Wardyn can build a barrier, then re-check."
             )}
@@ -346,7 +348,7 @@ export function EnvironmentStep({
   return (
     <div className="space-y-5">
       {/* No-runner danger card — the matrix stays visible read-only below. */}
-      {noRunner && <NoRunnerCard noDriver={noDriver} />}
+      {noRunner && <NoRunnerCard noDriver={noDriver} k8s={k8s} />}
 
       {/* k8s variant rows (prompt-v4) — Runner/Egress containment/Confinement
           classes/Agent images. The tier matrix below is UNCHANGED: it's still
@@ -370,10 +372,10 @@ export function EnvironmentStep({
         // radios are already disabled and the cells carry their own opacity (#2840).
         className="relative overflow-x-auto rounded-xl border"
       >
-        <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
+        <table className="w-full min-w-[640px] table-fixed border-collapse text-sm">
           <thead>
             <tr>
-              <th className="w-[220px] border-b bg-muted/40 px-4 py-3 text-left align-bottom font-normal">
+              <th className="w-[160px] border-b bg-muted/40 px-4 py-3 text-left align-bottom font-normal">
                 <span className="label-eyebrow">
                   Barrier tier
                 </span>
@@ -552,7 +554,7 @@ function RowLabelled({
       <th
         scope="row"
         className={cn(
-          "w-[220px] px-4 py-3 text-left align-top font-normal text-foreground",
+          "w-[160px] px-4 py-3 text-left align-top font-normal text-foreground",
           !foot && "border-b",
         )}
       >

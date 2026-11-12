@@ -17,6 +17,10 @@ import type { MeUserDrive } from "../../lib/api/health";
 // keystroke, so that is cheap; a field that changes often needs its own
 // context instead.
 export interface MeIdentity {
+  // GET /me's `unit_admin_of`: the units this caller holds a unit-admin grant on. Default empty: fail
+  // CLOSED, like userDrive, so an unresolved or failed /me, an older server that never sends the key, and an
+  // unwrapped component all read as "no grant". UX only: the server's requireUnitScope is the gate.
+  unitAdminOf: readonly { unit_id: string; unit_name: string }[];
   // Whether the signed-in caller holds the operator role (see GET
   // /api/v1/me's `operator` field, sourced from the same isOperator
   // predicate the server gates writes with — internal/api/http.go). Default
@@ -132,6 +136,12 @@ export interface MeIdentity {
   // with no <OperatorProvider> (every existing test) must never invent a
   // posture warning nothing has actually reported.
   confinementPosture: ConfinementPosture;
+  // /healthz's network_policy_checked_at, from the same answer as the posture:
+  // the check that produced it, RFC 3339 UTC. "" when absent.
+  confinementCheckedAt: string;
+  // /healthz's network_policy_source, from the same answer: "runner" when the
+  // posture is a connected Kubernetes runner's, "" when it is this cluster's.
+  confinementSource: string;
 
   // #510-F6 — /healthz's `demo_video_base_url`, the operator-run mirror the
   // Getting Started demo episodes stream from on an air-gapped deployment.
@@ -203,12 +213,16 @@ export interface UserTypeMeta {
 }
 
 // See MeIdentity.confinementPosture for the fail-quiet rationale.
-export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "unknown" | "";
+export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "refused" | "not_proven" | "unknown" | "";
 
 // The single fail-open/fail-closed default every field's own doc comment
 // (above) explains — this is what every unwrapped consumer (every existing
 // test that mounts a screen directly, and any future one) reads.
+// One shared empty list, so a default prop does not hand the memo a fresh array on every render.
+const NO_UNITS: readonly { unit_id: string; unit_name: string }[] = [];
+
 const DEFAULT_ME_IDENTITY: MeIdentity = {
+  unitAdminOf: NO_UNITS,
   operator: true,
   operatorResolved: true,
   securityOperator: true,
@@ -220,6 +234,8 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   userDrive: NO_USER_DRIVE,
   userType: null,
   confinementPosture: "",
+  confinementCheckedAt: "",
+  confinementSource: "",
   demoVideoBaseUrl: undefined,
 };
 
@@ -230,6 +246,7 @@ export function OperatorProvider({
   operatorResolved = true,
   securityOperator = true,
   userViewSuperAdmin = false,
+  unitAdminOf = NO_UNITS,
   principal = "",
   identityRevision = 0,
   authGeneration = 0,
@@ -239,6 +256,8 @@ export function OperatorProvider({
   userDriveUnavailable = "",
   userType = null,
   confinementPosture = "",
+  confinementCheckedAt = "",
+  confinementSource = "",
   demoVideoBaseUrl = undefined,
   children,
 }: {
@@ -254,6 +273,8 @@ export function OperatorProvider({
   /** GET /me's `user_view_super_admin` — see MeIdentity.userViewSuperAdmin.
    *  Optional, defaulting false (fail closed). */
   userViewSuperAdmin?: boolean;
+  /** GET /me's `unit_admin_of` — see MeIdentity.unitAdminOf. Optional, defaulting empty (fail closed). */
+  unitAdminOf?: readonly { unit_id: string; unit_name: string }[];
   principal?: string;
   identityRevision?: number;
   authGeneration?: number;
@@ -271,6 +292,10 @@ export function OperatorProvider({
    *  (no posture reported), so every existing caller keeps today's silent
    *  behaviour. */
   confinementPosture?: ConfinementPosture;
+  /** See MeIdentity.confinementCheckedAt. Optional, defaulting "". */
+  confinementCheckedAt?: string;
+  /** See MeIdentity.confinementSource. Optional, defaulting "". */
+  confinementSource?: string;
   /** #510-F6 — see MeIdentity.demoVideoBaseUrl above. Optional, defaulting
    *  undefined ("no mirror configured"), so every existing caller keeps
    *  today's GitHub-default behaviour. */
@@ -299,6 +324,7 @@ export function OperatorProvider({
       operatorResolved,
       securityOperator,
       userViewSuperAdmin,
+      unitAdminOf,
       principal,
       identityRevision,
       authGeneration,
@@ -306,9 +332,11 @@ export function OperatorProvider({
       userDrive: drive,
       userType,
       confinementPosture,
+      confinementCheckedAt,
+      confinementSource,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, userViewSuperAdmin, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, userViewSuperAdmin, unitAdminOf, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, confinementCheckedAt, confinementSource, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -316,6 +344,12 @@ export function OperatorProvider({
 // The member's local_dir root constraint label — see MeIdentity.memberLocalDirRoot above.
 export function useMemberLocalDirRoot(): string | null {
   return React.useContext(MeIdentityContext).memberLocalDirRoot;
+}
+
+// The units the caller holds a unit-admin grant on — see MeIdentity.unitAdminOf above. UX only: it decides
+// what the console shows, and the server's requireUnitScope is what refuses.
+export function useUnitAdminOf(): readonly { unit_id: string; unit_name: string }[] {
+  return React.useContext(MeIdentityContext).unitAdminOf;
 }
 
 // The caller's own user type — see MeIdentity.userType above.
@@ -455,6 +489,16 @@ export function useRoleResolved(): boolean {
 // sites still each read only this one value out of it.
 export function useConfinementPosture(): ConfinementPosture {
   return React.useContext(MeIdentityContext).confinementPosture;
+}
+
+// The time of the check that produced the posture — see MeIdentity.confinementCheckedAt.
+export function useConfinementCheckedAt(): string {
+  return React.useContext(MeIdentityContext).confinementCheckedAt;
+}
+
+// Where the posture comes from — see MeIdentity.confinementSource.
+export function useConfinementSource(): string {
+  return React.useContext(MeIdentityContext).confinementSource;
 }
 
 // The operator-run demo mirror — see MeIdentity.demoVideoBaseUrl above.

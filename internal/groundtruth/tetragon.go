@@ -34,6 +34,8 @@ import (
 type TetragonEvent struct {
 	ProcessExec   *TetragonProcessExec   `json:"process_exec,omitempty"`
 	ProcessKprobe *TetragonProcessKprobe `json:"process_kprobe,omitempty"`
+	// NodeName is the node the Tetragon agent runs on (top level of each export line).
+	NodeName string `json:"node_name,omitempty"`
 }
 
 // TetragonProcessExec carries a process execve.
@@ -80,6 +82,22 @@ type TetragonProcess struct {
 	Arguments string `json:"arguments,omitempty"`
 	CgroupID  uint64 `json:"cgroup_id,string,omitempty"`
 	Docker    string `json:"docker,omitempty"` // container id (truncated)
+	// Pod is set on Kubernetes nodes: the pod and container the process runs in.
+	Pod *TetragonPod `json:"pod,omitempty"`
+}
+
+// TetragonPod is the Kubernetes pod block of a process descriptor. Only the
+// immutable identity is read; pod labels are mutable and never a key.
+type TetragonPod struct {
+	Namespace string                `json:"namespace,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Container *TetragonPodContainer `json:"container,omitempty"`
+}
+
+// TetragonPodContainer names the container inside the pod.
+type TetragonPodContainer struct {
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // ── Mapper ──────────────────────────────────────────────────────────────────
@@ -89,6 +107,8 @@ type TetragonProcess struct {
 // Safe for concurrent use when the Correlator is.
 type Mapper struct {
 	corr Correlator
+	// node stamps events whose export line carries no node_name.
+	node string
 }
 
 // NewMapper builds a Mapper over a Correlator. A nil Correlator treats every
@@ -96,6 +116,13 @@ type Mapper struct {
 // visible blindness rather than crashing.
 func NewMapper(corr Correlator) *Mapper {
 	return &Mapper{corr: corr}
+}
+
+// WithNode sets the node recorded on events whose export line has no
+// node_name, and returns m. Call it before the Mapper is shared.
+func (m *Mapper) WithNode(node string) *Mapper {
+	m.node = node
+	return m
 }
 
 // Map converts ev into an AuditEvent. ok is false for an unrecorded event
@@ -108,9 +135,9 @@ func NewMapper(corr Correlator) *Mapper {
 func (m *Mapper) Map(ev TetragonEvent) (types.AuditEvent, bool) {
 	switch {
 	case ev.ProcessExec != nil:
-		return m.mapExec(ev.ProcessExec)
+		return m.mapExec(ev.ProcessExec, m.nodeOf(ev))
 	case ev.ProcessKprobe != nil:
-		return m.mapKprobe(ev.ProcessKprobe)
+		return m.mapKprobe(ev.ProcessKprobe, m.nodeOf(ev))
 	default:
 		return types.AuditEvent{}, false
 	}
@@ -126,7 +153,18 @@ func (m *Mapper) MapLine(line []byte) (types.AuditEvent, bool) {
 	return m.Map(ev)
 }
 
-func (m *Mapper) mapExec(e *TetragonProcessExec) (types.AuditEvent, bool) {
+// nodeOf is the node an event is stamped with: the Mapper's own node when it is
+// set, else the line's node_name. The sensor's heartbeat is keyed by the same
+// node, so events and beats join on one value even when Tetragon's node_name is
+// its hostname rather than the Kubernetes node name.
+func (m *Mapper) nodeOf(ev TetragonEvent) string {
+	if m.node != "" {
+		return m.node
+	}
+	return ev.NodeName
+}
+
+func (m *Mapper) mapExec(e *TetragonProcessExec, node string) (types.AuditEvent, bool) {
 	p := e.Process
 	if p == nil {
 		return types.AuditEvent{}, false
@@ -144,6 +182,8 @@ func (m *Mapper) mapExec(e *TetragonProcessExec) (types.AuditEvent, bool) {
 		Subtype:     SubtypeProcessExec,
 		CgroupID:    p.CgroupID,
 		ContainerID: containerID(p),
+		Node:        node,
+		Pod:         podOf(p),
 		Argv:        argv,
 		Loader:      loader,
 		Correlation: correlation,
@@ -154,19 +194,19 @@ func (m *Mapper) mapExec(e *TetragonProcessExec) (types.AuditEvent, bool) {
 // mapKprobe multiplexes a process_kprobe into a connect or file-write audit
 // event. A connect kprobe is recognised by function name or by carrying a
 // sock_arg; everything else is a file write.
-func (m *Mapper) mapKprobe(e *TetragonProcessKprobe) (types.AuditEvent, bool) {
+func (m *Mapper) mapKprobe(e *TetragonProcessKprobe, node string) (types.AuditEvent, bool) {
 	p := e.Process
 	if p == nil {
 		return types.AuditEvent{}, false
 	}
 	if sock := kprobeSock(e); sock != nil || isConnectKprobe(e.FunctionName) {
-		return m.mapConnect(p, sock)
+		return m.mapConnect(p, sock, node)
 	}
-	return m.mapFileWrite(p, e)
+	return m.mapFileWrite(p, e, node)
 }
 
 // mapConnect emits a kernel.network.connect from a connect kprobe's sock_arg.
-func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg) (types.AuditEvent, bool) {
+func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg, node string) (types.AuditEvent, bool) {
 	runID, correlation := m.correlate(p)
 	ip, port := connectDst(sock)
 	dst := ""
@@ -188,6 +228,8 @@ func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg) (types.Au
 		Subtype:     SubtypeNetworkConnect,
 		CgroupID:    p.CgroupID,
 		ContainerID: containerID(p),
+		Node:        node,
+		Pod:         podOf(p),
 		Dst:         dst,
 		Correlation: correlation,
 	}
@@ -195,7 +237,7 @@ func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg) (types.Au
 }
 
 // mapFileWrite emits a kernel.file.write for a sensitive-path kprobe.
-func (m *Mapper) mapFileWrite(p *TetragonProcess, e *TetragonProcessKprobe) (types.AuditEvent, bool) {
+func (m *Mapper) mapFileWrite(p *TetragonProcess, e *TetragonProcessKprobe, node string) (types.AuditEvent, bool) {
 	path := kprobePath(e)
 	if !IsSensitivePath(path) {
 		// Non-sensitive write: filtered noise, not recorded.
@@ -207,6 +249,8 @@ func (m *Mapper) mapFileWrite(p *TetragonProcess, e *TetragonProcessKprobe) (typ
 		Subtype:     SubtypeFileWrite,
 		CgroupID:    p.CgroupID,
 		ContainerID: containerID(p),
+		Node:        node,
+		Pod:         podOf(p),
 		Path:        path,
 		Correlation: correlation,
 	}
@@ -238,11 +282,22 @@ func kprobeSock(e *TetragonProcessKprobe) *TetragonSockArg {
 	return nil
 }
 
-// correlate resolves a process to a run id via container-id correlation.
+// correlate resolves a process to a run id: by pod when the event carries a
+// pod block and the Correlator is a PodCorrelator, then by container id.
 // Returns (nil, unmapped) if it doesn't resolve or no Correlator is wired.
 func (m *Mapper) correlate(p *TetragonProcess) (*uuid.UUID, Correlation) {
 	if m.corr == nil {
 		return nil, CorrelationUnmapped
+	}
+	if pc, ok := m.corr.(PodCorrelator); ok && p != nil && p.Pod != nil {
+		container := ""
+		if p.Pod.Container != nil {
+			container = p.Pod.Container.Name
+		}
+		if id, ok := pc.RunForPod(p.Pod.Namespace, p.Pod.Name, container); ok {
+			rid := id
+			return &rid, CorrelationMapped
+		}
 	}
 	if cid := containerID(p); cid != "" {
 		if id, ok := m.corr.RunForContainer(cid); ok {
@@ -266,6 +321,14 @@ func auditFor(runID *uuid.UUID, action, target, outcome string, data EventData) 
 		Outcome:   outcome,
 		Data:      data.marshal(),
 	}
+}
+
+// podOf is the "namespace/name" of the event's pod, or "" off Kubernetes.
+func podOf(p *TetragonProcess) string {
+	if p == nil || p.Pod == nil || p.Pod.Name == "" {
+		return ""
+	}
+	return p.Pod.Namespace + "/" + p.Pod.Name
 }
 
 func containerID(p *TetragonProcess) string {

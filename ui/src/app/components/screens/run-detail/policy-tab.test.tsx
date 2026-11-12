@@ -267,6 +267,30 @@ describe("PolicyTab — changes grouped by cause", () => {
     expect(within(mirror).getByText("registry.npmjs.org").parentElement).toHaveTextContent("Removed at start");
   });
 
+  it("reads the IP-address switch as the setting, labelled, for an addition and a removal", async () => {
+    const ON = "When allow-all egress is on, refuse connections to IP addresses unless they are listed exactly in Allowed hosts.";
+    show(
+      view({
+        changes: [
+          change({ cause: "overlay", field: "refuse_ip_literals", added: ["true"] }),
+          change({ cause: "launch", field: "refuse_ip_literals", removed: ["true"] }),
+        ],
+      }),
+    );
+    await ready();
+    const set = screen.getByRole("heading", { name: CHANGE_HEADING.overlay }).parentElement!;
+    const added = within(set).getByText(ON).parentElement!;
+    expect(added).toHaveTextContent("Added at start");
+    expect(added).toHaveTextContent("IP addresses");
+    expect(within(set).getByText(ON)).not.toHaveClass("font-mono");
+    const launch = screen.getByRole("heading", { name: CHANGE_HEADING.launch }).parentElement!;
+    const removed = within(launch).getByText(ON).parentElement!;
+    expect(removed).toHaveTextContent("Removed at start");
+    expect(removed).toHaveTextContent("IP addresses");
+    expect(removed).not.toHaveTextContent("Refuse IP addresses");
+    expect(screen.queryByText("true")).not.toBeInTheDocument();
+  });
+
   it("an unrecognised cause falls under the generic heading", async () => {
     show(view({ changes: [change({ cause: "something_new", field: "allowed_domains", added: ["x.example"] })] }));
     await ready();
@@ -714,5 +738,111 @@ describe("PolicyTab — Summary / YAML switch and Copy YAML", () => {
     expect(screen.getByText(POLICY_TAB.scope)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "YAML" }));
     expect(screen.getByText(POLICY_TAB.scope)).toBeInTheDocument();
+  });
+});
+
+describe("PolicyTab: the run's wall preset line", () => {
+  const withPreset = (wall_preset: RunDetail["wall_preset"]) => ({ ...RUN, wall_preset }) as RunDetail;
+
+  it("names the preset, its audience and version under the source line", async () => {
+    show(view(), { run: withPreset({ id: "sealed", name: "Sealed", scope: "builtin", version: 1 }) });
+    await ready();
+    expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("Wall preset: Sealed (built in, version 1).");
+  });
+
+  it("says a personal wall preset, naming nothing, when the run read carries its scope alone", async () => {
+    show(view(), { run: withPreset({ scope: "person" }) });
+    await ready();
+    const line = screen.getByTestId("wall-preset-run-line");
+    expect(line).toHaveTextContent("Wall preset: a personal wall preset.");
+    expect(line).not.toHaveTextContent("version");
+  });
+
+  it("draws no line for a run launched without a wall preset", async () => {
+    show(view());
+    await ready();
+    expect(screen.queryByTestId("wall-preset-run-line")).toBeNull();
+  });
+});
+
+describe("PolicyTab: a wall preset's changes sit under their own heading", () => {
+  const mixed = view({
+    changes: [
+      change({ cause: "walls", field: "allowed_domains", removed: ["pypi.org"] }),
+      change({ cause: "wall_preset", field: "allowed_domains", removed: ["pastebin.com"] }),
+    ],
+  });
+  const headings = () => screen.getAllByRole("heading").map((h) => h.textContent);
+  const entriesOf = (name: string) => within(screen.getByRole("heading", { name }).parentElement as HTMLElement);
+
+  it("names an organisation preset, apart from the person's walls", async () => {
+    show(mixed, { run: { ...RUN, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 4 } } as RunDetail });
+    await ready();
+    expect(screen.getByRole("heading", { name: "Your walls" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Wall preset: Docs triage" })).toBeInTheDocument();
+    expect(entriesOf("Your walls").getByText("pypi.org")).toBeInTheDocument();
+    expect(entriesOf("Wall preset: Docs triage").getByText("pastebin.com")).toBeInTheDocument();
+    expect(entriesOf("Your walls").queryByText("pastebin.com")).toBeNull();
+    expect(entriesOf("Wall preset: Docs triage").queryByText("pypi.org")).toBeNull();
+    expect(headings().filter((h) => h === "Your walls")).toHaveLength(1);
+  });
+
+  it("names no preset to a reader who gets the scope alone", async () => {
+    show(mixed, { principal: "admin@acme.example", run: { ...RUN, wall_preset: { scope: "person" } } as RunDetail });
+    await ready();
+    expect(screen.queryByRole("heading", { name: "A personal wall preset" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "dana@acme.example's walls" })).toBeInTheDocument();
+    // None of the preset's change rows shows, as an entry or as a chip on the spec.
+    expect(screen.queryByText("pastebin.com")).toBeNull();
+    expect(headings().some((h) => /wall preset/i.test(h))).toBe(false);
+  });
+});
+
+describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
+  const withPreset = (wall_preset: RunDetail["wall_preset"]) => ({ ...RUN, wall_preset }) as RunDetail;
+  const sealed = { id: "sealed", name: "Sealed", scope: "builtin" as const, version: 1 };
+  const policy = (over: Partial<RunPolicyView> = {}) =>
+    view({
+      spec: { allowed_domains: ["a.example.com"], push_rules: { deny_all: true }, git_push_any_branch: false } as never,
+      provenance: { allowed_domains: { layer: "wall_preset" }, push_rules: { layer: "wall_preset" }, first_use_approval: { layer: "deployment" } },
+      wall_preset: { ...sealed, narrowed: ["allowed_domains", "push_rules"] },
+      ...over,
+    });
+
+  it("puts Wall preset: {name} on the rows the preset decided", async () => {
+    show(policy(), { run: withPreset(sealed) });
+    await ready();
+    const chips = screen.getAllByText("Wall preset: Sealed").filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(chips).toHaveLength(2);
+  });
+
+  it("draws no chip for a personal preset a non-owner reads, which carries its scope alone", async () => {
+    show(policy({ wall_preset: { scope: "person" } }), { run: withPreset({ scope: "person" }) });
+    await ready();
+    expect(screen.queryByText(/^Wall preset: /, { selector: "[data-testid=policy-summary] *" })).toBeNull();
+  });
+
+  it("reads Pushes can't be stopped on this install from the policy view's pushes_unstoppable", async () => {
+    show(policy({ pushes_unstoppable: true, spec: { allowed_domains: ["a.example.com"], git_push_any_branch: false, github_capabilities: ["code_read"] } as never }), { run: withPreset(sealed) });
+    await ready();
+    expect(within(screen.getByTestId("policy-summary")).getByText("Pushes can't be stopped on this install.")).toBeInTheDocument();
+  });
+
+  it("names a group preset's audience by the group's label, not its id", async () => {
+    show(view(), { run: withPreset({ id: "g1", name: "Release freeze", scope: "group", group_id: "grp-77", group_label: "Platform", version: 2 }) });
+    await ready();
+    expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("Wall preset: Release freeze (Platform group, version 2).");
+    cleanup();
+    show(view(), { run: withPreset({ id: "g1", name: "Release freeze", scope: "group", group_id: "grp-77", version: 2 }) });
+    await ready();
+    expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("(grp-77 group, version 2)");
+  });
+
+  it("under deny_all the run page never says Pushes can't be stopped", async () => {
+    show(policy({ pushes_unstoppable: true }), { run: withPreset(sealed) });
+    await ready();
+    const summary = within(screen.getByTestId("policy-summary"));
+    expect(summary.queryByText("Pushes can't be stopped on this install.")).toBeNull();
+    expect(summary.getByText("Every push refused")).toBeInTheDocument();
   });
 });

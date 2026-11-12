@@ -21,7 +21,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -171,9 +170,7 @@ func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host strin
 		return
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(adoRefusal{
+	writeJSONStatus(w, http.StatusUnauthorized, "application/json; charset=utf-8", adoRefusal{
 		ID:        "1",
 		Message:   msg,
 		TypeName:  "Wardyn.Egress.NotSignedInException, Wardyn",

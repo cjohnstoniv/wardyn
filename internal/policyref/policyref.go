@@ -45,6 +45,9 @@ const (
 	LayerRestriction = "restriction"
 	// LayerPersonal is a person's own walls (types.PersonalWalls): a private, narrow-only document that follows them.
 	LayerPersonal = "personal"
+	// LayerWallPreset is the wall preset a run was launched with (types.WallPreset): a named, narrow-only
+	// document its owner chose at launch, frozen on the run.
+	LayerWallPreset = "wall_preset"
 
 	mailtoScheme = "mailto:"
 )
@@ -89,7 +92,7 @@ type Ref struct {
 	// as changed, so the person is not sent to the owner of a policy they edited.
 	Overridden bool `json:"overridden,omitempty"`
 	// Layer is the kind of layer that set the limit (LayerDeployment,
-	// LayerUnit or LayerPersonal). Layered stamps it on a refusal's policy; the
+	// LayerUnit, LayerPersonal or LayerWallPreset). Layered stamps it on a refusal's policy; the
 	// proxy's attribution never carries it, because its wire predates the key.
 	Layer string `json:"layer,omitempty"`
 	// Locked says the knob a refusal is attributed to is locked by the layer that set it, so no
@@ -123,7 +126,7 @@ type Provenance struct {
 }
 
 // Layered is a copy of ref stamped with the layer kind its source names
-// (deployment, unit or personal; none for any other source), nil for nil. The one
+// (deployment, unit, personal or wall_preset; none for any other source), nil for nil. The one
 // place a refusal's policy gains its layer.
 func Layered(ref *Ref) *Ref {
 	if ref == nil {
@@ -131,7 +134,7 @@ func Layered(ref *Ref) *Ref {
 	}
 	cp := *ref
 	cp.Layer = ""
-	if cp.Source == SourceUnit || cp.Source == SourceDeployment || cp.Source == LayerPersonal {
+	if cp.Source == SourceUnit || cp.Source == SourceDeployment || cp.Source == LayerPersonal || cp.Source == LayerWallPreset {
 		cp.Layer = cp.Source
 	}
 	return &cp
@@ -196,6 +199,20 @@ func Project(source, name string, c *Contact) *Ref {
 // the personal layer, and the walls' owner, kept when it passes as Project keeps a contact's owner.
 func Personal(owner string) *Ref {
 	ref := &Ref{Source: LayerPersonal}
+	if validText(owner, ownerMax) {
+		ref.Owner = owner
+	}
+	return ref
+}
+
+// WallPreset is the policy a refusal by a run's wall preset names: source wall_preset, which Layered
+// stamps as that layer, the preset's name (empty for a personal preset someone else may read), and the
+// run's owner, who chose it at launch, kept when each passes as Project keeps a contact's text.
+func WallPreset(name, owner string) *Ref {
+	ref := &Ref{Source: LayerWallPreset}
+	if validText(name, ownerMax) {
+		ref.Name = name
+	}
 	if validText(owner, ownerMax) {
 		ref.Owner = owner
 	}

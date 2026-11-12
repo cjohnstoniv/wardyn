@@ -1,0 +1,3 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S.
+# docs/CONFINEMENT.md 859 measured: the barrier guide and the thin-sandbox recipe.
+docs/CONFINEMENT.md=859 share=15

@@ -31,6 +31,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,8 +50,9 @@ var placeholder = []byte("<secret-hidden>")
 //
 // A nil *Registry is safe: all methods on a nil pointer are no-ops.
 type Registry struct {
-	mu     sync.RWMutex
-	perRun map[uuid.UUID][][]byte // run id -> set of secret values
+	mu        sync.RWMutex
+	perRun    map[uuid.UUID][][]byte                       // run id -> set of secret values
+	dropGuard atomic.Pointer[func(runID uuid.UUID) func()] // brackets a Drop*Value or Evict (backend.go)
 	// globals is every process-wide value masked right now, on every run: the
 	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte
@@ -173,18 +175,19 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 
 // AddLocal is Add into this process's cache only, for a value that is already
 // committed elsewhere (a masking manifest's renderings, a row another replica
-// wrote). It never fails.
-func (r *Registry) AddLocal(runID uuid.UUID, value []byte) {
+// wrote). It never fails. It reports whether it added the value, so a caller can RemoveLocal exactly that.
+func (r *Registry) AddLocal(runID uuid.UUID, value []byte) bool {
 	if r == nil || len(value) < MinLen {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if containsSlice(r.perRun[runID], value) {
-		return
+		return false
 	}
 	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
 	r.gen++
+	return true
 }
 
 // AddGlobal registers values as the CURRENT values of one credential (owner,
@@ -596,14 +599,14 @@ func (r *Registry) Evict(runID uuid.UUID) {
 	if r == nil {
 		return
 	}
+	defer r.guardDrop(runID)() // brackets the removal: nothing vouches for the run until it is done
 	r.mu.Lock()
 	_, hadSecrets := r.perRun[runID]
 	delete(r.perRun, runID)
 	delete(r.cached, runID)
-	// The bump is CONDITIONAL: gen is the cache key for every run, so an
-	// unconditional bump would invalidate every OTHER run's cached Masker on
-	// every eviction. An eviction that deleted no per-run secrets changed
-	// nothing any other run's Masker was built from.
+	// The bump is CONDITIONAL: gen keys every run's cached Masker, so a bump on
+	// each eviction would invalidate every OTHER run's. An eviction that
+	// deleted no per-run secrets changed nothing any other Masker was built from.
 	if hadSecrets {
 		r.gen++
 	}

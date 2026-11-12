@@ -180,11 +180,11 @@ func copyServiceExit(p *int) *int {
 	return &v
 }
 
-// sameServiceStatus compares everything but observed_at.
+// sameServiceStatus compares everything but observed_at, Wardyn's own check included.
 func sameServiceStatus(a, b types.RunServiceStatus) bool {
 	return a.Health == b.Health && a.Reason == b.Reason && a.Restarts == b.Restarts &&
 		(a.LastExitCode == nil) == (b.LastExitCode == nil) &&
-		(a.LastExitCode == nil || *a.LastExitCode == *b.LastExitCode)
+		(a.LastExitCode == nil || *a.LastExitCode == *b.LastExitCode) && sameServiceProbe(a.Probe, b.Probe)
 }
 
 // sweepServiceHealth is the run watcher's service health pass. A run with a runner is read by the
@@ -273,8 +273,21 @@ func (s *Server) mirrorServiceRun(ctx context.Context, st store.ServiceRunStore,
 	pctx, cancel := context.WithTimeout(ctx, serviceProbeTimeout)
 	f, probe := s.readServiceState(pctx, run.SandboxRef)
 	cancel()
+	// Wardyn's own check, after the file, only for a spec that opted in: any other service's status is
+	// read and written exactly as before.
+	var check *serviceCheck
+	if run.Service.ControlPlaneProbe() {
+		check = s.observeServiceProbe(ctx, run)
+	}
 	now := s.cfg.Now()
 	next := serviceObservation(run, f, probe, now)
+	if run.Service.ControlPlaneProbe() {
+		var prev *types.RunServiceProbe
+		if run.ServiceStatus != nil {
+			prev = run.ServiceStatus.Probe
+		}
+		next.Probe = serviceProbeObservation(prev, check, run.Service.Health.FailureThreshold, now)
+	}
 	if prev := run.ServiceStatus; prev != nil && sameServiceStatus(*prev, next) && now.Sub(prev.ObservedAt) < serviceStatusRefresh {
 		return
 	}
@@ -289,9 +302,10 @@ func (s *Server) mirrorServiceRun(ctx context.Context, st store.ServiceRunStore,
 	}
 }
 
-// auditServiceChange writes the rows a stored status earns: one when the health changed, one when the
-// restart count rose. A run with no earlier status reads as starting with no restarts, so a service
-// that launches cleanly writes nothing until it turns healthy. At most two rows per run per pass.
+// auditServiceChange writes the rows a stored status earns: one when the health changed, one when Wardyn's
+// own check's health changed (source control_plane), one when the restart count rose. A run with no earlier
+// status reads as starting with no restarts, and a check with no earlier reading as starting, so a service
+// that launches cleanly writes nothing until it turns healthy. At most three rows per run per pass.
 func (s *Server) auditServiceChange(ctx context.Context, run types.AgentRun, next types.RunServiceStatus) {
 	from, restarts := types.ServiceHealthStarting, 0
 	if prev := run.ServiceStatus; prev != nil {
@@ -302,6 +316,18 @@ func (s *Server) auditServiceChange(ctx context.Context, run types.AgentRun, nex
 			"success", mustJSON(map[string]any{
 				"from": from, "to": next.Health, "reason": next.Reason, "source": "sandbox",
 			})))
+	}
+	if next.Probe != nil {
+		probeFrom := types.ServiceHealthStarting
+		if prev := run.ServiceStatus; prev != nil && prev.Probe != nil {
+			probeFrom = prev.Probe.Health
+		}
+		if probeFrom != next.Probe.Health {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.service.health", run.ID.String(),
+				"success", mustJSON(map[string]any{
+					"from": probeFrom, "to": next.Probe.Health, "reason": next.Probe.Reason, "source": "control_plane",
+				})))
+		}
 	}
 	if next.Restarts > restarts {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.service.restart", run.ID.String(),

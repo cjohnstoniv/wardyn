@@ -17,7 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -80,6 +79,8 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, types.ModelProvidersRead{
 		ModelProviders: block, ConnectedPeople: connected,
 		EntraLoginConfigured: s.providerWriteEnv(nil).EntraLoginConfigured, KindsAvailable: kindsAvailable(),
+		GatewayIdentityIssuer: s.gatewayIdentityIssuer(), GatewayJWKSPath: s.cfg.BasePath + gatewayJWKSRoute,
+		GatewayIdentityBedrockSSO: s.gatewayBedrockSSOAvailable(),
 	})
 }
 
@@ -116,7 +117,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	}
 	imageOK := s.claudeSignInImageOK(ctx, block)
 	// SEAM-1, handlePutAgentProviders's reason: the same singleton document.
-	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	r, unlock, ok := s.lockProviderDocument(w, r, block)
 	if !ok {
 		return
 	}
@@ -137,6 +138,9 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	}
 	if err := validateModelProviderImagePrereqs(block, existing.ModelProviders, imageOK); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error())
+		return
+	}
+	if s.refuseGatewayIdentityWrite(w, r, block, existing.ModelProviders, "invalid model providers: ") {
 		return
 	}
 	assignModelProviderUIDs(block, existing.ModelProviders)
@@ -198,7 +202,7 @@ func stillDefaultRefusal(roster *types.AgentProviders, block *types.ModelProvide
 // more people than the providers page is.
 func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 	ids, kinds, pairs, disabled, pins, changed := []string{}, []string{}, []string{}, []string{}, []string{}, []string{}
-	rekinded := []string{}
+	rekinded, identity, unbound := []string{}, []string{}, []string{}
 	prior, priorByID := map[string]types.ModelProvider{}, map[string]types.ModelProvider{}
 	for _, p := range before.Providers {
 		prior[p.UID], priorByID[p.ID] = p, p
@@ -214,30 +218,46 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 		if p.Disabled {
 			disabled = append(disabled, p.ID)
 		}
+		if p.GatewayIdentity != nil {
+			identity = append(identity, p.ID)
+		}
 		if p.Bedrock != nil && p.Bedrock.SSOAccountID != "" {
 			pins = append(pins, p.ID+":"+p.Bedrock.SSOAccountID+"/"+p.Bedrock.SSORoleName)
 		}
 		if old, ok := prior[p.UID]; ok && providerAddressChanged(old, p) {
 			changed = append(changed, p.ID)
 		}
+		if p.OIDC.Unbound() { // named on every write that carries it, so setting it is on the record
+			unbound = append(unbound, p.ID)
+		}
 		if old, ok := priorByID[p.ID]; ok && old.Kind != p.Kind {
 			rekinded = append(rekinded, p.ID)
 		}
 	}
-	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded} {
+	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded, identity, unbound} {
 		slices.Sort(l)
 	}
-	return map[string]any{
+	data := map[string]any{
 		"provider_count": len(after.Providers), "ids": ids, "kinds": kinds, "harnesses": pairs,
 		"disabled": disabled, "pins": pins, "base_url_changed": changed, "kind_changed": rekinded,
 	}
+	if len(identity) > 0 { // absent with identity off, so this row reads as it always has
+		data["gateway_identity"] = identity
+	}
+	if names := extraHeaderAuditNames(after); names != nil { // header names only, never a value; absent with none set
+		data["extra_headers"] = names
+	}
+	if len(unbound) > 0 { // absent unless a row signs people in without tying it to their console sign-in
+		data["oidc_unbound"] = unbound
+	}
+	return data
 }
 
 // providerAddressChanged is rule 8's predicate: where requests go, or how each
 // person's credential is sent, differs between two versions of one provider.
 func providerAddressChanged(a, b types.ModelProvider) bool {
 	if a.BaseURL != b.BaseURL || bedrockAddress(a) != bedrockAddress(b) || authHeader(a.Auth) != authHeader(b.Auth) ||
-		azureAddress(a) != azureAddress(b) {
+		azureAddress(a) != azureAddress(b) || oidcAddress(a) != oidcAddress(b) || extraHeadersAddress(a) != extraHeadersAddress(b) {
 		return true
 	}
 	for _, ha := range a.Harnesses {
@@ -264,6 +284,12 @@ func providerAddressDigest(p types.ModelProvider) string {
 	parts := []any{p.BaseURL, bedrockAddress(p), authHeader(p.Auth), harnesses}
 	if p.Azure != nil { // appended only for the kind that has it, so no other row's digest moves
 		parts = append(parts, azureAddress(p))
+	}
+	if p.OIDC != nil { // likewise: an OIDC row alone appends, so no other row's digest moves
+		parts = append(parts, oidcAddress(p))
+	}
+	if len(p.ExtraHeaders) > 0 { // likewise: only a row with headers appends
+		parts = append(parts, extraHeadersAddress(p))
 	}
 	sum := sha256.Sum256(mustJSON(parts))
 	return hex.EncodeToString(sum[:])
@@ -298,7 +324,11 @@ func authHeader(a *types.ProviderAuth) string {
 // header scheme or UID. Built the same for admins and members, so there is
 // nothing for the member redaction to strip.
 type SetupModelProvider struct {
-	ID   string `json:"id"`
+	ID string `json:"id"`
+	// UID is the row's own id: the one in a sign-in URL and in a held run's approval scope, so a person's console can
+	// open a provider's sign-in and name the provider such a request is for. It names a row, not a secret, and a
+	// console that has not yet read a change from plain to sign-in still holds it.
+	UID  string `json:"uid,omitempty"`
 	Name string `json:"name,omitempty"`
 	Kind string `json:"kind"`
 	// Disabled is published, never hidden: a turned-off default is why this
@@ -309,6 +339,12 @@ type SetupModelProvider struct {
 	// DefaultFor are the harnesses whose roster default this provider is.
 	DefaultFor []string `json:"default_for,omitempty"`
 	Host       string   `json:"host"`
+	// SignIn is "oidc" for a custom endpoint that signs people in at its own authority, so the console offers
+	// a sign-in door where it would offer a paste-a-token one; absent otherwise. IdentityBinding rides with
+	// it ("console" or "none"; "none" is the "not bound to your sign-in" line). Whether THIS person has a live
+	// sign-in is their access state (SetupProviderAccess), not a property of the row.
+	SignIn          string `json:"sign_in,omitempty"`
+	IdentityBinding string `json:"identity_binding,omitempty"`
 }
 
 // setupModelProviders is SetupStatus.ModelProviders: nil (absent) with no block,
@@ -326,8 +362,11 @@ func (s *Server) setupModelProviders(ctx context.Context, sc types.SiteConfig) [
 	}
 	out := []SetupModelProvider{}
 	for _, p := range sc.ModelProviders.Providers {
-		row := SetupModelProvider{ID: p.ID, Name: p.Name, Kind: string(p.Kind), Disabled: p.Disabled,
+		row := SetupModelProvider{ID: p.ID, UID: p.UID, Name: p.Name, Kind: string(p.Kind), Disabled: p.Disabled,
 			Harnesses: []string{}, Host: providerHost(p)}
+		if p.OIDC != nil && p.Kind == types.ModelProviderCustomEndpoint {
+			row.SignIn, row.IdentityBinding = "oidc", p.OIDC.Binding()
+		}
 		for _, h := range p.Harnesses {
 			if !launchable(h.Harness) {
 				continue

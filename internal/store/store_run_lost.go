@@ -57,7 +57,7 @@ var ErrRunTokenLineage = errors.New("store: the presented token is not of the ru
 
 // StampRunTokenRenewed — see RunLoser. A run with no recorded renewal has no lineage yet; otherwise
 // the presented token must be the last one minted, or the one that renewal presented (a proxy keeps
-// it when the lease send behind a renewal fails).
+// it only when the renewal's answer never reaches it).
 func (s PG) StampRunTokenRenewed(ctx context.Context, id uuid.UUID, jti, prevJTI string) (bool, error) {
 	var stamped, live bool
 	err := s.Pool.QueryRow(ctx, `

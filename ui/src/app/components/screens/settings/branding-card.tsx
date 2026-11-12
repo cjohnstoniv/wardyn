@@ -29,7 +29,7 @@ import { Field, fieldHintId, OptionCard } from "../../wardyn/form-primitives";
 import { ApprovalStateBadge } from "../../wardyn/primitives";
 import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { cn } from "../../ui/utils";
-import { ErrorState } from "../../wardyn/states";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useThemeName } from "../../wardyn/theme-provider";
 import { BrandingContext } from "../../wardyn/branding-context";
@@ -49,7 +49,7 @@ import {
   type Branding,
   type NameFormat,
 } from "../../../lib/branding";
-import { BRAND_NAME, BRANDING } from "../../../lib/branding-copy";
+import { BRAND_NAME, BRANDING, BRANDING_FORM } from "../../../lib/branding-copy";
 import { CARD_STATUS } from "../../wardyn/copy/card-status";
 
 interface Draft {
@@ -166,6 +166,7 @@ export function BrandingCard() {
   // A failed read is not "Default branding": the form would start empty and a Save would replace the stored
   // document (support link, dark pair) the admin never saw. The card says it could not read, and offers Retry.
   const [loadFailed, setLoadFailed] = React.useState(false);
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     let live = true;
@@ -175,7 +176,11 @@ export function BrandingCard() {
         setLoadFailed(false);
         setBrand(b.org_name ? b : null);
       },
-      () => live && setLoadFailed(true),
+      (e) => {
+        if (!live) return;
+        setLoadMessage(failureSentence(e));
+        setLoadFailed(true);
+      },
     );
     return () => {
       live = false;
@@ -202,9 +207,10 @@ export function BrandingCard() {
   const dark = draft.darkOn ? pairCheck(draft.darkPrimary, draft.darkText) : null;
   const linkBad = draft.link !== "" && !draft.link.startsWith("https://");
   const logoBad = !!draft.logo && draft.logo.size > LOGO_MAX_BYTES;
-  const problems = [light.fillBad, light.textBad || light.low, !!dark?.fillBad, !!dark && (dark.textBad || dark.low), linkBad, logoBad]
+  const nameBad = draft.orgName.trim() === "";
+  const problems = [light.fillBad, light.textBad || light.low, !!dark?.fillBad, !!dark && (dark.textBad || dark.low), linkBad, logoBad, nameBad]
     .filter(Boolean).length;
-  const canSave = problems === 0 && draft.orgName.trim() !== "" && !saving;
+  const canSave = problems === 0 && !saving;
 
   const save = async () => {
     setSaving(true);
@@ -276,14 +282,16 @@ export function BrandingCard() {
       <p className="text-body leading-snug text-muted-foreground">{BRANDING.LEDE}</p>
       {loadFailed ? (
         <div className="mt-4">
-          <ErrorState onRetry={() => setAttempt((n) => n + 1)} />
+          <ErrorState size="compact" title={BRANDING_FORM.LOAD_FAILED_TITLE} message={loadMessage} onRetry={() => setAttempt((n) => n + 1)} />
         </div>
       ) : (
         <div className="mt-4 grid gap-6 md:grid-cols-2">
           <div className="space-y-4">
             <Field label={BRANDING.ORG_NAME_LABEL} htmlFor="brand-org">
-              <Input id="brand-org" value={draft.orgName} maxLength={64} onChange={(e) => set({ orgName: e.target.value })} />
+              <Input id="brand-org" value={draft.orgName} maxLength={64} aria-describedby={nameBad ? "brand-org-needed" : undefined} onChange={(e) => set({ orgName: e.target.value })} />
             </Field>
+            {/* Not an alert: a first visit opens with the name empty, and that is a reason Save is off, not a fault. */}
+            {nameBad && <p id="brand-org-needed" className="text-xs text-muted-foreground">{BRANDING_FORM.ERR_NAME}</p>}
             <Field label={BRANDING.NAME_FORMAT_LABEL}>
               <div className="grid gap-2">
                 {(["prefix", "suffix"] as const).map((f) => (

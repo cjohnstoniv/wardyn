@@ -71,6 +71,9 @@ type injector struct {
 	approvals approvalReader
 	// maskKey files this injector's credentials in procRegistry (procMaskFor).
 	maskKey uuid.UUID
+	// llmHeaders is Config.LLMHeaders by host key: the non-secret headers set on a gateway host's requests
+	// (extra_headers.go). Immutable once the proxy is built, so no lock.
+	llmHeaders map[string]map[string]string
 }
 
 type injectedHeader struct {
@@ -448,21 +451,25 @@ func stripSandboxCredentials(h http.Header, owned string) {
 	if owned != "" {
 		h.Del(owned)
 	}
-	for _, name := range []string{
-		"Authorization",
-		"X-Api-Key",
-		"Api-Key",
-		"X-Auth-Token",
-		"Anthropic-Api-Key",
-		"Cookie",
-		"Private-Token",
-		"X-Access-Token",
-		"X-Amz-Security-Token",
-		"X-Functions-Key",
-		"X-Goog-Api-Key",
-	} {
+	for _, name := range strippedCredentialHeaders {
 		h.Del(name)
 	}
+}
+
+// strippedCredentialHeaders is the fixed list stripSandboxCredentials removes. An admin's extra gateway
+// header may not take any of these names (ReservedExtraHeader).
+var strippedCredentialHeaders = []string{
+	"Authorization",
+	"X-Api-Key",
+	"Api-Key",
+	"X-Auth-Token",
+	"Anthropic-Api-Key",
+	"Cookie",
+	"Private-Token",
+	"X-Access-Token",
+	"X-Amz-Security-Token",
+	"X-Functions-Key",
+	"X-Goog-Api-Key",
 }
 
 // injectableTransport reports whether a brokered credential may attach to a forward request bound
@@ -510,7 +517,15 @@ func (p *Proxy) applyInjection(req *http.Request, host string, port int) {
 	if req.URL == nil || !p.injectableTransport(req.URL.Scheme, host, port) {
 		return
 	}
+	// The same routing-header strip the brokered and terminated-tunnel lanes run, before the
+	// rule's credential attaches: the rule's own header is the one it keeps.
+	owned := ""
+	if h, ok, err := p.inject.resolve(host); err == nil && ok {
+		owned = h.name
+	}
+	p.stripGatewayRoutingHeaders(req.Header, host, owned)
 	p.inject.apply(req, host, port)
+	p.applyExtraHeaders(req.Header, host, owned)
 }
 
 // apply strips the sandbox's own credential headers and sets the injected one if an exactly-allowed

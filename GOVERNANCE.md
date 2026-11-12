@@ -6,9 +6,7 @@ not a target.
 
 ## Decision making
 
-- **Day-to-day changes** (bug fixes, docs, minor features) use **lazy consensus**: a
-  pull request open ≥72 hours with no substantive objection, passing CI, may be
-  merged.
+- **Day-to-day changes** (bug fixes, docs, minor features): the maintainer merges a pull request that passes CI. Branch protection requires the code owner's approval.
 - **Significant changes** (API surface, security invariants, architectural
   direction, license or governance) need explicit maintainer approval.
 - **Tie-breaking**: the maintainer has final say. There is no second maintainer to

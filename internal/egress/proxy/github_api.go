@@ -20,7 +20,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -113,6 +112,14 @@ func (p *Proxy) serveAPIDoor(w http.ResponseWriter, r *http.Request, host string
 	return false
 }
 
+// refuseGrantHostTunnel answers a CONNECT to a host one of the doors guards with
+// a refusal, in the order the doors were added, and reports whether it did.
+func (p *Proxy) refuseGrantHostTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	return p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
+		p.refuseKubeAPITunnel(w, r, host, port)
+}
+
 // isGitHubAPIHost reports whether host is the door's host on a run that has one.
 func (p *Proxy) isGitHubAPIHost(host string) bool {
 	return p.ghAPI != nil && patAPIHost(host) == ghscope.APIHost
@@ -182,9 +189,7 @@ func (p *Proxy) serveGitHubAPI(w http.ResponseWriter, r *http.Request, host stri
 // again") whose JSON carries the code and the sentence.
 func (p *Proxy) refuseGitHubAPI(w http.ResponseWriter, r *http.Request, host string, port int, message string) {
 	p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourceGitHubAPIRefused)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]string{
 		"wardyn":  gitHubAPIRefused,
 		"message": message,
 	})
@@ -302,7 +307,7 @@ func (p *Proxy) boundedEgressTarget(ctx context.Context, host string, port int) 
 }
 
 func (p *Proxy) revokeGitHubToken(ctx context.Context, target, tok string) error {
-	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target), http.MethodDelete, "https://"+ghscope.APIHost+"/installation/token", nil)
+	req, err := http.NewRequestWithContext(context.WithValue(withProxyOwnSend(ctx), vettedIPKey{}, target), http.MethodDelete, "https://"+ghscope.APIHost+"/installation/token", nil)
 	if err != nil {
 		return err
 	}

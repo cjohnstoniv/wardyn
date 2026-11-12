@@ -27,10 +27,20 @@ export function unionCeiling(cs: readonly OrgCeiling[]): string[] | undefined {
   return [...new Set(cs.flatMap((c) => c.ceiling))];
 }
 
+// What `pr` stands for on a ceiling (internal/adoscope/pr_alias.go prParts).
+const PR_PARTS = ["pr_create", "pr_vote", "pr_complete"];
+
+/** Whether a ceiling allows `cap`, reading `pr` as its three parts and the three parts together as `pr`, as the
+ *  server compares it (adoscope.Has). */
+export function adoAllows(ceiling: readonly string[], cap: string): boolean {
+  const expanded = ceiling.flatMap((c) => (c === "pr" ? PR_PARTS : [c]));
+  return cap === "pr" ? PR_PARTS.every((p) => expanded.includes(p)) : expanded.includes(cap);
+}
+
 /** The organisations that refuse `cap`, for a capability another organisation allows. Empty with one
  *  organisation, or when all of them refuse it (that is the lock, not a hint). */
 export function refusedBy(cs: readonly OrgCeiling[], cap: string): string[] {
   if (cs.length < 2) return [];
-  const refusing = cs.filter((c) => !c.ceiling.includes(cap)).map((c) => c.org);
+  const refusing = cs.filter((c) => !adoAllows(c.ceiling, cap)).map((c) => c.org);
   return refusing.length === cs.length ? [] : refusing;
 }

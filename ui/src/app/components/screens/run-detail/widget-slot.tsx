@@ -53,7 +53,7 @@ export function WidgetSlot({
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn("flex min-h-0 flex-1 flex-col", FILL_TILE, className)}>
+    <div className={cn("tile-scroll flex min-h-0 flex-1 flex-col", FILL_TILE, className)}>
       <ErrorBoundary region={region} resetKey={resetKey}>
         {children}
       </ErrorBoundary>

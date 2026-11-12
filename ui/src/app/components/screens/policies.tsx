@@ -61,7 +61,8 @@ import { PolicyPanel, egressSummary, lifecycleSummary, minimalSpec, parseSpec } 
 import { PolicyDocumentView } from "../wardyn/policy-document/policy-document";
 import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document/policy-source";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { CC_META } from "../wardyn/cc-meta";
@@ -95,7 +96,10 @@ export function PoliciesScreen() {
   const routed = useInRouterContext();
   const [policies, setPolicies] = React.useState<RunPolicy[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);
@@ -116,7 +120,10 @@ export function PoliciesScreen() {
         setPolicies(p);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -181,7 +188,8 @@ export function PoliciesScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search policies by name or id…"
-            value={query}
+            aria-label="Search policies"
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="max-w-sm"
           />
@@ -201,7 +209,7 @@ export function PoliciesScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={7} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={UserCog}
@@ -210,8 +218,8 @@ export function PoliciesScreen() {
               query
                 ? "Try a different search term."
                 : operator
-                  ? "A policy overrides the default for specific runs — tighter or looser, referenced by its ID when you create a run."
-                  : `A policy overrides the default for specific runs — tighter or looser. ${OPERATOR_ONLY_REASON}`
+                  ? "A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it."
+                  : `A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it. ${OPERATOR_ONLY_REASON}`
             }
             action={
               query ? (
@@ -235,7 +243,9 @@ export function PoliciesScreen() {
                 <TableHead>Egress</TableHead>
                 <TableHead className="w-[160px]">Attributes</TableHead>
                 <TableHead className="w-[100px]">Updated</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -308,7 +318,7 @@ export function PoliciesScreen() {
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-8" aria-label="Policy actions">
+                          <Button variant="ghost" size="icon" className="size-8" aria-label={`Policy actions: ${p.name}`}>
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -393,9 +403,11 @@ function PolicyDetail({
     <Sheet open={!!policy} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[560px]">
         <SheetHeader className="border-b border-border pb-4">
-          <SheetTitle className="flex items-center gap-2">
-            <ShieldCheck className="size-4 text-primary" />
-            {policy?.name}
+          <SheetTitle className="flex min-w-0 items-center gap-2 break-words">
+            <ShieldCheck className="size-4 shrink-0 text-primary" />
+            {/* A flex item of its own: min-width:0 on the title does not reach an anonymous text item, so a long
+                unbroken name would run under Close. */}
+            <span className="min-w-0 [overflow-wrap:anywhere]">{policy?.name}</span>
           </SheetTitle>
         </SheetHeader>
         {policy && (
@@ -535,13 +547,13 @@ function PolicyEditor({
   React.useEffect(() => {
     if (!editor) return;
     let alive = true;
-    let severalOrgs = false;
+    let ownRows = false;
     void setupApi
       .getSetupStatus()
       .then((st) => {
         if (!alive) return;
-        // The first row's ceiling, unless the person's several rows (below) already answered.
-        if (!severalOrgs) setAdoCeiling(st.scm_access?.capability_ceiling);
+        // The first row's ceiling, unless the person's own rows (below) already answered.
+        if (!ownRows) setAdoCeiling(st.scm_access?.capability_ceiling);
         const providers = st.unreachable ? undefined : st.model_providers;
         setModelProviders(providers);
         // A new, untouched policy re-opens on the starter that follows the providers.
@@ -553,13 +565,14 @@ function PolicyEditor({
         }
       })
       .catch(() => {});
-    // With several organisations (#2146) every row names its own ceiling; unreadable leaves the first row's.
+    // The person's own rows name their ceilings, even with one organisation, so the lock follows their row and not
+    // the first row on the provider (#2146); unreadable, or no row naming one, leaves the first row's.
     void scmAccessApi
       .getMine()
       .then((rows) => {
         const perOrg = orgCeilings(Array.isArray(rows) ? rows : []);
-        if (!alive || perOrg.length < 2) return;
-        severalOrgs = true;
+        if (!alive || perOrg.length < 1) return;
+        ownRows = true;
         setAdoCeiling(unionCeiling(perOrg));
         setAdoOrgCeilings(perOrg);
       })
@@ -599,7 +612,7 @@ function PolicyEditor({
       onSaved();
     } catch (e) {
       // Surface the server's validation message (HttpError carries the body).
-      setError(getErrorMessage(e) || "Failed to save policy.");
+      setError(getErrorMessage(e, "Failed to save policy."));
       setSaving(false);
     }
   };

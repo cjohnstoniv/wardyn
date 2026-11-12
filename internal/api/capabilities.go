@@ -476,6 +476,11 @@ func (s *Server) capUnresolvableGroupDeny(ctx context.Context, kind, value strin
 // Deliberately not a second host matcher: two matchers that disagree is how a
 // deny gets bypassed by a port suffix.
 //
+// An image grant may also be a registry prefix ("registry.example.com/team/*",
+// imagePrefixGrant): it matches a ref whose repository, as typed, sits under
+// the prefix at a segment boundary. Every other image value is exact, and an
+// image value with any other "*" matches nothing.
+//
 // Every other kind is an exact, case-sensitive compare. A secret name, a
 // workspace uuid, an image ref, an agent id, an integration id and a git
 // provider row id are all identifiers where a near-miss must not match; only
@@ -487,6 +492,14 @@ func capValueMatches(kind, grantValue, want string) bool {
 	}
 	if capKinds[kind].hostSet {
 		return entryCoversAny(grantValue, map[string]bool{egressEntryHost(want): true})
+	}
+	if kind == capImage {
+		if prefix, ok := imagePrefixGrant(grantValue); ok {
+			return imagePrefixCovers(prefix, want)
+		}
+		if imageStarRow(grantValue) {
+			return false
+		}
 	}
 	return grantValue == strings.TrimSpace(want)
 }
@@ -510,6 +523,9 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 	}
 	// Only host-set kinds have set-valued entries; every other kind is an exact
 	// identifier, where "want covers deny" is the same compare reversed.
+	if kind == capImage {
+		return imagePrefixOverlaps(grantValue, want)
+	}
 	return capKinds[kind].hostSet && capValueMatches(kind, want, grantValue)
 }
 
@@ -720,7 +736,16 @@ func (r *capRead) granted(ctx context.Context) bool {
 		r.err = err
 		return false
 	}
-	return !restricted
+	if restricted {
+		return false
+	}
+	// A prefix allow must not open another tag or digest of a repository an
+	// admin restricted: the restriction names one reference, the prefix names
+	// the whole repository. A wildcard allow keeps its existing reading.
+	if r.kind == capImage && r.b.onlyPrefixAllows(r.kind, r.value) && r.b.imageSiblingRestricted(r.value) {
+		return false
+	}
+	return true
 }
 
 func (r *capRead) scan(ctx context.Context) {
@@ -756,7 +781,10 @@ func (b *capBatch) isRestricted(ctx context.Context, kind, value string) (bool, 
 		}
 		b.restricted, b.restrictLoaded = rs, true
 	}
-	return b.restricted[kind][strings.TrimSpace(value)], nil
+	if b.restricted[kind][strings.TrimSpace(value)] {
+		return true, nil
+	}
+	return kind == capImage && imageRestrictedSpelling(value, b.restricted[kind]), nil
 }
 
 // namedAllow reports whether the caller holds an allow naming value itself,
@@ -806,7 +834,7 @@ func (b *capBatch) scan(ctx context.Context, kind, value string) (deny, allow bo
 	for _, g := range b.byKind[kind] {
 		b.s.capRowsScanned.Add(1)
 		if g.Effect == types.CapabilityDeny {
-			if capValueOverlaps(kind, g.Value, value) {
+			if capDenyOverlaps(kind, g.Value, value) {
 				return true, false, nil // deny is final
 			}
 			continue
@@ -846,14 +874,14 @@ func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string
 		var err error
 		// ListGroupDenyGrants filters subject_type='group' AND effect='deny' AND
 		// capability=$1 in SQL, so nothing is filtered again here and the match
-		// is capValueOverlaps alone — one shared matcher.
+		// is capDenyOverlaps alone — one shared matcher.
 		if grants, err = b.s.cfg.Store.ListGroupDenyGrants(ctx, kind); err != nil {
 			return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 		}
 		b.groupDeny[kind] = grants
 	}
 	for _, g := range grants {
-		if capValueOverlaps(kind, g.Value, value) {
+		if capDenyOverlaps(kind, g.Value, value) {
 			return true, nil
 		}
 	}

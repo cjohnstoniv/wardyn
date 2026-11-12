@@ -163,7 +163,7 @@ func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsC
 		Region:           a.SSORegion,
 		ComponentID:      cli.ComponentID,
 		SSOStartURL:      a.StartURL,
-	}, injections, sigv4Hosts)
+	}, injections, sigv4Hosts, nil)
 	return inj, mitm, sig, &lane, ok
 }
 

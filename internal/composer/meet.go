@@ -5,6 +5,8 @@ package composer
 
 import (
 	"fmt"
+	"net"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -76,6 +78,39 @@ func ApplyOverlay(base Authority, ov Overlay) (Authority, []string, error) {
 	return m.out, m.warns, nil
 }
 
+// ApplyRestrictionOverlay is ApplyOverlay for a restriction's overlay. A restriction's allowlist that
+// turns open egress off (types.RestrictionSpec.Overlay) meets a policy that allows all egress as that
+// allowlist, not as nothing, as boundaryMeet reads the boundary's allowlist at create and MeetWalls reads
+// the walls': each name the list allows on a port allow-all reaches (none named, 80 or 443) is added to the
+// policy's own before the meet, so it is not dropped as uncovered. (The seal's boundary layer is not read
+// this way: it meets open egress with ApplyOverlay and keeps none of the list.) An IP literal or another
+// port is not added: an exact literal is trusted where allow-all is not, and the port rule keeps allow-all
+// to 80 and 443, so either is kept only where the policy's own list names it (openSeed, which MeetWalls
+// shares). A name added this way is an exact entry, so it also enrols proxy-side credential injection
+// (proxy.Policy.AllowedExactHost) for a credential the run holds for that host, as a name MeetWalls adds
+// already does. A unit's overlay keeps ApplyOverlay's rule, where open egress covers no entry.
+func ApplyRestrictionOverlay(base Authority, ov Overlay) (Authority, []string, error) {
+	closes := ov.Ceiling.AllowAllEgress != nil && !*ov.Ceiling.AllowAllEgress
+	if base.Ceiling.AllowAllEgress && closes && ov.Ceiling.AllowedDomains != nil {
+		base.Ceiling.AllowedDomains = openSeed(base.Ceiling.AllowedDomains, *ov.Ceiling.AllowedDomains)
+	}
+	return ApplyOverlay(base, ov)
+}
+
+// openSeed is own plus each entry of list that open egress reaches: a name or wildcard on a port allow-all
+// reaches (none named, 80 or 443, portCovers). An IP literal or another port is left out, so the meet keeps
+// it only where own names it.
+func openSeed(own, list []string) []string {
+	out := slices.Clone(own)
+	for _, s := range list {
+		e, ok := parseDomEntry(s)
+		if ok && portCovers(0, e.port) && net.ParseIP(strings.Trim(e.host, "[]")) == nil {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // ValidateOverlay is the write-time reading of the same meet: it refuses an
 // overlay that names anything its base does not permit (a domain outside the
 // base, a method the base excludes, allow_all_egress on a base without it, a
@@ -108,7 +143,9 @@ func (m *meeter) run(ov Overlay) {
 	m.meetEgress(ov.Ceiling)
 	m.meetPosture(ov.Ceiling)
 	m.meetPush(ov.Ceiling.PushRules)
+	m.meetHostRules(ov.Ceiling.HostRules)
 	m.meetLimits(ov.Limits)
+	m.impliedByDataOut()
 	m.checkResult()
 }
 
@@ -163,8 +200,8 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if c.ToolRules != nil {
 		seen := map[string]bool{}
 		for _, r := range *c.ToolRules {
-			if !types.ValidToolEffect(r.Effect) {
-				m.fail(ReasonOverlayInvalid, "tool_rules", "tool %q has unknown effect %q", r.Tool, r.Effect)
+			if err := types.ValidToolRule(r); err != nil {
+				m.fail(ReasonOverlayInvalid, "tool_rules", "%v", err)
 			}
 			// A stored overlay keeps resolving (last wins, as the proxy reads it); only a write is sent back.
 			if seen[r.Tool] {
@@ -179,9 +216,14 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if w := c.HarnessInnerWalls; w != nil && !validInnerWalls(*w) {
 		m.fail(ReasonOverlayInvalid, "harness_inner_walls", "sandbox_mode %q or approvals %q is not a value a policy may choose", w.SandboxMode, w.Approvals)
 	}
-	if d := c.Desktop; d != nil && !(types.ValidTransferRule(d.PasteIn) && types.ValidTransferRule(d.CopyOut) &&
-		types.ValidTransferRule(d.Upload) && types.ValidTransferRule(d.Download)) {
-		m.fail(ReasonOverlayInvalid, "desktop", "each direction is allowed or blocked")
+	if d := c.Desktop; d != nil {
+		// Every direction named, so the meet guard sees each one judged.
+		if err := types.ValidateDesktopControls(&types.DesktopControls{PasteIn: d.PasteIn, CopyOut: d.CopyOut, Upload: d.Upload, Download: d.Download}); err != nil {
+			m.fail(ReasonOverlayInvalid, "desktop", "%v", err)
+		}
+	}
+	if d := c.DataOut; d != nil && !types.ValidDataOut(*d) {
+		m.fail(ReasonOverlayInvalid, "data_out", "data_out: %q is not a rule; want allowed, review or blocked", *d)
 	}
 	m.validateNonNegative(ov)
 	if d := ov.Limits.DenyPlacements; d != nil {
@@ -191,7 +233,10 @@ func (m *meeter) validatePresence(ov Overlay) {
 			}
 		}
 	}
+	m.validateDenyLists(ov.Limits)
 	m.validateMacOSBases(ov.Limits.AllowedMacOSBases)
+	m.validateAllowedModels(ov.Limits.AllowedModels)
+	m.validateRequiredImageSigners(ov.Limits.RequiredImageSigners)
 	if r := ov.Limits.AutonomyRubric; r != nil {
 		if err := r.Validate(); err != nil {
 			m.fail(ReasonOverlayInvalid, "autonomy_rubric", "%v", err)

@@ -1,494 +1,116 @@
 # Wardyn roadmap
 
-- Wardyn is **pre-alpha**.
-- Interfaces are not stable, there is no semantic-versioning promise, and nothing here is a date commitment — the planned rows are ordered by intent, not by schedule.
-- This file is the single forward-looking source of truth.
-- Per-release detail lives in [CHANGELOG.md](CHANGELOG.md); per-seam detail (which pluggable implementations exist versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md).
+- Wardyn is **pre-alpha**. Interfaces are not stable and there is no semantic-versioning promise.
+- Nothing here is a date commitment; planned rows are ordered by intent.
+- [CHANGELOG.md](CHANGELOG.md) holds the detail of every release.
+- [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says which implementations exist for each seam and which are only an interface.
 
 ## Shipped
 
 | Milestone | Highlights | Status |
 |---|---|---|
-| **v0.1** | Per-run identity, approval FSM, credential broker, L2 egress proxy, append-only Postgres audit + PTY replay, CC1/CC2 confinement gating | **Shipped (pre-alpha)** |
-| **v0.2** | Open-source pilot bar (Docker-only): secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp + AppArmor, interactive attach sessions, control-plane TLS, real conformance gate + supply-chain CI | **Shipped (pre-alpha)** |
-| **v0.3** | CI mode (BYOA): headless pipeline launches with no pre-running control plane — `wardyn run --wait`, `--image`, `task_mode: exec`, one-shot [`scripts/ci-run.sh`](scripts/ci-run.sh), GitHub Actions / Azure DevOps examples ([docs/CI.md](docs/CI.md)) | **Shipped (pre-alpha)** |
-| **v0.3.1** | Repo-scoped git egress via the proxy-side git-broker (`github.com` leaves the allowlist). Getting Started demos, Claude subscription login in a container, paginated list endpoints, SDK route-family coverage, [docs/ENV.md](docs/ENV.md) | **Shipped (pre-alpha)** |
-| **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and the corporate-network build/egress lanes | **Shipped (pre-alpha)** — see [CHANGELOG.md](CHANGELOG.md)'s `[0.4.0]` through `[0.4.5]` entries |
-| **v0.5** | Kubernetes runner substrate + a sandbox-capable Helm deploy, conformance green on a real cluster, native SSH into a run, admin/member RBAC with owner scoping, signed+published release images | **Shipped (pre-alpha)** — tagged `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** See [below](#v06-highlights). | **Shipped (pre-alpha)** — `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)); see [below](#v06-status). |
-| **v0.7.0** | **Governance an org can delegate, on hardware it owns.** See [below](#v070-highlights). | **Shipped (pre-alpha)** — `v0.7.0`, 2026-09-09 (see [CHANGELOG.md](CHANGELOG.md)). The macOS `.pkg`, the MDM vendor example and the real-Mac smoke run stay **operator-gated** and are not in it |
-| **v0.7.1** | Patch: the header showed an SSO user's OIDC `sub`, not its `name` claim; a stock `helm install` (persistence off) crash-looped on an empty recording dir on a read-only root filesystem | **Shipped (pre-alpha)** — `v0.7.1`, 2026-09-11 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.2** | **Workspace Providers** — one admin object for which git/model providers are enabled, for whom, inside what bounds. An agent roster with per-person model credentials, ephemeral disk enforcement on Kubernetes, and seven field-report fixes | **Shipped (pre-alpha)** — `v0.7.2`, 2026-09-12 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.3** | A second field report from the same estate; see [below](#v073-highlights). | **Shipped (pre-alpha)** — `v0.7.3`, 2026-09-15 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.4** | **Governance hardening over the whole surface a member or an operator's identity touches.** See [below](#v074-highlights). | **Shipped (pre-alpha)** — `v0.7.4`, 2026-09-16 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.5** | A third field report from the same private-endpoint Kubernetes estate; see [below](#v075-highlights). | **Shipped (pre-alpha)** — `v0.7.5`, 2026-09-17 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.6** | "The facts exist; connect them to the person" — a fourth field report; see [below](#v076-highlights). | **Shipped (pre-alpha)** — `v0.7.6` (see [CHANGELOG.md](CHANGELOG.md); tag `v0.7.6`, 2026-09-18) |
-| **v0.7.7** | A fifth field report from the same estate: with an expired AWS SSO session, Launch bounced the console to Getting Started; see [below](#v077-highlights). | **Shipped (pre-alpha)** — `v0.7.7`, 2026-09-18 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.8** | Three field reports and the terminal; see [below](#v078-highlights). | **Shipped (pre-alpha)** — `v0.7.8`, 2026-09-19 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.9** | Patch: the egress proxy shared one TLS config with the sidecar's control-plane client; see [below](#v079-highlights). | **Shipped (pre-alpha)** — `v0.7.9`, 2026-09-21 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.10** | **Per-person Azure DevOps access on Entra ID**; see [below](#v0710-highlights). | **Shipped (pre-alpha)** — `v0.7.10`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.11** | Patch: Azure DevOps projects and repositories whose names carry spaces or other permitted characters; see [below](#v0711-highlights). | **Shipped (pre-alpha)** — `v0.7.11`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.12** | Patch: sealed stored credentials, a TLS 1.3 control-plane hop to the proxy and `_FILE` boot settings; see [below](#v0712-highlights). | **Shipped (pre-alpha)** — `v0.7.12`, 2026-09-23 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.13** | Patch: wardynd refuses to start on a database a newer wardynd migrated; upgrade to 0.7.13 before 0.8; see [below](#v0713-highlights). | **Shipped (pre-alpha)** — `v0.7.13`, 2026-09-28 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.0** | **Least-privilege Azure DevOps per run**; upgrade from 0.7.13; see [below](#v080-highlights). | **Shipped (pre-alpha)** — `v0.8.0`, 2026-09-29 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.1** | Patch: the AWS sign-in helper's chooser and listing fixes; see [below](#v081-highlights). | **Shipped (pre-alpha)** — `v0.8.1`, 2026-09-29 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.2** | **Per-person Azure DevOps tokens**; see [below](#v082-highlights). | **Shipped (pre-alpha)** — `v0.8.2`, 2026-09-30 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.3** | Security patch: the agent images move to Debian 13; see [below](#v083-highlights). | **Shipped (pre-alpha)** — `v0.8.3`, 2026-09-30 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.4** | Azure DevOps per-person tokens and admin visibility, Azure Key Vault and a separate Transit platform key, push-rule size limits, opt-in four-eyes for Azure DevOps capability escalations, one noun-verb CLI, a tree-keyed release path | **Shipped (pre-alpha)** — `v0.8.4`, 2026-10-01 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.5** | Azure DevOps Services own-token fix, owner-only interactive entry to a run, no admin-minted person tokens, revive and lease-sweep fixes, an honest console kill outcome, CLI redirect and strict-JSON hardening, tag-bound release verification | **Shipped (pre-alpha)** — `v0.8.5`, 2026-10-02 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.6** | Audit retention, multi-replica HA, key custody, SCIM leaver deprovisioning and more; see [below](#v086-highlights). | **Shipped (pre-alpha)** — `v0.8.6`, 2026-10-04 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.7** | Egress tunnel-failure diagnostics (a row when an acknowledged connection dies), dedicated connections for the lifetime database locks, a conditional governance note, and pull-request CI scoped to the change | **Shipped (pre-alpha)** — `v0.8.7`, 2026-10-06 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.8** | Patch: an adopter's 0.8.7 field report; see [below](#v088-highlights). | **Shipped (pre-alpha)** — `v0.8.8`, 2026-10-07 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.8.9** | Run-level custom components (granted, saved and inline), their secrets added at the proxy or, where allowed, delivered as a variable or file. Also a four-panel New Run, person erasure, restructured docs and Go 1.26.9 | **Shipped (pre-alpha)** — `v0.8.9`, 2026-10-09 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.0** | Hybrid local and remote runs: client-mode runners, Self-Hosted and Remote Provided pools and a run queue. Also a redesigned New Run with run documents, templates and several drives, an AWS KMS key provider and React 19 | **Shipped (pre-alpha)** — `v0.9.0`, 2026-10-13 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.1** | Self-hosted runners on people's own computers: an AWS SSO run starts on a laptop runner, wardyn-runnerd works with Docker Desktop, and setup is one command. Also a self_host_runner permission and a run page naming where a run ran | **Shipped (pre-alpha)** — `v0.9.1`, 2026-10-14 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.2** | Laptop runners on private-endpoint estates: a self-hosted runner now receives the organisation's internal_hosts | **Shipped (pre-alpha)** — `v0.9.2`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.3-rc.1** | rc.1: laptop runners in a locked-down enterprise: a corporate CA bundle, errors an SDK can read, disk on VM engines, and images for both architectures. | **Shipped (pre-alpha)** — `v0.9.3-rc.1`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.3-rc.2** | rc.2: session recordings follow the organisation, the Azure DevOps credential follows the run's own repository, and a dropped runner link no longer stops a run's egress. | **Shipped (pre-alpha)** — `v0.9.3-rc.2`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.3-rc.3** | rc.3: organisation runners in Kubernetes, AWS SSO sessions renewed mid-run, laptop audit decisions off the VM file share, and runner recovery after a control-plane restart. | **Shipped (pre-alpha)** — `v0.9.3-rc.3`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.3** | Organisation runners in Kubernetes, runner-resident credentials, laptop runners fit for a locked-down enterprise, and runner recovery after a control-plane restart. | **Shipped (pre-alpha)** — `v0.9.3`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.4** | A stability and honesty release: runner and output-recovery fixes, hardened credential erasure, stored secrets and member drives, console polish and corrected credential-claims text. | **Shipped (pre-alpha)** — `v0.9.4`, 2026-10-19 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.5** | A fix release: the sign-in dialog's code and steps, sign-in refusal reasons, setup status and teardown audit detail. | **Shipped (pre-alpha)** — `v0.9.5`, 2026-10-19 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.6** | A fix release: own Azure DevOps tokens on a person's own runner, clearer refusals, runner connection diagnostics, recordings without typed input. | **Shipped (pre-alpha)** — `v0.9.6`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.7** | A fix release: minted Azure DevOps tokens on a person's own runner, and credential delivery writes the server cannot build are refused. | **Shipped (pre-alpha)** — `v0.9.7`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.8** | A fix release: private-address refusals name the internal_hosts remedy, wrapped base images say what works instead, and credential delivery rows the server cannot build are listed. | **Shipped (pre-alpha)** — `v0.9.8`, 2026-10-21 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.9.9** | A security patch: the agent images build on Node.js 24.22.1 and code-server 4.141.1 (CVE-2026-111497). The Claude Code CLI's own embedded runtime is a known issue. | **Shipped (pre-alpha)** — `v0.9.9`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.1** | rc.1: Linux VM sandboxes networked through the run's proxy, organisation units with their own walls and admins, local model servers as providers, folders from your computer, and desktop recording and clipboard controls. | **Shipped (pre-alpha)** — `v0.10.0-rc.1`, 2026-10-24 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.2** | rc.2: macOS VM sandboxes on company-managed Macs (preview, off by default), ordered desktop sign-in pauses, quieter runner exit retries, and the rc.1 fixes. | **Shipped (pre-alpha)** — `v0.10.0-rc.2`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.3** | rc.3: macOS VMs on macOS 26 Macs through a one-time setup by hand, the run page's macOS disk line, and fixes for rc.2's five known issues. | **Shipped (pre-alpha)** — `v0.10.0-rc.3`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.4** | rc.4: a first macOS VM prepare on macOS 26 past the auxiliary storage lock, slots freed after a failed prepare, a clear error behind a TLS-inspecting proxy, and Kubernetes and recording fixes. | **Shipped (pre-alpha)** — `v0.10.0-rc.4`, 2026-10-26 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.5** | rc.5: agent images on Node.js 24.22.1 and code-server 4.141.1 (CVE-2026-111497), and two macOS VM fixes: a failed start lets go of its VM, and a clock change is not a restart. | **Shipped (pre-alpha)** — `v0.10.0-rc.5`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.6** | rc.6: a macOS VM memory check by macOS's own memory pressure, Bedrock PrivateLink endpoints signed at the proxy, AWS signing shown on Run Detail, and policy context beside host warnings on New Run. | **Shipped (pre-alpha)** — `v0.10.0-rc.6`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.7** | rc.7: each allowed host marked Inspected or Tunnel only on a run's Policy tab and in the CLI, folders shared into a macOS VM, and pre-wrapped images on Kubernetes without an image builder. | **Shipped (pre-alpha)** — `v0.10.0-rc.7`, 2026-10-29 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.8** | rc.8: commands kept running as services, inbound apps that people and API clients can call, workloads Wardyn keeps declared, your own walls, and a macOS VM guest that gets its network address. | **Shipped (pre-alpha)** — `v0.10.0-rc.8`, 2026-10-29 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.9** | rc.9: macOS VM runs with drives and operator-made bases, folders on a person's own runner, Wardyn-only guest pairing, AWS re-signing on a person's runner (AWS and some macOS parts not yet run end to end). | **Shipped (pre-alpha)** — `v0.10.0-rc.9`, 2026-11-01 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.10** | rc.10: Watch desktop on a view-only macOS VM run, and macOS VM, Azure DevOps push, workload and console fixes (macOS parts not yet run on a real Mac). | **Shipped (pre-alpha)** — `v0.10.0-rc.10`, 2026-11-01 (see [CHANGELOG.md](CHANGELOG.md)) |
-
-## Shipped detail
-
-### v0.6 highlights
-
-- **The enterprise-POC base: cloud deployment + real permissioning.**
-- Capability grants (four kinds, per-kind enforcement switches, IdP groups),
-- Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`),
-- terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override),
-- governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix
-
-### v0.6 status
-
-- **Shipped (pre-alpha)** — `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)); the release supersets `prep/v0.6` with the demo-video series.
-- The daemon-free merge gate (`make ci`) is green at the release tip minus DCO sign-offs; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host —
-- a pre-existing lane defect, not a 0.6 regression
-
-### v0.7.0 highlights
-
-- **Governance an org can delegate, on hardware it owns.**
-- Assignable governance profiles (a named ceiling bound to a person, a group, or everyone)
-- and a `security_admin` tier that can be handed the verdict without being handed the deployment,
-- the rest of enterprise desktop deployment (systemd installer, MDM-distributable packages, the member-mode envelope, a reachable SSH gateway, digest-pinned upgrades),
-- per-tool policy, never-resident git PATs for non-GitHub forges, and the corporate-network last miles —
-- TLS-inspection root, internal model gateway, PrivateLink Bedrock
-
-### v0.7.3 highlights
-
-- A second field report from the same estate:
-- the per-user AWS SSO lane can no longer sign with the wrong identity (account/role pinned, enforced at three doors),
-- the Bedrock check texts and admin sign-in door stopped conflating a deployment-wide fact with a per-person credential gap,
-- and the CSRF Origin guard now applies in every mode
-
-### v0.7.4 highlights
-
-- **Governance hardening over the whole surface a member or an operator's identity touches.**
-- Per-run credential residency and revocation,
-- the five findings of the 0.7.3 field report plus the owner's two testability asks,
-- a kind-provable AWS SSO test path,
-- an admin's own "view as member", and a repo-wide review campaign's fixes across the runner substrate, the egress proxy and the console
-
-### v0.7.5 highlights
-
-- A third field report from the same private-endpoint Kubernetes estate (Entra SSO, one enabled roster row: `claude-code` / `bedrock_sso` / `per_user`):
-- the console stops asserting things that are false on that deployment shape (the New Run rail's credential-residency and Recording claims, the member's "Your model key" card, and Getting Started's lede),
-- an admin can preview the not-signed-in member state,
-- the AWS sign-in sandbox now runs the sign-in itself with every attach path joining it,
-- a slow sign-in start no longer reads as unreadable and a new sign-in supersedes an orphaned one,
-- a rebuilt Claude Code image boots without parking approvals on the CLI's own bootstrap,
-- and on Kubernetes an autonomous run's `/tmp` and `/home/agent/work` are now inside `disk_mib` (narrowed, not closed)
-
-### v0.7.6 highlights
-
-- "The facts exist; connect them to the person" — a fourth field report from the same estate:
-- an actionable model-access state now rides a banner on every screen instead of only Getting Started,
-- a run refused for a dead model credential offers the sign-in instead of directions to it,
-- a slow start says what it is waiting on instead of a poll-tick guess,
-- the AWS sign-in tab opens and closes itself,
-- a spent refresh token stops grading `live` for days,
-- and wardynd's own outbound calls (OIDC, AWS SSO renewal, Entra sync) gain a scoped corporate-proxy knob that does not share `HTTPS_PROXY`'s process-wide blast radius;
-- a mid-run credential lapse holding the run instead of killing it ships behind a kill switch
-
-### v0.7.7 highlights
-
-- A fifth field report from the same estate: with an expired AWS SSO session, Launch bounced the console to Getting Started.
-- The setup gate stops grading the two per-person model-provider rows,
-- a create-time refusal carries the machine-readable reason `model_credential`,
-- the console opens the sign-in from that refusal and relaunches the same run,
-- and the launch redeems an expired session at the click instead of admitting a spent one
-
-### v0.7.8 highlights
-
-- Three field reports and the terminal:
-- the setup gate's blocking decision moved server-side (`SetupCheck.Blocking`),
-- the shipped confinement floor is CC1 with the strongest installed class as the default,
-- a dial refusal names its own cause and hop,
-- AWS-lane refusals answer in SDK-readable JSON,
-- `wardyn attach` rides a single-use ticket,
-- and the terminal's holder and focus defects are fixed
-
-### v0.7.9 highlights
-
-- Patch: the egress proxy shared one TLS config with the sidecar's control-plane client,
-- so on a corporate-CA install it offered HTTP/2 it could not speak and every re-originated request to a peer that accepted the offer failed;
-- the proxy now speaks HTTP/2, handles a peer that speaks it unasked, and files a protocol mismatch as its own refusal instead of a dial failure
-
-### v0.7.10 highlights
-
-- **Per-person Azure DevOps access on Entra ID**: a run reaches Azure DevOps as the person who started it, with their own sign-in captured at console login and never placed in the sandbox;
-- every REST call and git push is checked against a plain-language capability the run was granted,
-- and a request beyond it is held for approval once or for the run.
-- Also: an SSO-only console posture, Bedrock policy-deny and throttle refusals named on the failed run
-
-### v0.7.11 highlights
-
-- Patch: Azure DevOps projects and repositories whose names carry spaces or other permitted characters (`Payments Platform`, `Card Auth (v2).Service`) import, launch, clone, fetch and push;
-- every door stores one spelling of the address, and approvals name the repository the same way on the REST and git paths
-
-### v0.7.12 highlights
-
-- Patch: stored credentials are sealed with AES-256-GCM per row, bound to their owner and name (envelope v1, a one-way conversion on first boot);
-- the control-plane → proxy hop that carries credential values is TLS 1.3, pinned to a CA wardynd mints;
-- every secret-carrying boot setting accepts a `_FILE` path (Vault Agent / CSI), with an opt-in chart mode;
-- an Azure DevOps address's host now ends at `?` or `#`
-
-### v0.7.13 highlights
-
-- Patch: wardynd refuses to start on a database a newer wardynd migrated, naming the newest migration it does not ship, with `WARDYN_ALLOW_UNKNOWN_MIGRATIONS` as the break-glass;
-- a rollback drill proves the refusal writes nothing and that restoring the pre-upgrade dump boots clean.
-- Upgrade to 0.7.13 before 0.8
-
-### v0.8.0 highlights
-
-- **Least-privilege Azure DevOps per run**: an admin sets the Entra row's capability ceiling and default profile in the console;
-- a run policy picks the run's capabilities, a member stands only what an admin granted (the rest is held for approval or refused),
-- `policy_bypass` means only a pull request completed past its policies,
-- and a push outside the run's branch follows `git_push_any_branch` while Azure DevOps enforces its own branch policies.
-- Also: user types in the User view, model providers chosen per run on each person's own connection,
-- an ended run extended and revived with its files kept, a rebuilt Runs page, and a Kubernetes agent that starts only once its proxy is ready.
-- Upgrade from 0.7.13
-
-### v0.8.1 highlights
-
-- Patch: the AWS sign-in helper uploads the account and role a person chose however long they take at the chooser (each portal request has its own deadline),
-- lists accounts and roles past the first page,
-- and says in one plain sentence when the portal did not return them;
-- the sign-in dialog no longer claims a capture that was never reported
-
-### v0.8.2 highlights
-
-- **Per-person Azure DevOps tokens**: Wardyn creates a short-lived personal access token for each run in the person's name, with only that run's access,
-- renewed near expiry and revoked when the run ends, pauses or the person disconnects (the existing Entra app gains `vso.pats` and `vso.pats_manage`);
-- where Entra sign-in isn't available each person adds their own token, on Azure DevOps Services or Server.
-- The shared Azure DevOps token and SSH key are retired, and Azure DevOps capabilities are split per area.
-- Also: a run shows its sandbox's startup progress and the policy it actually got, the attach card scrolls, and the operator-held model credentials are retired in favour of each person's own model provider connection
-
-### v0.8.3 highlights
-
-- Security patch: the agent images move to Debian 13, clearing three CRITICAL Perl vulnerabilities Debian 12 does not fix, and every agent image build takes current security updates;
-- CI fails on any CRITICAL in a published image, fixed or not, and the nightly scans the images already published
-
-### v0.8.6 highlights
-
-- Audit retention, attested partition drops and per-person erasure; supported multi-replica HA with a shared masking registry; per-person and per-domain key custody;
-- SCIM leaver deprovisioning; four-eyes governance changes; constrained-admin mode and profile composition; approval notifications;
-- Azure DevOps and git_pat narrowing; shared-cluster capacity and placement; persisted run output; a reworked browser terminal
-
-### v0.8.8 highlights
-
-- Patch: an adopter's 0.8.7 field report.
-- SSH through a TLS-terminating listener (advertised ProxyCommand, proven Istio recipe),
-- a seed file for the network site settings, an opt-in unauthenticated metrics listener,
-- a waiting AWS sign-in found again after a lost tab, Use the default policy on New Run,
-- in-place session renewal and an optional session lifetime,
-- launches that no longer fail just after creation on a renewal in flight,
-- corrected upstream-proxy bypass guidance, one pool wedge fixed, and the agent-vscode shell-quote CVE-2026-102422
+| **v0.1** | Per-run identity, approval FSM, credential broker, L2 egress proxy, append-only Postgres audit and PTY replay, CC1/CC2 confinement gating | **Shipped (pre-alpha)** |
+| **v0.2** | Docker-only: secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp and AppArmor, interactive attach sessions, control-plane TLS, a conformance gate and supply-chain CI | **Shipped (pre-alpha)** |
+| **v0.3** | CI mode: headless launches with no pre-running control plane (`wardyn run --wait`, `--image`, `task_mode: exec`, [`scripts/ci-run.sh`](scripts/ci-run.sh)); from v0.3.1, repo-scoped git egress through the proxy-side git broker ([docs/CI.md](docs/CI.md)) | **Shipped (pre-alpha)** |
+| **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and corporate-network build and egress lanes | **Shipped (pre-alpha)** — `v0.4.0` to `v0.4.5` (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.5** | Kubernetes runner substrate and Helm deploy, native SSH into a run, admin and member RBAC with owner scoping, signed release images | **Shipped (pre-alpha)** — `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.6** | Cloud deployment and real permissioning: capability grants, Kubernetes as the base deployment, `wardyn ssh`, governed UI sandboxes | **Shipped (pre-alpha)** — `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7** | Governance an organisation can delegate: Workspace Providers, an agent roster, per-person Azure DevOps access on Entra ID, sealed stored credentials. 0.7.13 refuses to start on a database a newer wardynd migrated, so upgrade to it before 0.8 | **Shipped (pre-alpha)** — `v0.7.0` to `v0.7.13`, 2026-09-09 to 2026-09-28 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.8** | Least-privilege and per-person Azure DevOps tokens, Azure Key Vault and Transit key custody, audit retention, multi-replica HA, SCIM leaver deprovisioning, run-level custom components, a four-panel New Run, one noun-verb CLI | **Shipped (pre-alpha)** — `v0.8.0` to `v0.8.9`, 2026-09-29 to 2026-10-09 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9** | Hybrid local and remote runs: client-mode runners on laptops and in Kubernetes, runner pools and a run queue, runner-resident credentials, a redesigned New Run with run documents and templates ([design](docs/design/0.9/PLAN.md)) | **Shipped (pre-alpha)** — `v0.9.0` to `v0.9.9`, 2026-10-13 to 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0** | Developer sandboxes: Linux VM and macOS VM sandboxes (macOS is a preview, off by default), organisation walls, local model servers, folders from your computer, desktop controls, services. The macOS parts have not run end to end on a real Mac | **Shipped (pre-alpha)** — `v0.10.0-rc.1` to `v0.10.0-rc.13`, 2026-10-24 to 2026-11-04 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.14** | rc.14: image signature admission, signed audit receipts, per-run model token usage, MCP step-up approval, Idempotency-Key on run creation, macOS GUI sessions; Docker runs need Engine 28 or later. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.14`, 2026-11-07 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.15** | rc.15: a refused request no longer keeps a run awake, gateway rerouting keys refused under the allowed-models list, cleaner macOS VM bases, the guest agent signed in-process. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.15`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.16** | rc.16: unit deciders for held approvals, platform envelopes, file download approvals, kubectl restart and per-write approval, model gateway and detector pages. | **Shipped (pre-alpha)** — `v0.10.0-rc.16`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.17** | rc.17: macOS VM idle and Setup Assistant fixes, working edit-base buttons, `update-tools`, and credentials withheld unless a policy names their host exactly. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.17`, 2026-11-09 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.18** | rc.18: the rc.17 macOS VM login fix, per-host method and path rules, the IP-address switch, a No network preset, proxy policy confirmation and DNS audit rows. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.18`, 2026-11-10 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.19** | rc.19: computer folders kept until their copy back finishes, Docker network edits and revives gated on the new proxy's first renewal, Kubernetes refusing live network edits, clearer exec and No network answers, and Go 1.26.11. | **Shipped (pre-alpha)** — `v0.10.0-rc.19`, 2026-11-11 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.20** | rc.20: ended runs cut off the network, Kubernetes live network edits that narrow the running proxy, No network below the proxy on Kubernetes where NetworkPolicy is enforced, and an opt-in macOS Setup Assistant carry-over. | **Shipped (pre-alpha)** — `v0.10.0-rc.20`, 2026-11-12 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
-- Everything below is **planned, unbuilt, and undated** unless it says it shipped.
-- Where a seam exists but no implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per row.
+Everything below is planned and undated unless a row says it shipped.
 
-- **v0.8 and v0.9 have shipped** (the Shipped table above, through `v0.9.3`).
-- 0.9 delivered the hybrid local and remote runs described in [docs/design/0.9/PLAN.md](docs/design/0.9/PLAN.md):
-  - a laptop runs `wardyn-runnerd`, its owner claims it, and the org is the only scheduler and audit writer;
-  - 0.8's enrolment (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0.
-- 0.9.4 is bug fixes and console UX only; it adds no feature.
-- What is still **planned** starts at 0.10, below.
+### v0.10
 
-| Milestone | Scope |
+- The flagship is developer sandboxes (epic #2944): a real machine for a developer or their agent, with a desktop and a browser, inside nested walls.
+- Each layer can only narrow: the organisation's outer limits, then teams, the person, the sandbox and the agent.
+
+Built, from 0.10.0-rc.1 to rc.13:
+
+| Item | Status |
 |---|---|
-| **v0.8** | **Alpha RC.** Shipped as `v0.8.0` through `v0.8.9`; see the Shipped table. |
-| **v0.9** | **Hybrid local + remote.** Shipped as `v0.9.0` through `v0.9.4`. See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
-| **v0.10** | **Developer sandboxes**: desktop machines with a real browser inside nested walls, plus the New Run items marked Coming soon; see [below](#v010-scope). |
-| **v0.10.x** | The developer-sandbox follow-ons behind flags: macOS, Windows, the local window, GPU desktops, fork and agent rules; see [below](#v010-scope). |
-| **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
-| **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
+| The Wardyn boundary with a dry-run report, bound super admins and an audited break-glass, every limit naming its layer, a final seal | Built |
+| Linux VM sandboxes, with the proxy as the VM's only network | Built |
+| macOS VM sandboxes on company-managed Macs, and `wardyn window` for the Mac's own window | Built as a preview, off by default |
+| A governed local-model endpoint for the person's own GPU | Built |
+| Folders on your computer in remote sandboxes | Built |
+| Desktop in the console, Needs you with take-over, clipboard and file-transfer controls, desktop recording, sign-ins inside a desktop | Built |
+| Scheduled runs (`WARDYN_SCHEDULED_RUNS`), several agents in one run (`WARDYN_MULTI_AGENT_TASKS`), in-sandbox MCP servers (`WARDYN_MCP_LOCAL_SERVERS`), kubectl (`WARDYN_KUBECTL_CLI`) | Built, off by default |
+| Team-shared drives, keeping a run's work folder as a drive, services and inbound apps | Built |
+| Session continuity across sign-ins (#1995) and session lifetime (#1996, `WARDYN_OIDC_SESSION_RENEW_CAP`, `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`) | Built |
 
-### v0.9 scope
-
-- **Hybrid local + remote.**
-- MDM-managed laptops enrolled into a remote org control plane on Kubernetes:
-- client-mode runners: the org schedules, enforces and audits, and a laptop runs no control plane (an offline runner starts no new governed run),
-- per-run placement between the laptop and the org's cluster, and mixing the two under one identity, one ceiling and one audit stream ·
-- the disk link (`wardyn sync` into a remote sandbox; drive-as-source) ·
-- the New Run redesign: guided setup, the YAML/JSON run document, the Tools and access step, Templates, and saving a draft as a template or policy ·
-- the `member` role alias removed (0.8 warns)
-
-What 0.9.3 adds to the runners (the release candidates are in the Shipped table):
-
-| Area | What shipped |
-|---|---|
-| Organisation runners | `wardyn-runnerd` in a Kubernetes cluster, installed by the `deploy/helm/wardyn-runnerd` chart: outbound-only, ServiceAccount and NetworkPolicy isolation, a boot NetworkPolicy canary and a kubelet floor |
-| Trust classes | Each runner is `personal`, `managed_device` or `org_cluster`, set by a security operator; the credential delivery policy can differ per class |
-| Resident credentials | `runner_resident` delivers `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` to the run's runner, kept in the OS keystore and erased at run end, best effort |
-| Recordings | The organisation decides per run; a run that is not recorded says why (`org_off`, `runner_declined`), and `recording: required` refuses a non-recording runner |
-| Locked-down networks | A corporate CA on runners, provider-shaped errors, disk on VM engines, and images for both architectures |
-
-### v0.10 scope
-
-- **The flagship is developer sandboxes** (epic #2944).
-- A developer, or an agent working for one, gets a real machine: a desktop, a real browser, their tools.
-- It is a governed sandbox inside nested walls. Each layer can only narrow: the organisation's outer limits, then teams, the person, the sandbox, and the agent.
-- Credentials stay out wherever Wardyn can broker them. Where one must enter, such as a sign-in inside a desktop, it is scoped, short-lived and audited.
-
-**0.10.0, the core:**
-
-| Area | Item | Issue |
-|---|---|---|
-| Walls | Organisation outer walls, off until turned on, with a dry-run report | #2945 |
-| Walls | Walls bind super admins; the admin token is an audited break-glass | #2946 |
-| Walls | Every limit names the layer that set it and a contact | #2951 |
-| Walls | A final seal after every late host addition | #2952 |
-| Machines | Linux desktop VM sandboxes | #2953 |
-| Machines | The proxy is the VM's only network, proved per guest OS | #2956 |
-| Machines | A governed local-model endpoint for the person's own GPU | #2957 |
-| Hybrid | Folders on your computer in remote sandboxes: pick one in New Run, seed before the agent starts, ignore files, deletes, git history, editors | #2981 |
-| Experience | Open desktop in the console | #2962 |
-| Experience | Needs you: the agent pauses, the person takes over and hands back | #2963 |
-| Controls | Clipboard and file transfer per direction | #2967 |
-| Controls | Desktop session recording | #2968 |
-| Controls | Sign-ins inside a desktop, in separate person and agent profiles | #2972 |
-| Process | Spikes and mock-first designs | #2973, #2974 |
-
-**0.10.x, behind flags:**
+Not built:
 
 | Item | Issue |
 |---|---|
-| macOS sandboxes on company-managed Macs, proved by an MDM device certificate | #2954, #2975 |
-| Windows sandboxes from org-supplied images under a licence pool | #2955 |
-| Laptop sandboxes in a local native window | #2961 |
+| Proof of a Mac's identity by an MDM device certificate (a Mac is trusted today by its `managed_device` class and posture file) | #2975 |
+| Windows sandboxes from organisation-supplied images under a licence pool | #2955 |
+| A local native window for sandboxes other than macOS VMs | #2961 |
 | GPU in container sandboxes, and an opt-in GPU desktop for Linux VMs | #2958, #2959 |
 | Snapshots, fork, warm pools and sleep on disconnect | #2960 |
 | Per-setting delegation, agent rules, place rules | #2947, #2949, #2950 |
-| Live two-way sync with a conflict view, and organisation controls for local folders | #2987, #2990 |
-| Pause on every runtime, cold move between machines, and org sites with a reference edge box | #2991 |
+| Live two-way folder sync with a conflict view, and organisation controls for local folders | #2987, #2990 |
+| Pause on every runtime, cold move between machines, and organisation sites with a reference edge box | #2991 |
 | Preview URLs, in-browser approvals, action gates, watermark, browser lock-down, Record Mode for desktops | #2965, #2964, #2971, #2969, #2970, #2966 |
-
-**Also in 0.10:** the New Run items marked Coming soon in 0.9.
-
-| Item | Issue |
-|---|---|
-| Scheduled runs, one-time and repeating | #1986 |
-| Several autonomous agents in one run | #1987 |
-| Team-shared drives | #1988 |
-| In-sandbox MCP servers per harness | #1989 |
-| Google Cloud CLI and kubectl access | #1990 |
-| Reusing a run's main drive across runs | #1991 |
-| Folders on your computer as run files | #1992 |
+| Google Cloud CLI access | #1990 |
 | The AI composer | #1993 |
-| Application and server sandboxes | #1994 |
 
-- Session continuity across tabs and sign-ins (#1995) targets a 0.9.x release; session lifetime (#1996) shipped in 0.9.3 as `WARDYN_OIDC_SESSION_RENEW_CAP` and `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`.
+### v1.0
 
-### v1.0 scope
+| Item | Status |
+|---|---|
+| SPIRE identity provider and OpenBao secret store | Not built; the `identity.Provider` and `secretstore.Store` seams ship |
+| L3 MCP and tool gateway | Partly built: the per-tool-call decision plane ships. Interception of tool-call egress that bypasses the proxy does not ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
+| Arbitrary-domain L2 TLS interception | Not built; targeted model and registry interception ships, opt-in |
+| Cloud STS federation | Not built |
+| OCSF SIEM sink | Not built; file, webhook, syslog and OTLP sinks ship |
+| Docker and Compose L1 default-deny by nftables | Not built; Docker relies on L0 structural confinement. Kubernetes L1 ships as a NetworkPolicy with a boot canary |
+| Cilium `toFQDNs` | Not built |
+| High-availability completion | Open blockers a second replica still hits, chiefly that a registered runner holds its session with one replica; see [High availability](docs/operations/high-availability.md) |
+| Kubernetes parity with Docker | Open gaps listed in [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md) "Known gaps" |
+| CC3/Vault (Kata) packaged and GA | Experimental |
+| Signed action receipts | Shipped in `v0.10.0-rc.14`: checkpoints and receipts signed with the Ed25519 boot key `wardyn-audit-receipt-key`, checked offline with `wardyn audit verify` against keys pinned off the control plane ([OPERATIONS.md](docs/OPERATIONS.md#signed-checkpoints-and-receipts)). The key is held by the control plane. |
+| Separation of duty on the control plane (super-admin tier) | Not built; `security_admin` separates governance authority ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
 
-- SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) ·
-- OpenBao secret store (same, for `secretstore.Store`) ·
-- L3 MCP/tool gateway ·
-- arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) ·
-- cloud STS federation ·
-- OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) ·
-- Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) ·
-- HA completion — closing the blockers a second replica still hits, chiefly that a registered runner holds its session with one replica; see [High availability](docs/operations/high-availability.md) for each ·
-- k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, a per-pod PIDs limit, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") ·
-- CC3/Vault (Kata) packaged and GA — experimental today ·
-- Cilium `toFQDNs` ·
-- signed action receipts (the hash chain itself ships — migration `0047`) ·
-- separation of duty on the control plane
+### Git-token ref confinement
 
-### v1.0 git-token ref confinement scope
-
-- **Token-side** branch-namespace confinement for minted git tokens —
-- the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane,
-- but the installation token itself cannot self-restrict to a ref prefix.
-- What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, [`internal/broker/ruleset.go`](internal/broker/ruleset.go)), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off).
-- What's still not built: Wardyn never creates or holds the ruleset itself —
-- that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step ([`docs/POLICIES.md`](docs/POLICIES.md)) —
-- and the gate defaults off, so an operator who does neither still has an unbound token.
-- The ruleset is a GitHub-only, `github_token`-only mechanism regardless:
-- `git_pat` gained its own receive-pack parsing since 0.7.2 (the pat scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, folded by #203 from the standalone `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, default off)
-- and its own content rules since 0.8 (`push_rules`, both brokered lanes) —
-- only `ssh_key` remains structurally outside any receive-pack parser, since git's SSH transport has no broker seam ([`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) asset #4)
+- The proxy-side push-ref check is on by default and binds the brokered GitHub App path (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, `agent-run` pushes `wardyn/<run-id>/work`).
+- A GitHub installation token cannot restrict itself to a ref prefix. Wardyn reads a repository ruleset back ([`internal/broker/ruleset.go`](internal/broker/ruleset.go)), grades it on the setup checklist, and refuses every `github_token` mint until one verifies when `WARDYN_GITHUB_REQUIRE_REF_RULESET` is on (default off).
+- Not built: Wardyn never creates the ruleset, since that needs repo-admin access it does not request; creating one stays an operator step ([docs/POLICIES.md](docs/POLICIES.md)).
+- `git_pat` pushes have receive-pack parsing (the pat scope of the same setting, default off) and `push_rules`. Only `ssh_key` sits outside any receive-pack parser, because git's SSH transport has no broker seam.
 
 ### Named gaps without a milestone
 
-- These are known, documented ceilings.
-- They are listed so they are not mistaken for shipped behavior; none is scheduled.
+These are known ceilings. None is scheduled. Accepted residuals of the security model are in [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md), not here.
 
-- **Seventeen of the 23 catalogued demo episodes are still unrecorded stubs** ([`ui/src/app/lib/demo-videos.ts`](ui/src/app/lib/demo-videos.ts)'s `EPISODES`; [`cmd/wardynd/demo_videos_guard_test.go`](cmd/wardynd/demo_videos_guard_test.go) pins the count).
-  - 0.7 organised the install paths around three audiences —
-  - single-user, multi-user, and joining a Wardyn someone else runs — and the episodes now play inside Getting Started itself (a manifest per episode, watched only on explicit click).
-  - `00` (front door), `03c` (authorized-then-issued), `04` (add a workspace), `04b` (a member's own workspace),
-  - `04c` (who may do what — governance profiles and role mappings), `04d` (a member's own drive), `06`–`10` (first run, interactive, autonomous, record, approvals),
-  - `11` (CI), `12` (audit and attach), `12b` (admin operations), `02b` (managed desktop), `02c` (cloud) and `13` (SSH into a cluster run) still carry `tag: null` —
-  - their grader arms and persona quizzes are written, the takes are not shot.
-
-- **`--agent` is still required for a run that names no image.**
-  - **0.7 narrowed this rather than closing it.**
-  - A `task_mode=exec` run that carries an `--image` (or an attached workspace) no longer needs an agent —
-    - which was the case that made the CLI read AI-first, and which our own CI docs used to demonstrate the workaround for.
-  - What remains: a bare `wardyn run --task-mode exec --task 'echo hi'` with no image still 400s, because there is nothing to run it in.
-  - The residual is therefore "the run must name SOMETHING", not "the run must name an agent".
-  - Deliberately not defaulted further: defaulting the agent to `claude-code` would make an agentless run eligible for the operator's live subscription credential, and defaulting it to `byoa`/`none` resolves to an image that is not published.
-- **GitLab PATs are non-resident but not scoped.**
-  - **0.7 built the never-resident half**: a `git_pat` for a non-GitHub forge is minted proxy-side and injected on the outbound leg, so the credential no longer enters the sandbox.
-  - What this entry now names is the half that remains and cannot be built the same way: GitLab has no token-minting integration, so the operator PAT's scope is the boundary.
-  - Per-repo, auto-expiring scoping is achievable on GitHub because an installation token can be minted narrow; it is not achievable on a PAT Wardyn merely holds.
-  - The `WARDYN_GIT_PAT_BROKER` broker is therefore a residency control, never a least-privilege one.
-  - **Azure DevOps is no longer in this entry (0.8.2):** it has no shared PAT, and Wardyn creates a short-lived, run-scoped PAT for each run in the person's name ([`docs/AZURE-DEVOPS.md`](docs/AZURE-DEVOPS.md)).
-- **Proxy-side injection of the Bedrock SSO bearer.**
-  - Would make the SSO token never-resident; the derived role credentials stay resident regardless, because SigV4 signs in-process.
-- **The `ssh_key` grant is clone-only and does not fit a bind-mounted workspace.**
-  - The key is written just before the clone and wiped right after, so a `local_dir` workspace — which has no clone step — leaves interactive SSH pull/push unauthenticated.
-  - Rewrite the remote to HTTPS, or accept clone-only SSH.
-  - ([field report](docs/adoption/corp-network-onboarding-findings.md))
-- **Team mode as a packaged, sealed multi-user product** —
-  - as opposed to the RBAC that ships IN the control plane today (see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Multi-user: who can change what", and [docs/USERS.md](docs/USERS.md) for what a member themself can do).
-  - Admin/member roles and owner scoping are real and shipped (v0.5), and v0.6 added capability grants over a user, an IdP group, or everyone (see CHANGELOG.md's `[0.6.0]` entry) —
-    - which is authorization detail on top of those two roles, not a tenancy model, and 0.6 added per-user `wdn_` API tokens (personal, independently revocable — same entry).
-  - What's still speculative, no design in the tree: SAML, SCIM provisioning of joiners and movers (SCIM removes leavers only: suspend and purge, see [docs/OPERATIONS.md](docs/OPERATIONS.md) "Leavers and SCIM"), an organization/tenant structure, and CUSTOM roles beyond admin/member.
-  - The admin token and local mode remain the same shared credential they always were: always-admin, no per-human identity, no separation of duty from a real admin user (v1.0's row, above).
-- **The SSH gateway's admin override is a bounded-stale stamp, weaker than the web terminal's live check.**
-  - `sshAuth` grants an admin's own registered key an override — `run.created_by == principal` OR (the run has no personal owner AND `key.role == admin` AND `key.role_checked_at` no older than `WARDYN_SSH_ROLE_TTL`, migrations `0043_ssh_key_role.sql` and `0046_ssh_key_role_checked_at.sql`).
-  - The stamp is no longer registration-time-only: every OIDC login re-stamps `role` and `role_checked_at` for all of that principal's keys (`oidc.Config.OnLogin`),
-    - and the TTL (default `24h`) expires a stamp on its own even if the human never logs in again —
-    - closing the "keeps the override forever until re-registered" gap this bullet used to name.
-  - What's left: the gateway still never reads the human's role LIVE at connect time, unlike the web terminal's `requireOperator` gate —
-    - SSH carries no session for that gate to read —
-    - so a demotion can still ride an unexpired stamp for up to one TTL window.
-  - Overrides are audited distinctly (`ssh.authenticate` carries `override:true`), and the ceiling is documented, not silently assumed away, in [`docs/SSH.md`](docs/SSH.md)'s Bounds section and [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) residual #15.
-- **The legacy `sources`/`base_image` workspace columns have no drop date, and the migration number reserved for it is gone.**
-  - 0.4.5's source-library split (migration `0031_source_library.sql`) kept the old embedded columns live for compatibility and reserved migration number `0032` in its own comment for the column-drop migration, "which must ship in a LATER release, never this one."
-  - That number is now taken —
-    - `0032_attach_tickets_token_sha256.sql` shipped in v0.5, and the v0.5 k8s/SSH merge renumbered its own new migrations up past it (`0033_ssh_public_keys.sql`, `0034_attach_ticket_role.sql`) —
-    - and v0.6 took the numbers through `0043_ssh_key_role.sql`, so the eventual drop migration needs a fresh number whenever it's scheduled.
-  - That floor moves with every release; read the migrations directory rather than this sentence.
-  - Nothing depends on it happening by any particular release; it's listed here so the stale "is 0032" comment in `0031_source_library.sql` isn't mistaken for a live plan.
-- **Age-key rotation is offline and operator-driven.**
-  - `wardynd -rotate-age-key` now re-encrypts every stored secret to a fresh identity in one transaction ([docs/operations/secrets-and-keys.md](docs/operations/secrets-and-keys.md#rotating-the-age-key)'s "Rotating the age key"), so the old "no rotation path at all" ceiling is gone.
-  - What remains: the daemon has to be **stopped** for it, and nothing enforces that —
-    - no wardynd holds a process-lifetime advisory lock, so the tool can refuse a second concurrent rotation but cannot see a serving process.
-  - There is also no scheduled or automatic rotation, and no `wardyn secret rotate`: the CLI deliberately never touches the key.
-- **react-router 7 → 8 major bump.**
-  - No longer security-forced: GHSA-qwww-vcr4-c8h2 patches at 7.18.2 as well as 8.3.0, the console ships 7.18.2, and the pnpm-audit suppression that once covered it is deleted — `make npm-audit` is green with nothing ignored.
-  - What remains is the major itself:
-    - every stable 8.x peer-depends on React >=19.2.7 (this console is already on React 19, so that half is met),
-    - and `react-router-dom` has no 8.x at all — v8 is also a package rename to `react-router`.
-  - Needs a UI owner, not an advisory deadline.
-- **Kata/TPROXY/io_uring composer quick-hits.**
-  - Parked since the composer-readiness work.
+- **`--agent` is required for a run that names no image.** A `task_mode=exec` run with an `--image` or an attached workspace needs no agent. A bare `wardyn run --task-mode exec --task 'echo hi'` is refused `400` because there is nothing to run it in. Defaulting the agent to `claude-code` would make an agentless run eligible for the operator's subscription credential.
+- **GitLab PATs are kept out of the sandbox but not scoped.** A `git_pat` for a non-GitHub forge is injected at the proxy. GitLab has no token-minting integration, so the operator PAT's own scope is the boundary, and `WARDYN_GIT_PAT_BROKER` controls residency, not least privilege. Azure DevOps mints a run-scoped PAT in the person's name ([docs/AZURE-DEVOPS.md](docs/AZURE-DEVOPS.md)).
+- **An `ssh_key` grant covers the start-up clone only.** The proxy's SSH agent closes when the clone finishes, so a `local_dir` workspace, which has no clone, has no SSH credential for pull or push. Rewrite the remote to HTTPS.
+- **Team mode as a sealed multi-user product.**
+  - Shipped: admin and member roles, owner scoping, capability grants and per-user `wdn_` tokens ([docs/OPERATIONS.md](docs/OPERATIONS.md) "Multi-user: who can change what").
+  - Not built: SAML, SCIM provisioning of joiners and movers (SCIM removes leavers only; see "Leavers and SCIM"), a tenant structure, and custom roles beyond admin and member.
+  - The admin token and local mode stay one shared always-admin credential.
+- **Age-key rotation is offline.** `wardynd -rotate-age-key` re-encrypts every stored secret in one transaction ([docs/operations/secrets-and-keys.md](docs/operations/secrets-and-keys.md#rotating-the-age-key)). The daemon must be stopped and nothing enforces that. There is no scheduled rotation.
 - **A member's inline model-access grant needs an operator integration.**
-  - A member may author an `inline_policy`, but its api_key/git_pat/ssh_key grant is clamped to grant KINDS the operator allows
-    - and then its {host, secret} pairing is dropped unless the operator eligible-listed that exact pairing (`filterUserGrants`, [`internal/api/inline_policy.go`](internal/api/inline_policy.go) —
-    - the secret-exfil guard: a member must not pair an arbitrary stored secret with an allowlisted host).
-  - A run's real model-access grant comes from its model provider, or is re-added at launch by `applyWorkspaceRequirements` (a workspace requirement), so the supported multi-user flow is unaffected.
-  - The ceiling: a member whose model access relies ONLY on a raw operator secret + a wildcard `api_key` ceiling with NO provider and NO workspace requirement gets nothing re-added —
-    - the run launches without model access (fail-closed, no exfil).
-  - The drop used to be invisible to an operator — a clamp *warning* in preflight/Review and nothing else —
-    - so a deliberate member exfil *attempt* left no trace; 0.6 closed that:
-    - every drop now also records an `authz.denied` audit event with reason `grant_pairing_not_eligible`, aggregated one event per reason at launch (never on a preflight dry-run)
-    - and carrying the pairings that went (`auditUserPolicyDrops`, same file).
-  - No preview lane disagrees with launch: preflight is the only one, and it resolves through the same `resolveRunPolicy` chokepoint and the same `resolveRunLLMAccess` verdict the create path uses ([`internal/api/preflight.go`](internal/api/preflight.go)),
-    - so its checklist shows the dropped grant and the resulting no-model-access before the member launches.
-
-  - **Shipped in 0.7:** the pure-BYOK-for-members flow this bullet used to name as a suggested fix —
-    - a member's own stored provider-convention key now survives with no operator integration and no workspace requirement behind it (per-principal secrets, migration `0050`; see the 0.7 CHANGELOG entry).
-  - This is still not the member-mode model-access story on the desktop tier's m′ profile, which reaches a model via **Bedrock** —
-    - daemon-level MDM-set configuration rather than a per-member credential, routing around this gate entirely ([`docs/DESKTOP.md`](docs/DESKTOP.md) "Model access on m′").
-- **Drives beyond one per person.**
-  - Team-shared drives (one object, many principals — breaks the `UNIQUE(subject_type, subject)` + LIMIT-1 resolver invariant and needs its own design round) ·
-    - multiple drives per principal · cloud-drive providers (rclone/OneDrive) · csi `subDir` templating ·
-    - wardynd performing NFS/SMB mounts itself · run-row drive persistence (D3).
-  - No 0.8/0.8.1 issue tracks any of these.
-  - Self-service reset, per-user uid/Kerberos/cifs `multiuser`, and a same-drive concurrent-run collision warning are current, documented non-goals, not gaps —
-    - [docs/USERS.md](docs/USERS.md) ("there is no self-service reset: a drive you have poisoned is reclaimed by your admin with a documented command, so ask")
-    - and [docs/design/user-drives-prompt.md](docs/design/user-drives-prompt.md)'s "Do not design" list ("No Reset", "No share credentials, no per-user uid, no Kerberos", "No collision warning").
-- **Identity and authz residuals accepted without a build.**
-  - `known_principals` (other people's subjects on records) · PF-48 (resident credential lanes above a re-asserted ceiling, architectural) · **TM #39** (an IdP-FILTERED group claim is indistinguishable from a complete one) ·
-    - governance residuals PF-12/15/16/1 (by design) · the three accepted egress residuals B6/B7/B8 (unassigned-member stored policy, IPv6 redirect literal, SNI-swap probe) ·
-    - a WebSocket close code `4403` on attach (every attach authz refusal is an HTTP 403 BEFORE the upgrade by deliberate invariant,
-    - so a `4403` needs its own decision to open a socket for an unauthorized caller) ·
-    - a DB-clock cookie `iat` (the shipped comparison-time fix is recorded as safe to leave standing).
-  - The per-user API-token group-snapshot refresh and the per-user Bedrock-bearer widening this residual used to carry alongside them are both shipped (#152, #153).
-- **The AWS SSO dispatch credential-refresh mechanism's remaining half.**
-  - Per-user BEARER/API-key credentials (`per_user` is `bedrock_sso`-only in 0.7.2) ·
-    - an explicit opt-in cross-mechanism fallback (needs a policy field, a ceiling term and an audit story) ·
-    - the rest of the mid-run renewal design (the legacy no-block path still ships refresh fields in the sandbox cache;
-    - a renewal channel for runs longer than one access token).
-    - (The background renewer shipped: `RenewAWSSSOCredentials`.)
-- **Review-round findings with a written shape, deliberately not pulled.**
-  - An `llm_inspection` scan-budget policy (fields and their POLICIES rows) and a re-derivation of the docker/k8s hardening-cap rationale have no 0.8/0.8.1 issue.
-  - The console copy/state residue this bullet used to also carry is tracked by #157 (part of #84):
-    - five of its twelve findings are recoverable and covered there, the rest are struck rather than carried as unexplained ids ([`docs/design/0.8/PLAN.md`](docs/design/0.8/PLAN.md)'s Risks section).
-  - The `setup_items` preflight field and the Recordings screen's own pagination this bullet also used to carry are both already resolved, not gaps:
-    - `setup_items` has a real consumer (`wardyn run --dry-run`; #172, closed — the premise that it had none was wrong) and Recordings pagination shipped (#159).
-  - The second terminal-escape chord this residue used to carry alongside them shipped as `Ctrl+Shift+Backspace` (#133).
-- **Verification debt from private review rounds.**
-  - A backlog of claimed-fixed findings from prior review rounds that were never re-verified, plus a Low/Info-severity residue and the `TEST-GAPS` chronic backlog, has no 0.8/0.8.1 issue.
-  - The two 0.7.2 browser rows this debt used to also carry ("a member signs in to AWS SSO and launches", "an expired shared credential refuses the run with the named sentence")
-    - are resolved differently, not carried forward:
-    - both need a real OIDC session no Playwright harness holds, so they are pinned in Go against the mechanism itself (`runs_dispatch_llm_mechanism_test.go`, `awssso_refresh_test.go`)
-    - and were walked in a live browser against a real tenant before the tag.
-- **Dev-box tooling** (a decision, not a product gap — none of it reaches a deployment).
-  - The `.wslconfig processors=24` bump for the build host · the verification harness's own two: the ledger's `init --resume-from` gap, and the review persona's re-arm on compaction.
-  - Recorded so they are not re-discovered as findings in 0.8's rounds.
-- **Demo and video track** (not release-gated, owner-timed; the seventeen unrecorded episode stubs are tracked above, this section's first bullet).
-  - The episode 00 script gate · the dialog rewrite set and its owner mock round ·
-    - the 03c act-3 rewrite (a PAT is brokered by default now) · the five held videos' re-take · the 04c re-take ·
-    - the re-record impact tool, caption lint and quota probe.
-- **Ops-gated** (owner hardware/tenants).
-  - The real-tenant Entra walk · the real-AWS PrivateLink walk (partially tracked by #706) · adopter acceptance ·
-    - the macOS `.pkg` (Apple Developer ID) · an MDM vendor example · a real-Mac launchd smoke run ·
-    - a real playback-engine proof · a live `disk_mib` walk on an xfs+pquota Docker host.
+  - `filterUserGrants` ([`internal/api/inline_policy.go`](internal/api/inline_policy.go)) drops a `{host, secret}` pairing the operator did not list as eligible, and audits the drop as `authz.denied` with reason `grant_pairing_not_eligible`.
+  - A member whose model access rests only on a raw operator secret, with no model provider and no workspace requirement, launches without model access.
+  - The supported flow, a model provider or a workspace requirement, is unaffected.
+- **Drives.** Not built: cloud-drive providers (rclone, OneDrive), csi `subDir` templating, and wardynd performing NFS or SMB mounts itself. Self-service reset and a same-drive collision warning are non-goals ([docs/USERS.md](docs/USERS.md), [docs/design/user-drives-prompt.md](docs/design/user-drives-prompt.md)).
 
 ## What is not on the roadmap
 
 - **Bring-your-own arbitrary Kubernetes manifests.** One blessed Helm chart, or nothing.
-- **A feature that passes on only one target.**
-  - The parity rule: a feature is not done until it passes the conformance suite on both Docker and kind —
-    - CI now gates on both, but that is a floor, not a one-time proof (see [ARCHITECTURE.md](ARCHITECTURE.md)'s "Parity rule").
-  - The k8s substrate is not at overall feature parity with Docker yet even though it passes conformance (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps"); a new feature still owes both targets, or an honest, explicit skip.
+- **A feature that passes on only one target.** A feature is not done until it passes the conformance suite on Docker and kind ([ARCHITECTURE.md](ARCHITECTURE.md) "Parity rule"). The Kubernetes substrate is not at feature parity yet; see its "Known gaps" above.
 - **A paid or open-core edition.** Apache-2.0 everything.
-- **Interactive tool-approval routing through the toolgate FSM.**
-  - Spiked and refused, not deferred: `wardyn-toolgate` routes only a non-interactive run's tool calls to the approval FSM,
-    - upstream pins `claude`'s `--permission-prompt-tool` to non-interactive use,
-    - and the only alternative — a hook — fails *open* on a timeout, the wrong default for an approval gate.
-  - Self-service value collapses anyway: the human deciding the prompt can already attach to the run and answer it directly.
-  - What shipped instead: an interactive run's `tool_approvals=hold` is refused with a 400 naming the field, rather than silently accepted and discarded.
+- **Interactive tool-approval routing through the toolgate FSM.** `wardyn-toolgate` routes only a non-interactive run's tool calls to the approval FSM. Upstream pins `claude`'s `--permission-prompt-tool` to non-interactive use, and the only alternative, a hook, fails open on a timeout. A person can already attach to the run and answer the prompt. An interactive run's `tool_approvals=hold` is refused `400` naming the field.

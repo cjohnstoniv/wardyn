@@ -320,6 +320,17 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
+      # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
+      # extra swap lets that peak page out instead of the runner being shut down.
+      - name: Add swap for the coverage compile
+        if: needs.changes.outputs.backend != 'false'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
@@ -1001,6 +1012,10 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1044,6 +1059,8 @@ jobs:
           load: true
           cache-from: type=gha,scope=wardyn-proxy
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
+      - uses: ./.github/actions/kind-binary
+        if: needs.changes.outputs.backend != 'false'
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         if: needs.changes.outputs.backend != 'false'
         with:
@@ -1257,6 +1274,10 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1313,6 +1334,7 @@ jobs:
       # own doc and deploy/kind/Dockerfile.conformance-agent.
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: wardyn-conformance-k8s
@@ -1365,6 +1387,331 @@ jobs:
             ~/.cache/go-build
             ~/.cache/golangci-lint
           key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+
+  # ── conformance-k8s-agent-sandbox: the experimental agent-sandbox backend on kind ──
+  # The same suite as conformance-k8s (same kind, Calico and PSS-restricted namespace), with
+  # WARDYN_TEST_K8S_AGENT_SANDBOX=1: an agents.x-k8s.io Sandbox makes each run's agent pod, held by
+  # Wardyn's scheduling gate until the read-back passes. On top of the suite it runs the backend's own
+  # cases (agentsandbox_k8s_test.go), including every admission decision of the chart's two
+  # ValidatingAdmissionPolicies against this real API server.
+  #
+  # Third party, CI only: agent-sandbox v1.0.9's sandbox.yaml, checked against its published sha256,
+  # with the controller image replaced by its index digest and scanned by trivy before it runs. Pulled
+  # anonymously; there is no registry login in this job.
+  #
+  # Identities. The policies name two requesters: the controller's ServiceAccount (the upstream
+  # manifest's, the chart default) and wardynd's (system:serviceaccount:<release namespace>:<SA>). The
+  # suite authenticates as a real ServiceAccount token for wardyn/wardynd, the identity the policies
+  # are rendered with, so the gate removal is judged exactly as it is in a cluster. That account is
+  # bound to cluster-admin, as conformance-k8s's kind account is: the chart's Role is checked verb by
+  # verb with `kubectl auth can-i --as`, not by running the suite under it. The cases reach the other
+  # identities by impersonation.
+  #
+  # Train pull requests and pushes to main only: one more runner for up to 45 minutes, on the runs
+  # that merge a wave. Not a required check and not in `gates` (the backend is experimental), but a
+  # red here is the run's red: the train pull request shows it as its own check, and the run's
+  # conclusion is failure, which green-by-tree.sh refuses as release evidence for that tree.
+  conformance-k8s-agent-sandbox:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/')) }}
+    runs-on: ubuntu-26.04
+    # Until measured: conformance-k8s's 35 (the Makefile's 30m suite timeout plus the bring-up) plus 10 for
+    # the controller fetch, two trivy scans, its install, the policies, can-i and seven real-pod cases.
+    timeout-minutes: 45
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      AGENT_SANDBOX_CONTROLLER_IMAGE: registry.k8s.io/agent-sandbox/agent-sandbox-controller@sha256:ef1a1a3076afc996e711c44b388fbb7ffb7cd6858953d7e685166b299d77bd38
+      # Chart values the policies and the Role are rendered with (the minimum the chart renders k8s with).
+      WARDYN_CHART_VALUES: >-
+        --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
+        --set serviceAccount.automount=true --set k8s.enabled=true --set k8s.proxyImage=wardyn/wardyn-proxy:kind-test
+        --set k8s.runsNamespace=wardyn-conformance --set k8s.agentSandbox.enabled=true
+    steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      # conformance-k8s's build cache compiles the same packages; this job only reads it.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-conformance-k8s-${{ runner.os }}-
+      - name: Drop cached test results
+        run: go clean -testcache
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        id: buildx
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+          use: false
+      - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.proxy
+          tags: wardyn/wardyn-proxy:kind-test
+          load: true
+          cache-from: type=gha,scope=wardyn-proxy
+      - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
+        run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      # Kubernetes v1.30 by digest, with the kind release that image was built for: the docs claim the
+      # backend was tested on v1.30, and kind-action's default node image is newer. The version is
+      # printed after the Calico rollout so the log shows what ran.
+      - uses: ./.github/actions/kind-binary
+        with:
+          version: v0.23.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.23.0
+          node_image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
+          cluster_name: wardyn-conformance-k8s
+          config: deploy/kind/conformance-kind-config.yaml
+          wait: 90s
+      - name: Load images into kind (no registry pull)
+        run: |
+          kind load docker-image wardyn/wardyn-proxy:kind-test --name wardyn-conformance-k8s
+          kind load docker-image wardyn/conformance-agent:kind-test --name wardyn-conformance-k8s
+      - name: Install Calico (single-file, version-pinned manifest — NetworkPolicy enforcement)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
+          kubectl version
+          server=$(kubectl version -o json | jq -r .serverVersion.gitVersion)
+          [ "$server" = v1.30.0 ] || { echo "::error::the cluster runs $server, not the v1.30.0 the docs name"; exit 1; }
+      - name: Label a PSS-restricted namespace for runs
+        run: |
+          kubectl create namespace wardyn-conformance
+          kubectl label namespace wardyn-conformance \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=v1.30
+      - name: Repoint KUBECONFIG at the node's internal IP (see conformance-k8s)
+        run: |
+          NODE_IP=$(kubectl get nodes wardyn-conformance-k8s-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+          kind get kubeconfig --name wardyn-conformance-k8s --internal \
+            | sed "s/wardyn-conformance-k8s-control-plane:6443/${NODE_IP}:6443/" \
+            > "$RUNNER_TEMP/kubeconfig-internal.yaml"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
+      # sha256 published with the v1.0.9 release. The manifest names the controller by tag, so the one
+      # image line is replaced with the index digest, and no image may be left that is not by digest.
+      - name: Fetch agent-sandbox v1.0.9 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.9/sandbox.yaml
+          sha256: 3eeb27fa821659593ba92c5454571f08c84abb07096bb9d372c1c6c750f6d7d2
+          path: ${{ runner.temp }}/agent-sandbox.yaml
+      - name: Pin the agent-sandbox controller by digest
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/agent-sandbox.yaml"
+          tagged='registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.9'
+          [ "$(grep -cF "image: $tagged" "$f")" = 1 ] || { echo "::error::expected exactly one '$tagged' image line in sandbox.yaml"; exit 1; }
+          sed -i "s|image: $tagged\$|image: $AGENT_SANDBOX_CONTROLLER_IMAGE|" "$f"
+          images=$(grep -E '^[[:space:]]*(- )?image:[[:space:]]*[^[:space:]]' "$f")
+          echo "$images"
+          if grep -v '@sha256:[0-9a-f]\{64\}$' <<<"$images"; then echo "::error::an image above is not pinned by digest"; exit 1; fi
+          grep -qF "image: $AGENT_SANDBOX_CONTROLLER_IMAGE" "$f"
+      # The repo's trivy pattern (see the trivy-wardynd job): the pinned binary, the shared DB cache,
+      # then the default and the strict CRITICAL scans, here on the controller's digest.
+      - name: Trivy DB cache key date
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore trivy DB cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            cache-trivy-
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
+      - name: Install trivy 0.70.0 (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/trivy-bin"
+          mkdir -p "$dir"
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
+          echo "$dir" >> "$GITHUB_PATH"
+      - name: Trivy scan of the agent-sandbox controller digest
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.AGENT_SANDBOX_CONTROLLER_IMAGE }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+          cache: false
+          skip-setup-trivy: true
+      - name: Trivy strict scan of the agent-sandbox controller digest (CRITICAL, fixed or not)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.AGENT_SANDBOX_CONTROLLER_IMAGE }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: false
+          trivyignores: .trivyignore
+          exit-code: '1'
+          cache: false
+          skip-setup-trivy: true
+      - name: Install agent-sandbox and wait for its controller
+        run: |
+          set -euo pipefail
+          kubectl apply -f "$RUNNER_TEMP/agent-sandbox.yaml"
+          kubectl -n agent-sandbox-system rollout status deployment/agent-sandbox-controller --timeout=180s
+          got=$(kubectl -n agent-sandbox-system get deployment agent-sandbox-controller -o jsonpath='{.spec.template.spec.containers[0].image}')
+          [ "$got" = "$AGENT_SANDBOX_CONTROLLER_IMAGE" ] || { echo "::error::controller runs $got"; exit 1; }
+      # The chart's own render, with wardynd's ServiceAccount named wardyn/wardynd: the ungate policy
+      # admits a gate removal only from that requester, and the suite authenticates as it (next step).
+      # A policy whose CEL does not type-check reports it in status.typeChecking; that fails here.
+      - name: Install the chart's agent-sandbox admission policies (wardynd = wardyn/wardynd)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # WARDYN_CHART_VALUES is a list of --set flags
+          helm template wardyn deploy/helm/wardyn -n wardyn $WARDYN_CHART_VALUES --set serviceAccount.name=wardynd \
+            --show-only templates/agent-sandbox-policy.yaml > "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          grep -F "system:serviceaccount:wardyn:wardynd" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          grep -F "system:serviceaccount:agent-sandbox-system:agent-sandbox-controller" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          kubectl apply -f "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+          for p in $(kubectl get -f "$RUNNER_TEMP/agent-sandbox-policy.yaml" -o jsonpath='{range .items[?(@.kind=="ValidatingAdmissionPolicy")]}{.metadata.name}{" "}{end}'); do
+            for _ in $(seq 30); do
+              [ "$(kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.observedGeneration}')" = 1 ] && break
+              sleep 1
+            done
+            gen=$(kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.observedGeneration}')
+            warn=$(kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.typeChecking.expressionWarnings}')
+            echo "$p: observedGeneration=$gen typeChecking warnings=[$warn]"
+            if [ "$gen" != 1 ] || [ -n "$warn" ]; then echo "::error::policy $p is not type-checked clean"; exit 1; fi
+          done
+      - name: Authenticate the suite as wardyn/wardynd (a ServiceAccount token)
+        run: |
+          set -euo pipefail
+          kubectl create namespace wardyn
+          kubectl -n wardyn create serviceaccount wardynd
+          kubectl create clusterrolebinding wardyn-conformance-wardynd --clusterrole=cluster-admin --serviceaccount=wardyn:wardynd
+          token=$(kubectl -n wardyn create token wardynd --duration=2h)
+          echo "::add-mask::$token"
+          kc="$RUNNER_TEMP/kubeconfig-wardynd.yaml"
+          cp "$KUBECONFIG" "$kc"
+          kubectl --kubeconfig "$kc" config set-credentials wardynd --token="$token" >/dev/null
+          kubectl --kubeconfig "$kc" config set-context --current --user=wardynd >/dev/null
+          who=$(kubectl --kubeconfig "$kc" auth whoami -o jsonpath='{.status.userInfo.username}')
+          [ "$who" = system:serviceaccount:wardyn:wardynd ] || { echo "::error::the suite would run as $who"; exit 1; }
+          echo "suite identity: $who"
+      # Every verb of every rule in the Role the chart renders with the backend on, asked as a
+      # ServiceAccount that holds only that Role; then the verbs it must not hold.
+      - name: kubectl auth can-i for each verb in the rendered Role
+        run: |
+          set -euo pipefail
+          sa=wardynd-rbac-check
+          as=system:serviceaccount:wardyn:$sa
+          ns=wardyn-conformance
+          # shellcheck disable=SC2086 # WARDYN_CHART_VALUES is a list of --set flags
+          helm template wardyn deploy/helm/wardyn -n wardyn $WARDYN_CHART_VALUES --set serviceAccount.name=$sa \
+            --show-only templates/rbac.yaml > "$RUNNER_TEMP/rbac.yaml"
+          kubectl apply -f "$RUNNER_TEMP/rbac.yaml"
+          rules=$(kubectl get -f "$RUNNER_TEMP/rbac.yaml" -o json \
+            | jq -r '.items[] | select(.kind == "Role") | .rules[] | .apiGroups[] as $g | .resources[] as $r | .verbs[] as $v | "\(if $g == "" then "core" else $g end) \($r) \($v)"')
+          ask() { # <group> <resource[/sub]> <verb> -> yes|no
+            local g=$1 res=${2%%/*} sub=""
+            [[ $2 == */* ]] && sub=${2#*/}
+            [ "$g" = core ] && g=""
+            if [ -z "$g" ] || kubectl api-resources --api-group="$g" -o name | grep -qxF "$res.$g"; then
+              kubectl auth can-i "$3" "$res${g:+.$g}" ${sub:+--subresource "$sub"} -n "$ns" --as "$as" 2>/dev/null || true
+            else
+              # A group this cluster does not serve (metrics.k8s.io: kind has no metrics-server). kubectl
+              # resolves a resource through discovery, so it cannot name one; the same question goes as
+              # a SubjectAccessReview with the identity's own groups.
+              printf '{"apiVersion":"authorization.k8s.io/v1","kind":"SubjectAccessReview","spec":{"user":"%s","groups":["system:serviceaccounts","system:serviceaccounts:wardyn","system:authenticated"],"resourceAttributes":{"namespace":"%s","group":"%s","resource":"%s","subresource":"%s","verb":"%s"}}}' \
+                "$as" "$ns" "$g" "$res" "$sub" "$3" \
+                | kubectl create -f - -o jsonpath='{.status.allowed}' | sed 's/^true$/yes/; s/^false$/no/'
+            fi
+          }
+          fail=0 n=0
+          while read -r g r v; do
+            n=$((n + 1))
+            got=$(ask "$g" "$r" "$v")
+            echo "can-i $v $r ($g): $got"
+            [ "$got" = yes ] || fail=1
+          done <<<"$rules"
+          grep -qx 'core pods patch' <<<"$rules" || { echo "::error::the rendered Role has no pods patch"; fail=1; }
+          grep -qx 'agents.x-k8s.io sandboxes create' <<<"$rules" || { echo "::error::the rendered Role has no sandboxes create"; fail=1; }
+          for q in "agents.x-k8s.io sandboxes update" "agents.x-k8s.io sandboxes patch" "agents.x-k8s.io sandboxes watch" \
+                   "agents.x-k8s.io sandboxes deletecollection" "agents.x-k8s.io sandboxes/status update" "core pods update"; do
+            read -r g r v <<<"$q"
+            got=$(ask "$g" "$r" "$v")
+            echo "must not hold: can-i $v $r ($g): $got"
+            [ "$got" = no ] || fail=1
+          done
+          echo "$n rendered verbs asked"
+          [ "$n" -gt 0 ] && [ "$fail" = 0 ]
+      - name: Run k8s conformance with the agent-sandbox backend (make target)
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig-wardynd.yaml
+          WARDYN_TEST_K8S: "1"
+          WARDYN_TEST_K8S_AGENT_SANDBOX: "1"
+          WARDYN_K8S_NAMESPACE: wardyn-conformance
+          WARDYN_PROXY_IMAGE: wardyn/wardyn-proxy:kind-test
+          WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
+        run: make test-conformance-k8s
+      # A typo in the switch would skip every backend case and pass the suite on plain pods.
+      - name: The agent-sandbox cases ran and passed (a skip fails here)
+        run: |
+          set -euo pipefail
+          out=test/reports/go/conformance-k8s/test-output.json
+          fail=0
+          for t in TestAgentSandboxBackendIsReallyOn TestAgentSandboxNetworkPolicyFirst TestAgentSandboxSquatterPodIsRefused \
+                   TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission \
+                   TestAgentSandboxStagedSecretStarts; do
+            if grep -qF "\"Action\":\"pass\",\"Package\":\"github.com/cjohnstoniv/wardyn/test/conformance\",\"Test\":\"$t\"" "$out"; then
+              echo "passed: $t"
+            else
+              echo "::error::$t did not pass (skipped, renamed or absent)"; fail=1
+            fi
+          done
+          exit "$fail"
+      - name: Controller log and runs-namespace events (on failure)
+        if: failure()
+        run: |
+          kubectl -n agent-sandbox-system logs deployment/agent-sandbox-controller --tail=300 || true
+          kubectl -n wardyn-conformance get events --sort-by=.lastTimestamp | tail -n 100 || true
+          kubectl -n wardyn-conformance get sandboxes.agents.x-k8s.io,pods -o wide || true
+      - name: Upload conformance-k8s-agent-sandbox test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: conformance-k8s-agent-sandbox-test-reports
+          path: test/reports/go/conformance-k8s/**
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
@@ -1488,6 +1835,10 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1597,6 +1948,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1741,6 +2096,7 @@ jobs:
   #   - cgo build, vet and tests of the helper, its library and the guest agent, darwin-native tests included
   #   - the darwin runnerd build
   #   - the helper signed ad hoc with its one entitlement, read back with codesign
+  #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
@@ -1845,6 +2201,56 @@ jobs:
           codesign --verify --strict "$agent"
           grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+      # What a tools update pushes: a fresh agent build (the linker's ad hoc signature) signed by Wardyn's own
+      # signer with a throwaway self-signed cert this Mac does not trust, then checked by this Mac's codesign.
+      # TestSignProof makes the identity, writes the signed copy and the requirement it must read back, and runs
+      # the whole host signer, which must pick Wardyn's signer. Not a required check: read it on the train head.
+      - name: Sign the guest agent with Wardyn's signer and check it with codesign
+        id: wardynsign
+        if: ${{ !cancelled() }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$WARDYN_SIGN_PROOF_AGENT" ./cmd/wardyn-guest-agent
+          go test -count=1 -v -run '^TestSignProof$' ./internal/macvm/ | tee "$RUNNER_TEMP/sign-proof.out"
+          grep -q -- '^--- PASS: TestSignProof ' "$RUNNER_TEMP/sign-proof.out"
+          signed="$WARDYN_SIGN_PROOF_DIR/wardyn/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed"
+          dr="$(codesign -d -r- "$signed" 2>&1 | sed -n 's/^designated => //p')"
+          echo "designated => $dr"
+          [ "$dr" = "$(cat "$WARDYN_SIGN_PROOF_DIR/requirement.txt")" ]
+          info="$(codesign -dvvv "$signed" 2>&1)"
+          echo "$info"
+          grep -q 'Hash type=sha256 size=32' <<<"$info"
+          grep -q 'flags=0x0(none)' <<<"$info"
+          if grep -Eq 'adhoc|linker-signed' <<<"$info"; then echo "::error::the signed agent reads ad hoc or linker-signed"; exit 1; fi
+          # It starts: macOS kills a binary whose signature it refuses before flag parsing. Not a gate (exit 2 is -h's).
+          rc=0
+          "$signed" -h >/dev/null 2>&1 || rc=$?
+          echo "signed agent -h exit status: $rc"
+          if [ "$rc" -ge 128 ]; then echo "::warning::the signed agent was killed at start (exit $rc)"; fi
+      # The codesign fallback for real: a temporary keychain on the search list and the requirement as -r= text.
+      # It settles whether codesign signs with a self-signed identity this Mac does not trust. Either answer is a
+      # result, so it does not fail the job; the log says which.
+      - name: Sign the guest agent with the codesign fallback (result only)
+        if: ${{ !cancelled() && steps.wardynsign.outcome == 'success' }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -uo pipefail
+          rc=0
+          go test -count=1 -v -run '^TestSignProofCodesignFallback$' ./internal/macvm/ || rc=$?
+          echo "codesign fallback exit status: $rc"
+          if [ "$rc" -ne 0 ]; then
+            echo "::notice::the codesign fallback did not sign with an untrusted self-signed identity on this Mac"
+            exit 0
+          fi
+          signed="$WARDYN_SIGN_PROOF_DIR/codesign/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed" || echo "::warning::codesign --verify --strict refused the fallback's copy"
+          codesign -d -r- "$signed" 2>&1 || true
       # The release package asserts the same floor on what it ships (release.yml, runner-pkg).
       - name: Every darwin binary loads on macOS 26 (minos 26.0 or lower)
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
@@ -2267,14 +2673,17 @@ jobs:
             cache-trivy-
       # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
       # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
       - name: Install trivy 0.70.0 (pinned, checksum-verified)
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/trivy-bin"
           mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

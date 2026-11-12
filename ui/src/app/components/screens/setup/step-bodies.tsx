@@ -186,6 +186,7 @@ export function ReviewStep({
           the footer's "Finish setup" is this surface's one affirmative
           action. */}
       <SectionCard title={SETUP.FINISH_TITLE}>
+        <p className="mb-3 text-sm text-muted-foreground">{SETUP.FINISH_SWITCH_NOTE}</p>
         <Button variant="outline" size="sm" onClick={onSwitchToUser} disabled={switchDisabled}>
           {SETUP.FINISH_SWITCH}
         </Button>
@@ -193,9 +194,12 @@ export function ReviewStep({
 
       {/* #2847: the step's one Re-check is in the layout's header row. */}
       <p className="text-sm leading-relaxed text-muted-foreground">
-        Every setup check, in one place. {readiness.ready && readiness.llmReady
+        Every setup check, in one place.{" "}
+        {readiness.ready && readiness.llmReady
           ? "The essentials are ready — you can launch."
-          : "Not everything a first run needs is ready yet — review what's left."}
+          : readiness.ready
+            ? "Runs can launch: the barrier is ready. Agent runs also need a model provider; see Optional setup below."
+            : "Not everything a first run needs is ready yet — review what's left."}
       </p>
 
       {group("Blocking", "warning", blockers)}
@@ -295,10 +299,13 @@ export function useSiteConfigStep(
 export function WorkspacesStep({
   workspaces,
   loading,
+  error = false,
   onReload,
 }: {
   workspaces: Workspace[];
   loading: boolean;
+  /** The list read failed: say so, instead of reading as "none onboarded yet". */
+  error?: boolean;
   onReload: () => void;
 }) {
   // Onboarding is a workspace write — operator-only (see http.go).
@@ -316,6 +323,18 @@ export function WorkspacesStep({
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading workspaces…</p>
+      ) : error ? (
+        <div className="rounded-xl border border-dashed border-border p-6 text-center">
+          <p className="text-sm text-muted-foreground">Couldn&apos;t load workspaces.</p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <Button variant="outline" onClick={() => onReload()}>
+              Retry
+            </Button>
+            <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+              <Plus className="size-4" /> Add workspace
+            </Button>
+          </div>
+        </div>
       ) : workspaces.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-6 text-center">
           <p className="text-sm text-muted-foreground">No workspaces onboarded yet.</p>
@@ -405,7 +424,14 @@ export function DeploymentStep({
           <p className="text-sm text-muted-foreground">{PT.SINGLE_USER_BODY}</p>
           <p className="mt-3 text-xs text-muted-foreground">
             {PT.SINGLE_USER_SSO_NOTE_PREFIX}
-            <span className="font-mono">{PT.SINGLE_USER_SSO_NOTE_DOC}</span>
+            <a
+              href={PT.SINGLE_USER_SSO_NOTE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-info hover:underline"
+            >
+              {PT.SINGLE_USER_SSO_NOTE_DOC}
+            </a>
             {PT.SINGLE_USER_SSO_NOTE_SUFFIX}
           </p>
           {managePeopleLink}
@@ -427,9 +453,15 @@ export function DeploymentStep({
             <span className="font-mono">{PT.MULTI_USER_ROLES_VAR}</span>
             {PT.MULTI_USER_ROLES_SUFFIX}
           </p>
-          <Chip tone="success" dot>
-            {access?.provider ? `${PT.MULTI_USER_SSO_CHIP} · ${access.provider}` : PT.MULTI_USER_SSO_CHIP}
-          </Chip>
+          {accessState === "sso_unavailable" ? (
+            <Chip tone="warning" dot>
+              {PT.MULTI_USER_SSO_DOWN_CHIP}
+            </Chip>
+          ) : (
+            <Chip tone="success" dot>
+              {access?.provider ? `${PT.MULTI_USER_SSO_CHIP} · ${access.provider}` : PT.MULTI_USER_SSO_CHIP}
+            </Chip>
+          )}
         </div>
         <div className="my-3 border-t border-border" />
         <p className="text-sm text-muted-foreground">

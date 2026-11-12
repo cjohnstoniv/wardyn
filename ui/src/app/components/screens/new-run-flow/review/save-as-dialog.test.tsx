@@ -76,6 +76,20 @@ describe("SaveAsDialog", () => {
     expect(props.onOpenChange).not.toHaveBeenCalled();
   });
 
+  it("says a wall preset is chosen at each launch and is not saved, and saves none of it", async () => {
+    const { user, save } = setup({ intent: { ...INTENT, wall_preset: "sealed" } as RunIntent });
+    expect(screen.getByText("A wall preset is chosen at each launch, so it is not saved with the template.")).toBeVisible();
+    setField(screen.getByLabelText("Name"), "Nightly");
+    await user.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(JSON.stringify(sent(save))).not.toContain("wall_preset");
+  });
+
+  it("says nothing of a wall preset when the draft has none", () => {
+    setup();
+    expect(screen.queryByText(/wall preset/i)).toBeNull();
+  });
+
   it("offers Only me alone, with the plain helper, to a person who manages no group", () => {
     setup();
     const options = screen.getAllByRole("option").map((o) => o.textContent);

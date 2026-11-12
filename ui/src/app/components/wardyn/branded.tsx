@@ -19,6 +19,7 @@ import { CONSOLE_VIEW } from "./copy/console-view";
 import { asJson, wfetch } from "../../lib/api/core";
 import { isHexColour, monogram, productName, type Branding } from "../../lib/branding";
 import { BRAND_HEADER } from "../../lib/branding-copy";
+import { setTitleBrand } from "../../lib/console-title";
 
 // head: colours, tab icon and title (document.head); gate: the sign-in
 // lockup; bar: the top-bar wordmark; link: the header's Support link.
@@ -67,18 +68,23 @@ export function brandColourCSS(b: Branding): string | null {
 
 /**
  * The tab title a brand shows for the console's own: "Wardyn" -> the product
- * name, "Wardyn admin" -> "<name> admin" (the Admin view cue stays). Any other
- * title is left alone.
+ * name, "Wardyn admin" -> "<name> admin" (the Admin view cue stays), alone or
+ * after a page's "<page> - ". Any other title is left alone. A brand name can
+ * itself end in " - Wardyn" (an organisation named "Acme -"), so the result can
+ * look unbranded again: only the console's own titles are passed in (console-title.ts).
  */
 export function brandTitle(title: string, name: string): string {
-  return title === CONSOLE_VIEW.TITLE_USER || title === CONSOLE_VIEW.TITLE_ADMIN
-    ? name + title.slice(CONSOLE_VIEW.TITLE_USER.length)
-    : title;
+  const own = CONSOLE_VIEW.TITLE_USER;
+  for (const cue of [" admin", ""]) {
+    const from = own + cue;
+    if (title === from) return name + cue;
+    if (title.endsWith(` - ${from}`)) return title.slice(0, -from.length) + name + cue;
+  }
+  return title;
 }
 
 // Colours, tab icon and tab title while a brand is set; leaving restores all
-// three. The title is renamed wherever the console sets it (index.html, the
-// shell's view effect) by watching <head>, so those writers stay as they were.
+// three. The title is renamed through console-title.ts, its one writer.
 function BrandEffects({ brand }: { brand: Branding }) {
   const css = brandColourCSS(brand);
   React.useEffect(() => {
@@ -104,17 +110,8 @@ function BrandEffects({ brand }: { brand: Branding }) {
   }, [icon]);
   const name = productName(brand);
   React.useEffect(() => {
-    const rename = () => {
-      const next = brandTitle(document.title, name);
-      if (next !== document.title) document.title = next;
-    };
-    rename();
-    const watch = new MutationObserver(rename);
-    watch.observe(document.head, { childList: true, characterData: true, subtree: true });
-    return () => {
-      watch.disconnect();
-      if (document.title.startsWith(name)) document.title = CONSOLE_VIEW.TITLE_USER + document.title.slice(name.length);
-    };
+    setTitleBrand((title) => brandTitle(title, name));
+    return () => setTitleBrand(null);
   }, [name]);
   return null;
 }

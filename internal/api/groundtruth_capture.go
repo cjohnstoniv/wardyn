@@ -13,10 +13,16 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -93,13 +99,21 @@ func (s *Server) hostSensorCaveat(ctx context.Context) string {
 // terminal transition, that is the capture); `now` stands in for the end only
 // when UpdatedAt is before CreatedAt or in the future, so a mid-flight review
 // gets the NARROWER window, which fails silent rather than false.
-// Only the LATEST heartbeat is consulted (no new query shape), so this is a
+// With one sensor only its LATEST heartbeat is consulted (several node
+// sensors: see kernelWindowOnNode), so this is a
 // conservative detector: it fires when the newest beat falls inside the window
 // and never invents an anomaly. A per-window counter delta needs a
 // heartbeats-between-two-times query; add one if real drops go missed.
 func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmode.KernelWindow {
 	if s.cfg.Store == nil {
 		return recordmode.KernelWindow{}
+	}
+	rows, live, err := s.groundtruthNodeSensors(ctx)
+	if err != nil {
+		return recordmode.KernelWindow{} // which node's beat applies is unknown: fail silent
+	}
+	if live >= 2 {
+		return s.kernelWindowOnNode(ctx, run, rows)
 	}
 	status := s.ebpfGroundtruthStatus(ctx)
 	beat, ok := status["last_heartbeat"].(string)
@@ -110,11 +124,7 @@ func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmod
 	if err != nil {
 		return recordmode.KernelWindow{}
 	}
-	end := run.UpdatedAt
-	if now := s.cfg.Now().UTC(); end.Before(run.CreatedAt) || end.After(now) {
-		end = now
-	}
-	if at.Before(run.CreatedAt.Add(-time.Second)) || at.After(end.Add(time.Second)) {
+	if !s.beatInRunWindow(run, at) {
 		return recordmode.KernelWindow{}
 	}
 	// BOTH counters, because neither means anything alone: drops are
@@ -124,4 +134,64 @@ func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmod
 	dropped, _ := status["dropped_unmapped"].(uint64)
 	observed, _ := status["observed_total"].(uint64)
 	return recordmode.KernelWindow{Beat: true, DroppedUnmapped: dropped, ObservedTotal: observed}
+}
+
+// beatInRunWindow reports whether a heartbeat taken at at falls inside run's
+// capture window, as kernelWindow defines it.
+func (s *Server) beatInRunWindow(run types.AgentRun, at time.Time) bool {
+	end := run.UpdatedAt
+	if now := s.cfg.Now().UTC(); end.Before(run.CreatedAt) || end.After(now) {
+		end = now
+	}
+	return !at.Before(run.CreatedAt.Add(-time.Second)) && !at.After(end.Add(time.Second))
+}
+
+// kernelNodeEventWindow is how many of a run's newest kernel events kernelWindowOnNode reads to find its node.
+const kernelNodeEventWindow = 64
+
+// kernelEventsForNode is the run's newest kernel events. A store that pages reads only those rows;
+// the unpaged fallback reads the run's whole capture window, as before.
+func (s *Server) kernelEventsForNode(ctx context.Context, runID uuid.UUID) ([]types.AuditEvent, error) {
+	if pager, ok := s.cfg.Store.(store.Pager); ok {
+		return pager.QueryAuditEventsFilteredPage(ctx, &runID,
+			store.AuditFilter{ActionPrefix: groundtruth.KernelActionPrefix}, store.Page{Limit: kernelNodeEventWindow, Newest: true})
+	}
+	return s.cfg.Store.QueryAuditEvents(ctx, runID, maxCaptureAuditEvents)
+}
+
+// kernelWindowOnNode is kernelWindow with a sensor on each of several nodes:
+// the newest beat anywhere says nothing about the node the run was on, so the
+// window reads the beat of the node the run's own kernel events name
+// (data.node, the newest such event). A run with no kernel events, or one on
+// a node with no sensor row, gets the empty window, which fails silent rather
+// than false.
+func (s *Server) kernelWindowOnNode(ctx context.Context, run types.AgentRun, rows []store.GroundtruthSensor) recordmode.KernelWindow {
+	events, err := s.kernelEventsForNode(ctx, run.ID)
+	if err != nil {
+		return recordmode.KernelWindow{}
+	}
+	node, found := "", false
+	var newest time.Time
+	for _, ev := range events {
+		if !strings.HasPrefix(ev.Action, groundtruth.KernelActionPrefix) {
+			continue
+		}
+		var d struct {
+			Node string `json:"node"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil || d.Node == "" {
+			continue
+		}
+		if !found || ev.Time.After(newest) {
+			node, newest, found = d.Node, ev.Time, true
+		}
+	}
+	if !found {
+		return recordmode.KernelWindow{}
+	}
+	i := slices.IndexFunc(rows, func(g store.GroundtruthSensor) bool { return g.Node == node })
+	if i < 0 || !s.beatInRunWindow(run, rows[i].LastBeat) {
+		return recordmode.KernelWindow{}
+	}
+	return recordmode.KernelWindow{Beat: true, DroppedUnmapped: rows[i].DroppedUnmapped, ObservedTotal: rows[i].ObservedTotal}
 }

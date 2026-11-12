@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/google/uuid"
 )
 
@@ -72,6 +73,8 @@ type createRunLaunch struct {
 	mainDrive *mainDriveDecision
 	// signinImageUngranted is the fold's (runFold.signinImageUngranted).
 	signinImageUngranted bool
+	// machine is the fold's kept machine plan (runFold.machine).
+	machine *keptMachinePlan
 }
 
 // launch is what both doors hand finishCreateRunLaunch for a run the fold admitted: create, and the pool
@@ -85,7 +88,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
-		signinImageUngranted: f.signinImageUngranted,
+		signinImageUngranted: f.signinImageUngranted, machine: f.machine,
 	}
 }
 
@@ -156,6 +159,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			Policy:             l.spec,
 			FirstGitHubGrantID: l.gw.firstGitHubGrantID,
 			GitGrants:          l.gw.gitGrants,
+			GitPushWithheld:    l.gw.gitPushWithheld,
 			GitPATGrants:       l.gw.gitPATGrants,
 			SSHGrants:          l.gw.sshGrants,
 			Injections:         l.gw.injections,
@@ -189,6 +193,8 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			MainDrive:        l.mainDrive,
 			// SigninImageUngranted keeps a person's own desktop image (desktopSigninDispatch).
 			SigninImageUngranted: l.signinImageUngranted,
+			DesktopWindowAtStart: l.req.DesktopWindow == client.DesktopWindowAtStart,
+			Machine:              l.machine,
 		})
 	}
 }

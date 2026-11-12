@@ -248,11 +248,30 @@ func (r *Registry) RetireGlobalValue(id uuid.UUID, at time.Time) {
 	}
 }
 
+// SetDropGuard registers f to bracket every removal of a value from this registry (DropRunValue and Evict,
+// with that run's id; DropGlobalValue, with uuid.Nil: every run's corpus holds the globals). f runs before the
+// removal and returns the function that runs after it. Whatever vouches that a run is fully masked here
+// (maskmanifest's held manifest) uses the bracket to refuse to vouch from before the first until after the
+// second, so nothing reads "covered" while a value is going or gone. f must not call back into r.
+func (r *Registry) SetDropGuard(f func(runID uuid.UUID) (end func())) {
+	if r != nil {
+		r.dropGuard.Store(&f)
+	}
+}
+
+func (r *Registry) guardDrop(runID uuid.UUID) (end func()) {
+	if f := r.dropGuard.Load(); f != nil {
+		return (*f)(runID)
+	}
+	return func() {}
+}
+
 // DropGlobalValue forgets committed row id's value, current or retired.
 func (r *Registry) DropGlobalValue(id uuid.UUID) {
 	if r == nil {
 		return
 	}
+	defer r.guardDrop(uuid.Nil)()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.rows, id)
@@ -261,6 +280,16 @@ func (r *Registry) DropGlobalValue(id uuid.UUID) {
 
 // DropRunValue forgets one value of runID's per-run corpus.
 func (r *Registry) DropRunValue(runID uuid.UUID, value []byte) {
+	if r == nil {
+		return
+	}
+	defer r.guardDrop(runID)()
+	r.RemoveLocal(runID, value)
+}
+
+// RemoveLocal takes one value out of runID's per-run corpus in this process, as DropRunValue does but
+// without the drop guard: for a caller undoing its own AddLocal, which ended no coverage.
+func (r *Registry) RemoveLocal(runID uuid.UUID, value []byte) {
 	if r == nil {
 		return
 	}

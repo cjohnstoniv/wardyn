@@ -9,10 +9,12 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -65,6 +67,27 @@ type RunLeaser interface {
 	// row is RUNNING and still carries that outage mark with no stop recorded;
 	// a revive clears it.
 	MarkRunAgentStopped(ctx context.Context, id uuid.UUID, lostAt time.Time) error
+}
+
+// ForcedStopper is the forced end's surface, optional like store.Pager: the api layer asserts it at the call,
+// so the RunLeaser fakes need no change and a store without it never forces an end (migration 0276).
+type ForcedStopper interface {
+	// StopKeptRunForcedIf is StopKeptRunIf, and in the same statement stamps forced_stop_at. It answers the
+	// stamp the row now carries, for ClearForcedStop. applied is false when the mark or state changed.
+	StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (stamp time.Time, applied bool, err error)
+	// KeptHoldOffPassed answers, on the database's clock, whether run id's lost_at (fromLostAt) or ends_at
+	// plus after is at or before now(). False for a run that does not exist or has no such time.
+	KeptHoldOffPassed(ctx context.Context, id uuid.UUID, fromLostAt bool, after time.Duration) (bool, error)
+	// ListForcedStops lists the runs whose forced stop is not yet confirmed.
+	ListForcedStops(ctx context.Context) ([]ForcedStop, error)
+	// ClearForcedStop clears run id's mark, only while it still carries stamp (the one the caller read).
+	ClearForcedStop(ctx context.Context, id uuid.UUID, stamp time.Time) (bool, error)
+}
+
+// ForcedStop is a run with an unconfirmed forced stop, and the stamp its mark carries.
+type ForcedStop struct {
+	RunID uuid.UUID
+	At    time.Time
 }
 
 // EndedKept is the condition a write on a run kept by its OWN end (LostEnded)
@@ -189,6 +212,66 @@ func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, 
 		id, string(to), lostAt, string(lostReason), endsAt, to.IsTerminal())
 	if err != nil {
 		return false, fmt.Errorf("store: stop kept run if: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// StopKeptRunForcedIf — see ForcedStopper. It is StopKeptRunIf's UPDATE with the same SET and WHERE, plus the mark.
+func (s PG) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (time.Time, bool, error) {
+	var stamp time.Time
+	err := s.Pool.QueryRow(ctx, `
+		UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=CASE WHEN $6 THEN now() ELSE ended_at END, forced_stop_at=now()
+		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT DISTINCT FROM $3
+		  AND lost_reason=$4 AND ends_at IS NOT DISTINCT FROM $5
+		RETURNING forced_stop_at`,
+		id, string(to), lostAt, string(lostReason), endsAt, to.IsTerminal()).Scan(&stamp)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("store: stop kept run forced if: %w", err)
+	}
+	return stamp, true, nil
+}
+
+// KeptHoldOffPassed — see ForcedStopper. The time is the database's own, so no replica's clock decides it.
+func (s PG) KeptHoldOffPassed(ctx context.Context, id uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
+	var past bool
+	err := s.Pool.QueryRow(ctx, `
+		SELECT COALESCE((CASE WHEN $2 THEN lost_at ELSE ends_at END) + make_interval(secs => $3::float8) <= now(), false)
+		FROM agent_runs WHERE id=$1`, id, fromLostAt, after.Seconds()).Scan(&past)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: kept hold-off passed: %w", err)
+	}
+	return past, nil
+}
+
+// ListForcedStops — see ForcedStopper.
+func (s PG) ListForcedStops(ctx context.Context) ([]ForcedStop, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, forced_stop_at FROM agent_runs WHERE forced_stop_at IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list forced stops: %w", err)
+	}
+	defer rows.Close()
+	var out []ForcedStop
+	for rows.Next() {
+		var f ForcedStop
+		if err := rows.Scan(&f.RunID, &f.At); err != nil {
+			return nil, fmt.Errorf("store: list forced stops: %w", err)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// ClearForcedStop — see ForcedStopper.
+func (s PG) ClearForcedStop(ctx context.Context, id uuid.UUID, stamp time.Time) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET forced_stop_at=NULL WHERE id=$1 AND forced_stop_at=$2`, id, stamp)
+	if err != nil {
+		return false, fmt.Errorf("store: clear forced stop: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }

@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	dockerclient "github.com/moby/moby/client"
 
@@ -371,6 +373,8 @@ func TestLinuxVMSandbox(t *testing.T) {
 	t.Logf("the relay counted %d IPv6 frames dropped, %d of them before the IPv6 probe", ipv6Drops(decisions(t, cli, spec.RunID)), before)
 	// The proxy's rows: the port rule refused port 22 (the run's proxy is marked vm, as nothing else
 	// turns that rule on here), the relay reported what only it sees, and every allow is the origin.
+	// A DNS row records what the relay told the guest, not traffic: the relay answers every well-spelt
+	// name until its table is full, so here each is dns:answered, with no relay flow.
 	want := map[string]bool{"policy:port": false, "policy:default-deny": false, "vmnet:literal-ip": false, "vmnet:udp": false, "vmnet:dropped-frame": false}
 	var rows []map[string]any
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(time.Second) {
@@ -401,6 +405,10 @@ func TestLinuxVMSandbox(t *testing.T) {
 		flow, _ := r["flow"].(string)
 		t.Logf("%v %s host=%q port=%v flow=%q repeat=%v cause=%q", r["decision"], src, host, req["Port"], flow, r["repeat"], r["cause"])
 		switch {
+		case strings.HasPrefix(src, "dns:"):
+			if src != "dns:answered" || flow != "" {
+				t.Errorf("DNS row %v: want dns:answered with no flow", r)
+			}
 		case r["decision"] == "allow" && host != "origin.test":
 			t.Errorf("allow row for %q: only the origin is allowed", host)
 		case r["decision"] == "deny" && !strings.HasPrefix(src, "vmnet:") && flow == "":
@@ -473,6 +481,35 @@ func TestLinuxVMSandbox(t *testing.T) {
 		}
 	})
 
+	// The -L and UI-relay door: the guest has no socat, so a forward execs the agent's own forward mode,
+	// which dials 127.0.0.1:<port> in the guest and takes nothing else.
+	t.Run("ForwardDialsGuestLoopbackOnly", func(t *testing.T) {
+		const agent = guestagent.LinuxAgentPath
+		for _, arg := range []string{"127.0.0.1:7777", "::1", "127.0.0.2", "0.0.0.0", "localhost", "0", "65536", "http"} {
+			if code, o := run(t, d, sb.Ref, agent+" forward "+arg+" </dev/null"); code != 2 {
+				t.Errorf("forward %q = %d %q, want 2 (refused before any dial)", arg, code, o)
+			}
+		}
+		if code, o := run(t, d, sb.Ref, agent+" forward 7778 </dev/null"); code != 1 {
+			t.Errorf("forward to a port with no listener = %d %q, want 1", code, o)
+		}
+		// One-shot listener on the guest's loopback, as the agent user: reads a line, answers, closes.
+		const listener = `perl -e 'use Socket; socket(S,PF_INET,SOCK_STREAM,0); setsockopt(S,SOL_SOCKET,SO_REUSEADDR,1); ` +
+			`bind(S,sockaddr_in(7777,inet_aton("127.0.0.1"))) or die; listen(S,5); accept(C,S); select(C); $|=1; ` +
+			`my $l=<C>; print C "echo:$l"; close C'`
+		// A listener on 127.0.0.2 alone is not reached by the same port: forward dials 127.0.0.1 only.
+		const otherLoopback = `perl -e 'use Socket; alarm 20; socket(S,PF_INET,SOCK_STREAM,0); setsockopt(S,SOL_SOCKET,SO_REUSEADDR,1); ` +
+			`bind(S,sockaddr_in(7779,inet_aton("127.0.0.2"))) or die; listen(S,5); accept(C,S); print C "reached"; close C'`
+		other := "(" + otherLoopback + " >/dev/null 2>&1 &); sleep 1; " + agent + " forward 7779 </dev/null"
+		if code, o := run(t, d, sb.Ref, other); code != 1 || strings.Contains(o, "reached") {
+			t.Errorf("forward with a listener on 127.0.0.2 only = %d %q, want 1 and no reached", code, o)
+		}
+		script := "(" + listener + " >/dev/null 2>&1 &); sleep 1; printf 'ping\\n' | " + agent + " forward 7777"
+		if code, o := run(t, d, sb.Ref, script); code != 0 || !strings.Contains(o, "echo:ping") {
+			t.Errorf("forward to the guest's loopback listener = %d %q, want 0 and echo:ping", code, o)
+		}
+	})
+
 	// Stop, then nothing of the run is left.
 	if err := d.StopSandbox(ctx, sb.Ref); err != nil {
 		t.Fatal(err)
@@ -488,4 +525,422 @@ func TestLinuxVMSandbox(t *testing.T) {
 	if len(list.Items) != 0 {
 		t.Fatalf("teardown left %d containers", len(list.Items))
 	}
+}
+
+// asAgentContainer runs script in a container as the image agent's uid, with dir at /d: what a container
+// run on the same drive is, and writes as. It returns the exit code.
+func asAgentContainer(t *testing.T, cli *dockerclient.Client, dir, script string) int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
+		Name:       "wardyn-vmconf-agent-" + uuid.NewString()[:8],
+		Config:     &container.Config{Image: "busybox:latest", User: "1000:1000", Cmd: []string{"sh", "-c", script}},
+		HostConfig: &container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: dir, Target: "/d"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, dockerclient.ContainerRemoveOptions{Force: true})
+	}()
+	if _, err := cli.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	wait := cli.ContainerWait(ctx, created.ID, dockerclient.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	select {
+	case res := <-wait.Result:
+		return res.StatusCode
+	case werr := <-wait.Error:
+		t.Fatal(werr)
+	}
+	return -1
+}
+
+// inContainer runs argv in a running container and returns its exit code.
+func inContainer(t *testing.T, cli *dockerclient.Client, name string, argv ...string) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	created, err := cli.ExecCreate(ctx, name, dockerclient.ExecCreateOptions{Cmd: argv})
+	if err != nil {
+		t.Fatalf("exec %v in %s: %v", argv, name, err)
+	}
+	if _, err := cli.ExecStart(ctx, created.ID, dockerclient.ExecStartOptions{}); err != nil {
+		t.Fatalf("exec %v in %s: %v", argv, name, err)
+	}
+	for {
+		insp, err := cli.ExecInspect(ctx, created.ID, dockerclient.ExecInspectOptions{})
+		if err != nil {
+			t.Fatalf("exec %v in %s: %v", argv, name, err)
+		}
+		if !insp.Running {
+			return insp.ExitCode
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// startGuest starts script in the guest and returns a function that waits for its end and its exit code.
+func startGuest(t *testing.T, d *docker.Driver, ref, script string) func() int {
+	t.Helper()
+	es, err := d.ExecStream(context.Background(), ref, runner.ExecSpec{Argv: []string{"bash", "-c", script}})
+	if err != nil {
+		t.Fatalf("exec %q: %v", script, err)
+	}
+	_ = es.Stdin.Close()
+	return func() int {
+		t.Helper()
+		done := make(chan struct{})
+		go func() { _, _ = io.Copy(io.Discard, es.Stderr); close(done) }()
+		_, _ = io.Copy(io.Discard, es.Stdout)
+		<-done
+		code, err := es.Wait()
+		if err != nil {
+			t.Fatalf("exec %q wait: %v", script, err)
+		}
+		return code
+	}
+}
+
+// seenWithin polls script in the guest until it exits 0 and returns how long that took: an upper
+// bound, since each poll is a round trip of its own. Never seeing it within 30 seconds fails the test.
+func seenWithin(t *testing.T, d *docker.Driver, ref, script string) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for time.Since(start) < 30*time.Second {
+		if code, _ := run(t, d, ref, script); code == 0 {
+			return time.Since(start)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("not seen in the other VM within 30s: %s", script)
+	return 0
+}
+
+// A drive bound to the runner in a real VM: the share is the person's home and nothing else, a
+// read-only drive stays read-only (under a submount too), and two VMs share one drive. The hard link
+// is the known residual: a link planted on the host inside a home reaches what it links to, as it
+// does in a container, because the walk stops at names and a hard link has no name to refuse. The
+// "two VMs on one share" line is the measurement the docs state.
+func TestLinuxVMDrives(t *testing.T) {
+	qemuImage, guestImage, proxyImage := os.Getenv("WARDYN_TEST_VM_QEMU_IMAGE"), os.Getenv("WARDYN_TEST_VM_GUEST_IMAGE"), os.Getenv("WARDYN_TEST_VM_PROXY_IMAGE")
+	if qemuImage == "" || guestImage == "" || proxyImage == "" {
+		t.Skip("WARDYN_TEST_VM_QEMU_IMAGE, WARDYN_TEST_VM_GUEST_IMAGE and WARDYN_TEST_VM_PROXY_IMAGE not set")
+	}
+	ctx := context.Background()
+	cli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	upNet := "wardyn-vmconf-up-" + uuid.NewString()[:8]
+	if _, err := cli.NetworkCreate(ctx, upNet, dockerclient.NetworkCreateOptions{Driver: "bridge", Internal: true,
+		IPAM: &network.IPAM{Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix(upSubnet)}}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = cli.NetworkRemove(context.Background(), upNet, dockerclient.NetworkRemoveOptions{}) })
+
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	share, outside := filepath.Join(base, "share"), filepath.Join(base, "outside")
+	alice, team, bob := filepath.Join(share, "alice"), filepath.Join(share, "team"), filepath.Join(share, "bob")
+	sub := filepath.Join(team, "sub")
+	for _, dir := range []string{alice, team, bob, outside, sub} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const bobSecret, outsideSecret = "bob-secret-marker", "outside-secret-marker"
+	for path, body := range map[string]string{
+		filepath.Join(bob, "secret"):     bobSecret + "\n",
+		filepath.Join(outside, "secret"): outsideSecret + "\n",
+		filepath.Join(team, "file"):      "team file\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Planted on the host, as someone with a shell on the share could: links out of the home, and a
+	// hard link at a sibling's file.
+	for link, to := range map[string]string{
+		filepath.Join(alice, "out-abs"): filepath.Join(outside, "secret"),
+		filepath.Join(alice, "out-rel"): "../bob/secret",
+		filepath.Join(share, "carol"):   bob,
+		filepath.Join(share, "dave"):    outside,
+	} {
+		if err := os.Symlink(to, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Link(filepath.Join(bob, "secret"), filepath.Join(alice, "hard")); err != nil {
+		t.Fatal(err)
+	}
+	// A filesystem mounted inside the read-only home, which only the runner's host can put there. A
+	// hosted runner has passwordless sudo; elsewhere this one case is skipped, and CI never skips it.
+	submount := true
+	if b, err := exec.Command("sudo", "-n", "mount", "-t", "tmpfs", "-o", "mode=0777,size=1m", "tmpfs", sub).CombinedOutput(); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("mount the submount: %v %s", err, b)
+		}
+		t.Logf("no submount case: %v %s", err, b)
+		submount = false
+	} else {
+		t.Cleanup(func() { _ = exec.Command("sudo", "-n", "umount", "-l", sub).Run() })
+		if err := os.WriteFile(filepath.Join(sub, "file"), []byte("submount file\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d, err := docker.New(docker.Config{ProxyImage: proxyImage, InternalNetwork: upNet, UserDriveHostRoots: []string{share}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.MkdirTemp("", "wvm") // short: unix socket paths are bounded
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(state) })
+	vc, err := d.ProbeVM(ctx, docker.VMConfig{StateDir: state, QEMUImage: qemuImage, CPUModel: cmp.Or(os.Getenv("WARDYN_TEST_VM_CPU_MODEL"), "Haswell-v4")})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !vc.Virtiofs {
+		t.Fatalf("probe found %+v", vc)
+	}
+	if err := d.EnableVM(&vc); err != nil {
+		t.Fatal(err)
+	}
+
+	drive := func(home, target string, readOnly bool) types.DriveMount {
+		return types.DriveMount{DriveID: uuid.New(), Backend: types.DriveBackendHostPath, ObjectName: filepath.Join(share, home), HostRoot: share,
+			DriveName: "conformance-share", HomeName: home, Target: target, ReadOnly: readOnly}
+	}
+	spec := func(drives ...types.DriveMount) runner.SandboxSpec {
+		return runner.SandboxSpec{
+			RunID: uuid.New(), Image: guestImage, MachineKind: types.MachineLinuxVM, ConfinementClass: types.CC1,
+			ProxyConfig: runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080", Policy: types.RunPolicySpec{
+				AllowedDomains: []string{"origin.test"}, FirstUseApproval: types.FirstUseAlwaysDeny, MinConfinementClass: types.CC1}},
+			Resources: runner.Resources{CPUMillis: 2000, MemoryMiB: 2048},
+			Drives:    drives, ExecOutput: &lockedBuffer{},
+		}
+	}
+	boot := func(s runner.SandboxSpec) string {
+		t.Helper()
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Minute) // a first image conversion included
+		defer cancel()
+		sb, err := d.CreateSandbox(cctx, s)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		t.Cleanup(func() { _ = d.KillSandbox(context.Background(), sb.Ref) })
+		return sb.Ref
+	}
+
+	// A home that is a link at a sibling's home, or out of the drive's root, never starts.
+	for _, home := range []string{"carol", "dave"} {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		sb, err := d.CreateSandbox(cctx, spec(drive(home, runner.DriveTarget, false)))
+		cancel()
+		if err == nil {
+			_ = d.KillSandbox(context.Background(), sb.Ref)
+		}
+		if err == nil || !strings.Contains(err.Error(), "denied user drive") {
+			t.Fatalf("a home linked out (%s): create = %v, want denied user drive", home, err)
+		}
+	}
+
+	const rw, ro = runner.DriveTarget, runner.SharedRoot + "/team"
+	specA := spec(drive("alice", rw, false), drive("team", ro, true))
+	a := boot(specA)
+
+	// The share's container holds the home it serves and no more, in the mode the drive has.
+	for n := range 2 {
+		name := fmt.Sprintf("wardyn-vmfs-%s-%d", specA.RunID, n)
+		fs, err := cli.ContainerInspect(ctx, name, dockerclient.ContainerInspectOptions{})
+		if err != nil {
+			t.Fatalf("the VM's share %d: %v", n, err)
+		}
+		cmdline := strings.Join(fs.Container.Config.Cmd, " ")
+		for _, m := range fs.Container.HostConfig.Mounts {
+			if m.Target != "/share" {
+				continue
+			}
+			switch m.Source {
+			case alice:
+				if m.ReadOnly || strings.Contains(cmdline, "--readonly") {
+					t.Fatalf("the writable home's share: %+v, %s", m, cmdline)
+				}
+				if code := inContainer(t, cli, name, "touch", "/share/from-the-share"); code != 0 {
+					t.Fatalf("a write from the writable share's own container = %d: this probe proves nothing", code)
+				}
+			case team:
+				if !m.ReadOnly || !strings.Contains(cmdline, "--readonly") {
+					t.Fatalf("the read-only home's share: %+v, %s", m, cmdline)
+				}
+				// Below the guest: the bind itself refuses a write, whatever a guest could ask.
+				paths := []string{"/share/nope"}
+				if submount {
+					paths = append(paths, "/share/sub/nope")
+				}
+				for _, p := range paths {
+					if code := inContainer(t, cli, name, "touch", p); code == 0 {
+						t.Errorf("the read-only share's bind took a write at %s", p)
+					}
+				}
+			default:
+				t.Fatalf("the share binds %s, which is neither home", m.Source)
+			}
+		}
+	}
+
+	// The read-only drive in the guest: read, never written, by any route.
+	if code, o := run(t, d, a, `while read -r _ t _ o _; do [ "$t" = "`+ro+`" ] && echo "$o"; done </proc/mounts; true`); code != 0 ||
+		!strings.HasPrefix(o, "ro,") || !strings.Contains(o, "nosuid") || !strings.Contains(o, "nodev") {
+		t.Fatalf("the read-only drive's guest mount = %d %q", code, o)
+	}
+	if code, o := run(t, d, a, "cat "+ro+"/file"); code != 0 || !strings.Contains(o, "team file") {
+		t.Fatalf("reading the read-only drive = %d %q", code, o)
+	}
+	writes := []string{"touch " + ro + "/nope", "echo x >> " + ro + "/file", "rm " + ro + "/file", "mkdir " + ro + "/nope.d"}
+	if submount {
+		if code, o := run(t, d, a, "cat "+ro+"/sub/file"); code != 0 || !strings.Contains(o, "submount file") {
+			t.Fatalf("reading the submount in the guest = %d %q: its write refusal would prove nothing", code, o)
+		}
+		writes = append(writes, "touch "+ro+"/sub/nope", "echo x >> "+ro+"/sub/file")
+	}
+	for _, script := range writes {
+		if code, o := run(t, d, a, script); code == 0 {
+			t.Errorf("%q on a read-only drive succeeded: %q", script, o)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(team, "file")); err != nil || string(b) != "team file\n" {
+		t.Fatalf("the read-only drive's file on the host: %q %v", b, err)
+	}
+	for _, p := range []string{filepath.Join(team, "nope"), filepath.Join(team, "nope.d"), filepath.Join(sub, "nope")} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the read-only drive took a write: %s: %v", p, err)
+		}
+	}
+
+	// The writable drive: a write lands in the home, as the runner's user.
+	if code, o := run(t, d, a, "echo from-the-guest > "+rw+"/made"); code != 0 {
+		t.Fatalf("a write to the writable drive = %d %q", code, o)
+	}
+	fi, err := os.Stat(filepath.Join(alice, "made"))
+	if err != nil {
+		t.Fatalf("the guest's write on the host: %v", err)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != vc.UID || int(st.Gid) != vc.GID {
+		t.Fatalf("the guest's write is not the runner's %d:%d: %+v", vc.UID, vc.GID, fi.Sys())
+	}
+
+	// Out of the share: a link's target is read in the guest, so it names nothing on the host.
+	for name, script := range map[string]string{
+		"an absolute link planted on the host": "cat " + rw + "/out-abs",
+		"a link at a sibling's home":           "cat " + rw + "/out-rel",
+		"a walk up":                            "cat " + rw + "/../bob/secret; ls -a " + rw + "/..",
+		"a link the guest made":                "ln -s ../bob/secret " + rw + "/guest-link; cat " + rw + "/guest-link",
+		"a link the guest made at a host path": "ln -s " + filepath.Join(bob, "secret") + " " + rw + "/guest-abs; cat " + rw + "/guest-abs",
+	} {
+		_, o := run(t, d, a, script)
+		if strings.Contains(o, bobSecret) || strings.Contains(o, outsideSecret) || strings.Contains(o, "bob\n") {
+			t.Errorf("%s reached outside the share: %q", name, o)
+		}
+	}
+	// The only way the sibling's bytes are in this home is the hard link.
+	if code, o := run(t, d, a, "grep -rlsF "+bobSecret+" "+rw+" "+ro); code != 0 || strings.TrimSpace(o) != rw+"/hard" {
+		t.Errorf("a sweep of the guest's drives for the sibling's secret = %d %q, want only the hard link", code, o)
+	}
+	// The residual, pinned so a change to it is seen: a hard link planted on the host is that file.
+	if code, o := run(t, d, a, "cat "+rw+"/hard && echo via-hard >> "+rw+"/hard"); code != 0 || !strings.Contains(o, bobSecret) {
+		t.Errorf("the hard link planted on the host = %d %q, want it to read and write through, as in a container", code, o)
+	}
+	if b, err := os.ReadFile(filepath.Join(bob, "secret")); err != nil || !strings.Contains(string(b), "via-hard") {
+		t.Errorf("the write through the hard link on the host: %q %v", b, err)
+	}
+
+	// A container and a VM on one drive, by what the runner's uid is. Equal to the image agent's they
+	// are one user; otherwise each reads what the other wrote and neither can change it. A hosted
+	// runner has the second, so the first is proved only on a host whose runner is uid 1000.
+	sameUser := vc.UID == 1000
+	if code := asAgentContainer(t, cli, alice, "echo from-a-container > /d/from-container"); code != 0 {
+		t.Fatalf("a container's write to the drive = %d", code)
+	}
+	if code, o := run(t, d, a, "cat "+rw+"/from-container"); code != 0 || !strings.Contains(o, "from-a-container") {
+		t.Errorf("the VM reading a container's write = %d %q", code, o)
+	}
+	vmWrites, _ := run(t, d, a, "echo x >> "+rw+"/from-container")
+	containerWrites := asAgentContainer(t, cli, alice, "echo x >> /d/made")
+	if (vmWrites == 0) != sameUser || (containerWrites == 0) != sameUser {
+		t.Errorf("runner uid %d: the VM changing a container's file = %d, a container changing the VM's = %d", vc.UID, vmWrites, containerWrites)
+	}
+	t.Logf("a container and a VM on one share: runner uid %d, VM changes a container's file: %d, container changes the VM's: %d", vc.UID, vmWrites, containerWrites)
+
+	// Two VMs on one share.
+	b := boot(spec(drive("alice", rw, false)))
+	if code, o := run(t, d, a, "echo one > "+rw+"/new"); code != 0 {
+		t.Fatalf("a write in the first VM = %d %q", code, o)
+	}
+	newFile := seenWithin(t, d, b, "grep -q one "+rw+"/new")
+	if code, o := run(t, d, b, "cat "+rw+"/new; echo two > "+rw+"/from-b"); code != 0 {
+		t.Fatalf("the second VM on the share = %d %q", code, o)
+	}
+	otherWay := seenWithin(t, d, a, "grep -q two "+rw+"/from-b")
+	// The second VM has the file open in its cache by now: an overwrite, then a delete.
+	if code, o := run(t, d, a, "echo edited > "+rw+"/new"); code != 0 {
+		t.Fatalf("an overwrite in the first VM = %d %q", code, o)
+	}
+	overwrite := seenWithin(t, d, b, "grep -q edited "+rw+"/new")
+	if code, o := run(t, d, a, "rm "+rw+"/new"); code != 0 {
+		t.Fatalf("a delete in the first VM = %d %q", code, o)
+	}
+	deleted := seenWithin(t, d, b, "! test -e "+rw+"/new")
+
+	// Both append at once: two containers on one folder lose no line.
+	const lines = 500
+	appendAll := func(who string) string {
+		return fmt.Sprintf("for i in $(seq %d); do echo %s$i >> %s/appended; done", lines, who, rw)
+	}
+	waitA, waitB := startGuest(t, d, a, appendAll("a")), startGuest(t, d, b, appendAll("b"))
+	if ca, cb := waitA(), waitB(); ca != 0 || cb != 0 {
+		t.Fatalf("appending from both VMs = %d, %d", ca, cb)
+	}
+	appended, err := os.ReadFile(filepath.Join(alice, "appended"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotLines := strings.Count(string(appended), "\n")
+	if gotLines != 2*lines {
+		t.Errorf("two VMs appending %d lines each left %d lines", lines, gotLines)
+	}
+
+	// A lock: the first VM holds a flock. Its own second process is the control. On one kernel, as two
+	// containers on a folder are, the others would be refused too; whether they are is the measurement.
+	hold := startGuest(t, d, a, "flock "+rw+"/lock bash -c 'touch "+rw+"/held; until test -e "+rw+"/release; do sleep 0.2; done'")
+	seenWithin(t, d, a, "test -e "+rw+"/held")
+	if code, _ := run(t, d, a, "flock -n "+rw+"/lock true"); code == 0 {
+		t.Fatal("a second process in the VM that holds the flock got it: the lock proves nothing")
+	}
+	otherVMLock, _ := run(t, d, b, "flock -n "+rw+"/lock true")
+	lockFile, err := os.Open(filepath.Join(alice, "lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostLockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	_ = lockFile.Close()
+	if code, o := run(t, d, a, "touch "+rw+"/release"); code != 0 {
+		t.Fatalf("releasing the holder = %d %q", code, o)
+	}
+	if code := hold(); code != 0 {
+		t.Fatalf("the flock holder = %d", code)
+	}
+	t.Logf("two VMs on one share: new file seen in %v (other way %v), overwrite seen in %v, delete seen in %v; "+
+		"%d of %d lines kept when both append; flock held in one VM: other VM's try exit %d (nonzero = refused), host's try %v (nil = not refused)",
+		newFile, otherWay, overwrite, deleted, gotLines, 2*lines, otherVMLock, hostLockErr)
 }

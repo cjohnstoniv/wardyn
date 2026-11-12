@@ -67,6 +67,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 const (
@@ -346,15 +347,18 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
-	// After the ownership check (a foreign caller learns nothing), before any cookie. An inbound app is a background run's one door.
-	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil && !s.uiAppIsInbound(r.Context(), runID, app) {
-		s.uiRefuseBackground(w, r, rf, runID, app, ta)
+	// After the ownership check (a foreign caller learns nothing), before any cookie. An inbound app is a background
+	// run's one door for an app; the watch door's ticket, on the built-in desktop alone, answers to its own checks.
+	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil && s.uiBackgroundDoorRefused(w, r, rf, run, app, ta) {
 		return
 	}
 	// superAdmin is true past this point only on the admin's own run or an
 	// operator-owned one, so the governance exemption below cannot reach a
-	// person's run.
-	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseUIAppsDenied(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
+	// person's run. The sign-in display and a declared noVNC desktop answer to
+	// deny_interactive too, as a VM's desktop does (uiEnterDesktop, which keeps
+	// its own door); any other declared app is deny_ui_apps' alone.
+	rt := r.WithContext(withTicketActor(r.Context(), ta))
+	if ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
@@ -381,13 +385,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
-	declared, found := types.UIApp{}, false
-	for _, a := range apps {
-		if a.Name == app {
-			declared, found = a, true
-			break
-		}
-	}
+	declared, found := uiDeclaredApp(apps, app)
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))
@@ -405,6 +403,16 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		data["inbound"], data["caller"] = true, sess.Caller // the entry that admitted them, as their inbound.allow rows name it
 	}
 	s.startUISession(w, r, run, ta, sess, data, declared.PathOrRoot(), redirectStatus)
+}
+
+// uiDeclaredApp finds the run's declared UI app named app.
+func uiDeclaredApp(apps []types.UIApp, app string) (types.UIApp, bool) {
+	for _, a := range apps {
+		if a.Name == app {
+			return a, true
+		}
+	}
+	return types.UIApp{}, false
 }
 
 // relay
@@ -455,9 +463,8 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	// exactly like the decision-ingest and attach keepalives: a human reading
 	// code in an editor is not idle, and the reaper must not stop the run under
 	// them.
-	// "" is never ruleSourceCredentialReauthTimeout: a human relaying UI traffic
-	// is always real presence, so this touch is never excluded.
-	if s.shouldTouch(sess.Run, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
+	// A human relaying UI traffic is always real presence, so only the debounce applies.
+	if s.touchDue(sess.Run) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(r.Context(), sess.Run)
 	}
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
@@ -712,6 +719,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// Fresh run state on EVERY connection (not just at enter): a killed or
 	// stopped run must stop serving, and this is the cheapest place that sees
 	// every new connection.
+	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
 		return nil, uiFail(ctx, http.StatusNotFound, reasonRunNotFound, "run not found")
@@ -723,6 +731,13 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if runIsKept(run) {
 		return nil, uiFail(ctx, http.StatusConflict, reasonUIGatewayRunKept, "run has ended; the UI app is gone")
 	}
+	// A macOS VM's loopback also holds Screen Sharing (5900-5909): the desktop door, which the window's
+	// session and recording accounting covers. Refused here, before any launcher probe, relay exec or
+	// ui.open row, rather than left to the guest agent's own refusal.
+	if run.MachineKind.IsMacOSVM() && guestagent.MacScreenSharingPort(sess.Port) {
+		return nil, uiFail(ctx, http.StatusForbidden, reasonUIGatewayAppNotDeclared,
+			fmt.Sprintf("port %d is the macOS VM's Screen Sharing and can't be a UI app; open the run's window instead", sess.Port))
+	}
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is
 	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
@@ -730,7 +745,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
 	sess.SandboxRef = run.SandboxRef
-	s.markUIReasserted(sess, s.cfg.Now())
+	s.markUIReasserted(sess, s.cfg.Now(), gen)
 	// A paused run is thawed before the execs below (run_pause.go).
 	if err := s.thawForExec(ctx, run, uiActorType(sess), sess.Principal, "presence"); err != nil {
 		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayResumeFailed, "run is paused and could not be resumed; try again")
@@ -765,7 +780,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	}
 
 	execSess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", sess.Port)},
+		Argv: sshRelayArgv(run.MachineKind, sess.Port),
 	})
 	if err != nil {
 		stopSignIn()
@@ -840,7 +855,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		seedPolls = uiEnsureWaitSecs * 2
 	}
 	exec, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port, seedPolls)},
+		Argv: []string{"sh", "-c", uiLauncherScriptFor(run.MachineKind, launcher, sess.Port, seedPolls)},
 	})
 	if err != nil {
 		return uiExecFailure(ctx, reasonUIGatewayLauncherExecFailed, "start ui app launcher", err)
@@ -898,7 +913,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 	}
 }
 
-// uiLauncherScript is the in-sandbox probe-launch-poll cycle. Both
+// uiLauncherScriptFor is the in-sandbox probe-launch-poll cycle. Both
 // interpolations are policy-validated (a lower-case slug and an integer port,
 // validateUIApps), so neither can carry a shell metacharacter; they are quoted
 // anyway.
@@ -914,16 +929,26 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 // sandbox's WARDYN_INTERACTIVE_START is agent, set from the run's interactive_start,
 // which the run row does not keep) starts no server, so it answers at once.
 // After the wait an application run (its env says so) answers 6, not 3.
-func uiLauncherScript(launcher string, port, seedPolls int) string {
-	return fmt.Sprintf(`p=%d
-b='%s'
-socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
+//
+// The listening check is the machine kind's: socat in a container, the guest agent's forward -probe
+// in a VM, which has no socat.
+func uiLauncherScriptFor(kind types.MachineKind, launcher string, port, seedPolls int) string {
+	probe := `socat -u /dev/null "TCP:127.0.0.1:$p"`
+	switch kind {
+	case types.MachineLinuxVM:
+		probe = "'" + guestagent.LinuxAgentPath + `' forward -probe "$p"`
+	case types.MachineMacOSVM:
+		probe = "'" + guestagent.MacAgentBinaryPath + `' forward -probe "$p"`
+	}
+	return fmt.Sprintf(`p=%[1]d
+b='%[2]s'
+%[5]s >/dev/null 2>&1 && exit 0
 if ! [ -x "$b" ]; then
   [ "${WARDYN_INTERACTIVE_START:-}" = agent ] && exit 3
   i=0
-  while [ "$i" -lt %d ]; do
+  while [ "$i" -lt %[3]d ]; do
     sleep 0.5
-    socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
+    %[5]s >/dev/null 2>&1 && exit 0
     i=$((i+1))
   done
   [ "${WARDYN_APPLICATION_RUN:-}" = 1 ] && exit 6
@@ -931,13 +956,13 @@ if ! [ -x "$b" ]; then
 fi
 "$b" >/dev/null 2>&1 </dev/null &
 i=0
-while [ "$i" -lt %d ]; do
+while [ "$i" -lt %[4]d ]; do
   sleep 0.5
-  socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 5
+  %[5]s >/dev/null 2>&1 && exit 5
   i=$((i+1))
 done
 exit 4
-`, port, launcher, seedPolls, uiEnsureWaitSecs*2)
+`, port, launcher, seedPolls, uiEnsureWaitSecs*2, probe)
 }
 
 func (s *Server) uiAppReady(key string) bool {

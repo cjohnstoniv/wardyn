@@ -18,7 +18,7 @@ import type { Invitation } from "../../../lib/types/service-identities";
 import { Button } from "../../ui/button";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { INVITATIONS as T, inWords, lifetimeWords } from "../../wardyn/copy/service-tokens";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { TokenDialog } from "./token-dialog";
 
 // The reasons that mean the invitation is no longer the person's to claim.
@@ -36,6 +36,7 @@ function loadFailure(e: unknown): Load {
 
 export function InvitationsCard() {
   const [state, setState] = React.useState<Load>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [items, setItems] = React.useState<Invitation[]>([]);
   // The names of the person's own tokens, for the one an invitation replaces (it carries an id only).
   const [names, setNames] = React.useState<Record<string, string>>({});
@@ -57,7 +58,10 @@ export function InvitationsCard() {
             .catch(() => {}); // the card then says "a token": the name is a courtesy
         }
       })
-      .catch((e: unknown) => setState(loadFailure(e)));
+      .catch((e: unknown) => {
+        setLoadMessage(failureSentence(e));
+        setState(loadFailure(e));
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -84,7 +88,7 @@ export function InvitationsCard() {
         </div>
       ) : state === "error" ? (
         <div role="group" aria-label={T.LOAD_ERROR_LABEL}>
-          <ErrorState as="h4" onRetry={() => {
+          <ErrorState as="h4" message={loadMessage} onRetry={() => {
             setState("loading");
             load();
           }} />

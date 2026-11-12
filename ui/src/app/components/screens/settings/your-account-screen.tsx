@@ -32,14 +32,17 @@ import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
 import { MyComponentsCard } from "./my-components-card";
+import { WallPresetsCard } from "./wall-presets-card";
 import { YourWallsCard } from "./your-walls-card";
 import { MyRunnerAndPoolsCards } from "./my-pools-card";
+import { KeptMachinesCard } from "./kept-machines-card";
 import { InvitationsCard } from "./invitations-card";
 import { ApiTokensCard } from "./api-tokens-card";
 import { ServiceIdentitiesCard } from "./service-identities-card";
 import { SignedInClisCard } from "./signed-in-clis-card";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { HOST_CARD } from "../../wardyn/copy/host-card";
 
 export function YourAccountScreen() {
   const adminView = useConsoleMode() === "admin";
@@ -51,6 +54,11 @@ export function YourAccountScreen() {
     setupApi
       .getSetupStatus()
       .then((s) => {
+        // getSetupStatus never rejects; an unreachable answer is a made-up payload, so say so rather than render it.
+        if (s.unreachable) {
+          setState("error");
+          return;
+        }
         setStatus(s);
         setState("ready");
       })
@@ -62,7 +70,9 @@ export function YourAccountScreen() {
     <PageContainer width="form" className="pb-8">
       <PageHeader title={YOUR_ACCOUNT.TITLE} description={YOUR_ACCOUNT.LEDE} />
       {state === "loading" && <TableSkeleton />}
-      {state === "error" && <ErrorState onRetry={load} />}
+      {state === "error" && (
+        <ErrorState title={HOST_CARD.UNREACHABLE_TITLE} message={HOST_CARD.UNREACHABLE_BODY} onRetry={load} />
+      )}
       {state === "ready" && status && (
         <div className="space-y-2">
           {/* #1508: an admin's invitation to create an API token. Renders nothing while none is waiting. */}
@@ -83,9 +93,15 @@ export function YourAccountScreen() {
           {/* #2948: the person's own limits on every run they start. Renders nothing for a caller who is
               no person (the admin token, local mode) and where the store keeps no personal settings. */}
           <YourWallsCard />
+          {/* rc.12: named walls the person picks per run at New Run. Renders nothing for a caller who is no person and
+              where the store keeps no wall presets. The organisation's presets are written in the Admin view. */}
+          <WallPresetsCard admin={adminView} />
           {/* 0.9 (M-RN-2): the person's own computer that runs their runs. User view only; renders
               nothing while runners are off. */}
           {!adminView && <MyRunnerAndPoolsCards />}
+          {/* rc.12: the macOS VMs the person keeps on their own Mac between runs. User view only; renders nothing while
+              nothing is kept and keeping is not allowed to them. */}
+          {!adminView && <KeptMachinesCard />}
           <SshKeysPane heading="h3" />
           {/* ATT-LOGIN-UI: the computers signed in with the Wardyn CLI, each with its own Sign out. Absent where
               CLI sign-in is not served. */}

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -419,5 +420,59 @@ func TestRunLeakedHook(t *testing.T) {
 				t.Fatalf("the hook's error was not logged: %s", logs.String())
 			}
 		})
+	}
+}
+
+// Status carries the running shim's own answer, never run.json's setting, which every case here holds.
+func TestRunStatusCarriesTheShimsForcedViewOnly(t *testing.T) {
+	for name, c := range map[string]struct {
+		shim macvm.DesktopShim
+		want bool
+	}{
+		"forced":              {&macvm.RFBShim{ViewOnly: true, ForceViewOnly: true}, true},
+		"not forced":          {&macvm.RFBShim{ViewOnly: true}, false},
+		"no shim":             {nil, false},
+		"a shim with no word": {forcedViewPlainShim{}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := startRun(t, &macvmtest.Engine{}, func(cfg *macvm.RunConfig, o *macvm.RunOptions) {
+				cfg.DesktopViewOnly = true
+				o.Desktop = c.shim
+			})
+			st, err := r.cc.Status(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.DesktopForcedViewOnly != c.want {
+				t.Fatalf("status says %v, want %v", st.DesktopForcedViewOnly, c.want)
+			}
+		})
+	}
+}
+
+// forcedViewPlainShim serves nothing and has no report.
+type forcedViewPlainShim struct{}
+
+func (forcedViewPlainShim) ServeDesktop(client, guest net.Conn) {
+	_ = client.Close()
+	_ = guest.Close()
+}
+
+// An older helper's status has no such key, and a run.json from an older runner has no setting.
+func TestForcedViewOnlyAbsentReadsAsNotForced(t *testing.T) {
+	var st macvm.Status
+	if err := json.Unmarshal([]byte(`{"proto":1,"run_id":"r","state":"running"}`), &st); err != nil || st.DesktopForcedViewOnly {
+		t.Fatalf("an older status: %+v, %v", st, err)
+	}
+	dir := macvm.Layout{Root: t.TempDir()}.RunDir(testRunID)
+	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: testRunID, BaseDir: "/b"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, macvm.RunConfigFile))
+	if err != nil || bytes.Contains(b, []byte("desktop_view_only")) {
+		t.Fatalf("an unforced run.json carries the key: %s, %v", b, err)
+	}
+	if c, err := macvm.ReadRunConfig(dir); err != nil || c.DesktopViewOnly {
+		t.Fatalf("read it back: %+v, %v", c, err)
 	}
 }

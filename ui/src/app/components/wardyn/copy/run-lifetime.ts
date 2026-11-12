@@ -111,6 +111,19 @@ export function warnTitle(stage: EndsWarningStage): string {
 export function warnBody(dateText: string): string {
   return `At ${dateText} the run stops. Its files are kept for a while after that (your admin sets how long); push or save anything you need before then.`;
 }
+// A run launched under an elevation ends when the elevation does, and nothing here can move that end.
+// `mine` is false for someone looking at another person's run, who reads "the elevation" where its owner reads "your elevation".
+export function endsElevation(dateText: string, mine = true): string {
+  return `This run ends when ${mine ? "your" : "the"} elevation ends, ${dateText}. It can't be extended.`;
+}
+export function warnBodyElevation(dateText: string, mine = true): string {
+  return `At ${dateText} the run stops, because ${mine ? "your" : "the"} elevation ends then. Push or save anything you need before then.`;
+}
+// A run the server ended at its elevation's end. It is gone, so the only way on is a new request and a new run.
+export const ELEVATION_ENDED_TITLE = "This run ended when your elevation ended";
+export const ELEVATION_ENDED_TITLE_OTHER = "This run ended when the elevation ended";
+export const ELEVATION_ENDED_BODY = "To keep working, ask for elevation again and start a new run.";
+export const REQUEST_ELEVATION = "Request elevation";
 export const WARN_EXTEND_1_DAY = "Extend 1 day";
 export const WARN_CHANGE_END = "Change end…";
 export const WARN_DISMISS = "Dismiss";
@@ -136,7 +149,16 @@ export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it.";
 // sentence stops at the one fact that's actually true.
 export const ENDED_BODY_TASK = "It has no network.";
 export const ENDED_EXTEND_AND_REVIVE = "Extend and revive";
+// UXR-15: one verb for stopping a run on the run page. The header's End run and the banner's button both open the same
+// confirm, whose own button says "End run".
 export const END_RUN = "End run";
+/** The toast names the run by its title (else its task), one line, bounded: a task can be a paragraph. */
+export function toastRunName(run: { title?: string; task?: string }): string {
+  const line = ((run.title ?? "").trim() || run.task || "").trim().split("\n")[0];
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line || "this run";
+}
+export const ENDING = (name: string) => `Ending ${name}`;
+export const COULDNT_END = (name: string) => `Couldn't end ${name}`;
 
 // ---- Lost and revive (design.md §4.1, mock "Paused, and lost then revived") ----
 

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useNavigate } from "react-router-dom";
+import { PollPauseContext } from "../../../lib/use-poll";
 import type { RemoteRunnerView } from "../../../lib/types/runner-pools";
 import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
 
@@ -159,15 +160,17 @@ function Back() {
   return null;
 }
 
-function renderScreen(opts: { operator?: boolean; at?: string } = {}) {
-  const { operator = true, at = "/admin/runners" } = opts;
+function renderScreen(opts: { operator?: boolean; at?: string; signedOut?: boolean } = {}) {
+  const { operator = true, at = "/admin/runners", signedOut = false } = opts;
   return render(
-    <MemoryRouter initialEntries={[at]}>
-      <OperatorProvider operator={operator} securityOperator operatorResolved principal="admin@corp.example">
-        <RunnersScreen />
-        <Back />
-      </OperatorProvider>
-    </MemoryRouter>,
+    <PollPauseContext.Provider value={signedOut}>
+      <MemoryRouter initialEntries={[at]}>
+        <OperatorProvider operator={operator} securityOperator operatorResolved principal="admin@corp.example">
+          <RunnersScreen />
+          <Back />
+        </OperatorProvider>
+      </MemoryRouter>
+    </PollPauseContext.Provider>,
   );
 }
 
@@ -274,13 +277,13 @@ describe("Admin -> Runners list", () => {
     expect(within(desk).getByText("This runner is offline. Its capacity isn't counted as available until it reconnects.")).toBeInTheDocument();
     expect(within(desk).getByText("Not reported")).toBeInTheDocument();
     expect(within(desk).getByText("None — runs nothing")).toBeInTheDocument();
-    // A remote-hosted runner is the organization's; its user pools name their owner.
+    // A remote-hosted runner is the organisation's; its user pools name their owner.
     const shared = cardOf("shared-docker");
     expect(within(shared).getByText("Remote-hosted")).toBeInTheDocument();
     expect(within(shared).getByText("Not applicable")).toBeInTheDocument();
-    expect(within(shared).getByText("Organization")).toBeInTheDocument();
+    expect(within(shared).getByText("Organisation")).toBeInTheDocument();
     expect(shared).toHaveTextContent("General, Lab VM · cara");
-    expect(within(shared).getByRole("row", { name: /^Memory/ })).toHaveTextContent("16 GB of 96 GB");
+    expect(within(shared).getByRole("row", { name: /^Memory/ })).toHaveTextContent("16 GiB of 96 GiB");
     expect(rowNames()).toEqual(["mbp-ben", "laptop-7", "desk-2", "shared-docker"]);
   });
 
@@ -350,6 +353,20 @@ describe("Admin -> Runners list", () => {
       });
       await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
       expect(screen.queryByText("Couldn't load runners")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-read while the console is signed out", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      renderScreen({ signedOut: true });
+      await screen.findByRole("button", { name: "laptop-7" });
+      await act(async () => {
+        vi.advanceTimersByTime(90_000);
+      });
+      expect(listMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -467,7 +484,7 @@ describe("Admin -> Runners drawer and revoke", () => {
     expect(within(drawer).getByText(/Running now: 2 of 2/)).toBeInTheDocument();
     expect(within(drawer).getByText("At its limit")).toBeInTheDocument();
     expect(within(drawer).getByText("Only its owner changes these, in Settings → My runner or with wardyn runner set. You can read them here.")).toBeInTheDocument();
-    expect(within(drawer).getByText(/This computer reports 8 CPUs · 16 GB memory · 500 GB disk\. Its limits can't be higher\./)).toBeInTheDocument();
+    expect(within(drawer).getByText(/This computer reports 8 CPUs · 16 GiB memory · 500 GiB disk\. Its limits can't be higher\./)).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: "Laptop" })).toBeInTheDocument();
     expect(within(drawer).queryByRole("button", { name: "Edit limits" })).toBeNull();
     expect(within(drawer).getByText("SHA256:3Jd1d8XqFULLFINGERPRINTVALUEk2Q9")).toBeInTheDocument();
@@ -606,8 +623,8 @@ describe("Admin -> Runners remote-hosted runner", () => {
     const dialog = await screen.findByRole("dialog", { name: "Limits for shared-docker" });
     expect(within(dialog).getByText("Remote-hosted runners need limits too. Every run on it stays within them.")).toBeInTheDocument();
     expect(within(dialog).getByText("Running now: 1. Lowering any limit never stops a run already going.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Total ÷ \"Runs at once\": 24 ÷ 6 = 4 CPUs · 96 ÷ 6 = 16 GB memory · 1000 ÷ 6 = 166 GB disk. At least 1 CPU and 1 GB.")).toBeInTheDocument();
-    const memory = within(dialog).getAllByRole("spinbutton", { name: "Memory (GB)" });
+    expect(within(dialog).getByText("Total ÷ \"Runs at once\": 24 ÷ 6 = 4 CPUs · 96 ÷ 6 = 16 GiB memory · 1000 ÷ 6 = 166 GiB disk. At least 1 CPU and 1 GiB.")).toBeInTheDocument();
+    const memory = within(dialog).getAllByRole("spinbutton", { name: "Memory (GiB)" });
     setField(memory[1], "128");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(within(dialog).getAllByText("Per run can't be more than the total.").length).toBeGreaterThan(0);
@@ -774,7 +791,7 @@ describe("Admin -> Runners tabs", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent("Set up in");
   });
 
-  it("an organization pool's organization runner opens its runner, found in the admin list beside people's", async () => {
+  it("an organisation pool's organisation runner opens its runner, found in the admin list beside people's", async () => {
     const cluster = runner({ id: "r-cluster", name: "cluster-a", owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com", pools: [] });
     listMock.mockResolvedValue([LAPTOP, cluster]);
     const user = userEvent.setup();

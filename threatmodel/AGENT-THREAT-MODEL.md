@@ -57,24 +57,23 @@ this space is an axis substitution.
 | 5 | **Data exfiltration via other egress** | data leaves over an ordinary network call | 🟡 **mitigated for unlisted destinations; partial for allowlisted ones.** Default-deny plus first-use approval. Bypass class: a permitted destination that is also attacker-reachable (dual-use hosts, DNS through the permitted resolver) |
 | 6 | **Model-traffic interception** | someone reads the model channel — including the platform itself | 🟡 **partial, by design, both directions.** Proxy credential injection terminates model TLS; only inspection is opt-in. The CA key also sits beyond proxy memory (residuals 59, 69). Teams need a neutral name for "we MITM our own agents". |
 | 7 | **Sandbox escape** | code leaves the isolation boundary | 🟢 **mitigated to the declared class, honestly bounded.** Each confinement class documents what it does **not** stop, and a demanded class that cannot be enforced fails closed rather than silently downgrading |
-| 8 | **Lateral movement** | one run reaches another, or the host | 🟢 **mitigated, with a published exception list.** Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary, with two operator overrides; see [below](#category-8-verdict). |
+| 8 | **Lateral movement** | one run reaches another, or the host | 🟢 **mitigated, with a published exception list.** Docker: per-run networks with no route off the host and no host address. Kubernetes: a default-deny NetworkPolicy proven by a boot-time canary. Overrides lift either; see [below](#category-8-verdict). |
 | 9a | **Supply chain — the platform's own artifacts** | you pull a tampered platform image | 🟢 **mitigated.** Keyless signing, SBOMs scanned from the image rather than the source tree, build provenance |
 | 9b | **Supply chain — content executing inside a run** | a malicious package's install script runs | 🟡 **partial** — bypass class: any code that executes inside the sandbox. Nothing scans it, so it collapses into category 1 and is answered by containment, not prevention |
 | 9c | **Supply chain — the image the sandbox is built from** | a hostile base image | 🟡 **partial — the weakest of the three.** A base carrying build-time triggers is refused, but wrapping is not vetting: base content is unscanned, and build steps run on the host **before any confinement class exists** |
 | 10 | **Privilege escalation within the platform** | a member gains operator powers | 🟡 **partial.** A capability-grant model exists with deny-beats-allow precedence — but **every enforcement switch ships off**, so an upgraded deployment enforces nothing until an admin turns kinds on |
-| 11 | **Attribution evasion** | an action cannot be traced to a human sponsor | 🟡 **partial.** The run token carries both the human and the agent; audit events record a single actor field, so sponsor and agent are not separable per event |
-| 12 | **Audit tampering** | the record is altered after the fact | 🟡 **partial, deliberately graded.** Append-only enforcement plus a hash chain — which is tamper-**evidence**, not tamper-proofness, and only if a head hash is retained off-box. Session recordings are writable by the run that produces them |
+| 11 | **Attribution evasion** | an action cannot be traced to a human sponsor | 🟡 **partial.** The run token carries both the human and the agent. Each audit row has one actor; an agent's rows are typed `agent` and name the run, whose owner is the human |
+| 12 | **Audit tampering** | the record is altered after the fact | 🟡 **partial, deliberately graded.** Append-only enforcement plus a hash chain and signed checkpoints — which are tamper-**evidence**, not tamper-proofness, and only if a head hash or checkpoint is retained off-box. Session recordings are writable by the run that produces them |
 | 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** It has no rate limit, batching guard or anomaly signal on approval volume, and only opt-in separation of duty; see [below](#category-13-verdict). |
 | 14 | **Resource abuse / denial of wallet** | the agent burns money rather than data | 🟡 **partial, and the enforced set differs BY SUBSTRATE.** `WARDYN_RUN_MAX_AGE` is off by default, and there is no token-spend or model-call budget anywhere; see [below](#category-14-verdict). |
 
-- **Deliberately excluded**, so the absence reads as a decision:
+- **Deliberately excluded:**
   - model-weight theft (no models are hosted),
   - training-data poisoning (not a runtime-containment concern),
   - and agent-to-agent collusion (no multi-agent construct exists — though
     nested-sandbox degradation is where it would first appear).
 
-**No mapping to STRIDE or ATLAS.** A mapping table is attractive to reviewers and
-would claim coverage of a framework nothing here is tested against.
+**No mapping to STRIDE or ATLAS**: nothing here is tested against either framework.
 
 #### Category 2 verdict
 
@@ -90,7 +89,7 @@ would claim coverage of a framework nothing here is tested against.
 
 - 🟢 **mitigated, with a published exception list.**
 - Credentials are minted per-run, TTL-capped and injected proxy-side, so the sandbox holds a placeholder.
-- The exceptions — where a credential IS resident — are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5.1a rather than restated here, because a second copy of that list is how it drifts
+- The exceptions — where a credential IS resident — are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5.1a.
 
 #### Category 4 verdict
 
@@ -102,10 +101,9 @@ would claim coverage of a framework nothing here is tested against.
 #### Category 8 verdict
 
 - 🟢 **mitigated, with a published exception list.**
-- Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary that refuses to start if it does not hold.
-- The two operator overrides that boot the canary past a failure it would otherwise refuse to start on are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5's "Operator overrides that boot past a fail-closed gate"
-  - rather than restated here,
-  - because a second copy of that list is how it drifts
+- Docker: per-run networks with no route off the host and no host address; an Engine older than 28.0.0 is refused.
+- Kubernetes: a default-deny NetworkPolicy proven by a boot-time canary that refuses to start if it does not hold.
+- The operator overrides that boot past these gates are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5's "Operator overrides that boot past a fail-closed gate".
 
 #### Category 13 verdict
 
@@ -121,7 +119,7 @@ would claim coverage of a framework nothing here is tested against.
   - environment builds apply the same check but never honour the override) —
 - a DISK size the policy writes is refused when the runner cannot cap it (`main_drive_unenforceable`).
 - A requested or default size is soft: it runs uncapped, with a warning, on a storage driver that cannot take a size quota.
-- Kubernetes: CPU, memory and — since 0.7.2 — DISK.
+- Kubernetes: CPU, memory and DISK.
 - A run's `disk_mib` is now requested as the agent container's `resources.limits[ephemeral-storage]` (with a small fixed 256Mi request,
   - so scheduling is unchanged apart from a node genuinely short on allocatable ephemeral storage newly rejecting the pod),
   - and `disk_mib` bounds `/tmp`, `/home/agent/work` and `/home/agent/.cache`, which are emptyDirs.
@@ -133,12 +131,13 @@ would claim coverage of a framework nothing here is tested against.
   - there is no per-container equivalent in the Pod API, so the substrate logs "requested but not enforced" and creates the pod anyway,
   - and there is nothing for a fail-closed check to catch (set the node-level kubelet `podPidsLimit` as a cluster-wide backstop).
 - Lifetime: an optional IDLE auto-stop (`auto_stop_after_sec`, measured against `updated_at`, which an active agent keeps resetting),
-  - and the shipped default policy sets it to `3600` (from 0.8.6),
+  - and the shipped default policy sets it to `3600`,
   - and a policy value `<= 0` is never reaped ([`docs/POLICIES.md`](../docs/POLICIES.md));
   - the reaper skips every such run (the kind quickstart's default policy and the Helm chart's all-on values ship `0` too; the CI example policies set `3600`).
-- Since 0.8.6 there is also an optional absolute cap, `WARDYN_RUN_MAX_AGE` (off by default):
+- There is also an optional absolute cap, `WARDYN_RUN_MAX_AGE` (off by default):
   - the reaper stops a RUNNING run older than it however busy it is, audits `run.max_age.expire`, and on Kubernetes the cap also sets `activeDeadlineSeconds` on the run's pods.
 - With it unset a busy run has no wall-clock bound.
+- Linux VM: a policy's disk size or process limit is refused; a default one is shown as not enforced. macOS VM: never paused when idle, and a profile that pauses idle runs is refused.
 - **There is no token-spend or model-call budget anywhere** — an agent holding a valid model credential can exhaust it
 
 ---
@@ -156,7 +155,7 @@ control. Four owners; the assignments that surprise people are the point.
 | Source-forge rulesets (branch protection and equivalents) | **Operator** — creating one needs repo-admin the platform deliberately does not hold |
 | A credential supplied whole (an unbrokered PAT or SSH key) | **Operator** — bounded by what they issued, not by the platform |
 | The host a run executes on, when it is the developer's own runner | **The developer** — the platform's controls there bind the agent only, and what the host reports is self-reported |
-| Off-box retention of audit head hashes | **Security team / SIEM** — a hash chain detects tampering only against a copy kept somewhere the platform cannot reach |
+| Off-box retention of audit head hashes and signed checkpoints | **Security team / SIEM** — a hash chain detects tampering only against a copy kept somewhere the platform cannot reach; pin `wardyn audit keys` there too |
 | The task, the tools, the sources | **Agent author** — who owns nothing on the enforcement side, by construction |
 | Resistance to prompt injection | **Agent author and model vendor** — explicitly **not** the platform |
 | The taxonomy, residual review, red-team exercises | **Security team** |

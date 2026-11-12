@@ -45,6 +45,12 @@ vi.mock("../../lib/api/providers", () => ({
 import { SecretsScreen, AddSecretDialog } from "./secrets";
 import { LANE_META } from "../../lib/scm-provider";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
+import { WRITE_ONLY } from "../wardyn/copy/door";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
+import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -67,6 +73,48 @@ describe("SecretsScreen — delete error handling", () => {
     const confirm = await screen.findByRole("button", { name: /delete secret/i });
     await user.click(confirm);
   }
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listSecretsMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    render(<SecretsScreen />);
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("reads the search text from the URL, so Back from a row lands on the same filtered list", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key", "openai-api-key"]);
+    render(
+      <MemoryRouter initialEntries={["/?q=openai"]}>
+        <SecretsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("openai-api-key")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search secrets by name…")).toHaveValue("openai");
+    expect(screen.queryByText("anthropic-api-key")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key", "openai-api-key"]);
+    render(
+      <LaggingRouter>
+        <SecretsScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("openai-api-key");
+    const box = screen.getByPlaceholderText("Search secrets by name…");
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
+  });
+
+  it("names each row's actions menu after the secret", async () => {
+    render(<SecretsScreen />);
+    expect(await screen.findByRole("button", { name: "Secret actions: anthropic-api-key" })).toBeInTheDocument();
+  });
 
   it("surfaces a toast.error when deleteSecret() rejects (no longer silent)", async () => {
     deleteSecretMock.mockRejectedValue(new Error("HTTP 403: forbidden"));
@@ -241,6 +289,7 @@ describe("AddSecretDialog — locked, host-aware mode", () => {
         host="dev.azure.com"
         lane="pat"
         initialName="git-pat-dev-azure-com"
+        patBroker
       />,
     );
     // The host is a fact (Mono text), not a labelled/editable field.
@@ -256,7 +305,7 @@ describe("AddSecretDialog — locked, host-aware mode", () => {
 
   // #381 F8: the ON-default test above proves nothing about the off
   // position — this is the real coverage the review found missing.
-  it("renders the pre-0.7 in-sandbox label when patBrokerEnabled is false", () => {
+  it("renders the pre-0.7 in-sandbox label when the broker is known off", () => {
     render(
       <AddSecretDialog
         open
@@ -265,7 +314,7 @@ describe("AddSecretDialog — locked, host-aware mode", () => {
         host="dev.azure.com"
         lane="pat"
         initialName="git-pat-dev-azure-com"
-        patBrokerEnabled={false}
+        patBroker={false}
       />,
     );
     expect(screen.getByText("PAT · in-sandbox")).toBeInTheDocument();
@@ -378,6 +427,83 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
   });
 
+  it("a failed lookup says nothing about Git tokens, offers Try again, and claims only once it succeeds", async () => {
+    getWorkspaceProvidersMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    render(<SecretsScreen />);
+    expect(await screen.findByText(/Couldn't check how stored Git tokens are handled/)).toBeInTheDocument();
+    expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
+    // Unknown: only the line that is true either way. "Stays in Wardyn, unless…" is false for a Git token with the broker off.
+    expect(screen.getByText(new RegExp(SECRETS_BROKER_UNCHECKED.VALUE_DELIVERABLE))).toBeInTheDocument();
+    expect(screen.queryByText(/stays in Wardyn/)).not.toBeInTheDocument();
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText(/Exception: A git access token is handed to git inside the sandbox/)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't check how stored Git tokens/)).not.toBeInTheDocument();
+  });
+
+  it("makes no Git token claim while the switch is still loading", async () => {
+    getWorkspaceProvidersMock.mockReturnValue(new Promise(() => {}));
+    render(<SecretsScreen />);
+    await screen.findByRole("heading", { name: "Secrets" });
+    expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/handed to git inside the sandbox/)).not.toBeInTheDocument();
+  });
+
+  const openAdd = async () => userEvent.click(await screen.findByRole("button", { name: /add secret/i }));
+  const noExclusiveClaim = () => {
+    const d = within(screen.getByRole("dialog"));
+    expect(d.getByText(/stored write-only: it is never returned by the API or shown again\./)).toBeInTheDocument();
+    expect(d.queryByText(/stays in Wardyn/)).toBeNull();
+    expect(d.queryByText(/token broker off/i)).toBeNull();
+  };
+
+  it("after a failed lookup, Add and Rotate make no exclusive residency claim and still store", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    getWorkspaceProvidersMock.mockRejectedValue(new Error("HTTP 500"));
+    render(<SecretsScreen />);
+    await screen.findByText(/Couldn't check how stored Git tokens/);
+    await openAdd();
+    noExclusiveClaim();
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /cancel/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /secret actions/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /rotate/i }));
+    noExclusiveClaim();
+  });
+
+  it("in the member view the setting is never read, so Add makes no exclusive claim", async () => {
+    listSecretsMineMock.mockResolvedValue({ names: ["my-key"], mine: ["my-key"] });
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+    // The member never reads the switch, so the header makes only the line that is true either way.
+    expect(screen.getByText(new RegExp(SECRETS_BROKER_UNCHECKED.VALUE_DELIVERABLE))).toBeInTheDocument();
+    expect(screen.queryByText(/stays in Wardyn|stored git access token|Exception:/)).toBeNull();
+    await openAdd();
+    noExclusiveClaim();
+  });
+
+  it("known off: Add and Rotate show the Git token exception; known on: the existing copy", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
+    const { unmount } = render(<SecretsScreen />);
+    await screen.findByText(/Exception: A git access token is handed to git/);
+    await openAdd();
+    expect(screen.getByText(/With the token broker off, a stored Git token is handed to git inside the sandbox\./)).toBeInTheDocument();
+    unmount();
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
+    render(<SecretsScreen />);
+    await screen.findByText(/A stored git access token is attached to the request by the proxy/);
+    await openAdd();
+    const d = within(screen.getByRole("dialog"));
+    expect(d.getByText(/stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox/)).toBeInTheDocument();
+    expect(d.queryByText(/token broker off/i)).toBeNull();
+  });
+
   it("says the pre-0.7 exception sentence when the switch resolves off", async () => {
     getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
     render(<SecretsScreen />);
@@ -420,6 +546,28 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
     expect(listSecretsMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /add secret/i })).toBeEnabled();
     expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+  });
+
+  // The cyan tint over the row's hover wash (muted at 50%) measures 4.49:1, under the 4.5:1 text target; over --card it is 5.36:1.
+  it("member: the Write-only chip sits on the card colour while its row is hovered, so its text keeps contrast", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    const chip = screen.getByTitle(WRITE_ONLY.TOOLTIP);
+    expect(chip.className).toContain("[tr:hover_&]:bg-card");
+  });
+
+  it("names the search box, not only by its placeholder", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    expect(screen.getByRole("textbox", { name: "Search secrets" })).toBeInTheDocument();
   });
 
   it("member: Rotate and Delete act on their own row only; the admin's name has no actions", async () => {
@@ -582,5 +730,55 @@ describe("SecretsScreen / AddSecretDialog — chrome (#2890, #2891)", () => {
     render(<SecretsScreen />);
     expect(await screen.findByText(/^1 of 1 secret$/)).toHaveClass("whitespace-nowrap");
     expect(screen.getByPlaceholderText(/search secrets by name/i)).toHaveClass("min-w-0");
+  });
+});
+
+describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIALS.md)", () => {
+  it("the page header says the exception and no longer promises a short-lived credential", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    listSecretsMineMock.mockResolvedValue([]);
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
+    render(<SecretsScreen />);
+    await screen.findByText("anthropic-api-key");
+    expect(
+      await screen.findByText(/A stored value stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/short-lived, scoped credential/i)).not.toBeInTheDocument();
+  });
+
+  it("the Add secret dialog names the exception and no longer says injected proxy-side", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} patBroker />);
+    expect(
+      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/injected proxy-side/i)).not.toBeInTheDocument();
+    // Broker on (the default): the git token is not a sandbox exception, so the dialog does not claim it is.
+    expect(screen.queryByText(/token broker off/i)).not.toBeInTheDocument();
+  });
+
+  it("an unknown broker setting claims nothing about where a value is held, and storing stays allowed", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText(/stored write-only: it is never returned by the API or shown again\./)).toBeInTheDocument();
+    expect(screen.queryByText(/stays in Wardyn/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/token broker off/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "any-key" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "v" } });
+    expect(screen.getByRole("button", { name: /save secret/i })).toBeEnabled();
+  });
+
+  it("an unknown setting gives a plain PAT chip, not brokered or in-sandbox", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} lockName host="dev.azure.com" lane="pat" initialName="git-pat-dev-azure-com" />);
+    expect(screen.getByText("PAT")).toBeInTheDocument();
+    expect(screen.queryByText(/brokered|in-sandbox/)).not.toBeInTheDocument();
+  });
+
+  it("the Add secret dialog also names the git token exception when the token broker is off", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} patBroker={false} />);
+    expect(
+      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/With the token broker off, a stored Git token is handed to git inside the sandbox\./),
+    ).toBeInTheDocument();
   });
 });

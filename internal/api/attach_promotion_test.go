@@ -295,9 +295,11 @@ func TestAttachPromotion_WebPromotionResizesRemainingObservers(t *testing.T) {
 	if !m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderSecond {
 		t.Fatalf("the remaining observer's frame = %+v, want read_only naming the promoted client %s", m, holderSecond)
 	}
-	if c, r := remaining.lastSize(); c != 120 || r != 40 {
-		t.Fatalf("the remaining observer's PTY = %dx%d after the writer changed to 120x40", c, r)
-	}
+	// The resize reaches the observers only once the promoted writer's exec is installed, after the frames.
+	waitFor(t, "the remaining observer's PTY to follow the writer's 120x40", func() bool {
+		c, r := remaining.lastSize()
+		return c == 120 && r == 40
+	})
 }
 
 // TestAttachPromotion_TakeoverPromotesOnlyTheTaker pins both halves of the

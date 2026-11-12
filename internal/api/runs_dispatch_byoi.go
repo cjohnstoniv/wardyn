@@ -60,6 +60,14 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
 	defer cancel()
 	if run.RunnerID != nil {
+		// A warn-only run, which is an interactive one, holds no generation for this call (leaseRunOnRunner), and it gets
+		// none: a lease's unattempted generation would admit an Exec for as long as the run lives. So the
+		// check does not run, and the row says so; the outcome CHECK has no value for a check not run.
+		if !failClosed && execution.operation == "" {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
+				run.ID.String(), "success", mustJSON(map[string]any{"ran": false, "detail": "not run: interactive"})))
+			return false
+		}
 		st, ok := s.cfg.Runner.(runner.Selftester)
 		if !ok {
 			return s.byoiSelftestExit(ctx, run, 0, runner.ErrSelftestUnsupported, failClosed)

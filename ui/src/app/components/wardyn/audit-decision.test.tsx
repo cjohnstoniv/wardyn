@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
-import { AuditDecision, ruleSourceLabel, RuleSourceChip, toolRuleDecision } from "./audit-decision";
+import { AuditDecision, isAttributedRefusal, ruleSourceLabel, RuleSourceChip, toolRuleDecision } from "./audit-decision";
 import { aheadByHours } from "../../lib/test-clock";
 import { PUSH } from "./copy/push";
 
@@ -93,6 +93,12 @@ describe("ruleSourceLabel", () => {
       label: "Released by approval",
       tone: "neutral",
     });
+    // A held or refused request is never "released": only an approval id means it went through.
+    expect(ruleSourceLabel("approval:pending")).toEqual({ label: "Held for approval", tone: "info" });
+    expect(ruleSourceLabel("approval:denied")).toEqual({ label: "Denied by an approver", tone: "danger" });
+    for (const reason of ["expired", "stale", "refused", "host-cap"]) {
+      expect(ruleSourceLabel(`approval:${reason}`)?.tone).toBe("danger");
+    }
     // The address-range floor names its own cause: a refused private endpoint
     // otherwise reads as a policy or an entitlement gap and sends the operator
     // to their IAM team over a permission that was never the problem.
@@ -185,6 +191,11 @@ describe("ruleSourceLabel", () => {
       tone: "danger",
     });
   });
+
+  it("labels a push the run's walls or wall preset refuse, and leaves the five labels as shipped", () => {
+    expect(ruleSourceLabel("brokered:git:push-deny-all")).toEqual({ label: "Refused: every push", tone: "danger" });
+    expect(ruleSourceLabel("brokered:git:push-rules")?.label).toBe("Push refused — a denied path");
+  });
 });
 
 describe("RuleSourceChip", () => {
@@ -260,5 +271,17 @@ describe("RuleSourceChip", () => {
     renderChip({ data: { rule_source: "brokered:git:push-rules" } });
     expect(screen.getByText("Push refused — a denied path")).toBeInTheDocument();
     expect(screen.getByText(PUSH.DENIED_PATH_BODY)).toBeInTheDocument();
+  });
+  // The allowed-models gate writes only refusals under its rule_source. Every refusal reads the same, whatever its cause says.
+  it("names the allowed-models gate's refusals", () => {
+    expect(ruleSourceLabel("brokered:allowed-models")).toEqual({ label: "Refused: model limit", tone: "danger" });
+    renderChip({ action: "egress.deny", data: { rule_source: "brokered:allowed-models", cause: "batch requests cannot be checked against this run's allowed models" } });
+    expect(screen.getByText("Refused: model limit")).toBeInTheDocument();
+    expect(screen.getByText("batch requests cannot be checked against this run's allowed models")).toBeInTheDocument();
+  });
+
+  it("offers Request access beside a refusal of the gate, and not beside an allowed route", () => {
+    expect(isAttributedRefusal(event({ action: "egress.deny", data: { rule_source: "brokered:allowed-models" } }))).toBe(true);
+    expect(isAttributedRefusal(event({ action: "egress.allow", data: { rule_source: "brokered:allowed-models" } }))).toBe(false);
   });
 });

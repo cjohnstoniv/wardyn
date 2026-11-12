@@ -80,6 +80,7 @@ export function ProfileCeilingPolicy({
         <div className="mt-3">
           <PolicyPanel
             instance="policies"
+            ceiling
             value={source}
             onChange={onSourceChange}
             format={format}

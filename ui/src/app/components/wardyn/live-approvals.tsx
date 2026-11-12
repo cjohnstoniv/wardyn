@@ -18,10 +18,12 @@
 // the agent on every mutating tool call), which is why some rows here have no
 // scope caret — see decide().
 import * as React from "react";
-import { ShieldAlert, Clock, Check, Loader2, X } from "lucide-react";
+import { AlertTriangle, ShieldAlert, Clock, Check, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   canDecideApproval,
+  isMCPCallRequest,
+  isHostCallRequest,
   decisionArgs,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
@@ -32,9 +34,13 @@ import {
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "./push-content-card";
+import { McpCallCard } from "./mcp-call-card";
+import { HostCallCard } from "./host-call-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
-import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
+import { useShellSetupStatus } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
 import { HttpError } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
@@ -197,6 +203,7 @@ export function LiveApprovals({
   run?: AdoCardRun | null;
   adminView?: boolean;
 }) {
+  const { status: setupStatus } = useShellSetupStatus();
   // Decides here go straight to the API with no ReasonDialog stop, so this is
   // the one gate for all FOUR mount sites (run detail, demo screen, and
   // record-pane.tsx's two) — see approvals.tsx's ApprovalCard for the
@@ -345,7 +352,7 @@ export function LiveApprovals({
       setAdminOnly((cur) => new Set(cur).add(id));
     }
   };
-  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind)) && !adminOnly.has(a.id);
+  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind, a)) && !adminOnly.has(a.id);
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -361,6 +368,7 @@ export function LiveApprovals({
         await api.deny(a.id, reasonDeny, ...args);
       }
       await refresh();
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
     } catch (e) {
       noteRefusal(a.id, e);
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
@@ -382,6 +390,7 @@ export function LiveApprovals({
       if (approve) await api.approve(a.id, reasonApprove, ...opts);
       else await api.deny(a.id, reasonDeny, ...opts);
       await refresh();
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
     } catch (e) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(e) });
     } finally {
@@ -439,12 +448,22 @@ export function LiveApprovals({
   // provider; a MIXED set (both present, or reauth alongside something else)
   // falls through to the generic "waiting on you" heading rather than assert
   // either provider by name.
+  const isOidcHold = (a: ApprovalRequest) => a.kind === "credential_reauth" && a.requested_scope?.lane === OIDC_HOLD_LANE;
+  const allOidcReauth = pending.length > 0 && pending.every(isOidcHold);
   const allAwsReauth =
-    pending.length > 0 && pending.every((a) => a.kind === "credential_reauth" && !isAdoConsentRequest(a));
+    pending.length > 0 && pending.every((a) => a.kind === "credential_reauth" && !isAdoConsentRequest(a) && !isOidcHold(a));
   const allAdoConsent = pending.length > 0 && pending.every((a) => isAdoConsentRequest(a));
+  // The heading names the provider only when every held request is for the same one; two providers read as unnamed.
+  const holdUIDs = new Set(pending.map((a) => String(a.requested_scope?.provider_id ?? "")));
+  const oidcName =
+    allOidcReauth && holdUIDs.size === 1
+      ? setupStatus?.model_providers?.find((p) => p.sign_in === "oidc" && p.uid === [...holdUIDs][0])
+      : undefined;
   const heading = allAwsReauth
     ? REAUTH_HEADING
-    : allAdoConsent
+    : allOidcReauth
+      ? OIDC_SIGN_IN.APPROVAL_HEADING(oidcName ? oidcName.name || oidcName.id : OIDC_SIGN_IN.APPROVAL_UNNAMED)
+      : allAdoConsent
       ? ADO.STRIP_HEADING_CONSENT
       : anyHeld
         ? "Sandbox is waiting — approve to let it through"
@@ -458,6 +477,7 @@ export function LiveApprovals({
       data-testid="live-approvals"
     >
       <div className="flex items-center gap-2">
+        {allOidcReauth && <AlertTriangle className="size-4 shrink-0 text-warning" aria-hidden="true" />}
         <SectionLabel>{heading}</SectionLabel>
         {/* Named once for the whole panel, not per row — but only when it's
             actually true: F-12 fixed the row-level gate below to follow
@@ -537,6 +557,35 @@ export function LiveApprovals({
             />
           );
         }
+        // One MCP call: its own card, which shows the exact arguments (the strip's plain row has no room for them).
+        if (isMCPCallRequest(a) && a.state === "PENDING") {
+          return (
+            <McpCallCard
+              key={a.id}
+              item={a}
+              canDecide={canDecide(a)}
+              run={run}
+              busy={busy === a.id ? busyAction : null}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
+            />
+          );
+        }
+        // One held request to a rule-held host: its own card, which shows the whole host, method and path and says the
+        // approval lasts the run (the strip's plain row clips a long title and offers a bare Approve).
+        if (isHostCallRequest(a) && a.state === "PENDING") {
+          return (
+            <HostCallCard
+              key={a.id}
+              item={a}
+              canDecide={canDecide(a)}
+              run={run}
+              busy={busy === a.id ? busyAction : null}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
+            />
+          );
+        }
         const label = rowLabel(a);
         const title = deriveTitle(a.kind, a.requested_scope ?? {});
         const held = isHeld(a);
@@ -583,7 +632,8 @@ export function LiveApprovals({
             <Button
               size="sm"
               variant="info"
-              className="h-7 rounded-r-none border-r-0"
+              // Squared on the right only when the scope caret is drawn next to it.
+              className={scoped && !a.walls_block ? "h-7 rounded-r-none border-r-0" : "h-7"}
               disabled={!canDecide(a) || !!a.walls_block || busy === a.id}
               onClick={() => decide(a, true)}
             >
@@ -606,7 +656,7 @@ export function LiveApprovals({
             <Button
               size="sm"
               variant="outline"
-              className="h-7 ml-1 rounded-r-none border-r-0"
+              className={scoped ? "h-7 ml-1 rounded-r-none border-r-0" : "h-7 ml-1"}
               disabled={!canDecide(a) || busy === a.id}
               onClick={() => setDenyTarget({ request: a, scope: "run" })}
             >

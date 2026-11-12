@@ -53,9 +53,10 @@ type ResolvedUnit struct {
 	Chain   []unitLink
 	Ceiling types.RunPolicySpec
 	Limits  types.GovernanceLimits
-	// AuthoredResources is the CPU, memory and PIDs limit the chain's own rows set, before Ceiling inherits the
-	// deployment's size: a zero field is one no row set. The member cap reads it (#1949), so a
-	// maximum with no size of its own is the size.
+	// AuthoredResources is the CPU, memory, PIDs limit and disk the chain's own rows set, before Ceiling inherits
+	// the deployment's size: a zero field is one no row set. The member cap reads its CPU and memory (#1949),
+	// so a maximum with no size of its own is the size; provenance reads all of it, so a row that sets only
+	// a disk is credited for its size.
 	AuthoredResources types.ResourceLimits
 	// Warnings name the LEAF only and never a base's name, id, overlay or contact: they reach a
 	// member's 201 clamp_warnings.
@@ -66,6 +67,10 @@ type ResolvedUnit struct {
 	// Ceiling: the deployment, or the unit on the path whose step changed it (never a pass-through
 	// unit, which changes nothing). It names the bases, so it is admin surfaces only.
 	PathProvenance knobProvenance
+	// StandaloneRoot says the chain's root is a standalone row: walls it states itself, which do not
+	// follow a later change to the deployment default (a size it omits does). Display only: it
+	// decides who provenance names, never a value.
+	StandaloneRoot bool
 }
 
 // unitLink names one profile of a chain, with the knobs it locks for the units below it and its
@@ -268,8 +273,9 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 	default:
 		var warns []string
 		base, warns = s.standaloneAuthority(chain[root])
+		out.StandaloneRoot = true
 		if r := chain[root].Ceiling.Resources; r != nil {
-			out.AuthoredResources = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB, PidsLimit: r.PidsLimit}
+			out.AuthoredResources = *r
 		}
 		out.AdminWarnings = append(out.AdminWarnings, warns...)
 		if root == 0 {
@@ -277,13 +283,24 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		}
 		next = root - 1
 	}
-	// The path's provenance, step by step from the deployment's walls with its own size filled in:
-	// that fill-in is the deployment's (Default's root changes nothing), a standalone root's own walls
-	// are the root's, and each step's changes are its unit's.
+	// The path's provenance, step by step. A default-rooted or base-less chain starts from the
+	// deployment's walls with its own size filled in: that fill-in is the deployment's (Default's
+	// root changes nothing), and each step's changes are its unit's. A standalone root's walls are
+	// the root's whether or not they equal the deployment's, since a change to the deployment default
+	// does not reach them; only a size it omits follows the deployment. The exception is the root's
+	// grants, which standaloneAuthority re-intersects against the deployment's, so a redeploy can drop
+	// one; they are still the root's to state.
 	deployment := s.deploymentAuthority().Ceiling
 	last := policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[root].Name}
-	out.PathProvenance = startProvenance(deploymentProvenance)
-	out.PathProvenance.setBy(last, deployment, base.Ceiling)
+	if out.StandaloneRoot {
+		out.PathProvenance = startProvenance(last)
+		if out.AuthoredResources == (types.ResourceLimits{}) {
+			out.PathProvenance["resources"] = deploymentProvenance
+		}
+	} else {
+		out.PathProvenance = startProvenance(deploymentProvenance)
+		out.PathProvenance.setBy(last, deployment, base.Ceiling)
+	}
 	for i := next; i >= 0; i-- {
 		if chain[i].Mode == types.UnitModePassThrough {
 			continue // its parent's walls exactly: the step is the identity
@@ -300,7 +317,9 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 	if out.Composed {
 		out.Ceiling.Resources = s.inheritDeploymentResources(out.Ceiling.Resources)
 	}
-	out.PathProvenance.resetUnchanged(deploymentProvenance, deployment, out.Ceiling)
+	if !out.StandaloneRoot {
+		out.PathProvenance.resetUnchanged(deploymentProvenance, deployment, out.Ceiling)
+	}
 	return out, nil
 }
 

@@ -224,6 +224,14 @@ rm -rf "$TEXTS"; mkdir -p licenses
 cp -r "$tmp/out" "$TEXTS"
 mv "$tmp/NOTICES.md" "$NOTICES"
 
+# go-licenses picks a /vN module's licence URL online (a HEAD on <dir>/vN/go.mod, dropping /vN when that request
+# fails), so a GitHub outage flips that one path segment. Drift that is only that flip is not drift.
+notices_vnorm() { sed -E 's#/v[0-9]+/(LICEN[CS]E[^ |]*) \|#/\1 |#g'; }
+if [ -z "$(git status --porcelain --untracked-files=all -- "$TEXTS")" ] &&
+   cmp -s <(git show :"$NOTICES" | notices_vnorm) <(notices_vnorm < "$NOTICES"); then
+  git checkout -- "$NOTICES"
+fi
+
 # git status, NOT git diff: `git diff` cannot see untracked files, so a brand-new
 # dependency's brand-new licence text would produce a GREEN gate. That single case
 # is the entire reason this gate exists.

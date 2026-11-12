@@ -259,6 +259,12 @@ export interface SetupModelProvider {
   // The agents whose roster default it is.
   default_for?: string[];
   host: string;
+  // The row's own id, on a sign-in row only: the one a held run's sign-in request names (scope.provider_id).
+  uid?: string;
+  // "oidc" for a custom endpoint that signs people in at its own authority; absent otherwise.
+  sign_in?: "oidc" | (string & {});
+  // With sign_in: "console" or "none". "none" is the "not bound to your sign-in" row.
+  identity_binding?: "console" | "none" | (string & {});
 }
 
 // One provider's connection state for THIS PRINCIPAL (internal/api.
@@ -285,6 +291,9 @@ export interface SetupProviderAccess {
   // was never used.
   added_at?: string;
   last_used_at?: string;
+  // RFC3339: when the caller last signed in to an endpoint that signs people in. Unlike added_at (first stored,
+  // kept when a credential is replaced) it moves on every sign-in. Absent for any other row.
+  signed_in_at?: string;
 }
 
 export interface SetupStatus {
@@ -346,6 +355,8 @@ export interface SetupStatus {
     mcp_local_servers?: boolean;
     /** WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off. */
     macos_vms?: boolean;
+    /** The site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window on their Mac. Absent when off. */
+    mac_window?: boolean;
   };
   checks: SetupCheck[];
   auth: {

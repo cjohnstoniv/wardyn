@@ -20,13 +20,15 @@ package proxy
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -44,16 +46,16 @@ const (
 	patAPIPort = 443
 )
 
-// patAPIMethodOverrides are the headers a framework reads a method override from.
-var patAPIMethodOverrides = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"}
-
 // patAPIMethodMismatch reports a method override that names another method than
 // the request line. The tables judge the wire method, and a framework that
 // honoured the override would run another: so an override that turns a read into
 // a write is not a read, and none of the admitted rows needs one.
 func patAPIMethodMismatch(r *http.Request) bool {
-	for _, h := range patAPIMethodOverrides {
-		for _, v := range r.Header.Values(h) {
+	for h, vs := range r.Header {
+		if !armscope.MethodOverrideHeader(h) { // any case, '-' or '_'
+			continue
+		}
+		for _, v := range vs {
 			if !strings.EqualFold(strings.TrimSpace(v), r.Method) {
 				return true
 			}
@@ -199,6 +201,24 @@ type apiDoor struct {
 	stream bool
 	// rt, when set, is the door's own upstream (a cluster's CA bundle); nil is the egress transport.
 	rt http.RoundTripper
+	// gateway, when set, is the identity route the request goes out on (aws_sigv4_gateway.go): the
+	// run's token is attached before sign runs, and the answer always comes back scrubbed.
+	gateway *GatewayIdentityRoute
+	// approvalID, when set, is the approval a person gave this exact request (kube_api_hold.go).
+	approvalID *uuid.UUID
+}
+
+// sendAPIDoor sends a door's request: on the door's own transport (the kube row's CA) after the outbound
+// host-rule gate, which roundTripUpstream otherwise runs.
+func (p *Proxy) sendAPIDoor(d apiDoor, out *http.Request) (*http.Response, error) {
+	if d.rt == nil {
+		return p.roundTripUpstream(out)
+	}
+	out, err := p.outboundHostRuleRefused(out) // a held request waits here, bounded (host_call_hold.go)
+	if err != nil {
+		return nil, err
+	}
+	return d.rt.RoundTrip(out)
 }
 
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
@@ -280,12 +300,25 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	out.ContentLength = r.ContentLength
 	copyHeader(out.Header, r.Header)
 	removeHopByHop(out.Header)
+	p.stripGatewayHeaders(out.Header)
+	stripRouteOverrides(out.Header) // the door judged the request line's method and path
 	stripSandboxCredentials(out.Header, "")
 	if d.credential != nil {
 		out.Header.Set(name, value)
 	}
 	out.Host = hostport
 	out.Header.Del("Host")
+	callID, sentToken := "", ""
+	if d.gateway != nil {
+		// Before sign: the attach drops Accept-Encoding, Range and If-Range, which the sandbox may
+		// have signed, so the signature covers only what is sent. A refused mint sends nothing.
+		callID = uuid.NewString()
+		if !p.attachGatewayIdentity(w, r, out.Header, d.gateway, host, port, d.denied, callID) {
+			return
+		}
+		out.Header.Set(gatewayCallIDHeader, callID)
+		sentToken = out.Header.Get(gatewayIdentityHeader)
+	}
 	if d.sign != nil {
 		if err := d.sign(out); err != nil {
 			p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
@@ -294,20 +327,24 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 		}
 	}
 
-	var resp *http.Response
-	if d.rt != nil {
-		resp, err = d.rt.RoundTrip(out)
-	} else {
-		resp, err = p.roundTripUpstream(out)
-	}
+	resp, err := p.sendAPIDoor(d, out)
 	if err != nil {
-		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, port)}, host, far+" api upstream error")
+		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, port), GatewayCallID: callID}, host, far+" api upstream error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, d.allow)
 	allow.Scan = scanSummary
+	allow.GatewayCallID = callID
+	allow.ApprovalID = d.approvalID
 	p.emitDialledAllow(allow, host)
+	if d.sign != nil && bedrockServiceLabel(p.sigv4.scopes[hostKey(host)].service) {
+		p.meterUsage(r, host, port, resp, callID) // a re-signed Bedrock call, direct or at a gateway
+	}
+	if d.gateway != nil {
+		p.relayGatewayRoute(w, r, host, port, resp, d.denied, sentToken, callID)
+		return
+	}
 	if d.stream {
 		p.relayStreaming(w, resp)
 		return
@@ -326,9 +363,7 @@ func (p *Proxy) emitPATAPIDecision(r *http.Request, host string, port int, d egr
 // another credential") whose JSON carries the code and the sentence.
 func (p *Proxy) refusePATAPI(w http.ResponseWriter, r *http.Request, host string, port int, why string) {
 	p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourcePATAPIDenied)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]string{
 		"wardyn":  patAPIRefused,
 		"message": "Wardyn refused this forge API request: " + why + ".",
 	})

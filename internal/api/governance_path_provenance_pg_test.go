@@ -19,7 +19,7 @@ import (
 )
 
 // path_provenance (the policy tree's admin reads): which unit on a context's path changed each
-// knob, beside the leaf-only provenance a run gets. pathTree (governance_provenance_golden_test.go)
+// knob, beside check's leaf-only provenance. pathTree (governance_provenance_golden_test.go)
 // is the tree every pin reads.
 
 // checkWalls is POST /governance/check's two provenances for one user subject.
@@ -206,6 +206,40 @@ func TestPathProvenanceStandaloneRootIsTheRoots(t *testing.T) {
 	} {
 		if got := path["resources"]; got != unitRec("pp-sa") {
 			t.Errorf("%s pp-sa-child path_provenance[resources] = %+v, want the standalone root pp-sa", where, got)
+		}
+	}
+}
+
+// TestPathProvenanceStandaloneEqualToDeploymentIsTheUnits: a standalone unit whose walls equal the
+// deployment default's still sets them, and keeps them if the default changes, so every knob is the
+// unit's on GET /governance and on check, provenance and path_provenance alike. Only the size it
+// omits follows the deployment, and stays the deployment's.
+func TestPathProvenanceStandaloneEqualToDeploymentIsTheUnits(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	same := e.srv.cfg.DefaultPolicy.Clone()
+	same.Resources = nil
+	unit, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{Name: "pp-eq", CreatedBy: "seed", Ceiling: same})
+	if err != nil {
+		t.Fatal(err)
+	}
+	treeMember(t, e, unit, types.CapabilitySubjectUser, "sub-pp-eq", 1, true)
+	walls := checkWallsFor(t, e, "sub-pp-eq")
+	for where, got := range map[string]map[string]policyref.Provenance{
+		"GET /governance path_provenance": unitPathProvenance(t, e)[unit.ID],
+		"check path_provenance":           walls.PathProvenance,
+		"check provenance":                walls.Provenance,
+	} {
+		if len(got) == 0 {
+			t.Errorf("%s is empty", where)
+		}
+		for knob, rec := range got {
+			want := unitRec("pp-eq")
+			if knob == "resources" {
+				want = deploymentProvenance
+			}
+			if rec != want {
+				t.Errorf("%s[%s] = %+v, want %+v", where, knob, rec, want)
+			}
 		}
 	}
 }

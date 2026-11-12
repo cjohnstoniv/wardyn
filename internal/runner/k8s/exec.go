@@ -76,6 +76,11 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("k8s: exec: get pod %q: %w", ref, err)
 	}
+	// Under the agent-sandbox backend a gated pod is one its controller made again: the agent would
+	// run in a pod Wardyn never checked.
+	if d.cfg.AgentSandbox && agentPodGated(pod) {
+		return "", fmt.Errorf("k8s: exec: %s", agentPodReplacedMessage)
+	}
 
 	main, ok := findContainer(pod.Spec.Containers, mainContainerName)
 	if !ok {
@@ -264,7 +269,19 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	errs := 0
 	for {
 		pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
+		// ponytail: with the agent-sandbox backend on, each poll also reads the Sandbox for its images;
+		// skip that while the pod's resourceVersion is unchanged if the read ever shows as load.
+		replaced, deleting := false, false
+		if err == nil && d.cfg.AgentSandbox {
+			replaced, deleting, err = d.agentPodReplaced(ctx, ns, pod)
+		}
 		switch {
+		case deleting:
+			// Its Sandbox is being deleted or gone: read as the gone pod below is, so a run Wardyn's
+			// own teardown already ended gets no second end, and one ended from outside fails.
+			return notFoundExitCode, nil
+		case replaced:
+			return 0, fmt.Errorf("k8s: exec wait: %s", agentPodReplacedMessage)
 		case err == nil:
 			errs = 0
 			if !slices.ContainsFunc(pod.Spec.EphemeralContainers, func(ec corev1.EphemeralContainer) bool { return ec.Name == execContainerName }) {
@@ -329,6 +346,13 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 			return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil
 		}
 		return runner.Status{}, fmt.Errorf("k8s: agent status: get pod: %w", err)
+	}
+	replacedSt, replaced, err := d.replacedPodStatus(ctx, ns, pod)
+	if err != nil {
+		return runner.Status{}, fmt.Errorf("k8s: agent status: %w", err)
+	}
+	if replaced {
+		return replacedSt, nil
 	}
 	if st, done := terminalExecStatus(pod, agentExecID); done {
 		return st, nil

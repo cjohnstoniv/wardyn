@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -113,12 +114,15 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	if s.cfg.Runner == nil {
 		return buildErr
 	}
-	s.auditK8sNetpolIfUnenforced(ctx)
+	if netpol := s.auditK8sNetpolIfUnenforced(ctx); s.cfg.Runner.Name() == "k8s" {
+		s.goBackground(func() { s.watchK8sNetpolVerdict(s.watcherBaseCtx(), watcherSweepInterval, netpol) })
+	}
 	// Start the periodic sweep FIRST, before anything that can fail: a transient
 	// store error in the boot pass must not disable adoption for the process's
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
 	s.goBackground(func() { s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval) })
+	s.startRunEndLoops()
 	s.startWorkloadStatusSweeper() // custom-resource workloads' statuses, on their own faster cadence
 	// sweepOrphanedSandboxes runs LAST: finalizeUndispatchedRuns above has by now
 	// flipped every ref-empty abandoned run terminal, so those runs' leaked
@@ -174,20 +178,71 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 // Capabilities() call already means no live k8s daemon to warn about, so it is
 // treated the same as a non-k8s driver, not as a reason to fail boot. Nil run
 // id, like apitokens.go's token.create/token.revoke rows — this is a
-// deployment-wide posture fact, not tied to any one run.
-func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) {
+// deployment-wide posture fact, not tied to any one run. It returns the verdict
+// it read ("" when it read none), the baseline the re-check watch compares with.
+func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) string {
 	driver := s.cfg.Runner.Name()
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
-		return
+		return ""
 	}
 	verdict := k8sNetpolVerdict(driver, caps)
 	if verdict != "unenforced" && verdict != "acknowledged" {
-		return
+		return verdict
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile",
 		"k8s.netpol.fail", driver, "failure",
 		mustJSON(map[string]any{"verdict": verdict, "driver": driver})))
+	return verdict
+}
+
+// watchK8sNetpolVerdict reads the NetworkPolicy verdict every `every` until ctx
+// ends, auditing each change the canary's re-checks make (auditK8sNetpolChange).
+func (s *Server) watchK8sNetpolVerdict(ctx context.Context, every time.Duration, last string) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			last = s.auditK8sNetpolChange(ctx, last)
+		}
+	}
+}
+
+// auditK8sNetpolChange writes "k8s.netpol.update" when the verdict differs from
+// last, in either direction: a failed re-check that refuses new sandboxes, and
+// the check that proves enforcement again. The outcome is "success" only when the
+// new verdict is "enforced". A verdict first read here (last == "", boot could
+// not read one) is the baseline, not a change; an unreadable one keeps last.
+func (s *Server) auditK8sNetpolChange(ctx context.Context, last string) string {
+	driver := s.cfg.Runner.Name()
+	caps, err := s.cfg.Runner.Capabilities(ctx)
+	if err != nil {
+		return last
+	}
+	verdict := k8sNetpolVerdict(driver, caps)
+	if verdict == "" || verdict == last || last == "" {
+		return cmp.Or(verdict, last)
+	}
+	s.auditNetpolUpdate(ctx, "wardyn/reconcile", driver, verdict, last, caps.NetworkPolicyCheck.At, map[string]any{"driver": driver})
+	return verdict
+}
+
+// auditNetpolUpdate writes one "k8s.netpol.update" row: verdict replaced previous, from the check at at
+// (zero when the substrate reports no time). The outcome is "success" only when the new verdict is
+// "enforced". data holds the source's own fields (driver; runner_id for a runner's report).
+func (s *Server) auditNetpolUpdate(ctx context.Context, actorID, target, verdict, previous string, at time.Time, data map[string]any) {
+	outcome := "failure"
+	if verdict == runner.NetPolEnforced {
+		outcome = "success"
+	}
+	data["verdict"], data["previous"] = verdict, previous
+	if !at.IsZero() {
+		data["checked_at"] = at.UTC().Format(time.RFC3339)
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, actorID, "k8s.netpol.update", target, outcome, mustJSON(data)))
 }
 
 // sweepOrphanedSandboxes tears down the per-run containers of runs whose row no
@@ -227,6 +282,17 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		return fmt.Errorf("sweep orphaned sandboxes: list live image checks: %w", err)
 	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
+	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
+	// hazard); what one sweep leaves, the next takes. The run-op lock waits and the cuts the sweep makes run inside
+	// this bound, orphanSweepBound. One cut's failure row may then take up to one runTeardownBudget past it:
+	// copyBackCut writes the row on a teardownCtx of its own, so the row of a cut the bound ended, or of one that
+	// failed just before it, gets that budget (TestOrphanSweep_ASlowFailureRowTakesOneTeardownBudgetPastTheBound
+	// pins this allowance). The sum covers the lock waits, the cuts and that one row, not the whole sweep: each
+	// lock's release (its connection closes on a budget of its own) and the sweep's own reads (runsByID,
+	// LiveImageCheckAttempts, RunWatcherFresh) run on ctx, outside it.
+	sctx, cancel := context.WithTimeout(ctx, orphanSweepBound)
+	defer cancel()
+	sweepEnd, _ := sctx.Deadline()
 	isOrphan := func(runID uuid.UUID) bool {
 		if liveChecks[runID] {
 			return false
@@ -241,8 +307,25 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		if isTerminalRunState(run.State) {
 			// The run ended; its containers should already be gone, unless its computer folder's
-			// pass back keeps them for resumeComputerFolderBacks, which runs before this sweep.
-			return !s.computerFolderKept(ctx, runID)
+			// pass back keeps them for the tail owner (folderCleanupLoop), or that pass is still
+			// running under the end's lock (lockRunEnd).
+			if sctx.Err() != nil || !time.Now().Before(sweepEnd) {
+				return false // the sweep's bound is spent: no cut, and the run is left to the terminal sweep
+			}
+			lctx, unlock, free := s.tryLockRunOp(sctx, runID)
+			if !free {
+				return false
+			}
+			defer unlock()
+			// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
+			// owner's give-up at the cap ends the keep. The cut runs on the sweep's own bound, not a fresh one per
+			// run, so cuts that never answer take one bound in all, and one failure row up to one runTeardownBudget
+			// past it (the allowance at sctx above; the lock's release is outside both). A cut that bound ended
+			// decides nothing: the run keeps its ref and is left to the terminal sweep and the next label sweep.
+			vctx, vcancel := context.WithDeadline(lctx, sweepEnd)
+			defer vcancel()
+			v, _, _ := s.folderKeepVerdict(vctx, run, "sandbox.orphan.sweep")
+			return v == folderKeepNone && vctx.Err() == nil
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -259,10 +342,6 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		return true
 	}
-	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
-	// hazard); what one sweep leaves, the next takes.
-	sctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
-	defer cancel()
 	swept, err := sweeper.SweepOrphanedSandboxes(sctx, undispatchedGrace, isOrphan)
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
@@ -292,7 +371,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // audits it with teardown_error) for the NEXT boot to retry. A runner run's
 // teardown follows the runner's last answer: an end it refused is retried as a
 // kill, an end or a kill it applied clears the ref, and a kill it refused is not
-// queued again. A direct stop an online runner refuses is followed by one kill.
+// queued again. With no answer yet it is a kill.
 //
 // It also re-runs revokeRunCascade: a run that
 // reaches this pass may have had its ORIGINAL finalize/kill/idle-stop
@@ -309,45 +388,67 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 	}
 	for _, run := range runs {
 		s.revokeRunCascade(ctx, run.ID)
-		if s.computerFolderKept(ctx, run.ID) {
-			continue // kept for its computer folder's pass back, which resumeComputerFolderBacks resumes
-		}
-		kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
-		torn := false
-		switch {
-		case answered && outcome == types.RunnerActionSuccess:
-			torn = true // the runner applied an end or a kill: a proven stop
-		case answered && kind == types.RunnerActionKill && outcome == types.RunnerActionRefused:
-			continue // queued again it would be refused again; the ref stays
-		case answered && (kind == types.RunnerActionKill || outcome == types.RunnerActionRefused):
-			// A record the runner keeps only for containment refuses an end, every boot, but takes
-			// a kill, which stops its agent.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
-		case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
-			// The same record refuses a direct stop from an online runner, which leaves no answer to
-			// follow next boot, so a refused stop is followed by one kill. One audit row covers both.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(func(ctx context.Context, ref string) error {
-				err := s.cfg.Runner.StopSandbox(ctx, ref)
-				if err == nil || errors.Is(err, runner.ErrPendingOnRunner) {
-					return err // stopped, or an end queued for an offline runner, whose answer the next boot follows
-				}
-				if kerr := s.cfg.Runner.KillSandbox(ctx, ref); kerr != nil {
-					return errors.Join(err, kerr)
-				}
-				return nil
-			}))
-		default:
-			torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.StopSandbox))
-		}
-		if !torn {
-			continue // still stuck; audited above, ref stays set for the next boot
-		}
-		if serr := s.clearSandboxRef(ctx, run.ID); serr != nil {
-			slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
-				slog.String("run_id", run.ID.String()), slog.Any("err", serr))
+		// An end still running its computer folder's pass back holds the run's lock (lockRunEnd).
+		if lctx, unlock, free := s.tryLockRunOp(ctx, run.ID); free {
+			s.reconcileOrphanedRun(lctx, run)
+			unlock()
 		}
 	}
 	return nil
+}
+
+// reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
+func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
+	if s.boundedKeepVerdict(ctx, run, "sandbox.orphan.sweep") != folderKeepNone {
+		// Kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) runs, on a confirmed
+		// cut; or a runner that is not here, left until it is, or until the tail owner gives the pass up.
+		return
+	}
+	kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
+	torn := false
+	switch {
+	case answered && outcome == types.RunnerActionSuccess:
+		torn = true // the runner applied an end or a kill: a proven stop
+	case answered && kind == types.RunnerActionKill && outcome == types.RunnerActionRefused:
+		return // queued again it would be refused again; the ref stays
+	case answered && (kind == types.RunnerActionKill || outcome == types.RunnerActionRefused):
+		// A record the runner keeps only for containment refuses an end, every boot, but takes
+		// a kill, which stops its agent.
+		torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
+	case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
+		// A kill, never a stop: a stop is queued for an offline runner (at boot, every runner) as an
+		// end, which a runner that cannot keep an ended sandbox refuses and a containment-only record
+		// refuses too. Every runner takes a kill, and a terminal run's sandbox has nothing to keep.
+		torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
+	default:
+		torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.StopSandbox))
+	}
+	if !torn {
+		return // still stuck; audited above, ref stays set for the next boot
+	}
+	if serr := s.clearSandboxRef(ctx, run.ID); serr != nil {
+		slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
+			slog.String("run_id", run.ID.String()), slog.Any("err", serr))
+	}
+}
+
+// reconcileCutBound is the bound of one boot orphan pass cut; a variable only so a test can shorten it.
+var reconcileCutBound = reconcileFinalizeTimeout
+
+// orphanSweepBound is the label sweep's bound (sweepOrphanedSandboxes) on its run-op lock waits and the cuts it
+// makes, which all share it; one cut's failure row may take up to one runTeardownBudget past it. It does not bound
+// the whole sweep: the locks' release and the sweep's own reads are outside it. A variable only so a test can
+// shorten it.
+var orphanSweepBound = reconcileFinalizeTimeout
+
+// boundedKeepVerdict is folderKeepVerdict on the bound of one boot teardown call (reconcileFinalizeTimeout): the
+// cut it makes is a substrate call, and one that never answers must not hold boot. A cut that timed out is
+// unconfirmed, so the verdict is folderKeepNone and the caller stops the sandbox.
+func (s *Server) boundedKeepVerdict(ctx context.Context, run types.AgentRun, action string) folderKeep {
+	ctx, cancel := context.WithTimeout(ctx, reconcileCutBound)
+	defer cancel()
+	v, _, _ := s.folderKeepVerdict(ctx, run, action)
+	return v
 }
 
 // boundedTeardown bounds one teardown call of the boot orphan pass like a finalize
@@ -363,7 +464,8 @@ func boundedTeardown(teardown func(context.Context, string) error) func(context.
 
 // lastRunnerTeardown is the runner's latest answer to a queued end or kill of
 // run's sandbox, or answered false off Postgres, for a run on no runner, or
-// when it cannot be read (the sweep then queues the end it always has).
+// when it cannot be read (the sweep then tears the sandbox down as for no answer:
+// a kill for a run on a runner, a stop otherwise).
 func (s *Server) lastRunnerTeardown(ctx context.Context, run types.AgentRun) (types.RunnerActionKind, string, bool) {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok || run.RunnerID == nil || s.cfg.Runner == nil {
@@ -521,6 +623,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 	}
 	base := s.watcherBaseCtx()
 	var reattached, finalized int
+	runs = s.failInterruptedMacPreps(ctx, runs) // a macOS VM run whose prep a restart cut short is ended, not adopted
 	for _, run := range runs {
 		// Strand guard: a crash between SetSandboxRef and Exec
 		// leaves a non-interactive task run with a sandbox_ref but no persisted
@@ -583,7 +686,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 			if st.ExitCode != nil && *st.ExitCode == 0 {
 				final = types.RunCompleted
 			}
-			s.reconcileFinalize(ctx, run.ID, final, run.SandboxRef, "reconciled after watcher lease expired")
+			s.reconcileFinalizeHint(ctx, run.ID, final, run.SandboxRef, "reconciled after watcher lease expired", st.FailureHint)
 			finalized++
 			continue
 		}
@@ -612,112 +715,6 @@ func (s *Server) probeAgent(ctx context.Context, ref, agentExecID string) (runne
 	pctx, cancel := context.WithTimeout(ctx, watcherProbeTimeout)
 	defer cancel()
 	return s.cfg.Runner.AgentStatus(pctx, ref, agentExecID)
-}
-
-// runWatcherSweeper re-runs the sweep every `every` until ctx ends (daemon
-// shutdown). Panic-safe like the watchers it starts; a contained panic ends the
-// sweeper, so it is logged at ERROR — adoption is degraded to boot-only until the
-// process restarts. The interval is a parameter only so tests can drive it fast.
-func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
-	tick := time.NewTicker(every)
-	defer tick.Stop()
-	// Zero, so the FIRST tick runs the undispatched pass: it costs one extra
-	// ListRuns per process and it retries a boot pass that failed on a transient
-	// store error. After that the pass is rate-limited to its own slow cadence —
-	// it is an unbounded full-table read whose eligibility only changes on the
-	// undispatchedGrace timescale, so running it every sweep tick would be pure
-	// waste.
-	var lastUndispatched time.Time
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			// Recover PER TICK, not once around the whole loop: a
-			// store-driver edge that panics on ONE claimed row must not permanently
-			// degrade adoption to boot-only for the process lifetime on the strength
-			// of a single log line — the next tick simply tries again.
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.ErrorContext(ctx, "wardynd: PANIC in run watcher sweep tick (contained; adoption continues next tick)",
-							slog.Any("panic", r))
-					}
-				}()
-				// One tick, recorded as the run_watcher sweep: the first sub-pass
-				// error is the tick's, so an attempt that failed has no success.
-				_ = s.cfg.SweepHealth.Tick(ctx, sweephealth.RunWatcher, func(ctx context.Context) error {
-					return s.runWatcherTick(ctx, &lastUndispatched)
-				})
-			}()
-		}
-	}
-}
-
-// runWatcherTick is one pass of the run watcher sweep: the undispatched-run
-// reconcile on its slow cadence, then every sub-pass that rides this tick. Each
-// sub-pass runs whatever the others returned, and each error is logged as it
-// happens; the first is returned, so one failing sub-pass keeps the tick from
-// counting as a success.
-func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time) error {
-	var first error
-	pass := func(what string, err error) {
-		if err == nil {
-			return
-		}
-		slog.WarnContext(ctx, "wardynd: "+what, slog.Any("err", err))
-		if first == nil {
-			first = err
-		}
-	}
-	if now := s.cfg.Now(); now.Sub(*lastUndispatched) >= undispatchedGrace {
-		*lastUndispatched = now
-		pass("undispatched run reconcile", s.finalizeUndispatchedRuns(ctx))
-		// Same slow cadence as the undispatched pass (both are unbounded
-		// full-table reads whose eligibility only changes on the
-		// undispatchedGrace timescale), and AFTER it, so a just-finalized
-		// ref-empty run's leaked containers are swept the same tick.
-		// ponytail: no separate ticker — piggy-backing this cadence keeps
-		// one ContainerList per grace period, free next to what it reclaims.
-		pass("computer folder resume", s.resumeComputerFolderBacks(ctx))
-		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
-		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
-		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))
-	}
-	pass("run watcher sweep", s.sweepRunWatchers(ctx))
-	// A tightened profile reaches its live runs on this cadence,
-	// before the lease reads their ends.
-	pass("run limits re-clamp", s.sweepRunLimits(ctx))
-	// The lease rides this cadence too: its warnings are minutes
-	// apart and the end is a minute late at worst.
-	pass("run lease sweep", s.sweepRunLeases(ctx))
-	// And the pause, after the lease so a run ending this tick is
-	// not frozen first; its backstop resumes a run whose request
-	// closed without a writer calling approvalClosed.
-	pass("run pause sweep", s.sweepRunPauses(ctx))
-	// A service's health, read from the state file its supervisor keeps. The read is
-	// never presence, so it does not hold a run past an idle wall.
-	pass("service health sweep", s.sweepServiceHealth(ctx))
-	// A sign-in whose run ended, whose window passed, or whose end failed.
-	pass("desktop sign-in sweep", s.sweepDesktopSignins(ctx))
-	// A VM's pause whose run ended with the agent still paused writes its row here.
-	pass("ended desktop pause sweep", s.sweepEndedDesktopVMPauses(ctx))
-	// And the recording hold of a pause whose run ended with no desktop connection left, on every
-	// replica: each holds its own.
-	pass("ended desktop recording pause sweep", s.sweepEndedDesktopRecordingPauses(ctx))
-	// A run whose token lapsed loses its proxy within a tick.
-	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
-	// Azure DevOps personal access tokens, on their own slower clock.
-	pass("run personal access token sweep", s.sweepRunPATs(ctx))
-	// Unclaimed runners that outlived their 24h wait.
-	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
-	// Ended runs' runner_resident values, erased by the runners this replica
-	// holds; on every replica, after the passes above that end runs.
-	pass("runner resident erase sweep", s.sweepResidentErase(ctx))
-	// Ended runner runs' retirements, one step each; on every replica, as
-	// each step is one transaction under the run lock.
-	pass("runner retirement producer", s.produceRunnerRetirements(ctx))
-	return first
 }
 
 // holdRunWatcherLease marks this process as the live watcher for runID and keeps
@@ -892,36 +889,31 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				tick.Reset(baseInterval)
 			}
 			if isTerminalRunState(st.State) {
-				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-					switch s.probeRunnerSandbox(ctx, run, ref, st) {
-					case runnerProbeEnded:
-						return
-					case runnerProbeAbsent:
-						continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
-					}
-					if s.keepRebootedRun(ctx, run, st) {
-						return
-					}
+				run, gerr := s.cfg.Store.GetRun(ctx, runID)
+				if gerr != nil {
+					// One failed read must not skip the keep-after-reboot path and finalize: the next tick reads again.
+					slog.WarnContext(ctx, "reconcile watch: read run before finalizing", slog.String("run_id", runID.String()), slog.Any("err", gerr))
+					continue
+				}
+				switch s.probeRunnerSandbox(ctx, run, ref, st) {
+				case runnerProbeEnded:
+					return
+				case runnerProbeAbsent:
+					continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
+				}
+				if s.keepRebootedRun(ctx, run, st) {
+					return
 				}
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {
 					final = types.RunCompleted
 				}
-				s.reconcileFinalize(ctx, runID, final, ref, "reconciled exit")
+				s.reconcileFinalizeHint(ctx, runID, final, ref, "reconciled exit", st.FailureHint)
 				return
 			}
 		}
 	}
 }
-
-// reconcileFinalizeTimeout bounds the WHOLE finalize tail (GetRun, CAS, audit
-// writes, the revoke cascade, and StopSandbox) so one wedged ContainerStop cannot
-// hang the single-threaded sweeper — or the boot pass that gates serveAndShutdown,
-// where an unbounded StopSandbox would keep the control plane from ever serving
-// /healthz and crashloop the pod. Generous: it must cover a
-// graceful SIGTERM→SIGKILL stop (the driver's own stopTimeout is 10s) plus the
-// revoke cascade, so 2× that with headroom.
-const reconcileFinalizeTimeout = 60 * time.Second
 
 // runnerReceived reports whether the run has a runner execution row: its runner was handed a task to
 // run. A run with no task has none, even while the runner holds its sandbox. A store that cannot say,
@@ -935,65 +927,4 @@ func (s *Server) runnerReceived(ctx context.Context, runID uuid.UUID) bool {
 	}
 	_, err := ex.RunnerExecutionOf(ctx, runID)
 	return !errors.Is(err, store.ErrNotFound)
-}
-
-// reconcileFinalize transitions a stranded run to a terminal state — conditional
-// on it still being non-terminal so a concurrent kill/complete is never clobbered
-// — then runs the revoke cascade and (best-effort) tears the sandbox down.
-func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason string) {
-	// Bound the whole tail: the sweep loop and the boot pass call
-	// this SYNCHRONOUSLY, so an unbounded wedged StopSandbox would stall adoption
-	// for the process lifetime (or block boot from serving).
-	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
-	defer cancel()
-	cur, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: reconcile get run failed",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
-		return
-	}
-	// A run its runner holds is ended by the runner, which this must not race: one with a sandbox there
-	// (an interactive run has no task, so no execution row) and one handed a task (its durable exit
-	// receipt). One with neither (a crash between create and dispatch) has nothing on the runner to
-	// report, so it is finalized here like any other run that was never dispatched.
-	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil && (cur.SandboxRef != "" || s.runnerReceived(ctx, runID)) {
-		return
-	}
-	if isTerminalRunState(cur.State) {
-		return // already finalized (e.g. a concurrent kill won)
-	}
-	if runIsKept(cur) {
-		return // stopped on purpose and kept; the lease sweep owns its end
-	}
-	applied, err := s.casRunState(ctx, runID, cur.State, to)
-	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: reconcile finalize failed",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
-		return
-	}
-	if !applied {
-		return // someone else won the transition
-	}
-	if to == types.RunFailed && reason != "" {
-		// Optional-interface, best-effort, in the shape failAndRevoke already
-		// uses: reconcileFinalize also finalizes successful terminal states, so
-		// the hint write is gated strictly on the FAILED transition — writing it
-		// unconditionally would paint a red reason chip on a completed run.
-		if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
-			if herr := setter.SetRunFailureHint(ctx, runID, reason); herr != nil {
-				slog.WarnContext(ctx, "wardynd: could not persist reconciled run failure hint",
-					slog.String("run_id", runID.String()), slog.Any("err", herr))
-			}
-		}
-	}
-	// Shared terminal tail (audit run.reconcile → revoke cascade → sandbox
-	// teardown with a teardown_error audit on failure → workspace/record
-	// settlement). The completion watcher runs the IDENTICAL sequence via
-	// finalizeRunTail, so a swallowed StopSandbox error (which would abandon a
-	// live/routable container the now-terminal run's next boot skips) can never
-	// creep back into just one of the two finalize paths. A scan/verify run that
-	// never delivered its result fails fast instead of hanging the workspace; a
-	// record run's evidence is captured from whatever audit events landed.
-	s.finalizeRunTail(ctx, runID, ref, "run.reconcile", "success",
-		map[string]any{"to": string(to), "reason": reason})
 }

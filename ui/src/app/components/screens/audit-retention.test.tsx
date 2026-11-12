@@ -26,13 +26,16 @@ vi.mock("../../lib/api/audit", () => ({
   },
 }));
 vi.mock("../../lib/api/runs", () => ({ runs: { getRun: vi.fn().mockResolvedValue(undefined) } }));
-vi.mock("../../lib/api/health", () => ({ health: { health: () => Promise.resolve({}) } }));
+vi.mock("../../lib/api/health", () => ({
+  health: { health: () => Promise.resolve({}), whoami: () => Promise.resolve(null) },
+}));
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: (...a: unknown[]) => toastError(...a) } }));
 
 import { HttpError } from "../../lib/api/core";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { AuditScreen } from "./audit";
+import { STATES } from "../wardyn/states";
 
 function status(over: Partial<AuditRetentionStatus> = {}): AuditRetentionStatus {
   return {
@@ -187,6 +190,13 @@ describe("Audit → Retention", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/months of partitions ready$/)).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getRetentionMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    await openRetention();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("a failed read is an error with a retry, not an empty card", async () => {

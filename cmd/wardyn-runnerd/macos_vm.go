@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,7 +122,8 @@ type macOSVMs struct {
 
 	mu    sync.Mutex
 	caps  *runnerwire.MacVMCaps
-	drift string // the base agent version a tools update was last asked for
+	drift macOSVMDrift // the tools updates checkAgent asked for (askDrift)
+	kept  macOSVMKept  // the driver's kept machines and this Mac's limit for them
 	items macOSVMItems
 	bases macOSVMBases
 }
@@ -132,10 +132,12 @@ type macOSVMs struct {
 type macOSVMSetup struct {
 	ledgerDir, root, runnerID, version string
 	limitsFile                         string
-	uid                                int
-	dockerMemory, perRunMemory         uint64
-	host                               admission.Host
-	owner                              func(os.FileInfo) (int, bool)
+	// settings are the runner settings as the caller resolved them (macOSVMSettings).
+	settings                   macOSVMSettings
+	uid                        int
+	dockerMemory, perRunMemory uint64
+	host                       admission.Host
+	owner                      func(os.FileInfo) (int, bool)
 	// fstat replaces fstat(2) in the ledger's root-ownership checks (tests); nil is the real one.
 	fstat func(fd int, name string) (unix.Stat_t, error)
 }
@@ -154,6 +156,7 @@ type macVMDriver interface {
 func (m *macOSVMs) useDriver(d macVMDriver) {
 	m.reclaim, m.endNewest = d.ReclaimMacVMs, d.EndNewestMacVM
 	m.prepNet, m.prepSweep, m.prepRemove = d.StartMacPrepNet, d.SweepMacPrep, d.RemoveMacPrepNet
+	m.kept.driver, _ = d.(keptDriver)
 }
 
 // openMacOSVMs opens the ledger and the VM directory. A ledger the package did not install whole (the
@@ -161,7 +164,8 @@ func (m *macOSVMs) useDriver(d macVMDriver) {
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory, limitsFile: s.limitsFile,
-		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: openMacOSVMItems()}
+		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: macOSVMItems{file: s.settings.baseFile}, bases: macOSVMBases{dir: s.settings.basesDir}}
+	m.openKept(s.settings.keptLimit)
 	if s.ledgerDir != admission.DefaultDir {
 		m.ledgerDir = s.ledgerDir
 	}
@@ -242,6 +246,7 @@ func (m *macOSVMs) start(ctx context.Context, resend func()) {
 	m.mu.Lock()
 	m.ctx = ctx
 	m.mu.Unlock()
+	m.sweepKept(ctx)
 	if m.endNewest != nil {
 		go m.watchDisk(ctx, macOSVMDiskEvery, func() (int64, error) { return m.host.FreeDiskBytes(m.layout.Root) }, m.endNewest)
 	}
@@ -298,7 +303,7 @@ func (m *macOSVMs) recompute() bool {
 // base ready it offers none. A ledger read that fails keeps the last max, as the organisation already
 // has it.
 func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
-	c := runnerwire.MacVMCaps{SignIns: true, Folders: true, Drives: true, DiskDrives: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
+	c := runnerwire.MacVMCaps{SignIns: true, Folders: true, Drives: true, DiskDrives: true, Window: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
 	reason, hostOS, hostReason, thermal, noSession := m.hostStatus()
 	c.NoSession = noSession
 	if m.ledger == nil {
@@ -316,6 +321,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 			slog.Warn("macOS VM ledger: reconcile", "error", err.Error())
 		}
 	}
+	m.keptCaps(&c, last)
 	man, base := m.base()
 	c.Base = base
 	if base.State != runnerwire.MacVMBaseReady {
@@ -345,40 +351,6 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 		c.Max = last.Max
 	}
 	return c
-}
-
-// guestMemory is what one guest of this base takes: the per-run memory, or the base's minimum when that
-// is more (a run below it is refused at start).
-func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return max(m.perRunMemory, man.MinMemoryMiB<<20)
-}
-
-// The caps' refusal for a per-run limit below the base's minimum: the owner's MV-R47 (memory) and MV-R48
-// (CPU), with the runner's per-run amount, the base's minimum and the runner's id.
-const (
-	macOSVMMemoryBelowMinimum = "Per-run memory on this runner is %[1]s GB; a macOS VM needs at least %[2]d GB. Its owner raises it to %[2]d GB or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-memory %[2]d`."
-	macOSVMCPUBelowMinimum    = "Per-run CPU on this runner is %[1]d CPUs; a macOS VM needs at least %[2]d. Its owner raises it to %[2]d or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-cpu %[2]d`."
-)
-
-// belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
-// to raise, for this Mac's log, and the caps' refusal (design 6, "Guest size below minimum"), else "".
-func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal, reason string) {
-	m.mu.Lock()
-	mem, cpus := m.perRunMemory, m.perRunCPUs
-	m.mu.Unlock()
-	switch {
-	case mem != 0 && mem < man.MinMemoryMiB<<20:
-		gb := strconv.FormatFloat(math.Floor(float64(mem>>20)/1024*10)/10, 'f', -1, 64)
-		need := (man.MinMemoryMiB + 1023) >> 10
-		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB),
-			fmt.Sprintf(macOSVMMemoryBelowMinimum, gb, need, m.runnerID), runnerwire.MacVMReasonMemoryBelowMinimum
-	case cpus != 0 && cpus < man.MinCPUs:
-		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs),
-			fmt.Sprintf(macOSVMCPUBelowMinimum, cpus, man.MinCPUs, m.runnerID), runnerwire.MacVMReasonCPUBelowMinimum
-	}
-	return "", "", ""
 }
 
 // setPerRunLimits is runnerwire.RunnerHooks.PerRunLimits: the per-run CPU (milli-CPU) and memory (MiB)
@@ -449,16 +421,10 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 }
 
 // checkAgent is the guest agent drift trigger: a base whose agent is not this runner's needs a tools
-// update, asked for once per base agent version. The base keeps serving meanwhile.
+// update, asked for while serving until one starts per base agent version (askDrift). The base keeps
+// serving meanwhile.
 func (m *macOSVMs) checkAgent(man macvm.Manifest) {
-	if man.AgentVersion == "" || man.AgentVersion == m.version {
-		return
-	}
-	m.mu.Lock()
-	asked := m.drift == man.AgentVersion
-	m.drift = man.AgentVersion
-	m.mu.Unlock()
-	if asked {
+	if man.AgentVersion == "" || man.AgentVersion == m.version || !m.askDrift(man.AgentVersion) {
 		return
 	}
 	slog.Warn("macOS VM base: its guest agent is not this runner's; a tools update replaces it", "base_agent", man.AgentVersion, "runner", m.version)
@@ -506,11 +472,12 @@ func (m *macOSVMs) vmGone(e admission.Entry) bool {
 	return err != nil || got != start
 }
 
-// reconcilePrepare releases this runner's prepare and tools-update entries whose helper has exited
-// (the helper releases nothing, startJob): neither job has a run directory, and the ledger itself
-// refuses while a VM process of this user could still be its VM.
+// reconcilePrepare releases this runner's prepare, tools-update, edit and drive open entries whose helper has
+// exited (the helper releases nothing, startJob): none has a run directory, and the ledger itself refuses
+// while a VM process of this user could still be its VM. A drive open's CLI releases its own entry; this is
+// for the one whose CLI was killed, so it cannot hold one of the two VM slots until someone runs it again.
 func (m *macOSVMs) reconcilePrepare() {
-	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate, kindEditBase} {
+	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate, kindEditBase, kindDriveOpen} {
 		for _, e := range m.own(k) {
 			if !m.vmGone(e) {
 				continue
@@ -769,19 +736,34 @@ const toolsUpdateLog = "tools-update.log"
 // its own ledger entry, a guest at the base's minimum CPUs and the per-run memory (or the minimum), and
 // the helper's `update-tools`, which takes the base's update lock, works on a staging copy and swaps it
 // in, so runs keep cloning the old base meanwhile. It is an automatic update, so it passes no --force,
-// which is for an update someone asks for (design 3.12, "an update someone asks for retries every pin"):
-// the helper compares the base's agent with its own build (macvm.NeedsToolsUpdate) and pushes its own.
+// which is for an update someone asks for (design 3.12, "an update someone asks for retries every pin";
+// updateTools): the helper compares the base's agent with its own build (macvm.NeedsToolsUpdate) and pushes its own.
 func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) error {
+	return m.startToolsUpdateWith(ctx, man, false)
+}
+
+// startToolsUpdateWith is startToolsUpdate, with force for an update someone asked for.
+func (m *macOSVMs) startToolsUpdateWith(ctx context.Context, man macvm.Manifest, force bool) error {
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
+	}
+	if slices.ContainsFunc(m.own(admission.KindToolsUpdate), func(e admission.Entry) bool { return !m.vmGone(e) }) {
+		return macvm.ErrToolsUpdateBusy // one at a time, as the helper's update lock has it
 	}
 	items, err := m.baseFileArgs(nil)
 	if err != nil {
 		return err
 	}
-	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
+	if force {
+		items = append(items, "--"+macvm.FlagForce)
+	}
+	err = m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
 		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, ledger: m.ledgerDir, descr: "tools update"})
+	if err == nil {
+		m.driftStarted(m.driftKey(man))
+	}
+	return err
 }
 
 // kindEditBase is an edit's ledger entry: one VM slot for its boots, which run one at a time. serve hands

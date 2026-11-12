@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -35,6 +36,9 @@ type mcpUpstream struct {
 	body     []byte
 	status   int
 	location string
+	// identity and callID are the gateway headers the last MCP call arrived with; mintBody is
+	// the last gateway identity ask, answered with a token for mintAud.
+	identity, callID, mintBody, mintAud string
 }
 
 const mcpServerSecret = "Bearer mcp-server-secret-value"
@@ -49,7 +53,16 @@ func newMCPUpstream(t *testing.T) *mcpUpstream {
 			_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: mcpServerSecret, JTI: "j"})
 			return
 		}
+		if r.URL.Path == "/api/v1/internal/gateway-identity" {
+			b, _ := io.ReadAll(r.Body)
+			u.mintBody = string(b)
+			exp := time.Now().Add(10 * time.Minute)
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": gwidToken(u.mintAud, exp, 1), "expires_at": exp})
+			return
+		}
 		u.hits++
+		u.identity, u.callID = r.Header.Get(gatewayIdentityHeader), r.Header.Get(gatewayCallIDHeader)
+		w.Header().Set("X-Echo", u.identity)
 		u.auth, u.smuggled = r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")
 		u.body, _ = io.ReadAll(r.Body)
 		if u.location != "" {
@@ -585,5 +598,84 @@ func TestMCPBroker_ClaudeAstralNameBlocked(t *testing.T) {
 	f := newMCPFixture(t, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "mcp__linear__admin__delete", Effect: types.ToolDeny}}}, nil, nil)
 	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpCall(1, "admin\U0001F600delete")); !strings.Contains(rec.Body.String(), mcpBlockedMessage) || f.up.hitCount() != 0 {
 		t.Fatalf("%q hits %d; want blocked", rec.Body, f.up.hitCount())
+	}
+}
+
+// withMCPGatewayRoute gives the fixture's linear server a gateway identity route, as dispatch seals one.
+func withMCPGatewayRoute(f *mcpFixture, key, path string) {
+	rt := GatewayIdentityRoute{Host: "mcp.linear.test", Port: 443, PathPrefix: path, MCPKey: key, Audience: gwidAudience}
+	f.p.gatewayRoutes = []GatewayIdentityRoute{rt}
+	f.p.gatewayHolders = map[string]*gatewayTokenHolder{rt.holderKey(): {mcpKey: key, audience: gwidAudience, timeout: 5 * time.Second}}
+	f.p.maskKey = uuid.New()
+}
+
+// An organisation MCP server with a route is sent the minted token in place of whatever the sandbox
+// put in the header, asked for by server key, and an echo of the token in the answer is masked.
+func TestMCPBroker_GatewayIdentityAttachedAndEchoMasked(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.linear.test", "mcp.github.test"}}, nil, nil)
+	t.Cleanup(func() { procRegistry.Evict(f.p.maskKey) })
+	withMCPGatewayRoute(f, "linear", "/mcp")
+	f.up.mintAud = gwidAudience
+	rec := f.post(t, mcpToken("claude-code"), "linear", mcpInit, gatewayIdentityHeader, gwidForged, gatewayCallIDHeader, gwidCallID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	f.up.mu.Lock()
+	defer f.up.mu.Unlock()
+	if f.up.mintBody != `{"mcp_server":"linear"}` {
+		t.Errorf("mint body = %s, want the server key alone", f.up.mintBody)
+	}
+	if f.up.identity == "" || f.up.identity == gwidForged || strings.Count(f.up.identity, ".") != 2 {
+		t.Errorf("the server got identity %q, want the minted token", f.up.identity)
+	}
+	if f.up.callID == "" || f.up.callID == gwidCallID {
+		t.Errorf("the server got call id %q, want a fresh one", f.up.callID)
+	}
+	if f.up.auth != mcpServerSecret {
+		t.Errorf("the server's own credential = %q, want it kept", f.up.auth)
+	}
+	if got := rec.Header().Get("X-Echo"); strings.Contains(got, f.up.identity) {
+		t.Errorf("the echoed token reached the sandbox: %q", got)
+	}
+	if strings.Contains(rec.Body.String(), f.up.identity) {
+		t.Errorf("the body holds the token: %q", rec.Body)
+	}
+}
+
+// A server the route does not cover (the github server, another host) gets the call id and no token, and
+// a run's other server is not asked for one.
+func TestMCPBroker_GatewayIdentityOnlyOnItsOwnRoute(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.linear.test", "mcp.github.test"}}, nil, nil)
+	t.Cleanup(func() { procRegistry.Evict(f.p.maskKey) })
+	withMCPGatewayRoute(f, "linear", "/mcp")
+	f.up.mintAud = gwidAudience
+	if rec := f.post(t, mcpToken("claude-code"), "github", mcpInit, gatewayIdentityHeader, gwidForged); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	f.up.mu.Lock()
+	defer f.up.mu.Unlock()
+	if f.up.identity != "" || f.up.mintBody != "" || f.up.callID == "" {
+		t.Errorf("github got identity %q, call id %q; mint asked %q", f.up.identity, f.up.callID, f.up.mintBody)
+	}
+}
+
+// A route that is not the server's own (another server's key on its path) refuses the call and sends nothing.
+func TestMCPBroker_GatewayIdentityForeignRouteRefused(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.linear.test", "mcp.github.test"}}, nil, nil)
+	t.Cleanup(func() { procRegistry.Evict(f.p.maskKey) })
+	withMCPGatewayRoute(f, "other", "/mcp")
+	if rec := f.post(t, mcpToken("claude-code"), "linear", mcpInit); rec.Code != http.StatusBadGateway || f.up.hitCount() != 0 {
+		t.Fatalf("status %d, %d hits: want a refusal before the server", rec.Code, f.up.hitCount())
+	}
+}
+
+// A mint the control plane answers for another audience stops the call: the second layer of audience binding holds on MCP too.
+func TestMCPBroker_GatewayIdentityWrongAudienceNotSent(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.linear.test", "mcp.github.test"}}, nil, nil)
+	t.Cleanup(func() { procRegistry.Evict(f.p.maskKey) })
+	withMCPGatewayRoute(f, "linear", "/mcp")
+	f.up.mintAud = "https://elsewhere.test/"
+	if rec := f.post(t, mcpToken("claude-code"), "linear", mcpInit); rec.Code != http.StatusBadGateway || f.up.hitCount() != 0 {
+		t.Fatalf("status %d, %d hits: want the call not sent", rec.Code, f.up.hitCount())
 	}
 }

@@ -117,13 +117,18 @@ type Workload struct {
 // WorkloadView is a workload with the state of its current run, as the reads report it: RunState is empty
 // while it has no run, and ServiceHealth when the run has no service health yet. RunPausedAt and
 // ServiceObservedAt are the run's paused_at and its service health's observed_at, for the API to project
-// that health as it projects a run's.
+// that health as it projects a run's. ServiceProbe is the run's last reading of Wardyn's own check, nil for none;
+// ServiceProbeOn is whether the run's frozen spec opted in to that check, and RunStartedAt is when the run was
+// admitted (or created, before admission), so a missing reading reads as renewal reads it.
 type WorkloadView struct {
 	Workload
 	RunState          types.RunState
 	ServiceHealth     string
 	RunPausedAt       *time.Time
 	ServiceObservedAt *time.Time
+	ServiceProbe      *types.RunServiceProbe
+	ServiceProbeOn    bool
+	RunStartedAt      *time.Time
 }
 
 // WorkloadPut is the record half of an apply. Digest is the caller's, over Intent, RunIn and RestartKey.
@@ -204,6 +209,7 @@ type WorkloadBinding struct {
 // them 501, as RunnerPoolStore does.
 type WorkloadStore interface {
 	PutWorkload(ctx context.Context, in WorkloadPut) (Workload, WorkloadWrite, error)
+	PlanWorkloadPut(ctx context.Context, in WorkloadPut) (*Workload, WorkloadWrite, error)
 	ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bool, error)
 	SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error)
 	RecordWorkloadRefusal(ctx context.Context, id, claim uuid.UUID, r WorkloadRefusal) error
@@ -240,7 +246,8 @@ const workloadCols = `w.id, w.owner, w.name, w.source, w.source_pool_id, COALESC
 // that column lands in.
 const (
 	workloadViewCols = workloadCols + `, COALESCE(r.state, ''), COALESCE(to_jsonb(r) -> 'service_status' ->> 'health', ''), r.paused_at,
-		(to_jsonb(r) -> 'service_status' ->> 'observed_at')::timestamptz`
+		(to_jsonb(r) -> 'service_status' ->> 'observed_at')::timestamptz, to_jsonb(r) -> 'service_status' -> 'probe',
+		COALESCE(to_jsonb(r) -> 'service' -> 'health' ->> 'probe', ''), COALESCE(r.admitted_at, r.created_at)`
 	workloadViewFrom = ` FROM workloads w LEFT JOIN agent_runs r ON r.id = w.current_run_id`
 )
 
@@ -272,8 +279,20 @@ func scanWorkload(row pgx.Row) (Workload, error) {
 
 func scanWorkloadView(row pgx.Row) (WorkloadView, error) {
 	var v WorkloadView
-	err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth, &v.RunPausedAt, &v.ServiceObservedAt)
-	return v, err
+	var probe []byte
+	var probeSpec string
+	if err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth, &v.RunPausedAt, &v.ServiceObservedAt, &probe,
+		&probeSpec, &v.RunStartedAt); err != nil {
+		return v, err
+	}
+	v.ServiceProbeOn = probeSpec == types.ServiceProbeControlPlane
+	if len(probe) > 0 && string(probe) != "null" {
+		v.ServiceProbe = &types.RunServiceProbe{}
+		if err := json.Unmarshal(probe, v.ServiceProbe); err != nil {
+			return v, fmt.Errorf("store: decode workload service probe: %w", err)
+		}
+	}
+	return v, nil
 }
 
 func sameUUIDPtr(a, b *uuid.UUID) bool {
@@ -381,6 +400,36 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 		return Workload{}, "", err
 	}
 	return out, write, nil
+}
+
+// PlanWorkloadPut answers what PutWorkload would do with in, for the API source, and writes nothing: no
+// lock, no row. It returns the stored row (nil when there is none) and the write, or the error
+// PutWorkload would return for the same state. A new API-source branch in PutWorkload updates this, and
+// TestPG_Workload_PlanWorkloadPutMatchesPut gets its row. The answer is a read at one moment: a
+// concurrent apply can move the row after it.
+func (s PG) PlanWorkloadPut(ctx context.Context, in WorkloadPut) (*Workload, WorkloadWrite, error) {
+	if in.Source != WorkloadSourceAPI {
+		return nil, "", errors.New("store: plan workload put: only the API source is planned")
+	}
+	cur, err := scanWorkload(s.Pool.QueryRow(ctx, `SELECT `+workloadCols+` FROM workloads w WHERE w.owner = $1 AND w.name = $2`, in.Owner, in.Name))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		var n int
+		if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM workloads WHERE owner = $1`, in.Owner).Scan(&n); err != nil {
+			return nil, "", err
+		}
+		if n >= MaxWorkloadsPerOwner {
+			return nil, "", ErrWorkloadCapReached
+		}
+		return nil, WorkloadCreated, nil
+	case err != nil:
+		return nil, "", err
+	case cur.Source != in.Source:
+		return &cur, "", ErrWorkloadSourceConflict
+	case cur.Digest != in.Digest:
+		return &cur, WorkloadUpdated, nil
+	}
+	return &cur, WorkloadUnchanged, nil
 }
 
 // ClaimWorkloadLaunch takes the right to launch the workload's current generation for WorkloadLaunchClaim.

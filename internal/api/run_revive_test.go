@@ -59,6 +59,16 @@ func (s *reviveStore) ListGovernanceMemberships(context.Context) ([]types.Govern
 	return allRowsFor(s.profiles), nil
 }
 
+// ListMembershipsFor is the same table as the owner's own session reads it: each unit's `all` row matches
+// every caller.
+func (s *reviveStore) ListMembershipsFor(context.Context, []string, []string, string) ([]store.MembershipMatch, error) {
+	out := make([]store.MembershipMatch, 0, len(s.profiles))
+	for i, m := range allRowsFor(s.profiles) {
+		out = append(out, store.MembershipMatch{Membership: m, Unit: s.profiles[i]})
+	}
+	return out, nil
+}
+
 func (s *reviveStore) PutRunProxyConfig(_ context.Context, id uuid.UUID, sealed []byte) error {
 	plain, err := kek.Open(s.key, sealed, runProxyConfigAAD(id))
 	if err != nil {
@@ -163,8 +173,8 @@ type reviveRunner struct {
 	// whose end passed has its agent stopped too (run_lost.go), which revive
 	// detects by probing this, never by trusting lost_reason alone.
 	status types.RunState
-	// statusErr makes Status fail, as a wedged daemon would (Minor, Fable
-	// review): the probe could not observe the agent at all.
+	// statusErr makes Status fail, as a wedged daemon would: the probe could
+	// not observe the agent at all.
 	statusErr error
 	onEnsure  func()
 	// onReplace runs inside ReplaceProxy with the new proxy's config, as that proxy's startup renewal does.
@@ -238,7 +248,8 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 		RunToken:          "old-token",
 		ControlPlaneURL:   "http://127.0.0.1:8081",
 		ControlPlaneCAPEM: string(oldCA.CertPEM),
-		Policy:            types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com"}},
+		// Every injection's host is listed exactly, as the proxy that ran needed to start with it.
+		Policy: types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com", "artifactory.corp.example"}},
 		Injection: []runner.InjectionGrant{
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.openai.com", Header: "Authorization", Format: "Bearer %s"}},
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "artifactory.corp.example", Header: "x-api-key", Format: "%s"}},
@@ -342,7 +353,7 @@ func TestReviveRun_TheOwnersCeilingNotTheCallers(t *testing.T) {
 	if err != nil || claims.RunID != f.run.ID || claims.Sub != f.run.CreatedBy {
 		t.Errorf("fresh token claims %+v (err %v); want this run, minted for its owner %q", claims, err, f.run.CreatedBy)
 	}
-	if cfg.MITMCAKeyPEM != "ca-key" || cfg.MITMCACertPEM != "ca-cert" || !slices.Equal(cfg.Policy.AllowedDomains, []string{"api.openai.com", "api.anthropic.com"}) {
+	if cfg.MITMCAKeyPEM != "ca-key" || cfg.MITMCACertPEM != "ca-cert" || !slices.Equal(cfg.Policy.AllowedDomains, []string{"api.openai.com", "api.anthropic.com", "artifactory.corp.example"}) {
 		t.Error("the revive changed the MITM CA or the allowlist; it may only add denies and a token")
 	}
 
@@ -679,8 +690,7 @@ func TestReviveRun_RevokesTheRetiringToken(t *testing.T) {
 	}
 }
 
-// TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive is F4 (Fable
-// review of O2's placement): a LIVE run's restart whose ReplaceProxy fails
+// TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive pins this: a LIVE run's restart whose ReplaceProxy fails
 // before the old proxy is touched (a plain inspect error, not
 // ErrProxyReplaceFailed) keeps that proxy running — it renews its own token
 // and stays that way. The retiring token must therefore still verify
@@ -818,8 +828,7 @@ func TestReviveRun_RevokesTheTokensTheReplacedProxyRenewed(t *testing.T) {
 	})
 }
 
-// TestReviveRun_AgentStatusProbeErrorRefuses is the Minor fix (Fable
-// review): reviveNeedsAgentStart must not read "the probe failed" as "the
+// TestReviveRun_AgentStatusProbeErrorRefuses pins that reviveNeedsAgentStart must not read "the probe failed" as "the
 // agent is running". An outage run whose Status cannot be observed (a wedged
 // daemon) is refused with 503, never proxy-only-revived and reported success
 // while its agent might really be stopped.

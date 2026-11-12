@@ -142,6 +142,8 @@ const (
 	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
 	// that leaves nothing standing (POST /runs/preflight).
 	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
+	// The bounded list reaches past the provider row's capability_ceiling.
+	reasonADOCapabilitiesAboveCeiling = "ado_capabilities_above_ceiling"
 )
 
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field
@@ -224,6 +226,7 @@ const (
 	reasonAdminTokenNotConfigured  = "admin_token_not_configured"
 	reasonMissingBearerToken       = "missing_bearer_token"
 	reasonInvalidAdminToken        = "invalid_admin_token"
+	reasonAdminTokenRateLimited    = "admin_token_rate_limited" // too many failed admin token guesses from this address (429, Retry-After: 10)
 	// reasonIdentityProviderNotConfigured is shared by internalAuth and
 	// internalAuthGroundtruth: the identical cause (no embedded identity
 	// provider wired) refuses both the run-token and the sensor-token chains.
@@ -487,6 +490,7 @@ const (
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditUnitTargetFilter            = "audit_unit_target_filter"
 	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
 	reasonAuditPartitionNotFound           = "audit_partition_not_found"
 	reasonAuditPartitionOpen               = "audit_partition_open"
@@ -611,6 +615,24 @@ const (
 	reasonADOCallbackMissingCode     = "ado_callback_missing_code"
 	reasonADOCallbackIdentityBinding = "identity_binding"
 	reasonADOCallbackUnusableGrant   = "unusable_grant"
+	// reasonEndpointOIDCIssuerMismatch is an endpoint sign-in whose identity token came from an authority other
+	// than the one the console signs the person in with, under the console binding. Unlike identity_binding
+	// (the token is another person's), the person cannot fix it: their admin pointed the provider at the wrong
+	// authority.
+	reasonEndpointOIDCIssuerMismatch = "identity_issuer_mismatch"
+)
+
+// The sign-in door and callback of a custom endpoint that signs people in (endpoint_oidc.go), and the paste
+// door's refusal for such a row (model_provider_credentials.go). The callback's invalid reason buckets every
+// state, one-time cookie, MAC, session and stamped-row cause as one: the remedy is the same for all.
+const (
+	reasonModelProviderCredentialSignsIn = "model_provider_credential_signs_in"
+	reasonEndpointOIDCUnconfigured       = "endpoint_oidc_unconfigured"
+	reasonEndpointOIDCUnknownRow         = "endpoint_oidc_unknown_row"
+	reasonEndpointOIDCNoSession          = "endpoint_oidc_no_session"
+	reasonEndpointOIDCAuthority          = "endpoint_oidc_authority_unavailable"
+	reasonEndpointOIDCCallbackInvalid    = "endpoint_oidc_callback_invalid"
+	reasonEndpointOIDCMissingCode        = "endpoint_oidc_callback_missing_code"
 )
 
 // POST /api/v1/me/view (user_view.go): the admin/security-admin user-view

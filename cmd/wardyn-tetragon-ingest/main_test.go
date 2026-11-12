@@ -484,3 +484,79 @@ func TestTailExport_ResyncsPastStillStreamingOversizedLine(t *testing.T) {
 		t.Fatalf("droppedCount moved from %d to %d processing the SAME oversized line's still-streaming remainder — want exactly one drop for the whole line, not one per cap-sized chunk (R-06)", afterFirstDrop, got)
 	}
 }
+
+// TestTailExport_FollowsRenameAndRecreateLargerFile pins rotation by rename and
+// recreate when the new file is larger than the read offset, so a size shrink
+// cannot be what notices it: only the inode comparison does. This is how a
+// directory-mounted export on a Kubernetes node rotates.
+func TestTailExport_FollowsRenameAndRecreateLargerFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tetragon.log")
+
+	var (
+		mu     sync.Mutex
+		bodies []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	sink := newEventSink(srv.URL, "tok", 64, 8, 20*time.Millisecond, srv.Client())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+	bodyContains := func(want string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, b := range bodies {
+			if strings.Contains(b, want) {
+				return true
+			}
+		}
+		return false
+	}
+
+	line := func(bin string) string {
+		return `{"process_exec":{"process":{"binary":"` + bin + `"}}}` + "\n"
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tailExport(ctx, path, groundtruth.NewMapper(nil), sink)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for !bodyContains("/x-before-rotation") && time.Now().Before(deadline) {
+		appendLine(t, path, line("/x-before-rotation"))
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !bodyContains("/x-before-rotation") {
+		t.Fatal("event on the pre-rotation file was never read (tailer not attached)")
+	}
+
+	// Rename the live file away and recreate the path with MORE content than
+	// the tailer has read.
+	if err := os.Rename(path, filepath.Join(dir, "tetragon.log.1")); err != nil {
+		t.Fatal(err)
+	}
+	fresh := line("/x-first-after-rotation") + line("/x-second-after-rotation") +
+		line("/x-padding-"+strings.Repeat("a", 4096))
+	if err := os.WriteFile(path, []byte(fresh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for !bodyContains("/x-first-after-rotation") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !bodyContains("/x-first-after-rotation") {
+		t.Fatal("the recreated export was not followed from offset 0")
+	}
+}

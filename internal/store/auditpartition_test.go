@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/auditreceipt"
 )
 
 // The digest is defined in migration 0119; this is the same definition written out with nothing shared.
@@ -92,5 +94,32 @@ func TestPartitionDigestStreamsPastTheFieldLimit(t *testing.T) {
 	}
 	if len(d.Sum()) != 64 {
 		t.Errorf("Sum = %q, want 64 hex characters", d.Sum())
+	}
+}
+
+// TestFold_SameStepAsPartitionDigest: the checkpoint fold is the partition digest's step from another seed,
+// and the offline verifier's Fold (a separate implementation, since it links no store code) agrees with it.
+func TestFold_SameStepAsPartitionDigest(t *testing.T) {
+	m := PartitionManifest{Partition: "audit_events_p202610", Rows: 2, SeqLo: 7, SeqHi: 8, RecordedLoUS: 1, RecordedHiUS: 2}
+	hashes := []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}
+	part, fold := NewPartitionDigest(m), NewFoldDigest(m.Header())
+	for _, h := range hashes {
+		part.Add(h)
+		fold.Add(h)
+	}
+	if part.Sum() != fold.Sum() {
+		t.Fatalf("seeded with the header, the fold gives %s, the partition digest %s", fold.Sum(), part.Sum())
+	}
+	for _, seed := range []string{"", strings.Repeat("3c", 32)} {
+		f := NewFoldDigest(seed)
+		for _, h := range hashes {
+			f.Add(h)
+		}
+		if got, want := f.Sum(), referenceDigest(seed, hashes...); got != want {
+			t.Errorf("seed %q: Sum = %s, want %s", seed, got, want)
+		}
+		if got := auditreceipt.Fold(seed, hashes); got != f.Sum() {
+			t.Errorf("seed %q: auditreceipt.Fold = %s, store fold %s", seed, got, f.Sum())
+		}
 	}
 }

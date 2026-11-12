@@ -36,6 +36,7 @@ package conformance_test
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -43,6 +44,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,16 +80,24 @@ func TestConformanceK8s(t *testing.T) {
 	// resolved the same way register.go would — empty => k8s.New's own
 	// "default" fallback (Config.withDefaults). ci.yml sets it to the
 	// PSS-restricted namespace it labels.
-	sub, err := k8s.New(k8s.Config{
+	sub, err := k8s.New(k8sSuiteConfig(k8s.Config{
 		Namespaces: []string{os.Getenv("WARDYN_K8S_NAMESPACE")},
 		ProxyImage: proxyImage,
 		Record:     true, // the production default; see the doc comment above
+		// A No network create is refused without a peer, and the suite's server-mode driver has no
+		// Wardyn to point at: its own namespace (the fallback is Config.withDefaults') and a label no
+		// Wardyn pod carries. The suite's control-plane URL is a loopback literal, so nothing is looked up
+		// or pinned, and no case here calls Wardyn.
+		ControlPlanePeer: &k8s.ControlPlanePeer{
+			Namespace: cmp.Or(os.Getenv("WARDYN_K8S_NAMESPACE"), "default"),
+			PodLabels: map[string]string{standInLabelKey: standInLabelValue},
+		},
 		// ConfinementRuntimes deliberately nil: this suite proves CC1 (the
 		// unconditional floor); CC2/CC3 need a RuntimeClass pin this
 		// throwaway conformance cluster does not provision (see A1's
 		// Config.ConfinementRuntimes doc — a RuntimeClass name carries no
 		// guessable platform convention).
-	})
+	}))
 	if err != nil {
 		// Construction itself IS the positive canary-direction proof: k8s.New
 		// refuses to boot unless the boot-time egress canary proves this
@@ -122,6 +132,8 @@ func TestConformanceK8s(t *testing.T) {
 		// Wardyn SENDS, never what a real apiserver then defaults.
 		EphemeralStorageProbe: ephemeralStorageProbe,
 		UserDrives:            k8sDriveFixture(t, cs, ns, agentImage),
+		// The suite refuses to start without the real wardyn-proxy (WARDYN_PROXY_IMAGE above).
+		RealProxy: true,
 		// DefaultRouteProbe: nil (deliberately). This substrate declares
 		// StructuralEgress:false — it proves L1 (NetworkPolicy), never L0
 		// (see internal/runner/k8s's package doc) — so conformance.go's own
@@ -146,16 +158,75 @@ func TestConformanceK8s(t *testing.T) {
 		testAgentCannotReachAnythingButTheProxy(t, r, agentImage)
 	})
 
+	t.Run("NoNetworkProxyPodReachesOnlyWardyn", func(t *testing.T) {
+		testNoNetworkProxyPodReachesOnlyWardyn(t, r, agentImage)
+	})
+
 	t.Run("ClosedOffAfterTeardown", func(t *testing.T) {
 		testClosedOffAfterTeardown(t, r, cs, ns, agentImage)
 	})
+
+	t.Run("LiveProxyNarrow", func(t *testing.T) {
+		liveProxyNarrow(t, r, cs, ns, agentImage)
+	})
 }
 
-// heldScript holds a connection to the proxy and prints held=1 once it has stayed up for 2 s.
-const heldScript = `sleep 3600 | nc wardyn-proxy 3128 &
+// heldScript holds a connection to the proxy and prints held=1 once it has stayed up for 2 s. busybox nc
+// never exits while its stdin is open, so the script watches the agent's own socket table instead: it
+// finds the one ESTABLISHED socket to port 3128 (hex 0C38) and reports how it leaves ESTABLISHED.
+// gone=08 or gone=09 (CLOSE_WAIT, LAST_ACK) means the peer, the proxy, sent FIN; gone=absent means the
+// peer sent RST. Any other state means this end closed first, which is observer-error=, never a pass. A
+// table it cannot read or parse prints observer-error=<why> and stops, never gone=. HELD_PROC_NET stands
+// in for /proc/net in a local check.
+const heldScript = `sleep 3600 | nc -v wardyn-proxy 3128 2>&1 &
 pid=$!
 sleep 2
-kill -0 "$pid" && echo held=1
+kill -0 "$pid" || { echo "observer-error=nc exited before 2 s"; exit 1; }
+net=${HELD_PROC_NET:-/proc/net}
+scan() {
+	for f in "$net/tcp" "$net/tcp6"; do
+		[ -r "$f" ] || { echo "observer-error=cannot read $f"; return 1; }
+	done
+	out=$(awk -v lp="$1" '$3 ~ /:0C38$/ { split($2, a, ":"); if ((lp == "" && $4 == "01") || (lp != "" && (a[2] "") == (lp ""))) { n++; p = a[2]; s = $4 } } END { print n + 0, p, s }' "$net/tcp" "$net/tcp6") || { echo "observer-error=awk exited $?"; return 1; }
+}
+scan "" || exit 1
+set -- $out
+[ "$1" = 1 ] || { echo "observer-error=held connection not identified: $1 ESTABLISHED sockets to port 3128"; exit 1; }
+lp=$2
+case $lp in [0-9A-F][0-9A-F][0-9A-F][0-9A-F]) ;; *) echo "observer-error=bad local port '$lp'"; exit 1 ;; esac
+echo "held-port=$lp"
+echo held=1
+while :; do
+	sleep 0.2 || { echo "observer-error=sleep 0.2 failed"; exit 1; }
+	scan "$lp" || exit 1
+	set -- $out
+	case "$1 $3" in
+	"0 ") echo gone=absent; break ;;
+	"1 01") ;;
+	"1 08"|"1 09") echo "gone=$3"; break ;;
+	"1 "[0-9A-F][0-9A-F]) echo "observer-error=local port $lp is in state $3: this end closed first"; exit 1 ;;
+	*) echo "observer-error=unexpected rows for local port $lp: $out"; exit 1 ;;
+	esac
+done
+wait`
+
+// teardownHeldScript holds a connection to the proxy for closedOffAfter. Before held=1 it proves once,
+// as heldScript does, that the connection is up: the one ESTABLISHED socket to port 3128 in the agent's
+// own table. After held=1 it only waits. The sleep pipeline keeps it up, so its stream ends only when the
+// pod's processes die, and an nc that dies first during the pod's deletion is no verdict either way.
+const teardownHeldScript = `sleep 3600 | nc -v wardyn-proxy 3128 2>&1 &
+pid=$!
+sleep 2
+kill -0 "$pid" || { echo "observer-error=nc exited before 2 s"; exit 1; }
+net=${HELD_PROC_NET:-/proc/net}
+for f in "$net/tcp" "$net/tcp6"; do
+	[ -r "$f" ] || { echo "observer-error=cannot read $f"; exit 1; }
+done
+out=$(awk '$3 ~ /:0C38$/ && $4 == "01" { n++; split($2, a, ":"); p = a[2] } END { print n + 0, p }' "$net/tcp" "$net/tcp6") || { echo "observer-error=awk exited $?"; exit 1; }
+set -- $out
+[ "$1" = 1 ] || { echo "observer-error=held connection not identified: $1 ESTABLISHED sockets to port 3128"; exit 1; }
+echo "held-port=$2"
+echo held=1
 wait`
 
 // closedOffBound is how long a held connection may outlive a teardown that has returned. A driver that
@@ -241,7 +312,7 @@ func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, 
 	})
 	runPods := metav1.ListOptions{LabelSelector: "wardyn.run-id=" + spec.RunID.String()}
 
-	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", heldScript}})
+	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", teardownHeldScript}})
 	if err != nil {
 		t.Fatalf("ExecStream (hold a connection to the proxy): %v", err)
 	}
@@ -249,20 +320,42 @@ func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, 
 	if sess.Stdin != nil {
 		_ = sess.Stdin.Close()
 	}
-	held, closed := make(chan struct{}), make(chan struct{})
+	// closed is the end of the stream, which only a pod's death brings once held=1 is out. failed is an
+	// observer-error= line, which the script prints only before held=1 and then stops on its own.
+	var mu sync.Mutex
+	var lines []string
+	held, closed, failed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(closed)
+		var sawHeld, sawFailed bool
 		sc := bufio.NewScanner(sess.Stdout)
 		for sc.Scan() {
-			if strings.TrimSpace(sc.Text()) == "held=1" {
+			line := strings.TrimSpace(sc.Text())
+			mu.Lock()
+			lines = append(lines, line)
+			mu.Unlock()
+			switch {
+			case line == "held=1" && !sawHeld:
+				sawHeld = true
 				close(held)
+			case strings.HasPrefix(line, "observer-error=") && !sawFailed:
+				sawFailed = true
+				close(failed)
 			}
 		}
 	}()
+	observed := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Join(lines, " | ")
+	}
+	defer func() { t.Logf("held-connection observer printed: %s", observed()) }()
 	select {
 	case <-held:
+	case <-failed:
+		t.Fatalf("the held-connection observer failed before the connection was held: %s", observed())
 	case <-closed:
-		t.Fatal("the connection from the agent to its proxy did not stay up for 2 s — an environment problem, not a verdict: the check has nothing to find closed")
+		t.Fatalf("the connection from the agent to its proxy did not stay up for 2 s — an environment problem, not a verdict: the check has nothing to find closed (the script printed: %s)", observed())
 	case <-time.After(time.Minute):
 		t.Fatal("the held-connection script never reported — an environment problem, not a verdict")
 	}
@@ -291,6 +384,11 @@ func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, 
 	case <-closed:
 	case <-time.After(closedOffBound):
 		open = append(open, fmt.Errorf("the connection the agent held to its proxy was still up %s after teardown returned", closedOffBound))
+	}
+	select {
+	case <-failed:
+		t.Fatalf("the held-connection observer failed, so the end of its stream proves nothing: %s", observed())
+	default:
 	}
 	return errors.Join(open...)
 }

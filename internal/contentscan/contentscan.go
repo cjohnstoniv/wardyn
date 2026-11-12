@@ -223,6 +223,20 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		return nil, fmt.Errorf("contentscan: mode %q requires at least one detector", mode)
 	}
 
+	// The proxy does not re-run policy validation, so a format it cannot speak must fail here
+	// rather than quietly fall back to Wardyn's own.
+	presidioFormat := false
+	switch strings.ToLower(strings.TrimSpace(spec.DetectorSidecarFormat)) {
+	case "":
+	case types.DetectorSidecarFormatPresidio:
+		if spec.DetectorSidecarURL == "" {
+			return nil, fmt.Errorf("contentscan: detector_sidecar_format %q needs detector_sidecar_url", spec.DetectorSidecarFormat)
+		}
+		presidioFormat = true
+	default:
+		return nil, fmt.Errorf("contentscan: invalid detector_sidecar_format %q", spec.DetectorSidecarFormat)
+	}
+
 	// Filter ONCE and hold on the engine: used both to build the known-secret
 	// detector and to corpus-mask every finding's FieldPath centrally, so a
 	// corpus secret used as a JSON key is masked even with no corpus detector enabled.
@@ -249,7 +263,9 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		dets = append(dets, cd)
 	}
 	if spec.DetectorSidecarURL != "" {
-		dets = append(dets, newSidecarDetector(spec.DetectorSidecarURL, nil))
+		sc := newSidecarDetector(spec.DetectorSidecarURL, nil)
+		sc.presidio = presidioFormat
+		dets = append(dets, sc)
 	}
 	if len(dets) == 0 {
 		// Configured WITH a detector but nothing active (e.g. detect_secrets
@@ -279,6 +295,26 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 		scanAttachments: spec.ScanAttachments,
 		inspectForward:  spec.InspectForwardEgress,
 	}, nil
+}
+
+// NewSecretsOnlyEngine is NewEngine cut to one check: an exact match of the run's own
+// secret values (DetectSecrets). It is what a route whose gateway inspects prompts
+// still runs, since those values exist only in Wardyn's memory and no gateway can
+// look for them. The spec is rebuilt from the fields this check uses rather than
+// copied with the others cleared, so a detector added later stays off here.
+// (nil, nil) when spec has no DetectSecrets, or the corpus gives it nothing to match.
+func NewSecretsOnlyEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
+	if !spec.DetectSecrets {
+		return nil, nil
+	}
+	return NewEngine(types.LLMInspectionSpec{
+		Mode:                 spec.Mode,
+		DetectSecrets:        true,
+		MaxScanBytes:         spec.MaxScanBytes,
+		OnScannerError:       spec.OnScannerError,
+		BlockMinSeverity:     spec.BlockMinSeverity,
+		InspectForwardEgress: spec.InspectForwardEgress,
+	}, corpus)
 }
 
 // InspectForwardEgress reports whether the proxy should also scan the generic

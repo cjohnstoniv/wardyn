@@ -18,7 +18,7 @@ vi.mock("../../lib/api/ssh-keys", () => ({
   sshKeys: { listKeys: () => Promise.resolve([{ fingerprint: "SHA256:x", principal: "alice@example.com", name: "k", public_key: "", created_at: "" }]) },
 }));
 vi.mock("../../lib/api/runs", () => ({
-  runs: { attachTicket: vi.fn() },
+  runs: { getPolicy: () => new Promise(() => {}), attachTicket: vi.fn() },
 }));
 
 import { ConnectSSHCard } from "./run-detail-ssh";
@@ -197,12 +197,14 @@ describe("Get the CLI — the org CA fingerprints", () => {
 });
 
 describe("The SSH lane is demoted", () => {
-  it("is a folded disclosure after Get the CLI and before UI apps", async () => {
+  it("is a disclosure after Get the CLI and before UI apps, open by default when the person has a key", async () => {
     healthMock.mockResolvedValue({ status: "ok", version: "0.10.0", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     renderCard();
     const sshCmd = await screen.findByText(`ssh ${run.id}@wardyn.corp.example -p 2222`);
     const lane = sshCmd.closest("details")!;
-    expect(lane).not.toHaveAttribute("open");
+    await waitFor(() => expect(lane).toHaveAttribute("open"));
+    expect(lane.querySelector("summary svg")!.getAttribute("aria-hidden")).toBe("true");
+    expect(lane.querySelector("summary")!.textContent).not.toMatch(/[▾▴]/);
     expect(lane.querySelector("summary")!.textContent).toContain(RUN_CLI.SSH_TITLE);
     const after = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     expect(after(screen.getByText(RUN_CLI.GET_TITLE), lane)).toBe(true);

@@ -157,3 +157,22 @@ af08ab4eaccf9f4262452dc525e18792430725a7:internal/doctor/network_test.go:generic
 # The runner doctor's wire stage: the RFC 6455 sample WebSocket key and a fake test token. Never real.
 2276693f5cfcd9899c6b00c5fcc39244168045d7:internal/doctor/network.go:generic-api-key:406
 2276693f5cfcd9899c6b00c5fcc39244168045d7:internal/doctor/wire_test.go:generic-api-key:121
+
+# The gateway key parser's refusal test: PEM armour around "AAAA", which is no key. Never real.
+337837140cba8a6dcd9dccd76b5667049188ad90:internal/gatewayidentity/signer_test.go:private-key:385
+# Synthetic access token in the endpoint sign-in token-request test: a fake IdP's
+# reply ("a-0123456789") so the test can assert the token request's shape. Not a real token.
+c28f27ccc8088866e689b84819c52323a84559d9:internal/api/endpoint_oidc_test.go:generic-api-key:263
+# The MCP call-key test's stand-in for a call's sha256 hex digest (four 0-9a-f
+# cycles), committed as a literal before it became strings.Repeat. A digest, never a credential.
+716c2001921d2c766b84d15f2ab80ce852a932c6:internal/approval/mcp_call_test.go:generic-api-key:15
+# The MCP call console card test's stand-in for a call's sha256 hex digest (four 0-9a-f cycles). A digest,
+# never a credential.
+c2450be019d75f32f496890ed983465c3294528b:ui/src/app/components/screens/approvals-mcp-call.test.tsx:generic-api-key:49
+# The extra-header refusal test's sample JWT (the well-known example claims, a dummy signature),
+# committed as a literal before it was assembled from parts. A fixture, never a credential.
+41a0ea61912c2c6ebf61c9d4a28118a9b207ac48:internal/egress/proxy/extra_headers_test.go:jwt:73
+# UI test fixtures: a fake hex digest, a fake hash and a made-up UUID, as literals. Fixtures, never credentials.
+52be3c80a58ba96b9a4547850b6a7966d051f3d2:ui/src/app/components/wardyn/kube-call-card.test.tsx:generic-api-key:16
+fbfc044a5bd06512fff0ffba8c4317d44a254285:ui/src/app/components/screens/approvals-waiting.test.tsx:generic-api-key:349
+79fdeb3a4b8ef8909e59be51fc0a20ddb364689d:ui/src/app/components/screens/governance/deny-list-strip.test.tsx:generic-api-key:59

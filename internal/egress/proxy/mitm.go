@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -22,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
@@ -163,7 +165,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // isMITMHost reports whether host is an upstream the proxy will TLS-MITM.
 //
 // TRUST BOUNDARY (read before widening): TLS-MITM lets the proxy read plaintext and swap the
-// credential header. Permitted for exactly five reasons:
+// credential header. Permitted for exactly six reasons:
 //  1. built-in LLM hosts (Anthropic/OpenAI) — subscription-OAuth / content-inspection. Bedrock is
 //     excluded: its client-side SigV4 auth would be invalidated by terminate-and-reforward.
 //  2. operator-configured corp artifact hosts (p.mitmHosts, compiled at dispatch from site-config
@@ -183,6 +185,8 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 //     on port 443, whose requests the proxy signs again with role credentials the sandbox never
 //     holds. Bedrock's data plane is terminated only here, where the proxy is the signer, so #1's
 //     reason does not apply.
+//  6. a governed model list is set: each model gateway host the run's providers reach is authored at
+//     DISPATCH as "host:port", so the allowed_models gate reads its requests (allowed_models.go).
 //
 // #2/#3's surface is bounded on every axis: admin-authored only (never sandbox/agent/request); exact
 // hostname, never wildcard/suffix; exact port when the entry names one (mitmPorts), so a non-443
@@ -392,7 +396,10 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// being served; wait for the conn itself to end so the tunnel stays tracked for a drain to close.
 	connDone := make(chan struct{})
 	var connOnce sync.Once
+	base := vmnetLaneOnly(r.Context())
 	srv := &http.Server{
+		// Every inner request's context derives from this, so a relayed CONNECT's inner requests are Relayed too.
+		BaseContext: func(net.Listener) context.Context { return base },
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, rr *http.Request) {
 			p.serveMITMRequest(rw, rr, host, port)
 		}),
@@ -422,8 +429,68 @@ var mitmReadTimeout = 5 * time.Minute
 // sign-in hold would have its body cut short by time already spent waiting. Called after each point
 // that can hold, before the body is read. A writer without deadline support (a test recorder) has
 // none to re-arm.
-func rearmBodyDeadline(w http.ResponseWriter) {
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(mitmReadTimeout))
+func rearmBodyDeadline(w http.ResponseWriter, r *http.Request) { rearmBodyDeadlineAfter(w, r, 0) }
+
+// rearmBodyDeadlineAfter is rearmBodyDeadline for a body read only after a wait of up to wait somewhere
+// this proxy does not see: a via_org request the organisation's engine holds (host_call_hold.go).
+//
+// Only while network body bytes remain unread: once a request has no body left, net/http reads the
+// connection in the background with no deadline, and a deadline set then ends that read mid-handler,
+// cancelling the request and failing every later request on the connection.
+func rearmBodyDeadlineAfter(w http.ResponseWriter, r *http.Request, wait time.Duration) {
+	if !networkBodyUnread(r) {
+		return
+	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(wait + mitmReadTimeout))
+}
+
+// networkBody is the state of the body a request arrived with, kept in its context so it outlives a
+// gate replacing r.Body with a buffered copy (trackNetworkBody).
+type networkBody struct{ done atomic.Bool }
+
+type networkBodyKey struct{}
+
+// networkBodyReader marks its networkBody done at EOF or Close, the points after which net/http has
+// nothing left to read for this request.
+type networkBodyReader struct {
+	io.ReadCloser
+	state *networkBody
+}
+
+func (b *networkBodyReader) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.state.done.Store(true)
+	}
+	return n, err
+}
+
+func (b *networkBodyReader) Close() error {
+	b.state.done.Store(true)
+	return b.ReadCloser.Close()
+}
+
+// trackNetworkBody records, at a handler's entry, whether r's network body is still unread, for
+// rearmBodyDeadlineAfter. Each entry records its own: a request that passes a second entry
+// (ServeInjected's serveMITMRequest) is wrapped again, and the outer wrapper still sees every read.
+func trackNetworkBody(r *http.Request) *http.Request {
+	state := &networkBody{}
+	r = r.WithContext(context.WithValue(r.Context(), networkBodyKey{}, state))
+	if r.Body == nil || r.Body == http.NoBody {
+		state.done.Store(true)
+		return r
+	}
+	r.Body = &networkBodyReader{ReadCloser: r.Body, state: state}
+	return r
+}
+
+// networkBodyUnread reports whether r's network body may still have bytes to read. A request no entry
+// tracked counts as unread unless it has no body.
+func networkBodyUnread(r *http.Request) bool {
+	if state, ok := r.Context().Value(networkBodyKey{}).(*networkBody); ok {
+		return !state.done.Load()
+	}
+	return r.Body != nil && r.Body != http.NoBody
 }
 
 // serveMITMRequest serves a MITM-terminated request: inspects the plaintext and forwards it, and —
@@ -434,9 +501,31 @@ func rearmBodyDeadline(w http.ResponseWriter) {
 // port is the REAL CONNECT port — the dial below must use it, not assume 443, or the operator's
 // credential reaches whatever answers at the wrong port.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
+	r = trackNetworkBody(r)
+	p.stripGatewayHeaders(r.Header)
 	// A via_org destination: the inner request's own Host goes to the
 	// organisation, which refuses one that is not the grant's destination.
 	if route, ok := p.viaOrgRouteForHost(host); ok {
+		// The organisation never sees a declared trailer (forwardViaOrg sends none), so its engine cannot
+		// judge one: a declared override is refused here, as on every other lane.
+		if p.policy.namesRuleHost(host) {
+			if cause := declaredOverrideTrailerCause(r); cause != "" {
+				p.writeHostRuleRefusal(w, r, host, port, cause)
+				return
+			}
+		}
+		// The run's allowed_models judges a via_org request to a model host too: the organisation
+		// forwards it on, and nothing after this branch would see it.
+		releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+		defer releaseModels()
+		if modelRefused {
+			return
+		}
+		// The organisation's engine judges the host rules. A request they hold waits there, up to the hold
+		// window, before its body is read, so the body's own read time starts after that wait.
+		if _, held := p.hostRuleVerdict(r, host, requestEscapedPath(r)); held {
+			rearmBodyDeadlineAfter(w, r, hostCallWindow*hostCallSecond)
+		}
 		authority := r.Host
 		if authority == "" {
 			authority = net.JoinHostPort(host, strconv.Itoa(port))
@@ -450,6 +539,16 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	defer release()
+	// The run's allowed_models judges a model host's request before any door, gate or scan sees it.
+	// A method the policy refuses is left to serveAdmittedMITMRequest, which keeps its policy:method row.
+	releaseModels, modelRefused := noopRelease, false
+	if p.evaluator.MethodAllowed(r.Method) {
+		releaseModels, modelRefused = p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+	}
+	defer releaseModels()
+	if modelRefused {
+		return
+	}
 	p.serveAdmittedMITMRequest(w, r, host, port)
 }
 
@@ -458,14 +557,12 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 	// chooses each one, so the method restriction must be re-applied per request. The APPROVAL half
 	// stays per-CONNECT (docs/POLICIES.md "'One connection' is the honest word") since re-approving
 	// per inner request would multiply approvals; the method check costs nothing to re-apply.
-	if !p.evaluator.MethodAllowed(r.Method) {
-		log := decisionLog(p.reqOf(r, host, port), egress.Deny, "policy:method")
-		if p.sink != nil {
-			p.sink.emit(log)
-		}
-		// memoed=false: built right here (policy:method on an inner request), never from the
-		// private-IP memo.
-		p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
+	// Host rules judge each request inside the same way (host_rules.go).
+	if p.innerMethodRefused(w, r, host, port) {
+		return
+	}
+	r, refused := p.hostRuleRefused(w, r, host, port) // r carries an approved hold to the forward
+	if refused {
 		return
 	}
 
@@ -492,7 +589,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer releaseAzure()
-	rearmBodyDeadline(w) // the gate may have held the request (awaitADOCapability)
+	rearmBodyDeadline(w, r) // the gate may have held the request (awaitADOCapability)
 
 	// Dial target: through the corp proxy (by hostname) when configured — egressDial chains
 	// CONNECT+TLS end-to-end — else the vetted IP directly (upstream mode relaxes the vetted-IP pin
@@ -525,7 +622,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
 		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardBody(w, r, host, port)
 	} else {
-		bodyReader, scanSummary, releaseBody, blocked = p.inspectLLM(w, r, host, port, rest, channel)
+		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardedLLM(w, r, host, port, rest, channel)
 		// Honest coverage: say what happened instead of a bare scan:mitm allow for a channel we
 		// can't parse — same uninspected_channel skip the brokered route already emits.
 		if scanSummary == nil && channel == contentscan.ChannelGeneric && p.scanner != nil &&
@@ -588,7 +685,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 			brokeredFault{port: port, ruleSource: mitmSource, reason: reasonCredentialUnavailable})
 		return
 	}
-	rearmBodyDeadline(w) // the resolve may have held the request (credhold.go)
+	rearmBodyDeadline(w, r) // the resolve may have held the request (credhold.go)
 	var injectHdr *injectedHeader
 	if ok {
 		injectHdr = &hdr

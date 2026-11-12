@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// registryClients are module paths that can read an image registry. The control plane never does:
-// a prewrapped image is checked by the kubelet's own pull in a check pod, so no registry request or
-// pull credential passes through wardynd. github.com/distribution/reference only parses image names
-// and stays allowed.
+// registryClients are module paths that can read an image registry. The control plane links none of
+// them: a prewrapped image is checked by the kubelet's own pull in a check pod, and image admission's
+// registry reads go through internal/imageadmit's own client, only while admission is on.
+// github.com/distribution/reference only parses image names and stays allowed.
 var registryClients = []string{
 	"github.com/google/go-containerregistry",
 	"github.com/distribution/distribution",
@@ -23,6 +23,15 @@ var registryClients = []string{
 	"github.com/containers/image",
 	"github.com/regclient/regclient",
 	"oras.land/oras-go",
+}
+
+// registryNameParsers are packages under a registryClients path that only parse image names, like
+// github.com/distribution/reference: no transport, no client. Each is allowed as that exact package, never
+// its subtree. go-containerregistry's pkg/name imports nothing beyond the standard library and go-digest; it
+// reaches internal/api through sigstore-go, both its signature payload (which parses the signed image's name)
+// and its trusted root parser (image admission's check of a trusted root file at write).
+var registryNameParsers = map[string]bool{
+	"github.com/google/go-containerregistry/pkg/name": true,
 }
 
 // The API links no registry client under any build it ships with, so a registry read cannot come
@@ -38,6 +47,9 @@ func TestAPILinksNoRegistryClient(t *testing.T) {
 			t.Fatalf("go list -deps -tags=%q ./internal/api/...: %v\n%s", tags, err, stderr.String())
 		}
 		for _, pkg := range strings.Fields(string(out)) {
+			if registryNameParsers[pkg] {
+				continue
+			}
 			for _, client := range registryClients {
 				if pkg == client || strings.HasPrefix(pkg, client+"/") {
 					t.Errorf("tags=%q: internal/api links %s, a registry client", tags, pkg)

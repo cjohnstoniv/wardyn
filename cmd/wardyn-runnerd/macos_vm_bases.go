@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
@@ -24,24 +23,14 @@ import (
 // Standard. When Standard changes, each other base is derived from it again, one at a time, under a
 // tools-update entry (one of the 2 VM slots), and never while a run on that base lives.
 
-// macOSVMBasesDir reads the runner setting macos_vm_bases_dir (tests replace it).
-var macOSVMBasesDir = func() (string, error) {
-	c, err := effectiveRunnerConfig("", nil)
-	if err != nil {
-		return "", err
-	}
-	return c.get("macos_vm_bases_dir"), nil
-}
-
 // deriveBaseLog, in the VM directory, is the derivations' output.
 const deriveBaseLog = "derive-base.log"
 
-// macOSVMBases is the other bases' state. dir is the setting, read once (err: it could not be read);
+// macOSVMBases is the other bases' state. dir is the setting as the caller resolved it (err: it could not be read);
 // asked is the derivation last started ("<name> <stamp> <digest>") and starting says one is being
 // started; failed holds, per base, the key a derivation ended at with the base still not current; warned
-// is the last error logged. All but once and start are under macOSVMs.mu.
+// is the last error logged. All but start are under macOSVMs.mu.
 type macOSVMBases struct {
-	once     sync.Once
 	dir      string
 	err      error
 	asked    string
@@ -57,7 +46,6 @@ type macOSVMBases struct {
 // the first base that is not current, has no live run, and has not failed from this Standard is derived.
 func (m *macOSVMs) derivedBases(man macvm.Manifest) []runnerwire.MacVMDerivedBase {
 	b := &m.bases
-	b.once.Do(func() { b.dir, b.err = macOSVMBasesDir() })
 	if b.err != nil || b.dir == "" {
 		if b.err != nil {
 			m.warnBases("the other bases cannot be read; only Standard is offered", b.err)

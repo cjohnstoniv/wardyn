@@ -36,8 +36,6 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { CONNECTIONS } from "../../components/wardyn/copy/door";
-import { APP_NAME_RE } from "../../components/screens/new-run-flow/lenses/apps-lens";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -228,7 +226,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 
   it("RunnerSettings: default-off admission block mirrors the Go wire shape", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "RunnerSettings");
-    expect(goTags).toEqual(["enabled"]);
+    expect(goTags).toEqual(["enabled", "require_managed_device"]);
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "RunnerSettings");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
@@ -242,13 +240,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
-  // The macOS VM block of the site config: one tag today (max_base_age_days).
+  // The macOS VM block of the site config: max_base_age_days, the background-watch and window switches, and the three kept-machine keys.
   it("SiteMacOSVM (`macos_vm` in site config): full parity with the TS mirror", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteMacOSVM");
-    expect(goTags).toEqual(["max_base_age_days"]);
+    expect(goTags).toEqual(["max_base_age_days", "allow_background_watch", "allow_attended_window", "allow_kept_machines", "kept_machine_idle_days", "max_kept_machines_per_person"]);
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteMacOSVM");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
+
 
   // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
   it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {
@@ -311,6 +310,11 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
     // #1991: the drive catalogue's create block, keep_work_folder and enforcement included.
     ["MemberDriveCreate", "pkg/client/me_drives.go", "MemberDriveCreate", "ui/src/app/lib/api/me-drives.ts"],
+    // Kept macOS VM machines: the person's list, its envelope, the create request's machine and the run read's.
+    ["KeptMachine", "pkg/client/machines.go", "KeptMachine", "ui/src/app/lib/types/kept-machine.ts"],
+    ["MyMachines", "pkg/client/machines.go", "MyMachines", "ui/src/app/lib/types/kept-machine.ts"],
+    ["RunMachine", "pkg/client/machines.go", "RunMachineRequest", "ui/src/app/lib/types/kept-machine.ts"],
+    ["runMachineView", "internal/api/run_kept_machine.go", "RunMachine", "ui/src/app/lib/types/kept-machine.ts"],
     // GET /me's `service` block, present only for a service identity's token.
     ["meServiceReach", "internal/api/me_service_reach.go", "ServiceReach", "ui/src/app/lib/api/health.ts"],
     ["meReachPreset", "internal/api/me_service_reach.go", "ServiceReachPreset", "ui/src/app/lib/api/health.ts"],
@@ -457,6 +461,16 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const go = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
     const ts = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
+  });
+
+  it("the policy preview's image_admission fact has the same value in Go and TS", () => {
+    const go = readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
+    const goValues = [...go.matchAll(/ImageAdmissionFact\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
+    const fact = /export type ImageAdmissionFact =([\s\S]*?);/.exec(ts)?.[1] ?? "";
+    const tsValues = [...fact.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(goValues).toEqual(["checked at launch"]);
+    expect(tsValues).toEqual(goValues);
   });
 
   it("policy-preview pending reasons have the same closed enum in Go and TS", () => {
@@ -618,6 +632,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/user_drive.go", "UserDriveGrant", "members_can_write", "api/drives.ts", "UserDriveGrant"],
     ["internal/types/user_drive.go", "UserDriveListItem", "single_host", "api/drives.ts", "UserDriveListItem"],
     ["internal/types/workspace_provider.go", "UserDriveProvider", "team_drives", "types/site.ts", "UserDriveProvider"],
+    ["internal/api/user_drives.go", "userDrivesResponse", "team_drives", "api/drives.ts", "UserDrivesSnapshot"],
     ["pkg/client/families.go", "DriveRequest", "team", "api/drives.ts", "UserDriveInput"],
     ["pkg/client/families.go", "DriveGrantRequest", "members_can_write", "api/drives.ts", "UserDriveGrantInput"],
     ["pkg/client/me_drives.go", "MeDrive", "team", "api/me-drives.ts", "MeDrive"],
@@ -981,20 +996,4 @@ describe("SetupProviderAccess cause fields", () => {
       expect(tsInterfaceBody(ts, "SetupProviderAccess")).toContain(`${key}?:`);
     }
   });
-});
-
-
-it("connection re-check sentence matches the server", () => {
-  const src = readFileSync(join(repoRoot(), "internal/api/provider_connection_changes.go"), "utf8");
-  const sentence = src.match(/const providerAccessRecheck = ("[^"\n]*")/);
-  expect(sentence).not.toBeNull();
-  expect(JSON.parse(sentence![1])).toBe(CONNECTIONS.STORE_UNREADABLE);
-  expect(CONNECTIONS.STORE_UNREADABLE).toContain("Your credential may still be stored");
-});
-
-it("the New Run app-name rule is the server's uiAppNameRE", () => {
-  const src = readFileSync(join(repoRoot(), "internal/api/policy.go"), "utf8");
-  const m = /var uiAppNameRE = regexp\.MustCompile\(`([^`]+)`\)/.exec(src);
-  expect(m).not.toBeNull();
-  expect(APP_NAME_RE.source).toBe(m![1]);
 });

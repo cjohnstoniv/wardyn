@@ -12,6 +12,7 @@ import {
   MAX_PUSH_RULE_PATH_BYTES,
   nonGitHubPushRuleHosts,
   pushRulePatternProblem,
+  PUSH_RULES_CARD,
   PUSH_RULES_WARN_SSH_ONLY,
   pushRulesUnenforceableBySSHOnly,
   pushRulesWarnNonGithub,
@@ -249,6 +250,15 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(current.push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
   });
 
+  it("keeps the fields it does not edit: a stored deny_all, deny_new_executables and max_file_size_mib survive an added deny path", async () => {
+    let current: RunPolicySpec = BASE;
+    const stored = { deny_all: true, deny_new_executables: true, max_file_size_mib: 8 };
+    render(<Harness initial={{ ...BASE, push_rules: stored }} capture={(next) => (current = next)} />);
+    await user.click(within(denySection()).getByRole("button", { name: "Add path" }));
+    setField(screen.getByLabelText("Deny path 1"), "secrets/**");
+    expect(current.push_rules).toEqual({ ...stored, deny_paths: ["secrets/**"] });
+  });
+
   it("removes a row and drops the key entirely when the document is back to nothing", async () => {
     let current: RunPolicySpec = BASE;
     render(
@@ -352,11 +362,10 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  // The mock's own header (packet script) carries this exact count next to
-  // the title in every one of its five "Try it" scenarios.
+  // The counts next to the title read "N denied path(s) · N path(s) held for review".
   it("the header states the deny/review counts, and they track the document", () => {
     const { rerender } = render(<PushRulesSection spec={BASE} onSpecChange={() => {}} />);
-    expect(screen.getByText("0 deny · 0 held for review")).toBeInTheDocument();
+    expect(screen.getByText("0 denied paths · 0 paths held for review")).toBeInTheDocument();
     rerender(
       <PushRulesSection
         spec={{
@@ -366,7 +375,24 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
         onSpecChange={() => {}}
       />,
     );
-    expect(screen.getByText("2 deny · 1 held for review")).toBeInTheDocument();
+    expect(screen.getByText("2 denied paths · 1 path held for review")).toBeInTheDocument();
+  });
+
+  // deny_all has no toggle on this card: a policy that sets it says so read-only, and one that does not
+  // says nothing.
+  it("states a stored deny_all read-only, and nothing without it", () => {
+    const { rerender } = render(
+      <PushRulesSection spec={{ ...BASE, push_rules: { deny_all: true } }} onSpecChange={() => {}} />,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(PUSH_RULES_CARD.DENY_ALL_STATUS);
+    expect(status).toHaveTextContent(PUSH_RULES_CARD.DENY_ALL_WHERE);
+    expect(PUSH_RULES_CARD.DENY_ALL_STATUS).toBe("Every push is refused by this policy.");
+    // The 0/0 counts would read as "nothing is refused", so they are hidden under deny_all.
+    expect(screen.queryByText(/denied paths? ·/)).not.toBeInTheDocument();
+    rerender(<PushRulesSection spec={{ ...BASE, push_rules: { deny_paths: ["a/**"] } }} onSpecChange={() => {}} />);
+    expect(screen.queryByText(PUSH_RULES_CARD.DENY_ALL_STATUS)).not.toBeInTheDocument();
+    expect(screen.getByText("1 denied path · 0 paths held for review")).toBeInTheDocument();
   });
 
   // A row's error is not just visually beside its input — an assistive

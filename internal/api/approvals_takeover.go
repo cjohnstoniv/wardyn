@@ -138,19 +138,33 @@ func (s *Server) loadTakeover(w http.ResponseWriter, r *http.Request) (types.App
 // takeoverResponse is a take over / hand back answer: the row, and where the person drives.
 type takeoverResponse struct {
 	types.ApprovalRequest
-	// Surface is "desktop" when the run's policy declares a novnc UI app, else "terminal".
+	// Surface is "desktop" when the run declares a novnc UI app or is a VM run whose built-in desktop the
+	// browser can drive (the UI gateway on), else "terminal".
 	Surface string `json:"surface"`
 }
 
-// takeoverSurface is where a takeover of run puts the person: its declared desktop, else its terminal.
+// takeoverSurface is where a takeover of run puts the person: its declared desktop, or a desktop VM
+// run's built-in desktop (the gateway's __desktop app) while the browser can drive it, else its terminal.
+// A macOS VM run whose desktop is view only in the browser keeps the terminal, as does one whose agent
+// allows no desktop sign-ins (the door the desktop would open is refused), as does a run whose governance
+// profile denies UI apps.
 func (s *Server) takeoverSurface(ctx context.Context, run types.AgentRun) string {
-	apps, err := s.effectiveUIApps(ctx, run.ID)
-	if err == nil && s.uiGatewayEnabled() {
+	if !s.uiGatewayEnabled() {
+		return "terminal"
+	}
+	// The desktop door refuses a run under deny_ui_apps; an unreadable profile gets the terminal, which that limit does not refuse.
+	if p, err := s.runUnit(ctx, run); err != nil || (p != nil && p.Limits.DenyUIApps) {
+		return "terminal"
+	}
+	if apps, err := s.effectiveUIApps(ctx, run.ID); err == nil {
 		for _, app := range apps {
 			if app.Name == "novnc" {
 				return "desktop"
 			}
 		}
+	}
+	if run.MachineKind.IsVM() && !run.BackgroundOnly() && !s.macOSDesktopViewOnly(run) && !s.macOSDesktopSignInsOff(ctx, run) {
+		return "desktop"
 	}
 	return "terminal"
 }

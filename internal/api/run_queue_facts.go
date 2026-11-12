@@ -24,15 +24,33 @@ type queuePassKey struct{}
 // stored authority, not the name: two runs of one person queued under different group snapshots resolve
 // different pools and ceilings.
 type queueOwnerFacts struct {
-	poolsRead   bool
-	pools       []store.RunnerPoolCatalogueRow
-	poolRefusal *runRefusal
+	// pools are the owner's permitted pools by the unit their runs froze (frozenUnitKey): a unit row of a
+	// use policy admits by that unit, so two runs of one owner in two units read two answers.
+	pools       map[string]queuePoolFacts
 	ceilingRead bool
 	ceiling     governanceCeiling
 	ceilingErr  error
 }
 
+type queuePoolFacts struct {
+	rows    []store.RunnerPoolCatalogueRow
+	refusal *runRefusal
+}
+
 type queueOwnerKey struct{}
+
+// frozenUnitKey names the unit ctx judges a pool's unit rows by: "" for the owner's current unit, "-"
+// for a run that froze none, else the frozen unit's id.
+func frozenUnitKey(ctx context.Context) string {
+	f, ok := ctx.Value(frozenPoolUnitKey{}).(frozenPoolUnit)
+	switch {
+	case !ok:
+		return ""
+	case f.id == nil:
+		return "-"
+	}
+	return f.id.String()
+}
 
 // withQueuePass starts a pass's cache on ctx.
 func withQueuePass(ctx context.Context) context.Context {
@@ -63,17 +81,22 @@ func withQueueOwner(ctx context.Context, owner string, authority []byte) context
 	return context.WithValue(ctx, queueOwnerKey{}, f)
 }
 
-// queuePermittedPools is permittedPools for the owner on ctx, read once per pass.
+// queuePermittedPools is permittedPools for the owner on ctx, read once per pass for each frozen unit.
 func (s *Server) queuePermittedPools(ctx context.Context, ps store.RunnerPoolStore) ([]store.RunnerPoolCatalogueRow, *runRefusal) {
 	f, ok := ctx.Value(queueOwnerKey{}).(*queueOwnerFacts)
 	if !ok {
 		return s.permittedPools(ctx, ps, true)
 	}
-	if !f.poolsRead {
-		f.pools, f.poolRefusal = s.permittedPools(ctx, ps, true)
-		f.poolsRead = true
+	key := frozenUnitKey(ctx)
+	got, read := f.pools[key]
+	if !read {
+		got.rows, got.refusal = s.permittedPools(ctx, ps, true)
+		if f.pools == nil {
+			f.pools = map[string]queuePoolFacts{}
+		}
+		f.pools[key] = got
 	}
-	return f.pools, f.poolRefusal
+	return got.rows, got.refusal
 }
 
 // queueCeiling is effectiveCeiling for the owner on ctx, read once per pass.

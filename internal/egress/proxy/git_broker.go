@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -143,6 +144,9 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
 	}
+	if p.refuseWithheldPush(w, r, githubHost, rest, func(src string) { p.emitGitDecision(r, egress.Deny, src) }) {
+		return
+	}
 
 	// Push confinement (ON by default; =false opts out). A receive-pack POST
 	// carries its ref updates in a small pkt-line command section AHEAD of the
@@ -201,8 +205,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// Build the upstream URL from the MATCHED key + validated rest, never the
 	// raw request path, so nothing attacker-controlled beyond it flows outbound.
 	upstreamURL := "https://" + githubHost + "/" + orgRepo + ".git/" + rest
-	if r.URL.RawQuery != "" {
-		upstreamURL += "?" + r.URL.RawQuery
+	// Refs discovery forwards only the service validGitRest read, rebuilt; a
+	// pack POST takes no query.
+	if rest == "info/refs" {
+		upstreamURL += "?" + url.Values{"service": {r.URL.Query().Get("service")}}.Encode()
 	}
 	outReq, err := http.NewRequestWithContext(
 		context.WithValue(r.Context(), vettedIPKey{}, target),
@@ -217,6 +223,8 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	outReq.ContentLength = r.ContentLength
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
+	p.stripGatewayHeaders(outReq.Header)
+	stripRouteOverrides(outReq.Header)
 	// Defensive: strip any sandbox-supplied credential before injecting ours
 	// (stripSandboxCredentials, inject.go) so a rogue client can't smuggle its own.
 	stripSandboxCredentials(outReq.Header, "")

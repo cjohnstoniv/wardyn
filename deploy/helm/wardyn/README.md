@@ -54,16 +54,17 @@ Wardyn is up.
 
 ## Prerequisites
 
-Platform requirements, in one breath: **Kubernetes 1.20+ (1.25+ with `k8s.enabled`), Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. In detail:
+**Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** CI runs the chart on Kubernetes 1.31 and the latest kind image; it sets no `kubeVersion`. Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. In detail:
 
-- **Kubernetes 1.20+** and **Helm 3**.
-  - With `k8s.enabled` the floor is **1.25+**: exec and attach add an ephemeral container (`UpdateEphemeralContainers`), which is GA from 1.25.
+- **Helm 3**. Other Kubernetes versions are untested.
+  - With `k8s.enabled`, exec and attach add an ephemeral container (`UpdateEphemeralContainers`), which is GA from 1.25.
 - **A CNI that enforces NetworkPolicy** (Calico, Cilium, ...).
   - The chart renders portable `networking.k8s.io/v1` policies — no specific CNI required — but enforcement is load-bearing:
     - with `k8s.enabled`, a boot-time egress canary verifies it and refuses to start the substrate on a non-enforcing CNI
     - (kind's default kindnet is the classic case — the conformance CI lane pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the refusal to a loud warning).
   - A DIFFERENT knob, `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, never downgrades this enforcement refusal — it only acknowledges the SEPARATE trap below (an ambient default-deny already present in `k8s.runsNamespace`),
     - and only when the canary pod actually ran and could not connect.
+- **Pod sysctls allowed in `k8s.runsNamespace`** (with `k8s.enabled`): each run's proxy pod sets `net.ipv4.ip_unprivileged_port_start=53`, a namespaced safe sysctl, to bind its DNS listener without a capability. A cluster whose admission forbids pod sysctls fails every run at proxy start.
 - **Postgres 13+** (external or managed).
 - A wardynd image:
   - the chart's default pulls the CI-published one for a released version (see the callout at the top), or **build and push your own** (see below) for a fork, a private registry, or an unreleased change.
@@ -107,9 +108,9 @@ kubectl create secret docker-registry regcred -n wardyn \
 - Pin the version — an unpinned OCI install silently follows the newest chart:
 
 ```bash
-# NOT releases/latest — it excludes pre-releases, and a Wardyn release may be
-# one, so that endpoint can skip the newest release or 404.
-WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
+# The release GitHub marks Latest (a pre-release is never marked; set WARDYN_VERSION by hand for one).
+# If there is none the lookup fails and the guard below refuses to install unpinned.
+WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 ```
 
@@ -156,18 +157,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 - The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json` (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on boot with `open examples/policies/default.json: no such file or directory`; on one of those, add `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`).
 - To use a different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under `/examples/policies/` (`demo.json`, ...).
 - To bake a cluster-specific policy into the chart instead — an alternative to picking among the image's bundled ones — see [Default policy](#default-policy).
-- The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops runs idle for an hour.
-- To keep the old behaviour, use a policy with `auto_stop_after_sec` set to `0`.
-- The shipped file is also the ceiling member runs are clamped to,
-  - so while it is in use a member's `auto_stop_after_sec` of `0`, a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions use (admins are not clamped).
-- On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run that makes no egress calls and has no attach is also stopped after an hour.
-- A run someone is attached to (a browser terminal, an SSH shell, an exec, sftp or `-L` channel) is not idle-stopped, as long as the attach's keepalive writes, made every 30 seconds, succeed;
-  - they are best effort and a failed one is dropped.
-- To lengthen the hour for members, raise `auto_stop_after_sec` in the default policy rather than setting it to `0`:
-  - a ceiling of `0` removes the cap and also turns idle stop off for every run that does not set its own.
-- Three more clocks are separate:
-  - idle pause (`pause_idle_after_sec` in a governance profile; the Kubernetes runner cannot freeze, so it never applies there), the lease (`ends_at`, none by default, set only by a profile's run limits) and `WARDYN_RUN_MAX_AGE` (off by default).
-- See [Run lifetime](../../../docs/operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run).
+- The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops idle runs after an hour, and member runs are clamped to that ceiling. See [Run lifetime](../../../docs/operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) for the clamp, the attach keepalive and the other clocks.
 
 > [!IMPORTANT]
 > **Upgrade note — `/readyz` is a 0.6-and-later endpoint.**
@@ -258,6 +248,7 @@ env:
   WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=user"
   WARDYN_OIDC_DEFAULT_ROLE: "user"          # unmatched users land here instead of being denied
   WARDYN_OIDC_OPERATOR_EMAILS: "platform@corp.example"  # legacy admin safety net, still honored
+  WARDYN_GOVERN_ADMIN_RUNS: "true"          # recommended with SSO; see docs/operations/member-mode.md
 
 extraEnv:
   - name: WARDYN_OIDC_CLIENT_SECRET       # 🔒 secret-bearing var — extraEnv, never a literal `env` value
@@ -273,6 +264,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   -f rbac-values.yaml   # the snippet above
 ```
 
+- Where admins sign in with SSO, set `env.WARDYN_GOVERN_ADMIN_RUNS` so their runs are governed like a member's. It refuses Record Mode unless `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT=recording`, and it governs admin-role personal tokens, so check CI first ([Constrained-admin mode](../../../docs/operations/member-mode.md#constrained-admin-mode)).
 - Keep `auth.adminToken` configured even with OIDC set up:
   - the admin token always authenticates as admin (one shared credential, no per-human identity to demote), which is the recovery path if a role-map typo ever locks every human out.
 - Set `env.WARDYN_OIDC_ROLE_MAP` on its own (no `extraEnv`/Entra changes) against an EXISTING OIDC-only install to turn on RBAC for the first time;
@@ -408,6 +400,18 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - With no ResourceQuota in the runs namespace, it is also how wardynd measures the cluster at boot to propose the cluster runner's limits. With neither, the runner gets none and takes no run until an admin sets them. The kind quickstart turns it on for that.
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),
     - and one that would fill a quota to 90% or more is warned; a quota wardynd may not read is reported as unreadable, never as empty.
+- `k8s.agentSandbox.enabled` (`WARDYN_K8S_AGENT_SANDBOX`, default `false`, **experimental**): creates each run's agent pod through a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox` instead of directly.
+  - Off renders exactly what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
+  - Tested against agent-sandbox v1.0.9 only (beta `agents.x-k8s.io/v1beta1`). Install its controller and CRD first: this chart installs neither.
+  - Needs `k8s.enabled=true` and an enforced NetworkPolicy; the chart refuses `k8s.allowUnenforcedNetPol` and `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`, including one set through `extraEnv` `valueFrom`, which it cannot read.
+  - Adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes.agents.x-k8s.io` to the runner Role, nothing to the ClusterRole.
+  - Also renders two `ValidatingAdmissionPolicy` objects with bindings (`<release>-wardyn-sandbox-pod-gate` and `-ungate`) for the runs namespace.
+    - The first selects pod creates by the controller's identity (`k8s.agentSandbox.controller`, default the upstream ServiceAccount). It refuses one without the `wardyn.dev/verify` scheduling gate or a `Sandbox` owner, or one that names a node.
+    - The second selects an update of a pod that held the gate. Only wardynd's own ServiceAccount may remove the gate, and the same write may not change labels, annotations, owners, images, tolerations, node selector, affinity, the deadline or the node, or add an ephemeral container.
+    - They need Kubernetes 1.30+ and fail closed. Other identities, Wardyn's own pods included, are not selected.
+    - The guarantee covers create and gate-removal hooks, and only while those two identities are configured right. A kind run has not yet proven it.
+    - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
+  - Refused with `k8s.ackAmbientDefaultDeny` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` too, as a literal or a `valueFrom`.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
   - Ships at 1000m/2048Mi so a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size.
   - `runner.sandbox.proxyResources` sizes each run's `wardyn-proxy` sidecar (500m/256Mi).
@@ -418,6 +422,20 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g. `--set k8s.runtimeClasses.CC2=gvisor`.
   - Unlike Docker's well-known runtime family names, a RuntimeClass object name is operator-chosen and carries no platform convention Wardyn can guess;
     - CC2/CC3 stay unadvertised (CC1-only) until pinned here to a RuntimeClass whose `.Handler` actually delivers that class's isolation.
+  - Running CC3 on a managed cluster with Kata, for a pool whose RuntimeClass is named `kata-vm-isolation` with handler `kata`:
+    ```
+    helm upgrade --install wardyn ... --set k8s.runtimeClasses.CC3=kata-vm-isolation
+    ```
+    - The value is the RuntimeClass NAME, which may be anything. CC3 is advertised only when that class exists in the cluster and its HANDLER is non-empty and does not start with `runc`, `crun`, `sysbox` or `runsc` (the list is in [`internal/runner/sandbox.go`](../../../internal/runner/sandbox.go); `kata`, `kata-qemu` and `krun` pass).
+    - A missing class, an empty pin or a refused handler makes a CC3 run fail to start; it never falls back to the node's default runtime.
+    - The RuntimeClass is set on the agent pod only. The `wardyn-proxy` pod runs on the node's default runtime, outside the guest.
+    - Agent limits (`runner.sandbox.defaultResources`, or the policy's resources) become the pod's CPU and memory limits, and its requests equal them unless `runner.sandbox.requestRatio` is set.
+    - CC2 stays unadvertised on a cluster with no gVisor (`runsc*`) handler: leave `k8s.runtimeClasses.CC2` empty.
+    - A Linux VM sandbox (`k8s.linuxVM=true` in the `wardyn-runnerd` chart, not this one) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
+    - Not proven: CI does not run Kata, because the conformance test skips where none is installed.
+    - The unit tests use a fake clientset with class `kata` and handler `kata-qemu`, plus a `kata-vm-isolation` / `kata` row, so this pairing has never run on a real cluster.
+    - Unknown: PVC drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
+    - Nothing here states what your cloud's node pools support (sizes, hardening modes, scanners); check your provider's documentation.
 - `k8s.apiServer.ports`: port(s) the control-plane NetworkPolicy opens so wardynd can reach the API server.
   - Defaults to `[443, 6443]` — `kubernetes.default.svc`'s Service port (443, what client-go's in-cluster config always targets) PLUS the typical kubeadm/kind apiserver backend port (6443):
     - on iptables-mode kube-proxy + Calico, the DNAT to that backend port happens BEFORE Calico evaluates egress, so `[443]` alone fails this rule closed on that (common) combination.
@@ -449,7 +467,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 ### User drives (`drives.enabled`)
 
 - Renamed from `userDrives.enabled` in 0.8 (issue #658), a clean break with no alias — a `--reuse-values` upgrade from an older release must set `drives` explicitly; see [docs/sdk.md](../../../docs/sdk.md)'s "Renamed in 0.8" table.
-- The chart refuses to render while the old `userDrives.enabled` is `true`, since nothing reads it any more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the `userDrives` block from your values file).
+- With `k8s.enabled`, the chart refuses to render while the old `userDrives.enabled` is `true`, since nothing reads it any more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the `userDrives` block from your values file).
 - A **user drive** is per-person storage a run mounts at `/home/agent/drive`.
 - An admin registers a drive and allocates it in the console; a member ticks a box on a run.
 - Two Kubernetes backends, both claim-based — a pod cannot bind a host path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
@@ -497,8 +515,9 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 - Accepted but not enforced, with a logged warning naming the run: **no per-pod PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide backstop).
 - That one is not a missing feature and will not close: the Pod API has no per-container maximum-pids resource to request, so there is nothing for the chart to set — see `resourceRequirements` in [`internal/runner/k8s/naming.go`](../../../internal/runner/k8s/naming.go).
 - The kubelet setting is the only lever, and it is node-wide by design.
-- Also **no in-sandbox DNS** (a fast-failing loopback-only resolver — only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress), **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no k8s-substrate equivalent),
-  - and **`replicas` stays 1 unless `ha.enabled` is set** (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "High availability").
+- Also **no in-sandbox DNS**: the agent's one nameserver is its proxy pod, which refuses every query, so only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress. `AAAA` for its own name, `wardyn-proxy`, is not refused or recorded. Its `run.dns.query` rows are capped at 64 a second per proxy; excess rows, including folded repeats, are dropped and counted in the proxy's warning.
+  - The ground-truth sensor is **opt-in, not a default**: `groundtruth.k8s.enabled` runs a DaemonSet that reads your Tetragon's export. [The page](../../../docs/operations/kubernetes-ground-truth.md) also has the recipe for joining another sensor by run.
+  - **`replicas` stays 1 unless `ha.enabled` is set** (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "High availability").
 
 - **Narrowed in 0.7.5, further in 0.8 (#164): `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's writes to `/tmp`, its workdir `/home/agent/work`, and its toolchain cache root `/home/agent/.cache`.**
   - A run's `disk_mib` becomes the agent container's `resources.limits[ephemeral-storage]`
@@ -563,7 +582,12 @@ ingress:
   annotations:
     # The setup connectivity probe is one request of up to 90s; ingress-nginx
     # times reads out at 60s by default, which turns the verdict into a 504.
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120" # or 540 if this ingress serves the egress edit
+    # The egress edit request (PATCH /api/v1/runs/{id}/egress), counted from wardynd's own
+    # time limits, can take up to 425s, or 485s for a run with a both-ways computer
+    # folder; a stalled database read at sign-in or at the audit write is not counted. Set
+    # a proxy read timeout of at least 540s for it; a shorter one can return 504 to the
+    # caller while the edit continues.
   hosts:
     - host: wardyn.example.com
       paths:
@@ -715,7 +739,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 
 ## Split SSH exposure
 
-- `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second Service object), so by default SSH shares whatever exposure HTTP has (`service.type`, `networkPolicy.ingress.from`).
+- `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second Service object), so by default SSH shares whatever exposure HTTP has (`service.type`, `networkPolicy.ingress.from`). Run pods are excluded from the same-namespace peers for the SSH port.
 - To expose SSH differently — e.g. its own `LoadBalancer` while HTTP stays internal `ClusterIP` — bring your own minimal Service targeting the same pods:
 
 ```yaml
@@ -1016,6 +1040,7 @@ spec:
   - Empty (default) => no ConfigMap, image's own baked default applies.
 - `trustedCA`: PEM text baking a corporate CA bundle into a ConfigMap, mounted read-only — see [Corporate CA trust](#corporate-ca-trust) above.
   - Empty (default) => no ConfigMap, system roots only.
+- `imageAdmission.registryAuthSecret`: optional name of an existing `kubernetes.io/dockerconfigjson` Secret (often the one `k8s.imagePullSecret` names), mounted read-only into wardynd with `WARDYN_REGISTRY_AUTH_FILE` pointing at it, so image signature checks can read private registries. Unset (default): nothing mounted, registries are read anonymously. Wardyn never creates the Secret or calls the Secrets API; an `env.WARDYN_REGISTRY_AUTH_FILE` wins. See [image signature checks](../../../docs/operations/image-signature-checks.md).
 - `kek.domains`: a map from key-domain name to `transit: {key, role}` or `azurekv: {key, signingKey, clientId}`, rendered to a ConfigMap and mounted read-only as `WARDYN_KEY_DOMAINS_FILE` — see [Key domains](#key-domains) above.
   - Empty (default) => no ConfigMap, every principal key under the credential key.
 - `awsSSOProxyInject`: `"on"` or empty. `"off"`, `"false"`, `"0"` were removed in 0.10.0 and `wardynd` refuses to start on them — see [docs/OPERATIONS.md "Removed in 0.10.0"](../../../docs/OPERATIONS.md#removed-in-0100).
@@ -1039,6 +1064,7 @@ spec:
   - Empty by default; see [SSH on a 443-only estate](#ssh-on-a-443-only-estate) for an Istio example.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs` with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off` (no recording, no replay) when off.
   - **The chart default records nothing** until you set `env.WARDYN_RECORDING_STORE=pg` or turn on `persistence`; `wardyn setup status` shows it in the "Session recording" row.
+  - With the store off, the console's Recordings screen shows "Session recording is disabled on this deployment".
   - wardynd's own default directory writes to the read-only root FS and would crash-loop the pod (it did, on 0.7.0's empty-dir spelling).
   - The chart pins the store itself — not because `pg` is unsafe here (its casts are already readable from any replica), but because this chart is single-replica by policy (see `replicas` below),
     - so there is no HA reason to force the unbounded-by-default `pg` store on every install.
@@ -1072,5 +1098,16 @@ spec:
   - The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime upgrades.
   - Per-replica limits (connection caps, rate limiters, the `via_org` byte total of a local run) add up across replicas.
   - See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
+
+### Security and capacity settings
+
+| Value | Default | Effect |
+|---|---|---|
+| `auth.ssoOnly` | `false` | Makes SSO the only way into the console (`WARDYN_SSO_ONLY`). The chart refuses to render it beside `auth.adminToken`, `WARDYN_LOCAL_MODE` or `WARDYN_USER_DESKTOP`, and without `WARDYN_OIDC_ISSUER` |
+| `secretStore.backend` | `pg` | Where credentials are sealed: Postgres under the age key (`pg`), or Vault (`vaultkv`) or Azure Key Vault (`azurekv`). `secretStore.vault.*` or `secretStore.azure.*` holds the connection. See [Secrets and keys](../../../docs/operations/secrets-and-keys.md) |
+| `kek.provider` | `local` | The key service that wraps data keys: `local`, `transit`, `azurekv` or `awskms`. `kek.required` refuses writes without one, `kek.principalKeys` seals each person's credentials under their own key, and `kek.transit.*`, `kek.azurekv.*` and `kek.awskms.*` configure the service |
+| `maxConcurrentRuns` | `0` | Caps non-terminal runs across the deployment (`WARDYN_MAX_CONCURRENT_RUNS`); `0` is unlimited. A create past it is `422` |
+| `trustedProxies` | `""` | CIDR list of reverse proxies whose `X-Forwarded-For` names the client (`WARDYN_TRUSTED_PROXIES`); empty trusts none |
+| `goMemLimit` | `"400MiB"` | Go soft memory limit (`GOMEMLIMIT`); keep it near 80% of `resources.limits.memory` |
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

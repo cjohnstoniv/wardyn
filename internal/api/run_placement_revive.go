@@ -61,15 +61,16 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 	pc := runner.ProxyConfig{
 		RunToken: c.RunToken, ControlPlaneURL: c.ControlPlaneURL, ControlPlaneCAPEM: c.ControlPlaneCAPEM,
 		Policy: c.Policy, MITMCACertPEM: c.MITMCACertPEM, MITMCAKeyPEM: c.MITMCAKeyPEM,
-		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, PATGrants: c.PATGrants,
+		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, GitPushWithheld: c.GitPushWithheld, PATGrants: c.PATGrants,
 		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4, KubeAPI: c.KubeAPI,
 		UpstreamProxyURL: c.UpstreamProxyURL, TrustedCAPEM: c.TrustedCAPEM, InternalHosts: c.InternalHosts,
 		UpstreamProxyNoProxy: c.UpstreamProxyNoProxy, LLMUpstreams: c.LLMUpstreams,
-		LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels,
-		Unattended: c.Unattended, ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
-		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
-		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings,
-		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "",
+		LLMHeaders: c.LLMHeaders, LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels, GatewayIdentity: c.GatewayIdentity,
+		ModelLimit: runner.ModelLimitOf(c.AllowedModels, c.BedrockRoutes), Unattended: c.Unattended,
+		ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
+		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, ForgeHosts: c.ForgeHosts, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
+		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings, MCPApproveEach: c.MCPApproveEach, ActivityIgnoreHosts: c.ActivityIgnoreHosts,
+		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "", NoNetwork: c.NoNetwork,
 	}
 	for _, in := range c.Injection {
 		pc.Injection = append(pc.Injection, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule})
@@ -84,6 +85,14 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 func (s *Server) lockRevive(ctx context.Context, run types.AgentRun) (context.Context, func(), *reviveError) {
 	busy := reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 	releaseSlot := func() {}
+	if caps, stale := s.runnerNeedsUpdateToRevive(run); stale {
+		machine := caps.MachineName
+		if machine == "" {
+			machine = "its computer"
+		}
+		return ctx, nil, reviveRefused(http.StatusConflict, reasonReviveRunnerUpdateNeeded,
+			fmt.Sprintf("update the runner on %s to revive this run", machine))
+	}
 	if run.RunnerID != nil {
 		release, ok := s.runnerOwnerSlots(run.CreatedBy).acquireRevive(ctx, leaseWait)
 		if !ok {
@@ -107,6 +116,9 @@ func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun,
 	c, rerr := s.reviveCeiling(ctx, run, actorType, actor)
 	if rerr == nil {
 		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
+	}
+	if rerr == nil {
+		rerr = s.reviveDenyLists(ctx, run, c, actorType, actor)
 	}
 	if rerr == nil {
 		rerr = s.reviveBelowBoundaryFloor(ctx, run, actorType, actor)
@@ -153,6 +165,12 @@ type ownerCeiling struct {
 	// restrictionIDs are the restrictions the revived run is held to (reviveRestrictions), re-captured on
 	// the run before it is sealed.
 	restrictionIDs []uuid.UUID
+	// requiredImageSigners are the image signers the profile and the restrictions require, which a revive's
+	// image admission holds the run's pinned image to.
+	requiredImageSigners []string
+	// denyComponents and denyModelProviders are the profile's and the restrictions' deny lists, unioned,
+	// which a revive holds the run's stored components and model providers to (reviveDenyLists).
+	denyComponents, denyModelProviders []string
 }
 
 // reviveCeiling is the OWNER's current ceiling: the profile captured on the
@@ -173,7 +191,8 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorTyp
 	}
 	var c ownerCeiling
 	if p != nil {
-		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements}
+		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements,
+			requiredImageSigners: p.Limits.RequiredImageSigners, denyComponents: p.Limits.DenyComponents, denyModelProviders: p.Limits.DenyModelProviders}
 		if len(p.Limits.AllowedMacOSBases) > 0 {
 			c.allowedMacOSBases = [][]string{p.Limits.AllowedMacOSBases}
 		}

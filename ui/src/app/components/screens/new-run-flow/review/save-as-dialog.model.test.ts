@@ -15,10 +15,10 @@ const publish = (p: Partial<TemplatePublish>): TemplatePublish => ({ org: false,
 
 describe("the policy keys a policy may hold", () => {
   it("are the run-wide network, credential and access-rule keys the server pins", () => {
-    // internal/api TestTemplatePolicyKeysArePinned lists the same eleven.
+    // internal/api TestTemplatePolicyKeysArePinned lists the same fourteen.
     expect(Object.keys(POLICY_KEY_PART).sort()).toEqual([
-      "allow_all_egress", "allowed_domains", "allowed_methods", "denied_domains", "eligible_grants",
-      "first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "llm_inspection", "max_holds", "recording",
+      "allow_all_egress", "allowed_domains", "allowed_methods", "data_out", "denied_domains", "eligible_grants",
+      "first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "host_rules", "llm_inspection", "max_holds", "recording", "refuse_ip_literals",
     ]);
   });
 });
@@ -72,6 +72,12 @@ describe("savePartsOf", () => {
   it("never carries a run title, description or contract marker", () => {
     const stray = { title: "Nightly", description: "d", mode_contract: "0.9", experience: "background" } as unknown as RunIntent;
     const { parts, unassigned } = savePartsOf("template", stray);
+    expect([...parts.flatMap((p) => p.fields), ...unassigned]).toEqual(["experience"]);
+  });
+
+  it("never saves the unit a run was chosen to run in", () => {
+    const chosen = { run_in: "u-pay", experience: "background" } as unknown as RunIntent;
+    const { parts, unassigned } = savePartsOf("template", chosen);
     expect([...parts.flatMap((p) => p.fields), ...unassigned]).toEqual(["experience"]);
   });
 });

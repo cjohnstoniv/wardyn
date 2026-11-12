@@ -6,7 +6,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DESKTOP } from "../app/components/wardyn/copy/desktop";
-import { DesktopViewer, readBoot, type Boot, type DesktopSocket } from "./viewer";
+import { DesktopViewer, readBoot, WINDOW_OPEN, WINDOW_OPEN_LEGACY_REASON, type Boot, type DesktopSocket } from "./viewer";
 
 const OPEN: Boot = { state: "open", expires: 0, rfb: "/r/x/__desktop/__rfb", close: "/r/x/__desktop/__close" };
 
@@ -26,8 +26,8 @@ class FakeSocket implements DesktopSocket {
   serve(bytes: number[]) {
     act(() => this.onmessage?.({ data: Uint8Array.from(bytes).buffer } as MessageEvent));
   }
-  end(code: number) {
-    act(() => this.onclose?.({ code } as CloseEvent));
+  end(code: number, reason = "") {
+    act(() => this.onclose?.({ code, reason } as CloseEvent));
   }
   opened() {
     act(() => this.onopen?.({} as Event));
@@ -221,6 +221,7 @@ describe("DesktopViewer", () => {
     sockets[0].serve(HANDSHAKE);
     expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
     expect(screen.getByText(DESKTOP.viewOnlyBody)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.backgroundWatchBody)).toBeNull();
     expect(screen.queryByText(DESKTOP.phoneBody)).toBeNull();
     const canvas = screen.getByTestId("desktop-canvas");
     expect(canvas).toHaveAttribute("tabindex", "-1");
@@ -236,5 +237,172 @@ describe("DesktopViewer", () => {
     for (const s of [DESKTOP.linkRefused, DESKTOP.linkBody, DESKTOP.whyWallBody, DESKTOP.whySetByBody, DESKTOP.whyEnforcedBody, DESKTOP.whyCanChangeBody, DESKTOP.gatewaySaid])
       expect(within(card).getByText(s)).toBeInTheDocument();
     expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("Invalid, expired, or already-used attach ticket");
+  });
+
+  it("a background watch says so, sends no input, and a re-check's end has its own words and doesn't retry", () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const connect = vi.fn(() => {
+      const s = new FakeSocket();
+      sockets.push(s);
+      return s;
+    });
+    render(<DesktopViewer boot={{ ...OPEN, machine_kind: "macos_vm", view_only: true, background: true }} connect={connect} small={false} />);
+    sockets[0].opened();
+    sockets[0].serve(HANDSHAKE);
+    expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.backgroundWatchBody)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.viewOnlyBody)).toBeNull();
+    const canvas = screen.getByTestId("desktop-canvas");
+    expect(canvas).toHaveAttribute("tabindex", "-1");
+    const sent = sockets[0].sent.length;
+    fireEvent.pointerMove(canvas, { clientX: 5, clientY: 5 });
+    expect(sockets[0].sent.length).toBe(sent);
+
+    sockets[0].end(4005);
+    expect(screen.getByText(DESKTOP.sessionEnded)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.watchEndedBody)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.sessionEndedBody)).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  // The input messages (RFB KeyEvent 4, PointerEvent 5) a socket was sent after `from` messages.
+  const inputs = (sock: FakeSocket, from: number) =>
+    sock.sent.slice(from).filter((m) => m[0] === 4 || m[0] === 5).map((m) => (m[0] === 4 ? `key ${m[1] ? "down" : "up"} ${new DataView(m.buffer).getUint32(4).toString(16)}` : `pointer ${m[1]}`));
+
+  it("releases held keys when the canvas, the window or the tab loses focus", () => {
+    const { sockets } = open();
+    sockets[0].serve(HANDSHAKE);
+    const canvas = screen.getByTestId("desktop-canvas");
+    for (const leave of [() => fireEvent.blur(canvas), () => fireEvent.blur(window), () => {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      fireEvent(document, new Event("visibilitychange"));
+    }]) {
+      const from = sockets[0].sent.length;
+      fireEvent.keyDown(canvas, { key: "Alt", code: "AltLeft", location: 1 });
+      fireEvent.keyDown(canvas, { key: "Control", code: "ControlLeft", location: 1 });
+      leave();
+      expect(inputs(sockets[0], from)).toEqual(["key down ffe9", "key down ffe3", "key up ffe9", "key up ffe3"]);
+      leave(); // nothing is held any more, so nothing more is sent
+      expect(inputs(sockets[0], from)).toHaveLength(4);
+    }
+  });
+
+  it("says a window opened on the Mac, from the new close code or today's 4001 reason, and does not retry", () => {
+    vi.useFakeTimers();
+    expect(WINDOW_OPEN).toBe(4006);
+    for (const [code, reason] of [[4006, ""], [4001, `${WINDOW_OPEN_LEGACY_REASON}, so this desktop only watches now. Reload to keep watching.`]] as const) {
+      const a = open();
+      a.sockets[0].end(code, reason);
+      expect(screen.getByText(DESKTOP.windowOpenTitle)).toBeInTheDocument();
+      expect(screen.getByText(DESKTOP.windowOpenBody)).toBeInTheDocument();
+      expect(screen.queryByText(DESKTOP.sessionEnded)).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(20_000);
+      });
+      expect(a.connect).toHaveBeenCalledTimes(1);
+      cleanup();
+    }
+    open().sockets[0].end(4001, "something else");
+    expect(screen.getByText(DESKTOP.sessionEnded)).toBeInTheDocument();
+  });
+
+  it("shows the gateway's reason from the second failed dial, and says reconnecting after a drop", () => {
+    vi.useFakeTimers();
+    const { sockets } = open();
+    sockets[0].opened();
+    sockets[0].end(4004, "too many open UI connections for this run (max 4) - close a tab and retry");
+    expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.starting);
+    expect(screen.queryByText(/Still trying/)).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    sockets[1].opened();
+    sockets[1].end(4004, "too many open UI connections for this run (max 4) - close a tab and retry");
+    expect(screen.getByText(DESKTOP.stillTrying("too many open UI connections for this run (max 4) - close a tab and retry"))).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    sockets[2].opened();
+    sockets[2].serve(HANDSHAKE);
+    expect(screen.queryByText(/Still trying/)).toBeNull();
+    sockets[2].end(1006);
+    expect(screen.getByText(DESKTOP.reconnecting)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.reconnectingBody)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.starting)).toBeNull();
+  });
+
+  it("a drag keeps its pointer past the canvas edge and lets the button go when capture is lost", () => {
+    const { sockets } = open();
+    sockets[0].serve(HANDSHAKE);
+    const canvas = screen.getByTestId("desktop-canvas");
+    const capture = vi.fn();
+    Object.assign(canvas, { setPointerCapture: capture, hasPointerCapture: () => true, releasePointerCapture: vi.fn() });
+    const from = sockets[0].sent.length;
+    fireEvent.pointerDown(canvas, { pointerId: 7, buttons: 1 });
+    expect(capture).toHaveBeenCalledWith(7);
+    fireEvent.lostPointerCapture(canvas, { pointerId: 7 });
+    expect(inputs(sockets[0], from)).toEqual(["pointer 1", "pointer 0"]);
+  });
+
+  it("scrolls one notch per 50 px and maps a sideways swipe to the horizontal buttons", () => {
+    const { sockets } = open();
+    sockets[0].serve(HANDSHAKE);
+    const canvas = screen.getByTestId("desktop-canvas");
+    const wheel = (init: WheelEventInit) => {
+      const from = sockets[0].sent.length;
+      fireEvent.wheel(canvas, init);
+      return inputs(sockets[0], from);
+    };
+    expect(wheel({ deltaY: 100 })).toEqual(["pointer 16", "pointer 0", "pointer 16", "pointer 0"]);
+    expect(wheel({ deltaY: 30 })).toEqual([]);
+    expect(wheel({ deltaY: 30 })).toEqual(["pointer 16", "pointer 0"]);
+    expect(wheel({ deltaY: -90 })).toEqual(["pointer 8", "pointer 0"]);
+    expect(wheel({ deltaX: -60, deltaY: 0 })).toEqual(["pointer 32", "pointer 0"]);
+    expect(wheel({ deltaX: 60, deltaY: 0 })).toEqual(["pointer 64", "pointer 0"]);
+    expect(wheel({ deltaX: 0, deltaY: 0 })).toEqual([]);
+  });
+
+  it("names the canvas, says clipboard doesn't reach it, and leaves it on the escape chord", () => {
+    const { sockets } = open();
+    sockets[0].serve(HANDSHAKE);
+    const canvas = screen.getByLabelText(DESKTOP.canvasLabel);
+    expect(canvas).toBe(screen.getByTestId("desktop-canvas"));
+    expect(screen.getByText(DESKTOP.noClipboard)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.escapeHint)).toBeNull();
+    act(() => canvas.focus());
+    expect(screen.getByText("Ctrl+Shift+Backspace leaves the desktop")).toBeInTheDocument();
+    const from = sockets[0].sent.length;
+    fireEvent.keyDown(canvas, { key: "Control", code: "ControlLeft", location: 1, ctrlKey: true });
+    fireEvent.keyDown(canvas, { key: "Shift", code: "ShiftLeft", location: 1, ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(canvas, { key: "Backspace", code: "Backspace", ctrlKey: true, shiftKey: true });
+    expect(inputs(sockets[0], from)).toEqual(["key down ffe3", "key down ffe1", "key up ffe3", "key up ffe1"]);
+    expect(canvas).not.toHaveFocus();
+    expect(screen.queryByText(DESKTOP.escapeHint)).toBeNull();
+  });
+
+  it("tells a macOS VM desktop to use the terminal, not Files", () => {
+    const socket = new FakeSocket();
+    render(<DesktopViewer boot={{ ...OPEN, machine_kind: "macos_vm" }} connect={() => socket} />);
+    socket.serve(HANDSHAKE);
+    expect(screen.getByText(DESKTOP.noClipboardMac)).toBeInTheDocument();
+    expect(DESKTOP.noClipboardMac).not.toMatch(/Files/);
+    expect(screen.queryByText(DESKTOP.noClipboard)).toBeNull();
+  });
+
+  it("offers no clipboard or escape line to a view-only session", () => {
+    render(<DesktopViewer boot={{ ...OPEN, view_only: true }} connect={() => new FakeSocket()} />);
+    expect(screen.queryByText(DESKTOP.noClipboard)).toBeNull();
+  });
+
+  it("links back to the run's page when the gateway names it", () => {
+    render(<DesktopViewer boot={{ ...OPEN, run_title: "Fix the build", run_href: "https://console.example/runs/1" }} connect={() => new FakeSocket()} />);
+    expect(screen.getByRole("link", { name: DESKTOP.backToRun("Fix the build") })).toHaveAttribute("href", "https://console.example/runs/1");
+    cleanup();
+    render(<DesktopViewer boot={{ ...OPEN, run_title: "Fix the build", run_href: "javascript:alert(1)" }} connect={() => new FakeSocket()} />);
+    expect(screen.queryByRole("link")).toBeNull();
   });
 });

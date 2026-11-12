@@ -8,10 +8,9 @@ an operator follows to turn one on and run the queue.
 **Optional: require a SECOND human on egress decisions.**
 
 - Set `WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain` approval may not be the human who created the run.
-- Off by default: on unprompted, it would deadlock every single-operator deployment.
-- Both verbs: a self-*deny* is refused too.
-- A refusal is a `403` recorded as `authz.denied` with `reason: second_human_required`, landing **before** the decision is written, so a refused decision leaves the approval `PENDING`.
-- Scoped to `egress_domain` only; `credential` and every other `tool_call` approval are admin-only, and the one a run's owner may decide, an Azure DevOps access request, has its own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`.
+- Off by default, because it would deadlock every single-operator deployment.
+- A self-*deny* is refused too. A refusal is a `403` recorded as `authz.denied` with `reason: second_human_required`, landing **before** the decision is written, so a refused decision leaves the approval `PENDING`.
+- Scoped to `egress_domain` only; `credential` and every other `tool_call` approval are admin-only, and the two a run's owner may decide, an Azure DevOps access request and one MCP call, have their own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`.
 - The rule cannot apply to a run with an empty `created_by` (a system-created follow-on run): it has no human creator.
 - **Local mode REFUSES the switch** (`503`): it authenticates nobody, so the decider and the run's `created_by` both come from the client-supplied, DEV-ONLY `X-Wardyn-Principal` header, and no request can prove a second human decided.
 - Configure SSO to use this switch, or leave it unset. The refusal covers only `egress_domain` decisions.
@@ -19,13 +18,13 @@ an operator follows to turn one on and run the queue.
 **Optional: the same for Azure DevOps capability escalations.**
 
 - A member may decide an Azure DevOps capability escalation on a run they own; ownership is the whole member rule, so a creator can approve their own, admin-class capabilities included.
-- Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who creates the run can neither approve nor deny its Azure DevOps escalation; a different administrator decides.
+- Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who creates the run can neither approve nor deny its Azure DevOps escalation or MCP call approval; a different administrator decides.
 - It is a separate switch, off by default, with every rule above:
   - the same `403` / `second_human_required`, the approval left `PENDING`, the `503` in local mode (plus a boot warning), and the `admin-token` break-glass, whose `approval.second_human.bypass` row names this switch in its `switch` field.
 - Each switch governs only its own kind.
 - A run's attention state follows the setting, as for egress: it stops naming the creator as the one who can act.
 
-**Units and memberships (0.10.0).**
+**Units and memberships.**
 
 - Units form a tree under one Default unit, whose walls are the deployment default: a unit built on the deployment default is its child; a standalone unit is top-level.
 - Memberships are keyed by unit, subject type and subject, so a person can belong to several units.
@@ -37,10 +36,10 @@ an operator follows to turn one on and run the queue.
 - A unit path is at most `governance_max_depth` deep (site config; 16 unset, max 64; `0` resets, `null` keeps it); Default or a top-level unit is 1.
   - A write past it: `409` `governance_unit_depth`.
   - Lowering it below the deepest path: `400` `site_config_invalid`, naming that path.
-- Unit admins (0.10.0) govern their units and the units below them; [unit admins](unit-admins.md) has the full rule.
+- Unit admins govern their units and the units below them; [unit admins](unit-admins.md) has the full rule.
   - A security admin's unit-admin grant follows `WARDYN_GOVERNANCE_SECOND_HUMAN`, so a single-admin install can create unit admins.
-  - A unit admin's widening, a grant of a unit admin below included, is always held, whatever the switch says.
-- `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (pre-0.10.0: only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
+  - A unit admin's widening, a grant of a unit admin below included, is always held, whatever the switch says. A held change to a unit itself is decided by a security admin or an admin of a unit above it ([unit admins](unit-admins.md#four-eyes)).
+- `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
 - A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`).
 - The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`.
 - `PUT /governance/memberships/{id}` `{"unit_id"}` moves a membership, keeping its id, `priority`, `home` and `legacy` (audit `governance.membership.write`, with `from_unit_id`). An unknown unit is `404` `governance_unit_not_found`; one the subject is in, `409` `governance_membership_invalid`.
@@ -49,20 +48,37 @@ an operator follows to turn one on and run the queue.
 
 **Restrictions.**
 
-- A restriction (`/governance/restrictions`) is a deny-only list (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+- A restriction (`/governance/restrictions`) is a list of narrowing rules (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit` (`strict: true` drops the parent-unit mapping: only people whose own unit is the pin or below it run on the workspace), and an organisation component's is `PUT /components/{id}/owning-unit`.
+- A restriction can carry `denied_domains`, `allowed_domains`, `allow_all_egress: false`, first-use approval, `max_holds`, a confinement floor, `auto_stop_after_sec`, `git_push_any_branch: false`, `push_rules`, `desktop`, `recording` (a floor), `data_out`, `tool_rules`, `withheld_grants`, and `azure_devops_capabilities` / `github_capabilities`, capability caps that follow its members, and in its limits the `deny_*` switches, `allowed_models` and the caps. Each only narrows, by the same rule a unit's walls use, in every unit its people run in.
+- A restriction that names `allowed_domains` and not `allow_all_egress` turns open egress off for its people.
+- A restriction's first `allowed_domains` naming a host or wildcard waits for a second person, on create and on update, though it closes open egress: an exact entry grants what open egress does not, such as credential injection.
+- A restriction binds a run that is already running: a revive meets it again, a credential for a host outside its `allowed_domains` is withheld at the next mint, and an approval cannot admit such a host. That holds for a restriction the run started under. One a person gains later applies when the next start or revive resolves it. A new group restriction needs the owner's own sign-in: an admin's revive finds user, user-type and everyone restrictions and keeps the captured ones, but not a new group restriction.
+- Keeping the strictest floor:
+  - Key a floor restriction on a group, not a user type. Restrictions on groups combine over every group a person holds, so a person in both a restrictive and a permissive group keeps the restrictive floor.
+  - A person has one user type: the highest-priority type their sign-in matches. Two types tied at the top refuse sign-in. Where a user type must carry the floor, give the restrictive type the higher priority.
+  - A floor keyed only on a user type is lost when a higher-priority type also matches.
 
 **Optional: four-eyes on governance writes.**
 
 - Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no single administrator can change a governance profile, an assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment alone.
 - With it on, a human's write to `POST/PUT/DELETE /governance/units`, `POST/PUT/DELETE /governance/memberships` (with `POST /governance/memberships/{id}/promote`), `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
-- Nothing is applied.
-- `diff` is rendered by the server, never by a client:
+- Nothing is applied. `diff` is rendered by the server, never by a client:
   - the target's current row and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed field paths;
   - for an assignment, `diff.after` embeds the profile it points at as it stood at the proposal.
 - A second human approves it with `POST /governance/changes/{id}/approve`, or any authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at most 512 characters, no control characters, recorded on the change and its audit row only).
 - `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and `GET /governance/changes/{id}` reads one.
+- `GET /governance/changes?approver=security` lists only the changes a security admin alone may decide: no unit admin governs every unit they touch.
+- The proposer may write why the change is wanted, and a ticket reference, with `PUT /governance/changes/{id}/note` (`{"reason","ticket"}`, both optional).
+  - Only the proposer may, and only while the change is pending. A second write replaces the first.
+  - The reason is at most 500 characters. The ticket is one line of at most 128. Neither holds a control character.
+  - Both are free text, never checked against a ticketing system. A change read shows them as `note: {reason, ticket}`, and the audit row `governance.change.note` records them.
+  - `wardyn governance set --reason ... --ticket ...` writes them on every change the apply held.
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`).
-- Nothing notifies anyone that a change waits: approvers find them with `wardyn governance changes list` or the API; name who looks, and how often, in your runbook.
+- Wardyn sends no message when a change waits. The acknowledged audit webhook ([ENV.md](../ENV.md#acknowledged-delivery-delivery-acknowledged)) carries every audit row, so a relay you run can notify the people who decide:
+  1. Keep the rows whose `action` is `governance.change.propose` or `governance.change.note`.
+  2. Route on `data.units`, the ids of the units the change touches. A row with no `units` is for security admins.
+  3. Fetch `GET /governance/changes/{id}` (the row's `target`) for the diff and the note.
+  4. Deduplicate on the row `id`: delivery is at-least-once.
 
 - **Who may approve.**
   - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.
@@ -73,28 +89,14 @@ an operator follows to turn one on and run the queue.
   - The predicate is evaluated again inside the approval transaction: a token revoked since it authenticated, cut off by a session revocation, or whose role no longer passes is refused, and the change stays pending.
 - **Distinct human.**
   - An approval is refused (`403`, `authz.denied`, reason `second_human_required`, target `governance.change`) when the approver's principal equals the proposer's, or when both emails are non-empty and equal once case-folded.
-  - The proposer may reject their own change.
+  - The proposer may reject their own change, even when they could not approve it. That withdraws it, and the reject row carries `withdrawn: true`.
 - **What applies.**
   - One transaction locks the change, requires it pending and unexpired, compares the target (and, for an assignment, the profile it points at) and the deployment default with what the proposal reviewed, applies the write and moves the change to `applied`.
   - A write to the target in between (the break-glass included), a rename or ceiling change of the profile an assignment points at, or a changed deployment default makes the change `stale` (`409` `governance_change_stale`): it never overwrites.
   - The write is re-validated against the current deployment default, so an approval cannot apply what a direct write would refuse.
   - Two approvals racing on one change apply it once; the other is `409` `governance_change_not_pending`.
   - A failure after the write rolls it back.
-- **Exemptions.**
-  - Only these apply directly, with no second human:
-    - a profile update whose new effective profile is no more permissive than the current one (the same resolved comparison composition uses, `Leq`) and whose member CPU and memory cap is no higher,
-    - a rename that changes nothing else (unless held below),
-    - an availability `PUT` that leaves the restricted bit as it is,
-    - and a user type's name or description edit that leaves its priority alone.
-  - A profile update that changes the contact is held even when it narrows.
-  - So is a rename of a profile with a group assignment that shares its priority with another profile's group assignment: a person in both groups gets the profile whose name sorts first.
-  - So is one that adds an `llm_inspection` naming a `detector_sidecar_url` where the profile had none: the sidecar receives spans of the model traffic of everyone under the profile. An added inspection without one narrows.
-  - Everything else is held, deletes and every assignment write included: deleting an assignment widens its subjects back to the deployment ceiling.
-  - No grant, enforcement, availability, priority or role-mapping write has a narrowing exemption, because each can widen:
-    - deleting a deny grant,
-    - lifting a restriction (which admits every person with no grant write),
-    - turning enforcement on,
-    - raising a priority (which moves a person matching two types onto the other at their next sign-in).
+- **Exemptions.** Which writes apply directly, and what stays held, is in step 2 of the [walkthrough](#four-eyes-on-governance-writes-a-walkthrough).
 - **Per target.**
   - *Capability grant* (`POST`/`DELETE /permissions/grants`): the target is the grant's natural key (subject type, subject, capability, value);
     - a delete by id is resolved to it at proposal, so a pending delete and a pending upsert of one grant collide.
@@ -116,19 +118,14 @@ an operator follows to turn one on and run the queue.
     - A description or suspend PATCH, a PATCH naming the current sponsor, unsuspend and retire apply directly; the user type never changes on a PATCH.
     - A create applies only while the name is free, the sponsor is bound and active and the type exists; a sponsor change only while the identity is not retired or recreated and its sponsor is the one reviewed.
     - On approval the identity's tokens are revoked as after a direct sponsor change, and `service_identity.create` or `.update` is written.
-- **Break-glass and local mode.**
-  - The `admin-token` principal applies a covered write directly and approves a change, each writing `governance.change.bypass` beside the target's own row.
-  - A deployment that wants this gate to bind holds the token out of band.
-  - Local mode authenticates nobody, so the proposer and approver are both client-supplied: with the switch on it answers every covered write and every approve or reject `503` (`governance_second_human_local_mode`).
 - **Audit.**
   - `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
   - On approval the target's own row (`governance.unit.write`, `governance.membership.write`, ...) is written too, its actor the approver, carrying `change_id` and `proposed_by`.
   - The proposer, the approver, their emails and a rejection's `reason` are personal fields: the `audit_personal_fields` erasure scope clears them from the change rows, and a pending change whose proposer is erased expires, so one with no recorded proposer is never approved.
 - **Residual risks.**
-  - The `admin-token` is single-human by design.
+  - The `admin-token` is single-human by design; local mode authenticates nobody and answers every covered write `503` (step 1 of the [walkthrough](#four-eyes-on-governance-writes-a-walkthrough)).
   - A database writer can change the tables directly: the audit chain then shows a target row with no `propose`/`approve` pair, which is detection, not prevention.
   - Each change is reviewed alone: two separately approved changes can compose into a widening neither diff shows.
-  - Not covered here: the rest of the governance-adjacent writes (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, and user-type create and delete stay single-human until their own lanes).
 - **In the console.**
   - The Governance screen's Changes tab lists pending changes with the server's diff; an approver approves or rejects there (a reason is optional).
   - A held console write shows "Submitted for approval" where it was made, never a save.
@@ -141,9 +138,10 @@ an operator follows to turn one on and run the queue.
 - Refusing the token would lock you out of your own approval queue when SSO breaks, so the bypass is the deliberate break-glass.
 - It is not silent: each writes an `approval.second_human.bypass` audit event beside the `actor_type=system` `approval.decide`.
 - **For this gate to actually bind, treat the admin token as a break-glass credential** — configure SSO, and hold the token out of band.
+
 ## Four-eyes on governance writes: a walkthrough
 
-- The rules are in "Optional: four-eyes on governance writes" above; this is the order to work in.
+- The rules are under "Optional: four-eyes on governance writes" above; this is the order to work in.
 - The switch and its TTL are in [ENV.md](../ENV.md); the audit rows in [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md); the residuals in [THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
 
 **1. Before you turn it on.** All four must hold, or the switch deadlocks you or does not bind:
@@ -162,7 +160,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 
 | Write | Held when | Approver |
 |---|---|---|
-| Governance profile create, update, delete | the write is not exempt (below) | security admin or super admin |
+| Governance profile create, update, delete | the write is not exempt (see the lists below the table) | security admin or super admin |
 | Governance membership upsert, move, promote, delete | always, deletes included | security admin or super admin |
 | Capability grant upsert, delete | always | security admin or super admin |
 | Enforcement map replace | always | security admin or super admin |
@@ -174,7 +172,8 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
 | The recording level (`PUT /governance/recording`) | always | security admin or super admin |
-| A restriction delete or loosening; a unit pin moved off its branch | always | security admin or super admin |
+| A platform envelope (`PUT` or `DELETE /governance/units/{id}/envelope`) | always | security admin or super admin |
+| A restriction delete or loosening; a unit pin moved off its branch (a workspace's or a component's), or a strict workspace pin made plain | always | security admin or super admin |
 | An approval rule (`PUT /governance/approval-rules/{name}`, see [approval-rules.md](approval-rules.md)); a `DELETE` is never held | always, an edit included | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |
@@ -186,12 +185,24 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 
 Exempt, so applied directly:
 
-- a profile update whose new effective profile is no more permissive than the current one,
-- a rename or description edit that changes nothing else,
+- a profile update whose new effective profile is no more permissive than the current one (the same resolved comparison composition uses, `Leq`) and whose member CPU and memory cap is no higher,
+- a rename that changes nothing else,
 - an availability `PUT` that leaves the restricted bit as it is,
-- and a user-type name or description edit that leaves its priority alone.
+- and a user type's name or description edit that leaves its priority alone.
 
-Nothing else narrows by shape: a delete can widen (a deny grant, an assignment, a restriction), so no delete is exempt on its own.
+Held even when the update narrows:
+
+- a change to the contact,
+- a removed lock, or a re-parent that takes the unit out from under a lock its old parents hold,
+- a rename of a profile with a group assignment that shares its priority with another profile's group assignment: a person in both groups gets the profile whose name sorts first,
+- an added `llm_inspection` naming a `detector_sidecar_url` where the profile had none: the sidecar receives spans of the model traffic of everyone under the profile. An added inspection without one narrows.
+
+Everything else is held, deletes and every assignment write included: deleting an assignment widens its subjects back to the deployment ceiling. No grant, enforcement, availability, priority or role-mapping write has a narrowing exemption, because each can widen:
+
+- deleting a deny grant,
+- lifting a restriction (which admits every person with no grant write),
+- turning enforcement on,
+- raising a priority (which moves a person matching two types onto the other at their next sign-in).
 
 **3. Propose, review, decide.**
 
@@ -248,3 +259,50 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 **7. What stays single-human.**
 
 - Workspace approved and denied egress lists, record-egress promotion, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and delete, and the SCIM purge's deletion of a person's own assignments and grants.
+- Organisation-scope wall presets are also written by one admin, directly and with no hold. A preset only narrows, so this widens nothing.
+
+**8. Credential delivery rows a release cannot build.**
+
+- A stored `PUT /governance/credential-delivery` row that names a mode the server cannot build for its class stays stored, and a run that needs it is refused.
+- `GET /governance/credential-delivery` lists these rows as `unbuildable`.
+- Setup status shows a `credential_delivery` warning, for operators only. It changes nothing and never blocks.
+- The Runner credentials page does not list the rows. Read `unbuildable` from the `GET`, then set each row to a buildable mode or to refuse.
+
+## Export and restore
+
+Profiles and their assignments live in Postgres, so `make reset` / `make reset-all` take them with the volume.
+
+1. Export before a reset: `wardyn governance get > governance.json` (`GET /api/v1/governance`).
+2. Restore after: `wardyn governance set governance.json`.
+
+- `set` upserts every named profile **by name** (its unique handle), except the Default unit, which is the server's own and is never written or pruned. It upserts every membership by its natural key (unit name, subject_type, subject).
+- A person's membership of one unit and of another are two memberships. Moving a person by editing the unit in the file adds the new membership and leaves the old one; removing it takes an explicit delete or a reviewed `--prune`.
+- A profile the file does not mention is left alone. One present server-side but absent from the file is removed only with `--prune`, which also removes an omitted membership. It removes assignments before profiles, so a still-referenced profile never trips the delete-while-assigned refusal (`governance_unit_in_use`).
+- `wardyn governance get > f && wardyn governance set f` is a no-op: unchanged rows are skipped rather than re-written, so a repeat `set` issues no writes and adds no audit rows.
+
+## One file per platform
+
+A platform can keep its part of governance in a repository file: its unit, the units below it, and their memberships, unit admins and deciders rules.
+
+```
+wardyn governance get --under platform > platform.json            # that unit and every unit below it
+wardyn governance plan platform.json --under platform --prune     # the steps, deletes listed
+wardyn governance set platform.json --under platform --prune --reason "team leads decide egress" --ticket CHG-1234
+```
+
+- `--under` takes a unit name or id. `set --under` writes through the same routes as the API, so a write held for a second approver is held exactly as a direct call is, and `--reason` and `--ticket` are written on each held change.
+- The document must include the unit `--under` names. These are refused before anything is written, all in one error:
+  - a unit outside the subtree, or a new unit whose parent is outside it,
+  - a membership, an `admins` entry or a `deciders` entry on a unit outside it,
+  - any restriction: restrictions are organisation-wide, so write them without `--under`.
+- `--prune` compares against the subtree only, so it never deletes or clears anything outside it.
+- A unit admin's `get --under` followed by `set --under` of that file writes nothing.
+- `set --under` prints the subtree after the apply, the same shape `get --under` prints.
+
+The `deciders` section is each unit's own rules by unit name, in the form `wardyn governance deciders set` takes. Rules a unit inherits are not in it.
+
+- A document with no `deciders` key leaves every unit's rules alone, under `--prune` too, so a file written before the section existed never clears a rule.
+- A present section, even `{}`, is authoritative: `set` puts each listed unit's rules, and `--prune` clears the rules of every unit it omits.
+- Rules are compared in the server's stored form (`240m` equals `4h`), so an unchanged rule is no write.
+- Parents are written before children. When a parent's rule change is held, a child's rule that widens with it waits: the server refuses it as wider than the stored parent, and `set` lists it as deferred. Run `set` again after the parent's change is approved.
+- Elevations (memberships with an end) are granted through requests and are not part of a document: `set` never writes or prunes them.

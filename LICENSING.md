@@ -11,7 +11,7 @@ That means, explicitly:
 
 - **Free for individuals and free for enterprises**, at any scale. There are no
   seat limits, no node limits, no run limits, and no usage tiers.
-- **No fee, ever, for the software.** There is no paid edition, no open-core
+- **No fee for the software.** There is no paid edition, no open-core
   split, no feature held back behind a licence key. Every
   control the project documents is in this repository and runs on your
   infrastructure, or it does not run.
@@ -35,8 +35,7 @@ copyright to a single party who can then do as they like with it.
 Origin, and each contributor keeps copyright in their own work. Inbound equals
 outbound: Apache-2.0 in, Apache-2.0 out. The practical consequence is that **no
 single party — including the maintainer — can relicense the project's accumulated
-work**. That is a structural guarantee, not a promise, and it is worth more to an
-adopter than any statement of intent.
+work**.
 
 An Apache-2.0 grant, once made, is also irrevocable for the code it covers. A
 future version could in principle be published under other terms, but every
@@ -49,8 +48,8 @@ Wardyn is distributed through four channels:
 | channel | what it is |
 |---|---|
 | **Source** | this git repository |
-| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardynd-fips,wardyn-proxy,wardyn-runnerd,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
-| **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release with `wardyn-licenses.tar.gz`, the licence texts and notices for them and for the `wardyn-runnerd-*` binaries |
+| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardynd-fips,wardyn-proxy,wardyn-runnerd,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc,agent-novnc-signin}` |
+| **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}` and `wardyn-windows-{amd64,arm64}.exe`, attached to each GitHub release with `wardyn-licenses.tar.gz`, the licence texts and notices for them and for the `wardyn-runnerd-*` binaries |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
 `agent-vscode` and `agent-novnc` — the UI-sandbox relay's two apps — publish
@@ -58,6 +57,8 @@ with every release; both build `FROM` `agent-base`, never
 from the unpublished `agent-claude-code` below. Unlike the vendor CLI, Wardyn
 **does** convey what these two contain — a pinned code-server and a minimal X
 stack — under those components' own licences; see the next section.
+`agent-novnc-signin` builds `FROM` `agent-novnc` and adds Chromium, cage, wayvnc and
+fonts-liberation, also under their own licences.
 
 Three more agent Dockerfiles (`claude-code`, `oracle`, `full`) stay **local
 build recipes only**: `make agent-images` builds them on your own machine, no
@@ -86,8 +87,7 @@ binary:
 
 - Every image carries base-image packages under GPL and LGPL (Debian's `bash`,
   `coreutils`, `dpkg`, `apt`; Alpine's `busybox` and `apk-tools`). This is
-  ordinary aggregation and is how every container image on earth works, but the
-  corresponding source offer is real and is in
+  ordinary aggregation. The corresponding source offer is in
   [`deploy/images/THIRD-PARTY-GPL.md`](deploy/images/THIRD-PARTY-GPL.md).
 - The agent images apt-install `asciinema` (GPL-3.0), executed as a subprocess and
   never linked. Covered by the same source offer.
@@ -105,8 +105,9 @@ binary:
   states the vendor terms that bind anyone who builds and runs it themselves.
   The product images (`wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`) contain no such component.
 
-You do not have to take any of this on trust: every published image is
+You do not have to take any of this on trust: every release image is
 cosign-signed and carries an attested CycloneDX SBOM and build provenance.
+The continuous `wardynd:latest` and `:sha-` tags are signed only.
 [`docs/VERIFY.md`](docs/VERIFY.md) is the copy-pasteable procedure.
 
 One thing to know before your scanner reads that SBOM. A Vite bundle strips

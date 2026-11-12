@@ -50,6 +50,21 @@ describe("IdentityWidget recording row", () => {
     expect(screen.getByText(text)).toBeInTheDocument();
   });
 
+  it("says a macOS VM run's terminal sessions are recorded, not that the run is unrecorded", () => {
+    render(<IdentityWidget run={{ ...run, machine_kind: "macos_vm", recording_level: "terminal", not_recorded: "runner_declined" }} onGoPolicy={() => {}} />);
+    expect(screen.getByText("Terminal sessions are recorded at this run's recording level. The agent's output isn't recorded.")).toBeInTheDocument();
+    expect(screen.getByText(RUN_RECORDING.macos_terminal)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_RECORDING.runner_declined)).not.toBeInTheDocument();
+  });
+
+  it("keeps the runner_declined words for a Linux VM run and a macOS VM run at off", () => {
+    const { unmount } = render(<IdentityWidget run={{ ...run, machine_kind: "linux_vm", recording_level: "terminal", not_recorded: "runner_declined" }} onGoPolicy={() => {}} />);
+    expect(screen.getByText(RUN_RECORDING.runner_declined)).toBeInTheDocument();
+    unmount();
+    render(<IdentityWidget run={{ ...run, machine_kind: "macos_vm", recording_level: "off", not_recorded: "policy_off" }} onGoPolicy={() => {}} />);
+    expect(screen.getByText(RUN_RECORDING.policy_off)).toBeInTheDocument();
+  });
+
   it("shows no recording row for a recorded run", () => {
     render(<IdentityWidget run={run} onGoPolicy={() => {}} />);
     expect(screen.queryByText(RUN_RECORDING.LABEL)).not.toBeInTheDocument();

@@ -91,6 +91,11 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if sp.AllowAllEgress != nil && *sp.AllowAllEgress && sp.AllowedDomains != nil {
 		return errors.New("allow_all_egress true allows every host, so allowed_domains bounds nothing: name one of them")
 	}
+	if sp.DataOut != nil {
+		if err := validateDataOut(*sp.DataOut); err != nil {
+			return err
+		}
+	}
 	if m := limits.MaxEndAheadSec; m != nil && *m <= 0 {
 		return errors.New("limits.max_end_ahead_sec must be a positive number of seconds; omit it for no limit")
 	}
@@ -112,6 +117,9 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	}
 	spec.Desktop = sp.Desktop
 	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
+		return err
+	}
+	if err := validateVCSCaps(sp.AzureDevOpsCapabilities, sp.GitHubCapabilities); err != nil {
 		return err
 	}
 	return validateAuthoredPolicySpec(spec)
@@ -173,6 +181,10 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, ref.status, ref.reason, ref.msg)
 			return
 		}
+		if err := s.boundaryDeciderLockRefusal(r.Context(), nil, body, cur, units); err != nil {
+			s.writeDecidersError(w, r, err)
+			return
+		}
 	}
 	if mode == govQueue {
 		s.proposeGovernanceChange(w, r, govProposal{
@@ -201,7 +213,7 @@ func boundaryAuditData(before, after types.BoundaryWrite) map[string]any {
 
 // applyBoundaryChange applies a held replacement inside the decision transaction: the target lock,
 // the boundary as it now stands compared with what the proposal reviewed, then the write on q.
-func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
+func applyBoundaryChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	var held types.BoundaryWrite
 	if err := decodeHeldPayload(ch.Payload, &held); err != nil {
@@ -229,6 +241,9 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 		if ref := boundaryLocksRefusal(&held, cur, units); ref != nil {
 			return govApplied{}, ref
 		}
+		if err := s.boundaryDeciderLockRefusal(ctx, q, held, cur, units); err != nil {
+			return govApplied{}, err
+		}
 	}
 	if _, err := store.PutBoundaryQ(ctx, q, held, principalFromRequest(r)); err != nil {
 		return govApplied{}, err
@@ -245,6 +260,9 @@ type boundaryReport struct {
 	Units          []boundaryReportRow    `json:"units"`
 	StoredPolicies []boundaryReportRow    `json:"stored_policies"`
 	Memberships    []boundaryReportAssign `json:"memberships"`
+	// ProviderRows are the Azure DevOps provider rows the drafted capability cap narrows; GitHub's lists
+	// live on components and policies, so none is listed here. Always a non-nil slice.
+	ProviderRows []boundaryProviderCap `json:"provider_rows"`
 }
 
 type boundaryReportRow struct {
@@ -313,9 +331,12 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 		}
 		return boundaryChanges(redactSpecForRead(spec, tier), redactSpecForRead(after, tier), limits, afterLimits), nil
 	}
-	report := boundaryReport{Units: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Memberships: []boundaryReportAssign{}}
+	report := boundaryReport{Units: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Memberships: []boundaryReportAssign{}, ProviderRows: []boundaryProviderCap{}}
 	var err error
 	if report.Deployment, err = meet(s.cfg.DefaultPolicy, types.GovernanceLimits{}); err != nil {
+		return boundaryReport{}, err
+	}
+	if report.ProviderRows, err = s.boundaryProviderRows(ctx, b); err != nil {
 		return boundaryReport{}, err
 	}
 	if s.cfg.Store == nil {

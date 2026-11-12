@@ -60,7 +60,7 @@ func TestHandler_OverlongKeyNotFoundWithoutStoreCall(t *testing.T) {
 	} {
 		store := &countingStore{}
 		authorized := false
-		authorize := func(*http.Request, string) bool { authorized = true; return true }
+		authorize := func(http.ResponseWriter, *http.Request, string) bool { authorized = true; return true }
 		srv := httptest.NewServer(newTestRouterWithAuth(store, authorize))
 		resp, err := http.Get(srv.URL + "/api/v1/runs/" + run + "/recording/" + tc.key)
 		srv.Close()
@@ -192,7 +192,7 @@ func TestHandler_UnservableSuffixNotFoundWithoutStoreCall(t *testing.T) {
 	for _, suffix := range []string{"~a%5Cb", "~a%00b"} {
 		store := &countingStore{}
 		authorized := false
-		authorize := func(*http.Request, string) bool { authorized = true; return true }
+		authorize := func(http.ResponseWriter, *http.Request, string) bool { authorized = true; return true }
 		srv := httptest.NewServer(newTestRouterWithAuth(store, authorize))
 		resp, err := http.Get(srv.URL + "/api/v1/runs/" + run + "/recording/" + run + suffix)
 		srv.Close()

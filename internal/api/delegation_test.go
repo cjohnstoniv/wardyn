@@ -37,6 +37,8 @@ type fakeDelegateStore struct {
 	delegates map[uuid.UUID]types.Delegate
 	byCred    map[string]uuid.UUID
 	tokens    map[string]types.DelegatedToken
+	// inFlight is the count of non-terminal runs RevokeDelegate reports for a portal.
+	inFlight map[uuid.UUID]int
 }
 
 func newFakeDelegateStore() *fakeDelegateStore {
@@ -81,16 +83,21 @@ func (f *fakeDelegateStore) ListDelegates(context.Context) ([]types.Delegate, er
 	return out, nil
 }
 
-func (f *fakeDelegateStore) RevokeDelegate(_ context.Context, id uuid.UUID, now time.Time) (types.Delegate, error) {
+func (f *fakeDelegateStore) RevokeDelegate(_ context.Context, id uuid.UUID, now time.Time, cut bool) (types.Delegate, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	d, ok := f.delegates[id]
-	if !ok || d.RevokedAt != nil {
-		return types.Delegate{}, store.ErrNotFound
+	if !ok || (d.RevokedAt != nil && (!cut || d.CutInFlightAt != nil)) {
+		return types.Delegate{}, 0, store.ErrNotFound
 	}
-	d.RevokedAt = &now
+	if d.RevokedAt == nil {
+		d.RevokedAt = &now
+	}
+	if cut {
+		d.CutInFlightAt = &now
+	}
 	f.delegates[id] = d
-	return d, nil
+	return d, f.inFlight[id], nil
 }
 
 func (f *fakeDelegateStore) MintDelegatedToken(_ context.Context, t types.DelegatedToken, raw string, _ time.Time) (types.DelegatedToken, error) {

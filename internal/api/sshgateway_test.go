@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +52,22 @@ type sshMemStore struct {
 	profiles []types.GovernanceUnit
 	// profilesErr, when set, is ListGovernanceUnits' answer instead.
 	profilesErr error
+	// policy is the run policy QueryAuditEvents answers as the run's recorded envelope (the zero value has no
+	// data_out rule); policyErr fails the read, and noPolicy answers no envelope at all (data_out_test.go).
+	policy    types.RunPolicySpec
+	policyErr error
+	noPolicy  bool
+}
+
+// QueryAuditEvents answers the run's run.policy.resolve envelope, which the gateway reads for its data_out rule.
+func (s *sshMemStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.policyErr != nil || s.noPolicy {
+		return nil, s.policyErr
+	}
+	data, _ := json.Marshal(s.policy)
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
 }
 
 func newSSHMemStore() *sshMemStore {
@@ -1821,10 +1838,57 @@ func TestSSHProbeConnContainsAPanickingRequest(t *testing.T) {
 	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
 	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
 	c := panicConn{closed: make(chan struct{})}
-	go sshProbeConn(context.Background(), c)
+	go sshProbeConn(context.Background(), c, nil)
 	select {
 	case <-c.closed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the connection was not closed after its keepalive request panicked")
+	}
+}
+
+// livePeerConn answers every keepalive and records its Close.
+type livePeerConn struct {
+	ssh.Conn
+	closed chan struct{}
+}
+
+func (livePeerConn) SendRequest(string, bool, []byte) (bool, []byte, error) { return true, nil, nil }
+func (c livePeerConn) Close() error                                         { close(c.closed); return nil }
+
+// The keepalive recheck tells "unknown" from "gone": a failed store read keeps an idle connection,
+// every other reason closes it. One case per arm.
+func TestSSHProbeConnRecheckArms(t *testing.T) {
+	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
+	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	for _, tc := range []struct {
+		name, reason string
+		wantClosed   bool
+	}{
+		{"key lookup failed", sshReasonKeyLookup, false},
+		{"run lookup failed", sshReasonRunLookup, false},
+		{"session cutoff lookup failed", sshReasonCutoffLookup, false},
+		{"key deleted", "SSH key registration changed", true},
+		{"session revoked", "SSH key predates session revocation", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := livePeerConn{closed: make(chan struct{})}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var checks atomic.Int32
+			go sshProbeConn(ctx, c, func() string { checks.Add(1); return tc.reason })
+			select {
+			case <-c.closed:
+				if !tc.wantClosed {
+					t.Fatalf("%q closed an idle connection", tc.reason)
+				}
+			case <-time.After(400 * time.Millisecond):
+				if tc.wantClosed {
+					t.Fatalf("%q did not close the connection", tc.reason)
+				}
+				if checks.Load() < 3 {
+					t.Fatalf("only %d rechecks in 400ms; the keep arm proved nothing", checks.Load())
+				}
+			}
+		})
 	}
 }

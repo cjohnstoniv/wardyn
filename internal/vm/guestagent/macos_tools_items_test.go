@@ -76,7 +76,7 @@ func TestToolsPushBaseItems(t *testing.T) {
 		}
 	}
 	for _, dest := range []string{MacItemStageDir + "/edr/mnt", MacItemStageDir + "/edr/.hidden", MacItemStageDir + "/edr/a/b", MacItemStageDir + "/item.pkg", MacItemStageDir + "/Edr/item.pkg",
-		MacClaudeCodeManagedSettingsPath, strings.ToUpper(MacClaudeCodeManagedMCPPath), MacCodexRequirementsPath, MacRunDir + "/secret",
+		MacClaudeCodeManagedSettingsPath, strings.ToUpper(MacClaudeCodeManagedMCPPath), MacCodexRequirementsPath, MacRunDir + "/secret", MacSessionEnvPath,
 		MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains/System.keychain", "/Users/agent/x", "/etc/sudoers", "/private/etc/codex/requirements.toml", "/Library/../etc/codex/requirements.toml"} {
 		if err := tl.pushAllowed(dest); err == nil {
 			t.Errorf("%s allowed", dest)
@@ -91,6 +91,7 @@ func TestTrustSettingsFormsRunAsRoot(t *testing.T) {
 	cer := ItemDir("org-ca") + "/" + ItemCert
 	add := []string{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl", "-k", MacSystemKeychain, cer}
 	del := []string{"/usr/bin/security", "delete-certificate", "-t", "-Z", strings.Repeat("AB", 20), MacSystemKeychain}
+	untrust := []string{"/usr/bin/security", "remove-trusted-cert", "-d", cer}
 	for name, tc := range map[string]struct {
 		argv []string
 		exit int
@@ -98,6 +99,7 @@ func TestTrustSettingsFormsRunAsRoot(t *testing.T) {
 		"trusted":       {argv: add},
 		"trust refused": {argv: add, exit: 1},
 		"removed":       {argv: del},
+		"trust removed": {argv: untrust},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rig := newToolsRig(t)
@@ -124,6 +126,11 @@ func TestTrustSettingsFormsRunAsRoot(t *testing.T) {
 		{"/usr/bin/security", "delete-certificate", "-t", "-Z", "abc", MacSystemKeychain},
 		{"/usr/bin/security", "delete-certificate", "-c", "Org", MacSystemKeychain},
 		{"/usr/bin/security", "verify-cert", "-c", cer},
+		{"/usr/bin/security", "remove-trusted-cert", "-d", "/tmp/x.cer"},
+		{"/usr/bin/security", "remove-trusted-cert", cer},
+		{"/usr/bin/security", "remove-trusted-cert", "-d", cer, MacSystemKeychain},
+		{"/usr/bin/security", "remove-trusted-cert", "-d", MacItemStageDir + "/../etc/" + ItemCert},
+		{"/usr/bin/security", "remove-trusted-cert", "-d", ItemDir("..") + "/" + ItemCert},
 	} {
 		if w := rig.exec(argv...); w.Code != 403 {
 			t.Errorf("%q: %d", argv, w.Code)

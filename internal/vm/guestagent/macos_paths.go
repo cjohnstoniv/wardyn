@@ -45,6 +45,31 @@ const (
 	// MacRunDir is the guest's counterpart of the Linux /run/wardyn, where a delivered secret lands: a
 	// macOS guest has no /run (its system volume is sealed).
 	MacRunDir = "/var/run/wardyn"
+	// MacSessionEnvDir holds a run's settings file and its three status files, beside the pairing key in the
+	// directory stage 1 makes root:wheel 0755, so the root-only write walk (walkDir) passes every parent.
+	// Not MacRunDir: a stock guest has /private/var/run as root:daemon 0775, which the walk refuses, so no
+	// file was written there. A boot does not clear it as it does /var/run; the boot scrub does.
+	MacSessionEnvDir = "/Library/Wardyn/run"
+	// MacSessionEnvPath is the shell file of a run's non-secret settings, which the agent account's zsh
+	// reads through the hook in MacZshEnvPath: root's and read-only to the agent account, so only the agent
+	// process changes what it sources.
+	MacSessionEnvPath = MacSessionEnvDir + "/session-env.zsh"
+	// MacSessionEnvStatusPath says whether those settings reached the window's GUI session: one
+	// session_env= line (SessionEnvStatus), never a value.
+	MacSessionEnvStatusPath = MacSessionEnvDir + "/session-env.status"
+	// MacDesktopViewStatusPath says what the last desktop view showed: one line, view=console, or
+	// view=screen_sharing_login with the reason. Root's, 0644; it never holds a password.
+	MacDesktopViewStatusPath = MacSessionEnvDir + "/desktop-view.status"
+	// MacHostPrefsStatusPath says what the boot's per-host settings carry did: one host_prefs= line: off,
+	// skipped or failed with a reason, or carried with counts, then console= and a Unix time; never a
+	// file's name or contents.
+	MacHostPrefsStatusPath = MacSessionEnvDir + "/host-prefs.status"
+	// MacHostPrefsSwitchPath turns the carry on: it runs only on a base that has this regular file.
+	// /Library/Wardyn is root's, so only an administrator makes it.
+	MacHostPrefsSwitchPath = "/Library/Wardyn/setup-assistant-carry"
+	// MacZshEnvPath is the system-wide zsh file that carries the hook, /etc/zshenv spelled through /private
+	// as /etc is a link too.
+	MacZshEnvPath = "/private/etc/zshenv"
 )
 
 // EnvManagedFiles names the managed files a run's Init wrote, for the launcher's check that each is in

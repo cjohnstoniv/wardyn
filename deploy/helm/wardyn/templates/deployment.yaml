@@ -557,6 +557,13 @@ spec:
             - name: WARDYN_TRUSTED_CA_FILE
               value: {{ "/etc/wardyn/trusted-ca/ca.pem" | quote }}
             {{- end }}
+            {{- if and (.Values.imageAdmission | default dict).registryAuthSecret (not (hasKey .Values.env "WARDYN_REGISTRY_AUTH_FILE")) }}
+            # Points wardynd at the registry credentials of the named
+            # kubernetes.io/dockerconfigjson Secret, mounted read-only below.
+            # Image signature checks read them; nothing else does.
+            - name: WARDYN_REGISTRY_AUTH_FILE
+              value: {{ "/etc/wardyn/registry-auth/config.json" | quote }}
+            {{- end }}
             {{- if and $dps.existingSecret (not (hasKey .Values.env "WARDYN_DAEMON_PROXY_SECRET")) }}
             # Points wardynd at the operator-managed Secret mounted below — a
             # Secret this chart never creates, since the value is a
@@ -640,6 +647,14 @@ spec:
               value: "k8s"
             - name: WARDYN_K8S_NAMESPACE
               value: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+            {{- if include "wardyn.groundtruthEnabled" . }}
+            {{- /* Not WARDYN_GROUNDTRUTH_TOKEN_FILE: wardynd refuses to boot with both. */}}
+            {{- if hasKey $eff "WARDYN_GROUNDTRUTH_TOKEN_FILE" }}
+            {{- fail "wardyn: groundtruth.k8s.enabled delivers the sensor token through a Secret, so WARDYN_GROUNDTRUTH_TOKEN_FILE must not be set in env or extraEnv: wardynd refuses to boot with both." }}
+            {{- end }}
+            - name: WARDYN_GROUNDTRUTH_TOKEN_SECRET
+              value: {{ printf "%s/%s" (include "wardyn.groundtruthNamespace" .) (include "wardyn.groundtruthSecret" .) | quote }}
+            {{- end }}
             - name: WARDYN_PROXY_IMAGE
               value: {{ .Values.k8s.proxyImage | quote }}
             {{- if .Values.k8s.imagePullSecret }}
@@ -669,6 +684,15 @@ spec:
             - name: WARDYN_K8S_READ_NODES
               value: "true"
             {{- end }}
+            {{- if (.Values.k8s.agentSandbox | default dict).enabled }}
+            # Experimental (#3863): internal/runner/k8s creates the agent pod through a Sandbox object.
+            - name: WARDYN_K8S_AGENT_SANDBOX
+              value: "true"
+            {{- with .Values.k8s.agentSandbox.template }}
+            - name: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- $rtc := list -}}
             {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}
             {{- with .Values.k8s.runtimeClasses.CC3 }}{{- $rtc = append $rtc (printf "CC3=%s" .) -}}{{- end }}
@@ -684,6 +708,12 @@ spec:
             # refuses to boot on an http:// value that is not loopback.
             - name: WARDYN_CONTROL_PLANE_URL
               value: {{ printf "https://%s.%s.svc.%s:%d" (include "wardyn.fullname" .) .Release.Namespace (.Values.k8s.clusterDomain | default "cluster.local") $internalPort | quote }}
+            # A No network run's proxy pod may reach only these pods: wardynd's own, by the labels its
+            # own NetworkPolicy selects (run pods can carry extra labels, so the component label is part of it).
+            - name: WARDYN_K8S_CONTROL_PLANE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: WARDYN_K8S_CONTROL_PLANE_POD_LABELS
+              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/name=%s,app.kubernetes.io/component=control-plane" .Release.Name (include "wardyn.name" .) | quote }}
             {{- end }}
             {{- if $ssh.enabled }}
             - name: WARDYN_SSH_LISTEN
@@ -703,6 +733,13 @@ spec:
             {{- with $ui.originTemplate }}
             - name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE
               value: {{ . | quote }}
+            {{- end }}
+            {{- if and (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_OIDC_ISSUER")) (not $ui.originTemplate) (not (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE"))) (not (include "wardyn.allowUISharedOrigin" $)) }}
+            {{- fail "wardyn: uiSandbox.originTemplate is required when uiSandbox.enabled=true and SSO (WARDYN_OIDC_ISSUER) is configured: without it every run's apps share one origin, so a page one run serves can reach another run's app. Set uiSandbox.originTemplate (e.g. https://run-{run}.ui.example.com, needs wildcard DNS and a wildcard certificate), or set uiSandbox.acceptSharedOrigin=true to accept the shared origin" }}
+            {{- end }}
+            {{- if and $ui.acceptSharedOrigin (not $ui.originTemplate) }}
+            - name: WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN
+              value: "true"
             {{- end }}
             {{- end }}
             {{- if $ml.enabled }}
@@ -800,6 +837,11 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if (.Values.imageAdmission | default dict).registryAuthSecret }}
+            - name: registry-auth
+              mountPath: /etc/wardyn/registry-auth
+              readOnly: true
+            {{- end }}
             {{- if (.Values.siteConfigSeed | default dict) }}
             - name: site-config-seed
               mountPath: /etc/wardyn/site-config-seed
@@ -845,6 +887,14 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if (.Values.imageAdmission | default dict).registryAuthSecret }}
+        - name: registry-auth
+          secret:
+            secretName: {{ .Values.imageAdmission.registryAuthSecret | quote }}
+            items:
+              - key: .dockerconfigjson
+                path: config.json
         {{- end }}
         {{- if (.Values.siteConfigSeed | default dict) }}
         - name: site-config-seed

@@ -7,9 +7,8 @@
 
 ## Console template chips
 
-- The policy panel's template chips (`/runs/new` and `/admin/policies`) are seeded from three of these files as compiled-in consts in [`ui/src/app/components/wardyn/policy-panel.tsx`](../../ui/src/app/components/wardyn/policy-panel.tsx) — **not** read from disk at runtime.
-- [`default.json`](default.json) → **Package registries**, [`ci.json`](ci.json) → **CI baseline**, [`ci-claude-llm.json`](ci-claude-llm.json) → **Model provider only**.
-- Editing one of these files does not change what the console offers; the chip's JSON has to be updated in the panel component too.
+- The policy panel's template chips (`/runs/new` and `/admin/policies`) mirror the shape of [`default.json`](default.json) (**Package registries**), [`ci.json`](ci.json) (**CI baseline**) and [`ci-claude-llm.json`](ci-claude-llm.json) (**Model provider only**).
+- Their hosts come from the model providers you connected, and the chips are built in [`ui/src/app/components/wardyn/policy-panel.tsx`](../../ui/src/app/components/wardyn/policy-panel.tsx), not read from disk. Editing a file does not change them.
 - The **Minimal** and **Allow-all — observe first** chips are authored directly in the panel and have no example-file source.
 
 ## sandbox.yaml / sandbox-claude.yaml / sandbox-workspace.yaml
@@ -46,7 +45,7 @@
 - Claude coding policies: `api.anthropic.com` + npm/Go registry egress (GitHub arrives via the brokered `github_token` grant — contents read, approval-gated — not the allowlist); `first_use_approval: "deny_with_review"`.
 - The model credential is the run's model provider's, not a policy grant.
 - The shipped `github_token` grant carries `"repos": []`, a template. Before a `--repo` clone can work, list the repository in the grant's own `scope.repos`, as [`remote-workspace.yaml`](remote-workspace.yaml) and [`sandbox-claude.yaml`](sandbox-claude.yaml) do ([the details](../../docs/POLICIES.md)).
-- Both [`scripts/up.sh`](../../scripts/up.sh)'s `pick_policy` and host mode pick it when a real model path is configured (it replaced `composer-dev.json` — same ceiling, honest name).
+- Both [`scripts/up.sh`](../../scripts/up.sh)'s `pick_policy` and host mode pick it when a real model path is configured.
 - The `-inspected` variant is the LLM-egress-inspection example: it adds `llm_inspection` (`mode: "alert"`, `detect_secrets: true`, `on_scanner_error: "pass"`) so prompt traffic to the model provider is scanned and alerts are logged without blocking.
 
 ## ci-claude-llm.json
@@ -58,7 +57,7 @@
 
 ## demo.json
 
-- The zero-dependency floor policy (`min_confinement_class: "CC1"` — runs anywhere Docker runs, no gVisor needed): `proxy.golang.org` egress only, `first_use_approval: "deny_with_review"`, one approval-gated read-only `github_token` grant.
+- The zero-dependency floor policy (`min_confinement_class: "CC1"` — runs anywhere Docker runs, no gVisor needed): `proxy.golang.org` egress only, `first_use_approval: "deny_with_review"`, one approval-gated read-only `github_token` grant. See [CONFINEMENT.md](../../docs/CONFINEMENT.md).
 - `github.com` is deliberately **not** allowlisted — a `github_token` grant that names its repositories routes git through the repo-scoped git-broker instead, so the sandbox never dials GitHub directly.
 - The shipped grant has `"repos": []`: list the repository in its `scope.repos` first, or the broker mints nothing and the clone fails.
 - The compose launcher auto-picks it when gVisor/`runsc` is absent (see the [`deploy/compose/.env.example`](../../deploy/compose/.env.example) header for the pick order).
@@ -72,8 +71,7 @@
 ## `ui-sandbox.json` — relaying an in-container editor to the browser
 
 - The only shipped example that declares `ui_apps`.
-- Before it, `grep -rl ui_apps examples/policies/` returned nothing, so the one policy field the UI-sandbox feature turns on had no worked example anywhere.
-- `ui_apps` names a loopback port INSIDE the sandbox that the gateway may relay — `{name, port, path}`, operator-authored, never a command.
+- `ui_apps` names a loopback port INSIDE the sandbox that the gateway may relay — `{name, port, path}` (`path` is optional), operator-authored, never a command. An app marked `inbound` can be called from outside the run, by the `callers` it names; see [UI sandboxes](../../docs/UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port).
 - `name` selects the launcher the image must ship as `/usr/local/bin/wardyn-ui-<name>`: **declaring an app does not install one**, and an image without that launcher fails closed with the path it looked for.
 - `vscode` matches `deploy/images/vscode/`, which ships `/usr/local/bin/wardyn-ui-vscode`; `novnc` is the other shipped launcher.
 

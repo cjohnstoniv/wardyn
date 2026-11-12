@@ -329,6 +329,41 @@ func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
 	}
 }
 
+// TestGovCovProfileWriteExemptHoldsAPortBesideABareName: a composed profile's edit from [github.com]
+// to [github.com, github.com:22] over a base naming both is held. The composition now keeps
+// github.com:22, which a bare github.com does not reach under the port rule.
+func TestGovCovProfileWriteExemptHoldsAPortBesideABareName(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	all := []types.GovernanceUnit{govCovStandalone(govCovBase, "base", "pypi.org", "github.com", "github.com:22"),
+		govCovComposedOn(govCovPID, "p", govCovBase, "github.com")}
+	p, res := govCovBuilt(t, s, all, govCovPID,
+		`{"name":"p","parent_id":"`+govCovBase.String()+`","overlay":{"allowed_domains":["github.com","github.com:22"]}}`)
+	if !strings.Contains(" "+strings.Join(res.Ceiling.AllowedDomains, " ")+" ", " github.com:22 ") {
+		t.Fatalf("resolved allowed_domains = %v, want github.com:22 kept beside github.com", res.Ceiling.AllowedDomains)
+	}
+	if s.unitWriteExempt(context.Background(), all, p, res) {
+		t.Error("adding github.com:22 beside github.com applied without a second approver")
+	}
+}
+
+// TestGovCovComposeReadsABareBaseEntryUnderThePortRule: a unit whose overlay names b.example:8443 over a
+// base naming b.example bare composes to nothing for that host: the base reaches 80 and 443 only.
+func TestGovCovComposeReadsABareBaseEntryUnderThePortRule(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	all := []types.GovernanceUnit{govCovStandalone(govCovBase, "base", "b.example"), govCovComposedOn(govCovPID, "p", govCovBase, "b.example:8443")}
+	chain, err := chainFromRows(unitsByID(all), govCovPID, store.MaxUnitDepthCap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.composeChain(chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ceiling.AllowAllEgress || len(res.Ceiling.AllowedDomains) != 0 {
+		t.Errorf("composed egress = open %v allowed %v, want closed with nothing allowed", res.Ceiling.AllowAllEgress, res.Ceiling.AllowedDomains)
+	}
+}
+
 // TestGovCovProfileWriteExemptHoldsARenameThatMaySelect: the resolver breaks an equal-priority tie
 // between two group assignments by profile name, so a rename of a profile in such a tie is held by
 // both proofs, the metadata-only one and the narrowing one. A rename with no such tie still applies,
@@ -506,8 +541,8 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 			t.Errorf("diff = %s", ch.Diff)
 		}
 		// R1-0098: the omission warning a direct save returns rides in the diff, for the proposer and the approver.
-		if len(d.Notes) != 2 || !strings.Contains(d.Notes[0], "omits 2 allowed domain(s)") {
-			t.Errorf("notes = %v, want the omission warning a direct save would have returned", d.Notes)
+		if len(d.Notes) != 3 || !strings.Contains(d.Notes[0], "omits 2 allowed domain(s)") {
+			t.Errorf("notes = %v, want the omission warning a direct save would have returned, then the local-run limit sentence", d.Notes)
 		}
 		if _, err := govCovReplayPayload(ch); err != nil {
 			t.Errorf("the stored payload does not replay: %v", err)

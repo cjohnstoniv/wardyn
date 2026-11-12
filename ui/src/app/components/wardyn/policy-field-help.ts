@@ -72,6 +72,13 @@ export const FIELD_HELP = {
     doc: "top-level",
     snippet: ["GET", "POST"],
   },
+  host_rules: {
+    what: "Per-host method and path rules, one rule set per layer. Every set that names a host must allow a request on it.",
+    values:
+      "rules: host (exact, lowercase) + methods + paths + effect: allow | deny | hold (hold waits for a person to decide the request's host, method and path, then that answer stands for the run). Inside a set the first matching rule decides, and no match is a deny. Empty imposes nothing.",
+    doc: "host_rules--hostruleset",
+    snippet: [{ rules: [{ host: "api.example.com", methods: ["GET"], paths: ["/public"], effect: "allow" }] }],
+  },
   min_confinement_class: {
     what: "The barrier floor — the run refuses to launch below it.",
     values: "CC1 (Fence) | CC2 (Wall) | CC3 (Vault). Required.",
@@ -128,6 +135,13 @@ export const FIELD_HELP = {
     doc: "top-level",
     snippet: true,
   },
+  refuse_ip_literals: {
+    what: "Under allow_all_egress, refuses every IP-address host, in any spelling.",
+    values:
+      "true | false (default). An IP address listed exactly in allowed_domains is still allowed. It only narrows: a default or ceiling that sets it holds every run under it.",
+    doc: "top-level",
+    snippet: true,
+  },
   llm_inspection: {
     what: "Outbound content inspection on the brokered LLM routes — a guardrail and visibility layer, not exfiltration prevention.",
     values:
@@ -152,7 +166,7 @@ export const FIELD_HELP = {
   desktop: {
     what: "What may cross the desktop's edge, one rule per direction: the clipboard at the desktop relay, files at the run's Files panel.",
     values:
-      "paste_in, copy_out, upload, download: each allowed | blocked. Omitted keeps the default: paste in and upload allowed, copy out and download blocked. A member's run can only block more than its ceiling.",
+      "paste_in, copy_out, upload, download: each allowed | blocked. On a ceiling, an omitted field keeps the default: paste in and upload allowed, copy out and download blocked. A policy under a ceiling that leaves desktop out gets the ceiling's rules. One that sets them can only block more than its ceiling.",
     doc: "desktop--desktopcontrols",
     snippet: { copy_out: "allowed" },
   },
@@ -187,16 +201,16 @@ export const FIELD_HELP = {
   azure_devops_capabilities: {
     what: "This run's Azure DevOps capabilities on the per-person lane, in place of the provider's default profile — a saved policy becomes a saved access profile.",
     values:
-      "A list of grantable capabilities: code_read, code_write, pr, policy_admin, policy_bypass, repo_admin, … — anything else is refused on write. Only within the provider's capability_ceiling: a run naming anything outside it is refused at launch. Opening a pull request needs pr, not code_write. A member stands only what the provider's default profile or their governance profile grants. Omitted keeps the provider's default.",
+      "A list of grantable capabilities: code_read, code_write, pr, policy_admin, policy_bypass, repo_admin, … — anything else is refused on write. Only within the provider's capability_ceiling: a run naming anything outside it is refused at launch. Opening a pull request needs pr_create, not code_write; pr still covers pr_create, pr_vote and pr_complete. A member stands only what the provider's default profile or their governance profile grants. Omitted keeps the provider's default.",
     doc: "top-level",
-    snippet: ["code_read", "code_write", "pr", "project_read"],
+    snippet: ["code_read", "code_write", "pr_create", "project_read"],
   },
   github_capabilities: {
     what: "This run's GitHub capabilities on the per-person lane, in place of the provider's default profile — a saved policy becomes a saved access profile.",
     values:
-      "A list of grantable capabilities: code_read, code_write, workflows_write, pr, issues_read, issues_write, repo_admin, … Only within the provider's capability_ceiling. Changing files, branches or tags through the API is never granted — push with git. Omitted keeps the provider's default. Not enforced yet: no GitHub lane reads it.",
+      "A list of grantable capabilities: code_read, code_write, workflows_write, pr, pr_write, pr_review, issues_read, issues_write, repo_admin, … Only within the provider's capability_ceiling. Opening a pull request needs pr_write; pr still covers pr_write and pr_review. Changing files, branches or tags through the API is never granted — push with git. Omitted keeps the provider's default. A run whose list leaves out code_write can't push with git.",
     doc: "top-level",
-    snippet: ["code_read", "code_write", "pr"],
+    snippet: ["code_read", "code_write", "pr_write"],
   },
   harness_inner_walls: {
     what: "The harness's own walls inside Wardyn's: its sandbox, and where its approvals happen. Only adds walls: a choice looser than what the run launches with refuses the run.",
@@ -208,8 +222,15 @@ export const FIELD_HELP = {
   recording: {
     what: "How much of a run is recorded. A ceiling's level is a minimum: a policy under it may record more, never less. Keystrokes are never recorded.",
     values:
-      "off | terminal | screen_actions (a desktop's screen and an action log). Omitted: the organisation's level, terminal unless it sets one.",
+      "off | terminal | screen_actions (a desktop's screen and an action log). Omitted: the organisation's level, Terminal unless it sets one. The run owner's walls can raise it.",
     doc: "recording",
     snippet: "terminal",
+  },
+  data_out: {
+    what: "The run's rule for content leaving it. A layer above can only make it stricter.",
+    values:
+      "allowed | review | blocked. Omitted: allowed. review lets files out one at a time through the Files panel, each with a person's yes; blocked also refuses every download and every git push.",
+    doc: "data_out",
+    snippet: "review",
   },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;

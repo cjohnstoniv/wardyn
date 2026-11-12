@@ -13,6 +13,7 @@ vi.mock("../../../../lib/api/runs", () => ({
   runs: {
     getFiles: (...a: unknown[]) => getFilesMock(...a),
     getResources: (...a: unknown[]) => getResourcesMock(...a),
+    getModelUsage: () => Promise.resolve({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
   },
 }));
 
@@ -115,7 +116,7 @@ describe("SandboxWidget", () => {
     });
     render(<SandboxWidget runId="r1" live={true} />);
     await screen.findByText("Disk");
-    expect(screen.getByText(`${fmtBytes(2_000_000_000)} ${RUN_COCKPIT.diskWrittenSuffix}`)).toBeInTheDocument();
+    expect(screen.getByText(`1.9 GB ${RUN_COCKPIT.diskWrittenSuffix}`)).toBeInTheDocument();
     expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
   });
 });
@@ -135,6 +136,32 @@ describe("SandboxWidget on a macOS VM run (#3924)", () => {
     expect(await screen.findByText(RUN_COCKPIT.sandboxGuestReported)).toBeInTheDocument();
     expect(screen.getByText("7.9 GB / 8.0 GB")).toBeInTheDocument();
     expect(screen.getByText("412")).toBeInTheDocument();
+  });
+
+  it("shows a guest's disk in GB from 1 GiB, with no invented total, and leaves a small disk alone", async () => {
+    getResourcesMock.mockResolvedValue({ disk_used_bytes: 27739.5 * 1024 ** 2 });
+    const { unmount } = render(<SandboxWidget runId="r1" live={true} macOS />);
+    expect(await screen.findByText("27.1 GB")).toBeInTheDocument();
+    unmount();
+    getResourcesMock.mockResolvedValue({ disk_used_bytes: 500 * 1024 ** 2 });
+    render(<SandboxWidget runId="r1" live={true} macOS />);
+    expect(await screen.findByText("500.0 MB")).toBeInTheDocument();
+  });
+
+  it("shows a Linux sandbox's memory and disk in GB from 1 GiB, MB below, and the written total too", async () => {
+    getResourcesMock.mockResolvedValue({
+      memory_used_bytes: 512 * 1024 ** 2,
+      memory_limit_bytes: 2 * GiB,
+      disk_used_bytes: 2.1 * GiB,
+      disk_cap_bytes: 10 * GiB,
+    });
+    const { unmount } = render(<SandboxWidget runId="r1" live={true} />);
+    expect(await screen.findByText("2.1 GB / 10.0 GB")).toBeInTheDocument();
+    expect(screen.getByText("512.0 MB / 2.0 GB")).toBeInTheDocument();
+    unmount();
+    getResourcesMock.mockResolvedValue({ disk_written_bytes: 3 * GiB });
+    render(<SandboxWidget runId="r1" live={true} />);
+    expect(await screen.findByText(new RegExp(`^3\\.0 GB ${RUN_COCKPIT.diskWrittenSuffix}`))).toBeInTheDocument();
   });
 
   it("raises no warning from a guest's numbers, however full", async () => {
@@ -159,10 +186,10 @@ describe("SandboxWidget on a macOS VM run (#3924)", () => {
     expect(screen.queryByText(RUN_COCKPIT.sandboxGuestReported)).not.toBeInTheDocument();
   });
 
-  it("changes nothing on any other run", async () => {
+  it("shows memory in GB on any other run too, and still raises no guest line", async () => {
     getResourcesMock.mockResolvedValue({ memory_used_bytes: GiB, memory_limit_bytes: 8 * GiB });
     render(<SandboxWidget runId="r1" live={true} />);
-    expect(await screen.findByText(`${fmtBytes(GiB)} / ${fmtBytes(8 * GiB)}`)).toBeInTheDocument();
+    expect(await screen.findByText("1.0 GB / 8.0 GB")).toBeInTheDocument();
     expect(screen.queryByText(RUN_COCKPIT.sandboxGuestReported)).not.toBeInTheDocument();
   });
 });
@@ -369,19 +396,26 @@ describe("EgressWidget", () => {
     expect(screen.queryByText(/held/)).not.toBeInTheDocument();
   });
 
-  // 0.9 (M-RN-3 RS7): a decision a runner made while it was offline shows when it made it, not when it reached us;
-  // the refusal a full offline log forces says so.
-  it("shows a spooled row's own time and the full-log reason, and an ordinary row's age", () => {
+  // A decision that came through the spool shows its own time; only a row that reached Wardyn 60 s or more later
+  // says so. The refusal a full offline log forces says so.
+  it("marks a row that reached Wardyn later, and keeps the full-log reason", () => {
+    const now = new Date().toISOString();
     const observed = aheadByHours(-5);
     const egress: SpooledEgressDecision[] = [
-      { id: "e1", time: new Date().toISOString(), domain: "api.example.com", decision: "allow", spooled_at: observed },
-      { id: "e2", time: new Date().toISOString(), domain: "blocked.example.com", decision: "deny", spooled_at: observed, spool_full: true },
-      { id: "e3", time: new Date().toISOString(), domain: "plain.example.com", decision: "allow" },
+      { id: "e1", time: now, domain: "api.example.com", decision: "allow", spooled_at: observed },
+      { id: "e2", time: now, domain: "blocked.example.com", decision: "deny", spooled_at: observed, spool_full: true },
+      { id: "e3", time: now, domain: "plain.example.com", decision: "allow" },
+      { id: "e4", time: now, domain: "quick.example.com", decision: "allow", spooled_at: new Date(Date.now() - 30_000).toISOString() },
+      { id: "e5", time: now, domain: "bad.example.com", decision: "allow", spooled_at: "not a time" },
     ];
     render(<EgressWidget egress={egress} />);
-    expect(screen.getAllByText(/^Recorded offline at /)).toHaveLength(2);
+    expect(screen.getAllByText(/^Reached Wardyn later/)).toHaveLength(2);
+    expect(screen.queryByText(/offline at/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/^Reached Wardyn later/)[0]).toHaveAttribute("title", expect.stringMatching(/^Decided on the runner at .+\. Recorded here at .+\.$/));
     expect(screen.getByText("Refused — the runner's offline log was full")).toBeInTheDocument();
     expect(screen.getByText("plain.example.com").parentElement).toHaveTextContent("just now");
+    expect(screen.getByText("quick.example.com").parentElement).not.toHaveTextContent("Reached");
+    expect(screen.getByText("bad.example.com").parentElement).not.toHaveTextContent("Reached");
   });
 });
 
@@ -417,7 +451,7 @@ describe("IdentityWidget", () => {
     const id = "3f9c1e2a-7b44-4d0e-9c1a-5e8b2d6f4a10";
     render(<IdentityWidget run={{ ...run, id, title: "payments deps bump" }} onGoPolicy={() => {}} />);
     expect(screen.getByText("payments deps bump")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toHaveAttribute("title", `${id}\nClick to copy`);
+    expect(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" })).toHaveAttribute("title", `${id}\nClick to copy`);
     expect(screen.queryByText(id)).not.toBeInTheDocument();
   });
 
@@ -508,10 +542,22 @@ describe("IdentityWidget: where the run ran", () => {
 
   it("names the remote-hosted runner and its pool on a completed run that was not filled", () => {
     expect(rows({ placement: "remote", remote_runner_id: "k8s", runner_name: "Cluster A", runner_pool_id: "p1", runner_pool_name: "Build farm" })).toEqual({
-      placement: "Remote-hosted runner",
+      placement: "Kubernetes cluster",
       runner: "Cluster A",
       pool: "Build farm",
     });
+  });
+
+  it.each([
+    ["docker", "Docker host"],
+    ["k8s", "Kubernetes cluster"],
+    ["", "Remote-hosted runner"],
+  ])("a remote run on runner_target %j reads %j", (runner_target, expected) => {
+    expect(rows({ placement: "remote", runner_target }).placement).toBe(expected);
+  });
+
+  it("prefers the substrate the run was placed on over the deployment's runner_target", () => {
+    expect(rows({ placement: "remote", runner_target: "docker", remote_runner_id: "k8s" }).placement).toBe("Kubernetes cluster");
   });
 
   it("names the person's own computer, and falls back to the ids when no names are known", () => {
@@ -733,7 +779,7 @@ describe("IdentityWidget: Runs on and Evidence", () => {
   // C2: a remote run says where it ran (0.9.1: placed or not), and never carries the Evidence row or note.
   it.each(["substrate", "runner_asserted"] as const)("a remote run has no Evidence, whatever its evidence_source (%s)", (evidence_source) => {
     renderAs({ ...base, placement: "remote", runner_id: undefined, runner_name: undefined, evidence_source } as AgentRun, "me");
-    expect(screen.getByText("Remote-hosted runner")).toBeInTheDocument();
+    expect(screen.getByText("Docker host")).toBeInTheDocument();
     expect(screen.queryByText("The only place this run could run.")).not.toBeInTheDocument();
     expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
     expect(screen.queryByText(/your computer/)).not.toBeInTheDocument();
@@ -755,7 +801,7 @@ describe("IdentityWidget: Runs on and Evidence", () => {
 
   it("a remote run the resolver placed says where, and that it was the only place", () => {
     renderAs({ ...base, placement: "remote", placement_filled: true, runner_id: undefined, runner_name: undefined, evidence_source: "substrate" } as AgentRun, "me");
-    expect(screen.getByText("Remote-hosted runner")).toBeInTheDocument();
+    expect(screen.getByText("Docker host")).toBeInTheDocument();
     expect(screen.getByText("The only place this run could run.")).toBeInTheDocument();
   });
 });

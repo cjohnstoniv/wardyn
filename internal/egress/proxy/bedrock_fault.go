@@ -66,13 +66,15 @@ func bedrockRefusal(status int, class string) string {
 
 // emitLLMAllowWithFault is emitLLMDecision's Allow for a relayed LLM call,
 // plus the Bedrock data-plane fault class read off resp (bedrockUpstreamFault)
-// — kept here, beside that classifier, rather than in llm_routes.go.
-func (p *Proxy) emitLLMAllowWithFault(r *http.Request, host string, port int, ruleSource string, scan *egress.ScanSummary, path string, resp *http.Response) {
+// — kept here, beside that classifier, rather than in llm_routes.go. callID is the
+// attempt's X-Wardyn-Call-Id on a gateway route, "" elsewhere.
+func (p *Proxy) emitLLMAllowWithFault(r *http.Request, host string, port int, ruleSource string, scan *egress.ScanSummary, path, callID string, resp *http.Response) {
 	if p.sink == nil {
 		return
 	}
 	log := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSource)
 	log.Scan = scan
 	log.UpstreamFault = p.bedrockUpstreamFault(host, path, resp)
+	log.GatewayCallID = callID
 	p.emitDialledAllow(log, host)
 }

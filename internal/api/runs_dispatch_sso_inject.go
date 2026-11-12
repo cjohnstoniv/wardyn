@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -190,7 +191,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		SSORoleName:      t.bedrock.ssoRoleName,
 		Region:           t.bedrock.ssoRegion,
 		ProviderUID:      sso.provider,
-	}, injections, t.bedrock.sigv4Hosts)
+	}, injections, t.bedrock.sigv4Hosts, t.bedrock.sigv4Gateway)
 }
 
 // authorAWSSSOGrant is the grant and the MITM entry both AWS sign-in lanes
@@ -200,10 +201,15 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 //
 // With sigv4Hosts (a re-signed lane, runs_dispatch_aws_sigv4.go) the same grant
 // goes to the proxy's re-signer instead: no injection rule and no portal MITM
-// entry, so no request from the sandbox can carry the session.
+// entry, so no request from the sandbox can carry the session. gw, when set, is
+// the gateway the re-signer's calls go to (a Bedrock lane with run identity).
 func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn awsSSOScopeSnapshot,
-	injections []runner.InjectionGrant, sigv4Hosts []string,
+	injections []runner.InjectionGrant, sigv4Hosts []string, gw *proxy.AWSSigV4Gateway,
 ) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, bool) {
+	var gateways []proxy.AWSSigV4Gateway
+	if gw != nil && sigv4Hosts != nil {
+		gateways = []proxy.AWSSigV4Gateway{*gw}
+	}
 	portalHost := ssoPortalHost(sn.Region, s.cfg.AWSSSOEndpointOverride)
 	// The port the run actually reaches, not a hard-coded 443.
 	// ssoEgressHosts already honours the override's port, so an override on any
@@ -260,9 +266,10 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 		"pin_path":  awsSSORoleCredentialsPath,
 		"pin_query": awsSSOPinQuery(sn.SSOAccountID, sn.SSORoleName),
 	})
-	// A re-signed lane's session signs these hosts too, so the live check withholds it with them (grantHosts).
+	// A re-signed lane's session signs these hosts too, and reaches its gateway, so the live check
+	// withholds it with any of them (grantHosts).
 	if sigv4Hosts != nil {
-		scope = scopeWithSignedHosts(scope, sigv4Hosts)
+		scope = scopeWithSignedHosts(scope, slices.Concat(sigv4Hosts, awsSigV4GatewayHosts(gateways)))
 	}
 	grantID := uuid.New()
 	if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
@@ -281,7 +288,7 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 	}
 	if sigv4Hosts != nil {
 		return injections, nil, &proxy.AWSSigV4Config{GrantID: grantID, PortalHost: portalHost,
-			AccountID: sn.SSOAccountID, RoleName: sn.SSORoleName, Hosts: sigv4Hosts}, true
+			AccountID: sn.SSOAccountID, RoleName: sn.SSORoleName, Hosts: sigv4Hosts, Gateways: gateways}, true
 	}
 	if rule, derr := injectionRuleFromScope(scope); derr == nil {
 		injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})

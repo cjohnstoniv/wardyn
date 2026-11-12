@@ -139,6 +139,12 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveAzureFoundryInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// PER-PERSON ENDPOINT SIGN-IN: the run owner's own access token at a custom endpoint's authority,
+	// pinned to the dispatch-time snapshot and the row's own host — see resolveEndpointOIDCInjection.
+	// Before the provider-key arm below, which never serves a -oidc name.
+	if s.resolveEndpointOIDCInjection(w, r, claims, minted, grantID, run) {
+		return
+	}
 	// THE AZURE CLI: the run owner's own captured Entra sign-in for the Azure CLI row the run carries,
 	// redeemed for Azure Resource Manager and pinned to the dispatch-time snapshot — see
 	// resolveAzureARMInjection. Before the reserved-name check below, which refuses a

@@ -222,16 +222,19 @@ func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 		case viaOrgRunAway:
 			s.releaseViaOrgRun(run, false, false)
 		default:
-			if run.closeIdle(time.Now()) {
-				s.releaseViaOrgRun(run, false, false)
+			if gen := run.closeIdle(time.Now()); gen != nil {
+				s.goBackground(func() { closeViaOrgGen(run.id, gen) })
 			}
 		}
 	}
 }
 
-// closeIdle ends every stream idle past the timeout and reports whether the run itself has been idle
-// that long with nothing open.
-func (run *viaOrgRun) closeIdle(now time.Time) bool {
+// closeIdle ends every stream idle past the timeout and, when the run has had nothing open that long,
+// retires its engine generation and returns it for the caller to close. The check and the retire are one
+// step under both locks, so a stream admitted after a check is never cut by it.
+func (run *viaOrgRun) closeIdle(now time.Time) *viaOrgGen {
+	run.mu.Lock()
+	defer run.mu.Unlock()
 	run.smu.Lock()
 	defer run.smu.Unlock()
 	for st := range run.streams {
@@ -239,7 +242,12 @@ func (run *viaOrgRun) closeIdle(now time.Time) bool {
 			st.cancel()
 		}
 	}
-	return len(run.streams) == 0 && now.Sub(run.idleSince) > run.idle
+	if run.closed || len(run.streams) > 0 || now.Sub(run.idleSince) <= run.idle {
+		return nil
+	}
+	gen := run.engine
+	run.engine = nil
+	return gen
 }
 
 type viaOrgRunStatus int

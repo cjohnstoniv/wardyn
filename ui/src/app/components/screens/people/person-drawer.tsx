@@ -92,16 +92,28 @@ export function PersonDrawer({
 
   if (!person) return null;
   const label = person.email || person.principal;
-  const message: Record<Action, { confirm: string; run: () => Promise<unknown>; button: string }> = {
-    sign_out: { confirm: P.SIGN_OUT_CONFIRM(label), run: () => peopleApi.signOutEverywhere(person.principal), button: P.SIGN_OUT },
-    ssh: { confirm: P.SSH_REMOVE_CONFIRM(label), run: () => peopleApi.removeSSHKeys(person.principal), button: P.SSH_REMOVE },
+  const message: Record<Action, { title: string; confirm: string; run: () => Promise<unknown>; button: string; done: (result: unknown) => string }> = {
+    sign_out: {
+      title: P.SIGN_OUT_TITLE,
+      confirm: P.SIGN_OUT_CONFIRM(label),
+      run: () => peopleApi.signOutEverywhere(person.principal),
+      button: P.SIGN_OUT,
+      done: () => P.SIGN_OUT_DONE(label),
+    },
+    ssh: {
+      title: P.SSH_REMOVE_TITLE,
+      confirm: P.SSH_REMOVE_CONFIRM(label),
+      run: () => peopleApi.removeSSHKeys(person.principal),
+      button: P.SSH_REMOVE,
+      done: (n) => P.SSH_REMOVE_DONE(Number(n), label),
+    },
   };
 
   const run = async (action: Action) => {
     setBusy(true);
     try {
-      await message[action].run();
-      toast.success(`${message[action].button}: ${label}`);
+      const result = await message[action].run();
+      toast.success(message[action].done(result));
       setConfirm(null);
       onChanged();
     } catch (e) {
@@ -116,7 +128,7 @@ export function PersonDrawer({
       <Sheet open onOpenChange={(o) => !o && onClose()}>
         <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[480px]">
           <SheetHeader className="border-b border-border pb-4">
-            <SheetTitle>
+            <SheetTitle className="break-words">
               {label}
               {person.role ? ` · ${roleLabel(person.role)}` : ""}
             </SheetTitle>
@@ -154,6 +166,9 @@ export function PersonDrawer({
                 </ul>
               )}
             </Section>
+            <p className="border-b border-border py-2 text-meta text-muted-foreground">
+              {P.INVITE_LEAD} <code className="font-mono text-foreground [overflow-wrap:anywhere]">{P.INVITE_CMD(person.principal)}</code>.
+            </p>
             <Section label={P.SSH} value={person.ssh_keys}>
               <Button size="sm" variant="outline" disabled={person.ssh_keys === 0} onClick={() => setConfirm("ssh")}>
                 {P.SSH_REMOVE}
@@ -185,7 +200,7 @@ export function PersonDrawer({
           {confirm && (
             <>
               <AlertDialogHeader>
-                <AlertDialogTitle>{message[confirm].button}</AlertDialogTitle>
+                <AlertDialogTitle>{message[confirm].title}</AlertDialogTitle>
                 <AlertDialogDescription>{message[confirm].confirm}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

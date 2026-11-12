@@ -1,0 +1,173 @@
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# An external AI gateway on the kind quickstart cluster, for scripts/kind-gateway-run.sh:
+# the unmodified agentgateway image, pinned by digest, in front of test/gatewayfake.
+# Demo-grade, like everything else in this directory: it belongs only on a throwaway
+# cluster, and the only credential it ever sees is a value the script makes up.
+#
+# TWO HOSTNAMES, ONE GATEWAY POD. llm-gw serves the model route and mcp-gw serves MCP
+# federation. A component may not reach a host that serves a model
+# (internal/api/components_run.go), so an MCP gateway that also served the model route on one
+# host could not be attached as a component.
+#
+# The Secret ai-gateway-tls (a throwaway CA's server certificate for both hostnames) is made
+# by the script; the CA reaches wardynd through the chart's trustedCA value.
+#
+# RUN IDENTITY. The model route verifies the signed token wardyn-proxy sends in X-Wardyn-Identity
+# (jwtAuth, strict), against the key set wardynd serves, and the access log adds the token's
+# subject and run id and the call id Wardyn sent. The MCP route reads no token. The three
+# __PLACEHOLDERS__ below are the issuer and key set address wardynd reports, and the audience the
+# script gives the provider; scripts/kind-gateway-run.sh fills them in when it applies this file,
+# after wardynd serves the key set (the gateway does not start without it).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-gateway-config
+  namespace: wardyn
+data:
+  config.yaml: |
+    # Added to every access-log line. jwt.* is empty on the MCP route, which verifies nothing.
+    frontendPolicies:
+      accessLog:
+        add:
+          wardyn_sub: jwt.sub
+          wardyn_run: jwt.wardyn_run
+          wardyn_call: 'request.headers["x-wardyn-call-id"]'
+    binds:
+    - port: 8443
+      listeners:
+      - name: tls
+        protocol: HTTPS
+        tls:
+          cert: /etc/gateway/tls/tls.crt
+          key: /etc/gateway/tls/tls.key
+        routes:
+        # The model route: a Messages request in, a Messages answer out. Without the ai.routes
+        # table the gateway reads the request as a chat completion and answers in that shape.
+        - name: llm
+          hostnames: ["llm-gw.wardyn.svc.cluster.local"]
+          policies:
+            # Strict: a call with no token, or a token from another key, issuer or audience, is
+            # refused with a 401. preserveToken is left unset, so the header is consumed here and
+            # the fake never sees it.
+            jwtAuth:
+              mode: strict
+              location:
+                header:
+                  name: x-wardyn-identity
+              providers:
+              - issuer: "__GATEWAY_ISSUER__"
+                audiences: ["__GATEWAY_AUDIENCE__"]
+                jwks:
+                  url: "__GATEWAY_JWKS_URL__"
+            ai:
+              routes:
+                "/v1/messages": messages
+                "/v1/messages/count_tokens": anthropicTokenCount
+                "*": passthrough
+          backends:
+          - ai:
+              name: fake-anthropic
+              provider:
+                anthropic: {}
+              hostOverride: "gatewayfake.wardyn.svc.cluster.local:8080"
+        # MCP federation: the gateway is the one MCP server a client sees, the fake is its only target.
+        - name: mcp
+          hostnames: ["mcp-gw.wardyn.svc.cluster.local"]
+          backends:
+          - mcp:
+              targets:
+              - name: tools
+                mcp:
+                  host: gatewayfake.wardyn.svc.cluster.local
+                  port: 8080
+                  path: /mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-gateway
+  namespace: wardyn
+  labels: {app: ai-gateway}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ai-gateway}
+  template:
+    metadata:
+      labels: {app: ai-gateway}
+    spec:
+      containers:
+        - name: gateway
+          image: ghcr.io/agentgateway/agentgateway:v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b
+          args: ["-f", "/etc/gateway/config.yaml"]
+          ports: [{containerPort: 8443}]
+          readinessProbe:
+            httpGet: {path: /healthz/ready, port: 15021}
+            periodSeconds: 2
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/gateway/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: tls, mountPath: /etc/gateway/tls, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: ai-gateway-config}
+        - name: tls
+          secret: {secretName: ai-gateway-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-gw
+  namespace: wardyn
+  labels: {app: ai-gateway}
+spec:
+  selector: {app: ai-gateway}
+  ports: [{port: 8443, targetPort: 8443}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-gw
+  namespace: wardyn
+  labels: {app: ai-gateway}
+spec:
+  selector: {app: ai-gateway}
+  ports: [{port: 8443, targetPort: 8443}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gatewayfake
+  namespace: wardyn
+  labels: {app: gatewayfake}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gatewayfake}
+  template:
+    metadata:
+      labels: {app: gatewayfake}
+    spec:
+      containers:
+        - name: gatewayfake
+          # Built locally and `kind load`ed, never pulled: imagePullPolicy Never fails loudly on a
+          # missing image instead of sitting in ImagePullBackOff.
+          image: wardyn/gatewayfake:local
+          imagePullPolicy: Never
+          args: ["-addr", ":8080"]
+          ports: [{containerPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gatewayfake
+  namespace: wardyn
+  labels: {app: gatewayfake}
+spec:
+  selector: {app: gatewayfake}
+  ports: [{port: 8080, targetPort: 8080}]

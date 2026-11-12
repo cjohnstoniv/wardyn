@@ -30,6 +30,7 @@ const (
 	causeOverlay       = "overlay"
 	causeUnit          = "unit"
 	causeWalls         = "walls"
+	causeWallPreset    = "wall_preset" // the run's wall preset; the view's wall_preset names it, or for a personal preset read by another, its scope
 	causeOrgDisk       = "org_disk"
 	causePoolDisk      = "pool_disk" // the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
@@ -39,7 +40,7 @@ const (
 
 var causeOrder = []string{
 	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
-	causeOverlay, causeUnit, causeWalls, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
+	causeOverlay, causeUnit, causeWalls, causeWallPreset, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -58,12 +59,16 @@ const (
 	fieldMethods   = "allowed_methods"
 	fieldMinCC     = "min_confinement_class"
 	fieldDesktop   = "desktop"
+	fieldPushRules = "push_rules"
 	fieldDisk      = "resources.disk_mib"
 )
 
+// pushRulesDenyAll is the entry of the walls' added push_rules that says every push is refused.
+const pushRulesDenyAll = "deny_all"
+
 var policyFieldOrder = []string{
-	fieldAllowed, fieldDenied, "allow_all_egress", "first_use_approval", "first_use_hold_seconds", "max_holds",
-	fieldMethods, fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
+	fieldAllowed, fieldDenied, "allow_all_egress", "refuse_ip_literals", "first_use_approval", "first_use_hold_seconds", "max_holds",
+	fieldMethods, "host_rules", fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
 	"resources.cpu_millis", "resources.memory_mib", "resources.pids_limit", fieldDisk,
 	fieldToolRules, "git_push_any_branch", fieldADOCaps, fieldGHCaps,
 }
@@ -101,6 +106,7 @@ type auditEvidence struct {
 	diskDefaultSource                                                          types.LimitSource     // disk_mib_default_source, with basis default
 	legacyGitBroker                                                            bool                  // no confine row exists and the run holds a github grant
 	walls                                                                      *wallsSourceRecord    // what the launching person's walls narrowed (policy_source.personal_walls)
+	preset                                                                     *wallsSourceRecord    // what the run's wall preset narrowed (policy_source.wall_preset)
 }
 
 // explainRunPolicy attributes each difference between the policy a run started
@@ -126,8 +132,8 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 	groups := map[changeKey]*runPolicyChange{}
 	put := func(field, entry string, added bool) {
 		cause, profile, at := x.cause(field, entry, added)
-		if field == fieldDesktop && cause != causeWalls {
-			return // only a person's own walls are said to narrow the desktop; any other layer's change stays unshown
+		if field == fieldDesktop && cause != causeWalls && cause != causeWallPreset {
+			return // only a person's walls or the run's wall preset are said to narrow the desktop; any other layer's change stays unshown
 		}
 		k := changeKey{cause: cause, field: field, profile: profile}
 		if at != nil {
@@ -282,8 +288,10 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	ev := x.ev
 	allowAdded, denyAdded := field == fieldAllowed && added, field == fieldDenied && added
 	switch {
-	case x.walled(field, entry, added):
+	case wallsRecordHas(ev.walls, field, entry, added):
 		return causeWalls, "", nil, true
+	case wallsRecordHas(ev.preset, field, entry, added):
+		return causeWallPreset, "", nil, true
 	case allowAdded && ev.workspace[entry]:
 		return causeWorkspace, "", nil, true
 	case allowAdded && ev.sourceControl[entry]:
@@ -310,14 +318,13 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	return "", "", nil, false
 }
 
-// walled is the walls rule: the entry is one the person's walls took out of the run (an allowlist
-// entry or a grant) or added to it (a deny or a blocked desktop direction), as the run.create row
-// recorded, or the field is a scalar knob the walls narrowed. List entries are matched exactly, so
-// a knob the boundary also narrowed keeps each of its entries with the layer that changed it. A
-// scalar holds one value that both layers may have tightened; the walls step runs first and the record cannot tell the two apart, so
-// it is the walls'.
-func (x *explainer) walled(field, entry string, added bool) bool {
-	w := x.ev.walls
+// wallsRecordHas is the walls rule, for the person's walls (cause walls) and then the run's wall preset
+// (cause wall_preset): the entry is one the record took out of the run (an allowlist entry or a grant)
+// or added to it (a deny or a blocked desktop direction), as the run.create row recorded, or the field
+// is a scalar knob it narrowed. List entries are matched exactly, so a knob the boundary also narrowed
+// keeps each of its entries with the layer that changed it. A scalar holds one value that several layers may have tightened; the walls
+// steps run first, the person's before the preset's, and the record cannot tell them apart, so it is the first that names it.
+func wallsRecordHas(w *wallsSourceRecord, field, entry string, added bool) bool {
 	if w == nil {
 		return false
 	}
@@ -426,6 +433,9 @@ func desktopBlocked(sp types.RunPolicySpec) []string {
 			out = append(out, dir.name)
 		}
 	}
+	if d.Download == types.TransferReview { // held for a person's yes on each file: neither allowed nor blocked
+		out = append(out, "Review download")
+	}
 	return out
 }
 
@@ -444,6 +454,7 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		}
 	}
 	scalar("allow_all_egress", strconv.FormatBool(sp.AllowAllEgress))
+	scalar("refuse_ip_literals", strconv.FormatBool(sp.RefuseIPLiterals))
 	scalar("first_use_approval", string(sp.FirstUseApproval))
 	scalar("first_use_hold_seconds", strconv.Itoa(sp.FirstUseHoldSeconds))
 	scalar("max_holds", strconv.Itoa(sp.MaxHolds))
@@ -461,6 +472,9 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 	}
 	for _, g := range sp.EligibleGrants {
 		m[fieldGrants] = append(m[fieldGrants], grantKey(g))
+	}
+	for _, s := range sp.HostRules { // one entry per set: layers' sets apply side by side, never merged
+		m["host_rules"] = append(m["host_rules"], types.HostRuleSetKey(s))
 	}
 	for _, mnt := range sp.WorkspaceMounts {
 		m[fieldMounts] = append(m[fieldMounts], mnt.Target)

@@ -364,7 +364,7 @@ func TestSchemaWalkFlagsAnEmbeddedStructOnATableRoot(t *testing.T) {
 	}
 }
 
-// Fable's probe: a typo in a rule name must not be an allow.
+// A typo in a rule name must not be an allow.
 func TestUnknownRuleRefusesAndIsRejectedByTheTable(t *testing.T) {
 	typo := Entry{Struct: StructProxyConfig, Field: "GitGrants", Class: ClassBrokered, Rule: Rule("via_org_refus"), Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential}
 	if problems := tableProblems([]Entry{typo}); len(problems) != 1 || !strings.Contains(problems[0], "unknown rule") {
@@ -390,7 +390,7 @@ func TestUnknownRuleRefusesAndIsRejectedByTheTable(t *testing.T) {
 	}
 }
 
-// Fable's shadow probe: a future own refusing row after delivery-less own rows.
+// A future own refusing row must not be shadowed by delivery-less own rows before it.
 func TestDeliveryLessRowCannotShadowALaterRefusingRow(t *testing.T) {
 	rows := []Entry{
 		{Struct: StructProxyConfig, Field: "Injection", Class: ClassOwn, Rule: RuleAllow, Variant: "a"},

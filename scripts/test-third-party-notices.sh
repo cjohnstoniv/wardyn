@@ -33,4 +33,11 @@ for mode in --check --fix; do
     *"out of date"*) echo "FAIL: $mode reported drift for a tool failure"; exit 1 ;;
   esac
 done
+# The /vN licence-URL flip go-licenses makes when its online probe fails normalises away; any other change does not.
+eval "$(grep '^notices_vnorm()' "$ROOT/scripts/third-party-notices.sh")"
+a='| `github.com/aws/aws-sdk-go-v2/internal/endpoints/v2` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/internal/endpoints/v2.8.7/internal/endpoints/v2/LICENSE.txt |'
+b='| `github.com/aws/aws-sdk-go-v2/internal/endpoints/v2` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/internal/endpoints/v2.8.7/internal/endpoints/LICENSE.txt |'
+c='| `github.com/aws/aws-sdk-go-v2/internal/endpoints/v2` | MIT | https://github.com/aws/aws-sdk-go-v2/blob/internal/endpoints/v2.8.7/internal/endpoints/v2/LICENSE.txt |'
+[ "$(notices_vnorm <<<"$a")" = "$(notices_vnorm <<<"$b")" ] || { echo "FAIL: the /vN URL flip is reported as drift"; exit 1; }
+[ "$(notices_vnorm <<<"$a")" != "$(notices_vnorm <<<"$c")" ] || { echo "FAIL: a licence change normalised away"; exit 1; }
 echo "test-third-party-notices: ok"

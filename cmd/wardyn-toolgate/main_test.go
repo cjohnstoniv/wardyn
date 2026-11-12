@@ -408,3 +408,49 @@ func TestGateSendsItsHarnessCredential(t *testing.T) {
 		})
 	}
 }
+
+// TestCreateSendsInput: the gate sends the tool's full input beside the summary, so the proxy
+// can ask a person about an MCP call's exact arguments. An input over 32 KiB is left out,
+// never cut: the proxy then hands the question to the broker.
+func TestCreateSendsInput(t *testing.T) {
+	big := `{"text":"` + strings.Repeat("x", 32<<10) + `"}`
+	for name, tc := range map[string]struct {
+		input   string
+		want    string
+		omitted bool
+	}{
+		"sent whole":   {input: `{"id":"ENG-1","n":2}`, want: `{"id":"ENG-1","n":2}`},
+		"too large":    {input: big, omitted: true},
+		"no arguments": {input: `{}`, want: `{}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got map[string]json.RawMessage
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					var body struct {
+						Payload map[string]json.RawMessage `json:"payload"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					got = body.Payload
+					_ = json.NewEncoder(w).Encode(map[string]string{"state": "APPROVED"})
+				}
+			}))
+			defer srv.Close()
+			g := &gate{base: srv.URL, poll: time.Millisecond, deadline: time.Second, client: directClient()}
+			_, _ = g.create(callArgs{ToolName: "mcp__linear__delete_issue", Input: json.RawMessage(tc.input)})
+			in, present := got["input"]
+			if tc.omitted {
+				if present {
+					t.Fatalf("an input of %d bytes was sent; want it left out", len(in))
+				}
+				if _, ok := got["cmd"]; !ok {
+					t.Fatal("the summary is gone too")
+				}
+				return
+			}
+			if !present || string(in) != tc.want {
+				t.Fatalf("payload input %q (present %v), want %q", in, present, tc.want)
+			}
+		})
+	}
+}

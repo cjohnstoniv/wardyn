@@ -83,8 +83,9 @@ type treeDryRunPerson struct {
 func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target string, raw []byte) {
 	var apply func(q store.Querier) error
 	// touched is the units an approver of the write would have to govern (unitChangeScope's rule), from
-	// the states either side of it; none means only a security admin could decide it.
-	var touched func(before, after treeSnapshot) []uuid.UUID
+	// the states either side of it; none means only a security admin could decide it. strict is
+	// unitChangeScope's: a unit's own update needs an approver strictly above every unit it touches.
+	var touched func(before, after treeSnapshot) (units []uuid.UUID, strict bool)
 	var shift legacyShift
 	switch target {
 	case dryRunTargetUnit:
@@ -119,8 +120,11 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 			shift, err = s.applyUnitWriteQ(r, q, id, status, unit, limit)
 			return err
 		}
-		touched = func(before, after treeSnapshot) []uuid.UUID {
+		touched = func(before, after treeSnapshot) ([]uuid.UUID, bool) {
 			was, existed := unitsByID(before.units)[id]
+			if existed && s.securityOnlyRoot(r.Context(), id) { // as changeApprovers: an envelope's root is security's
+				return nil, false
+			}
 			now := unitsByID(after.units)[id]
 			units := []uuid.UUID{}
 			if existed {
@@ -129,13 +133,13 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 					units = append(units, a.UnitID)
 				}
 				if sameJSON(was.ParentID, now.ParentID) {
-					return units
+					return units, true
 				}
 			}
 			if now.ParentID == nil {
-				return nil
+				return nil, false
 			}
-			return append(units, *now.ParentID)
+			return append(units, *now.ParentID), existed
 		}
 	case dryRunTargetMembershipMove:
 		var req membershipMoveDryRunRequest
@@ -155,7 +159,9 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 			_, _, err := moveMembershipQ(r.Context(), q, req.ID, req.UnitID)
 			return err
 		}
-		touched = func(before, _ treeSnapshot) []uuid.UUID { return moveTouched(before, req.ID, req.UnitID, shift) }
+		touched = func(before, _ treeSnapshot) ([]uuid.UUID, bool) {
+			return moveTouched(before, req.ID, req.UnitID, shift), false
+		}
 	default:
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody,
 			fmt.Sprintf("target: %q is not a dry-run target — use boundary, unit or membership_move", target))
@@ -182,8 +188,8 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 	}
 	report.Target = target
 	report.Approvers = []changeApprover{{Kind: "security"}}
-	if units := touched(before, after); len(units) > 0 {
-		report.Approvers = s.approversFor(r.Context(), units, false, principalFromRequest(r), oidcEmailFromContext(r.Context()))
+	if units, strict := touched(before, after); len(units) > 0 {
+		report.Approvers = s.approversFor(r.Context(), units, strict, principalFromRequest(r), oidcEmailFromContext(r.Context()))
 	}
 	report.Activates, report.Vacates = shift.activates, shift.vacates
 	writeJSON(w, http.StatusOK, report)
@@ -235,6 +241,7 @@ func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID,
 			return types.GovernanceUnit{}, err
 		}
 		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, kept, all, b, limit)
+		err = s.checkDeciderLockWrite(r.Context(), q, err, p, all)
 		if err == nil {
 			shift, err = unitRenameShiftQ(r.Context(), q, all, id, p.Name)
 		}
@@ -379,7 +386,16 @@ func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot) (tr
 		return treeDryRunReport{}, err
 	}
 	for _, run := range runs {
-		if run.UnitID != nil && (wallsChanged[*run.UnitID] || leftBy(left[*run.UnitID], run)) {
+		if run.UnitID == nil {
+			continue
+		}
+		hit := wallsChanged[*run.UnitID]
+		if !hit {
+			if hit, err = s.leftBy(ctx, left[*run.UnitID], run); err != nil {
+				return treeDryRunReport{}, err
+			}
+		}
+		if hit {
 			report.LiveRuns = append(report.LiveRuns, run.ID)
 		}
 	}
@@ -387,9 +403,27 @@ func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot) (tr
 }
 
 // leftBy reports whether run may be its owner's under one of the memberships that leave its unit: a
-// user membership names its owner, and any other kind may match them.
-func leftBy(moved []types.GovernanceMembership, run types.AgentRun) bool {
-	return slices.ContainsFunc(moved, func(m types.GovernanceMembership) bool {
-		return m.SubjectType != types.CapabilitySubjectUser || m.Subject == run.CreatedBy
-	})
+// user membership names its owner by their sub or by an alias the identity directory holds for them (a
+// sign-in email), and any other kind may match them. The run records only the sub, so the aliases are
+// read from the directory, and only when no membership has matched by then.
+func (s *Server) leftBy(ctx context.Context, moved []types.GovernanceMembership, run types.AgentRun) (bool, error) {
+	var aliases []string
+	read := false
+	for _, m := range moved {
+		if m.SubjectType != types.CapabilitySubjectUser || m.Subject == run.CreatedBy ||
+			m.Subject == types.CanonicalUserSubject(run.CreatedBy) {
+			return true, nil
+		}
+		if pe, ok := s.cfg.Store.(store.PersonErasureStore); ok && !read {
+			var err error
+			if aliases, err = pe.PrincipalAliases(ctx, run.CreatedBy); err != nil {
+				return false, err
+			}
+			read = true
+		}
+		if slices.Contains(aliases, types.CanonicalUserSubject(m.Subject)) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

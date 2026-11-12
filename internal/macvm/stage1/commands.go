@@ -47,6 +47,14 @@ type command struct {
 	// MayDropSession: turning Remote Login off may end this very session
 	// before it reports an exit status; the fresh-dial check after it decides.
 	MayDropSession bool
+	// Optional: a failure of this row is logged by its id and stage 1 goes on. For a setting that must not stop a
+	// base from being published.
+	Optional bool
+	// Capture: the output is the guest's macOS product version or build, kept for the base-settings rows.
+	Capture capture
+	// ThenBaseSettings: the base-settings rows (internal/macvm/basesettings) run right after this command, rendered from
+	// what the Capture commands before it read.
+	ThenBaseSettings bool
 	// SkipIfOK: a probe argv, run the way the row runs. The row is skipped when the probe exits 0,
 	// and runs when it exits anything else.
 	SkipIfOK []string
@@ -110,16 +118,23 @@ var commands = []command{
 	{ID: "power-never-sleep", Step: "7d", Event: "setting power, screen lock and updates", Root: true, Argv: []string{"/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"}},
 	// The agent's own screen saver idle time: macOS reads it per user and ignores the system domain.
 	{ID: "screensaver-off", Step: "7d", Root: true, Argv: asAgent("/usr/bin/defaults", "-currentHost", "write", "com.apple.screensaver", "idleTime", "-int", "0")},
+	// The screen lock itself, which the idle time above does not turn off: sysadminctl takes the agent's password on stdin.
+	{ID: "screenlock-off", Step: "7d", Root: true, Argv: asAgent("/usr/sbin/sysadminctl", "-screenLock", "off", "-password", "-"), In: stdinAgentPassword, Optional: true},
 	{ID: "updates-check-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"}},
 	{ID: "updates-download-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"}},
 	{ID: "updates-macos-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"}},
+
+	// f. the agent's first desktop (the base-settings table): sw_vers first, whose values the host checks and
+	// renders into the stamps, then the rows. Every one of them is skipped when it fails, and the whole table when sw_vers prints a value outside the patterns.
+	{ID: "sw-vers-version", Step: "7f", Event: "setting the agent's first desktop", Root: true, Argv: []string{"/usr/bin/sw_vers", "-productVersion"}, Capture: captureVersion, Optional: true},
+	{ID: "sw-vers-build", Step: "7f", Root: true, Argv: []string{"/usr/bin/sw_vers", "-buildVersion"}, Capture: captureBuild, ThenBaseSettings: true, Optional: true},
 
 	// e. Remote Login off, last (§3.4 step 7e).
 	{ID: "remote-login-off", Step: "7e", Event: "turning Remote Login off", Root: true, Argv: []string{"/usr/sbin/systemsetup", "-f", "-setremotelogin", "off"}, MayDropSession: true},
 }
 
 // steps are the §3.4 steps a row may cite.
-var steps = []string{"6 D1(c)", "7a", "7b", "7c", "7d", "7e"}
+var steps = []string{"6 D1(c)", "7a", "7b", "7c", "7d", "7e", "7f"}
 
 // agentPlist is the guest agent's LaunchDaemon plist. Its only values are the
 // shared constants, none of which needs XML escaping.
@@ -174,11 +189,8 @@ func kcpasswordLen(n int) int { return (n + 1 + 11) / 12 * 12 }
 // with NULs to a multiple of 12 bytes, XORed with the fixed key.
 // UNVERIFIED (external): the format on macOS 27.
 func kcpassword(pw []byte) []byte {
-	key := []byte{0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F}
 	out := make([]byte, kcpasswordLen(len(pw)))
 	copy(out, pw)
-	for i := range out {
-		out[i] ^= key[i%len(key)]
-	}
+	guestagent.XORKCPassword(out)
 	return out
 }

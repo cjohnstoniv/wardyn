@@ -8,12 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -40,6 +43,36 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	normalizeN1Decision(&dl)
 
 	runID := claims.RunID
+	// Relayed is not serialised: a via_org engine's post marks a relayed row with DecisionRelayedHeader.
+	// Only the engine's in-process call for a VM run is trusted with it; anyone else's copy is dropped.
+	relayedMark := r.Header.Get(proxy.DecisionRelayedHeader) == "1"
+	r.Header.Del(proxy.DecisionRelayedHeader)
+	if relayedMark && viaOrgCall(r.Context()) {
+		if run, ok := liveRunFromContext(r.Context()); ok && run.MachineKind.IsVM() {
+			dl.Request.Relayed = true
+		}
+	}
+
+	// A model call's token counts (rule source llm:usage) are a count and not an egress decision: they are
+	// stored as usage and write no egress row, so a metered call is one decision row plus one usage row.
+	// Nor are they agent activity, so they do not touch the idle clock.
+	if dl.Usage != nil {
+		s.ingestModelUsage(w, r, runID, dl.Usage)
+		return
+	}
+
+	// A DNS query the run's sandbox asked (internal/egress/proxy/dns_audit.go) is its own row, not an
+	// egress decision, and not agent activity: a run that only asks names idles out.
+	if dl.DNS != nil {
+		fields := map[string]any{}
+		dl.DNS.AuditFields(fields)
+		data, _ := json.Marshal(fields)
+		ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, egress.DNSQueryAction, dl.DNS.Name, dl.DNS.AuditOutcome(), data)
+		ev.SourceIP = r.RemoteAddr
+		s.recordAudit(r.Context(), ev)
+		writeJSON(w, http.StatusAccepted, nil)
+		return
+	}
 
 	// An egress decision means the agent actually did something, so it resets the
 	// idle clock the reaper reads (agent_runs.updated_at) — the seam
@@ -50,11 +83,17 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// Debounced: a chatty agent can emit many decisions a second, and each touch
 	// is an UPDATE on the same agent_runs row; the reaper thresholds are minutes,
 	// so one touch per touchDebounce per run loses nothing.
-	if s.cfg.Store != nil && s.shouldTouch(runID, dl.RuleSource) {
+	// An allowed request is activity, a refused one is not (egress.CountsAsActivity): a run that is only
+	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
+	var kind types.MachineKind
+	if run, ok := liveRunFromContext(r.Context()); ok {
+		kind = run.MachineKind
+	}
+	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if agentActivityDecision(dl.RuleSource) {
+	if decisionIsActivity(kind, dl) {
 		s.noteAgentActive(r.Context(), runID)
 	}
 
@@ -88,12 +127,20 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Via != "" {
 		fields["via"] = dl.Via
 	}
+	// The allow of an opaque CONNECT to a model host; counted by RunOpaqueTunnels.
+	if dl.ModelTunnel {
+		fields["model_tunnel"] = true
+	}
 	// A desktop VM's relay flow id, and the port rule's dry-run mark.
 	if dl.Flow != "" {
 		fields["flow"] = dl.Flow
 	}
 	if dl.PortRule != "" {
 		fields["port_rule"] = dl.PortRule
+	}
+	// The id the gateway's access log shares with this row; absent on a run with no gateway route.
+	if dl.GatewayCallID != "" {
+		fields["gateway_call_id"] = dl.GatewayCallID
 	}
 	// Whose refusal a deny was ("refusal", egress.Refusal); absent on an unclassified row.
 	dl.Refusal.AuditFields(fields)
@@ -223,6 +270,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// committed, so good events are never half-dropped behind a 4xx. Validation is
 	// read-only (kernel-prefix check + run_id existence), so doing it up front is
 	// cheap and side-effect-free.
+	var ownNamespaces []string // the control plane's own runs namespace, resolved on the first Kubernetes event
 	for i := range batch.Events {
 		ev := &batch.Events[i]
 		// Enforce the kernel.* namespace (fail closed): the host sensor may only
@@ -243,13 +291,26 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// heartbeat) behind it. Only a genuine store failure stays a hard
 		// error (fail closed).
 		if ev.RunID != nil {
-			if _, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID); err != nil {
+			run, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID)
+			if err != nil {
 				if !errors.Is(err, store.ErrNotFound) {
 					writeServerError(w, r, "validate run_id", err)
 					return
 				}
 				ev.RunID = nil
 				ev.Data = downgradeToUnmapped(ev.Data, "run_id_not_found")
+				continue
+			}
+			// A Kubernetes event (data.pod set) is held to where and when the
+			// run's pod could exist. Downgrades, never rejects, as above.
+			if pod := groundtruthEventPod(ev.Data); pod != "" {
+				if ownNamespaces == nil && run.RunnerID == nil && run.RunnerPoolExecutor == "" {
+					ownNamespaces = groundtruthRunsNamespaces()
+				}
+				if reason := s.groundtruthPodRefusal(run, pod, ownNamespaces); reason != "" {
+					ev.RunID = nil
+					ev.Data = downgradeToUnmapped(ev.Data, reason)
+				}
 			}
 		}
 	}
@@ -278,6 +339,16 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// the sensor dies. The sensor sends zero Time on the normal path, so
 		// clamping to our own clock costs nothing and keeps honest degradation.
 		ev.Time = s.cfg.Now().UTC()
+		// Each node sensor's latest beat, for /healthz's per-node health. A
+		// failed write is logged, not retried: the audit row below is the
+		// record, and a node whose row stops moving reads as degraded, which
+		// is the honest direction. Failing the batch instead would stop every
+		// kernel event on, say, a split-role install missing the table grant.
+		if ev.Action == groundtruth.ActionSensorHeartbeat {
+			if err := s.upsertGroundtruthSensor(r.Context(), ev); err != nil {
+				_ = loggedMsg(r.Context(), "record ground-truth sensor health", err)
+			}
+		}
 		if err := s.recordGroundtruthAudit(r.Context(), ev); err != nil {
 			// Propagate as a non-2xx so the sender retries (fail-closed
 			// durability). accepted so far is not reported as success: the caller
@@ -288,6 +359,127 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		accepted++
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": accepted})
+}
+
+// groundtruthLateEvents is how long after a run ends its pod's kernel events
+// are still taken: the same retention the Docker correlator keeps an ended
+// container's mapping for (cmd/wardyn-tetragon-ingest, correlator.go).
+const groundtruthLateEvents = 15 * time.Minute
+
+// groundtruthEventPod is a kernel event's data.pod ("namespace/name"), set
+// only by a sensor on Kubernetes.
+func groundtruthEventPod(data json.RawMessage) string {
+	var d struct {
+		Pod string `json:"pod"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return d.Pod
+}
+
+// groundtruthPodRefusal is why a Kubernetes kernel event must lose its run,
+// or "" when it keeps it:
+//
+//	namespace_not_runs — the pod is not in a namespace the run's cluster
+//	                     places runs in, so it is not a run's pod whatever
+//	                     its name says (see groundtruthRunNamespaces);
+//	run_ended          — the run's pod has been gone for more than
+//	                     groundtruthLateEvents, so a pod re-created under
+//	                     the same name after teardown cannot write into it.
+//	                     Gone from the terminal transition (EndedAt, which
+//	                     later writes to the run do not move; UpdatedAt only
+//	                     on a row without it), or from when its lease ended
+//	                     (LostAt with LostReason ended): such a run stays
+//	                     RUNNING until the ended-run grace, without a pod.
+//
+// ownNamespaces is the control plane's own runs namespace, used for a run on
+// the in-process driver.
+func (s *Server) groundtruthPodRefusal(run types.AgentRun, pod string, ownNamespaces []string) string {
+	ns, _, ok := strings.Cut(pod, "/")
+	if namespaces, known := s.groundtruthRunNamespaces(run, ownNamespaces); known && (!ok || ns == "" || !slices.Contains(namespaces, ns)) {
+		return "namespace_not_runs"
+	}
+	var gone *time.Time
+	switch {
+	case run.State.IsTerminal() && run.EndedAt != nil:
+		gone = run.EndedAt
+	case run.State.IsTerminal():
+		gone = &run.UpdatedAt
+	case run.LostReason == types.LostEnded && run.LostAt != nil:
+		gone = run.LostAt
+	}
+	if gone != nil && s.cfg.Now().Sub(*gone) > groundtruthLateEvents {
+		return "run_ended"
+	}
+	return ""
+}
+
+// groundtruthRunNamespaces is the namespaces run's pod may be in, and whether
+// the control plane knows them. A run on the in-process driver is in the
+// control plane's own cluster: ownNamespaces. A run on a self-hosted runner is
+// in that runner's cluster: the namespaces the runner advertised with its
+// capabilities (TargetFacts.RunsNamespaces). Unknown, so not checked, when
+// that runner is offline or advertises none (an older runner), and for a run
+// on a remote-hosted runner, whose cluster this control plane has no source
+// for. An unknown answer keeps the event's run, as before the check existed:
+// the sensor token cannot name the cluster it runs in, so refusing would
+// downgrade every event from a cluster the control plane cannot see into.
+func (s *Server) groundtruthRunNamespaces(run types.AgentRun, ownNamespaces []string) ([]string, bool) {
+	switch {
+	case run.RunnerID != nil:
+		facts, ok := s.runnerFacts(*run.RunnerID)
+		if !ok || len(facts.RunsNamespaces) == 0 {
+			return nil, false
+		}
+		return facts.RunsNamespaces, true
+	case run.RunnerPoolExecutor != "":
+		return nil, false
+	default:
+		return ownNamespaces, true
+	}
+}
+
+// groundtruthServiceAccountNamespace is where the kubelet projects a pod's
+// own namespace.
+const groundtruthServiceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// groundtruthRunsNamespaces is the namespace the in-process Kubernetes driver
+// places run pods in, resolved as that driver resolves it (its config.go is
+// built only under the k8s tag): WARDYN_K8S_NAMESPACE, else this pod's own
+// namespace, else "default".
+func groundtruthRunsNamespaces() []string {
+	if ns := strings.TrimSpace(os.Getenv("WARDYN_K8S_NAMESPACE")); ns != "" {
+		return []string{ns}
+	}
+	if b, err := os.ReadFile(groundtruthServiceAccountNamespace); err == nil {
+		if ns := strings.TrimSpace(string(b)); ns != "" {
+			return []string{ns}
+		}
+	}
+	return []string{"default"}
+}
+
+// groundtruthNodeMax is a DNS name's length limit: a longer node name is no node's, and keys no row.
+const groundtruthNodeMax = 253
+
+// upsertGroundtruthSensor writes a heartbeat's node row: its data.node (""
+// for the Compose sensor), the server-forced time, and the beat's counts. A
+// store without per-node rows writes nothing.
+func (s *Server) upsertGroundtruthSensor(ctx context.Context, ev types.AuditEvent) error {
+	gs, ok := s.cfg.Store.(store.GroundtruthSensorStore)
+	if !ok {
+		return nil
+	}
+	var hb struct {
+		Node string `json:"node"`
+		groundtruthBeat
+	}
+	_ = json.Unmarshal(ev.Data, &hb)
+	if len(hb.Node) > groundtruthNodeMax {
+		return errors.New("sensor node name is over the 253-byte limit")
+	}
+	return gs.UpsertGroundtruthSensor(ctx, store.GroundtruthSensor{Node: hb.Node, LastBeat: ev.Time,
+		ObservedTotal: hb.ObservedTotal, DroppedTotal: hb.DroppedTotal, DroppedUnmapped: hb.DroppedUnmapped,
+		ObservedByKind: hb.ObservedByKind})
 }
 
 // downgradeToUnmapped marks a kernel event's data unmapped with reason,
@@ -384,8 +576,14 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var body internalApprovalRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body); err != nil ||
-		len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
+	err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body)
+	if err == nil {
+		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
+		if body.RequestedScope, refused = s.refuseBadCallScope(w, r, body.Kind, body.RequestedScope); refused {
+			return
+		}
+	}
+	if err != nil || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
 		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
 		return
 	}

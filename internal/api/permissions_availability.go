@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +30,23 @@ type availabilityView struct {
 	Value      string                  `json:"value"`
 	Restricted bool                    `json:"restricted"`
 	AllowedBy  []types.CapabilityGrant `json:"allowed_by"`
+	// CoveredBy is read-only and image-only: the registry-prefix allow rows
+	// ("registry.example.com/team/*") that cover the value. A launch check
+	// honours them with no catalog row, so a person reading "Admins only" here
+	// needs to see them; they are changed on Permissions, not from this control.
+	CoveredBy []availabilityCover `json:"covered_by"`
+}
+
+// availabilityCover is one prefix allow row that covers an availability value.
+type availabilityCover struct {
+	Prefix string             `json:"prefix"`
+	Who    availabilityWhoRef `json:"who"`
+}
+
+// availabilityWhoRef names the grant's subject the way an AllowedBy row does.
+type availabilityWhoRef struct {
+	SubjectType types.CapabilitySubjectType `json:"subject_type"`
+	Subject     string                      `json:"subject"`
 }
 
 // availabilityWriteRequest is PUT's body.
@@ -62,6 +80,9 @@ func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value str
 	if err == nil && value == capWildcard {
 		err = fmt.Errorf("value: name one resource, not every one")
 	}
+	if err == nil && kind == capImage && isImagePrefixGrant(value) {
+		err = fmt.Errorf("value: name one image, not a prefix")
+	}
 	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityTargetInvalid, "Invalid availability target: "+err.Error())
 		return "", "", false
@@ -71,7 +92,7 @@ func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value str
 
 // availabilityOf reads the value's restricted bit and its named allow rows.
 func (s *Server) availabilityOf(r *http.Request, kind, value string) (availabilityView, error) {
-	v := availabilityView{Kind: kind, Value: value, AllowedBy: []types.CapabilityGrant{}}
+	v := availabilityView{Kind: kind, Value: value, AllowedBy: []types.CapabilityGrant{}, CoveredBy: []availabilityCover{}}
 	restricted, err := s.cfg.Store.ListCapabilityRestrictions(r.Context())
 	if err != nil {
 		return v, err
@@ -81,12 +102,64 @@ func (s *Server) availabilityOf(r *http.Request, kind, value string) (availabili
 	if err != nil {
 		return v, err
 	}
+	var prefixes, nonPrefix, denies []types.CapabilityGrant
 	for _, g := range grants {
-		if g.Capability == kind && g.Effect == types.CapabilityAllow && strings.TrimSpace(g.Value) == value {
+		if g.Capability != kind {
+			continue
+		}
+		switch {
+		case g.Effect == types.CapabilityDeny:
+			denies = append(denies, g)
+		case strings.TrimSpace(g.Value) == value:
 			v.AllowedBy = append(v.AllowedBy, g)
+		case kind == capImage && capValueMatches(kind, g.Value, value):
+			// The launch check's own matcher, so this list can never name a row
+			// a launch would not match.
+			if isImagePrefixGrant(g.Value) {
+				prefixes = append(prefixes, g)
+			} else {
+				nonPrefix = append(nonPrefix, g)
+			}
 		}
 	}
+	if kind == capImage {
+		v.CoveredBy = coveringPrefixes(prefixes, nonPrefix, denies, value, v.Restricted, imageSiblingIn(restricted[capImage], value))
+	}
 	return v, nil
+}
+
+// coveringPrefixes keeps the prefix allows a launch would honour for value,
+// mirroring capRead.granted: nothing on a restricted value (only a named allow
+// counts there), nothing for a who whose allows are all prefixes while another
+// tag of the repository is restricted (a wildcard allow that applies to that
+// same who keeps its existing reading), and nothing for a who that a deny row
+// on the image refuses outright. A row applies to a who when it names the same
+// subject or everyone; a row on a narrower subject, such as one person in a
+// user type, is not read.
+func coveringPrefixes(prefixes, nonPrefix, denies []types.CapabilityGrant, value string, restricted, siblingRestricted bool) []availabilityCover {
+	covers := []availabilityCover{}
+	if restricted {
+		return covers
+	}
+	applies := func(row, who types.CapabilityGrant) bool {
+		return row.SubjectType == types.CapabilitySubjectAll || (row.SubjectType == who.SubjectType && row.Subject == who.Subject)
+	}
+next:
+	for _, g := range prefixes {
+		for _, d := range denies {
+			if capDenyOverlaps(capImage, d.Value, value) && applies(d, g) {
+				continue next
+			}
+		}
+		if siblingRestricted && !slices.ContainsFunc(nonPrefix, func(a types.CapabilityGrant) bool { return applies(a, g) }) {
+			continue
+		}
+		covers = append(covers, availabilityCover{
+			Prefix: strings.TrimSpace(g.Value),
+			Who:    availabilityWhoRef{SubjectType: g.SubjectType, Subject: g.Subject},
+		})
+	}
+	return covers
 }
 
 // handleGetAvailability answers one value's availability. securityOps.

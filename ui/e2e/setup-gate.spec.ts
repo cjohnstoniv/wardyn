@@ -736,6 +736,9 @@ test.describe("Corporate network step — typed values the server would refuse (
     await skipHero(page);
     await page.goto("/admin/setup?step=corp_network");
     const field = page.getByLabel("Proxy URL");
+    // The field is enabled once the site-config has loaded and seeded it (an earlier test in this file left a
+    // proxy URL stored); typing before that seed let it prepend the stored URL to the typed one.
+    await expect(field).toBeEnabled();
     await field.fill("http://:s3cret@proxy.e2e-userinfo.invalid:8080");
     await expect(field).toHaveAttribute("type", "password");
     await expect(page.getByText(INTEGRATIONS.CRED_URL_NOTE)).toBeVisible();

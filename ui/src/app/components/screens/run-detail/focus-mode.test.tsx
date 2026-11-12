@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as React from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
 const getLayout = vi.fn();
 const putLayout = vi.fn();
@@ -27,6 +27,7 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: {
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
   },
 }));
 
@@ -87,7 +88,11 @@ afterEach(() => vi.unstubAllGlobals());
 // The whole point of the mode: the canvas asks, the SHELL answers. Driven
 // through the real AppShell rather than a stub context, because "the shell
 // hides its own chrome" is the assertion.
-function renderCockpitInShell(Wrap: React.ComponentType<{ children: React.ReactNode }> = React.Fragment) {
+function renderCockpitInShell(
+  Wrap: React.ComponentType<{ children: React.ReactNode }> = React.Fragment,
+  // Stands in for the run header and tabs, which sit beside the canvas in main-content.
+  covered?: React.ReactNode,
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) =>
@@ -111,7 +116,16 @@ function renderCockpitInShell(Wrap: React.ComponentType<{ children: React.ReactN
         <Wrap>
           <Routes>
             <Route element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
-              <Route path="/runs/:id" element={<RunCanvas ctx={ctx()} />} />
+              <Route
+                path="/runs/:id"
+                element={
+                  <>
+                    {covered}
+                    <RunCanvas ctx={ctx()} />
+                  </>
+                }
+              />
+              <Route path="/elsewhere" element={<p>elsewhere</p>} />
             </Route>
           </Routes>
         </Wrap>
@@ -121,19 +135,16 @@ function renderCockpitInShell(Wrap: React.ComponentType<{ children: React.ReactN
 }
 
 describe("Focus mode — the shell gets out of the way", () => {
-  it("starts the overlay under the shell's banners, and drops the offset when focus ends", async () => {
+  it("starts the overlay under the shell's banners", async () => {
     const user = userEvent.setup();
     const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ bottom: 44 } as DOMRect);
     try {
       renderCockpitInShell();
       await screen.findByRole("heading", { name: "Egress" });
-      expect(document.documentElement.style.getPropertyValue("--shell-banner-h")).toBe("");
       await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
       expect(document.documentElement.style.getPropertyValue("--shell-banner-h")).toBe("44px");
       const overlay = screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }).closest(".fixed");
       expect(overlay).toHaveClass("top-[var(--shell-banner-h,0px)]");
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(document.documentElement.style.getPropertyValue("--shell-banner-h")).toBe(""));
     } finally {
       rect.mockRestore();
     }
@@ -235,6 +246,61 @@ describe("Focus mode — the shell gets out of the way", () => {
   });
 });
 
+describe("Focus mode — keyboard", () => {
+  let navigateTo: (to: string) => void = () => {};
+  function Covered() {
+    const navigate = useNavigate();
+    navigateTo = navigate;
+    return <button type="button">Approvals tab</button>;
+  }
+  const main = () => document.getElementById("main-content") as HTMLElement;
+
+  it("moves focus into the overlay on entry, and makes the covered region inert", async () => {
+    const user = userEvent.setup();
+    renderCockpitInShell(undefined, <Covered />);
+    await screen.findByRole("heading", { name: "Egress" });
+    expect(main()).not.toHaveAttribute("inert");
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+
+    expect(screen.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toHaveFocus();
+    expect(main()).toHaveAttribute("inert");
+    // The overlay and the terminal's host are outside main-content, so Tab can still reach them.
+    expect(main().contains(screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }))).toBe(false);
+    expect(main().contains(screen.getByText("the session"))).toBe(false);
+    // The covered tab is still in the DOM, but only inside the inert region.
+    expect(main().contains(screen.getByText("Approvals tab"))).toBe(true);
+  });
+
+  it("removes inert and returns focus to the Focus button on Escape and on the exit button", async () => {
+    const user = userEvent.setup();
+    renderCockpitInShell(undefined, <Covered />);
+    await screen.findByRole("heading", { name: "Egress" });
+
+    for (const leave of [() => user.keyboard("{Escape}"), () => user.click(screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }))]) {
+      await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+      expect(main()).toHaveAttribute("inert");
+      await leave();
+      await waitFor(() => expect(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus })).toHaveFocus());
+      expect(main()).not.toHaveAttribute("inert");
+    }
+  });
+
+  it("clears inert when the run page unmounts while focus is on, and does not throw", async () => {
+    const user = userEvent.setup();
+    renderCockpitInShell(undefined, <Covered />);
+    await screen.findByRole("heading", { name: "Egress" });
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+    expect(main()).toHaveAttribute("inert");
+
+    act(() => navigateTo("/elsewhere"));
+
+    await screen.findByText("elsewhere");
+    expect(main()).not.toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeNull();
+  });
+});
+
 describe("Focus mode — the edge dock", () => {
   it("opens on a widget, closes, and comes back from the rail", async () => {
     const user = userEvent.setup();
@@ -252,6 +318,13 @@ describe("Focus mode — the edge dock", () => {
     expect(screen.queryByRole("heading", { name: "Egress" })).toBeNull();
   });
 
+  // #3940: the dock is focus mode's large view already, and has no provider, so its cards draw no Expand control.
+  it("draws no Expand control on a docked widget", async () => {
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.expandWidget("Egress") })).toBeNull();
+  });
+
   it("⌘\\ toggles it", async () => {
     const user = userEvent.setup();
     render(<FocusMode ctx={ctx()} onExit={() => {}} />);
@@ -262,6 +335,56 @@ describe("Focus mode — the edge dock", () => {
 
     await user.keyboard("{Meta>}\\{/Meta}");
     expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+  });
+
+  // With the terminal focused, Escape and Ctrl+\\ are the program's keys (vim insert mode, SIGQUIT).
+  describe("keys while the terminal has focus", () => {
+    const withTerminal = (onExit: () => void) =>
+      render(<FocusMode ctx={ctx({ terminalPane: <textarea aria-label="terminal input" /> })} onExit={onExit} />);
+
+    it("passes Escape to the terminal and does not exit", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByLabelText("terminal input").focus();
+      await user.keyboard("{Escape}");
+      expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it("passes Ctrl+\\ to the terminal and leaves the dock alone", async () => {
+      const user = userEvent.setup();
+      withTerminal(() => {});
+      screen.getByLabelText("terminal input").focus();
+      await user.keyboard("{Control>}\\{/Control}");
+      expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    });
+
+    it("exits on Ctrl+Shift+Backspace from inside the terminal", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByLabelText("terminal input").focus();
+      await user.keyboard("{Control>}{Shift>}{Backspace}{/Shift}{/Control}");
+      expect(onExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("exits on Ctrl+Shift+Backspace from the console chrome too", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }).focus();
+      await user.keyboard("{Control>}{Shift>}{Backspace}{/Shift}{/Control}");
+      expect(onExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("still exits on Escape from the console chrome", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }).focus();
+      await user.keyboard("{Escape}");
+      expect(onExit).toHaveBeenCalledTimes(1);
+    });
   });
 
   // F1-F6: the dock used to store the raw selection with no clamp — when the
@@ -431,7 +554,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
     render(<FocusMode ctx={ctx()} onExit={() => {}} />);
     // Two chords, each a key cap beside the word for what it does.
     const caps = document.querySelectorAll("kbd");
-    expect([...caps].map((k) => k.textContent)).toEqual([chordLabel([MOD, "\\"]), "Esc"]);
+    expect([...caps].map((k) => k.textContent)).toEqual([chordLabel([MOD, "\\"]), "Ctrl+Shift+Backspace"]);
     expect(screen.getByText(RUN_COCKPIT.shortcutDock)).toBeInTheDocument();
     expect(screen.getByText(RUN_COCKPIT.shortcutExitFocus)).toBeInTheDocument();
     // ⌘K / ⌘1..4 / ⇧⌘F are on the board's strip and are NOT wired here.

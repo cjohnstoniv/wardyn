@@ -19,8 +19,8 @@ var errNoAdminPassword = errors.New("macvm: this macOS base keeps no admin passw
 const adminPasswordNext = AdminPasswordFile + ".next"
 
 // readAdminPassword reads the admin password file name in dir: a regular file (not a link), mode 0600, 8 to 64
-// bytes, every byte in codeAlphabet (every password Wardyn sets is). Anything else, absence included, is no
-// password.
+// bytes, every byte in codeAlphabet or typableAlphabet (every password Wardyn sets is: the edit's one-time
+// code is typableAlphabet's). Anything else, absence included, is no password.
 func readAdminPassword(dir, name string) ([]byte, error) {
 	p := filepath.Join(dir, name)
 	fi, err := os.Lstat(p)
@@ -32,7 +32,7 @@ func readAdminPassword(dir, name string) ([]byte, error) {
 		return nil, errNoAdminPassword
 	}
 	for _, c := range pw {
-		if strings.IndexByte(codeAlphabet, c) < 0 {
+		if strings.IndexByte(codeAlphabet, c) < 0 && strings.IndexByte(typableAlphabet, c) < 0 {
 			clear(pw)
 			return nil, errNoAdminPassword
 		}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,7 @@ func TestMacOSVMStatusTellsAnEditFromSetupByHand(t *testing.T) {
 		}
 		var text, doc strings.Builder
 		st.writeText(&text)
-		_ = doctor.Report{Stages: macOSVMDoctorStages()}.WriteText(&doc)
+		_ = doctor.Report{Stages: macOSVMDoctorStages(nil, "")}.WriteText(&doc)
 		for what, out := range map[string]string{"status": text.String(), "doctor": doc.String()} {
 			if got := strings.Contains(out, "setup by hand"); got != tc.setupBy {
 				t.Errorf("%s log newer: %s says setup by hand %v:\n%s", tc.newer, what, got, out)
@@ -177,5 +178,56 @@ func TestMacOSVMStatusTellsAnEditFromSetupByHand(t *testing.T) {
 		if got := st.Phase == "setup_by_hand"; got != tc.setupBy {
 			t.Errorf("%s log newer: phase %q", tc.newer, st.Phase)
 		}
+	}
+}
+
+// The status says what the last passing edit's recheck read in its boot and when: each certificate and Full
+// Disk Access, a read that failed as "could not be read", never trusted or allowed. A base with no edit
+// record, one that predates the read, or another base's record has no such line.
+func TestMacOSVMStatusPrintsTheLastEditsRead(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	base := m.layout.BaseDir(0)
+	man, err := macvm.ReadManifest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.editReadLines(); got != nil {
+		t.Fatalf("lines with no edit record: %q", got)
+	}
+	at := time.Date(2026, 11, 2, 14, 7, 0, 0, time.UTC)
+	write := func(rec macvm.EditRecord) {
+		t.Helper()
+		b, _ := json.Marshal(rec)
+		if err := os.WriteFile(base+".edit.json", b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(macvm.EditRecord{BaseCreatedAt: man.CreatedAt, EditedAt: at, Recheck: macvm.EditRecheckPassed})
+	if got := m.editReadLines(); got != nil {
+		t.Fatalf("lines from a record that predates the read: %q", got)
+	}
+	when := at.Local().Format("2 Jan 15:04")
+	write(macvm.EditRecord{BaseCreatedAt: man.CreatedAt, EditedAt: at, Recheck: macvm.EditRecheckPassed, ReadAt: at,
+		Certs: map[string]string{"acme-proxy": macvm.ItemNotTrusted, "acme-root": macvm.ItemTrusted, "lost": ""}, FullDiskAccess: "refused"})
+	want := []string{
+		"certificates, read at the last edit (" + when + "): acme-proxy not trusted, acme-root trusted, lost could not be read",
+		"Full Disk Access for the guest agent, read at the last edit (" + when + "): refused",
+	}
+	if got := m.editReadLines(); !slices.Equal(got, want) {
+		t.Fatalf("lines %q, want %q", got, want)
+	}
+	write(macvm.EditRecord{BaseCreatedAt: man.CreatedAt, EditedAt: at, Recheck: macvm.EditRecheckPassed, ReadAt: at})
+	if got := m.editReadLines(); len(got) != 1 || !strings.HasSuffix(got[0], "): could not be read") {
+		t.Fatalf("an unread Full Disk Access = %q", got)
+	}
+	var out strings.Builder
+	macOSVMStatus{State: runnerwire.MacVMBaseReady, Harnesses: []string{"none"}, editRead: want}.writeText(&out)
+	if !strings.Contains(out.String(), "MiB\n"+want[0]+"\n"+want[1]+"\n") {
+		t.Fatalf("status:\n%s", out.String())
+	}
+	write(macvm.EditRecord{BaseCreatedAt: man.CreatedAt.Add(-time.Hour), EditedAt: at, Recheck: macvm.EditRecheckPassed, ReadAt: at, FullDiskAccess: "allowed"})
+	if got := m.editReadLines(); got != nil {
+		t.Fatalf("another base's record read as this one's: %q", got)
 	}
 }

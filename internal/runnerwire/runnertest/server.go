@@ -37,6 +37,12 @@ type Server struct {
 	// Resident holds the values delivered through deliver_resident, by run id.
 	Resident map[uuid.UUID][]runnerwire.DeliverResidentArgs
 	Erased   []uuid.UUID
+	// KeptMachineCalls is every kept_machine call received, in order. The fake holds no machines: the
+	// first delete of an id answers deleted, a repeat answers already_absent.
+	KeptMachineCalls []runnerwire.KeptMachineArgs
+	// Legacy makes the server a runner from before proxy fencing and the folder pass limit: PublishCaps sends
+	// neither flag, fence_proxy is an unknown method, and a policy generation is not read.
+	Legacy bool
 }
 
 // Serve runs the runner side of a session over conn, backed by sub, until the
@@ -56,7 +62,8 @@ func (s *Server) PublishCaps(ctx context.Context, capacity placement.Capacity, r
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings})
+	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings,
+		ProxyFence: !s.Legacy, FolderPassOnce: !s.Legacy})
 	if err != nil {
 		return err
 	}
@@ -94,6 +101,27 @@ func (s *Server) reclaimDrive(ctx context.Context, args json.RawMessage) (any, e
 		return runnerwire.ReclaimDriveResult{InUse: true}, nil
 	}
 	return runnerwire.ReclaimDriveResult{Outcome: outcome}, err
+}
+
+// keptMachine answers kept_machine: it records the call and answers per the contract.
+func (s *Server) keptMachine(args json.RawMessage) (any, error) {
+	a, err := decode[runnerwire.KeptMachineArgs](args)
+	if err != nil {
+		return nil, err
+	}
+	if a.Op != runnerwire.KeptMachineOpDelete {
+		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := runnerwire.KeptMachineDeleted
+	for _, c := range s.KeptMachineCalls {
+		if c.Op == a.Op && c.ID == a.ID {
+			out = runnerwire.KeptMachineAlreadyAbsent
+		}
+	}
+	s.KeptMachineCalls = append(s.KeptMachineCalls, a)
+	return runnerwire.KeptMachineResult{Outcome: out}, nil
 }
 
 func (s *Server) handle(ctx context.Context, id uint32, method string, args json.RawMessage) (any, error) {
@@ -182,6 +210,8 @@ func (s *Server) handle(ctx context.Context, id uint32, method string, args json
 		return nil, ws.WorkloadStatus(ctx, a)
 	case runnerwire.MethodReclaimDrive:
 		return s.reclaimDrive(ctx, args)
+	case runnerwire.MethodKeptMachine:
+		return s.keptMachine(args)
 	case runnerwire.MethodEnsureProxyImg:
 		rv, ok := s.sub.(runner.ProxyReviver)
 		if !ok {
@@ -229,7 +259,7 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		if !ok {
 			return nil, runner.ErrReviveUnsupported
 		}
-		return nil, rv.ReplaceProxy(ctx, ref, a.CfgJSON)
+		return s.replaceProxyAt(ctx, rv, ref, a)
 	}
 	a, err := decode[runnerwire.RefArgs](args)
 	if err != nil {
@@ -249,12 +279,10 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		return s.teardown(ref, s.sub.StopSandbox(ctx, ref))
 	case runnerwire.MethodKill:
 		return s.teardown(ref, s.sub.KillSandbox(ctx, ref))
+	case runnerwire.MethodFenceProxy:
+		return nil, s.fence(ctx, method, ref)
 	case runnerwire.MethodEnd:
-		e, ok := s.sub.(runner.SandboxEnder)
-		if !ok {
-			return nil, runner.ErrEndUnsupported
-		}
-		return s.teardown(ref, e.EndSandbox(ctx, ref))
+		return s.end(ctx, ref, a.PolicyGeneration)
 	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
 		p, ok := s.sub.(runner.AgentPauser)
 		if !ok {
@@ -274,11 +302,7 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		}
 		return runnerwire.AgentPauseResult{FencedPause: true}, err
 	case runnerwire.MethodStopProxy:
-		p, ok := s.sub.(runner.ProxyStopper)
-		if !ok {
-			return nil, runner.ErrEndUnsupported
-		}
-		return nil, p.StopProxy(ctx, ref)
+		return nil, s.stopProxy(ctx, ref, a.PolicyGeneration)
 	case runnerwire.MethodStart:
 		st, ok := s.sub.(runner.SandboxStarter)
 		if !ok {
@@ -293,6 +317,55 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		return nil, rv.CanReplaceProxy(ctx, ref)
 	}
 	return nil, fmt.Errorf("unknown method %q", method)
+}
+
+// generation is the substrate's generation-aware stop, when the call names a generation and the server is not
+// playing a runner that predates them.
+func (s *Server) generation(gen int) (runner.ProxyGenerationStopper, bool) {
+	at, ok := s.sub.(runner.ProxyGenerationStopper)
+	return at, ok && gen > 0 && !s.Legacy
+}
+
+// end serves end, acting for the generation it names when the substrate reads it.
+func (s *Server) end(ctx context.Context, ref string, gen int) (any, error) {
+	if at, ok := s.generation(gen); ok {
+		return s.teardown(ref, at.EndSandboxAt(ctx, ref, gen))
+	}
+	e, ok := s.sub.(runner.SandboxEnder)
+	if !ok {
+		return nil, runner.ErrEndUnsupported
+	}
+	return s.teardown(ref, e.EndSandbox(ctx, ref))
+}
+
+// stopProxy serves stop_proxy, acting for the generation it names when the substrate reads it.
+func (s *Server) stopProxy(ctx context.Context, ref string, gen int) error {
+	if at, ok := s.generation(gen); ok {
+		return at.StopProxyAt(ctx, ref, gen)
+	}
+	p, ok := s.sub.(runner.ProxyStopper)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return p.StopProxy(ctx, ref)
+}
+
+// fence serves fence_proxy; a server playing an older runner, or a substrate that cannot fence, does not know it.
+func (s *Server) fence(ctx context.Context, method, ref string) error {
+	f, ok := s.sub.(runner.ProxyFencer)
+	if !ok || s.Legacy {
+		return fmt.Errorf("unknown method %q", method)
+	}
+	return f.FenceProxy(ctx, ref)
+}
+
+// replaceProxyAt serves replace_proxy, acting for the generation it names when the substrate reads it.
+func (s *Server) replaceProxyAt(ctx context.Context, rv runner.ProxyReviver, ref string, a runnerwire.ReplaceProxyArgs) (any, error) {
+	if at, ok := rv.(runner.ProxyReviverAt); ok && a.PolicyGeneration > 0 && !s.Legacy {
+		sum, err := at.ReplaceProxyHashedAt(ctx, ref, a.CfgJSON, a.PolicyGeneration)
+		return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+	}
+	return replaceProxy(ctx, rv, ref, a.CfgJSON)
 }
 
 // teardown answers a stop, kill or end as the real dispatcher does: a teardown
@@ -525,3 +598,12 @@ type (
 
 func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
 func (f readerFunc) Read(b []byte) (int, error)  { return f(b) }
+
+// replaceProxy answers replace_proxy as a runner does: with the hash, from a substrate that hashes.
+func replaceProxy(ctx context.Context, rv runner.ProxyReviver, ref string, cfg []byte) (any, error) {
+	if hashed, ok := rv.(runner.ProxyReviverHashed); ok {
+		sum, err := hashed.ReplaceProxyHashed(ctx, ref, cfg)
+		return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+	}
+	return nil, rv.ReplaceProxy(ctx, ref, cfg)
+}

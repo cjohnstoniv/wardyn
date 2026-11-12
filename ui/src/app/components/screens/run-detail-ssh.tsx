@@ -28,7 +28,7 @@
 // see the amendment in docs/design/ui-sandboxes-prompt.md §9.)
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { BookOpen, KeyRound } from "lucide-react";
+import { BookOpen, ChevronDown, KeyRound } from "lucide-react";
 import type { RunDetail, SSHPublicKey, UIApp } from "../../lib/types";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -36,26 +36,23 @@ import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { basePath } from "../../lib/base-path";
 import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
-import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
-import { entryErrorMessage, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
+import { entryErrorMessage, isBackgroundRun, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { RUN_CLI, RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
-import { DESKTOP } from "../wardyn/copy/desktop";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
-import { Chip, WidgetCard } from "../wardyn/primitives";
-import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
+import { isVMKind } from "../../lib/types/machine-kind";
+import { WidgetCard } from "../wardyn/primitives";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { UIAppRow } from "./run-detail/ui-app-row";
-import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
+import { useRunDataOut } from "./run-detail/use-run-data-out";
 import { cn } from "../ui/utils";
 import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
 import { orgCAFingerprints } from "../../lib/cli-install";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
-export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: MacOSRunFacts }) {
-  const macOS = given ?? macOSRunFactsOf(run);
+export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
   const operator = useOperator();
   const resolved = useOperatorResolved();
@@ -115,13 +112,16 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
   });
   const [cliLoaded, setCLILoaded] = React.useState(false);
   const [attempt, setAttempt] = React.useState(0);
+  // undefined = the person has not toggled the SSH lane, so it opens by default once SSH is on and a key is registered.
+  const [sshOpen, setSSHOpen] = React.useState<boolean | undefined>(undefined);
   // Which declared app's ticket-mint/open is in flight, and the last failure
-  // (scoped to one app — the other rows stay untouched per the mock's S5).
+  // (scoped to one app — the other rows stay untouched per the mock's S5). The
+  // built-in desktop is not a declared app: its Open and errors live in the
+  // Desktop tile (run-detail-desktop.tsx).
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
   const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
-  // #2972: a VM desktop's sign-ins, once the gateway can open it.
-  const signIns = useDesktopSignIns(run.id, mayAttach && running && isVMKind(run.machine_kind) && !!uiSandbox?.enabled && macOS?.desktop !== "observe");
-
+  // A run with no UI app has no desktop; under review its Files panel is the reviewed way out, so the rule is read for it.
+  const dataOut = useRunDataOut(run.id, (run.ui_apps ?? []).length === 0);
   React.useEffect(() => {
     if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
@@ -156,7 +156,7 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
     };
   }, [mayAttach, running, attempt]);
 
-  if (!mayAttach || (!running && !macOS?.disk)) return null; // a finished macOS VM run keeps its Desktop block while the Mac reports its disk
+  if (!mayAttach || !running || isBackgroundRun(run)) return null; // a background run has no terminal to attach to
 
   const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
@@ -224,11 +224,6 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
   // token at whatever else owns the host root). It rides `wardyn login <url>`;
   // the attach command itself carries no prefix.
   const consoleURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
-  // A macOS VM whose disk the Mac is removing has no desktop to open. One whose desktop is view only is
-  // watched: nobody can sign in without typing, so it has no sign-ins.
-  const macOff = !!macOS?.disk;
-  const viewOnly = macOS?.desktop === "observe" && running;
-  const desktopOn = uiSandboxOn && !macOff;
   const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
   return (
@@ -240,49 +235,9 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
       grow
       bodyClassName="scroll-thin overflow-y-auto p-4"
     >
-      {/* Mock M6: a desktop VM's desktop comes first, in its own block. It is the gateway's ticket ->
-          bind -> enter hand-off for the built-in desktop app, never a declared ui_app. */}
-      {isVMKind(run.machine_kind) && (
-        <section aria-label={DESKTOP.title} className="mb-4 rounded-[10px] border border-border p-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-medium text-foreground">{DESKTOP.title}</p>
-            {(healthAnswered || macOff) &&
-              (desktopOn && viewOnly ? (
-                <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
-              ) : desktopOn && signIns.view?.paused ? (
-                <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
-              ) : (
-                <Chip tone={desktopOn ? "success" : "neutral"}>{desktopOn ? DESKTOP.ready : DESKTOP.statusOff}</Chip>
-              ))}
-          </div>
-          <p className="mt-0.5 text-meta text-muted-foreground">{isMacOSVM(run) ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
-          {viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.observeOnlyMacOS}</p>}
-          {healthAnswered && !uiSandboxOn && !macOff && (
-            <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{monoTokens(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
-          )}
-          <MacOSDiskNote disk={macOS?.disk} />
-          {desktopOn && (
-            <>
-              <DesktopPausedNote s={signIns} />
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button size="sm" disabled={openingApp === DESKTOP_APP.name} onClick={() => openApp(DESKTOP_APP)}>
-                  {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : viewOnly ? DESKTOP.watch : UI_APPS_LANE.cta("desktop")}
-                </Button>
-                <DesktopSignInButton s={signIns} />
-              </div>
-              {appError?.app === DESKTOP_APP.name && (
-                <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError.message}</p>
-              )}
-              {!viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>}
-              <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
-              <DesktopSignInsNote s={signIns} />
-            </>
-          )}
-        </section>
-      )}
       {externalTool && (
         <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
-          Managed by an external tool — killing this run tears down that tool's workspace.
+          Managed by an external tool — ending this run tears down that tool's workspace.
         </p>
       )}
       <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
@@ -302,11 +257,14 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
       />
 
       {!sponsorOnly && (
-      <details className="group mt-4 border-t border-border pt-3">
+      <details
+        className="group mt-4 border-t border-border pt-3"
+        open={sshOpen ?? (sshOn && keys !== null && keys.length > 0)}
+        onToggle={(e) => setSSHOpen(e.currentTarget.open)}
+      >
         <summary className="flex cursor-pointer items-center gap-2">
           <span className="flex-1 text-xs font-medium text-foreground">{RUN_CLI.SSH_TITLE}</span>
-          <span className="text-xs text-muted-foreground group-open:hidden">{RUN_CLI.SHOW}</span>
-          <span className="hidden text-xs text-muted-foreground group-open:inline">{RUN_CLI.HIDE}</span>
+          <ChevronDown aria-hidden className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
         </summary>
         {healthAnswered && !sshOn && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
@@ -392,8 +350,7 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
             </p>
             <CodeBlock text={'"remote.SSH.localServerDownload": "always"'} />
             <p>
-              Why: the sandbox has no internet; VS Code must upload its server through SSH instead of the remote
-              host fetching it.
+              {RUN_SSH.VSCODE_WHY}
             </p>
           </div>
         </details>
@@ -483,8 +440,12 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
             ))}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
-            {mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} />}
+            {/* A VM run's Files panel is in its Desktop tile; any other run with a declared UI app keeps it here. */}
+            {mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && <DesktopFilesPanel runId={run.id} />}
           </>
+        )}
+        {dataOut === "review" && uiApps.length === 0 && mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && (
+          <DesktopFilesPanel runId={run.id} noDesktop />
         )}
       </div>
     </WidgetCard>
@@ -527,40 +488,77 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
 /** The UI-sandbox enter facts /healthz publishes (internal/api/healthz.go ui_sandbox). */
 export type UISandboxEnter = { enabled?: boolean; enter_url_template?: string; enter_post_url?: string; bind_url?: string } | null;
 
+// openEnterTab opens the named blank tab enterUIApp sends the app into. A browser only lets the click open a
+// tab, and the awaits that come later (ticket, bind, takeover) can outlive that permission, so a caller opens it
+// here, synchronously at the top of its click handler, and hands it to enterUIApp as opts.tab. A null return
+// means the browser blocked the pop-up: show RUN_SSH.POPUP_BLOCKED and request nothing.
+export function openEnterTab(): Window | null {
+  const name = `wardyn-enter-${Date.now().toString(36)}`;
+  const tab = window.open("", name);
+  if (!tab) return null;
+  tab.name = name;
+  // The new tab must not reach back to the console (the "noopener" a plain window.open would carry).
+  tab.opener = null;
+  return tab;
+}
+
 // enterUIApp opens a declared UI app of the run in a new tab: a single-use ticket, bound to this
-// browser, handed to the gateway by POST. ConnectSSHCard's Open button and a "Needs you" desktop
-// takeover (needs-you-banner.tsx) both go through it.
+// browser, handed to the gateway by POST. ConnectSSHCard's Open button, the Desktop tile, the Watch button
+// and a "Needs you" desktop takeover (needs-you-banner.tsx) all go through it.
 //
 // The /open page passes the ticket it minted itself (an inbound app's, for a named caller) and "_self", since
-// that page is already the new tab.
+// that page is already the new tab. A caller that has to await before this (a takeover, a ticket) opens the tab
+// itself with openEnterTab, inside its click, and passes it as opts.tab; then no other tab is opened here.
 export async function enterUIApp(
   runId: string,
   app: string,
   uiSandbox: UISandboxEnter,
-  opts: { ticket?: string; target?: "_blank" | "_self" } = {},
+  opts: { ticket?: string; target?: "_blank" | "_self"; tab?: Window } = {},
 ) {
-  const ticket = opts.ticket ?? (await runsApi.attachTicket(runId, "ui"));
   const target = opts.target ?? "_blank";
-  // #1241: the gateway refuses a ticket this browser did not bind first,
-  // so a ticket minted elsewhere cannot be pushed into this browser.
-  if (uiSandbox?.bind_url) {
-    await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(runId)), ticket);
+  // The tab is opened here, before the first await, when the caller did not open one. A null return means the
+  // browser blocked it.
+  let tab: Window | null = null;
+  let formTarget: string = target;
+  if (target === "_blank") {
+    tab = opts.tab ?? openEnterTab();
+    if (!tab) throw new Error(RUN_SSH.POPUP_BLOCKED);
+    formTarget = tab.name;
   }
-  // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
-  // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
-  // __wardyn/enter", no query) — split/join replaces every occurrence
-  // (replaceAll is ES2021; this tsconfig's lib is ES2020).
-  if (uiSandbox?.enter_post_url) {
-    const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
-    submitEnterForm(action, { run: runId, app, ticket }, target);
-  } else if (uiSandbox?.enter_url_template) {
-    const url = Object.entries({ run: runId, app, ticket }).reduce(
-      (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
-      uiSandbox.enter_url_template,
-    );
-    window.open(url, target, "noopener");
-  } else {
-    throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+  try {
+    const ticket = opts.ticket ?? (await runsApi.attachTicket(runId, "ui"));
+    // #1241: the gateway refuses a ticket this browser did not bind first,
+    // so a ticket minted elsewhere cannot be pushed into this browser.
+    if (uiSandbox?.bind_url) {
+      await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(runId)), ticket);
+    }
+    // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
+    // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
+    // __wardyn/enter", no query) — split/join replaces every occurrence
+    // (replaceAll is ES2021; this tsconfig's lib is ES2020).
+    if (uiSandbox?.enter_post_url) {
+      const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
+      // The person closed the blank tab while the ticket was pending: a named form would now open a new tab that never
+      // had its opener cleared. Treat it as cancelling, checked in the same tick as the submit.
+      if (tab?.closed) return;
+      submitEnterForm(action, { run: runId, app, ticket }, formTarget);
+    } else if (uiSandbox?.enter_url_template) {
+      const url = Object.entries({ run: runId, app, ticket }).reduce(
+        (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+        uiSandbox.enter_url_template,
+      );
+      if (tab) {
+        if (tab.closed) return;
+        tab.location.replace(url);
+      }
+      else window.open(url, target, "noopener");
+    } else {
+      throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+    }
+  } catch (err) {
+    // Nothing was sent into the blank tab, so do not leave it behind.
+    tab?.close();
+    throw err;
   }
 }
 
@@ -589,17 +587,15 @@ async function bindTicket(url: string, ticket: string) {
 }
 
 // submitEnterForm drives the #1220 POST hand-off: a hidden form, submitted
-// with target="_blank" so it opens the same new tab window.open(url, "_blank")
-// used to, but as a real POST whose fields never touch the URL, browser
-// history, or a reverse-proxy access log. rel="noopener" is form.submit()'s
-// equivalent of window.open's "noopener" flag above — no window.opener back
-// to the console from the new tab.
-function submitEnterForm(action: string, fields: Record<string, string>, target: "_blank" | "_self") {
+// into the named tab enterUIApp opened inside the click (or "_self"), as a real POST
+// whose fields never touch the URL, browser history, or a reverse-proxy access log.
+// The named tab already has its opener cleared (openEnterTab), so the form carries no rel="noopener": under it a
+// browser may refuse to reuse the named tab and open a second one, outside the click.
+function submitEnterForm(action: string, fields: Record<string, string>, target: string) {
   const form = document.createElement("form");
   form.method = "POST";
   form.action = action;
   form.target = target;
-  form.rel = "noopener";
   for (const [name, value] of Object.entries(fields)) {
     const input = document.createElement("input");
     input.type = "hidden";

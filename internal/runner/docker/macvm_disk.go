@@ -6,10 +6,12 @@
 package docker
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -72,3 +74,13 @@ func (d *Driver) forgetMacOSVMDisk(k, seen any) {
 }
 
 var _ runner.MacOSVMDiskReporter = (*Driver)(nil)
+
+// macVMDiskShortSaid says a disk-short admission refusal as the run's waiting line, and reports whether it did.
+func macVMDiskShortSaid(spec runner.SandboxSpec, err error) bool {
+	short := (*admission.Refusal)(nil)
+	if !errors.As(err, &short) || short.DiskNeeded <= 0 {
+		return false
+	}
+	spec.NotifyWaiting(runner.MacOSDiskShortMessage(short.DiskNeeded, short.DiskFreeLeft))
+	return true
+}

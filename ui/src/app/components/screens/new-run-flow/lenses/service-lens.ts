@@ -62,6 +62,15 @@ export function setHealth(intent: RunIntent, patch: Partial<NonNullable<RunServi
   return set(intent, { ...s, health });
 }
 
+/** Wardyn's own check of the port: a part of the health check, so it rides only while one is set. Off removes the field. */
+export function setProbe(intent: RunIntent, on: boolean): RunIntent {
+  const s = intent.service;
+  if (!s?.health) return intent;
+  const { probe: _probe, ...health } = s.health;
+  void _probe;
+  return set(intent, { ...s, health: on ? { ...health, probe: "control_plane" } : health });
+}
+
 /** A field of the form that the server's limits (internal/types/service.go) would refuse. */
 export type ServiceField = "port" | "path" | "interval" | "failures";
 

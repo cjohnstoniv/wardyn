@@ -11,12 +11,14 @@ import { Button } from "../app/components/ui/button";
 import { Chip } from "../app/components/wardyn/primitives";
 import { originWS } from "../app/lib/base-path";
 import { DESKTOP } from "../app/components/wardyn/copy/desktop";
-import { keysymOf } from "./keysym";
+import { isEscapeChord, keysymOf } from "./keysym";
 import { RfbClient, type RfbDisplay } from "./rfb";
 
 // `machine_kind` is the run's (types.MachineKind); absent when the gateway could not read the run.
 // `view_only`: the gateway keeps this session's input from the desktop.
-export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean } | { state: "refused"; said: string };
+// `background`: this session is a watch of a background run's desktop; it always comes with view_only.
+// `run_title` and `run_href`: the run's name and its page, for the way back to it; both or neither.
+export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string } | { state: "refused"; said: string };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */
 export function readBoot(el: HTMLElement = document.documentElement): Boot | null {
@@ -45,8 +47,16 @@ const openSocket = (path: string): DesktopSocket => new WebSocket(originWS(path)
 const SESSION_ENDED = 4001;
 const RUN_ENDED = 4002;
 const NOT_AUTHORIZED = 4003;
+const WATCH_ENDED = 4005;
+// A window opened on the Mac, so the browser desktop only watches (one keyboard at a time). Until the gateway
+// sends this code, it closes with SESSION_ENDED and a reason starting WINDOW_OPEN_LEGACY_REASON; both read the same.
+export const WINDOW_OPEN = 4006;
+export const WINDOW_OPEN_LEGACY_REASON = "A window is open on the Mac";
+const UNREACHABLE = 4004;
+// One wheel notch per this many pixels of scroll, so a light trackpad flick is not dozens of lines.
+const WHEEL_NOTCH_PX = 50;
 
-type Phase = "starting" | "connected" | "closed" | "expired" | "run_ended" | "refused";
+type Phase = "starting" | "reconnecting" | "connected" | "closed" | "expired" | "run_ended" | "watch_ended" | "window_open" | "refused";
 
 export function DesktopViewer({ boot, connect = openSocket, small }: { boot: Boot; connect?: (path: string) => DesktopSocket; small?: boolean }) {
   if (boot.state === "refused") return <LinkRefused said={boot.said} />;
@@ -61,12 +71,18 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
   const [phase, setPhase] = React.useState<Phase>("starting");
   const [fit, setFit] = React.useState(true);
   const [closeFailed, setCloseFailed] = React.useState(false);
+  const [said, setSaid] = React.useState<string | null>(null); // the gateway's reason, once a dial has failed twice
+  const [focused, setFocused] = React.useState(false);
   const pressed = React.useRef(new Map<string, number>()); // the keysym each held key went down with
+  const wheel = React.useRef({ x: 0, y: 0 }); // scroll pixels not yet sent as a notch
 
   React.useEffect(() => {
     let retry: ReturnType<typeof setTimeout> | undefined;
     let delay = 1000;
     let live = true;
+    let connectedOnce = false;
+    let fails = 0;
+    let reason = "";
     const dial = () => {
       const ws = connect(boot.rfb);
       socket.current = ws;
@@ -78,6 +94,9 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       const rfb = new RfbClient((b) => ws.send(b), canvasDisplay(canvas), {
         connected: () => {
           delay = 1000;
+          connectedOnce = true;
+          fails = 0;
+          setSaid(null);
           setPhase("connected");
         },
         failed: () => ws.close(),
@@ -86,14 +105,20 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       ws.onmessage = (ev) => rfb.receive(ev.data as ArrayBuffer);
       ws.onclose = (ev) => {
         client.current = null;
+        pressed.current.clear(); // the next connection starts with nothing held
         if (!live) return;
         if (closing.current || ev.code === NOT_AUTHORIZED) setPhase("closed");
+        else if (ev.code === WINDOW_OPEN || (ev.code === SESSION_ENDED && ev.reason?.startsWith(WINDOW_OPEN_LEGACY_REASON))) setPhase("window_open");
         else if (ev.code === SESSION_ENDED) setPhase("expired");
         else if (ev.code === RUN_ENDED) setPhase("run_ended");
+        else if (ev.code === WATCH_ENDED) setPhase("watch_ended");
         else {
           // Booting, restarting or briefly unreachable: the same tab connects on its own. A browser hides a
           // refused handshake's status, so a socket that never opened asks the gateway once whether it was 403.
-          setPhase("starting");
+          setPhase(connectedOnce ? "reconnecting" : "starting");
+          fails++;
+          if (ev.code === UNREACHABLE && ev.reason) reason = ev.reason;
+          setSaid(fails >= 2 && reason ? reason : null);
           const again = () => {
             if (!live) return;
             retry = setTimeout(dial, delay);
@@ -130,13 +155,29 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
     window.close();
   };
 
-  const input = viewOnly || phase !== "connected" ? {} : inputHandlers(canvas, client, pressed.current);
+  // Held keys must not outlive the focus: the VM would keep a modifier down while the person is in another window.
+  React.useEffect(() => {
+    if (viewOnly) return;
+    const release = () => releaseAll(client, pressed.current);
+    const hidden = () => document.visibilityState === "hidden" && release();
+    window.addEventListener("blur", release);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", release);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [viewOnly]);
+
+  const input = viewOnly || phase !== "connected" ? {} : inputHandlers(canvas, client, pressed.current, wheel.current);
   const ended = phase === "closed" || phase === "expired" || phase === "run_ended" || phase === "refused";
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-xs">
         {phase === "connected" && <Chip tone="success" dot>{DESKTOP.connected}</Chip>}
         <span className="font-medium">{DESKTOP.title}</span>
+        {boot.run_title && boot.run_href && /^https?:\/\//.test(boot.run_href) && (
+          <a href={boot.run_href} className="text-muted-foreground underline underline-offset-2">{DESKTOP.backToRun(boot.run_title)}</a>
+        )}
         <span className="flex-1" />
         <div className="inline-flex rounded-[9px] border border-border bg-surface-2 p-[3px]">
           {[[true, DESKTOP.fit], [false, DESKTOP.actualSize]].map(([value, label]) => (
@@ -154,7 +195,13 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       {viewOnly && (
         <p className="border-b border-border px-4 py-2 text-xs">
           <span className="font-medium">{boot.view_only ? DESKTOP.viewOnlyTitle : DESKTOP.phoneTitle}</span>{" "}
-          <span className="text-muted-foreground">{boot.view_only ? DESKTOP.viewOnlyBody : DESKTOP.phoneBody}</span>
+          <span className="text-muted-foreground">{boot.background ? DESKTOP.backgroundWatchBody : boot.view_only ? DESKTOP.viewOnlyBody : DESKTOP.phoneBody}</span>
+        </p>
+      )}
+      {!viewOnly && phase === "connected" && (
+        <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          {boot.machine_kind === "macos_vm" ? DESKTOP.noClipboardMac : DESKTOP.noClipboard}
+          {focused && <span className="block">{DESKTOP.escapeHint}</span>}
         </p>
       )}
       <main className={fit ? "relative flex min-h-0 flex-1 items-center justify-center bg-black" : "relative min-h-0 flex-1 overflow-auto bg-black"}>
@@ -162,28 +209,38 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           ref={canvas}
           data-testid="desktop-canvas"
           tabIndex={viewOnly ? -1 : 0}
+          aria-label={DESKTOP.canvasLabel}
           className={fit ? "max-h-full max-w-full object-contain" : undefined}
           hidden={phase !== "connected"}
           onContextMenu={(e) => e.preventDefault()}
+          onFocus={() => setFocused(true)}
+          onBlur={() => {
+            setFocused(false);
+            releaseAll(client, pressed.current);
+          }}
           {...input}
         />
-        {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} />}
+        {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} />}
       </main>
     </div>
   );
 }
 
-function Notice({ phase, macOS }: { phase: Exclude<Phase, "connected">; macOS: boolean }) {
+function Notice({ phase, macOS, said }: { phase: Exclude<Phase, "connected">; macOS: boolean; said: string | null }) {
   const [title, body] =
     phase === "starting" ? [macOS ? DESKTOP.startingMacOS : DESKTOP.starting, DESKTOP.startingBody]
+    : phase === "reconnecting" ? [DESKTOP.reconnecting, DESKTOP.reconnectingBody]
+    : phase === "window_open" ? [DESKTOP.windowOpenTitle, DESKTOP.windowOpenBody]
     : phase === "expired" ? [DESKTOP.sessionEnded, DESKTOP.sessionEndedBody]
     : phase === "run_ended" ? [DESKTOP.runEnded, undefined]
+    : phase === "watch_ended" ? [DESKTOP.sessionEnded, DESKTOP.watchEndedBody]
     : phase === "refused" ? [DESKTOP.sessionEnded, DESKTOP.refusedBody]
     : [DESKTOP.sessionEnded, undefined];
   return (
     <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center">
       <p className="text-sm font-medium text-white">{title}</p>
       {body && <p className="max-w-md text-xs text-neutral-400">{body}</p>}
+      {said && (phase === "starting" || phase === "reconnecting") && <p className="max-w-md text-xs text-neutral-400">{DESKTOP.stillTrying(said)}</p>}
     </div>
   );
 }
@@ -245,7 +302,13 @@ function canvasDisplay(ref: React.RefObject<HTMLCanvasElement | null>): RfbDispl
 // DOM buttons (1 left, 2 right, 4 middle) to RFB's mask (1 left, 2 middle, 4 right).
 const rfbButtons = (b: number) => (b & 1) | (b & 4 ? 2 : 0) | (b & 2 ? 4 : 0);
 
-function inputHandlers(canvas: React.RefObject<HTMLCanvasElement | null>, client: React.RefObject<RfbClient | null>, pressed: Map<string, number>) {
+/** Key-up for every held key, so the VM is left with none down. */
+function releaseAll(client: React.RefObject<RfbClient | null>, pressed: Map<string, number>) {
+  for (const sym of pressed.values()) client.current?.key(sym, false);
+  pressed.clear();
+}
+
+function inputHandlers(canvas: React.RefObject<HTMLCanvasElement | null>, client: React.RefObject<RfbClient | null>, pressed: Map<string, number>, wheel: { x: number; y: number }) {
   const at = (e: { clientX: number; clientY: number }) => {
     const el = canvas.current;
     if (!el) return [0, 0];
@@ -256,20 +319,60 @@ function inputHandlers(canvas: React.RefObject<HTMLCanvasElement | null>, client
     const [x, y] = at(e);
     client.current?.pointer(x, y, rfbButtons(e.buttons));
   };
+  // A drag that leaves the canvas (across Fit's border, out of the window) keeps arriving here until release.
+  const uncapture = (e: React.PointerEvent) => {
+    if (canvas.current?.hasPointerCapture?.(e.pointerId)) canvas.current.releasePointerCapture(e.pointerId);
+  };
   return {
     onPointerMove: pointer,
     onPointerDown: (e: React.PointerEvent) => {
       canvas.current?.focus();
+      try {
+        canvas.current?.setPointerCapture?.(e.pointerId);
+      } catch {
+        // a pointer that is already gone: nothing to capture
+      }
       pointer(e);
     },
-    onPointerUp: pointer,
+    onPointerUp: (e: React.PointerEvent) => {
+      pointer(e);
+      uncapture(e);
+    },
+    onPointerCancel: (e: React.PointerEvent) => {
+      const [x, y] = at(e);
+      client.current?.pointer(x, y, 0);
+      uncapture(e);
+    },
+    onLostPointerCapture: (e: React.PointerEvent) => {
+      const [x, y] = at(e);
+      client.current?.pointer(x, y, 0);
+    },
     onWheel: (e: React.WheelEvent) => {
       const [x, y] = at(e);
-      const wheel = e.deltaY < 0 ? 8 : 16;
-      client.current?.pointer(x, y, rfbButtons(e.buttons) | wheel);
-      client.current?.pointer(x, y, rfbButtons(e.buttons));
+      const px = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 800 : 1; // lines and pages to pixels
+      wheel.x += e.deltaX * px;
+      wheel.y += e.deltaY * px;
+      const down = Math.trunc(wheel.y / WHEEL_NOTCH_PX);
+      const right = Math.trunc(wheel.x / WHEEL_NOTCH_PX);
+      wheel.y -= down * WHEEL_NOTCH_PX;
+      wheel.x -= right * WHEEL_NOTCH_PX;
+      const held = rfbButtons(e.buttons);
+      const notch = (n: number, button: number) => {
+        for (let i = 0; i < Math.abs(n); i++) {
+          client.current?.pointer(x, y, held | button);
+          client.current?.pointer(x, y, held);
+        }
+      };
+      notch(down, down < 0 ? 8 : 16);
+      notch(right, right < 0 ? 32 : 64);
     },
     onKeyDown: (e: React.KeyboardEvent) => {
+      if (isEscapeChord(e)) {
+        e.preventDefault();
+        releaseAll(client, pressed);
+        canvas.current?.blur();
+        return;
+      }
       const sym = keysymOf(e);
       if (sym === undefined) return;
       e.preventDefault();

@@ -47,7 +47,7 @@ describe("New Run pool notes", () => {
 
   it("with a user pool chosen, says the biggest run it can take, and that a new run waits when every runner is at its limit", () => {
     const { unmount } = show([], pool({ capacity: capacity(1) }));
-    expect(screen.getByText("Biggest run it can take: 4 CPUs · 16 GB memory · 100 GB disk")).toBeInTheDocument();
+    expect(screen.getByText("Biggest run it can take: 4 CPUs · 16 GiB memory · 100 GiB disk")).toBeInTheDocument();
     expect(screen.queryByText(/A new run waits/)).toBeNull();
     unmount();
     show([], pool({ capacity: capacity(0) }));

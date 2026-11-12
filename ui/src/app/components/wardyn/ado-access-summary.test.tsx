@@ -57,6 +57,15 @@ describe("ADOAccessSummary — the saved-policy summary line", () => {
     ]);
   });
 
+  it("reads pr as its three parts for the fold, and pr_create alone is not Repos", () => {
+    // A stored pr covers pr_create, pr_vote and pr_complete: Repos, with no High-risk vote named.
+    expect(adoAccessSummary(["code_read", "code_write", "pr"])).toEqual({ parts: ["Repos"], highRisk: false });
+    // pr_create alone leaves pr and pr_complete unchosen, so each chosen row is named.
+    const { parts } = adoAccessSummary(["code_read", "code_write", "pr_create"]);
+    expect(parts).not.toContain("Repos");
+    expect(parts).toHaveLength(3);
+  });
+
   it("says nothing for a policy that names no capabilities, or a malformed value", () => {
     for (const caps of [undefined, [], "read", { read: true }]) {
       const { container, unmount } = render(<ADOAccessSummary caps={caps} />);

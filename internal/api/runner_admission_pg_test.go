@@ -212,17 +212,23 @@ func (s *session) result() error {
 	}
 }
 
-// waitReady reports whether the runner's production Link admitted dispatch.
+// waitReady reports whether the runner's production Link admitted dispatch for THIS session: its own
+// runner side is online, which it is only after its READY exchange, and the Link is online. The Link
+// alone can still read online for an earlier session that is closing, before this one has run its
+// fresh handshake (and the Disconnected that writes the earlier session's rows).
 func (f *admissionFixture) waitReady(s *session) bool {
 	link := f.srv.runnerEndpoint(f.rn.ID).link
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if link.Online() {
+		s.mu.Lock()
+		peer := s.peer
+		s.mu.Unlock()
+		if peer != nil && peer.Online() && link.Online() {
 			return true
 		}
 		select {
 		case <-s.done:
-			return link.Online()
+			return false
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

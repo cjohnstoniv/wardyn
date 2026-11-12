@@ -54,8 +54,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/felixge/httpsnoop` | MIT | https://github.com/felixge/httpsnoop/blob/v1.1.0/LICENSE.txt |
 | `github.com/fxamacker/cbor/v2` | MIT | https://github.com/fxamacker/cbor/blob/v2.9.1/LICENSE |
 | `github.com/go-chi/chi/v5` | MIT | https://github.com/go-chi/chi/blob/v5.5.0/LICENSE |
-| `github.com/go-jose/go-jose/v4` | Apache-2.0 | https://github.com/go-jose/go-jose/blob/v4.1.6/LICENSE |
-| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | https://github.com/go-jose/go-jose/blob/v4.1.6/json/LICENSE |
+| `github.com/go-jose/go-jose/v4` | Apache-2.0 | https://github.com/go-jose/go-jose/blob/v4.1.7/LICENSE |
+| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | https://github.com/go-jose/go-jose/blob/v4.1.7/json/LICENSE |
 | `github.com/go-logr/logr` | Apache-2.0 | https://github.com/go-logr/logr/blob/v1.4.4/LICENSE |
 | `github.com/go-logr/stdr` | Apache-2.0 | https://github.com/go-logr/stdr/blob/v1.2.2/LICENSE |
 | `github.com/go-openapi/analysis` | Apache-2.0 | https://github.com/go-openapi/analysis/blob/v1.0.0/LICENSE |

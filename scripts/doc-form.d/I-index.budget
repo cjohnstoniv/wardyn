@@ -11,7 +11,7 @@
 # README.md 2354 = ours 2339 + theirs 2344 - base 2329 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # 0.10 SI-POLICY: docs/README.md 843 adds 16 over 827: the approval-rules task row, measured.
 # docs/README.md 862 = ours 846 + theirs 843 - base 827 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-README.md=2364 share=35 # +10 (rc.10), measured: the one-line install needs a Claude Code image.
+README.md=2027 share=35 # 2027 measured (+33 at rc.14: the unlisted-host modes bullet); earlier: 1994 measured (+1 over 1993, measured: the barrier guide link in the confinement row); earlier: -442 (front-door docs): the duplicate overview, 17 unlinked video rows and the second install recipe are cut; first-run steps get their own section; measured.
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
@@ -24,7 +24,7 @@ README.md=2364 share=35 # +10 (rc.10), measured: the one-line install needs a Cl
 # docs/README.md 793 adds 26 over 767 (0.9.3 K7): the organisation-runner-in-a-cluster row, measured.
 # docs/README.md 810 measured at the 0.9.3 forward-port: both index rows above.
 # docs/README.md 846 = ours 829 + theirs 827 - base 810 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
-docs/README.md=958 share=35 # +20 (macOS VM sandboxes row); +19 (0.10 Linux VM): the Linux VM sandboxes row; +76 (rc.8 E5), measured: the extending, design index, high availability, services and workloads rows
+docs/README.md=1077 share=35 # 1077 measured (+10 over 1067: the CI trigger guard row); earlier: 1067 measured (+58 over 1009): the Getting started table and the security admin setup row; earlier: 1009 measured at the rc.14 W3 merge of imgadm-docs (ours 994, theirs 1002, base 987); earlier: 994 measured (+7 over 987, measured: the barrier guide row); earlier: -30 (front-door docs): the index is grouped by reader and gains the VM pages, monitoring, key rotation, model provider and recording-read rows; row wording is shortened; measured.
 # docs/README.md 824 adds 14 over 810, measured (0.10 LAY-A): the org walls task row.
 # docs/README.md 827 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
@@ -33,4 +33,4 @@ docs/README.md=958 share=35 # +20 (macOS VM sandboxes row); +19 (0.10 Linux VM):
 # docs/TRY-IT.md 3309 adds 55 over 3254 (setup sets the server runner's limits): make setup sets the server runner's limits; measured.
 # 0.9.4 L8: docs/TRY-IT.md 3371 adds 62 over 3309: the brokered-repo note, the setup-token wording and the rc-safe tag.
 # docs/TRY-IT.md 3421 adds 7 over 3414, measured: Setup's image row does not flag the install's pin.
-docs/TRY-IT.md=3421 share=35 # +37 (rc.10), measured: the Claude Code image row, the local-mode setting for the SSO step and two pointers.
+docs/TRY-IT.md=3128 share=35 # 3128 measured (+10: no Decisions dropped row does not prove none were lost); earlier: 3118 measured (+14: the Audit page counts dropped decisions); earlier: 3104 measured (-239 at rc.14: the provider kinds moved to operations/integrations.md); still 104 over the 3,000 ceiling; earlier: 3343 measured (the organisation default barrier); 3321 before; -108 (front-door docs): written for the one-line install first with a from-a-clone table; model-provider history, the git warning and slop are cut; still over the 3,000 ceiling until the provider kinds move to operations/integrations.md; measured.

@@ -15,10 +15,12 @@ import { runs } from "../../../../lib/api/runs";
 import { getErrorMessage } from "../../../../lib/format";
 import { runHeadline } from "../../../../lib/types/runs";
 import { Button, buttonVariants } from "../../../ui/button";
-import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
+import { NR_LAUNCH, NR_LAUNCH_STALE } from "../../../wardyn/copy/new-run/launch";
 import { KillRunDialog } from "../../../wardyn/kill-run-dialog";
 import { Chip, RunStateBadge } from "../../../wardyn/primitives";
 import { ErrorState } from "../../../wardyn/states";
+import { Refusal } from "../../../wardyn/refusal";
+import { REFUSAL, RUN_NOT_FOUND } from "../../../wardyn/copy/refusal";
 import { useRequestIdentity } from "../../../wardyn/operator-context";
 import { useNewRunDispatch, useNewRunDraft, type LaunchedState, type NewRunScreenProps } from "../new-run-route";
 import { givesUp, placeInLine, waitingBody, waitingSince, type LaunchedRun } from "./launched-model";
@@ -41,7 +43,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   const { principal } = useRequestIdentity();
   const router = useLocation();
   const created = React.useMemo(() => createdFor(router.state, principal, runId), [router.state, principal, runId]);
-  const { run, failed, now, reload, pool } = useLaunchedRun(runId, created);
+  const { run, failed, failMessage, now, reload, pool } = useLaunchedRun(runId, created);
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const heading = React.useRef<HTMLHeadingElement>(null);
@@ -69,17 +71,51 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
     wasWaiting.current = waiting;
   }, [waiting]);
 
-  if (run === null || (failed && !loaded)) {
-    return <ErrorState as="h1" onRetry={failed ? reload : undefined} />;
+  // The server answered and has no such run: nothing to retry, so say so and leave through Runs.
+  if (run === null) {
+    return (
+      <div className="flex justify-center">
+        <Refusal
+          tone="absent"
+          ariaLabel={RUN_NOT_FOUND.TITLE}
+          title={RUN_NOT_FOUND.TITLE}
+          chip={RUN_NOT_FOUND.CHIP}
+          body={RUN_NOT_FOUND.BODY}
+          rows={[
+            { label: REFUSAL.WALL, value: RUN_NOT_FOUND.WALL, muted: true },
+            { label: REFUSAL.CAN_CHANGE, value: RUN_NOT_FOUND.CAN_CHANGE },
+          ]}
+        >
+          <Link to="/runs" className={buttonVariants({ size: "sm" })}>
+            {RUN_NOT_FOUND.CTA}
+          </Link>
+        </Refusal>
+      </div>
+    );
   }
-  if (!loaded) return null;
+  if (failed && !loaded) {
+    return <ErrorState as="h1" message={failMessage} onRetry={reload} />;
+  }
+  // UXR-48: the badge and the title, drawn as placeholders while the launched run loads, not a blank page.
+  if (!loaded) {
+    return (
+      <section data-testid="launched-loading" aria-busy="true" className="flex flex-col items-center gap-4 text-center">
+        <span className="h-5 w-16 animate-pulse rounded-full bg-muted motion-reduce:animate-none" />
+        <span className="h-8 w-72 max-w-full animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      </section>
+    );
+  }
 
   const queue = run.queue;
   // A scheduled run waits for its time, not for a place in line: it says when it starts and what is checked then.
   const scheduled = queue && scheduledWait(run);
   const body = scheduled
     ? undefined
-    : waiting ? queue && waitingBody(queue.reason, pool) : starting ? NR_LAUNCH.STARTING_BODY : undefined;
+    : waiting ? queue && waitingBody(queue.reason, pool, queue.limit_sentence) : starting ? NR_LAUNCH.STARTING_BODY : undefined;
+  // A pool wait's sentence is the create's last warning. The run page says why it waits in its own panel, so
+  // carrying the create's copy there would show a second sentence that can differ once the wait has changed.
+  const carried = created?.warnings ?? [];
+  const launchWarnings = created?.state === "QUEUED" && created.queue && !scheduledWait(created) ? carried.slice(0, -1) : carried;
   const kill = async (id: string) => {
     setKilling(null);
     setKillFailed("");
@@ -103,6 +139,11 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
       </span>}
       {badge ? <Chip tone={waiting ? "info" : "success"}>{badge}</Chip> : <RunStateBadge state={run.state} />}
       <h1 ref={heading} tabIndex={-1} className="text-display outline-none">{runHeadline(run)}</h1>
+      {failed && (
+        <p role="status" data-testid="launched-stale" className="text-meta text-muted-foreground">
+          {NR_LAUNCH_STALE}
+        </p>
+      )}
       {body && <p className="text-muted-foreground">{body}</p>}
       {queue && scheduled === "scheduled" && (
         <div data-testid="launched-scheduled" className="flex flex-col gap-1">
@@ -148,11 +189,11 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
         <Button type="button" variant="outline" onClick={startAnother}>
           {NR_LAUNCH.START_ANOTHER}
         </Button>
-        <Link to={`/runs/${encodeURIComponent(run.id)}`} state={{ launchWarnings: created?.warnings ?? [] }} className={buttonVariants()}>
+        <Link to={`/runs/${encodeURIComponent(run.id)}`} state={{ launchWarnings }} className={buttonVariants()}>
           {NR_LAUNCH.VIEW_RUN}
         </Link>
       </div>
-      <KillRunDialog runId={killing} title={run.title?.trim() || run.task} onOpenChange={(open) => !open && setKilling(null)} onConfirm={(id) => void kill(id)} />
+      <KillRunDialog runId={killing} title={run.title?.trim() || run.task} onOpenChange={(open) => !open && setKilling(null)} onConfirm={(id) => void kill(id)} notStarted={!!scheduled} />
     </section>
   );
 }

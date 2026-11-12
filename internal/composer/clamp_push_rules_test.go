@@ -267,3 +267,25 @@ func TestClamp_PushRulesDenyNewExecutablesCannotBeTurnedOff(t *testing.T) {
 		t.Errorf("push_rules = %+v, want the proposal's own true untouched", got.PushRules)
 	}
 }
+
+// TestClamp_PushRulesDenyAllCannotBeTurnedOff: a ceiling's deny_all stays on
+// whatever the proposal says, and a proposal may set it under a ceiling that
+// does not.
+func TestClamp_PushRulesDenyAllCannotBeTurnedOff(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.PushRules = &types.PushRulesSpec{DenyAll: true}
+	for name, proposal := range map[string]*types.PushRulesSpec{
+		"proposal sets none":      nil,
+		"proposal sets other":     {DenyPaths: []string{"a/**"}},
+		"proposal sets it itself": {DenyAll: true},
+	} {
+		got, _ := Clamp(types.RunPolicySpec{PushRules: proposal}, ceiling, types.GovernanceLimits{})
+		if got.PushRules == nil || !got.PushRules.DenyAll {
+			t.Errorf("%s: push_rules = %+v, want deny_all kept on", name, got.PushRules)
+		}
+	}
+	got, _ := Clamp(types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyAll: true}}, operatorCeiling(t), types.GovernanceLimits{})
+	if got.PushRules == nil || !got.PushRules.DenyAll {
+		t.Errorf("a proposal's own deny_all was dropped: %+v", got.PushRules)
+	}
+}

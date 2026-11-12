@@ -22,7 +22,7 @@ steps:
       # time. Bump it deliberately, to a release you verified (docs/VERIFY.md);
       # `git -c advice.detachedHead=false checkout <sha>` after the clone pins
       # harder still. See docs/CI.md "Pin the wardyn checkout".
-      git clone --depth 1 --branch v0.10.0-rc.10 https://github.com/cjohnstoniv/wardyn "$(Agent.TempDirectory)/wardyn"
+      git clone --depth 1 --branch v0.10.0-rc.20 https://github.com/cjohnstoniv/wardyn "$(Agent.TempDirectory)/wardyn"
     displayName: Fetch wardyn
 
   - bash: |
@@ -31,6 +31,11 @@ steps:
       export WARDYN_CI_TASK_MODE="exec"
       export WARDYN_CI_TASK="echo hello from a governed sandbox && uname -a"
       export WARDYN_CI_OUT="$(Build.ArtifactStagingDirectory)/wardyn-run"
+      # The same on every re-run of this job and different for each job, so a re-run gets the
+      # first run back instead of launching another. It matters against your own control plane.
+      # Under `strategy: parallel` each copy gets its own SYSTEM_JOBPOSITIONINPHASE; under
+      # `strategy: matrix` add a value that is yours and differs per leg.
+      export WARDYN_CI_IDEMPOTENCY_KEY="$(Build.BuildId)-$(System.JobName)-${SYSTEM_JOBPOSITIONINPHASE:-0}"
       # Variant — real agent (claude-code) on the control plane you already
       # run, as a dedicated CI principal (docs/CI.md "CI's identity"): drop
       # the IMAGE/TASK_MODE lines, put the wardyn CLI on PATH, and export

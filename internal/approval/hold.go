@@ -30,6 +30,14 @@ func Hold(ap types.ApprovalRequest, now time.Time) (held bool, until time.Time) 
 	if TallyKey(ap) == TallyToolCallADO {
 		return boundedHold(holdStart(ap), now, types.HoldWindowADOCapability)
 	}
+	// An MCP call the proxy holds the open request for (hold_seconds set) is a SHORT hold, like a
+	// push: the call's answer is "waiting" when the window ends and the row stays PENDING for a
+	// retry to rejoin. One the gate raised has no hold_seconds and is live while PENDING, below.
+	if k := TallyKey(ap); k == TallyToolCallMCP || k == TallyToolCallKube || k == TallyToolCallHost { // a held kubectl write or host rule hold: the same short hold
+		if w := mcpCallHoldWindow(ap); w > 0 {
+			return boundedHold(holdStart(ap), now, w)
+		}
+	}
 	// PENDING alone is live for these, at any age (a takeover request: the agent is waiting): only the row's own server-side
 	// expiry (approval.ExpireStale) ends it — no client-side ceiling belongs here.
 	if ap.Kind == types.ApprovalToolCall || ap.Kind == types.ApprovalCredentialReauth || ap.Kind == types.ApprovalHumanTakeover {
@@ -60,6 +68,19 @@ func egressHoldWindow(ap types.ApprovalRequest) time.Duration {
 		return w
 	}
 	return types.HoldWindowEgress
+}
+
+// mcpCallHoldWindow is the hold the proxy stamped into an MCP call row's requested_scope.hold_seconds,
+// capped at the proxy's own ceiling; 0 when the row carries none.
+func mcpCallHoldWindow(ap types.ApprovalRequest) time.Duration {
+	var sc struct {
+		HoldSeconds int `json:"hold_seconds"`
+	}
+	_ = json.Unmarshal(ap.RequestedScope, &sc)
+	if sc.HoldSeconds < 1 {
+		return 0
+	}
+	return min(time.Duration(sc.HoldSeconds)*time.Second, types.HoldWindowMCPCall)
 }
 
 // approvalMode reads requested_scope.mode, or "" for a malformed/absent scope — the same

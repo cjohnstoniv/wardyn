@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { STATES } from "../wardyn/states";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
 
@@ -27,6 +28,7 @@ vi.mock("../../lib/api/runs", () => ({
     // layout decisions, not the widgets (widgets.test.tsx owns those).
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
     getAttachHolder: vi.fn().mockResolvedValue({ held: false }),
     takeoverAttach: vi.fn(),
   },
@@ -88,6 +90,7 @@ import { RUN_STARTUP } from "./run-status-detail";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { aheadByHours } from "../../lib/test-clock";
+import { HttpError } from "../../lib/api/core";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -139,6 +142,19 @@ function renderOwn(run: Record<string, unknown>) {
     </MemoryRouter>,
   );
 }
+
+it("a read the server worded shows its sentence, not the default line", async () => {
+  getRunMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+  render(
+    <MemoryRouter initialEntries={["/runs/run-1"]}>
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailScreen />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+  expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+});
 
 describe("RunDetailScreen — 'Run not found' names lack-of-access as a real reason", () => {
   it("mentions not having access alongside archived/deleted/stale-link", async () => {
@@ -317,7 +333,7 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
     expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
     expect(screen.queryByText("Attach from your terminal")).not.toBeInTheDocument();
     // Kill stays.
-    expect(screen.getByRole("button", { name: /^Kill/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^End run/ })).toBeEnabled();
   });
 
   // #1888: the link leads to a recording, so it is offered unless /healthz says
@@ -527,6 +543,45 @@ describe("RunDetailScreen — the recording tab's session-picker copy", () => {
 
     expect(await screen.findByText("No recording available")).toBeInTheDocument();
     expect(screen.queryByText("No recording for this session")).not.toBeInTheDocument();
+  });
+});
+
+// A macOS VM run stores nothing under its own key: its Recording tab opens on its newest agent output cast, and a
+// declined cast's failure row reads as a failure with its reason in the Audit tab.
+describe("RunDetailScreen — a macOS VM run's recording tab", () => {
+  const row = (id: string, target: string, session: string, mins: number, extra: Record<string, unknown> = {}) => ({
+    id, time: new Date(Date.parse(aheadByHours(-3)) + mins * 60_000).toISOString(), actor_type: "system", actor: "wardynd",
+    action: "session.recording.write", target, outcome: "success", data: { session }, ...extra,
+  });
+  const MAC = { ...RUN, state: "COMPLETED", machine_kind: "macos_vm", recording_level: "terminal" };
+
+  it("opens on the newest agent cast, not on an empty own key, and lists no Agent session entry", async () => {
+    listAuditMock.mockResolvedValue([
+      row("a", "run-1~agent", "agent", 0),
+      row("t", "run-1~console-1", "console-1", 9, { actor: "maya", actor_type: "human" }),
+      row("r", "run-1~agent-recovered", "agent-recovered", 4),
+      row("f", "run-1~agent", "agent", 7, { outcome: "failure", data: { session: "agent", reason: "save_failed" } }),
+    ]);
+    getRecordingMock.mockResolvedValue(null);
+    renderRun(MAC);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await waitFor(() => expect(getRecordingMock).toHaveBeenLastCalledWith("run-1", "run-1~agent-recovered"));
+    const picker = screen.getByRole("combobox", { name: "Recorded session" });
+    expect(picker).toHaveTextContent(/^Agent output, re-read after a restart · ended /);
+    await user.click(picker);
+    expect(screen.queryByRole("option", { name: "Agent session" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+  });
+
+  it("a Linux VM run still opens on its own key", async () => {
+    listAuditMock.mockResolvedValue([row("a", "run-1~console-1", "console-1", 0, { actor: "maya" })]);
+    getRecordingMock.mockResolvedValue(null);
+    renderRun({ ...MAC, machine_kind: "linux_vm" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await waitFor(() => expect(getRecordingMock).toHaveBeenCalledWith("run-1", "run-1"));
+    expect(getRecordingMock).not.toHaveBeenCalledWith("run-1", "run-1~console-1");
   });
 });
 

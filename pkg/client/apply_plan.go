@@ -15,7 +15,7 @@ type ApplyStep struct {
 	Unit        string                `json:"unit,omitempty"`    // an assignment's profile name; its id when no name is known
 	ID          *uuid.UUID            `json:"id,omitempty"`      // the existing row an update or delete targets
 	Fields      []string              `json:"fields,omitempty"`  // update: the JSON names of what changes
-	Outcome     string                `json:"outcome,omitempty"` // results only: "applied" | "pending" | "failed"
+	Outcome     string                `json:"outcome,omitempty"` // results only: "applied" | "pending" | "failed" | "deferred" (a deciders write waiting on a held change above it)
 	Error       string                `json:"error,omitempty"`   // with outcome "failed"
 	// Warnings, results only, are what the server warned of on a profile write it applied.
 	Warnings []string `json:"warnings,omitempty"`

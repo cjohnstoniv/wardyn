@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The service wire parity: each TS interface of types/runs.ts for a run's service has exactly the json tags
+// The service wire parity: each TS interface of types/run-service.ts for a run's service has exactly the json tags
 // of the Go struct in internal/types/service.go, the health states are exactly the Go constants, and
 // AgentRun carries both fields. The Go side is read from source.
 
@@ -41,9 +41,10 @@ const tsKeys = (src: string, iface: string) =>
 
 describe("run service wire", () => {
   const go = read("internal/types/service.go");
-  const runsTs = read("ui/src/app/lib/types/runs.ts");
+  const runsTs = read("ui/src/app/lib/types/run-service.ts");
+  const agentRunTs = read("ui/src/app/lib/types/runs.ts");
 
-  it.each(["RunService", "ServiceHealth", "RunServiceStatus"])("%s has the Go struct's json tags", (name) => {
+  it.each(["RunService", "ServiceHealth", "RunServiceStatus", "RunServiceProbe"])("%s has the Go struct's json tags", (name) => {
     expect(new Set(tsKeys(runsTs, name))).toEqual(new Set(goJSONTags(go, name)));
   });
 
@@ -54,11 +55,17 @@ describe("run service wire", () => {
     expect(goStates).toHaveLength(4);
   });
 
+  it("the probe's one value is the Go constant", () => {
+    expect(go).toMatch(/const ServiceProbeControlPlane = "control_plane"/);
+    expect(tsBody(runsTs, "ServiceHealth")).toMatch(/probe\?: "control_plane";/);
+    expect(go).toMatch(/Probe \*RunServiceProbe `json:"probe,omitempty"`/);
+  });
+
   it("AgentRun carries service and service_status as optional pointers", () => {
     const types = read("internal/types/types.go");
     expect(types).toMatch(/Service\s+\*RunService\s+`json:"service,omitempty"`/);
     expect(types).toMatch(/ServiceStatus\s+\*RunServiceStatus\s+`json:"service_status,omitempty"`/);
-    const body = tsBody(runsTs, "AgentRun");
+    const body = tsBody(agentRunTs, "AgentRun");
     expect(body).toMatch(/service\?: RunService;/);
     expect(body).toMatch(/service_status\?: RunServiceStatus;/);
   });

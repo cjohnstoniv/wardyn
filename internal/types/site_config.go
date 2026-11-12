@@ -141,6 +141,8 @@ type SiteConfig struct {
 	// MacOSVM is the organisation's macOS VM sandbox settings. A POINTER for the same byte-identical-GET
 	// reason as the provider blocks; nil, or a zero max, sets no maximum.
 	MacOSVM *SiteMacOSVM `json:"macos_vm,omitempty"`
+	// Images is the org's image rules. Absent reads as every rule off.
+	Images *SiteImages `json:"images,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
@@ -170,6 +172,66 @@ type SiteMacOSVM struct {
 	// so a base gets patched. 0 or absent: no maximum. A runner that does not report its base's age is
 	// refused while a maximum is set.
 	MaxBaseAgeDays int `json:"max_base_age_days,omitempty"`
+	// AllowBackgroundWatch lets a person watch a background macOS run's desktop, view only. A pointer
+	// so an explicit false survives omitempty: absent reads allowed, only false turns it off for the
+	// whole install. A governance profile can still deny it (GovernanceLimits.DenyBackgroundDesktopWatch).
+	AllowBackgroundWatch *bool `json:"allow_background_watch,omitempty"`
+	// AllowAttendedWindow lets a person open a keyboard-and-pointer window onto their own macOS VM run
+	// from the Mac it runs on. A pointer so an explicit false survives omitempty. Unlike the watch it
+	// is off when absent: only true turns it on for the whole install.
+	AllowAttendedWindow *bool `json:"allow_attended_window,omitempty"`
+	// AllowKeptMachines lets a person keep a macOS VM between their own interactive runs on their own Mac.
+	// A pointer so an explicit false survives omitempty. Off when absent, like the window: only true turns
+	// it on for the whole install, so an untouched install keeps "deleted when the run ends".
+	AllowKeptMachines *bool `json:"allow_kept_machines,omitempty"`
+	// KeptMachineIdleDays deletes a kept machine nobody has used for this many days. 1 to 90; 0 or absent
+	// reads KeptMachineIdleDaysDefault.
+	KeptMachineIdleDays int `json:"kept_machine_idle_days,omitempty"`
+	// MaxKeptMachinesPerPerson caps how many machines one person keeps. 1 to 4; 0 or absent reads
+	// MaxKeptMachinesPerPersonDefault.
+	MaxKeptMachinesPerPerson int `json:"max_kept_machines_per_person,omitempty"`
+}
+
+// The kept-machine limits' defaults and bounds (macos_vm.kept_machine_idle_days and
+// macos_vm.max_kept_machines_per_person).
+const (
+	KeptMachineIdleDaysDefault      = 30
+	KeptMachineIdleDaysMax          = 90
+	MaxKeptMachinesPerPersonDefault = 1
+	MaxKeptMachinesPerPersonMax     = 4
+)
+
+// BackgroundWatchAllowed reads the switch: a nil block or an absent field is allowed.
+func (m *SiteMacOSVM) BackgroundWatchAllowed() bool {
+	return m == nil || m.AllowBackgroundWatch == nil || *m.AllowBackgroundWatch
+}
+
+// AttendedWindowAllowed reads the window switch: a nil block or an absent field is off.
+func (m *SiteMacOSVM) AttendedWindowAllowed() bool {
+	return m != nil && m.AllowAttendedWindow != nil && *m.AllowAttendedWindow
+}
+
+// KeptMachinesAllowed reads the keep switch: a nil block or an absent field is off.
+func (m *SiteMacOSVM) KeptMachinesAllowed() bool {
+	return m != nil && m.AllowKeptMachines != nil && *m.AllowKeptMachines
+}
+
+// KeptMachineIdleDaysOrDefault is the idle limit in days: the stored value, or the default when the block or
+// the field is absent.
+func (m *SiteMacOSVM) KeptMachineIdleDaysOrDefault() int {
+	if m == nil || m.KeptMachineIdleDays <= 0 {
+		return KeptMachineIdleDaysDefault
+	}
+	return m.KeptMachineIdleDays
+}
+
+// MaxKeptMachinesPerPersonOrDefault is the per-person cap: the stored value, or the default when the block or
+// the field is absent.
+func (m *SiteMacOSVM) MaxKeptMachinesPerPersonOrDefault() int {
+	if m == nil || m.MaxKeptMachinesPerPerson <= 0 {
+		return MaxKeptMachinesPerPersonDefault
+	}
+	return m.MaxKeptMachinesPerPerson
 }
 
 // SiteEgress is SiteConfig.Egress.
@@ -194,6 +256,17 @@ type SiteEgress struct {
 // it out of the document (and applying) removes the logo it delivered.
 type SiteBranding struct {
 	LogoPath string `json:"logo_path,omitempty"`
+}
+
+// SiteImages is SiteConfig.Images.
+type SiteImages struct {
+	// RequireDigest refuses a member's run whose image is not pinned by digest
+	// (image@sha256:<digest>), whatever the image grants say: a grant names what an
+	// admin approved, and only a digest makes that what runs. Off by default.
+	// Operators are not bound by it (their runs are marked in the audit row).
+	RequireDigest bool `json:"require_digest,omitempty"`
+	// Admission is signature admission for member-chosen images (SiteImageAdmission). Absent reads off.
+	Admission *SiteImageAdmission `json:"admission,omitempty"`
 }
 
 // ComponentSettings is SiteConfig.Components. Every field's zero value is the
@@ -290,4 +363,10 @@ type WithheldScmHost struct {
 // RunnerSettings controls admission to runner routes. Nil and false both deny.
 type RunnerSettings struct {
 	Enabled bool `json:"enabled"`
+	// RequireManagedDevice refuses a new local run on a runner whose trust class is personal, so only a
+	// runner a security operator marked managed_device (or an organisation's cluster runner) takes one.
+	// Default off: an existing install keeps placing on personal runners until an admin turns this on.
+	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
+	// Always on the wire, false included, so GET /runners/settings states it when it is off.
+	RequireManagedDevice bool `json:"require_managed_device"`
 }

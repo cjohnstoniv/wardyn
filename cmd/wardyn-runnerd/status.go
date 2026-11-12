@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // statusFile is the runner's last connection state, in its state directory, for `wardyn doctor`.
@@ -41,6 +43,9 @@ type runnerStatus struct {
 	// proxy start, so run proxies serve any peer (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY on only by
 	// default); empty once one takes them.
 	PeersOnlyRefusedBy string `json:"peers_only_refused_by,omitempty"`
+	// NextRetryAt is when the runner next tries to pull its proxy image while it waits for one; empty
+	// otherwise. State stays "starting" meanwhile.
+	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
 }
 
 // statusPath is statusFile in stateDir.
@@ -174,12 +179,28 @@ func (w *statusWriter) peersOnlyChanged(image string) {
 	w.write()
 }
 
+// retryAt records when the proxy image is next tried; nil says the image is here, which also ends the
+// refusal that waiting for it recorded. A nil writer records nothing.
+func (w *statusWriter) retryAt(next *time.Time) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.cur.NextRetryAt = next
+	if next == nil && w.cur.Stage == types.RunnerStageProxyImage {
+		w.cur.Stage, w.cur.StageAt, w.refused = "", nil, nil
+	}
+	w.cur.UpdatedAt = w.now()
+	w.write()
+}
+
 // stopped is written when serve returns. A runner's own shutdown records no stage and clears the
 // one a failed connect left; a refusal at start stays, and is what the file shows at rest.
 func (w *statusWriter) stopped() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.cur.Stage, w.cur.StageAt = "", nil
+	w.cur.Stage, w.cur.StageAt, w.cur.NextRetryAt = "", nil, nil
 	if r := w.refused; r != nil {
 		w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt = r.LastError, r.LastErrorAt, r.Stage, r.StageAt
 	}

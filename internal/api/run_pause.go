@@ -68,6 +68,11 @@ const (
 	idleQuietCorePercent = 10.0
 )
 
+// pauseRuntimeCallTimeout bounds one freeze, or one thaw with its status read, that a pause, a resume or a
+// settle makes under the run's lock: a runtime that stops answering holds neither that lock nor the watcher
+// tick past it. It is the bound the compensation already puts on the same calls.
+var pauseRuntimeCallTimeout = pauseCompensateTimeout
+
 // pauseClocks is the process-local state the pause keeps: the two stamp
 // debounces, the failed-thaw backoffs and the idle round-robin cursor. Presence
 // and agent activity are debounced apart, so an agent stamp never swallows the
@@ -408,18 +413,6 @@ func (p presenceReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// ruleSourceApprovalsPoll mirrors internal/egress/proxy's ruleSourceApprovals:
-// the toolgate's 2-second poll of the request it is blocked on.
-const ruleSourceApprovalsPoll = "brokered:approvals"
-
-// agentActivityDecision reports whether a decision with this rule_source is
-// the agent doing something. Two are not: the toolgate polling a request it is
-// blocked on (that is waiting, and would keep a waiting run from ever pausing),
-// and a re-auth hold timing out (nobody came; see shouldTouch).
-func agentActivityDecision(ruleSource string) bool {
-	return ruleSource != ruleSourceApprovalsPoll && ruleSource != ruleSourceCredentialReauthTimeout
-}
-
 // approvalClosed resumes a paused run once it has no open request left: the
 // agent has an answer to act on. Every writer that moves a request out of
 // PENDING calls it; the pause sweep's backstop catches a pause whose
@@ -509,11 +502,21 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 	actorType types.ActorType, principal, reason string) error {
 	data := map[string]any{"reason": reason, "paused_reason": run.PausedReason, "paused_at": run.PausedAt}
 	if f, ok := s.cfg.Runner.(runner.Freezer); ok && run.SandboxRef != "" {
-		err := f.ThawSandbox(ctx, run.SandboxRef)
+		tctx, cancel := context.WithTimeout(ctx, pauseRuntimeCallTimeout)
+		err := f.ThawSandbox(tctx, run.SandboxRef)
 		if err == nil {
-			err = s.thawedSandboxRunning(ctx, run.SandboxRef)
+			err = s.thawedSandboxRunning(tctx, run.SandboxRef)
 		}
+		ended := tctx.Err() != nil
+		cancel()
 		if err != nil && !errors.Is(err, runner.ErrFreezeUnsupported) {
+			if ended {
+				// A thaw its context ended may still land in the runtime, under a row that stays paused. The settle
+				// record leaves it to the pause sweep, which freezes a sandbox whose row is paused (settlePauses).
+				nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
+				s.notePauseSettle(nctx, run.ID)
+				ncancel()
+			}
 			data["error"] = err.Error()
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 				run.ID.String(), "failure", mustJSON(data)))
@@ -715,10 +718,21 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 	}
 	defer unlock()
 	f := s.cfg.Runner.(runner.Freezer)
-	if err := f.FreezeSandbox(ctx, run.SandboxRef); err != nil {
-		if !errors.Is(err, runner.ErrFreezeUnsupported) {
+	fctx, fcancel := context.WithTimeout(ctx, pauseRuntimeCallTimeout)
+	ferr := f.FreezeSandbox(fctx, run.SandboxRef)
+	ended := fctx.Err() != nil
+	fcancel()
+	if ferr != nil {
+		if !errors.Is(ferr, runner.ErrFreezeUnsupported) {
 			slog.WarnContext(ctx, "wardynd: pausing a run failed",
-				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+				slog.String("run_id", run.ID.String()), slog.Any("err", ferr))
+		}
+		if ended {
+			// A freeze its context ended may still land in the runtime, and nothing marks it. The settle
+			// record leaves it to the pause sweep, which thaws a sandbox whose row is not paused (settlePauses).
+			nctx, ncancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
+			defer ncancel()
+			s.notePauseSettle(nctx, run.ID)
 		}
 		return
 	}

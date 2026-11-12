@@ -56,10 +56,18 @@ type runFold struct {
 	driveMounts []types.DriveMount
 	// keep is the drive keep_work_folder makes at create (stepDrive); nil when not asked.
 	keep *keptWorkFolder
+	// keptPin is the Mac a resumed machine is kept on, which placement holds the run to (stepPlacement);
+	// machine is what dispatch inserts or claims for a request with machine (stepKeptMachine). nil when not asked.
+	keptPin *uuid.UUID
+	machine *keptMachinePlan
 	// seed is what seeding the request's workspaces decided (attached first,
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
 	wsRefs []types.Workspace
+	// carriedImage is the base image a policy-carried workspace sets when neither the request nor an attached
+	// workspace chose one, which dispatch then uses (resolveCreateRunImage); stepWorkspaces holds it to the
+	// digest rule.
+	carriedImage string
 	// signinImageUngranted: the person's own image keeps its desktop sign-ins
 	// off at dispatch (signinVariantUngranted), decided here with the caller's
 	// identity, which the detached launch does not hold.
@@ -73,6 +81,7 @@ type runFold struct {
 	directGitHubAdded  []string
 	comps              runComponents
 	enforced           types.ConfinementClass
+	placed             backendPlacement                // the barriers the placement enforces, as stepConfinement read them (Review's backend row)
 	confinementDefault runnerpool.BarrierDefaultSource // who chose enforced when the request named no class
 	mpChoice           runProviderChoice
 	modelCred          modelCredentialFacts
@@ -114,6 +123,9 @@ type runFold struct {
 	// localDelivery is the credential delivery policy and trust class a local run was judged at
 	// (stepLocalEligibility); create persists its grants by the same judgement, never a second read.
 	localDelivery localJudgement
+	// admission is the image admission verdict for the member's image (stepImageAdmission), which the run row
+	// and the run.create row carry; nil when no check applied.
+	admission *types.ImageAdmissionVerdict
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -130,6 +142,8 @@ type runFoldStep struct {
 // The ORDER is security-relevant and is the contract; do not sort it:
 //   - The request contract first: it reads only the request, so a malformed or
 //     not-yet-honoured field answers before any store read or credential lookup.
+//   - A pinned portal's unit right after the contract: the ceiling arrives resolved, so the
+//     picked context is checked before any later step spends work on a launch the portal may not make.
 //   - The egress baseline is read once after request validation; the floor, the autonomy
 //     posture and the door's grading read that one value.
 //   - Policy first: the member clamp and grant narrowing run before anything
@@ -168,19 +182,27 @@ type runFoldStep struct {
 //     gated lane: a person's rule, or a policy rule that holds or blocks, puts
 //     a background run there too, and the person's allows are held to the
 //     policy with the lane's default under it.
+//   - A No network launch's refusal straight after the tool policy, the last step that adds a host:
+//     every host source the fold can see is known by then (stepNoNetwork).
 //   - A macOS VM's hold straight after the tool lane: autonomy and the inner walls
 //     have derived the hold by then, and the VM cannot hold a tool call.
+//   - A kept machine after the window at start: its own Mac, its pool, governance,
+//     desktop sign-ins and the run's lasting credentials are all resolved by then.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
 //   - The run's end reads the resolved pool, the governance ceiling and the deployment,
 //     so it sits after placement and refuses before capacity.
+//   - Image admission after every cheaper gate, since it is the one step that reads a registry,
+//     and before capacity, so its refusal also leaves no identity and no run row.
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 //   - The dry doors' derived egress after every gate: create adds those hosts
 //     after the mint (unionRunEgress), so nothing above may grade them.
 var runFoldSteps = []runFoldStep{
 	{(*Server).stepRunContract, foldAll},
+	{(*Server).stepPortalUnit, foldAll},
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
+	{(*Server).stepComputerFolderDataOut, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepADOOverride, foldAll},
 	{(*Server).stepDrive, foldAll},
@@ -193,6 +215,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepComponents, foldAll},
 	{(*Server).stepPlacementDenied, foldAll},
 	{(*Server).stepPlacement, foldAll},
+	{(*Server).stepScheduleDoor, foldAll},
 	{(*Server).stepDriveEligibility, foldAll},
 	{(*Server).stepResources, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},
@@ -200,14 +223,21 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPlacementCapability, foldAll},
 	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
+	{(*Server).stepDenyLists, foldAll},
 	{(*Server).stepAWSCLIProfile, foldAll},
+	{(*Server).stepAllowedModelsChecked, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepToolPolicy, foldAll},
+	{(*Server).stepNoNetwork, foldAll},
+	{(*Server).stepHostRulesVM, foldAll},
 	{(*Server).stepMacOSHold, foldAll},
+	{(*Server).stepMacWindow, foldAll},
+	{(*Server).stepKeptMachine, foldAll},
 	{(*Server).stepGitHubCLIRepo, foldCreate | foldPreflight},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
 	{(*Server).stepRunEnd, foldAll},
+	{(*Server).stepImageAdmission, foldCreate | foldPreflight},
 	{(*Server).stepHostCapacity, foldCreate | foldPreflight},
 	{(*Server).stepRunCap, foldCreate | foldPreflight},
 	{(*Server).stepRunFit, foldCreate | foldPreflight},

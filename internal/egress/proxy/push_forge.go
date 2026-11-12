@@ -538,7 +538,7 @@ func (f *forgeRepo) read(ctx context.Context, host, path string, authorize func(
 	if err != nil {
 		return 0, none, err
 	}
-	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target),
+	req, err := http.NewRequestWithContext(context.WithValue(withProxyOwnSend(ctx), vettedIPKey{}, target),
 		http.MethodGet, "https://"+upstreamURLHost(host, 443, 443)+path, nil)
 	if err != nil {
 		return 0, none, err

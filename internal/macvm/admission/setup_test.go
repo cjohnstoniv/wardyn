@@ -418,7 +418,7 @@ func everyEntry(t *testing.T, r *rig, names []string) int {
 	return found
 }
 
-// Fable R4 M1: the staging directory stays root-only while entries move into
+// The staging directory stays root-only while entries move into
 // it, so a name planted in it as soon as it can be reached (its chown) is too
 // late to block a move. Setup, retried once if it fails, ends with every entry.
 func TestSetupStagingRootOnlyDuringMove(t *testing.T) {

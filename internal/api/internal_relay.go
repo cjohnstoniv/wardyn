@@ -46,6 +46,7 @@ var relayedInternalRoutes = map[string]bool{
 	"GET /api/v1/internal/approvals/{id}":                  true,
 	"POST /api/v1/internal/approvals/{id}/expire":          true,
 	"POST /api/v1/internal/token/renew":                    true,
+	"POST /api/v1/internal/proxy/loaded":                   true, // the run proxy's readback, on its run token
 	"GET /api/v1/internal/injection/{grantID}":             true, // delivery = own only: refuseRelayedDelivery
 	"POST /api/v1/internal/credentials/mint":               true, // delivery = own only: refuseRelayedDelivery
 	"PUT /api/v1/internal/recordings/{runID}":              true,
@@ -61,6 +62,7 @@ var relayedInternalRoutes = map[string]bool{
 	"PUT /api/v1/internal/sso-token/{runID}":               false, // container login is cluster-only
 	"POST /api/v1/internal/groundtruth":                    false, // no host sensor on a laptop
 	"POST /api/v1/internal/desktop-signin/check":           false, // sign-ins never run on a runner (signinTarget)
+	"POST /api/v1/internal/gateway-identity":               false, // placement refuses a gateway route on a person's runner
 }
 
 type relayRunnerKey struct{}

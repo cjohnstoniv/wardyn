@@ -72,3 +72,12 @@ describe("Switch — the off state is visible", () => {
     expect(on.className).not.toContain("border-ring");
   });
 });
+
+describe("Switch — describedBy", () => {
+  it("points aria-describedby at the hint, and omits it when none is given", () => {
+    const { rerender } = render(<Switch checked={false} onChange={() => {}} label="Writable" describedBy="hint-1" />);
+    expect(screen.getByRole("switch", { name: "Writable" })).toHaveAttribute("aria-describedby", "hint-1");
+    rerender(<Switch checked={false} onChange={() => {}} label="Writable" />);
+    expect(screen.getByRole("switch", { name: "Writable" })).not.toHaveAttribute("aria-describedby");
+  });
+});

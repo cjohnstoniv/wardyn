@@ -12,6 +12,13 @@ import type { AuditEvent } from "../../../lib/types";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { AdoRunTokens } from "./ado-run-tokens";
 import { CredentialsWidget } from "./widgets/credentials";
+import { shortTime } from "../../../lib/format";
+
+// Clock times follow the reader's locale (lib/format.ts shortTime), so the expected text is built the same way.
+const hm = (s: string) => {
+  const [h, m] = s.split(":").map(Number);
+  return shortTime(new Date(2000, 8, 29, h, m).toISOString());
+};
 
 const runTokensMock = vi.fn();
 vi.mock("../../../lib/api/ado-pat", async () => {
@@ -35,14 +42,14 @@ async function draw(tokens: ADORunToken[], paused = false) {
 describe("AdoRunTokens", () => {
   it("6a: an active token is one line under the Azure DevOps heading", async () => {
     await draw([tok()]);
-    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02")).toBeInTheDocument();
+    expect(await screen.findByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")}`)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: ADO_PAT.RUN_TOKEN_TITLE })).toBeInTheDocument();
   });
 
   it("6b: a renewed run lists both tokens, oldest first, the old one muted", async () => {
     await draw([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({ revoke_reason: "expired", revoked_at: at(17, 2) })]);
-    const old = await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
-    const current = screen.getByText("Azure DevOps token: created 15:02 · expires 23:02");
+    const old = await screen.findByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (renewed)`);
+    const current = screen.getByText(`Azure DevOps token: created ${hm("15:02")} · expires ${hm("23:02")}`);
     expect(old).toHaveClass("text-muted-foreground");
     expect(current).not.toHaveClass("text-muted-foreground");
     expect(old.compareDocumentPosition(current) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -50,25 +57,25 @@ describe("AdoRunTokens", () => {
 
   it("6c: a paused run says its token was revoked and a new one comes on resume", async () => {
     await draw([tok({ revoked_at: at(11, 30), revoke_reason: "pause" })], true);
-    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 · revoked 11:30 (paused)")).toBeInTheDocument();
+    expect(await screen.findByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} · revoked ${hm("11:30")} (paused)`)).toBeInTheDocument();
     expect(screen.getByText(ADO_PAT.RUN_PAUSED)).toBeInTheDocument();
   });
 
   it("6d: a finished run's token shows when and why it was revoked", async () => {
     await draw([tok({ revoked_at: at(9, 41), revoke_reason: "run_end" })]);
-    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41 (run ended)")).toBeInTheDocument();
+    expect(await screen.findByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} · revoked ${hm("09:41")} (run ended)`)).toBeInTheDocument();
     expect(screen.queryByText(ADO_PAT.RUN_PAUSED)).not.toBeInTheDocument();
   });
 
   it("6f: a revoke that failed says when the token expires and where to revoke it by hand", async () => {
     await draw([tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" })]);
-    expect(await screen.findByText(ADO_PAT.RUN_REVOKE_FAILED("17:02"))).toBeInTheDocument();
+    expect(await screen.findByText(ADO_PAT.RUN_REVOKE_FAILED(hm("17:02")))).toBeInTheDocument();
   });
 
   it("7: a token a wider one replaced reads (access added), with no separate 'Access added' line", async () => {
     await draw([tok({ created_at: at(9, 20), valid_to: at(17, 20), scope: ["vso.code", "vso.project", "vso.code_write"] }), tok({})]);
-    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 (access added)")).toBeInTheDocument();
-    expect(screen.getByText("Azure DevOps token: created 09:20 · expires 17:20")).toBeInTheDocument();
+    expect(await screen.findByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (access added)`)).toBeInTheDocument();
+    expect(screen.getByText(`Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")}`)).toBeInTheDocument();
     expect(screen.queryByText(/^Access added/)).not.toBeInTheDocument();
   });
 

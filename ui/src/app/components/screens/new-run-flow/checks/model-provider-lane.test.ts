@@ -222,7 +222,7 @@ describe("resolveProviderSelection — R2/R6/R7/R8", () => {
     expect(result).toEqual({ selectedId: undefined, changeNote: null });
   });
 
-  // Opus review round 2 (F2) — the ORIGINAL bug: keeping any still-serving
+  // The ORIGINAL bug: keeping any still-serving
   // previousId unconditionally, before ever checking the pin, let an
   // AUTOMATIC pick (this function's own earlier adoption) outlive a pin that
   // resolved later — the workspace attaching or loading AFTER the providers

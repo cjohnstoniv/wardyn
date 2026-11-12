@@ -26,6 +26,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -55,6 +56,11 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 	if li == nil || len(li.WorkspaceSecretNames) == 0 {
 		return
 	}
+	// The block is shared with the policy this dispatch was handed, so the values
+	// land on a copy of it and the policy points at the copy.
+	cp := *li
+	cp.WorkspaceSecretValues = slices.Clone(li.WorkspaceSecretValues)
+	li, policy.LLMInspection = &cp, &cp
 	if s.cfg.Secrets == nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.resolve",
 			run.ID.String(), "failure", mustJSON(map[string]any{
@@ -108,7 +114,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		}
 		// On the run's masking manifest before it is used anywhere: a value that
 		// cannot be recorded is skipped like one that cannot be read.
-		if err := s.maskDispatchValue(ctx, run.ID, val); err != nil {
+		if err := s.maskDispatchValue(ctx, run.ID, envSecretRenderings(val)...); err != nil {
 			unrecorded++
 			continue
 		}
@@ -177,7 +183,7 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_USER_ENV_SECRET"
 // splitSecretEnv moves them onto SandboxSpec.SecretEnv, which the k8s driver
 // delivers via secretKeyRef rather than inline in the agent Pod spec.
 func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) []string {
-	names, _ := s.resolveEnvSecretValues(ctx, run, policy, nil, sandboxEnv)
+	names, _, _ := s.resolveEnvSecretValues(ctx, run, policy, nil, sandboxEnv)
 	return names
 }
 
@@ -185,11 +191,11 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 // rows. A grant whose row is runner_resident is read from the namespace its
 // origin was proved in (readResidentValue), and its variable is set to the
 // grant's placeholder, which the runner fills from its keystore; the value is
-// returned, in grant-id order, for deliverResident and nothing else.
+// returned, in grant-id order, for deliverResident and nothing else. placed is the
+// values it wrote into sandboxEnv (never a runner_resident one), for the known-secret
+// check (addPlacedSecrets).
 func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
-	sandboxEnv map[string]string) ([]string, []residentValue) {
-	var resolvedNames []string
-	var resident []residentValue
+	sandboxEnv map[string]string) (resolvedNames []string, resident []residentValue, placed [][]byte) {
 	for _, g := range policy.EligibleGrants {
 		if g.Kind != types.GrantEnvSecret {
 			continue
@@ -216,7 +222,9 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 		row, isResident := residentGrantRow(rows, g)
 		if skip == "" && isResident {
 			v, rerr := s.readResidentValue(ctx, run, row, secretName)
-			if rerr != nil {
+			if errors.Is(rerr, errSecretTrimmedTooShort) {
+				skip = rerr.Error()
+			} else if rerr != nil {
 				skip = "secret could not be resolved"
 			} else {
 				sandboxEnv[name] = placement.ResidentPlaceholder(row.ID)
@@ -237,12 +245,15 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 				skip = "the grant is owner_only and the run's owner has no secret of that name of their own"
 			case gerr != nil || len(val) == 0:
 				skip = "secret could not be resolved"
-			case s.maskDispatchValue(ctx, run.ID, val) != nil:
+			case secretmask.TrimmedTooShort(val):
+				skip = errSecretTrimmedTooShort.Error()
+			case s.maskDispatchValue(ctx, run.ID, envSecretRenderings(val)...) != nil:
 				// On the run's masking manifest before the sandbox can see it.
 				skip = "the run's masking manifest could not record the value"
 			default:
 				sandboxEnv[name] = string(val)
 				resolvedNames = append(resolvedNames, name)
+				placed = append(placed, val)
 			}
 		}
 		data := map[string]any{"name": name, "secret_name": secretName}
@@ -257,7 +268,7 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 			run.ID.String(), outcome, mustJSON(data)))
 	}
 	slices.SortFunc(resident, residentByGrantID)
-	return resolvedNames, resident
+	return resolvedNames, resident, placed
 }
 
 // residentGrantRow is the stored row an env_secret policy grant was written

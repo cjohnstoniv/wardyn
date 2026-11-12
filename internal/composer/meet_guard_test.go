@@ -41,9 +41,11 @@ var meetRules = map[string]meetRule{
 	"allowed_domains":                  {"nothing allowed (default deny)", "pairwise intersection of the two lists under internal/egress/domainmatch; an overlay entry the base's own list does not cover is invalid at write"},
 	"denied_domains":                   {"none", "union"},
 	"allow_all_egress":                 {"false", "AND"},
+	"refuse_ip_literals":               {"false", "OR"},
 	"first_use_approval":               {"always_deny (Normalize)", "stricter by firstUseApprovalRank"},
 	"first_use_hold_seconds":           {"30 s, cut to 600 s", "smaller after normalising"},
 	"max_holds":                        {"16, cut to 256", "smaller after normalising"},
+	"host_rules":                       {"no rules: nothing imposed", "each side's sets appended, never merged; de-duplicated and sorted (meetHostRules)"},
 	"allowed_methods":                  {"all methods", "intersection; empty on one side yields the other; disjoint is unsatisfiable; empty overlay refused"},
 	"min_confinement_class":            {"lowest rank", "higher by confinementRank"},
 	"eligible_grants":                  {"none", "the overlay's pass through; the resolver re-intersects against the resolved base"},
@@ -65,12 +67,14 @@ var meetRules = map[string]meetRule{
 	"desktop.upload":                   {"allowed", "blocked on either side: blocked"},
 	"desktop.download":                 {"blocked", "blocked on either side: blocked"},
 	"recording":                        {"the organisation's level", "the higher level; a lower overlay is a widening"},
+	"data_out":                         {"allowed", "the stricter value; a looser overlay is a widening; blocked also denies drives, kept machines and pushes"},
 	"push_rules.deny_paths":            {"none", "union"},
 	"push_rules.max_inspect_pack_mib":  {"32 MiB under an active rule", "smaller after normalising against the composed rule"},
 	"push_rules.require_review_paths":  {"none", "union"},
 	"push_rules.hold_seconds":          {"120 s, cut to 600 s", "smaller after normalising"},
 	"push_rules.deny_new_executables":  {"false", "OR"},
 	"push_rules.max_file_size_mib":     {"off", "smaller positive"},
+	"push_rules.deny_all":              {"false", "OR"},
 	"azure_devops_capabilities":        {"the provider row's default profile", "intersection; a list under an empty base is a widening and stays empty; disjoint is unsatisfiable; empty overlay refused"},
 	"github_capabilities":              {"the provider row's default profile", "intersection; a list under an empty base is a widening and stays empty; disjoint is unsatisfiable; empty overlay refused"},
 
@@ -82,8 +86,13 @@ var meetRules = map[string]meetRule{
 	"max_concurrent_runs":                   {"0 unlimited", "smaller positive"},
 	"deny_user_drive":                       {"false", "OR"},
 	"deny_member_drives":                    {"false", "OR"},
+	"deny_kept_machines":                    {"false", "OR"},
+	"deny_scheduled_runs":                   {"false", "OR"},
+	"deny_background_desktop_watch":         {"false", "OR"},
 	"deny_placements":                       {"none; every placement permitted", "union"},
 	"allowed_macos_bases":                   {"none; any base a Mac offers", "intersection; empty on one side yields the other; disjoint is unsatisfiable"},
+	"allowed_models":                        {"none; no limit", "intersection; empty on one side yields the other; disjoint is unsatisfiable"},
+	"required_image_signers":                {"none; the site's signers alone decide", "union; the base's order, then the overlay's new names"},
 	"max_cpu_millis":                        {"0 unlimited", "smaller positive"},
 	"max_memory_mib":                        {"0 unlimited", "smaller positive"},
 	"max_ephemeral_disk_mib":                {"0 unlimited", "smaller positive"},
@@ -105,6 +114,11 @@ var meetRules = map[string]meetRule{
 	"default_wait_sec":                      {"0 is max_wait_sec", "smaller after normalising, clamped to the composed max"},
 	"user_changes_limits":                   {"false", "AND (TightenRunLimits)"},
 	"pause_idle_after_sec":                  {"0 pauses only runs waiting for a decision", "smaller positive (TightenRunLimits)"},
+
+	"autonomy_rubric.self_defined_component": {"caps nothing", "the lower level"},
+
+	"deny_components":      {"none; every component may attach", "union; the base's order, then the overlay's new ids"},
+	"deny_model_providers": {"none; every provider may serve", "union; the base's order, then the overlay's new ids"},
 }
 
 // atomicMeetTypes are the struct types a meet rule treats as one value (compared
@@ -117,6 +131,7 @@ var atomicMeetTypes = map[reflect.Type]bool{
 	reflect.TypeOf(types.WorkspaceRepo{}):     true,
 	reflect.TypeOf(types.UIApp{}):             true,
 	reflect.TypeOf(types.ToolRule{}):          true,
+	reflect.TypeOf(types.HostRuleSet{}):       true,
 }
 
 // leafField is one meetable field: its wire path and the Go name the meet reads.

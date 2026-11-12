@@ -7,24 +7,24 @@ Later changes supersede this doc's numbered details: migration numbers, audit ac
 
 ## 1. Status and supersession
 
-The pilot reply is [`docs/adoption/hybrid-09-pilot-reply.md`](../../adoption/hybrid-09-pilot-reply.md), the deployment's answer to hybrid-0.8's owner questions. Citations below link its headings.
+Two requirements drive the design. R1: a sandbox can use a developer's own working directory on their laptop. R2: a sandbox can run on the laptop's own CPU, RAM and Docker while the remote control plane stays the one authority for console, ceiling, audit log and identity.
 
 ### 1.1 hybrid-0.8 questions and decisions
 
 | Item | 0.8 answer | 0.9 answer | Reason |
 |---|---|---|---|
-| O1 | `m′` pointed at the org (full daemon, borrowed identity) | **Client mode**: `wardyn-runnerd` registers outbound; the org schedules, enforces and audits (OD-6) | [Pilot reply, O1](../../adoption/hybrid-09-pilot-reply.md#2-o1--client-mode-and-the-objection-that-would-otherwise-sink-it): one scheduler; `m′` ships four MDM files and one shared OIDC client secret; the federation client has no policy fetch |
-| O2 | Offline local runs continue; evidence buffered durably | No governed run is created while the link is down; an in-flight run is never torn down by a drop (OD-7) | [Pilot reply, O2](../../adoption/hybrid-09-pilot-reply.md#3-o2--a-local-run-while-the-org-is-unreachable): an unrecorded authorization is unacceptable; killing work on a blip is too |
-| O3 | One audit chain per writer | **Dissolved**: one writer, the org | [Pilot reply, O1](../../adoption/hybrid-09-pilot-reply.md#2-o1--client-mode-and-the-objection-that-would-otherwise-sink-it): "only a question if there are two writers" |
-| O4 | No placement field in phase 1; default open | No default between two eligible placements; local eligibility derived from the dispatch plan (OD-8) | [Pilot reply, proposed rule](../../adoption/hybrid-09-pilot-reply.md#22-our-proposed-rule-placement-eligibility-is-a-function-of-the-grant-set): derive from the grant set; refusals name the credential |
-| O5 | Drive-as-source is "the disk link" (phase 3a) | Sync over the existing sftp channel is the disk link; drive-as-source is the shortcut (OD-9) | [Pilot reply, O5](../../adoption/hybrid-09-pilot-reply.md#4-o5--is-drive-as-source-enough-no-not-for-us): no shared storage, and none will be provisioned |
+| O1 | `m′` pointed at the org (full daemon, borrowed identity) | **Client mode**: `wardyn-runnerd` registers outbound; the org schedules, enforces and audits (OD-6) | One scheduler; `m′` ships four MDM files and one shared OIDC client secret; the federation client has no policy fetch |
+| O2 | Offline local runs continue; evidence buffered durably | No governed run is created while the link is down; an in-flight run is never torn down by a drop (OD-7) | An unrecorded authorization is unacceptable; killing work on a blip is too |
+| O3 | One audit chain per writer | **Dissolved**: one writer, the org | Two audit chains are a question only with two writers |
+| O4 | No placement field in phase 1; default open | No default between two eligible placements; local eligibility derived from the dispatch plan (OD-8) | Derive from the grant set; refusals name the credential |
+| O5 | Drive-as-source is "the disk link" (phase 3a) | Sync over the existing sftp channel is the disk link; drive-as-source is the shortcut (OD-9) | No storage is reachable from both substrates, and none will be provisioned |
 | D1 | Hybrid is `m′`-only | Superseded: the laptop runs no control plane, so there is no local admin to exclude | Client mode removes the local authority D1 guarded against |
 | D2 | Placement is a property of a run | **Kept** | Unchanged |
-| D3 | Drive-as-source first, sync second, reverse tunnel rejected | Sync first, drive-as-source second; reverse tunnel stays rejected | [Pilot reply, O5](../../adoption/hybrid-09-pilot-reply.md#4-o5--is-drive-as-source-enough-no-not-for-us) |
-| D4 | No refusal is relaxed; sync adds one case and one action | **Kept**: sync adds one subsystem case and one action ([§9](#9-disk-link-od-9)) | [Pilot reply, O5](../../adoption/hybrid-09-pilot-reply.md#4-o5--is-drive-as-source-enough-no-not-for-us) agrees with the refusals |
+| D3 | Drive-as-source first, sync second, reverse tunnel rejected | Sync first, drive-as-source second; reverse tunnel stays rejected | Drive-as-source links a shared location, not the laptop's own working tree |
+| D4 | No refusal is relaxed; sync adds one case and one action | **Kept**: sync adds one subsystem case and one action ([§9](#9-disk-link-od-9)) | The refusals stand; sync needs one new case |
 | D5 | Evidence flows laptop → org | **Kept in substance**: the org writes every row; the runner only carries bytes | One writer makes direction structural |
 | [Mint rule](../hybrid-0.8.md#52-what-the-enrolment-mint-pulls-and-what-it-must-never-pull) | The mint pulls an image and mints a device-local key, nothing else | **Kept** for `wardyn-runnerd`: the key pair is generated locally; no org credential is ever pulled | Same reasoning as `age.key` |
-| [MDM envelope](../hybrid-0.8.md#9-ops-docs-and-the-mdm-envelope) | One file's contents change; no new files | Two binaries plus one registration token | [Pilot reply, O1](../../adoption/hybrid-09-pilot-reply.md#2-o1--client-mode-and-the-objection-that-would-otherwise-sink-it), point 3 |
+| [MDM envelope](../hybrid-0.8.md#9-ops-docs-and-the-mdm-envelope) | One file's contents change; no new files | Two binaries plus one registration token | Client mode drops the per-device policy files and the shared OIDC client secret |
 | [Phases](../hybrid-0.8.md#11-phased-plan) | Phase 0–3 | Replaced by checkpoints CP1–CP3 on one tag (OD-10) | Single `v0.9.0` tag |
 
 ### 1.2 0.8/PLAN.md rules
@@ -111,7 +111,7 @@ The pilot reply is [`docs/adoption/hybrid-09-pilot-reply.md`](../../adoption/hyb
 | Boundary | Protected by | Who is trusted on each side |
 |---|---|---|
 | Runner ↔ org stream | TLS to the public URL; per-connection proof of possession of the runner key | Org: itself. Runner: the developer's host |
-| Laptop host | Nothing Wardyn controls: the developer is root | Everything on the laptop is developer-readable ([pilot reply, the objection](../../adoption/hybrid-09-pilot-reply.md#21-the-objection-on-a-developer-rooted-laptop-every-credential-is-readable)) |
+| Laptop host | Nothing Wardyn controls: the developer is root | Everything on the laptop is developer-readable |
 | Sandbox ↔ laptop proxy | L0 gatewayless Docker network, unchanged | Binds the **agent**, not the developer |
 | Laptop proxy ↔ org internal listener | End-to-end TLS (`ControlPlaneCAPEM`) through an opaque relay; run token; `runner_id` binding | The runner sees ciphertext only |
 | `via_org` egress ↔ upstream | Org-side TLS, org-side checks | The credentialed leg never touches the laptop |
@@ -120,7 +120,7 @@ The pilot reply is [`docs/adoption/hybrid-09-pilot-reply.md`](../../adoption/hyb
 
 | Piece | Why it transfers |
 |---|---|
-| The `wardyn-proxy` image and the Docker driver's sibling-proxy shape | One engine, two containers, which is one laptop ([pilot reply, engineering inventory](../../adoption/hybrid-09-pilot-reply.md#5-engineering-inventory-what-we-verified-transfers-and-what-does-not)) |
+| The `wardyn-proxy` image and the Docker driver's sibling-proxy shape | One engine, two containers, which is one laptop |
 | `wardyn-rec` upload through the local proxy | Already assumes no inbound reachability |
 | `runner.Capabilities` / `substrate.ClassSupport` | Already the scheduler's vocabulary and fails closed |
 | The redirect-refusing, outbound-only client shape of `federation.Client` | Right plumbing; the payload changes |
@@ -804,7 +804,7 @@ On a laptop the developer is root. Egress enforcement, managed settings, ADO cap
 | Directory | Env `WARDYN_SYNC_DIR` before the subsystem request, honoured only on a `wardyn-sync` channel. Validated server-side: absolute, under `/home/agent/`, no `..`; passed as `sftp-server -d` (Q9) |
 | Honesty | The directory is a start point and a label, not a boundary: sftp-server can reach what the agent uid can |
 | Engine | Pure-Go sftp client in the CLI; `rsync` over `ssh exec` also supported (P4) |
-| Editors | Mutagen and VS Code server via the Remote-SSH pattern, **to be proven by the pilot** |
+| Editors | Mutagen and VS Code server via the Remote-SSH pattern, **to be proven in a trial** |
 | New protocol surface | None; D4 holds |
 
 ### 9.3 Safety defaults
@@ -828,7 +828,7 @@ All of these run in the CLI on the laptop. The gateway relays bytes and cannot p
 | Action | `ssh.sync.transfer`: `dir`, `direction`, `bytes_in`, `bytes_out`, `error` |
 | sftp | `ssh.sftp.transfer` gains additive `bytes_in` / `bytes_out` and keeps `bytes` (P6) |
 | Run detail *Sync* row | From `ssh.sync.*` and `ssh.sftp.transfer`: directory, last activity, bytes each way, active sessions; no file-level claims |
-| Pilot | Runbook, then the pilot estate as a second conformance substrate (owner-gated) |
+| Trial | Runbook, then a trial estate as a second conformance substrate (owner-gated) |
 
 ## 10. Migration, deprecation, MDM and tiers
 

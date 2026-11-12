@@ -10,6 +10,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AdminMintedToken } from "../../lib/api/credentials";
 import { aheadByHours } from "../../lib/test-clock";
+import { STATES } from "../wardyn/states";
 import { MINTED } from "../wardyn/copy/credentials";
 
 const listMintedMock = vi.fn();
@@ -22,6 +23,7 @@ vi.mock("../../lib/api/credentials", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { AdminMintedTokens } from "./credentials-minted-tokens";
+import { HttpError } from "../../lib/api/core";
 
 const token = (id: string, person: string, disposition: AdminMintedToken["disposition"], over: Partial<AdminMintedToken> = {}): AdminMintedToken => ({
   id,
@@ -60,11 +62,19 @@ it("heads the section with the shared eyebrow style", async () => {
   expect(h).not.toHaveClass("font-semibold");
 });
 
+it("a read the server worded shows its sentence, not the default line", async () => {
+  listMintedMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+  render(<AdminMintedTokens />);
+  expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+  expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+});
+
 describe("the State column", () => {
   it("says where each live token stands, with what is true now and the identity it was linked to", async () => {
     render(<AdminMintedTokens />);
     await screen.findByText("alice@example.com");
     expect(screen.getByRole("columnheader", { name: MINTED.COL_STATE })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     expect(rowOf("alice@example.com").getByText("Needs a decision")).toBeInTheDocument();
     expect(rowOf("alice@example.com").getByText("Still works as the person. Invite them, or move it to a service identity.")).toBeInTheDocument();
     expect(rowOf("ben@example.com").getByText("Waiting for the owner")).toBeInTheDocument();

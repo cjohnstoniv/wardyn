@@ -233,3 +233,68 @@ test.describe("Settings — the provider editor: Bedrock and Claude subscription
     await expect(dialog.getByRole("heading", { name: "Claude subscription" })).toBeVisible();
   });
 });
+
+// Run identity on a gateway: the switch needs an address first, the key address is the console's origin
+// plus the path the server sent, and a save sends only the audience (never the issuer or the path, which
+// the server's strict decode refuses).
+test.describe("Settings — the provider editor: run identity on a gateway", () => {
+  test("a key kind with a gateway address turns it on, shows the issuer and key address, and saves the audience", async ({
+    page,
+  }) => {
+    const issuer = "spiffe://acme.example.com";
+    const jwksPath = "/wardyn/.well-known/wardyn-experimental/gateway-jwks.json";
+    let stored: { providers?: Record<string, unknown>[] } = {};
+    let etag = '"g1"';
+    const puts: { body: { providers: Array<Record<string, unknown>> } }[] = [];
+    await page.route("**/api/v1/model-providers", async (route) => {
+      const req = route.request();
+      if (req.method() === "PUT") {
+        puts.push({ body: req.postDataJSON() });
+        stored = puts[puts.length - 1].body;
+        etag = `"g${puts.length + 1}"`;
+      }
+      await route.fulfill({
+        status: 200,
+        headers: { ETag: etag },
+        json:
+          req.method() === "PUT"
+            ? stored
+            : { ...stored, connected_people: {}, gateway_identity_issuer: issuer, gateway_jwks_path: jwksPath },
+      });
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model providers");
+
+    await page.getByRole("button", { name: "Add model provider" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Anthropic API key" }).click();
+    const gateway = PROVIDER_EDITOR.GATEWAY;
+    const toggle = dialog.getByRole("switch", { name: gateway.SWITCH });
+    await expect(toggle).toBeDisabled();
+    await expect(dialog.getByText(gateway.NEEDS_ADDRESS("api.anthropic.com"))).toBeVisible();
+
+    await dialog.getByLabel(PROVIDER_EDITOR.ROUTE_THROUGH).fill("https://gateway.example.com");
+    await expect(toggle).toBeEnabled();
+    await expect(dialog.getByText(gateway.DISCLOSURE)).toBeVisible();
+    await toggle.click();
+    await expect(dialog.getByText(gateway.CHIP, { exact: true })).toBeVisible();
+    await expect(dialog.getByText(issuer, { exact: true })).toBeVisible();
+    const origin = new URL(page.url()).origin;
+    await expect(dialog.getByText(`${origin}${jwksPath}`, { exact: true })).toBeVisible();
+    await dialog.getByLabel(new RegExp(`^${gateway.AUDIENCE}`)).fill("wardyn-anthropic-keys");
+    await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
+
+    await expect(page.getByText("Provider saved.")).toBeVisible();
+    expect(puts).toHaveLength(1);
+    expect(puts[0].body.providers).toEqual([
+      expect.objectContaining({
+        kind: "anthropic_api_key",
+        base_url: "https://gateway.example.com",
+        gateway_identity: { audience: "wardyn-anthropic-keys" },
+      }),
+    ]);
+    expect(JSON.stringify(puts[0].body)).not.toMatch(/issuer|jwks/);
+  });
+});

@@ -13,6 +13,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// DesktopWindowAtStart is CreateRunRequest.DesktopWindow's one value.
+const DesktopWindowAtStart = "at_start"
+
 // CreateRunRequest is the body for POST /api/v1/runs.
 type CreateRunRequest struct {
 	Agent string `json:"agent"`
@@ -34,6 +37,11 @@ type CreateRunRequest struct {
 	// interpreted, only stored and displayed.
 	Description string     `json:"description,omitempty"`
 	PolicyID    *uuid.UUID `json:"policy_id,omitempty"`
+	// CorrelationID is the caller's own reference for this run, to join Wardyn's audit trail to another
+	// system's. Optional; trimmed, at most 128 characters of ASCII letters, digits and . _ : / -, anything else
+	// is 422 correlation_id_invalid. The run keeps it (AgentRun.CorrelationID), and the audit sinks carry it as
+	// data.correlation_id on the run's rows; the stored audit trail is unchanged.
+	CorrelationID string `json:"correlation_id,omitempty"`
 	// ConfinementClass, when set, requests a specific confinement class
 	// ("CC1"/"CC2"/"CC3"). Empty inherits the policy minimum; an unknown
 	// non-empty value is rejected by the server with 400.
@@ -51,6 +59,11 @@ type CreateRunRequest struct {
 	// MacOSBase is a macos_vm run's macOS base: "" or "Standard", the one prepare builds, or one of
 	// the Mac's other bases by name (PoolMacOSVM.Bases). Any other kind of sandbox sends none.
 	MacOSBase string `json:"macos_base,omitempty"`
+	// DesktopWindow, "at_start", asks for a window onto a macOS VM run on the person's own Mac as the VM comes
+	// up. The server judges it as it judges `wardyn window`, at create and again when the run is up: a create
+	// it would refuse is refused with the sentence, and a window that can't open then (the Mac's screen is
+	// locked) leaves the run going, to be opened on request. Only a macOS VM run sends it.
+	DesktopWindow string `json:"desktop_window,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
 	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default
@@ -171,6 +184,9 @@ type CreateRunRequest struct {
 	// member drives and storage.user_drive.member_create.keep_main_drive is on.
 	// Whatever the agent leaves in the folder comes back in that later run.
 	KeepWorkFolder bool `json:"keep_work_folder,omitempty"`
+	// Machine keeps this macOS VM run's machine for next time, or starts the run from one kept earlier.
+	// Only a macOS VM run on the person's own Mac sends it.
+	Machine *RunMachine `json:"machine,omitempty"`
 	// Components attaches custom components to this run: each entry names a
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.
@@ -288,17 +304,42 @@ type CreateRunRequest struct {
 	// checked. Only with experience background and workload kind command on a container sandbox;
 	// anything else is 422 run_service_shape, and a VM machine_kind is 422 request_field_unavailable.
 	// The server fills the defaults (restart on_failure, a health check's interval 15 and
-	// failure_threshold 3) and stores the spec frozen on the run.
+	// failure_threshold 3) and stores the spec frozen on the run. health.probe "control_plane" has
+	// wardynd check the port itself too, through the sandbox's exec path; any other value is 400
+	// run_mode_invalid with field service.health.probe.
 	Service *types.RunService `json:"service,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
-	// create path under the caller's own ceiling. Alongside it only Title,
-	// Task and PresetVersion may be set; any other field is refused.
+	// create path under the caller's own ceiling. Alongside it only Title, CorrelationID,
+	// Task, PresetVersion and WallPreset may be set; any other field is refused.
 	Preset string `json:"preset,omitempty"`
 	// PresetVersion, with Preset, pins the version the caller expects: a
 	// preset changed since is refused (409) rather than launched. 0 launches
 	// the current version. The created run records the version it used.
 	PresetVersion int `json:"preset_version,omitempty"`
+	// WallPreset narrows the run by a wall preset: a built-in's id (open,
+	// read-only, sealed) or a stored preset's id. It only narrows, beside the
+	// person's own walls, and the run keeps a frozen copy, so a later edit or
+	// delete of the preset changes nothing on it. A preset that does not exist
+	// or is not open to the caller is refused (422 wall_preset_unknown); the
+	// run is never launched without it.
+	WallPreset string `json:"wall_preset,omitempty"`
+}
+
+// RunWallPreset is the wall preset a run was launched with, as the run read
+// sends it: never its spec. Version is the version the run was queued and
+// reviewed under; Changed is set when the preset changed or went while the run
+// waited, which ended it queue_policy_changed. A personal preset on a run read
+// by anyone but the run's owner carries no id or name.
+type RunWallPreset struct {
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Scope   string `json:"scope"`
+	GroupID string `json:"group_id,omitempty"`
+	// GroupLabel is the group's display label, for a group preset whose group has one.
+	GroupLabel string            `json:"group_label,omitempty"`
+	Version    int               `json:"version,omitempty"`
+	Changed    *WallPresetChange `json:"changed,omitempty"`
 }
 
 // DriveSelection is the per-run user-drive option set. See
@@ -423,16 +464,20 @@ type CreateRunResult struct {
 	// ResourcesApplied is the CPU and memory the run asked for and got, and
 	// which limit bound each.
 	ResourcesApplied *AppliedResources `json:"resources_applied,omitempty"`
+	// Replayed is true when the server answered from an earlier create with the same
+	// Idempotency-Key (the Idempotent-Replayed header) instead of making a run.
+	Replayed bool `json:"-"`
 }
 
 // CreateRun submits a new agent run and answers once the run row exists (state
 // PENDING, never RUNNING) plus any advisory warnings; build and dispatch continue server-side.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
+//
+// It sends a fresh Idempotency-Key and makes ONE attempt: a lost answer is returned as the error
+// and the call is never repeated. To retry, or to choose the key, use CreateRunWith.
 func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
-	var out CreateRunResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs", req, &out)
-	return out, err
+	return c.CreateRunWith(ctx, req, CreateRunOptions{})
 }
 
 // PreflightItem is one row of the preflight setup checklist: something the run
@@ -496,6 +541,10 @@ type PreflightResult struct {
 	// for an unlisted host and the setup still needed. The policy preview
 	// answers the same block for the same request.
 	Access *AccessFacts `json:"access,omitempty"`
+	// AllowedModels is the governed list of hosted models a run under the caller's profile may ask
+	// for, and AllowedModelsProfile the name of that profile; both absent when no limit binds it.
+	AllowedModels        []string `json:"allowed_models,omitempty"`
+	AllowedModelsProfile string   `json:"allowed_models_unit,omitempty"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy

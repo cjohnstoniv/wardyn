@@ -44,6 +44,10 @@ type bootFlags struct {
 	// (bug-rbac-1) — a configured SSO deployment must not silently lose its
 	// RBAC to one stray env var.
 	allowLocalModeWithOIDC *bool
+	// allowUISharedOrigin is WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN, the hatch for
+	// validateUISandboxSharedOrigin: with SSO configured, the UI-sandbox gateway boots
+	// without a per-run origin template only when it is set.
+	allowUISharedOrigin *bool
 	// MEMBER-MODE DESKTOP (W-MEMB, docs/design/member-role-desktop.md). memberMode
 	// asserts the topology in which the human at the keyboard is a MEMBER and the
 	// operator authority lives elsewhere (an org IdP / MDM): it refuses to start
@@ -195,6 +199,8 @@ type bootFlags struct {
 	auditSource        *string
 	// auditSeal is WARDYN_AUDIT_SEAL (off|fields|full): whether personal audit fields are stored sealed under the person's own key.
 	auditSeal *string
+	// auditStrict is WARDYN_AUDIT_STRICT: a covered change is refused if its audit intent row cannot be written first.
+	auditStrict *bool
 
 	// auditRetentionDays is WARDYN_AUDIT_RETENTION_DAYS (0 = keep forever): the audit log's retention window,
 	// persisted in audit_partition_meta at boot through audit_retention_set_policy. A decrease, 0 to any
@@ -268,6 +274,8 @@ type bootFlags struct {
 	approvalExpiryAfter    *time.Duration
 	endedRunGrace          *time.Duration
 	auditCoalesceWindow    *time.Duration
+	// auditCheckpointInterval is how often wardynd signs a checkpoint over new audit rows (audit_checkpoint.go).
+	auditCheckpointInterval *time.Duration
 
 	envbuild     *bool
 	envbuildImg  *string
@@ -343,6 +351,15 @@ type bootFlags struct {
 	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
 	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
 	rotateAgeKey *string
+	// rotateGatewayIdentityKey is `wardynd -rotate-gateway-identity-key`
+	// (rotate_gateway_identity_key.go), rotateAuditReceiptKey is
+	// `wardynd -rotate-audit-receipt-key` (rotate_audit_receipt_key.go), and
+	// retirePrevious either one's recovery from a stolen key. Destructive like
+	// rotateAgeKey, and like it they have NO env pair: an explicit act on a
+	// command line, never on every boot.
+	rotateGatewayIdentityKey *bool
+	rotateAuditReceiptKey    *bool
+	retirePrevious           *bool
 	// migrateSecrets, migrateTo and reconcile are the store-mode maintenance
 	// modes (migrate_secrets.go); like rotateAgeKey they have NO env pair.
 	migrateSecrets *bool
@@ -412,6 +429,8 @@ type bootFlags struct {
 	// ceiling and per-source handshake bound.
 	sshMaxConns  *int
 	sshPerSource *int
+	// sshPerPrincipal is one person's share of sshMaxConns; 0 = the default.
+	sshPerPrincipal *int
 	// syncDeny is api.Config.SyncDeny before ParseSyncDeny splits and checks it.
 	syncDeny *string
 	// localFolderSeedWait is api.Config.LocalFolderSeedWait.
@@ -482,6 +501,7 @@ func parseBootFlags() *bootFlags {
 		localTrustedPeers:      flagEnv("local-trusted-peers", "WARDYN_LOCAL_TRUSTED_PEERS", "", "with -local-trust-forwarder, the only non-loopback peers trusted (IPs or CIDRs, comma-separated); empty resolves them at boot: the default route's gateway and wardynd's own addresses"),
 		localTrustFwd:          flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, also accept the forwarder peers -local-trusted-peers names (by default the gateway and own addresses resolved at boot) beside a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
 		allowLocalModeWithOIDC: flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, which disables the configured SSO/RBAC deployment; normally refused (default false)"),
+		allowUISharedOrigin:    flagBool("allow-ui-sandbox-shared-origin", "WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN", false, "allow the UI-sandbox gateway to run with SSO configured and no WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE, so every run's apps share one origin; normally refused (default false)"),
 		memberMode:             flagBool("member-mode", "WARDYN_USER_DESKTOP", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
 		memberRoots:            flagEnv("member-workspace-roots", "WARDYN_USER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a member's own local_dir workspace source may live under. Empty (default) means members may not mount host directories at all; point it at a dedicated projects directory, never $HOME"),
 		memberRootsMap:         flagEnv("member-workspace-roots-map", "WARDYN_USER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email; a listed principal's entry replaces the shared list rather than adding to it`),
@@ -545,6 +565,7 @@ func parseBootFlags() *bootFlags {
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
 		auditSeal:          flagEnv("audit-seal", "WARDYN_AUDIT_SEAL", "off", "off|fields|full: with fields, the personal fields of an audit row (docs/AUDIT-ACTIONS.md, Sealed fields) are stored, spooled and sent to sinks only as ciphertext under the person's own key, so erasing the person makes them unreadable everywhere they were copied. Rows written before it was turned on stay plaintext. full also stores a human actor as subject:<uuid>, so SIEM rules keyed on actor see subject ids (default off)"),
+		auditStrict:        flagBool("audit-strict", "WARDYN_AUDIT_STRICT", false, "strict audit: a covered policy, governance, approval or grant change is refused (503 audit_unavailable) if its audit intent row cannot be written to the store first; the handler's own detailed row can still spool (default false)"),
 
 		// OFF by default (0 = keep forever), like recordingRetention above and for the same reason; unlike
 		// it, the audit log is only ever trimmed a whole closed partition at a time, through an attested drop.
@@ -589,6 +610,8 @@ func parseBootFlags() *bootFlags {
 		// minute forever from one retrying sidecar, which the auth.fail rate
 		// limiter (1/sec) never trips. 0 disables it — every refusal is its own row.
 		auditCoalesceWindow: flagDuration("audit-coalesce-window", "WARDYN_AUDIT_COALESCE_WINDOW", 5*time.Minute, "fold identical consecutive auth.fail audit rows into one summary row when the gap between them is under this window (duration; 0 disables folding)"),
+
+		auditCheckpointInterval: flagDuration("audit-checkpoint-interval", "WARDYN_AUDIT_CHECKPOINT_INTERVAL", time.Minute, "how often wardynd signs a checkpoint over the audit rows appended since the last one, with the wardyn-audit-receipt-key boot key (duration; 0 turns signing off; 1s to 9s is refused)"),
 
 		envbuild:     flagBool("envbuild", "WARDYN_ENVBUILD", false, "enable devcontainer image builds for create-run; requires -tags docker (default false)"),
 		envbuildImg:  flagEnv("envbuild-image", "WARDYN_ENVBUILD_IMAGE", "", "envbuilder OCI image override. Empty (default) uses the upstream default"),
@@ -664,6 +687,15 @@ func parseBootFlags() *bootFlags {
 			"WARDYN_AGE_KEY's key to it in one transaction, replace the key file at `path` (previous kept as <path>.bak), then exit. "+
 			"That file must already hold the current identity as a bare AGE-SECRET-KEY-... line; see docs/operations/secrets-and-keys.md"),
 
+		// flag.Bool, NOT flagBool: no env pair by design — see the struct field.
+		rotateGatewayIdentityKey: flag.Bool("rotate-gateway-identity-key", false, "maintenance mode, every replica must be stopped: make a new AI gateway identity signing key, "+
+			"publish the old one until its tokens have expired, write a secret.rekey audit row, then exit. See docs/operations/secrets-and-keys.md (default false)"),
+		rotateAuditReceiptKey: flag.Bool("rotate-audit-receipt-key", false, "maintenance mode, every replica must be stopped: make a new audit checkpoint signing key, "+
+			"keep every old public key so old checkpoints still verify, write a secret.rekey audit row, then exit (default false)"),
+		retirePrevious: flag.Bool("retire-previous", false, "with -rotate-gateway-identity-key or -rotate-audit-receipt-key only, the recovery from a stolen key: "+
+			"the gateway key publishes the new key alone from now on, so nothing the old keys signed verifies once a gateway refetches (calls in flight fail until then); "+
+			"the audit key marks the replaced key retired, so wardyn audit verify fails every checkpoint it signed. See docs/operations/secrets-and-keys.md (default false)"),
+
 		// flag.Bool/flag.String, NOT the env helpers: no env pair by design.
 		migrateSecrets: flag.Bool("migrate-secrets", false, "maintenance mode, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit; idempotent and resumable. See docs/operations/secrets-and-keys.md (default false)"),
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
@@ -717,6 +749,7 @@ func parseBootFlags() *bootFlags {
 		syncDeny:               flagEnv("sync-deny", "WARDYN_SYNC_DENY", "", "comma-separated ignore patterns (git's syntax) that 'wardyn sync' leaves out on top of every .gitignore and .wardynignore, and that no ignore file can take back, e.g. '.env*,*.pem'; at most 64 patterns of 256 bytes, no control characters. Empty (default) adds none"),
 		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
 		sshMaxConns:            flagIntEnv("ssh-max-connections", "WARDYN_SSH_MAX_CONNECTIONS", api.DefaultSSHMaxConnections, "most authenticated SSH gateway connections open at once, per replica (integer, at least 1); one authenticated over it is closed"),
+		sshPerPrincipal:        flagIntEnv("ssh-max-connections-per-principal", "WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL", 0, "most authenticated SSH gateway connections one person may hold, per replica (integer; 0 = 8 with single sign-on, else all of WARDYN_SSH_MAX_CONNECTIONS); one over it is told why and closed"),
 		sshPerSource:           flagIntEnv("ssh-max-handshakes-per-source", "WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", api.DefaultSSHMaxHandshakesPerSource, "most SSH gateway connections one source address may have handshaking at once, per replica (integer, at least 1); one over it is closed before any byte"),
 		localFolderSeedWait:    flagDuration("local-folder-seed-wait", "WARDYN_LOCAL_FOLDER_SEED_WAIT", api.DefaultLocalFolderSeedWait, "how long a run with a local folder holds its agent for the folder's first 'wardyn sync' before it fails, never past the run's own end (duration, positive)"),
 		computerFolders:        flagBool("computer-folders", "WARDYN_COMPUTER_FOLDERS", false, "let a run take a folder from its creator's own folder-only runner ('wardyn-runnerd serve --substrate folders'), which Wardyn seeds before the agent starts (default false)"),
@@ -751,6 +784,7 @@ func finalizeBootFlags(f *bootFlags) {
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
 	exitOnGovernanceFlags(f)
+	exitOnBadCheckpointInterval(f)
 	exitOnBadPortRule(f)
 	exitOnBadDesktopSignins(f)
 }
@@ -768,6 +802,23 @@ func exitOnBadSecretFiles(f *bootFlags) {
 // (deploy/compose/docker-compose.yaml, docs/TRY-IT.md, docs/sdk.md, docs/ENV.md).
 // It is published, therefore not a secret — the analogue of knownPublicAgeKeys.
 const demoAdminToken = "demo-admin-token"
+
+// minAdminTokenLen is the shortest WARDYN_ADMIN_TOKEN boot accepts on a bind that is not loopback: the
+// bearer is the super-admin credential and every peer that can reach the port may guess at it.
+const minAdminTokenLen = 32
+
+// adminTokenStrengthRefusal refuses a WARDYN_ADMIN_TOKEN shorter than minAdminTokenLen when the listen
+// address is not loopback-only. The published demo token keeps its own handling (resolveLocalMode: refused
+// on a specific routable bind, a warning otherwise), and a loopback bind is reachable from this computer only.
+func adminTokenStrengthRefusal(token, listen string) error {
+	token = strings.TrimSpace(token)
+	if token == "" || token == demoAdminToken || len(token) >= minAdminTokenLen || listenIsLoopback(listen) {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: WARDYN_ADMIN_TOKEN is %d bytes but the listen address %q is not loopback-only — "+
+		"the admin token is the super-admin credential and is reachable by anything that can connect, so it must be at least %d bytes; "+
+		"set a longer secret (e.g. `openssl rand -hex 32`) or bind loopback", len(token), listen, minAdminTokenLen)
+}
 
 // localModeState is the resolved LOCAL HOST MODE posture: whether the no-auth
 // bypass is in effect, the operator principal to stamp, and whether the bind is
@@ -851,6 +902,9 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 		slog.Warn("wardynd: WARDYN_ADMIN_TOKEN is the demo token published in this repo — anyone who read the docs has full admin. Fine for the loopback-published demo stack; set a secret token before exposing this port.",
 			slog.String("listen", *f.listen),
 		)
+	}
+	if err := adminTokenStrengthRefusal(*f.adminToken, *f.listen); err != nil {
+		return lm, err
 	}
 	if !lm.enabled {
 		return lm, nil

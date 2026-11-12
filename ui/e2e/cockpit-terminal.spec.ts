@@ -402,4 +402,46 @@ test.describe("Run cockpit terminal", () => {
       .toBe("-1");
     expect(received.length, "the Ctrl+] fallback must reach no PTY either").toBe(0);
   });
+  // Focus mode makes #main-content inert while it is on; the session it shows lives in a portal outside that region,
+  // so typing into the terminal must still reach the PTY there.
+  test("in focus mode, typing into the terminal reaches the PTY and the terminal sits outside the inert region", async ({
+    page,
+  }) => {
+    const { id: runId } = await findRunningFixture(page);
+    await stubInteractiveRun(page, runId);
+    await stubAttachTicket(page, runId);
+    const received: Buffer[] = [];
+    await stubAttachSocket(page, (_n, ws) => {
+      ws.send(attachModeFrame(false));
+      ws.onMessage((msg) => {
+        if (Buffer.isBuffer(msg)) {
+          received.push(msg);
+          ws.send(msg);
+        }
+      });
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+    const pane = page.getByTestId("run-terminal-pane");
+    await expect(pane.locator(".xterm-screen").first()).toBeVisible();
+    await expect(pane.getByText(RUN_COCKPIT.driving)).toBeVisible();
+
+    await page.getByRole("button", { name: RUN_COCKPIT.enterFocus }).click({ force: true });
+    await expect(page.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeVisible();
+    await expect(page.locator("#main-content")).toHaveAttribute("inert", "");
+
+    const screen = page.locator(".xterm-screen").first();
+    await expect(screen).toBeVisible();
+    expect(
+      await screen.evaluate((el) => !document.getElementById("main-content")!.contains(el)),
+      "the focus-mode terminal must not sit inside the inert region",
+    ).toBe(true);
+
+    received.length = 0;
+    await screen.click();
+    await page.keyboard.type("typed in focus");
+    await pollScreen(screen, /typed in focus/, "typing in focus mode never echoed back to the screen");
+    expect(received.length, "typing in focus mode must reach the PTY").toBeGreaterThan(0);
+  });
 });

@@ -3,13 +3,14 @@
 # Exercising member mode as an admin
 
 You have an admin session and you want to see what a member sees. There
-are two ways; they answer different questions, and they compose.
+are two ways; they answer different questions, and they compose. The console
+calls member mode the User view.
 
 ## 1. The switch — the User view
 
 The **Console view** switch beside the wordmark offers **Admin view** |
 **User view** to a signed-in SSO admin. Choosing **User view** sets a flag
-on your EXISTING session cookie; your role is never rewritten, only the
+on your existing session cookie; your role is never rewritten, only the
 *effective* role your requests resolve to, and only downward.
 
 - The console reloads and you land exactly where a user lands: the
@@ -22,14 +23,12 @@ on your EXISTING session cookie; your role is never rewritten, only the
 - Every audit row the session writes still names **your own sub**: no
   impersonation. Delegation is recorded as delegation, and there is no way
   to become anybody else.
-- The transition itself is audited as `auth.user_view.set` (the pre-0.8
-  `auth.member_mode` name was dual-emitted through 0.8.x and is gone in 0.9,
-  [Renamed in 0.8](../OPERATIONS.md#renamed-in-08)) with `enabled`,
+- The transition itself is audited as `auth.user_view.set` with `enabled`,
   `real_role`, and `no_credential` on the preview below.
 - Each `403` an **admin-tier gate** raises while the mode is on carries
   `user_view: true` on its `authz.denied` row — the two middleware
   chokepoints and every in-handler refusal that raises the same two
-  reasons. A reviewer reads the burst as an admin walking the member path
+  reasons. An auditor reads the burst as an admin walking the member path
   rather than as an incident. (Denials with a *different* `reason` — an
   ungranted capability, a foreign resource — are the ones a member would
   meet identically, and carry no marker.)
@@ -82,6 +81,25 @@ no admin route opens whatever the type.
   - A run launched in the view takes the picked type's grants, governance profile, drives and run limits, and records that type.
   - Turn the switch on when an admin's own stamped type must bound the runs they launch.
 
+### Testing what members get
+
+Test in the **User view**, looking through the member type. Do not judge it from
+an admin's run outside the view.
+
+- With the switch off, a run from the admin token, local mode or an admin-role
+  personal token is ungoverned. It gets the deployment default, not a member's
+  profile.
+- A browser sign-in cannot launch in the Admin view (`409` `admin_view`). In the
+  User view the effective role is lowered, so the run takes the picked type's
+  profile and grants.
+- A security admin is never ungoverned. Its runs resolve against its stamped type.
+- A run that is ungoverned gets the deployment default only, not a member's profile or ceiling. The switch stays off by default, so an upgrade changes nothing.
+- Where admins sign in with SSO, we recommend turning on `WARDYN_GOVERN_ADMIN_RUNS`, with the steps under
+  [Constrained-admin mode](#constrained-admin-mode).
+  - It refuses Record Mode unless `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT=recording`.
+  - It also governs admin-role personal tokens, so check CI first.
+  - The admin token and local mode stay ungoverned either way.
+
 ## The no-credential preview — "Preview as a new user"
 
 The Permissions page header offers **Preview as a new user**. It's the
@@ -104,7 +122,7 @@ absent for the rest of the session.
 
 Inside the preview, **signing in is refused** — `POST /model-providers/{id}/sign-in`
 answers `409` while the posture is on, deliberately. The preview shows a
-new member's STATE, not their flow, and a sign-in completed there would
+new member's state, not their flow, and a sign-in completed there would
 capture a credential against the admin's own principal. The preview's band
 says so, and the sign-in pane offers no "Try again" for that refusal — the
 way out is to exit the mode.
@@ -121,7 +139,7 @@ agent's roster row is `per_user`.
   inside the preview when somebody flips the roster `per_user` → `shared`
   keeps the variant banner until they exit.
 
-**It is MODEL ACCESS only, and THIS BROWSER SESSION only.** The posture
+**It is model access only, and this browser session only.** The posture
 rides this session's cookie, so the same admin's CLI, their `wdn_` API
 token and a second browser all still create and dispatch runs on their
 real credential. "Runs that need it are refused" is true of this console
@@ -138,7 +156,7 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 | Registering an SSH key (`POST /me/ssh-keys`) | Allowed in the mode; the key is stored **capped** (migration `0070_ssh_key_view_capped`) — a member key for good. Your sign-in re-stamp leaves its role at `user`, and the SSH gateway never grants it the admin override, even while you are an admin. It reaches your own runs and nothing else. An uncapped admin key is registered outside the mode, and since 0.8.5 it reaches only runs with no personal owner |
 
 > [!IMPORTANT]
-> **It shows you what a member SEES. It is not proof that a member is REFUSED.** Four ceilings, all deliberate:
+> **It shows you what a member sees. It is not proof that a member is refused.** Four ceilings, all deliberate:
 
 | Ceiling | What it means |
 | --- | --- |
@@ -158,17 +176,17 @@ look, second identity for the proof.
   roster row is `shared` (there is nothing for the preview to hide) or
   against a pre-0.7.5 daemon.
 - `user_preview_available` (`internal/api/me.go`) is ANDed with the
-  caller's EFFECTIVE (clamped) admin tier. That's the same clamp that made
+  caller's effective (clamped) admin tier. That's the same clamp that made
   ceiling 4 true in the first place, so the button is gone the instant
   either posture clamps `isOperator`/`isSecurityOperator` false.
 - Inside that second posture the ceiling reads the other way round: your
   sign-in is *hidden, not removed*, and a rolling upgrade (ceiling 3) hides
   nothing at all.
-- **The preview shows the STATE, not the FLOW.** Signing in is refused
+- **The preview shows the state, not the flow.** Signing in is refused
   inside it (`409`), by design — a capture made there would land on your
   own identity and overwrite your real session.
 - So it reproduces what a member with no credential SEES; it cannot
-  rehearse a member's FIRST SIGN-IN. That still needs a real second
+  rehearse a member's first sign-in. That still needs a real second
   identity — `member@wardyn.local` in the kind quickstart, `wardyn-member`
   on Entra.
 - **Rolling upgrades, for the preview specifically.** The posture rides the
@@ -218,7 +236,8 @@ personal token. Their own runs are bounded by the governance profile and the
 capability grants that apply to them. That holds at every run seam: quotas, the
 drive and workspace-provider doors, owner revalidation and preset launch.
 `deny_interactive` and `deny_ui_apps` also bind the terminal, SSH and UI gateway
-on their own run.
+on their own run, and a watch of a background macOS run's desktop. Only the person
+who started that run can watch it.
 **Record Mode is refused** (`403` `recording_governed`), because that lane builds
 its own allow-all, credentialed sandbox and skips the member clamp on purpose.
 Setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording` restores it for that lane

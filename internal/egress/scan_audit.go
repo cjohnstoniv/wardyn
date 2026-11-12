@@ -34,7 +34,7 @@ func ScanAudit(sc *ScanSummary, host string) (action, outcome string, data json.
 	if sc.FindingsTotal > findingCount {
 		findingCount = sc.FindingsTotal
 	}
-	data, _ = json.Marshal(map[string]any{
+	fields := map[string]any{
 		"host":              host,
 		"channel":           sc.Channel,
 		"mode":              sc.Mode,
@@ -47,6 +47,10 @@ func ScanAudit(sc *ScanSummary, host string) (action, outcome string, data json.
 		"findings_capped":   sc.FindingsCapped,
 		"findings_past_cap": sc.FindingsPastCap,
 		"findings":          findings,
-	})
+	}
+	if sc.DeferredTo != "" {
+		fields["deferred_to"] = sc.DeferredTo // the provider whose gateway checks the prompt
+	}
+	data, _ = json.Marshal(fields)
 	return "llm.scan." + sc.Action, outcome, data
 }

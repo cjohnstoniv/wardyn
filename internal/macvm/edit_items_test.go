@@ -17,7 +17,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -109,28 +108,9 @@ func newItemsEdit(t *testing.T) (*editFix, *readBackGuest, string) {
 	return e, g, wifi
 }
 
-// again readies e for another edit: its window's guest shuts down once the window is up.
+// again readies e for another edit: its window's guest shuts down once the window is up, as the first's did.
 func (e *editFix) again(t *testing.T) {
-	boots := e.f.fb.Boots()
-	opened0, _ := e.f.fb.Windows()
-	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
-	wait := func(more func() bool) bool {
-		for more() {
-			select {
-			case <-stop:
-				return false
-			case <-time.After(time.Millisecond):
-			}
-		}
-		return true
-	}
-	go func() {
-		noWindow := func() bool { opened, _ := e.f.fb.Windows(); return opened == opened0 }
-		if wait(func() bool { return e.f.fb.Boots() == boots }) && wait(noWindow) {
-			e.f.fb.Shutdown(nil)
-		}
-	}()
+	t.Helper()
 	e.out.Reset()
 }
 
@@ -154,7 +134,9 @@ func TestEditBaseNamesProfilesThenReadsItemsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := e.lines()
-	if len(lines) != 5 || lines[2] != wifiLine || lines[3] != macvm.EditCheckingLine {
+	// The start, the boot line, the code line, the profile's path, the untrusted certificate's block (a blank
+	// line, a header and four lines), the checking line, the report (a header and three rows) and the ready line.
+	if len(lines) != 16 || lines[3] != wifiLine || lines[10] != macvm.EditCheckingLine {
 		t.Fatalf("lines:\n%s", e.out.String())
 	}
 	var want []string
@@ -168,7 +150,7 @@ func TestEditBaseNamesProfilesThenReadsItemsBack(t *testing.T) {
 	}
 	for _, w := range []string{
 		"run /bin/rm -rf " + adminDir, "run /usr/bin/stat " + adminDir, "run /bin/rm -rf " + stageWifi, "run /usr/bin/stat " + stageWifi,
-		"posture", "verify-cert",
+		"posture", "verify-cert", "posture", // the read-back records Full Disk Access in tools.json
 	} {
 		want = append(want, w+" after 2 codes")
 	}

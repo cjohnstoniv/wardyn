@@ -16,14 +16,14 @@ repository names. Substitute your own for the placeholders (`CORP_PROXY_HOST:POR
 
 > **Maintainer note.** Several claims below were re-tested against the code and on a native Linux
 > host with all four confinement runtimes installed. Where the test disagreed with the report, the
-> **verified** result is recorded — see A2 and B4 in particular. That is not a criticism of the
+> **verified** result is recorded — see the sandbox egress and the VM-backed `local_dir` mounts items in particular. That is not a criticism of the
 > report; it is how the report got turned into correct fixes.
 
 ---
 
-## A. Local changes (now upstreamed)
+## Local changes (now upstreamed)
 
-### A1. The `make setup` UI-build retry must not reinstall — reuse `node_modules`
+### The `make setup` UI-build retry must not reinstall — reuse `node_modules`
 
 **Problem.** On a mirror that proxies public npm metadata but does not host every tarball, the
 0.4.1 pnpm-404 fallback still failed. The retry ran the full `make ui`
@@ -43,7 +43,7 @@ start — it fixes the second and later `make setup`. The failure message now na
 platform-postinstall case and asks for the exact package + URL, because the underlying question
 (does a warm `--frozen-lockfile` re-hit the mirror at all?) could not be reproduced off-site.
 
-### A2. Sandbox egress via a loopback-only host forward proxy
+### Sandbox egress via a loopback-only host forward proxy
 
 **Problem (the biggest one).** Some corporate connectivity clients expose their forward proxy on a
 **loopback address only** (`127.0.0.1:PORT`). That is reachable from host processes but
@@ -83,7 +83,7 @@ wardyn site-config set corp-baseline.json        # reference the secret
 `<host-gateway>` is the address your sandbox reaches the host on (e.g. the VM's gateway on
 Rancher/Lima). Egress policy is still enforced by `wardyn-proxy` before anything reaches the relay.
 
-### A3. Persisting the corp wiring across `make reset` / `make reset-all`
+### Persisting the corp wiring across `make reset` / `make reset-all`
 
 Both reset paths delete the Postgres volume, and the upstream-proxy secret **and** the site-config
 live only there — so a plain `reset && setup` returned with broken egress and no step in between
@@ -95,16 +95,16 @@ where the operator could notice.
   and prints the capture command *before* asking for confirmation.
 - Restore secrets with `wardyn secret set` (reads the value on stdin; never argv, never `.env`).
 
-### A4. Native agent-CLI install works offline from a host-staged binary — no change needed
+### Native agent-CLI install works offline from a host-staged binary — no change needed
 
 Confirmed the `CLAUDE_INSTALL=native` path is the right escape hatch when public npm is blocked and
 the mirror hasn't onboarded the agent package. On a fully air-gapped build, staging the checksummed
 native binary on disk and building with the native flag avoids npm entirely. **This shipped feature
 is correct**; recorded here only as a confirmation that it solves the corp case.
 
-### A5. wardynd's own outbound calls had no supported way to follow a corporate proxy
+### wardynd's own outbound calls had no supported way to follow a corporate proxy
 
-Distinct from A2 above, which is the **sandbox's** egress hop. This is wardynd's own: OIDC discovery at
+Distinct from the sandbox egress item above, which is the **sandbox's** egress hop. This is wardynd's own: OIDC discovery at
 boot, the audit webhook sink, GitHub App token minting, AWS SSO token renewal, Entra sync. Two files in
 the repo gave opposite instructions — one said the AWS SSO renewal call "honours the PROCESS proxy
 environment... a deployment behind a corporate proxy needs this hop to follow it," and `docs/ENV.md`
@@ -119,7 +119,7 @@ outbound calls, applied to `http.DefaultTransport` only, with three hosts auto-b
 and boot refused on a malformed value. See `docs/OPERATIONS.md` "wardynd behind a corporate proxy" and
 `docs/ENV.md`.
 
-### A6. "One dropped packet" was two attempts, and the grading was worse than the symptom
+### "One dropped packet" was two attempts, and the grading was worse than the symptom
 
 The field report's framing: a captured AWS SSO session's refresh token was retired by AWS
 (`invalid_grant`) after what looked like a single dropped packet at 01:09, and the console kept
@@ -146,7 +146,7 @@ grading anything but `dead` there would promise a launch that does not work. Nev
 strength of a registration timestamp a spent token can no longer redeem. See `docs/AUDIT-ACTIONS.md`'s
 `harness.credential.refresh` row and `CHANGELOG.md`.
 
-### A7. "A credential that lapses mid-run kills the run" — RESOLVED in 0.7.6, behind a switch
+### "A credential that lapses mid-run kills the run" — RESOLVED in 0.7.6, behind a switch
 
 On the captured-AWS-SSO Bedrock lane the proxy now injects the session on the wire instead of writing
 it into the sandbox, and a session that lapses mid-run HOLDS the sandbox's next credential exchange
@@ -159,7 +159,7 @@ Bedrock lane (the bearer token) has nothing Wardyn can hold on,
 and create-time refusals are still refusals — Finding 3 gives those a door instead. See
 `docs/OPERATIONS.md` "A run is holding for a sign-in" and `threatmodel/THREAT-MODEL.md` residual #46.
 
-### A8. Per-user AWS SSO behind a corporate proxy: the Phase B MITM lane was undocumented, not unproxied
+### Per-user AWS SSO behind a corporate proxy: the Phase B MITM path was undocumented, not unproxied
 
 A private-endpoint Kubernetes estate reported every per-user Bedrock run hanging on its first model
 call on 0.7.6/0.7.7 (`portal.sso.<region>` allowed by policy, then `builtin:dial-failed`, in a tight
@@ -169,7 +169,7 @@ loop) and read the pattern as the Phase B MITM lane refusing to honour `SiteConf
 **Investigated: it isn't.** `serveMITMRequest` resolves its dial target through the same
 `egressTarget` / shared-transport path every other forward dial uses, so the re-origination already
 traverses the configured upstream proxy — nothing operator-facing said so, which is what let this
-join `WARDYN_DAEMON_PROXY_URL` (A5) and `upstream_proxy_no_proxy`'s own origin story as the third
+join `WARDYN_DAEMON_PROXY_URL` and `upstream_proxy_no_proxy`'s own origin story as the third
 report of one class of bug: a new outbound path that does not visibly inherit the operator's proxy
 configuration. **Fixed:** `docs/OPERATIONS.md` now names the lane and states the sandbox/wardynd
 proxy-scope invariant once; the corp-CA asymmetry the report's likely root cause traces to (sandbox
@@ -180,9 +180,9 @@ were never in the operator's hands (Ask 2 of that report).
 
 ---
 
-## B. Structural gaps
+## Structural gaps
 
-### B4. Writable `local_dir` mounts under a VM-backed host *(re-scoped by testing)*
+### Writable `local_dir` mounts under a VM-backed host *(re-scoped by testing)*
 
 **Reported:** a `local_dir` workspace onboarded `writable: true` mounts `rw` at the Docker layer and
 the agent *reads* it fine, but under CC2 (gVisor) writes were denied even on a `0777` host dir, with
@@ -212,7 +212,7 @@ workspace as a git `safe.directory`, so a uid mismatch surfaces as itself rather
 **Still open:** the exact failing layer on a VM-backed macOS host. If you hit this, the useful
 datapoint is `stat -c '%u %g' <workspace>` inside the sandbox under CC1 vs CC2 on the *same* mount.
 
-### B5. New Run wizard showed a false "no model access" warning — fixed
+### New Run wizard showed a false "no model access" warning — fixed
 
 The Access step correctly disables the cloud-model radio (that transport is operator-configured and
 applied automatically at dispatch, overriding the per-run api-key selection). But it still defaulted
@@ -225,13 +225,13 @@ transport reports model access as provisioned; and the Review banner defers to t
 of guessing locally. When the preflight is absent or still loading, the local guess still applies, so
 a genuine gap is never hidden.
 
-### B1 / B2 — shipped in v0.6; B3 still open
+### Env-var secrets and git_pat approval shipped in v0.6; the SSH key grant is open
 
-Each is confirmed real. B1 and B2 are now shipped (each widened what a credential or an approval
+Each is confirmed real. The first two are now shipped (each widened what a credential or an approval
 authorizes, so each landed with the bound that widening needs stated in the code and the threat
-model, not just the feature). B3 still needs a maintainer design call.
+model, not just the feature). The third still needs a maintainer design call.
 
-- **B1 — no grant delivers a secret as a sandbox environment variable.** The grant kinds are
+- **No grant delivers a secret as a sandbox environment variable.** The grant kinds are
   `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`. `git_pat` wires git's credential
   helper; `api_key` is proxy-injected; none places a secret in the sandbox env. So a PAT-authenticated
   CLI or REST tool (anything reading a `*_TOKEN` env var, or `curl` against a REST API) **cannot be
@@ -249,7 +249,7 @@ model, not just the feature). B3 still needs a maintainer design call.
   silently ignored; and **admin-only unless `WARDYN_ALLOW_USER_ENV_SECRET`**. See
   `docs/POLICIES.md` and `threatmodel/THREAT-MODEL.md` §5.1a.
 
-- **B2 — `git_pat` approval is single-use, so there is no "approve once per sandbox".** `git_pat`
+- **`git_pat` approval is single-use, so there is no "approve once per sandbox".** `git_pat`
   installs a *standing* credential helper that git invokes on *every* operation, but approval is
   single-use: with `requires_approval: true` a `pull` then a `push` in one sandbox raise **two**
   approvals (the second mint returns `ErrAlreadyMinted`); with `requires_approval: false` the helper
@@ -269,31 +269,31 @@ model, not just the feature). B3 still needs a maintainer design call.
   empty `decision_scope`, so a normalized comparison would have converted every legacy approval in
   every deployment into a standing lease on upgrade.
 
-- **B3 — the `ssh_key` grant is clone-only and doesn't fit a bind-mounted workspace.** The key is
+- **The `ssh_key` grant is clone-only and doesn't fit a bind-mounted workspace.** *(As assessed against 0.4.1. In 0.10.0 the run's proxy holds the key and signs SSH sign-in requests; see the CHANGELOG entry on the `ssh_key` grant.)* The key is
   minted at *clone* time, used, then wiped (git has no SSH credential-helper seam, so it must be
   resident briefly). A `local_dir` workspace has no clone step, so the key is provisioned at startup
   and wiped before the agent runs interactive git — leaving SSH `pull`/`push` unauthenticated.
-  Combined with B2: for a mounted checkout whose remote is SSH, **neither grant fits an interactive
+  Combined with the single-use `git_pat` approval: for a mounted checkout whose remote is SSH, **neither grant fits an interactive
   pull-then-push**; the operator must rewrite the remote to HTTPS or accept clone-only SSH.
   *Ask:* a session-scoped SSH agent (or a run-lifetime key file with the same wipe-on-run-end
   guarantee) so SSH remotes work for interactive git on a mounted workspace.
 
 ---
 
-## C. Feature proposals — a Wardyn-owned confinement runtime
+## Feature proposals — a Wardyn-owned confinement runtime
 
-These came out of B4: on a laptop the achievable confinement tier is dictated by whatever container
+These came out of the `local_dir` mounts item above: on a laptop the achievable confinement tier is dictated by whatever container
 runtime the user already has, and the common ones each fall short somewhere. The unifying idea is to
 let Wardyn own (and optionally provision) its own confinement runtime, so the tier is a Wardyn
 guarantee rather than a property of the host's pre-existing daemon.
 
-### C1. A working CC3 (microVM) path on macOS / Apple Silicon
+### A working CC3 (microVM) path on macOS / Apple Silicon
 
 **More of this is already shipped than the report assumed**, and the central unknown is now answered:
 
 - `krun`/libkrun is **already a first-class CC3 runtime** in the runner, and the per-class runtime
   override (`{CC3: "..."}`) already exists and is documented. **No runner change is needed.**
-- **The write path is proven** (table in B4): a libkrun microVM writes to a bind mount, and its guest
+- **The write path is proven** (table in the `local_dir` mounts item): a libkrun microVM writes to a bind mount, and its guest
   runs as **root**, confirming the driver's own note. That was the spike the report said must be
   proven rather than assumed — it is now proven, on Linux, where libkrun is the same runtime.
 
@@ -311,7 +311,7 @@ guarantee rather than a property of the host's pre-existing daemon.
 inside its guest. `scripts/test-podman.sh` already probes exactly what gates this (the `Runtimes`
 map) — reuse it rather than writing a new probe.
 
-### C2. `make setup` provisioning Wardyn's own tier-2/3 runtime
+### `make setup` provisioning Wardyn's own tier-2/3 runtime
 
 **The premise needs correcting first.** The report describes `wardyn setup wall|vault` as printing
 commands and "deliberately never installing anything." It already installs: under `--run` it
@@ -328,9 +328,9 @@ has no route to CC3 at all, which is the strongest argument for doing it.
 
 ## What was verified working end to end
 
-- `make reset-all && make setup` → healthy stack, no manual `WARDYN_UI_STAGE` (A1).
+- `make reset-all && make setup` → healthy stack, no manual `WARDYN_UI_STAGE`.
 - Model access over cloud SSO via the read-only credential mount (SSO auto-refresh).
-- Sandbox internet egress through a host relay (A2) — model endpoint and SCM host reachable from
+- Sandbox internet egress through a host relay — model endpoint and SCM host reachable from
   inside a run with a real HTTP round-trip, where it previously hung.
 - A `local_dir` workspace mounts and the agent reads the full tree; a stored policy attaches via
   `policy_id` and injects the mount + grant.
@@ -338,4 +338,4 @@ has no route to CC3 at all, which is the strongest argument for doing it.
 
 The environment is demanding but not unusual for a large enterprise: intercepting proxy, partial
 mirror, SSO-only cloud creds, SSH SCM, VM-backed runtime. Each gap above is something the next such
-adopter will hit.
+deployment will hit.

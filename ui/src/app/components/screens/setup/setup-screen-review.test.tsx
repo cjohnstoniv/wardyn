@@ -13,6 +13,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
 
 
 // api is mocked module-wide (by resolved path), which also covers the wizard's
@@ -328,6 +329,35 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // The INSTALL records completion too — the server call is what makes
     // onboarding survive a browser change and agree across origins.
     expect(completeOnboardingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("'Finish setup' re-reads the shell's setup status after the install records completion", async () => {
+    const order: string[] = [];
+    completeOnboardingMock.mockImplementationOnce(async () => {
+      order.push("complete");
+    });
+    const onRefresh = vi.fn(async () => {
+      order.push("refresh");
+    });
+    const onDone = vi.fn(() => {
+      order.push("done");
+    });
+    renderScreen(
+      <ModelAccessProvider status={null} onRefresh={onRefresh}>
+        <SetupScreen onDone={onDone} />
+      </ModelAccessProvider>,
+    );
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+    await user.click(screen.getByRole("button", { name: /^Review/ }));
+    onRefresh.mockClear();
+    order.length = 0;
+    await user.click(screen.getByRole("button", { name: /^finish setup$/i }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["complete", "refresh", "done"]);
   });
 
   // M-6: Finish's "Switch to user view" finishes setup as "Finish setup" does,

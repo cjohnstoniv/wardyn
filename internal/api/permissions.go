@@ -355,7 +355,8 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     match — a deny that turns nothing off. (validateCapabilityGrant still
 //     stores an ALLOW of a well-formed unknown name: stagedFeatureAllow.)
 //
-//   - agent and image: STORED VERBATIM, and that is a decision rather than an
+//   - agent and image: STORED VERBATIM (an image may also be a registry prefix
+//     ending in "/*", validated by imagePrefixGrant), and that is a decision rather than an
 //     omission. An agent id is not held to a closed catalog at the run boundary
 //     (a BYOA run names its own), and an image ref's tag may legitimately carry
 //     uppercase, so neither vocabulary is provably narrower than what is typed
@@ -391,6 +392,14 @@ func canonicalGrantValue(capability, value string) (string, error) {
 	case capImage:
 		// Verbatim, as above, but never a dot-segment path: the base-image doors'
 		// own rule, so a grant or restriction cannot target a value no image has.
+		// A "*" is only ever the registry-prefix form, stored verbatim like an
+		// exact ref (imagePrefixGrant) and compared as typed.
+		if strings.Contains(v, "*") {
+			if _, ok := imagePrefixGrant(v); !ok {
+				return "", fmt.Errorf("value: "+image400Prefix, fmt.Sprintf("%q", v))
+			}
+			return v, nil
+		}
 		if !imageRefPathSafe(v) {
 			return "", fmt.Errorf("value: "+image400DotSegment, fmt.Sprintf("%q", v))
 		}

@@ -122,6 +122,12 @@ type queueRoom struct {
 	// needs is the size the run would start with on each of those runners, by runner key; empty for a
 	// launch queued before its unbound size was recorded.
 	needs map[string]types.RunnerAmounts
+	// pool, candidates and fits are what the wait sentence names a limit from (waitLimitSentence): the
+	// pool's name, the online runners the run could go to, and the figures they were judged by. Candidates
+	// all lack room when wait is WaitRunnersAtCapacity.
+	pool       string
+	candidates []poolTarget
+	fits       map[string]runnerFit
 }
 
 // queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now.
@@ -138,7 +144,8 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	var req createRunRequest
 	_ = json.Unmarshal(launch.Request, &req) //nolint:errcheck // an unreadable request pins no runner
 	out := queueRoom{pinned: req.RunnerID != ""}
-	rows, refusal := s.queuePermittedPools(ctx, ps)
+	// The run's frozen unit decides a unit row, as it does at the start (queuedStart.bind).
+	rows, refusal := s.queuePermittedPools(withFrozenPoolUnit(ctx, launch.UnitID), ps)
 	if refusal != nil {
 		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
 			return out, fmt.Errorf("read the owner's pools: %w", refusal.err)
@@ -192,14 +199,16 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		return out, err
 	}
 	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: fits,
-		requireRecording: requireRecording}
+		requireRecording: runnerRecordingDemand(requireRecording, types.MachineKind(req.MachineKind))}
 	out.needs = map[string]types.RunnerAmounts{}
+	out.pool, out.fits = row.Pool.Name, fits
 	online := false
 	for _, t := range slices.Concat(kinds[types.PlacementLocal], kinds[types.PlacementRemote]) {
 		if demand.refusal(t) != "" || (out.pinned && t.id != req.RunnerID) {
 			continue
 		}
 		online = true
+		out.candidates = append(out.candidates, t)
 		f := demand.fits[t.id]
 		var need types.RunnerAmounts
 		if launch.Unbound != nil && f.limits != nil {

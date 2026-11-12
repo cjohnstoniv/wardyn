@@ -26,6 +26,7 @@ import (
 	xhtml "golang.org/x/net/html"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -448,12 +449,12 @@ func TestDesktopRelayFiltersCutTextByTheRunsDesktopRules(t *testing.T) {
 			}
 			outcome := map[bool]string{true: "success", false: "denied"}
 			wantRows := map[string]struct {
-				outcome   string
-				bytes     int
-				sum, text string
+				outcome string
+				bytes   int
+				text    string
 			}{
-				"copy_out": {outcome[tc.copyOut], len(copySentinel), digest(copySentinel), copySentinel},
-				"paste_in": {outcome[tc.pasteIn], len(pasteSentinel), digest(pasteSentinel), pasteSentinel},
+				"copy_out": {outcome[tc.copyOut], len(copySentinel), copySentinel},
+				"paste_in": {outcome[tc.pasteIn], len(pasteSentinel), pasteSentinel},
 			}
 			rows := clipboardRows(t, h, 2)
 			if len(rows) != 2 {
@@ -464,15 +465,14 @@ func TestDesktopRelayFiltersCutTextByTheRunsDesktopRules(t *testing.T) {
 					App       string `json:"app"`
 					Direction string `json:"direction"`
 					Bytes     int    `json:"bytes"`
-					SHA256    string `json:"sha256"`
 				}
 				_ = json.Unmarshal(row.Data, &d)
 				w := wantRows[d.Direction]
-				if row.Outcome != w.outcome || d.Bytes != w.bytes || d.SHA256 != w.sum || row.Target != d.Direction || d.App != uiDesktopAppName {
+				if row.Outcome != w.outcome || d.Bytes != w.bytes || row.Target != d.Direction || d.App != uiDesktopAppName {
 					t.Errorf("ui.clipboard.transfer row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
 				}
-				if strings.Contains(string(row.Data), w.text) {
-					t.Errorf("a ui.clipboard.transfer row carries the text: %s", row.Data)
+				if strings.Contains(string(row.Data), w.text) || strings.Contains(string(row.Data), "sha256") {
+					t.Errorf("a ui.clipboard.transfer row carries the text or a digest of it: %s", row.Data)
 				}
 			}
 		})
@@ -834,12 +834,22 @@ func postDesktopClose(gw http.Handler, h *uiHarness, c *http.Cookie) *httptest.R
 // desktopSiteStore answers the site config a test sets.
 type desktopSiteStore struct {
 	*desktopClosedStore
-	sc  types.SiteConfig
-	err error
+	siteMu sync.Mutex
+	sc     types.SiteConfig
+	err    error
 }
 
 func (s *desktopSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	s.siteMu.Lock()
+	defer s.siteMu.Unlock()
 	return s.sc, s.err
+}
+
+// setSite changes what GetSiteConfig answers while a server goroutine may be reading it.
+func (s *desktopSiteStore) setSite(sc types.SiteConfig, err error) {
+	s.siteMu.Lock()
+	defer s.siteMu.Unlock()
+	s.sc, s.err = sc, err
 }
 
 // A macOS VM's desktop opens as a Linux VM's does, except for an agent whose admin set "Sign-ins in a
@@ -942,5 +952,63 @@ func TestDesktopViewerBootNamesTheMachineKind(t *testing.T) {
 		if want := `&#34;machine_kind&#34;:&#34;` + string(kind) + `&#34;`; got.Code != http.StatusOK || !strings.Contains(got.Body.String(), want) {
 			t.Fatalf("%s viewer = %d %s, want %s in its boot data", kind, got.Code, got.Body.String(), want)
 		}
+	}
+}
+
+// The viewer's boot data carries the run's title and its absolute page on the console, both or neither, and a
+// refusal, which anyone holding the link is shown, carries neither.
+func TestDesktopViewerBootCarriesTheWayBackToTheRun(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	h.srv.cfg.Store = &desktopSiteStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+	title, href := `&#34;run_title&#34;:&#34;Fix the build&#34;`, `&#34;run_href&#34;:&#34;https://console.example/runs/`+h.run.ID.String()+`&#34;`
+	for _, tc := range []struct {
+		name, title, console string
+		want                 bool
+	}{
+		{"a titled run with a console URL", "Fix the build", "https://console.example/auth/callback", true},
+		{"no console URL", "Fix the build", "", false},
+		{"a console URL that is not http(s)", "Fix the build", "javascript:alert(1)", false},
+		{"no title", "", "https://console.example/auth/callback", false},
+	} {
+		h.run.Title = tc.title
+		h.store.putRun(h.run)
+		c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		h.srv.cfg.OIDCRedirectURL = tc.console
+		got := uiGet(h, desktopPath(h, "/"), c)
+		body := got.Body.String()
+		if got.Code != http.StatusOK || strings.Contains(body, title) != tc.want || strings.Contains(body, href) != tc.want ||
+			strings.Contains(body, "run_title") != strings.Contains(body, "run_href") {
+			t.Fatalf("%s: viewer = %d %s, want run_title and run_href %v", tc.name, got.Code, body, tc.want)
+		}
+		h.srv.cfg.OIDCRedirectURL = ""
+	}
+	h.run.Title = "Fix the build"
+	h.store.putRun(h.run)
+	h.srv.cfg.OIDCRedirectURL = "https://console.example/auth/callback"
+	if got := uiGet(h, desktopPath(h, "/"), nil); got.Code != http.StatusForbidden || strings.Contains(got.Body.String(), "run_title") {
+		t.Fatalf("refusal = %d %s, want 403 without the run's title", got.Code, got.Body.String())
+	}
+}
+
+// A window that opens on the Mac ends a browser desktop that has control with its own close code and words,
+// never a silent drop the viewer reconnects from, and the window waits for no close frame to go.
+func TestDesktopWithControlIsToldAWindowOpened(t *testing.T) {
+	r := rfbClientNewRig(t, runnerwire.MacVMDesktopControl)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	v, _ := r.open(ctx, t)
+	if !r.h.srv.macWindowYieldControl(ctx, r.h.run.ID) {
+		t.Fatal("the stream with control never yielded to the window")
+	}
+	for {
+		_, _, err := v.ws.Read(ctx)
+		if err == nil {
+			continue
+		}
+		var ce websocket.CloseError
+		if !errors.As(err, &ce) || ce.Code != desktopCloseWindowOpen || ce.Reason != desktopWindowOpenMsg {
+			t.Fatalf("stream = %v, want close %d %q", err, desktopCloseWindowOpen, desktopWindowOpenMsg)
+		}
+		return
 	}
 }

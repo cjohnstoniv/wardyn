@@ -96,7 +96,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const life = lifecycleOf(intent, view);
   const drives = useDriveCatalogue(pre?.runner_pool?.id ?? intent.runner_pool_id);
   const k8s = useK8sRunner();
-  const computerAllowed = useComputerFoldersAllowed();
+  const computerFolders = useComputerFoldersAllowed();
   const computer = intent.local_folder?.runner_id ? intent.local_folder : undefined;
   const operator = useOperator();
   const macOS = intent.machine_kind === "macos_vm";
@@ -293,7 +293,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
         />
         <MountMap attachments={inCardOrder(attachments, items)} size={sizeText} />
         <FilesSummary
-          tone={settled && sizeText !== undefined ? "done" : attempted ? "error" : "prompt"}
+          tone={settled && sizeText !== undefined && !size.over ? "done" : attempted ? "error" : "prompt"}
           text={sizeText === undefined ? NR_FILES.SIZE_ERROR : summaryText({
             size: sizeText,
             noExtra,
@@ -312,7 +312,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
         src={src}
         items={items}
         folderReason={k8s ? NR_FILES.FOLDER_REMOTE : undefined}
-        computerAllowed={computerAllowed}
+        computerAllowed={computerFolders.allowed}
+        computerLookupFailed={computerFolders.failed ? computerFolders.retry : undefined}
         driveReason={drives.reason}
         operator={operator}
         onSave={onSave}

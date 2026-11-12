@@ -85,6 +85,9 @@ type queuedLaunch struct {
 	// so its resolve selects the context the launch did, and sameUnit compares like with like.
 	RunIn       uuid.UUID   `json:"run_in,omitzero"`
 	OwningUnits []uuid.UUID `json:"owning_units,omitempty"`
+	// StrictPins are the choice's strict pins (contextChoice.StrictPins); a launch queued before them
+	// has none.
+	StrictPins []contextPin `json:"strict_pins,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
 	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
@@ -138,9 +141,12 @@ func queueWaitSec(req createRunRequest, interactive bool) (sec int, warning stri
 
 // queuePolicyRef is run_queue.policy_ref: what the run's policy was when it was reviewed, so a start can
 // tell it changed (Q7-A). A stored policy is its id and the SHA-256 of its spec; a launch preset is its
-// name, version and the SHA-256 of its request. An inline or default policy is the request's own, so
-// nothing can change under it. A policy or preset that has gone is recorded as gone.
-func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest) (json.RawMessage, error) {
+// name, version and the SHA-256 of its request; a wall preset is its id and version. An inline or
+// default policy is the request's own, so nothing can change under it. A policy or preset that has gone
+// is recorded as gone. frozen is the wall preset a fold froze for req, nil for none: its id and version
+// are recorded, never a second read that an edit in between could answer differently. With no fold, the
+// preset is read as it is now, and one that r's caller can no longer read is gone (r nil: not asked).
+func (s *Server) queuePolicyRef(ctx context.Context, r *http.Request, req createRunRequest, frozen *types.WallPresetOnRun) (json.RawMessage, error) {
 	ref := map[string]any{}
 	if req.PolicyID != nil {
 		ref["policy_id"] = req.PolicyID.String()
@@ -166,7 +172,65 @@ func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest) (json
 			ref["request_sha256"] = queueSHA256(p.Request)
 		}
 	}
+	if req.WallPreset != "" {
+		id, version := "", 0
+		if frozen != nil {
+			id, version = frozen.ID, frozen.Version
+		} else {
+			var err error
+			if id, version, err = s.wallPresetNow(ctx, r, req.WallPreset); err != nil {
+				return nil, fmt.Errorf("read the wall preset: %w", err)
+			}
+		}
+		if id == "" {
+			ref["wall_preset"], ref["wall_preset_gone"] = req.WallPreset, true
+		} else {
+			ref["wall_preset"], ref["wall_preset_version"] = id, version
+		}
+	}
 	return json.Marshal(ref)
+}
+
+// wallPresetNow is the id and version of the wall preset name names as it is now: a built-in's, or a
+// stored preset's. id is empty when it no longer exists or, with r, when r's caller may no longer read
+// it, judged as the fold judges it (launchWallPreset).
+func (s *Server) wallPresetNow(ctx context.Context, r *http.Request, name string) (id string, version int, err error) {
+	if p, ok := types.BuiltinWallPreset(name); ok {
+		return p.ID, p.Version, nil
+	}
+	ps, ok := s.cfg.Store.(store.WallPresetStore)
+	uid, perr := uuid.Parse(name)
+	if !ok || perr != nil {
+		return "", 0, nil
+	}
+	p, err := ps.GetWallPreset(ctx, uid)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return "", 0, nil
+	case err != nil || r == nil:
+		return p.ID, p.Version, err
+	}
+	c, err := s.wallPresetCaller(ctx, r, ps)
+	if err != nil {
+		return "", 0, err
+	}
+	if types.TemplateAuthorize(c.actor, p.Owner(), types.TemplateRead) != types.TemplateAllowed {
+		return "", 0, nil
+	}
+	return p.ID, p.Version, nil
+}
+
+// The points a test edits a wall preset at (Server.queueRace): between the create's fold and the
+// queue row's reference, and between the start's check of the reference and its fold.
+const (
+	queueRaceEnqueueAfterFold   = "enqueue_after_fold"
+	queueRaceStartAfterPrecheck = "start_after_precheck"
+)
+
+func (s *Server) queueRaceAt(point string) {
+	if s.queueRace != nil {
+		s.queueRace(point)
+	}
 }
 
 func queueSHA256JSON(v any) string {
@@ -239,6 +303,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	case errors.Is(err, store.ErrRunnerPoolStale):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
+	case errors.Is(err, store.ErrRunCreateKeySuperseded):
+		writeRunCreateKeyInFlight(w)
+		return
 	case err != nil:
 		writeServerError(w, r, "create run", err)
 		return
@@ -280,17 +347,22 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = got
 	}
 	if created.State == types.RunQueued {
+		runs := []types.AgentRun{created}
+		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
+		s.projectQueueLimit(r, &runs[0])
+		created = runs[0]
 		sentence := runnerpool.WaitAtCapacityMsg(pool.Name, capMax)
 		switch {
 		case q.f.schedule != nil:
 			sentence = scheduledWaitMsg(q.f.schedule)
-		case q.f.place.waitsForRoom:
-			sentence = runnerpool.WaitRunnersAtCapacityMsg(pool.Name)
+		case created.Queue != nil && created.Queue.LimitSentence != "":
+			// The sentence the run's own read gives, so the answer and the run page never differ.
+			sentence = created.Queue.LimitSentence
+		case q.f.place.waitsForRoom || created.StatusDetail == statusDetailQueuePrefix+string(runnerpool.WaitRunnersAtCapacity):
+			// The second test is a capped pool with room whose runners are full: the promotion's token says so.
+			sentence = q.runnerLimitSentence(s, ctx)
 		}
 		warnings = append(warnings, sentence)
-		runs := []types.AgentRun{created}
-		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
-		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings,
@@ -309,9 +381,109 @@ func (q queuedCreate) waitReason() runnerpool.WaitReason {
 	return runnerpool.WaitAtCapacity
 }
 
+// runnerLimitSentence is the wait sentence of a launch its runners hold back, from the placement's own
+// eligible runners. A read that fails, or runners that have found room since, leave the sentence that names
+// no limit: this is the answer's wording when the run's own read gave none, and the promotion decides.
+func (q queuedCreate) runnerLimitSentence(s *Server, ctx context.Context) string {
+	pool := q.f.place.pool.Name
+	fits, err := s.runnerFits(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: read runner limits for the wait sentence", slog.Any("err", err))
+		return runnerpool.WaitRunnersAtCapacityMsg(pool)
+	}
+	if sentence := s.waitLimitSentence(ctx, pool, q.f.place.eligible, fits, q.f.place.unbound); sentence != "" {
+		return sentence
+	}
+	return runnerpool.WaitRunnersAtCapacityMsg(pool)
+}
+
+// waitLimitSentence is the wait sentence of a run its runners hold back: it names the limit, by the same
+// size the promotion holds each runner to (queueRunnerFree). With several runners it gives, as an example,
+// the one holding the fewest runs, the first by id on a tie. "" when no runner is short of room by a limit.
+func (s *Server) waitLimitSentence(ctx context.Context, pool string, eligible []poolTarget, fits map[string]runnerFit, unbound *types.RunnerAmounts) string {
+	var shown poolTarget
+	limit := ""
+	for _, t := range eligible {
+		f := fits[t.id]
+		var need types.RunnerAmounts
+		if unbound != nil && f.limits != nil {
+			need = startSizeOn(*unbound, f.limits)
+		}
+		reason := runnerpool.NoRoomReason(f.limits, f.used, need)
+		if reason != "" && (limit == "" || f.used.Runs < fits[shown.id].used.Runs || (f.used.Runs == fits[shown.id].used.Runs && t.id < shown.id)) {
+			shown, limit = t, reason
+		}
+	}
+	if limit == "" {
+		return ""
+	}
+	name := fits[shown.id].runner.Name
+	if rs, ok := s.cfg.Store.(store.RemoteRunnerStore); ok && shown.runnerID == nil {
+		if got, err := rs.GetRemoteRunner(ctx, shown.id); err == nil {
+			name = got.Runner.Name
+		}
+	}
+	if name == "" {
+		name = shown.id
+	}
+	if len(eligible) == 1 {
+		return runnerpool.WaitRunnerAtLimitMsg(name, limit)
+	}
+	return runnerpool.WaitRunnersAtLimitMsg(pool, name, limit)
+}
+
+// projectQueueLimit fills Queue.LimitSentence of the one run a single-run route serves, when the run waits
+// because its runners are at a limit and the reader is its owner or an admin (ownsRunOrAdmin: the creator,
+// an admin, a security admin or the shared credential, the same readers the runner lists serve, so no
+// reader is told a runner name the lists would not give them): the sentence is worked out
+// from the runners' limits as they stand now, for the size the promotion holds the run to, so it stays
+// true as the wait changes. Only handleGetRun and the create answer call it: a list, even of one row, would
+// cost a read of every runner per row, so it never does.
+// A read that fails leaves the field off, and the console says the sentence its reason alone gives.
+func (s *Server) projectQueueLimit(r *http.Request, run *types.AgentRun) {
+	if run.Queue == nil || run.Queue.Reason != string(runnerpool.WaitRunnersAtCapacity) || !s.ownsRunOrAdmin(r, *run) {
+		return
+	}
+	qs, ok := s.queueStore()
+	if !ok {
+		return
+	}
+	// Judged as the owner, on the daemon's own context as the promotion is: the reader's identity never reaches it.
+	// Both reads, the entry and the runners, are under one bound.
+	base := s.cfg.BaseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(base), r.Context()), queueEnqueueBound)
+	defer cancel()
+	e, err := qs.GetRunQueueEntry(pctx, run.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return // the run left the queue between the two reads
+	}
+	var launch queuedLaunch
+	if err == nil {
+		err = json.Unmarshal(e.Launch, &launch)
+	}
+	if err != nil {
+		slog.WarnContext(r.Context(), "wardynd: read the queue entry for the wait sentence", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return
+	}
+	var auth queueAuthority
+	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
+	room, err := s.queueRunnerFree(withQueueOwner(auth.context(pctx), e.Owner, e.Authority), types.RunnerPool{ID: e.PoolID}, launch)
+	if err != nil {
+		slog.WarnContext(r.Context(), "wardynd: read runner limits for the wait sentence", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return
+	}
+	if room.wait == runnerpool.WaitRunnersAtCapacity {
+		run.Queue.LimitSentence = s.waitLimitSentence(pctx, room.pool, room.candidates, room.fits, launch.Unbound)
+	}
+}
+
 // entry is the run_queue row a launch is stored with.
 func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.RunQueueEntry, error) {
-	ref, err := s.queuePolicyRef(ctx, q.req)
+	s.queueRaceAt(queueRaceEnqueueAfterFold)
+	ref, err := s.queuePolicyRef(ctx, nil, q.req, q.f.source.wallPreset)
 	if err != nil {
 		return store.RunQueueEntry{}, err
 	}
@@ -323,16 +495,17 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), DriveRunner: drivesBoundRunner(q.f.drives, q.f.keep),
-		NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
+		Barrier: q.f.enforced, NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
 	}
+	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
+	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID
 		launch.UnitID = &id
 	}
 	choice := contextChoiceFrom(ctx)
-	launch.RunIn, launch.OwningUnits = choice.RunIn, choice.OwningUnits
+	launch.RunIn, launch.OwningUnits, launch.StrictPins = choice.RunIn, choice.OwningUnits, choice.StrictPins
 	raw, err := json.Marshal(launch)
 	if err != nil {
 		return store.RunQueueEntry{}, err
@@ -372,8 +545,10 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	createData["queue"] = queue
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markGovernanceExempt(ctx, createData)
+	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
+	stampImageAdmission(createData, q.f.admission)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
+	stampIdempotencyKey(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
 		created.ID.String(), "success", mustJSON(withRunUserType(ctx, created.UserType, createData))))
 	s.auditRunComponents(ctx, created.ID, q.createdByType, created.CreatedBy, q.f.comps)
@@ -391,7 +566,7 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 	}
 	warnings = append(warnings, q.f.autonomyWarns...)
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &q.req, spec: q.f.spec, harnesses: q.f.harnesses, level: q.f.autonomy.Level,
-		locked: ceilingForDispatch(q.f.ceiling, q.f.adoGrade, q.f.bedrockGrade).agentGuardrailLocks, class: q.f.enforced, place: q.f.place}, nil)...)
+		locked: ceilingForDispatch(q.f.ceiling, q.f.adoGrade, q.f.bedrockGrade).agentGuardrailLocks, class: q.f.enforced, place: q.f.place, comps: q.f.comps}, nil)...)
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)

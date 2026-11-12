@@ -133,12 +133,17 @@ var runApprovalKinds = []types.ApprovalKind{types.ApprovalToolCall, types.Approv
 // then the OFFSET-less ByRun page, then the fleet-wide list the dedup scan in internal/approval
 // already uses.
 func (s *Server) runApprovals(ctx context.Context, runID uuid.UUID, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+	return s.runApprovalsOfKinds(ctx, runID, state, runApprovalKinds)
+}
+
+// runApprovalsOfKinds is runApprovals for the given kinds. Only the keyset read narrows to them, so a caller tests the kind.
+func (s *Server) runApprovalsOfKinds(ctx context.Context, runID uuid.UUID, state types.ApprovalState, kinds []types.ApprovalKind) ([]types.ApprovalRequest, error) {
 	if pager, ok := s.cfg.Store.(store.ApprovalsKeysetByRunPager); ok {
 		var out []types.ApprovalRequest
 		var afterAt time.Time
 		var afterID uuid.UUID
 		for {
-			page, err := pager.ListApprovalsKeysetByRun(ctx, runID, state, runApprovalKinds, afterAt, afterID, runApprovalsPage)
+			page, err := pager.ListApprovalsKeysetByRun(ctx, runID, state, kinds, afterAt, afterID, runApprovalsPage)
 			if err != nil {
 				return nil, err
 			}

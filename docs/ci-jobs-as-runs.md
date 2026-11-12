@@ -35,7 +35,7 @@
   - **admin** means `WARDYN_ADMIN_TOKEN` is the deployment's admin token.
   - **ci** means `WARDYN_TOKEN` is the CI principal's token and `WARDYN_ADMIN_TOKEN` is unset, because the CLI tries the admin token first and it would silently win.
 
-## 1. Set the outer wall
+## 1. Set the deployment default
 
 - A profile can narrow the deployment's credential eligibility and never add to it.
 - So the runner-token pairing has to be in the deployment default policy first.
@@ -132,7 +132,7 @@ wardyn governance set ci-governance.json
 | `allowed_domains` | Only the forge. A job's own policy can list fewer, never more. |
 | `first_use_approval: always_deny` | An unlisted host is refused at once. Nothing waits for a reviewer nobody is watching. |
 | `min_confinement_class` | The weakest sandbox a job may run in. A job asking for less is raised to it, and a launch the runner cannot satisfy is refused. Set it to the strongest class your substrate offers. |
-| `deny_interactive` | Refuses an interactive run, including one that omits `--task`, which comes up interactive. It also refuses `wardyn attach` and the SSH gateway into any run under the profile, the owner's exec runs included. |
+| `deny_interactive` | Refuses an interactive run, even one that omits `--task`. It also refuses `wardyn attach`, the SSH gateway, the desktop, `novnc`, desktop sign-ins and the desktop's file transfers into any run under the profile, the owner's exec runs included. |
 | `deny_user_drive` | Refuses a user drive mount, the one storage that outlives a run. |
 | `max_concurrent_runs` | A launch past the cap is refused. |
 
@@ -435,7 +435,7 @@ echo "exit $?"
 
 - **UI apps, unless you add `deny_ui_apps`.**
   - The profile above does not set it, and an empty `ui_apps` in a ceiling is no opinion, so a job's own `ui_apps` survive the clamp.
-  - Add `"deny_ui_apps": true` to the limits to strip them from every job and have the UI gateway refuse a session (#1391).
+  - Add `"deny_ui_apps": true` to the limits to strip them from every job and have the UI gateway refuse a session.
   - Without it, what holds is the run policy you author declaring none, and the UI-sandbox gateway staying off, which is its default ([UI-SANDBOXES.md](UI-SANDBOXES.md)).
 - **The token is resident and readable.**
   - An `env_secret` is in the sandbox's environment for the whole run and every step of the job can read it.
@@ -451,6 +451,9 @@ echo "exit $?"
 - Every command above ran, as written, against a throwaway compose install of this tree
   - (`wardynd` built from source, the `sso` profile with Dex as the identity provider, Docker as the runner so only the Fence class exists)
   - and a Forgejo 11 container, using Forgejo runner v11.3.1.
-- The CI principal was a real signed-in `user` with its own token, which stored its own row; the service-identity form was not re-run. It changes steps 1 and 4 (who holds the token and how the runner token is stored), step 6 (a `FAILED` run exits `1`) and step 8 (the audit reads need an admin or sponsor token).
+- The CI principal was a signed-in `user` with its own token and stored row. The service-identity form was not re-run. It changes:
+  - steps 1 and 4: who holds the token and how the runner token is stored;
+  - step 6: a `FAILED` run exits `1`;
+  - step 8: `audit/export` needs an admin or sponsor token, the run's own audit rows do not.
 - The step 1 settings were applied to that install as described, and the workflow file was pushed through Forgejo's API rather than `git push`.
 - The Helm chart route is named, not run.

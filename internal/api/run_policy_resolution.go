@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -27,6 +29,9 @@ func (s *Server) boundRunUserSpec(ctx context.Context, r *http.Request, spec typ
 // boundRunUserSpecDrops is the member pipeline without its audit: the bounded
 // spec, the warnings and the structured drops the audit is made from.
 func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string) (types.RunPolicySpec, []string, []capDrop, *runRefusal) {
+	if refusal := githubCapabilitiesDisjoint(spec.GitHubCapabilities, ceiling.Spec.GitHubCapabilities); refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, refusal
+	}
 	domains, literalWarns := dropUncoveredPrivateLiterals(spec.AllowedDomains, ceiling.Spec)
 	spec.AllowedDomains = domains
 	spec, warns := composer.ClampMember(spec, ceiling.Spec, ceiling.Limits, ceiling.authoredSize(), ceiling.memberSize())
@@ -49,6 +54,20 @@ func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spe
 		return types.RunPolicySpec{}, nil, nil, capabilityRunRefusal(cerr)
 	}
 	return spec, append(warns, capWarns...), append(drops, capDrops...), nil
+}
+
+// githubCapabilitiesDisjoint refuses a member's github_capabilities that shares nothing with their
+// ceiling's list (their governance profile's): the run would be left holding no GitHub capability at all, and an empty list
+// reads as the default, so it is refused rather than run. The clamp then bounds a list that does
+// share something (composer.ClampMember).
+func githubCapabilitiesDisjoint(picked, profile []ghscope.Capability) *runRefusal {
+	picked, profile = ghscope.ExpandPR(picked), ghscope.ExpandPR(profile)
+	if len(picked) == 0 || len(profile) == 0 || slices.ContainsFunc(picked, func(c ghscope.Capability) bool { return ghscope.Has(profile, c) }) {
+		return nil
+	}
+	return runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
+		"This run's github_capabilities ("+wallsCapList(picked)+") shares nothing with the GitHub capabilities your runs are limited to ("+
+			wallsCapList(profile)+"), so the run would hold no GitHub capability. Name capabilities from that list, or leave github_capabilities out to take it.")
 }
 
 func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req *createRunRequest, dryRun, credentials bool) (types.RunPolicySpec, *uuid.UUID, []string, policySourceRecord, *runRefusal) {
@@ -159,7 +178,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		// The Background experience the person chose drops the idle stop.
 		source.knobs.step(ceiling.ownProvenance(), &spec, func() { clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...) })
 		// The person's own walls, then the Wardyn boundary, last, over whatever the steps above left (boundary_meet.go).
-		wallWarns, refusal := s.boundaryThenNoRepositories(ctx, ceiling, *req, &spec, &source)
+		wallWarns, refusal := s.boundaryThenNoRepositories(ctx, r, ceiling, *req, &spec, &source)
 		if refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
@@ -304,7 +323,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	source.knobs.step(ceiling.ownProvenance(), &spec, func() { storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...) })
 	// The person's own walls, then the Wardyn boundary, last: the one bound a stored row an unassigned
 	// member or an operator selects meets, and the outer limit on every other spec (boundary_meet.go).
-	wallWarns, refusal := s.boundaryThenNoRepositories(ctx, ceiling, *req, &spec, &source)
+	wallWarns, refusal := s.boundaryThenNoRepositories(ctx, r, ceiling, *req, &spec, &source)
 	if refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
@@ -324,11 +343,20 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 }
 
 // boundaryThenNoRepositories is the last steps of both arms of resolveRunPolicyFacts: the launching
-// person's own walls (personalWallsRunStep), then the Wardyn boundary over whatever the earlier steps
-// left (boundaryRunStep), then the refusal of a run asked for with no repositories or drives whose
-// resolved policy still attaches some (noRepositoriesResolvedRefusal).
-func (s *Server) boundaryThenNoRepositories(ctx context.Context, ceiling governanceCeiling, req createRunRequest, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
+// person's own walls (personalWallsRunStep), then the wall preset the launch chose (wallPresetRunStep),
+// then the Wardyn boundary over whatever the earlier steps left (boundaryRunStep), then the refusal of a
+// run asked for with no repositories or drives whose resolved policy still attaches some
+// (noRepositoriesResolvedRefusal). A preset that is not there refuses the run; it never runs as Open.
+func (s *Server) boundaryThenNoRepositories(ctx context.Context, r *http.Request, ceiling governanceCeiling, req createRunRequest, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
+	preset, refusal := s.launchWallPreset(ctx, r, req.WallPreset)
+	if refusal != nil {
+		return nil, refusal
+	}
 	wallsWarns, refusal := s.personalWallsRunStep(ctx, spec, source)
+	if refusal != nil {
+		return nil, refusal
+	}
+	presetWarns, refusal := s.wallPresetRunStep(spec, source, preset)
 	if refusal != nil {
 		return nil, refusal
 	}
@@ -336,7 +364,16 @@ func (s *Server) boundaryThenNoRepositories(ctx context.Context, ceiling governa
 	if refusal != nil {
 		return nil, refusal
 	}
-	return append(wallsWarns, warns...), noRepositoriesResolvedRefusal(req, *spec)
+	warns = append(append(wallsWarns, presetWarns...), warns...)
+	if s.cfg.DisableGitPATBroker {
+		// The walls were read by their step just above, which refused the run had the read failed.
+		if walls, err := s.personalWalls(ctx, wallsPerson(ctx)); err == nil {
+			if w := gitPushWithheldBy(*spec, walls, preset); w.github || w.ado {
+				warns = append(warns, unstoppablePushWarning)
+			}
+		}
+	}
+	return warns, noRepositoriesResolvedRefusal(req, *spec)
 }
 
 // Stored policies may predate write-time validation; duplicate narrowed PATs

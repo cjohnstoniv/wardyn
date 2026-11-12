@@ -126,6 +126,12 @@ export interface MacVMCaps {
   base: MacVMBase;
   /** The runner keeps a person's disk drives and kept work folders as disk images on this Mac, and deletes them. */
   disk_drives?: boolean;
+  /** The runner opens an attended window (keyboard and pointer) onto a macOS VM run it holds. */
+  window?: boolean;
+  /** The runner keeps a person's kept machines and deletes them. */
+  kept_machines?: boolean;
+  /** The Mac's kept machines and the disk they may take; absent when it keeps none or has not counted yet. */
+  kept?: MacVMKept;
   /** The Mac's other bases, each derived from `base` (Standard), in name order; absent when it has none. */
   bases?: MacVMDerivedBase[];
   /** In words, why the runner offers no macOS VM. The runner inventory leaves it out: the console words `reason` itself. */
@@ -141,4 +147,21 @@ export interface MacVMCaps {
   /** Whole GiB: free disk (disk_short), or free and needed memory (low_memory). Absent is 0. */
   free_gb?: number;
   need_gb?: number;
+}
+
+/** Go: runnerwire.MacVMKept. limit_bytes: the operator's limit for them all; worst_bytes: what they could grow to; allocated_bytes: what they take now. */
+export interface MacVMKept {
+  limit_bytes: number;
+  worst_bytes: number;
+  allocated_bytes: number;
+  machines?: MacVMKeptMachine[];
+}
+
+/** Go: runnerwire.MacVMKeptMachine: one kept machine on the Mac, by the id the org gave it. expires_at is RFC 3339. */
+export interface MacVMKeptMachine {
+  id: string;
+  bytes: number;
+  in_use?: boolean;
+  scrubbed?: boolean;
+  expires_at: string;
 }

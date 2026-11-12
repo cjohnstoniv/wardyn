@@ -22,15 +22,17 @@ import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { WatchDesktopButton } from "./watch-desktop";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
-import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
+import { isBackgroundRun, mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
+import { RUN_VM_PAGE } from "../../wardyn/copy/run-cockpit";
 import { isMacOSVM } from "../../../lib/types/machine-kind";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
 import { QueuedWait } from "./queued-wait";
 import { KeptOutput } from "./output-pane";
 import { useRunOutput } from "./use-run-output";
+import { useRunDataOut } from "./use-run-data-out";
 
 export function TerminalPane({
   run,
@@ -61,17 +63,22 @@ export function TerminalPane({
   // (#1476: the run's person, or an admin on a run no person owns).
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
+  // The run's data_out rule, read only for a terminal that could open. Unknown draws nothing.
+  const dataOut = useRunDataOut(run.id, attachable);
   // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
   const watchable = !recordingDisabled && run.has_recording !== false;
-  // Mock F-hero: a desktop the Mac lets be watched alone is offered here too, for whoever may enter the run.
-  const watchDesktop = run.state === "RUNNING" && canAttach && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
+  // A desktop the Mac lets be watched alone is offered here too, for whoever may enter the run. Never on a
+  // background run: its watch has its own ticket and lives in the Desktop tile, and this button's attach ticket refuses it.
+  const watchDesktop =
+    run.state === "RUNNING" && canAttach && !isBackgroundRun(run) && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
 
-  // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (a
-  // macOS VM is not recorded), any other non-interactive run once the recording read found none. A read that
-  // fails or is refused leaves the notices below as they were.
+  // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (its
+  // agent output cast is saved when the agent finishes), any other non-interactive run once the recording read
+  // found none. A read that fails or is refused leaves the notices below as they were.
   const comingUp = run.state === "PENDING" || run.state === "STARTING" || run.state === "QUEUED";
-  // A macOS VM run is never recorded, so its recording read cannot change the answer: the pane stays on Output
-  // while that read is still out, rather than flashing the Recording frame as the run ends.
+  // A finished macOS VM task run can have a recording (its agent output cast): the pane stays on Output while
+  // that read is still out, rather than flashing the Recording frame as the run ends, and becomes the replay
+  // only once the read finds one.
   const recordingPending = recState === "idle" || recState === "loading";
   const wantsKept =
     !run.interactive && (terminal ? (recState === "ready" && !recording) || (isMacOSVM(run) && recordingPending) : isMacOSVM(run) && !comingUp);
@@ -103,7 +110,17 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    return <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+    const terminal = <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} keepsIn={dataOut === "review" || dataOut === "blocked"} />;
+    // A macOS VM run is RUNNING while its setup runs: the terminal opens at once, so say the setup is still going.
+    if (!run.macos_preparing) return terminal;
+    return (
+      <>
+        <p role="status" className="shrink-0 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground" data-testid="macos-setting-up">
+          {RUN_VM_PAGE.settingUp}
+        </p>
+        {terminal}
+      </>
+    );
   }
 
   if (wantsKept && (keptOut || !keptFresh)) {
@@ -269,9 +286,11 @@ function PaneFrame({
 
 function PaneNotice({ text, action }: { text: string; action?: React.ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-      <p className="max-w-md text-sm text-muted-foreground">{text}</p>
-      {action}
+    <div className="scroll-thin flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-6 text-center">
+      <div className="my-auto flex flex-col items-center gap-2">
+        <p className="max-w-md text-sm text-muted-foreground">{text}</p>
+        {action}
+      </div>
     </div>
   );
 }

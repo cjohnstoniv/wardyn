@@ -180,7 +180,7 @@ func TestTokenFile_RereadOn403(t *testing.T) {
 func TestKeepAlive_RenewsBeforeExpiry(t *testing.T) {
 	f := newFakeVault(t)
 	f.ttl = 1
-	newFakeStore(t, f)
+	newFakeStoreDefaultBackoff(t, f)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		f.mu.Lock()

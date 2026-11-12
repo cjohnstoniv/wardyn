@@ -29,7 +29,7 @@ func TestDecodeUniqueFoldsLikeTheDecoder(t *testing.T) {
 		{
 			name: "unrelated Unicode keys are not duplicates",
 			req:  adoReq(http.MethodPatch, pr, `{"status":"completed","名前":1,"ключ":2,"КЛЮЧ2":3,"straße":4,"strasse":5,"ſ":6}`),
-			want: CapPR,
+			want: CapPRComplete,
 		},
 	})
 }

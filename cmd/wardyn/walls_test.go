@@ -114,6 +114,89 @@ func TestWallsYAMLRoundTrip(t *testing.T) {
 	}
 }
 
+const narrowingYAML = `azure_devops_capabilities: [code_read, pr]
+github_capabilities: [code_read]
+tool_rules:
+  - {tool: Bash, effect: deny}
+  - {tool: "*", effect: hold}
+push_rules:
+  deny_paths: [secrets/**, .github/workflows/**]
+recording: screen_actions
+auto_stop_after_sec: 600
+`
+
+// The capability lists, tool rules, push deny paths, recording floor and auto-stop cap are read from a
+// file as the spec's own typed fields, and what `walls` prints for them is what `walls set` reads.
+func TestWallsYAMLRoundTripNarrowingKnobs(t *testing.T) {
+	srv, st := newWallsServer(t)
+	file := filepath.Join(t.TempDir(), "walls.yaml")
+	if err := os.WriteFile(file, []byte(narrowingYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execCmdCapture(t, "walls", "set", "--file", file, "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	var got types.PersonalWallsSpec
+	if err := json.Unmarshal(st.spec, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.AzureDevOpsCapabilities == nil || len(*got.AzureDevOpsCapabilities) != 2 || got.GitHubCapabilities == nil || len(*got.GitHubCapabilities) != 1 ||
+		got.ToolRules == nil || len(*got.ToolRules) != 2 || (*got.ToolRules)[0].Effect != types.ToolDeny ||
+		got.AddedDenyPaths() == nil || len(*got.AddedDenyPaths()) != 2 ||
+		got.Recording == nil || *got.Recording != types.RecordingScreenActions || got.AutoStopAfterSec == nil || *got.AutoStopAfterSec != 600 {
+		t.Fatalf("stored spec = %s", st.spec)
+	}
+	first := string(st.spec)
+
+	shown, err := execCmdCapture(t, "walls", "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"azure_devops_capabilities:", "github_capabilities:", "tool_rules:", "deny_paths:", "recording: screen_actions", "auto_stop_after_sec: 600"} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("walls printed:\n%s\nwant %q", shown, want)
+		}
+	}
+	out := filepath.Join(t.TempDir(), "shown.yaml")
+	if err := os.WriteFile(out, []byte(shown), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execCmdCapture(t, "walls", "set", "-f", out, "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if string(st.spec) != first {
+		t.Fatalf("spec after the round trip = %s, want %s", st.spec, first)
+	}
+}
+
+// A file that names a knob walls do not have is refused before any request, and a file that names one
+// of the new knobs alone is a limit, not an empty document.
+func TestWallsSetNarrowingKnobsFile(t *testing.T) {
+	srv, st := newWallsServer(t)
+	for name, body := range map[string]string{
+		"a push rule that is not a deny path": "push_rules:\n  max_file_size_mib: 5\n",
+		"a misspelt knob":                     "auto_stop: 600\n",
+	} {
+		file := filepath.Join(t.TempDir(), "walls.yaml")
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := execCmdCapture(t, "walls", "set", "-f", file, "--url", srv.URL, "--token", "tok"); err == nil {
+			t.Errorf("%s: set succeeded, want a refusal", name)
+		}
+	}
+	if len(st.methods) != 0 {
+		t.Errorf("requests sent for a refused file: %v", st.methods)
+	}
+	file := filepath.Join(t.TempDir(), "walls.yaml")
+	if err := os.WriteFile(file, []byte("auto_stop_after_sec: 600\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execCmdCapture(t, "walls", "set", "-f", file, "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("a file naming only auto_stop_after_sec: %v", err)
+	}
+}
+
 // A site YAML would read as a number or a date is refused rather than written back in another spelling.
 func TestWallsSetRefusesAHostThatIsNotText(t *testing.T) {
 	srv, st := newWallsServer(t)

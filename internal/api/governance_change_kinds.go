@@ -92,13 +92,17 @@ type heldUnitWrite struct {
 }
 
 // unitWriteExempt reports whether a human's profile update applies without a second human. Only an
-// UPDATE of an existing profile can be exempt, and only by one of two proofs:
+// UPDATE of an existing profile can be exempt, and only by one of three proofs:
 //
 //   - metadata only: every stored field other than the name is equal to the current row, including the
 //     base, the overlay and the overlay limits;
 //   - narrowing: the new effective profile is Leq the current effective one (composer.Leq, which
 //     carries the full git_pat dominance contract), and its member CPU and memory cap is no higher
-//     (memberCapOf).
+//     (memberCapOf);
+//   - envelope: a unit admin's edit strictly inside an envelope, within its root's walls (envelopeExempt).
+//
+// A re-parent that takes the unit out from under a lock its old parents hold is held too (a lock
+// removed from above, reparentDropsLocks), whichever proof would otherwise admit it.
 //
 // A write that changes the contact is held even when Leq holds: a contact is who a refused person is
 // told to ask, and nothing proves a new one is not a redirect. So is a rename that can change which
@@ -107,7 +111,7 @@ type heldUnitWrite struct {
 func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
 	byID := unitsByID(all)
 	cur, exists := byID[p.ID]
-	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) {
+	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) || s.reparentDropsLocks(all, cur, p) {
 		return false
 	}
 	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(unitContactAfter(cur, p))) {
@@ -118,6 +122,9 @@ func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit
 	}
 	if sameJSON(cur.Ceiling, p.Ceiling) && sameJSON(cur.Limits, p.Limits) && sameJSON(cur.ParentID, p.ParentID) &&
 		sameJSON(cur.Overlay, p.Overlay) && sameJSON(cur.OverlayLimits, p.OverlayLimits) {
+		return true
+	}
+	if s.envelopeExempt(ctx, all, p, res) {
 		return true
 	}
 	chain, err := chainFromRows(byID, p.ID, store.MaxUnitDepthCap)
@@ -349,6 +356,7 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 	if posture := s.rubricPostureAdvisory(r.Context(), h.res); posture != "" {
 		p.notes = append(p.notes, posture)
 	}
+	p.notes = append(p.notes, s.governanceADOCeilingWarnings(r.Context(), h.res)...)
 	s.proposeGovernanceChange(w, r, p)
 }
 
@@ -425,6 +433,7 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 			return types.GovernanceUnit{}, err
 		}
 		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, b, limit)
+		err = s.checkDeciderLockWrite(ctx, q, err, p, all)
 		effective = res
 		if err != nil {
 			return p, err

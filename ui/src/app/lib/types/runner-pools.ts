@@ -37,7 +37,7 @@ export type RunnerPoolAvailability = "available" | "unavailable" | "unknown";
 export type RunnerPoolRunType = "background" | "interactive";
 
 /** Which bound an effective limit came from (Go: types.LimitSource). */
-export type LimitSource = "pool" | "governance" | "deployment" | "runner";
+export type LimitSource = "pool" | "governance" | "deployment" | "runner" | "elevation";
 
 /** Why the platform ended a run (Go: types.RunEndReason). */
 export type RunEndReason =
@@ -46,6 +46,7 @@ export type RunEndReason =
   | "queue_timeout"
   | "queue_sign_in_timeout"
   | "scheduled_runs_off"
+  | "scheduled_runs_denied"
   | "queue_profile_changed"
   | "queue_policy_changed"
   | "queue_portal_revoked"
@@ -196,9 +197,9 @@ export interface ResolvedRunnerPool {
   selection: RunnerPoolSelection;
 }
 
-/** Go: types.RunnerPoolSubject (a role is a user_type; an identity provider's roles arrive as groups). */
+/** Go: types.RunnerPoolSubject (a role is a user_type; an identity provider's roles arrive as groups; a unit row names a unit by id and admits runs in it or below it). */
 export interface RunnerPoolSubject {
-  subject_type: "user" | "group" | "user_type";
+  subject_type: "user" | "group" | "user_type" | "unit";
   subject: string;
 }
 

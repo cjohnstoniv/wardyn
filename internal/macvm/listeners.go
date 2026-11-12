@@ -69,6 +69,9 @@ func makeRunSockDir(o RunOptions, cfg RunConfig) (string, error) {
 	if err := checkSocketPaths(dir); err != nil {
 		return "", err
 	}
+	if o.drive != nil {
+		return sc.MakeRunDir(key) // the sweep looks for a run's directory beside this one, and a drive's clone is not among runs
+	}
 	runs := filepath.Dir(filepath.Clean(o.RunDir))
 	if removed, err := sc.SweepRunDirs(func(k string) bool { return k != key && sockResidue(runs, sc.UserDir(), k) }); err != nil {
 		o.Log.Warn("macvm: sweeping socket directories of gone runs", "err", err.Error())

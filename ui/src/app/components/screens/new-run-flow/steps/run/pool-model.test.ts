@@ -21,3 +21,17 @@ describe("the pool's main drive limit (DR-0160)", () => {
     expect(drive(64)).toBe("64 MiB");
   });
 });
+
+describe("the pool's lifetime limit", () => {
+  const life = (value: number) => {
+    const l = limits(1000) as unknown as Record<string, unknown>;
+    l.lifetime_sec = { default: { value: 3600 }, cap: { value }, cap_source: "governance" };
+    return limitCells(l as unknown as EffectiveRunLimits, undefined).find((c) => c.key === "lifetime")?.value;
+  };
+  it("reads the server's own ceiling as no maximum, never as 596523.24 hours", () => {
+    expect(life(2147483647)).toBe("No maximum");
+  });
+  it("still reads a real cap in hours", () => {
+    expect(life(86400)).toBe("24 hours");
+  });
+});

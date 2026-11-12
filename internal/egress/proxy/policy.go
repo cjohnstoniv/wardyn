@@ -74,6 +74,7 @@ type Policy struct {
 	deniedExactPort     map[string]struct{}
 	deniedWildPort      []domainmatch.WildPort
 	allowedMeth         map[string]struct{} // empty == all methods allowed
+	hostRules           []types.HostRuleSet // per-layer host rule sets (host_rules.go); empty imposes nothing
 	firstUse            types.FirstUseMode
 	// toolRules is tool name -> effect, compiled from RunPolicySpec.ToolRules.
 	// Nil/empty means "no rules": every gated call raises an approval. "*" is
@@ -85,6 +86,9 @@ type Policy struct {
 	// unaffected, and AllowedExactHost (credential injection) still requires an
 	// explicit exact allowlist entry.
 	allowAll bool
+	// refuseIPLiterals mirrors RunPolicySpec.RefuseIPLiterals: under allowAll, literalIPGuard refuses
+	// every literal IP host, in any spelling, but one listed exactly in the allowlist.
+	refuseIPLiterals bool
 	// gitPushAnyBranch mirrors RunPolicySpec.GitPushAnyBranch: this run's
 	// brokered pushes skip branch-namespace confinement (handleGitBroker).
 	gitPushAnyBranch bool
@@ -93,6 +97,9 @@ type Policy struct {
 	// than per request since a push may be matched against every entry of a
 	// list the control-plane body cap alone bounds (push_rules.go).
 	pushRules *pushRuleSet
+	// live is the deny list a live egress edit grows, checked before every allow. A pointer, so a copy of
+	// the Policy shares it.
+	live *liveDenies
 }
 
 // CompilePolicy builds a Policy from a RunPolicySpec. Domains are normalized
@@ -107,8 +114,11 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		allowedMeth:         make(map[string]struct{}),
 		firstUse:            spec.FirstUseApproval.Normalize(),
 		allowAll:            spec.AllowAllEgress,
+		hostRules:           types.CloneHostRuleSets(spec.HostRules),
+		refuseIPLiterals:    spec.RefuseIPLiterals,
 		gitPushAnyBranch:    spec.GitPushAnyBranch,
 		pushRules:           compilePushRules(spec.PushRules),
+		live:                &liveDenies{},
 	}
 	// Compiled into a map rather than scanned: validatePolicySpec already refuses
 	// duplicates, so an exact-match lookup is the whole matching semantics.
@@ -295,6 +305,9 @@ func ValidDomainEntry(d string) error {
 func (p *Policy) evalHost(host string, port int) hostDecision {
 	host = domainmatch.CanonHost(host)
 	key := hostPortKey(host, port)
+	if p.live.denies(host, port) {
+		return hostDeny
+	}
 	// Deny beats allow, unconditionally.
 	if _, ok := p.deniedExact[host]; ok {
 		return hostDeny
@@ -680,6 +693,9 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 	case ruleSourcePort:
 		w.Header().Set(egressHeaderDetail, portRuleDetail)
 		detail = "egress denied: " + portRuleDetail
+	case ruleSourceGitPushDenyAllForge:
+		detail = pushDenyAllForgeRefusal(host)
+		w.Header().Set(egressHeaderDetail, detail)
 	}
 	headerHost := host
 	if shape != shapePlain {

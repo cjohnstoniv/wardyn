@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { END_RUN } from "../src/app/components/wardyn/copy/run-lifetime";
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, newRunHeading, sql } from "./fixtures";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { RUN, RUN_COCKPIT, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
@@ -90,7 +91,7 @@ test.describe("Run detail (/runs/:id)", () => {
     expect(scrolls).toBe(false);
 
     // A non-terminal run has an enabled danger-zone Kill button.
-    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+    const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
     await expect(killBtn).toBeVisible();
     await expect(killBtn).toBeEnabled();
   });
@@ -125,9 +126,9 @@ test.describe("Run detail (/runs/:id)", () => {
     await page.waitForTimeout(3200);
     await expect(headingB).toBeVisible();
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toHaveCount(0);
-    await page.getByRole("button", { name: "Kill", exact: true }).click();
+    await page.getByRole("button", { name: END_RUN, exact: true }).click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText(`Kill "${b.task}"?`);
+    await expect(dialog).toContainText(`End ${b.task}?`);
     await expect(dialog).toContainText(b.id.slice(0, 8));
     await dialog.getByRole("button", { name: "Cancel" }).click();
   });
@@ -141,7 +142,7 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
     // Terminal run => the dead Kill button is gone; the next step leads.
-    await expect(page.getByRole("button", { name: "Kill", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: END_RUN, exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toBeVisible();
   });
 
@@ -171,7 +172,7 @@ test.describe("Run detail (/runs/:id)", () => {
 
     const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
     await expect(cloneBtn).toBeVisible();
-    await expect(page.getByRole("button", { name: "Kill", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: END_RUN, exact: true })).toHaveCount(0);
 
     await cloneBtn.click();
     // A clone opens New Run on Review, with the run's setup already in the draft (title and description
@@ -244,7 +245,7 @@ test.describe("Run detail (/runs/:id)", () => {
       await expect(cloneBtn, `clone label at ${width}px`).toHaveText(RUN.CLONE_CTA);
       const cloneBox = await cloneBtn.boundingBox();
       expect(cloneBox!.x + cloneBox!.width, `clone right edge at ${width}px`).toBeLessThanOrEqual(width);
-      await expect(page.getByRole("button", { name: "Kill", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: END_RUN, exact: true })).toHaveCount(0);
 
       await expect(header.getByText("Interactive", { exact: true }), `Interactive at ${width}px`).toBeVisible();
       await expect(header.getByText("Fence", { exact: true }), `Fence at ${width}px`).toBeVisible();
@@ -530,7 +531,7 @@ test.describe("Run detail — a failing side fetch is not an outage", () => {
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
     await expect(page.getByText(STATES.ERROR_DEFAULT)).toHaveCount(0);
     // The one control that ends a runaway run is still reachable.
-    await expect(page.getByRole("button", { name: "Kill" })).toBeVisible();
+    await expect(page.getByRole("button", { name: END_RUN })).toBeVisible();
 
     await page.unroute("**/api/v1/audit*");
     await page.unroute("**/api/v1/approvals*");
@@ -615,7 +616,7 @@ test.describe("Run detail: Folders from your computer", () => {
     await page.reload();
     await expect(page.getByText(RUN_COMPUTER_FOLDER.ENDED, { exact: true })).toBeVisible();
     await expect(page.getByText(RUN_COMPUTER_FOLDER.FILES("3"), { exact: true })).toBeVisible();
-    await expect(page.getByText(RUN_COMPUTER_FOLDER.DELETED)).toBeVisible();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.MAY_BE_GONE)).toBeVisible();
   });
 });
 

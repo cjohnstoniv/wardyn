@@ -8,6 +8,15 @@ package main
 import (
 	"os/exec"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
+)
+
+// The Docker driver is the macOS VM handle's kept machines driver, and the updater the driver calls before a
+// kept machine resumes.
+var (
+	_ keptDriver              = (*docker.Driver)(nil)
+	_ docker.KeptToolsUpdater = (*keptToolsUpdater)(nil)
 )
 
 // macHostOS is this Mac's build in the form a VM machine records, e.g. "macOS 27.0.1 (26A434)".

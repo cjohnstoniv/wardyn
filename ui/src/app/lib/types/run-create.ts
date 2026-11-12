@@ -8,6 +8,7 @@
 import type { Agent, AgentRun, ConfinementClass, RunService } from "./runs";
 import type { AppliedResources } from "./new-run-contract";
 import type { MachineKind } from "./machine-kind";
+import type { RunMachineRequest } from "./kept-machine";
 
 // The fields the New Run wizard composes into a POST /api/v1/runs body. policy_id
 // and inline_policy are MUTUALLY EXCLUSIVE (XOR); neither set => default policy.
@@ -34,6 +35,10 @@ export interface CreateRunInput {
   machine_kind?: MachineKind;
   // pkg/client.CreateRunRequest.MacOSBase: a macos_vm run's base, "Standard" or another base's name; absent is Standard.
   macos_base?: string;
+  // pkg/client.CreateRunRequest.DesktopWindow: "at_start" opens a window onto a macos_vm run on the creator's own Mac when it starts.
+  desktop_window?: "at_start";
+  // pkg/client.CreateRunRequest.Machine: keep this macos_vm run's machine for next time, or start from a kept one (an interactive run on the creator's own Mac).
+  machine?: RunMachineRequest;
   interactive?: boolean;
   // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.
@@ -78,6 +83,11 @@ export interface CreateRunInput {
    * (pkg/client.CreateRunRequest.KeepWorkFolder). Chosen at each launch: never in a template.
    */
   keep_work_folder?: boolean;
+  /**
+   * Narrows the run by a wall preset: a built-in's id (open, read-only, sealed) or a saved preset's id
+   * (pkg/client.CreateRunRequest.WallPreset). Chosen at each launch: never in a template.
+   */
+  wall_preset?: string;
 }
 
 /** types.RunLocalFolder as a request names it. `direction`: "both" brings the sandbox's changes back when the run ends. */

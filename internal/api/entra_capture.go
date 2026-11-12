@@ -43,6 +43,8 @@ const (
 	entraKindADO          entraKind = "azure_devops"
 	entraKindAzureFoundry entraKind = "azure_foundry"
 	entraKindAzureARM     entraKind = "azure_arm"
+	// entraKindEndpointOIDC is a custom_endpoint's own sign-in at its authority (endpoint_oidc.go).
+	entraKindEndpointOIDC entraKind = "endpoint_oidc"
 )
 
 // azureARMAudience is the one audience an Azure CLI row's sign-in is captured
@@ -102,6 +104,14 @@ type entraCapture struct {
 	// rowUID keys the capture's row: the provider's server-minted uid for
 	// azure_foundry, the row's admin id for Azure DevOps.
 	rowUID string
+	// authority is the token endpoint and client of a kind that is not an Entra application (endpoint_oidc.go);
+	// nil for every Entra kind, which derive theirs from the application's configuration.
+	authority *tokenAuthority
+	// oidc is what an endpoint sign-in binds an identity token against; nil for every Entra kind.
+	oidc *endpointOIDCBinding
+	// redeemFor is the row an endpoint redemption resolved authority from (endpointOIDCStillBound); nil
+	// otherwise.
+	redeemFor *types.ModelProvider
 }
 
 // adoCapture is the capture an Azure DevOps row runs. Callers have validated
@@ -163,6 +173,8 @@ func (c entraCapture) label() string {
 		return "azure foundry"
 	case entraKindAzureARM:
 		return "azure cli"
+	case entraKindEndpointOIDC:
+		return "endpoint oidc"
 	}
 	return "azure devops"
 }
@@ -172,7 +184,7 @@ func (c entraCapture) logRow() string { return c.rowUID }
 
 // auditProvider is the `provider` label this kind's audit and mask rows carry.
 func (c entraCapture) auditProvider() string {
-	if c.oneResource() {
+	if c.oneResource() || c.kind == entraKindEndpointOIDC {
 		return string(c.kind)
 	}
 	return adoEntraProviderPrefix
@@ -218,6 +230,13 @@ func azureCheckRequestedScopes(ceiling, scopes []string) error {
 // ceiling. A one-resource kind keeps the granted entries under the audience's
 // resource, never the `.default` literal; none means the grant is unusable.
 func (c entraCapture) capturedScopes(granted string) []string {
+	if c.kind == entraKindEndpointOIDC {
+		// RFC 6749 section 5.1: a response with no scope granted the requested set.
+		if fields := strings.Fields(granted); len(fields) > 0 {
+			return slices.Compact(slices.Sorted(slices.Values(fields)))
+		}
+		return slices.Clone(c.scopes)
+	}
 	if !c.oneResource() {
 		return adoCaptureScopes(granted, c.scopes)
 	}
@@ -235,6 +254,9 @@ func (c entraCapture) capturedScopes(granted string) []string {
 // cover. Azure DevOps wants each literal in the blob. A one-resource kind wants
 // the blob to hold at least one scope under the audience's resource.
 func (c entraCapture) consentCovers(blobScopes, wanted []string) (string, bool) {
+	if c.kind == entraKindEndpointOIDC {
+		return "", true // the refresh names no scope, so the authority decides what it still covers
+	}
 	if !c.oneResource() {
 		for _, want := range wanted {
 			if !slices.Contains(blobScopes, want) {
@@ -249,6 +271,15 @@ func (c entraCapture) consentCovers(blobScopes, wanted []string) (string, bool) 
 	}
 	return "", true
 }
+
+// sendsScopeOnRefresh reports whether a refresh names a scope. Every Entra kind does; an endpoint sign-in
+// does not, and an authority that omits `scope` from a response (RFC 6749 section 5.1) granted the set the
+// sign-in was captured with (omittedScopeIsGranted).
+func (c entraCapture) sendsScopeOnRefresh() bool { return c.kind != entraKindEndpointOIDC }
+
+// omittedScopeIsGranted reports whether a token response with no `scope` is read as the requested set.
+// Only for an endpoint sign-in: an Entra response with none is refused.
+func (c entraCapture) omittedScopeIsGranted() bool { return c.kind == entraKindEndpointOIDC }
 
 // entraCodeGrant is an authorization code redeemed into a blob that is ready to
 // store, with what the masking that follows the store needs.
@@ -269,7 +300,7 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 	if err != nil {
 		return entraCodeGrant{}, reasonStoreError
 	}
-	resp, err := s.postADOEntraToken(ctx, cfg, url.Values{
+	resp, err := s.postEntraToken(ctx, cfg, ec, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"code_verifier": {verifier},
@@ -277,7 +308,7 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 	})
 	if err != nil {
 		reason := adoCaptureErrorCode(err)
-		slog.WarnContext(ctx, "wardynd: the azure sign-in code exchange failed",
+		slog.WarnContext(ctx, "wardynd: the "+ec.label()+" sign-in code exchange failed",
 			slog.String("row", ec.rowUID), slog.String("reason", reason), slog.Any("err", err))
 		return entraCodeGrant{}, reason
 	}
@@ -288,16 +319,21 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 			slog.String("row", ec.rowUID), slog.Any("err", err))
 		return entraCodeGrant{}, reasonStoreError
 	}
-	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
-		slog.WarnContext(ctx, "wardynd: azure sign-in identity binding failed",
+	if reason, ok := s.bindEntraIdentity(ctx, cfg, ec, resp.IDToken, nonce, subject); !ok {
+		slog.WarnContext(ctx, "wardynd: "+ec.label()+" sign-in identity binding failed",
 			slog.String("row", ec.rowUID), slog.String("reason", reason))
+		// Only an endpoint sign-in can tell "another authority" from "another person": the console binding
+		// compares the issuer before the person.
+		if ec.oidc != nil && reason == endpointOIDCWrongIssuerRefusal {
+			return entraCodeGrant{}, reasonEndpointOIDCIssuerMismatch
+		}
 		return entraCodeGrant{}, reasonADOCallbackIdentityBinding
 	}
 	granted := ec.capturedScopes(resp.Scope)
 	if resp.RefreshToken == "" || len(granted) == 0 {
 		return entraCodeGrant{}, reasonADOCallbackUnusableGrant
 	}
-	return entraCodeGrant{generation: generation, access: resp.AccessToken, blob: adoEntraBlob{
+	blob := adoEntraBlob{
 		RefreshToken: resp.RefreshToken,
 		Scopes:       granted,
 		ExpiresAt:    accessExpiry,
@@ -306,7 +342,20 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 		Subject:      subject,
 		CapturedAt:   now.UTC(),
 		Source:       adoEntraSourceSignIn,
-	}}, ""
+	}
+	if ec.oidc != nil {
+		blob.TenantID, blob.Issuer, blob.IDPSubject = "", ec.oidc.issuer, ec.oidc.idpSub
+	}
+	return entraCodeGrant{generation: generation, access: resp.AccessToken, blob: blob}, ""
+}
+
+// bindEntraIdentity binds the identity token to the session's subject under this kind's rule: an endpoint
+// sign-in's (bindEndpointOIDCIdentity), or the console application's for every Entra kind.
+func (s *Server) bindEntraIdentity(ctx context.Context, cfg ADOEntraConfig, ec entraCapture, rawIDToken, nonce, subject string) (string, bool) {
+	if ec.oidc != nil {
+		return s.bindEndpointOIDCIdentity(ctx, ec.oidc, rawIDToken, nonce, subject)
+	}
+	return s.bindADOEntraIdentity(ctx, cfg, rawIDToken, nonce, subject)
 }
 
 // retireReplacedEntraTokens runs once a capture's blob is stored. The exchange

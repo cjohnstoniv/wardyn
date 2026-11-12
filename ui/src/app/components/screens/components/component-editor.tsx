@@ -11,11 +11,15 @@
 import * as React from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import { components as api } from "../../../lib/api/components";
+import { modelProviders } from "../../../lib/api/model-providers";
+import { PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import type { Component, ComponentDeliveryMode } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
+import { CopyButton } from "../../wardyn/copy-button";
+import { Chip } from "../../wardyn/primitives";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
@@ -24,6 +28,7 @@ import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
 import { Field } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
 import {
+  audienceEditable,
   blankSecret,
   blankSetting,
   draftOf,
@@ -31,9 +36,13 @@ import {
   hostLines,
   newUuid,
   requestOf,
+  withStored,
   type ComponentDraft,
   type SecretDraft,
 } from "./component-editor-model";
+
+// A save refused for the audience: a duplicate, no provider with identity on, or a value the server won't take.
+const AUDIENCE_REFUSAL = /gateway[_ ]audience/i;
 
 const MODES: { value: ComponentDeliveryMode; label: string }[] = [
   { value: "header", label: T.DEL_HEADER },
@@ -168,6 +177,94 @@ function SecretRow({
   );
 }
 
+// What an admin copies into their gateway, shown whole beside a Copy control (as the model provider editor does).
+function CopyRow({ text, label }: { text: string; label: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-input-background px-3 py-2">
+      <code className="min-w-0 break-all font-mono text-xs">{text}</code>
+      <CopyButton
+        text={text}
+        label={label}
+        className="shrink-0 gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
+      >
+        {PROVIDER_EDITOR.GATEWAY.COPY}
+      </CopyButton>
+    </div>
+  );
+}
+
+// The run identity an organisation's remote MCP server is sent (board GW-MCP): empty sends nothing. Set, it
+// shows what the token carries and the issuer and key address the gateway checks it with.
+function AudienceField({
+  value,
+  onChange,
+  saved,
+  refusal,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  // The stored row has an audience: a change to it reaches runs already going.
+  saved: boolean;
+  refusal: string | null;
+}) {
+  const g = PROVIDER_EDITOR.GATEWAY;
+  const [gateway, setGateway] = React.useState<{ issuer?: string; jwksPath?: string }>({});
+  React.useEffect(() => {
+    let live = true;
+    // Display only: an admin who can't read the providers is shown no issuer or key address.
+    modelProviders
+      .getModelProviders()
+      .then((l) => live && setGateway({ issuer: l.gatewayIssuer, jwksPath: l.gatewayJwksPath }))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const on = value.trim() !== "";
+  const keyAddress = gateway.jwksPath ? `${window.location.origin}${gateway.jwksPath}` : "";
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium text-foreground">{T.MCP_GROUP}</legend>
+      <Field label={T.AUDIENCE} htmlFor="component-gateway-audience" hint={T.AUDIENCE_HINT}>
+        <Input
+          id="component-gateway-audience"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="font-mono"
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={!!refusal || undefined}
+        />
+      </Field>
+      {refusal && (
+        <p role="alert" className="text-xs leading-snug text-danger">
+          {refusal}
+        </p>
+      )}
+      {on && (
+        <>
+          <Chip tone="warning">{g.CHIP}</Chip>
+          <p className="text-body">{T.AUDIENCE_SENDS}</p>
+          <a href={g.CLAIMS_URL} target="_blank" rel="noreferrer" className="block text-xs text-info underline-offset-2 hover:underline">
+            {g.CLAIMS_LINK}
+          </a>
+          {gateway.issuer && (
+            <Field label={g.ISSUER} hint={g.ISSUER_HINT}>
+              <CopyRow text={gateway.issuer} label={g.COPY_ISSUER} />
+            </Field>
+          )}
+          {keyAddress && (
+            <Field label={g.KEY_ADDRESS} hint={g.KEY_ADDRESS_HINT}>
+              <CopyRow text={keyAddress} label={g.COPY_KEY_ADDRESS} />
+            </Field>
+          )}
+        </>
+      )}
+      {saved && <p className="text-xs leading-snug text-muted-foreground">{T.AUDIENCE_SAVED_NOTE}</p>}
+    </fieldset>
+  );
+}
+
 export function ComponentEditor({
   component,
   onClose,
@@ -182,12 +279,15 @@ export function ComponentEditor({
   const [draft, setDraft] = React.useState<ComponentDraft>(() => draftOf(component));
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const savedAudience = component?.definition.mcp?.gateway_audience ?? "";
+  const [audience, setAudience] = React.useState(savedAudience);
+  const audienceRefused = audienceEditable(component) && !!error && AUDIENCE_REFUSAL.test(error);
   const hostChoices = headerHostChoices(hostLines(draft.hosts));
   const canSave = draft.name.trim() !== "" && !saving;
 
   // Leaving with edits that were not saved asks first; a save closes this dialog (onSaved). Row keys are random, so they are left out.
   const edited = JSON.stringify(
-    { ...draft, secrets: draft.secrets.map(({ key: _k, ...s }) => s), settings: draft.settings.map(({ key: _k, ...s }) => s) },
+    { ...draft, secrets: draft.secrets.map(({ key: _k, ...s }) => s), settings: draft.settings.map(({ key: _k, ...s }) => s), audience },
     null,
     2,
   );
@@ -199,7 +299,7 @@ export function ComponentEditor({
     setError(null);
     const id = component?.id ?? newUuid();
     try {
-      await api.put(id, requestOf(draft));
+      await api.put(id, withStored(requestOf(draft), component, audience));
       onSaved(id, component === null);
     } catch (e) {
       setError(getErrorMessage(e));
@@ -246,6 +346,10 @@ export function ComponentEditor({
             spellCheck={false}
           />
         </Field>
+
+        {audienceEditable(component) && (
+          <AudienceField value={audience} onChange={setAudience} saved={savedAudience !== ""} refusal={audienceRefused ? error : null} />
+        )}
 
         <fieldset className="space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SECRETS_LABEL}</legend>
@@ -310,7 +414,7 @@ export function ComponentEditor({
           </Button>
         </fieldset>
 
-        {error && (
+        {error && !audienceRefused && (
           <p role="alert" className="text-body text-danger">
             {error}
           </p>

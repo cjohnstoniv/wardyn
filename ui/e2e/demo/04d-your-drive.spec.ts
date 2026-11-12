@@ -87,6 +87,7 @@
  * than let the film drift away from docs/design/user-drives-prompt.md §7.
  */
 
+import { END_RUN } from "../../src/app/components/wardyn/copy/run-lifetime";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -868,11 +869,11 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   // series ends a run one way. The dialog's own body says what the kill costs,
   // so the softer verb is not a euphemism the viewer cannot check. A member may
   // kill their own run (OPERATIONS.md).
-  await act(page, page.getByRole("button", { name: "Kill", exact: true }), "End the run."); // C47d
+  await act(page, page.getByRole("button", { name: END_RUN, exact: true }), "End the run."); // C47d
   const kill = page.getByRole("alertdialog");
   await expect(kill).toBeVisible({ timeout: 15_000 });
   await expect(kill).toContainText("tears down the sandbox");
-  await act(page, kill.getByRole("button", { name: "Kill run" }), "The sandbox goes with it — and its own disk."); // C47e
+  await act(page, kill.getByRole("button", { name: "End run" }), "The sandbox goes with it — and its own disk."); // C47e
   await expect(
     page.getByText(RUN_OVER).first(),
     "run A never went terminal — run B would then share one claim with a live pod, which is not what C48 says",

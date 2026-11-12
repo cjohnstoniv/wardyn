@@ -24,9 +24,11 @@ import { governance as api, isGrantBoundError, type AutonomyRubric, type Governa
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
-import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
+import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
+import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
+import { ScheduledRunsDoorRow } from "./limits-schedule-autonomy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
+import type { GovernanceChange, PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -38,6 +40,8 @@ import { safeRequestHref } from "../../wardyn/policy-remedy";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { specToSource, type PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
 import { minimalSpec, parseSpec } from "../../wardyn/policy-panel";
+import { AllowedModelsRow, ALLOWED_MODELS_KEY } from "./allowed-models";
+import { DenyListRow } from "./deny-list-strip";
 import { Note, withMono } from "./display";
 import {
   asOverlay,
@@ -54,6 +58,9 @@ import {
 } from "./profile-overlay";
 import { ProfileCeilingPolicy } from "./profile-ceiling-policy";
 import { ProfileRubric } from "./profile-rubric";
+import { UnitDeciders } from "./unit-deciders";
+import { DECIDERS } from "../../wardyn/copy/deciders";
+import type { GovernanceDeciders } from "../../../lib/api/deciders";
 
 // A number field renders blank at 0/undefined — 0 IS "unlimited" for all three
 // rows below, not a value worth spelling out in the input (storage-tab.tsx's
@@ -85,6 +92,7 @@ export function ProfileEditor({
   onCancel,
   onSaved,
   onSubmitted,
+  deciders, decidersSupported, unitNames, onDecidersChanged,
 }: {
   /** The profile being edited, or null for a new one. */
   profile: GovernanceUnit | null;
@@ -97,7 +105,11 @@ export function ProfileEditor({
   onSaved: (warnings: string[]) => void;
   /** The write was held for a second person (202): nothing is saved yet. */
   /** The notes the held change carries, for the screen to show beside the submitted note. */
-  onSubmitted: (notes: string[]) => void;
+  onSubmitted: (notes: string[], change: GovernanceChange) => void;
+  deciders?: GovernanceDeciders[];
+  decidersSupported?: boolean;
+  unitNames?: Record<string, string>;
+  onDecidersChanged?: () => void;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
@@ -198,6 +210,10 @@ export function ProfileEditor({
   const initial = React.useRef(edited).current;
   useUnsavedGuard("profile-editor", edited !== initial, () => edited);
 
+  // Narrow is on for the models and the box is empty: there is nothing to save for it.
+  const narrowedModels = overlayLimits[ALLOWED_MODELS_KEY];
+  const narrowsToNothing = composed && Array.isArray(narrowedModels) && narrowedModels.length === 0;
+
   const save = async () => {
     const parsed = ceiling;
     if (parsed && !parsed.ok) {
@@ -227,6 +243,9 @@ export function ProfileEditor({
       // limits. An empty limits overlay is sent as null: absent would keep a stored one. Leaving a
       // base sends null for the overlay, which clears the base and limits with it. A standalone
       // profile that was never composed sends none of the three, as before.
+      // An empty models list narrows nothing, so it is never sent (Narrow on with an empty box cannot be saved).
+      const { [ALLOWED_MODELS_KEY]: emptyModels, ...rest } = overlayLimits;
+      const sendable = Array.isArray(emptyModels) && emptyModels.length === 0 ? rest : overlayLimits;
       const input: GovernanceUnitInput = composed
         ? {
             name: name.trim(),
@@ -234,7 +253,7 @@ export function ProfileEditor({
             limits: {},
             parent_id: baseProfile?.id ?? null,
             overlay: asOverlay(overlay),
-            overlay_limits: Object.keys(overlayLimits).length > 0 ? overlayLimits : null,
+            overlay_limits: Object.keys(sendable).length > 0 ? sendable : null,
             ...contactField,
           }
         : {
@@ -248,7 +267,7 @@ export function ProfileEditor({
       onSaved(res.warnings);
     } catch (e) {
       if (e instanceof PendingChangeError) {
-        onSubmitted(e.change.diff?.notes ?? []);
+        onSubmitted(e.change.diff?.notes ?? [], e.change);
         return;
       }
       // A refusal the SERVER composed is rendered verbatim — it names the
@@ -258,8 +277,8 @@ export function ProfileEditor({
       setError(
         isGrantBoundError(e)
           ? { title: GOV.GRANT_BOUND_TITLE, message: getErrorMessage(e) }
-          : e instanceof HttpError && composeRefusalTitle(e.reason)
-            ? { title: composeRefusalTitle(e.reason), message: e.message }
+          : e instanceof HttpError && composeRefusalTitle(e.reason, e.message)
+            ? { title: composeRefusalTitle(e.reason, e.message), message: e.message }
           : e instanceof HttpError
             ? { message: e.message }
             : { message: GOV.SAVE_ERROR },
@@ -279,6 +298,7 @@ export function ProfileEditor({
         items={[
           { id: "governance-section-ceiling", label: GOV.CEILING_TITLE },
           { id: "governance-section-limits", label: GOV.LIMITS_TITLE },
+          { id: "governance-section-deciders", label: DECIDERS.TITLE },
           { id: "governance-section-contact", label: GOV.CONTACT_TITLE },
         ]}
       />
@@ -412,6 +432,21 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_ui_apps: v }))}
         />
+        <LimitRow
+          label={BACKGROUND_WATCH_DOOR.LABEL}
+          hint={BACKGROUND_WATCH_DOOR.HINT}
+          checked={!!limits.deny_background_desktop_watch}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, deny_background_desktop_watch: v }))}
+        />
+        <LimitRow
+          label={KEEP_POLICY.LABEL}
+          hint={KEEP_POLICY.HINT}
+          checked={!!limits.deny_kept_machines}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, deny_kept_machines: v }))}
+        />
+        <ScheduledRunsDoorRow limits={limits} disabled={disabled} onChange={setLimits} />
         {/* The user-drive door (0.7 user drives, §5 #5). Its two strings live
             in governance-prompt.md §7.2 and governance-copy.ts, never in the
             drives module: the security admin's authority over drives is this
@@ -458,6 +493,26 @@ export function ProfileEditor({
           value={limits.max_drive_size_mib}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, max_drive_size_mib: v }))}
+        />
+        {/* A blank box is no limit and there is no deny-all, so the key is left out rather than sent empty. */}
+        <AllowedModelsRow
+          value={limits.allowed_models ?? []}
+          disabled={disabled}
+          onChange={(models) =>
+            setLimits(({ allowed_models: _drop, ...rest }) => (models.length > 0 ? { ...rest, allowed_models: models } : rest))
+          }
+        />
+        <DenyListRow
+          which="components"
+          value={limits.deny_components ?? []}
+          disabled={disabled}
+          onChange={(ids) => setLimits(({ deny_components: _drop, ...rest }) => (ids.length > 0 ? { ...rest, deny_components: ids } : rest))}
+        />
+        <DenyListRow
+          which="providers"
+          value={limits.deny_model_providers ?? []}
+          disabled={disabled}
+          onChange={(ids) => setLimits(({ deny_model_providers: _drop, ...rest }) => (ids.length > 0 ? { ...rest, deny_model_providers: ids } : rest))}
         />
           </>
         )}
@@ -552,6 +607,7 @@ export function ProfileEditor({
       {/* Read-only, as of the last save: a composed profile's binding policy is its base, narrowed. */}
       {profile?.overlay && composed && <EffectiveView profile={profile} />}
 
+      <UnitDeciders profile={profile} profiles={profiles} deciders={deciders} supported={decidersSupported} unitNames={unitNames} disabled={disabled} onChanged={onDecidersChanged} />
       <section id="governance-section-contact" className="mt-6 scroll-mt-4" data-testid="governance-profile-contact">
         <h4 className="text-body font-medium text-foreground">{GOV.CONTACT_TITLE}</h4>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{GOV.CONTACT_LEAD}</p>
@@ -622,7 +678,7 @@ export function ProfileEditor({
         onCancel={onCancel}
         onSave={save}
         saving={saving}
-        saveDisabled={disabled || !name.trim() || ceiling?.ok === false}
+        saveDisabled={disabled || !name.trim() || ceiling?.ok === false || narrowsToNothing}
         saveLabel={GOV.SAVE}
         cancelLabel={PEOPLE.CANCEL}
       />

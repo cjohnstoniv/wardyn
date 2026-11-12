@@ -35,6 +35,7 @@ export function ApprovalsTab({
   onDecline,
   viewerBlocked = false,
   refused,
+  presetRefused,
 }: {
   approvals: ApprovalRequest[];
   // This page always has the run loaded by the time this tab can render
@@ -48,6 +49,8 @@ export function ApprovalsTab({
   onDecline?: (id: string) => Promise<void>;
   /** The pending decisions are ones this viewer cannot make (viewerBlockedOnDecision). */
   viewerBlocked?: boolean;
+  /** Approvals the server refused for the run's wall preset (wall_preset_host). */
+  presetRefused?: ReadonlySet<string>;
   /** Requests the server refused this viewer with capability_egress_host. */
   refused?: ReadonlySet<string>;
 }) {
@@ -98,6 +101,7 @@ export function ApprovalsTab({
                 onTakeOver={onTakeOver}
                 onDecline={onDecline}
                 refused={refused?.has(a.id)}
+                presetBlocked={presetRefused?.has(a.id)}
               />
             ),
           )}

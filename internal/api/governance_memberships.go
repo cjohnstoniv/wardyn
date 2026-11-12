@@ -128,14 +128,19 @@ func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http
 	if writeMembershipTreeError(w, r, "", defaultMembershipRefusal(a.UnitID, defaultTakesNoMembershipsMsg)) {
 		return
 	}
-	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
+	if s.upsertApprovedGroupMembership(w, r, a) { // an envelope's approved group (governance_envelope_members.go)
 		return
 	}
+	// A unit admin's scope comes first: the user-type read answers 400 for a type that does not
+	// exist, which would tell someone outside the unit which types there are.
 	var belongsBy []uuid.UUID
 	if s.isUnitAdminCaller(r.Context()) {
 		if belongsBy, ok = s.membershipAddInScope(w, r, a); !ok {
 			return
 		}
+	}
+	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
+		return
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = principalFromRequest(r)

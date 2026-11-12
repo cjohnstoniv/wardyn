@@ -45,6 +45,8 @@ func DefaultRoot() (string, error) {
 //	<root>/cache/          <build>.ipsw(.part)
 //	<root>/runs/<run-key>/ disk.img aux.img machine-id run.json helper.log
 //	<root>/drives/         <object>.img <object>.img.lock (a person's disk drives kept on this Mac)
+//	<root>/kept/<key>/     disk.img aux.img machine-id pair.key manifest.json tools.json kept.json (a person's kept machine)
+//	<root>/kept/<key>.lock held by the helper for the whole boot of that machine
 //	<root>/prepare.log
 //	<root>/setup-code.json (only while macOS waits for its setup by hand)
 //
@@ -53,10 +55,22 @@ type Layout struct{ Root string }
 
 func (l Layout) BaseDir(slot int) string { return filepath.Join(l.Root, "bases", strconv.Itoa(slot)) }
 func (l Layout) CacheDir() string        { return filepath.Join(l.Root, "cache") }
+
+// AgentSigningDir holds this Mac's guest agent signing identity (AgentSigningIdentity): the helper reads it
+// to sign each guest agent build it pushes.
+func (l Layout) AgentSigningDir() string { return filepath.Join(l.Root, "agent-signing") }
 func (l Layout) RunsDir() string         { return filepath.Join(l.Root, "runs") }
 func (l Layout) RunDir(runID string) string {
 	return filepath.Join(l.RunsDir(), RunKey(runID))
 }
+
+// KeptDir is where this Mac keeps its kept machines, one folder each (KeptMachineDir) with its lock beside it.
+// It is never inside a run's folder, so ending a run does not touch a machine.
+func (l Layout) KeptDir() string { return filepath.Join(l.Root, "kept") }
+
+// KeptMachineDir is the folder of the kept machine whose id is id (a UUID): its RunKey, the first 12 hex
+// digits. Two ids can share a key, so a reader checks the full id in kept.json (ReadKept does).
+func (l Layout) KeptMachineDir(id string) string { return filepath.Join(l.KeptDir(), RunKey(id)) }
 
 // DrivesDir is where this Mac keeps its disk drives: each one's image, and the lock beside it that a
 // run holds while its VM has the disk attached.
@@ -360,6 +374,12 @@ type RunConfig struct {
 	// Disks are the disk drives' images, which the helper locks before the VM is built and holds
 	// until it ends.
 	Disks []Disk `json:"disks,omitempty"`
+	// DesktopViewOnly is runner.SandboxSpec.DesktopViewOnly: the helper's shim forces this boot's desktop
+	// view only (RFBShim.ForceViewOnly), whatever the base's manifest says.
+	DesktopViewOnly bool `json:"desktop_view_only,omitempty"`
+	// Kept, when set, makes this boot a person's kept machine: its disk lives in Layout.KeptMachineDir, not
+	// in the run folder (see KeptRun).
+	Kept *KeptRun `json:"kept,omitempty"`
 }
 
 // toolsModeField is the helper's stage-2 boot-configuration field. Only
@@ -396,6 +416,11 @@ func ReadRunConfig(runDir string) (RunConfig, error) {
 	}
 	if c.RunID == "" || c.BaseDir == "" {
 		return c, errors.New("macvm: run config needs run_id and base_dir")
+	}
+	if k := c.Kept; k != nil {
+		if _, err := uuid.Parse(k.ID); err != nil || (k.Mode != KeptNew && k.Mode != KeptResume && k.Mode != KeptFresh) {
+			return c, fmt.Errorf("macvm: run config: kept machine %q in mode %q", k.ID, k.Mode)
+		}
 	}
 	if name, key := filepath.Base(filepath.Clean(runDir)), RunKey(c.RunID); name != key {
 		return c, fmt.Errorf("macvm: the run directory %s holds run %s, whose directory is %s", runDir, c.RunID, key)

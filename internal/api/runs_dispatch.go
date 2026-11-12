@@ -18,6 +18,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// runUnattended reports whether nobody drives the run and its policy has review paths: the one case a
+// push held for review is refused instead. It is a function to keep dispatchRun under its complexity limit.
+func runUnattended(p dispatchParams, policy types.RunPolicySpec) bool {
+	return !p.Interactive && pushReviewRules(policy, p.PushRuleSets)
+}
+
 // dispatchRun launches the sandbox via the runner and advances run state. On any
 // failure it marks the run FAILED and audits — but never returns the failure to
 // the create caller (the run row exists and is queryable). p.RunToken is passed
@@ -60,6 +66,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.dispatchStartable(ctx, run, ceiling, p) {
 		return
 	}
+	p.modelLimit = ceiling.modelLimit // from the ceiling alone, whatever the lane passed
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
@@ -96,20 +103,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
-	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
-	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
-	// ground-truth stream. wardynd knows the resolved confinement class here, so
-	// it records the one-time kernel.sensor.bypass audit event itself — making the
-	// gap VISIBLE regardless of whether the operator set the sidecar env var
-	// WARDYN_GROUNDTRUTH_BLIND_RUNS (that path is kept too). Matches the data
-	// shape the sidecar emits (reason="cc3-kata-host-ebpf-blind", run_id) so the
-	// downstream audit/correlation is identical.
-	if run.ConfinementClass == types.CC3 {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "kernel.sensor.bypass",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"reason": "cc3-kata-host-ebpf-blind", "run_id": run.ID.String(),
-			})))
-	}
+	// The host sensor's blind spots (CC3 everywhere, CC2 under the Kubernetes
+	// sensor), recorded by wardynd itself; see recordSensorBypass.
+	s.recordSensorBypass(ctx, run)
 
 	// Sandbox env: non-secret values only (invariant 1). The run token never
 	// appears here — the proxy holds it via ProxyConfig.RunToken and injects it
@@ -338,7 +334,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// denies or does not allow is withheld as one the profile denies is (#3238).
 	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 	signsBedrock := llm.signsBedrock()
-	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	grantRows, unboundInjections := s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	withdrawADOLane(withholding{deny: ceiling.deny, layers: layers}, &ado, &policy, p.Policy.AllowedDomains) // no gate or interception entry ships for a withdrawn lane
 	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
@@ -365,7 +361,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
 	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
-	secretEnvKeys, resident := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
+	secretEnvKeys, resident, placedEnv := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
+	addPlacedSecrets(&policy, placedEnv...) // before the sidecar policy and the audited snapshot copy it
 
 	// Split the composed environment into its non-secret and credential-bearing
 	// halves — after EVERY writer above, so the "already set" guards each of them
@@ -375,6 +372,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// MCP servers: their credentials move to the broker and each harness's
 	// token goes into its own configuration (run_mcp.go).
 	mcp := dispatchMCP(p.Components.MCP, withholding{deny: ceiling.deny, layers: layers}, &injections, proxyURL, p.Interactive, sandboxEnv)
+	gatewayRoutes, gatewayRefusal := gatewayMCPRoutesOf(plan.gatewayRoutes, mcp)
+	if gatewayRefusal != "" {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, gatewayRefusal)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create", run.ID.String(), "failure", mustJSON(map[string]any{"error": gatewayRefusal})))
+		return
+	}
 	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
@@ -395,7 +398,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
 	// with each narrowed grant's scope read from its stored row — and, with every
 	// credential now authored, the one-credential-per-host re-check.
-	patGrants, ok := s.settleCredentialHosts(ctx, run, &p, policy, siteCfg, grantRows, injections)
+	patGrants, ok := s.settleCredentialHosts(ctx, run, &p, policy, siteCfg, grantRows, injections, unboundInjections)
 	if !ok {
 		return
 	}
@@ -419,7 +422,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		MacOSBase:        macOSBaseOf(run),
 		// "Sign-ins in a desktop" for the run's agent (run_desktop_vm_signin.go); only a VM reads it.
 		DesktopSignInsOff: desktopSignInsOff(siteCfg, siteCfgErr, run.Agent),
-		Env:               sandboxEnv,
+		// The stored mode alone, not p.Interactive; only a macOS VM reads it.
+		DesktopViewOnly: run.BackgroundOnly(),
+		Env:             sandboxEnv,
 		// The credential half (SandboxSpec.SecretEnv states the driver
 		// obligations). Nil for a run with no env_secret grant and no resident
 		// Bedrock credential, which is most of them.
@@ -467,6 +472,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// these "<org>/<repo>" keys (each -> its github_token grant), minting the
 			// scoped token proxy-side so it never enters the sandbox.
 			GitGrants: p.GitGrants,
+			// The hosts whose pushes the run's capabilities withhold (wireRunGrants).
+			GitPushWithheld: p.GitPushWithheld,
 			// git_pat per-HOST allowlist: the /wardyn/git/ route serves only these
 			// hosts, minting the stored PAT proxy-side so it never enters the
 			// sandbox. Empty when the lane is off, which makes the route 403 —
@@ -510,9 +517,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// legacy path, the chosen model provider's own address on the provider
 			// path (see dispatchLLMPlan.llmUpstreams). Empty => the vendor host.
 			LLMUpstreams: plan.llmUpstreams,
+			LLMHeaders:   plan.llmHeaders,
 			// What each local_model upstream above may be asked for (#2957);
 			// nil, so no key is written, unless the run chose one.
 			LocalModels: plan.localModels,
+			// The governed allowed-models list every hosted model request is held to; nil, so no key is
+			// written, when no limit binds the run. Never an empty list.
+			ModelLimit: plan.modelLimit,
+			// The routes that carry the run's signed identity; nil, so no key is written, with identity off.
+			GatewayIdentity: gatewayRoutes,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
@@ -521,20 +534,30 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// for review is refused instead (push_hold.go). Set only when the
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
-			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			Unattended:         runUnattended(p, policy),
 			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
+			// The code hosts the proxy refuses while deny_all is in force (nil
+			// otherwise, since an older proxy refuses the key).
+			ForgeHosts:         denyAllForgeHosts(policy, p.PushRuleSets, siteCfg, grantRows),
 			HarnessToolRules:   p.HarnessToolRules,
 			HarnessCredentials: harnessCreds,
 			MCPServers:         mcp.servers, MCPBindings: mcp.bindings,
+			// Present exactly when a rule is approve_each: an older proxy refuses the key.
+			MCPApproveEach: mcpApproveEachMarker(proxyPolicy, p.HarnessToolRules),
+			// A macOS VM run's boot hosts; its proxy does not read their allowed traffic as the run working.
+			ActivityIgnoreHosts: activityIgnoreHosts(run.MachineKind),
 			// The policy a refusal names (runs_dispatch_attribution.go); nil when
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
 			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
 			PortRule: s.cfg.EgressPortRule,
+			// A run launched with the No network preset: its proxy refuses every request. A revive
+			// replays it from the stored config. An older proxy refuses the key.
+			NoNetwork: noNetworkPreset(run.WallPreset),
 			// The person's sign-in listener; false, so no key is written,
 			// unless `signins` above.
 			DesktopSignins: signins,
@@ -599,6 +622,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	defer s.dropUncreatedMacKeptDrive(ctx, run, &created) // after the lease release below: defers run last-in first-out
 	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
+	// The run's kept machine: inserted or claimed here, before any runner work, and given back if no
+	// sandbox is created (run_kept_machine.go).
+	kept, ok := s.keptMachineAtDispatch(ctx, run, p.Machine)
+	if !ok {
+		return
+	}
+	defer s.releaseUnstartedKeptMachine(ctx, run, kept, &created)
+	spec.KeptMachine = kept.spec()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
@@ -618,6 +649,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, grantRows, p.PATBroker, &spec, &resident) {
 		return
 	}
+	if !s.keepFinalRunProxyConfig(ctx, run, spec.ProxyConfig, stopCreateLease) {
+		return
+	}
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
@@ -625,32 +659,21 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// classification are the last writers of the proxy config, and the host marks must describe
 	// the config the runner is sent. Nothing between the snapshot and here reads the envelope.
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
+	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec) // before the row below, so it is stamped too
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
-	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr)) {
+	if !s.startRunRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr, p.Interactive) {
 		return
 	}
-	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
-	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
-	endStartWait()
-	stopCreateLease()
-	if refused {
-		return // deliverResident failed the run and recorded why; no create was asked for
-	}
-	if err != nil {
-		// Conditional: only mark FAILED if still STARTING. A kill landing between the
-		// entry claim and this failure moved the run to KILLED — don't clobber that
-		// terminal state (mirrors the STARTING->RUNNING guard below).
-		hint, reason := sandboxCreateFailure(err)
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
+	execution, sb, start, ok := s.createRunSandbox(ctx, createCtx, run, spec, resident, kept, p.RunToken, func() { endStartWait(); stopCreateLease() })
+	if !ok {
 		return
 	}
 	created = true
+	s.keptMachineUp(ctx, run, kept, sb)
 
 	// Drives attached — a no-op for the runs (most of them) that carry none.
 	// See auditDriveMount.
@@ -663,7 +686,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, run.CreatedBy, p.Drives)
+	s.auditDriveMount(ctx, run.ID, run.CreatedBy, run.MachineKind, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()
@@ -687,8 +710,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	if err := s.recordStartedSandbox(ctx, run, sb); err != nil {
-		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
+	// The sandbox's ref, then the driver's hash of the bytes its proxy was handed: a start that must
+	// confirm and cannot is stopped here, before the run goes RUNNING (run_proxy_readback.go).
+	if !s.recordConfirmedSandbox(ctx, run, sb, start) {
 		return
 	}
 
@@ -715,8 +739,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// audit stream does not carry.
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
+	onPrepared := s.macWindowAtStartOrAfterPrep(ctx, run, p.Interactive, p.DesktopWindowAtStart) // the run is RUNNING
+
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
+	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy, onPrepared)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only
@@ -782,4 +808,41 @@ func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.Eg
 	}
 	sc.EgressRedirects = []types.EgressRedirect{*probe}
 	return sc, redirectPublicHosts(*probe)
+}
+
+// createRunSandbox is dispatch's create: a fresh start's reset mark (keptMachineResetting), then
+// leaseDeliverCreate, with done (the start wait's and the create lease's ends) called once either is
+// over. false when the run was failed and no sandbox was created: the mark could not be written, the
+// delivery refused the run (the mark is taken back: its Mac was never asked), or the create failed.
+func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.AgentRun, spec runner.SandboxSpec,
+	resident []residentValue, kept keptDispatch, token string, done func()) (runnerExecution, runner.Sandbox, proxyStartRec, bool) {
+	// The pending proxy start is recorded before CreateSandbox, so a report the proxy sends while the
+	// create is still running is held against it (run_proxy_readback.go).
+	start, ok := s.beginDispatchProxyStart(ctx, run, token, done)
+	if !ok {
+		return runnerExecution{}, runner.Sandbox{}, start, false
+	}
+	if !s.keptMachineResetting(ctx, run, kept) {
+		done()
+		return runnerExecution{}, runner.Sandbox{}, start, false
+	}
+	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
+	done()
+	if refused {
+		s.keptResetNotAsked(ctx, run, kept)
+		s.unoweAgentCast(ctx, run)
+		return execution, sb, start, false // deliverResident failed the run and recorded why; no create was asked for
+	}
+	if err != nil {
+		// Conditional: only mark FAILED if still STARTING. A kill landing between the
+		// entry claim and this failure moved the run to KILLED — don't clobber that
+		// terminal state (mirrors the STARTING->RUNNING guard in dispatchRun).
+		hint, reason := sandboxCreateFailure(err)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
+		s.unoweAgentCast(ctx, run)
+		return execution, sb, start, false
+	}
+	return execution, sb, start, true
 }

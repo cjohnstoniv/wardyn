@@ -87,6 +87,17 @@ export const RUN_MODE_REFUSAL = {
     "policy_overlay changes your organisation's default policy, so it cannot be combined with policy_id or inline_policy.",
 } as const;
 
+/**
+ * Watching a background macOS run's desktop (backgroundWatchLimitRefusal, internal/api/run_background_watch_limit.go).
+ * Kept apart from RUN_MODE_REFUSAL, which is pinned to the golden table: the site switch answers 403 with its own
+ * reason, and a profile's limit answers as governance_unit with no reason of its own. The bytes are the server's.
+ */
+export const BACKGROUND_WATCH_REFUSAL = {
+  SITE_OFF_REASON: "run_background_watch_site_off",
+  SITE_OFF: "Watching background desktops is turned off for this install. An admin can turn it on.",
+  PROFILE: "Your organisation's governance profile doesn't allow watching a background run's desktop.",
+} as const;
+
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
 export const RUN_MODE_REFUSAL_BY_KEY: Record<keyof typeof RUN_MODE_REFUSAL, (...args: string[]) => string> = {
   RUN_MODE_REQUIRED: () => RUN_MODE_REFUSAL.RUN_MODE_REQUIRED(),

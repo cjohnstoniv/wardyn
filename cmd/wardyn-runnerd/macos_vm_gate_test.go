@@ -112,6 +112,7 @@ func TestMacOSVMAgentDriftStartsAToolsUpdate(t *testing.T) {
 	m.toolsUpdate = func(man macvm.Manifest) { errs <- m.startToolsUpdate(context.Background(), man) }
 	man := `{"format":2,"state":"ready","guest_os":"macOS 27.0","agent_version":"0.9.0","min_cpus":4,"min_memory_mib":8192,"harnesses":["none"]}`
 	_ = os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600)
+	defer serving(m)()
 	m.recompute()
 	m.recompute()
 	select {

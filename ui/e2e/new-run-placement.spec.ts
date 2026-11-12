@@ -10,8 +10,6 @@
 //
 // Pools and the preflight are stubbed from the New Run scenario fixtures: the
 // seeded backend runs no runner and holds no pool.
-import { RUN_REF } from "../src/app/components/wardyn/copy/run-ref";
-import { shortRunId } from "../src/app/components/wardyn/run-ref";
 import type { Page } from "@playwright/test";
 import { test, expect, fillMainDriveSize, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
@@ -119,7 +117,7 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
     // Review says it plainly, and still lets the run launch: waiting is not a refusal.
     await expect(page.getByText(RUN_WAIT.AT_CAPACITY("CI jobs", 40))).toBeVisible();
     await expect(page.getByText(NR_REVIEW.WHERE_VALUE("CI jobs"), { exact: true })).toBeVisible();
-    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Organization pool", 40, 40))).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Organisation pool", 40, 40))).toBeVisible();
 
     await nameAndLaunch(page, "waiting run");
     await expect(page.getByText(NR_LAUNCH.BADGE_WAITING, { exact: true })).toBeVisible();
@@ -132,9 +130,9 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
 
     // Cancel goes through the same kill dialog the Runs board uses.
     await press(page, NR_LAUNCH.CANCEL_RUN);
-    const confirm = page.getByRole("alertdialog", { name: RUN_REF.killRun(shortRunId(RUN_ID)) });
+    const confirm = page.getByRole("alertdialog", { name: "End this run?" });
     await expect(confirm).toBeVisible();
-    await confirm.getByRole("button", { name: "Kill run" }).click();
+    await confirm.getByRole("button", { name: "End run" }).click();
     await expect.poll(() => seen.killed).toEqual([RUN_ID]);
   });
 

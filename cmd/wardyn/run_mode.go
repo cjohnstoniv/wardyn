@@ -35,6 +35,7 @@ type runModeFlags struct {
 	healthPath     string
 	healthEvery    time.Duration
 	healthFailures int
+	healthProbe    string
 }
 
 func (f *runModeFlags) bind(fs *pflag.FlagSet) {
@@ -50,6 +51,7 @@ func (f *runModeFlags) bind(fs *pflag.FlagSet) {
 	fs.StringVar(&f.healthPath, "health-path", "", "service: check health with an HTTP GET of this path (2xx or 3xx passes); without it the check is a TCP connect to --port")
 	fs.DurationVar(&f.healthEvery, "health-every", 0, "service: how often to check health, 5s to 5m (default 15s). Needs --port")
 	fs.IntVar(&f.healthFailures, "health-failures", 0, "service: consecutive failed checks before it reads unhealthy, 1 to 10 (default 3). Needs --port")
+	fs.StringVar(&f.healthProbe, "health-probe", "", "service: control_plane has Wardyn also check the port itself every minute, through the sandbox (not from the network outside it); the lease is renewed only while both checks say healthy or starting. Needs --port")
 }
 
 func (f runModeFlags) used() bool {
@@ -58,7 +60,7 @@ func (f runModeFlags) used() bool {
 
 // serviceUsed reports whether any service flag is set, so one without --service is refused rather than dropped.
 func (f runModeFlags) serviceUsed() bool {
-	return f.service || f.restart != "" || f.port != 0 || f.healthPath != "" || f.healthEvery != 0 || f.healthFailures != 0
+	return f.service || f.restart != "" || f.port != 0 || f.healthPath != "" || f.healthEvery != 0 || f.healthFailures != 0 || f.healthProbe != ""
 }
 
 // applyRunModeFlags rewrites a request the older flags filled into the run-mode
@@ -131,7 +133,7 @@ func serviceFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 		return nil
 	}
 	if !f.service {
-		return errors.New("--restart, --port, --health-path, --health-every and --health-failures shape a service: add --service")
+		return errors.New("--restart, --port, --health-path, --health-every, --health-failures and --health-probe shape a service: add --service")
 	}
 	if body.Workload == nil || body.Workload.Kind != sdk.WorkloadCommand {
 		return errors.New("--service keeps a command running: add --command")
@@ -146,14 +148,15 @@ func serviceFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 	default:
 		return fmt.Errorf("--restart %q is not on-failure or never", f.restart)
 	}
-	if f.healthPath != "" || f.healthEvery != 0 || f.healthFailures != 0 {
+	if f.healthPath != "" || f.healthEvery != 0 || f.healthFailures != 0 || f.healthProbe != "" {
 		if f.port == 0 {
-			return errors.New("--health-path, --health-every and --health-failures check the service's port: add --port")
+			return errors.New("--health-path, --health-every, --health-failures and --health-probe check the service's port: add --port")
 		}
 		if f.healthEvery%time.Second != 0 {
 			return fmt.Errorf("--health-every %s is not a whole number of seconds", f.healthEvery)
 		}
-		svc.Health = &types.ServiceHealth{Path: f.healthPath, IntervalSec: int(f.healthEvery / time.Second), FailureThreshold: f.healthFailures}
+		svc.Health = &types.ServiceHealth{Path: f.healthPath, IntervalSec: int(f.healthEvery / time.Second), FailureThreshold: f.healthFailures,
+			Probe: f.healthProbe}
 	}
 	body.Service = svc
 	return nil

@@ -30,6 +30,9 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 		{&l.DenyUIApps, o.DenyUIApps},
 		{&l.DenyUserDrive, o.DenyUserDrive},
 		{&l.DenyMemberDrives, o.DenyMemberDrives},
+		{&l.DenyKeptMachines, o.DenyKeptMachines},
+		{&l.DenyScheduledRuns, o.DenyScheduledRuns},
+		{&l.DenyBackgroundDesktopWatch, o.DenyBackgroundDesktopWatch},
 	} {
 		if f.ov != nil {
 			*f.base = *f.base || *f.ov
@@ -38,8 +41,15 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	if o.DenyPlacements != nil {
 		l.DenyPlacements = unionPlacements(l.DenyPlacements, *o.DenyPlacements)
 	}
+	m.meetDenyLists(o)
 	if o.AllowedMacOSBases != nil {
 		m.meetMacOSBases(*o.AllowedMacOSBases)
+	}
+	if o.AllowedModels != nil {
+		m.meetAllowedModels(*o.AllowedModels)
+	}
+	if o.RequiredImageSigners != nil {
+		l.RequiredImageSigners = unionSigners(l.RequiredImageSigners, *o.RequiredImageSigners)
 	}
 	for _, f := range []struct {
 		name string
@@ -109,6 +119,38 @@ func (m *meeter) validateMacOSBases(b *[]string) {
 	}
 }
 
+// validateRequiredImageSigners refuses an overlay's required_image_signers list that a profile could not hold.
+func (m *meeter) validateRequiredImageSigners(a *[]string) {
+	if a == nil {
+		return
+	}
+	if err := types.ValidRequiredImageSigners(*a); err != nil {
+		m.fail(ReasonOverlayInvalid, "required_image_signers", "%v", err)
+	}
+}
+
+// unionSigners is the requirement meet: every signer either side requires, base order first, each once. More
+// names is tighter, so an overlay can add a requirement and never drop the base's.
+func unionSigners(base, ov []string) []string {
+	out := slices.Clone(base)
+	for _, n := range ov {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// validateAllowedModels refuses an overlay's allowed_models list that a profile could not hold.
+func (m *meeter) validateAllowedModels(a *[]string) {
+	if a == nil {
+		return
+	}
+	if err := types.ValidAllowedModels(*a); err != nil {
+		m.fail(ReasonOverlayInvalid, "allowed_models", "%v", err)
+	}
+}
+
 // meetMacOSBases intersects two macOS base allow lists where empty means "any base". An empty overlay
 // narrows nothing. A disjoint pair has no representable result: the empty list the intersection would be
 // allows every base.
@@ -134,6 +176,33 @@ func (m *meeter) meetMacOSBases(ov []string) {
 		m.widen("allowed_macos_bases", "the base excludes %s", trimJoin(slicesDiff(ov, both)))
 	}
 	l.AllowedMacOSBases = both
+}
+
+// meetAllowedModels intersects two allowed-models lists where empty means no limit, as meetMacOSBases
+// does: an empty overlay narrows nothing, an empty base takes the overlay, and a disjoint pair has no
+// representable result, since the empty list the intersection would be is no limit.
+func (m *meeter) meetAllowedModels(ov []string) {
+	l := &m.out.Limits
+	switch {
+	case len(ov) == 0:
+		return
+	case len(l.AllowedModels) == 0:
+		l.AllowedModels = slices.Clone(ov)
+		return
+	}
+	var both []string
+	for _, n := range ov {
+		if slices.Contains(l.AllowedModels, n) {
+			both = append(both, n)
+		}
+	}
+	switch {
+	case len(both) == 0:
+		m.fail(ReasonOverlayUnsatisfiable, "allowed_models", "no model is in both the base (%s) and the overlay (%s)", trimJoin(l.AllowedModels), trimJoin(ov))
+	case len(both) < len(ov):
+		m.widen("allowed_models", "the base excludes %s", trimJoin(slicesDiff(ov, both)))
+	}
+	l.AllowedModels = both
 }
 
 // unionPlacements is a denial list only ever added to: the overlay's denials join the base's, in a
@@ -208,6 +277,7 @@ func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 		{"confinement_cc1", &b.ConfinementCC1, o.ConfinementCC1},
 		{"confinement_cc2", &b.ConfinementCC2, o.ConfinementCC2},
 		{"confinement_cc3", &b.ConfinementCC3, o.ConfinementCC3},
+		{"self_defined_component", &b.SelfDefinedComponent, o.SelfDefinedComponent},
 	} {
 		switch {
 		case f.ov == "":

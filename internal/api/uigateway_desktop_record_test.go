@@ -227,3 +227,83 @@ func TestVMDesktopRecording_FollowsTheRecordingKnob(t *testing.T) {
 		})
 	}
 }
+
+// macOSDesktopRun is vmDesktopRun on a macOS VM run at level.
+func macOSDesktopRun(t *testing.T, level types.RecordingLevel) (h *uiHarness, dr *desktopFakeRunner, send chan []byte) {
+	t.Helper()
+	h, dr, send, _ = vmDesktopRun(t)
+	h.run.Agent, h.run.MachineKind, h.run.RecordingLevel = "claude-code", types.MachineMacOSVM, level
+	h.store.putRun(h.run)
+	return h, dr, send
+}
+
+// TestMacOSVMDesktopRecording_YieldsACastWithThePauseGap: a macOS VM's desktop is recorded at Screen and
+// actions through the recorder a Linux VM's uses: one desktop- cast under the run's cast key, a pause
+// keeping none of what the display sends while it is open, and the same pause and resume rows.
+func TestMacOSVMDesktopRecording_YieldsACastWithThePauseGap(t *testing.T) {
+	h, dr, send := macOSDesktopRun(t, types.RecordingScreenActions)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, dr)
+	if !h.srv.PauseDesktopRecording(ctx, h.run, desktopPauseSignin, desktopPauseSignin) {
+		t.Fatal("pause refused")
+	}
+	send <- vmFBU // sent while paused: the viewer sees it, the recording does not
+	v.read(len(vmFBU))
+	if !h.srv.ResumeDesktopRecording(ctx, h.run, desktopPauseSignin) {
+		t.Fatal("resume refused")
+	}
+	send <- []byte("\x02\x02") // two Bells
+	v.read(2)
+	endVMDesktop(t, h, v, send)
+
+	write, pb, kept := storedVMRecording(t, h)
+	session, _ := write["session"].(string)
+	if write["format"] != "novnc-playback" || !strings.HasPrefix(session, desktopRecordingSuffix) ||
+		write["key"] != recording.CastKey(h.run.ID.String(), session) || pb.Format != "novnc-playback" {
+		t.Errorf("write row = %v, playback %s: want a desktop cast under the run's cast key", write, pb.Format)
+	}
+	if want := vmHandshake() + "\x02\x02"; kept != want || pb.StoppedMS != 0 {
+		t.Errorf("recorded frames = %q (stopped at %d ms), want the handshake and the Bells after the resume %q", kept, pb.StoppedMS, want)
+	}
+	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin || pb.Gaps[0].EndMS == 0 {
+		t.Errorf("playback gaps = %+v, want one closed %q gap", pb.Gaps, desktopPauseSignin)
+	}
+	if pause, resume := h.audit.auditRows("desktop.recording.pause", "success"), h.audit.auditRows("desktop.recording.resume", "success"); len(pause) != 1 || len(resume) != 1 {
+		t.Errorf("pause rows %d, resume rows %d, want 1 each", len(pause), len(resume))
+	}
+}
+
+// TestMacOSVMDesktopRecording_FollowsTheLevel: a macOS VM's desktop is kept at Screen and actions only,
+// and not on a run that records nothing, as for every machine kind.
+func TestMacOSVMDesktopRecording_FollowsTheLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		level types.RecordingLevel
+		note  types.RunNotRecorded
+		want  int
+	}{
+		{"screen and actions", types.RecordingScreenActions, "", 1},
+		{"screen and actions, runner declined", types.RecordingScreenActions, types.NotRecordedRunnerDeclined, 1},
+		{"terminal", types.RecordingTerminal, "", 0},
+		{"policy off", types.RecordingOff, types.NotRecordedPolicyOff, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, dr, send := macOSDesktopRun(t, tc.level)
+			h.run.NotRecorded = tc.note
+			h.store.putRun(h.run)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			v := openVMDesktop(t, ctx, h, dr)
+			send <- []byte("\x02\x02")
+			v.read(2)
+			endVMDesktop(t, h, v, send)
+			if tc.want == 1 {
+				storedVMRecording(t, h)
+			}
+			if rows := h.audit.auditRows("desktop.recording.write", "success"); len(rows) != tc.want {
+				t.Errorf("desktop.recording.write rows = %d, want %d", len(rows), tc.want)
+			}
+		})
+	}
+}

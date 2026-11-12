@@ -41,6 +41,9 @@ export interface EgressRedirect {
 
 export interface RunnerSettings {
   enabled: boolean;
+  // A new local run is refused on a personal-trust runner. Off by default, and always on the wire
+  // (false included); set only by PUT /runners/settings.
+  require_managed_device: boolean;
 }
 
 export interface SiteConfig {
@@ -146,6 +149,8 @@ export interface SiteConfig {
   recording?: SiteRecording;
   // types.SiteConfig.MacOSVM: the organisation's macOS VM sandbox settings.
   macos_vm?: SiteMacOSVM;
+  // types.SiteConfig.Images: the organisation's image rules.
+  images?: SiteImages;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -268,6 +273,13 @@ export interface ModelProvidersRead extends ModelProviders {
   connected_people?: Record<string, number>;
   entra_login_configured: boolean;
   kinds_available: ModelProviderKind[];
+  // Every gateway token's iss, and the key set's path under this deployment's
+  // origin with its base path: what an admin tells a gateway.
+  gateway_identity_issuer?: string;
+  gateway_jwks_path: string;
+  // Whether a bedrock_sso provider can send run identity on this install: only
+  // while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY).
+  gateway_identity_bedrock_sso: boolean;
 }
 
 // Closed set, server-validated.
@@ -279,6 +291,34 @@ export type ModelProviderKind =
   | "bedrock_bearer"
   | "custom_endpoint"
   | "local_model";
+
+// A provider's opt-in to run identity. audience is the token's aud: what this
+// provider's gateway looks for, and no other address's.
+export interface ModelProviderGatewayIdentity {
+  audience: string;
+  // A token's life in seconds, 60 to 600; absent is 600.
+  token_lifetime_seconds?: number;
+  // "gateway": this gateway checks prompts itself, and Wardyn checks them only for
+  // the run's own secret values. Absent: Wardyn checks them as the policy says.
+  inspection?: "gateway";
+}
+
+// A custom_endpoint's sign-in (Go's types.ProviderOIDC): where each person signs in and as which
+// client. PKCE, openid and offline_access are always on and are not settings.
+export interface ProviderOIDC {
+  // Required: discovery and the identity token's verification both come from it.
+  issuer: string;
+  // Overrides of what discovery names. The editor does not show them; a save carries them through.
+  authorize_url?: string;
+  token_url?: string;
+  client_id: string;
+  // The name of an operator secret holding the client's secret; absent is a public client.
+  client_secret_ref?: string;
+  // Asked for beside openid and offline_access. The server keeps the list as sent, duplicates included.
+  scopes: string[];
+  // "console" (also absent) or "none".
+  identity_binding?: "console" | "none" | (string & {});
+}
 
 // One provider. No credential lives here — each person supplies their own.
 export interface ModelProvider {
@@ -296,10 +336,20 @@ export interface ModelProvider {
   // custom_endpoint and local_model: required. Anthropic/OpenAI kinds: an optional
   // route-through gateway. Bedrock kinds: never (see bedrock.base_url).
   base_url?: string;
+  // Absent is off. On, each model call to this gateway carries a signed token
+  // naming the person, the run and the runner. custom_endpoint, or an Anthropic
+  // or OpenAI key kind with a base_url.
+  gateway_identity?: ModelProviderGatewayIdentity;
   // custom_endpoint, or local_model when its server wants a token: how each
   // person's token is sent. The server fills Authorization / "Bearer %s" when
   // absent; a local_model with no auth has no token at all.
   auth?: ProviderAuth;
+  // custom_endpoint only: each person signs in at the endpoint's own authority instead of pasting a token.
+  oidc?: ProviderOIDC;
+  // custom_endpoint only: non-secret headers the run proxy sets on every request to the gateway, for one that
+  // routes on a header (Portkey's x-portkey-provider). Absent is none. Changing them removes everyone's stored
+  // credential, as changing base_url does.
+  extra_headers?: ProviderHeader[];
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
   // local_model only: the model allowlist and the caps on each request.
@@ -339,11 +389,19 @@ export interface BedrockSettings {
   sso_role_name?: string;
 }
 
+// Go's types.ProviderHeader (internal/types/model_provider.go).
+export interface ProviderHeader {
+  name: string;
+  value: string;
+}
+
 export interface ProviderHarness {
   // A harness-catalog id ("claude-code", "codex-cli").
   harness: string;
   // Admin-set, no member override; required on a Bedrock kind.
   model?: string;
+  // The small model Claude Code's background work asks for; azure_foundry and custom_endpoint only.
+  fast_model?: string;
   // custom_endpoint only: where the endpoint serves this agent's API dialect.
   path?: string;
   auth_header?: string;
@@ -523,8 +581,69 @@ export interface SiteRecording {
   locked?: boolean;
 }
 
+/** Go: types.SiteImages (SiteConfig.images). */
+export interface SiteImages {
+  /** Refuse a member's run whose image is not pinned by digest (image@sha256:<digest>). Absent reads off. Operators are not bound. */
+  require_digest?: boolean;
+  /** Signature admission for member-chosen images. Absent reads off. */
+  admission?: SiteImageAdmission;
+}
+
+/** Go: types.SiteImageAdmission (SiteImages.admission). */
+export interface SiteImageAdmission {
+  /** Absent reads off. audit records a would-refuse and refuses nothing. */
+  mode?: "off" | "audit" | "enforce";
+  /** Absent reads member; all also covers the convention, harness and architecture images. */
+  scope?: "member" | "all";
+  /** Extra Sigstore trust roots a keyless signer may name; public-good always exists. */
+  trusted_roots?: ImageTrustedRoot[];
+  signers?: ImageSigner[];
+}
+
+/** Go: types.ImageTrustedRoot. */
+export interface ImageTrustedRoot {
+  name: string;
+  /** Absolute path of a Sigstore trusted-root JSON file in /etc/wardyn/sigstore on the control plane. */
+  path: string;
+}
+
+/** Go: types.ImageSigner. Exactly one of keyless and public_key is set. */
+export interface ImageSigner {
+  name: string;
+  /** Registry prefixes (registry.example.com/team/*) and exact references this signer covers. */
+  images: string[];
+  keyless?: ImageKeyless;
+  /** PEM public key: ECDSA P-256/P-384, Ed25519, or RSA of at least 2048 bits. */
+  public_key?: string;
+  /** Absent reads true. */
+  transparency_log?: boolean;
+  require_attestations?: string[];
+  signature_predicates?: string[];
+}
+
+/** Go: types.ImageKeyless. Exactly one of identity and identity_regexp is set. */
+export interface ImageKeyless {
+  issuer: string;
+  identity?: string;
+  /** Anchored: starts with ^ and ends with $. */
+  identity_regexp?: string;
+  source_repository?: string;
+  /** Absent reads public-good. */
+  trusted_root?: string;
+}
+
 /** Go: types.SiteMacOSVM (SiteConfig.macos_vm). */
 export interface SiteMacOSVM {
   /** Runs are refused on a Mac whose base was prepared more days ago than this. Absent or 0: no maximum. */
   max_base_age_days?: number;
+  /** A person may watch a background macOS run's desktop, view only. Absent reads allowed; only false turns it off. */
+  allow_background_watch?: boolean;
+  /** A person may open a window onto their own macOS VM run from its Mac. Absent reads off; only true turns it on. */
+  allow_attended_window?: boolean;
+  /** A person may keep a macOS VM on their own Mac between interactive runs. Absent reads off; only true turns it on. */
+  allow_kept_machines?: boolean;
+  /** A kept machine nobody has used for this many days is deleted. 1 to 90; absent reads 30. */
+  kept_machine_idle_days?: number;
+  /** Kept machines one person may have. 1 to 4; absent reads 1. */
+  max_kept_machines_per_person?: number;
 }

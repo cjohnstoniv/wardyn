@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -101,7 +102,7 @@ func providerTakesNoCredential(p types.ModelProvider) bool {
 // model_credential. A human owner's sentence is untouched.
 func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
 	blob, d, err := s.providerLivenessByKind(ctx, p, agent, owner, refresh)
-	if d.credential && isServicePrincipal(owner) && !providerTypedKinds[p.Kind] {
+	if d.credential && isServicePrincipal(owner) && (!providerTypedKinds[p.Kind] || p.OIDC != nil) {
 		d.msg = fmt.Sprintf(mpRunRefusal, p.ID, d.state, mpRunRemedyService)
 	}
 	return blob, d, err
@@ -166,6 +167,7 @@ type providerKeyLane struct {
 	format     string
 	upstream   string // BaseURL(+Path) when requests do not go to vendorHost
 	model      string
+	fast       string // custom_endpoint only: the claude-code small-model alias; "" leaves the haiku alias unset
 	owner      string // whose namespace the key is read from: the run owner's, always
 }
 
@@ -189,6 +191,9 @@ func providerKeyLaneFor(p types.ModelProvider, agent string) (providerKeyLane, b
 	base := p.BaseURL
 	if p.Kind == types.ModelProviderCustomEndpoint || p.Kind == types.ModelProviderLocalModel {
 		base += h.Path // always "" on a local model (validateProviderHarness)
+		if p.Kind == types.ModelProviderCustomEndpoint {
+			l.fast = h.FastModel
+		}
 		var auth types.ProviderAuth
 		if p.Auth != nil {
 			auth = *p.Auth
@@ -221,6 +226,9 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 	if !s.credentialPerson(owner) {
 		return providerDenial{msg: mpcNoPerson}, nil
 	}
+	if p.OIDC != nil {
+		return s.providerEndpointOIDCRefusal(ctx, owner, p)
+	}
 	_, found, err := s.ownSecret(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), owner, providerSecretName(p.UID, providerKeyPart))
 	if err != nil || found {
 		return providerDenial{}, err
@@ -239,6 +247,10 @@ type providerDispatch struct {
 	// localAllowlists is localModels' allowlists by provider id, for the run's own record (recordModelAllowlists).
 	localAllowlists map[string][]string
 	detail          string // the brokered-LLM 404's detail
+	// gatewayRoutes is ProxyConfig.GatewayIdentity: the routes that carry the run's signed identity.
+	gatewayRoutes []proxy.GatewayIdentityRoute
+	// extraHeaders is ProxyConfig.LLMHeaders: {gateway host → the non-secret headers its provider sets}.
+	extraHeaders map[string]map[string]string
 }
 
 // addLocalModel records a local_model lane's upstream, allowlist and bounds for
@@ -376,6 +388,9 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			return nil, nil, injections, providerDispatch{}, false
 		}
 		llms, lanePairs = append(llms, llm), append(lanePairs, pairs[i])
+		if lane.chosen != nil && !s.takeProviderGatewayRoute(ctx, lr, &prov, lane.chosen.provider, llm) {
+			return nil, nil, injections, providerDispatch{}, false
+		}
 		if lane.chosen == nil || !providerKeyKind(lane.chosen.provider.Kind) {
 			continue
 		}
@@ -397,6 +412,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			}
 			prov.upstreams[lane.key.vendorHost] = lane.key.upstream
 		}
+		prov.addExtraHeaders(lane.key)
 	}
 	return llms, lanePairs, injections, prov, true
 }
@@ -433,6 +449,15 @@ func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []t
 	}
 	return lanes, hosts, true
 }
+
+// mpRunGatewayAddress is the refusal of a provider sending gateway identity whose stored address no route can hold.
+// mpRunGatewayClash refuses a run whose two providers sign for one gateway path: the
+// proxy could not tell which token a call there carries.
+const mpRunGatewayClash = "Model providers %s and %s both send a signed identity to one gateway address and path, so nothing was started. " +
+	"Give each its own path on the gateway, or turn identity off for one."
+
+const mpRunGatewayAddress = "Model provider %s sends a signed identity to its gateway, but its address can't carry one, so nothing was started. " +
+	"Ask an admin to correct the provider's base URL."
 
 // mpRunSignInNotPrimary is create's harnessSignInNotPrimaryMsg at dispatch, for
 // a provider that became an AWS sign-in after the run was created.
@@ -660,6 +685,9 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 				}
 			}
 		}
+		if lane.key.fast != "" {
+			sandboxEnv[envDefaultHaikuModel] = lane.key.fast
+		}
 	case "codex-cli":
 		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
 		// from config.toml and its key from CODEX_API_KEY (task mode) or
@@ -670,8 +698,16 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
 		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
-		if lane.chosen != nil && lane.chosen.provider.Kind == types.ModelProviderLocalModel {
-			sandboxEnv[envCodexModel] = lane.key.model
+		if lane.chosen != nil {
+			switch lane.chosen.provider.Kind {
+			case types.ModelProviderLocalModel:
+				sandboxEnv[envCodexModel] = lane.key.model
+			case types.ModelProviderCustomEndpoint, types.ModelProviderOpenAIAPIKey:
+				// The Model the admin stored on the harness entry; unset leaves codex on its own default.
+				if lane.key.model != "" {
+					sandboxEnv[envCodexModel] = lane.key.model
+				}
+			}
 		}
 	}
 	return llmTransport{provider: lane.chosen}
@@ -693,15 +729,11 @@ func codexBaseURL(proxyURL, gateway string) string {
 
 // authorProviderKeyInjection writes the key arm's one model-credential grant:
 // an api_key grant for the lane's host naming the owner's own
-// wardyn-provider-<uid>-key, with the record the sink requires
-// (providerGrantSnapshot). ok=false means the write failed and the run is
-// already FAILED.
+// wardyn-provider-<uid>-key (-oidc for an endpoint that signs people in), with
+// the record the sink requires (providerGrantSnapshot). ok=false means the
+// write failed and the run is already FAILED.
 func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.AgentRun, lane providerKeyLane) (runner.InjectionGrant, bool) {
-	scope, _ := json.Marshal(map[string]any{
-		"host": lane.host, "header": lane.header, "format": lane.format,
-		"secret_name": providerSecretName(lane.provider.UID, providerKeyPart),
-		"snapshot":    providerGrantSnapshot{OwnerSubject: lane.owner, ProviderUID: lane.provider.UID, Harness: run.Agent},
-	})
+	scope, _ := json.Marshal(providerKeyGrantScope(run, lane))
 	grantID := uuid.New()
 	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),

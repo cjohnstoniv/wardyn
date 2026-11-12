@@ -10,6 +10,7 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
+import { KEEP_NEW_RUN } from "../../../../wardyn/copy/keep-machine";
 import { NR_SHAPE } from "../../../../wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunShape } from "../../../../../lib/types/runs";
@@ -67,6 +68,8 @@ export function ShapeStep({ go, startFromScratch }: NewRunScreenProps) {
   };
 
   const chooseWorkload = (shape: RunShape) => {
+    // A keep or resume the new shape can't have is cleared by chooseShape; the Run step and Review say so.
+    if (draft.intent.machine && !chooseShape(draft.intent, shape).machine) dispatch({ type: "guided", patch: { machineCleared: KEEP_NEW_RUN.INTERACTIVE_ONLY } });
     dispatch({ type: "edit", apply: (intent) => chooseShape(intent, shape) });
     go({ screen: "step", step: "run" });
   };

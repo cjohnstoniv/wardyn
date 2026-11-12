@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -54,6 +55,8 @@ type Config struct {
 	RunToken string `json:"run_token"`
 	// Policy is the compiled egress allowlist / method rules / first-use flag.
 	Policy types.RunPolicySpec `json:"policy"`
+	// LiveDenies are hosts a live egress edit denied; set only by WithLiveDenies, checked before every allow.
+	LiveDenies []string `json:"live_denies,omitempty"`
 	// Injection rules drive proxy-side credential injection (plain HTTP only).
 	// Each rule carries the grant_id the secret is minted from at startup.
 	Injection []InjectionConfig `json:"injection,omitempty"`
@@ -106,6 +109,12 @@ type Config struct {
 	// stays proxy-side. Compiled at dispatch from the run's github grants. Empty =>
 	// the git-broker route always 403s (no repo brokered).
 	GitGrants map[string]uuid.UUID `json:"git_grants,omitempty"`
+	// GitPushWithheld names the broker hosts whose pushes this run's effective
+	// capabilities withhold (no code_write), each with the forge's name for the
+	// refusal: "github.com" -> "GitHub" on the /wardyn/gh/ route, an Azure DevOps
+	// git_pat host -> "Azure DevOps" on /wardyn/git/. The broker refuses a push
+	// there before anything mints. Empty => no push withheld.
+	GitPushWithheld map[string]string `json:"git_push_withheld,omitempty"`
 	// PATGrants is the git_pat broker's per-HOST allowlist: canonical lower-case
 	// host -> the git_pat grant id to mint from, backing the /wardyn/git/ route.
 	//
@@ -244,6 +253,11 @@ type Config struct {
 	// host classification only, never LLMUpstreams' reverse lookup (llm_channel_hosts.go).
 	// Control-plane-authored; omitempty because an older proxy refuses a key it does not know.
 	LLMChannelHosts map[string]string `json:"llm_channel_hosts,omitempty"`
+	// LLMHeaders maps a gateway host (the host of an LLMUpstreams value) to the non-secret headers set on
+	// every request to it, after the credential (extra_headers.go). Control-plane-authored, same trust
+	// boundary as LLMUpstreams; omitempty because an older proxy refuses a key it does not know. Empty
+	// (the default) => a gateway request carries what it always has.
+	LLMHeaders map[string]map[string]string `json:"llm_headers,omitempty"`
 	// LLMUnavailableDetail is what the brokered-LLM 404 says about WHY no
 	// credential is behind this run's LLM route, composed by the control plane at
 	// dispatch (internal/api's llmUnavailableDetail) because only it knows the
@@ -260,6 +274,28 @@ type Config struct {
 	// because an older proxy refuses a key it does not know. Empty (the
 	// default) => no local model route, byte-identical to today.
 	LocalModels map[string]types.LocalModelSettings `json:"local_models,omitempty"`
+	// AllowedModels is the run's allowed_models list: when set, a request to a hosted model
+	// provider (a brokered or terminated Anthropic, OpenAI or Bedrock route) names one of these
+	// models exactly or is refused (allowed_models.go). It applies to the whole run, not a
+	// route: the limit is one governance value for the run, and a per-route map would let a
+	// provider the map missed through. Control-plane-authored; omitempty because an older proxy
+	// refuses a key it does not know, and a pointer so `[]` survives the wire. Unset (the default) =>
+	// off, byte-identical to today; `[]` => set and empty, every model refused.
+	AllowedModels *[]string `json:"allowed_models,omitempty"`
+	// BedrockRoutes maps each Bedrock gateway a run's provider names by its own address
+	// (bedrock.base_url) to the base path its Bedrock API is served under ("" at the root). AWS's
+	// endpoint names (isBedrockHost) do not identify such a host, so this is what makes it a model host
+	// of Bedrock shape for the allowed_models gate: a request under the base path is read as
+	// /model/{id}/{op}, and any other request that is not a read is refused. Sent only with
+	// AllowedModels. Control-plane-authored; omitempty because an older proxy refuses a key it does
+	// not know.
+	BedrockRoutes map[string]string `json:"bedrock_routes,omitempty"`
+	// GatewayIdentity lists the routes that carry the run's signed identity
+	// (gateway_identity.go). Control-plane-authored, same trust boundary as
+	// LLMUpstreams; it holds no token and no key. Empty (the default) => off,
+	// byte-identical to before; omitempty because an older proxy refuses a key
+	// it does not know.
+	GatewayIdentity []GatewayIdentityRoute `json:"gateway_identity,omitempty"`
 	// RunnerLocalModels names the LocalModels entries (each AllowOnLaptopRunners) whose server is
 	// on the runner's own computer: the runner relays that one port from its relay address, the
 	// address the control plane resolves to on a runner, and vetTrustedHost admits that address
@@ -320,6 +356,19 @@ type Config struct {
 	// the entries the run brought). A set only ever adds to it. Carried beside
 	// PushRuleSets and never beside Policy.PushRules.
 	PushRuleBase *types.PushRulesSpec `json:"push_rule_base,omitempty"`
+	// ForgeHosts are the code hosts Wardyn knows for this run: the public ones
+	// (types.PublicForgeHosts), site config (SCM hosts and Git provider rows)
+	// and the run's git_pat and ssh_key grants. While deny_all is in force the
+	// proxy refuses a connection to one of them unless a door serves it
+	// (push_deny_all_forge.go). Set, never empty, exactly when the run's push
+	// rules set deny_all: an older proxy refuses the key, and a runner that does
+	// not name forge_hosts is refused the run.
+	ForgeHosts []string `json:"forge_hosts,omitempty"`
+	// ActivityIgnoreHosts are hosts whose allowed requests are not the run working, so they do not move its
+	// idle clock (egress.CountsAsActivityFor): a macOS guest's Apple boot hosts, on a run that allows them. A VM
+	// guest's request on the vmnet relay lane never counts either (egress.Request.Relayed), whatever its host.
+	// Control-plane-authored and omitted when empty, because an older proxy refuses a key it does not know.
+	ActivityIgnoreHosts []string `json:"activity_ignore_hosts,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
 	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
 	// route evaluates the set of the harness that raised the call
@@ -347,6 +396,17 @@ type Config struct {
 	// servers turned on for it. Digests only: the token is in that harness's
 	// configuration, never here.
 	MCPBindings []MCPBinding `json:"mcp_bindings,omitempty"`
+	// MCPApproveEach is set exactly when a dispatched tool rule is approve_each; see
+	// MCPApproveEachConfig. An older proxy refuses the key, so the run does not start on it.
+	MCPApproveEach *MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
+	// DisableModelUsage turns off the per-call model-token meter, which is on by
+	// default with nothing in the config. Only an admin's opt-out sets it, so a
+	// default config still loads on an older proxy, which refuses this key.
+	DisableModelUsage bool `json:"disable_model_usage,omitempty"`
+	// NoNetwork is a run launched with the no-network wall preset: every sandbox request is refused
+	// (policy:no-network) and no egress dial is made, while the proxy's own control-plane calls go on.
+	// An older proxy refuses the key, so such a run never starts on one.
+	NoNetwork bool `json:"no_network,omitempty"`
 }
 
 // MCPServerConfig is one remote MCP server on the broker route.
@@ -437,6 +497,11 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
 	}
+	for i, rt := range c.GatewayIdentity {
+		if err := rt.validate(c.GatewayIdentity[:i]); err != nil {
+			return nil, fmt.Errorf("config: gateway_identity[%d]: %w", i, err)
+		}
+	}
 	if err := validResidentMints(c.ResidentMints); err != nil {
 		return nil, err
 	}
@@ -457,11 +522,17 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	if err := types.ValidatePushRuleSets(c.PushRuleSets); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if err := c.validateHostRules(); err != nil {
+		return nil, err
+	}
 	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := types.ValidateHarnessCredentials(c.HarnessCredentials); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := c.checkMCPApproveEach(); err != nil {
+		return nil, err
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
@@ -616,7 +687,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateLocalModels(); err != nil {
 		return err
 	}
-	return c.validateChannelHosts()
+	return cmp.Or(c.validateAllowedModels(), c.validateBedrockRoutes(), c.validateChannelHosts(), c.validateLLMHeaders())
 }
 
 // validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside

@@ -34,7 +34,9 @@ import { AlreadyIncluded } from "./already-included";
 import { HarnessSetup, providerNameFor } from "./harness-setup";
 import { SetupNeeded } from "./setup-needed";
 import { withoutNamelessHarness } from "./tool-facts";
-import { Totals } from "./totals";
+import { Totals, WallPresetApplyLine } from "./totals";
+import { chosenPreset, presetUnavailable, WallPresetPicker } from "./wall-preset-picker";
+import { rememberedPreset, useWallPresets } from "./use-wall-presets";
 
 const STEP_LABELS = {
   shape: NR_SHARED.STEP_SHAPE, run: NR_SHARED.STEP_RUN, harnesses: NR_SHARED.STEP_HARNESSES, files: NR_SHARED.STEP_FILES, tools: NR_SHARED.STEP_TOOLS,
@@ -84,6 +86,12 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const ado = useAdoConnect();
   const ownRows = useOwnTokenRows(status);
   const dispatch = useNewRunDispatch();
+  const presets = useWallPresets();
+  const presetId = draft.intent.wall_preset;
+  const gone = draft.guided.wallPresetGone;
+  const chosen = chosenPreset(presets, presetId);
+  const memory = rememberedPreset(presetId ?? "");
+  const unavailable = presetUnavailable(presets, presetId, gone) ? { name: (gone && gone.id === presetId ? gone.name : memory?.name) ?? "", audience: memory?.audience ?? "" } : undefined;
   // The person's own walls, to name a host they leave out; a caller with none (or no way to read them) sees no such line.
   const [walls, setWalls] = React.useState<PersonalWallsSpec>();
   React.useEffect(() => {
@@ -185,6 +193,18 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       <AddTools access={access} answered={answered} intent={draft.intent} answeredFor={answeredFor} githubRepos={repos} />
       {failure === null && (
         <>
+          {presets && (
+            <WallPresetPicker
+              list={presets}
+              value={presetId}
+              unavailable={unavailable}
+              onChange={(id) => {
+                dispatch({ type: "guided", patch: { wallPresetGone: undefined } });
+                dispatch({ type: "edit", apply: (i) => ({ ...i, wall_preset: id }) });
+              }}
+            />
+          )}
+          {chosen && !unavailable && <WallPresetApplyLine name={chosen.name} spec={chosen.spec} />}
           <Totals
             access={access}
             answered={answered}

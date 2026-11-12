@@ -118,6 +118,8 @@ func (c callerSubjects) matchesPoolSubject(sub types.RunnerPoolSubject) bool {
 		return slices.Contains(c.groups, sub.Subject)
 	case types.CapabilitySubjectUserType:
 		return c.userType != "" && c.userType == sub.Subject
+	case types.RunnerPoolSubjectUnit:
+		return slices.Contains(c.units, sub.Subject)
 	}
 	return false
 }
@@ -157,7 +159,7 @@ func (s *Server) permittedPools(ctx context.Context, ps store.RunnerPoolStore, f
 	if oversight {
 		return rows, nil
 	}
-	subj, err := s.callerSubjects(ctx)
+	subj, err := s.poolSubjects(ctx, rows)
 	if err != nil {
 		return nil, ceilingRunRefusal(err)
 	}
@@ -196,6 +198,8 @@ type poolState struct {
 	availability string
 	reason       runnerpool.Reason
 	own          []poolTarget
+	// org is an available organization pool's claimed organization runners (orgRunnerTargets), none while local is denied.
+	org []poolTarget
 }
 
 func (st poolState) choice(row store.RunnerPoolCatalogueRow) client.RunnerPoolChoice {
@@ -207,30 +211,39 @@ func (st poolState) choice(row store.RunnerPoolCatalogueRow) client.RunnerPoolCh
 // deny_placements, the runner switch and the runners themselves. It judges each kind of runner in the
 // pool as placement does (poolTargets, kindTargets): deny holds each kind, a user pool's remote-hosted
 // runners count only while their people policy admits the caller, and the pool is available while one
-// kind that is not denied can take a run. The pool list and the dry doors both ask it, so they agree.
+// kind that is not denied can take a run. An organization pool counts its claimed organization runners as the
+// local kind (orgRunnerTargets), beside its remote-hosted ones. The pool list and the dry doors both ask it, so they agree.
 // Whether a candidate has room or passes the run's own checks is the admission fold's to decide.
 func (s *Server) poolAvailability(ctx context.Context, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow, denied []types.Placement) (poolState, *runRefusal) {
 	unavailable := func(r runnerpool.Reason) (poolState, *runRefusal) {
 		return poolState{availability: client.RunnerPoolUnavailable, reason: r}, nil
 	}
 	remoteDenied := slices.Contains(denied, types.PlacementRemote)
+	localDenied := slices.Contains(denied, types.PlacementLocal)
 	switch {
 	case row.Pool.State != types.RunnerPoolActive:
 		return unavailable(runnerpool.ReasonUnavailable)
-	case row.Pool.Scope == types.RunnerPoolOrganization && remoteDenied:
-		return unavailable(runnerpool.AvailabilityPlacementDenied)
 	case row.Pool.Scope == types.RunnerPoolOrganization:
-		if !s.anyConfigured(row) {
-			return unavailable(runnerpool.ReasonNoEligibleMember)
+		// Claimed organization runners are candidates of the local kind (poolTarget.placement), as placement offers them.
+		org, refusal := s.orgRunnerTargets(ctx, ps, row)
+		switch {
+		case refusal != nil:
+			return poolState{}, refusal
+		case s.anyConfigured(row) && !remoteDenied, len(org) > 0 && !localDenied:
+			if localDenied {
+				org = nil // a local deny holds the organization runners, so they are no candidates
+			}
+			return poolState{availability: client.RunnerPoolAvailable, org: org}, nil
+		case remoteDenied || len(org) > 0:
+			return unavailable(runnerpool.AvailabilityPlacementDenied)
 		}
-		return poolState{availability: client.RunnerPoolAvailable}, nil
+		return unavailable(runnerpool.ReasonNoEligibleMember)
 	}
 	admitted, refusal := s.admittedRemoteMembers(ctx, row)
 	if refusal != nil {
 		return poolState{}, refusal
 	}
 	remote, own := s.anyConfigured(admitted), row.OwnRunners > 0
-	localDenied := slices.Contains(denied, types.PlacementLocal)
 	st, refusal := s.ownRunnerAvailability(ctx, ps, row)
 	switch {
 	case refusal != nil:
@@ -308,7 +321,7 @@ func (s *Server) listRunnerPools(w http.ResponseWriter, r *http.Request, forUse 
 		rows = rows[:store.RunnerPoolsOversightMax]
 		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
-	subj, err := s.callerSubjects(r.Context())
+	subj, err := s.poolSubjects(r.Context(), rows)
 	if err != nil {
 		writeCeilingError(w, r, err)
 		return

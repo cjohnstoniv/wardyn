@@ -90,7 +90,7 @@ func (f *residentFix) authorClass(t *testing.T, run types.AgentRun, c residentCl
 	ok := true
 	switch c.kind {
 	case types.GrantEnvSecret:
-		_, values = f.srv.resolveEnvSecretValues(ctx, run, spec.ProxyConfig.Policy, rows, env)
+		_, values, _ = f.srv.resolveEnvSecretValues(ctx, run, spec.ProxyConfig.Policy, rows, env)
 		spec.SecretEnv = env
 	case types.GrantFileSecret:
 		spec.ManagedFiles, _, values, ok = f.srv.resolveFileSecretValues(ctx, run, spec.ProxyConfig.Policy, rows)
@@ -385,7 +385,7 @@ func TestDispatch_ResidentClassesLiftedThroughDispatch(t *testing.T) {
 			}
 			run := f.startingRun(t, func(r *types.AgentRun) { r.State = types.RunPending })
 			g := f.classGrant(t, run, c, "op-secret")
-			p := dispatchParams{RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policyOf(g)}
+			p := dispatchParams{RunToken: runToken(t, f.srv, run.ID), Image: "wardyn/claude-code:latest", Policy: policyOf(g)}
 			switch c.kind {
 			case types.GrantSSHKey:
 				p.SSHGrants = map[string]string{c.host: g.ID.String()}

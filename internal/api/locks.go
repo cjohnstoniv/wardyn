@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -71,12 +72,19 @@ func (s *Server) lock(ctx context.Context, class int32, parts ...string) (contex
 // refusal (no capacity, the database not answering) is ok=false too, logged:
 // every caller is a sweep that retries on its next pass.
 func (s *Server) tryLock(ctx context.Context, class int32, parts ...string) (context.Context, func(), bool) {
+	lctx, unlock, ok, _ := s.tryLockHeld(ctx, class, parts...)
+	return lctx, unlock, ok
+}
+
+// tryLockHeld is tryLock that also says why it failed: held is true only when the lock is held
+// elsewhere, never for a refusal. A caller that acts on a held lock (the forced stop) uses this.
+func (s *Server) tryLockHeld(ctx context.Context, class int32, parts ...string) (lctx context.Context, unlock func(), ok, held bool) {
 	lctx, unlock, ok, err := s.locker().TryLock(ctx, db.NewLockKey(class, parts...))
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not take a lock; skipping until the next pass", slog.Any("err", err))
-		return ctx, nil, false
+		return ctx, nil, false, false
 	}
-	return lctx, unlock, ok
+	return lctx, unlock, ok, !ok
 }
 
 // lockDoor takes a lock for an HTTP handler and rebinds r to the lock's
@@ -119,9 +127,9 @@ const lockUnavailableMsg = "Another operation on this resource is in progress, o
 // run, never global, so two runs never wait on each other. The revive
 // (reviveRunProxy), the end edit's write (handleSetRunEndAndWait) and the two
 // sweeps that re-assert a destructive stop (leaseRun, keepRebootedRun) take
-// it, among others. It is NOT taken inside loseRun,
-// stopLostSandbox, endSandbox, reconcileFinalize or stopKeptRun: they run under
-// it. The sweep side only ever tries: a run whose lock is held, or that the
+// it, among others. It is NOT taken inside loseRun, stopLostSandbox or
+// endSandbox: they run under it. reconcileFinalize and stopKeptRun take it
+// themselves, re-entering when their caller holds it. The sweep side only ever tries: a run whose lock is held, or that the
 // lock pool cannot take now, is skipped and retried next pass.
 
 // lockRunOp takes run id's lock, waiting for it.
@@ -132,4 +140,36 @@ func (s *Server) lockRunOp(ctx context.Context, id uuid.UUID) (context.Context, 
 // tryLockRunOp is lockRunOp that gives up instead of waiting.
 func (s *Server) tryLockRunOp(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
 	return s.tryLock(ctx, db.RunOpLockClass, id.String())
+}
+
+// tryLockRunOpHeld is tryLockRunOp that also says whether the lock was found held (tryLockHeld).
+func (s *Server) tryLockRunOpHeld(ctx context.Context, id uuid.UUID) (context.Context, func(), bool, bool) {
+	return s.tryLockHeld(ctx, db.RunOpLockClass, id.String())
+}
+
+// lockRunEnd is lockRunOp for an end that publishes the run's terminal state and then runs its tail:
+// held from that write through the computer folder's pass back (finalizeRunEffects), it keeps every
+// sweep that only tries the lock off a sandbox whose pass is still running. Every writer whose tail
+// reaches finalizeRunEffects takes it; a caller already holding it on ctx re-enters. ok=false is
+// logged; the run is then left as it is for the next pass of whatever ends it. A run proved to have no
+// pass back to run (endMayPass) takes no lock and ends at once, as any run does. The lock is an end hold
+// (holdRunEnd) for b, the caller's hold budget, plus a macOS VM's stop (endHoldBudget).
+func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID, b time.Duration) (context.Context, func(), bool) {
+	if !s.endMayPass(ctx, id) {
+		return ctx, func() {}, true
+	}
+	lctx, unlock, err := s.holdRunEnd(ctx, id, s.endHoldBudget(ctx, id, b))
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not take the run's lock to end it; leaving it for the next pass",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+		return ctx, nil, false
+	}
+	return lctx, unlock, true
+}
+
+// LockRunEnd is lockRunEnd for cmd/wardynd's idle and max-age stop, the one end of a run outside this
+// package: its guarded transition, pass back and sandbox stop run on the context it returns, under the reaper's
+// hold budget (endHoldReaper).
+func (s *Server) LockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
+	return s.lockRunEnd(ctx, id, endHoldReaper)
 }

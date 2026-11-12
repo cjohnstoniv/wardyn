@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 // sshDisplaceGrace is how long a displaced SSH client gets to accept the
@@ -99,6 +100,19 @@ func sshIsSandboxLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// sshRelayArgv is the in-sandbox command that copies its stdio to the sandbox's own
+// 127.0.0.1:<port>: socat in a container, the guest agent's own forward mode in a VM, which has no
+// socat. Callers have already validated the destination and the port.
+func sshRelayArgv(kind types.MachineKind, port int) []string {
+	switch kind {
+	case types.MachineLinuxVM:
+		return guestagent.ForwardArgv(guestagent.LinuxAgentPath, port)
+	case types.MachineMacOSVM:
+		return guestagent.ForwardArgv(guestagent.MacAgentBinaryPath, port)
+	}
+	return []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", port)}
 }
 
 // sshExecStreamErrorMessage maps an ExecStream launch failure to the message
@@ -281,8 +295,8 @@ type sshSessionGate struct {
 // shared is set — one a sync-only channel (admitted past the shared cap, see
 // sshOpenSlot) may not make: that one is audited once, answered with the cap
 // text and closed, which frees the sync slot it was holding.
-func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
-	if g.started {
+func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool, path string) bool {
+	if g.started || g.s.sshDataOutRefused(g, path) {
 		_ = req.Reply(false, nil)
 		return false
 	}
@@ -309,11 +323,11 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 	}
 	switch m.Subsystem {
 	case "sftp":
-		if g.mayDispatch(req, true) {
+		if g.mayDispatch(req, true, "sftp") {
 			return func() { s.bridgeSSHSFTP(ctx, runID, principal, channel) }
 		}
 	case sshSyncSubsystem:
-		if !g.mayDispatch(req, false) {
+		if !g.mayDispatch(req, false, "") {
 			return nil
 		}
 		if !g.slot.toSync() {
@@ -327,7 +341,7 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 			sendChannelError(channel, fmt.Sprintf("wardyn: this run already has %d sync sessions (the most it allows); wait for one to end", maxSSHSyncSessionsPerRun))
 			return nil
 		}
-		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv, pass) }
+		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv, pass, g.slot.dataOut) }
 	default:
 		_ = req.Reply(false, nil)
 	}
@@ -426,7 +440,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 
 		case "shell":
-			if !gate.mayDispatch(req, true) {
+			if !gate.mayDispatch(req, true, "") {
 				continue
 			}
 			gate.started = true
@@ -438,7 +452,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "exec":
-			if !gate.mayDispatch(req, true) {
+			if !gate.mayDispatch(req, true, "exec") {
 				continue
 			}
 			var m sshExecReqMsg
@@ -916,7 +930,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 }
 
 // handleSSHDirectTCPIP implements `-L` local forwarding: ExecStream of `socat
-// - TCP:127.0.0.1:<port>` inside the sandbox's OWN network namespace (the
+// - TCP:127.0.0.1:<port>` (a VM: the guest agent's forward mode) inside the sandbox's OWN network namespace (the
 // sandbox cannot create egress — L0 structural confinement, invariant 3, is
 // unaffected by this), so the only reachable destination is EVER the
 // sandbox's own loopback regardless of what host the client asked to
@@ -943,9 +957,15 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		_ = newCh.Reject(ssh.ConnectionFailed, msg)
 		return
 	}
+	// A macOS VM's loopback also holds Screen Sharing: the desktop door, which the window's session and
+	// recording accounting covers. It needs the run's machine kind, so it follows the fresh read.
+	if run.MachineKind.IsMacOSVM() && guestagent.MacScreenSharingPort(int(m.DestPort)) {
+		_ = newCh.Reject(ssh.Prohibited, "forwarding to a macOS VM's Screen Sharing ports (5900-5909) is not allowed — open the run's window instead")
+		return
+	}
 
 	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", m.DestPort)},
+		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
 	if err != nil {
 		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",

@@ -91,7 +91,7 @@ func placementWireReasons(t *testing.T) []placement.Reason {
 			return true
 		})
 	}
-	for _, file := range []string{"eligibility.go", "enforce.go"} {
+	for _, file := range []string{"eligibility.go", "enforce.go", "managed_device.go"} {
 		for _, f := range parse("../placement/" + file) {
 			ast.Inspect(f, func(n ast.Node) bool {
 				if call, ok := n.(*ast.CallExpr); ok && len(call.Args) > 0 {
@@ -320,11 +320,11 @@ var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // comment explains the split: #656 slice 3 pushed reasons.go past
 // scripts/check-file-size.sh's 1000-line gate; reasons_revive.go holds the
 // revive block moved out of reasons_routes.go for the same reason;
-// reasons_governance.go the run-context reasons). Every
+// reasons_governance.go the run-context reasons; reasons_kept_machine.go the kept-machine ones). Every
 // reader of the set — this guard, driveRefusalConstants
 // (user_drives_run_test.go) — must read all of them, or a value declared in
 // another file is invisible to it.
-var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go"}
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
 // reasonsGoFiles via go/parser rather than a line-anchored regex, so a

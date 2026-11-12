@@ -124,6 +124,7 @@ var docTierRows = []struct{ route, token string }{
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
 	{"PUT /api/v1/workspaces/{id}/owning-unit", "`PUT /workspaces/{id}/owning-unit`"},
+	{"PUT /api/v1/components/{id}/owning-unit", "`PUT /components/{id}/owning-unit`"},
 	{"PUT /api/v1/workspaces/{id}/denied-egress", "`denied-egress`"},
 	// SEPARATE TOKENS, because 0.7 re-tiered one of these and not the other.
 	// They shared the surface token "`record` + `promote-egress`" while they
@@ -147,6 +148,9 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/people/{principal}/tokens", "`POST /people/{principal}/tokens`"},
 	{"GET /api/v1/people/{principal}/tokens", "`GET /people/{principal}/tokens`"},
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
+	{"GET /api/v1/audit/receipt", "`GET /audit/receipt`"},
+	{"GET /api/v1/audit/checkpoints", "`GET /audit/checkpoints`"},
+	{"GET /api/v1/audit/receipt-keys", "`GET /audit/receipt-keys`"},
 	{"GET /api/v1/admin/runs/capacity", "`GET /admin/runs/capacity`"},
 	{"GET /api/v1/audit/retention", "`GET /audit/retention`"},
 	{"POST /api/v1/audit/retention/drop", "`POST /audit/retention/drop`"},
@@ -205,6 +209,8 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/governance/units/{id}", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/units/{id}/admins", "the unit-admin `/governance` routes"},
 	{"DELETE /api/v1/governance/units/{id}/admins/{admin}", "the unit-admin `/governance` routes"},
+	{"PUT /api/v1/governance/units/{id}/deciders", "the unit-admin `/governance` routes"},
+	{"GET /api/v1/governance/units/{id}/model-usage", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/memberships", "the unit-admin `/governance` routes"},
 	{"DELETE /api/v1/governance/memberships/{id}", "the unit-admin `/governance` routes"},
 	{"PUT /api/v1/governance/memberships/{id}", "the unit-admin `/governance` routes"},
@@ -215,6 +221,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/governance/changes/{id}", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/changes/{id}/approve", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/changes/{id}/reject", "the unit-admin `/governance` routes"},
+	{"PUT /api/v1/governance/changes/{id}/note", "the unit-admin `/governance` routes"},
 	{"GET /api/v1/user-types", "the `/user-types` routes"},
 	{"POST /api/v1/user-types", "the `/user-types` routes"},
 	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
@@ -225,6 +232,8 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"GET /api/v1/governance/recording", "the `/governance/recording` routes"},
 	{"PUT /api/v1/governance/recording", "the `/governance/recording` routes"},
+	{"PUT /api/v1/governance/units/{id}/envelope", "the `/governance/units/{id}/envelope` routes"},
+	{"DELETE /api/v1/governance/units/{id}/envelope", "the `/governance/units/{id}/envelope` routes"},
 	{"POST /api/v1/governance/restrictions", "the `/governance/restrictions` routes"},
 	{"PUT /api/v1/governance/restrictions/{id}", "the `/governance/restrictions` routes"},
 	{"DELETE /api/v1/governance/restrictions/{id}", "the `/governance/restrictions` routes"},
@@ -303,6 +312,9 @@ var docTierRows = []struct{ route, token string }{
 	// Member drives (0.9): the admin list and delete of the drives people create are SUPER.
 	{"GET /api/v1/drives/member", "the `/drives/member` routes"},
 	{"DELETE /api/v1/drives/member/{id}", "the `/drives/member` routes"},
+	// Kept machines (0.10): the admin list and delete of the machines people keep are SUPER.
+	{"GET /api/v1/machines/kept", "the `/machines/kept` routes"},
+	{"DELETE /api/v1/machines/kept/{id}", "the `/machines/kept` routes"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each

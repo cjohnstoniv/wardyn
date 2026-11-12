@@ -177,6 +177,32 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // ?step= deep link: the Integrations page's proxy banner hands off to
   // Corporate network with it, now that the step is the only place a proxy is
   // configured (see integrations-screen.tsx's "Open Corporate network").
+  describe("Corporate network proxy secret — dangling warning needs a known secrets list", () => {
+    const openCorpNetwork = async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await screen.findByRole("heading", { name: /^network$/i });
+    };
+
+    it("a failed secrets read never says a configured secret no longer exists", async () => {
+      getSiteConfigMock.mockResolvedValue({ upstream_proxy_secret_ref: "corp-proxy" });
+      listSecretsMock.mockRejectedValue(new Error("HTTP 500"));
+      await openCorpNetwork();
+      await waitFor(() => expect(listSecretsMock).toHaveBeenCalled());
+      expect(screen.queryByText(/no longer exists in the store/i)).not.toBeInTheDocument();
+    });
+
+    it("a loaded list without the ref still warns that it is gone", async () => {
+      getSiteConfigMock.mockResolvedValue({ upstream_proxy_secret_ref: "corp-proxy" });
+      listSecretsMock.mockResolvedValue(["something-else"]);
+      await openCorpNetwork();
+      expect(await screen.findByText(/no longer exists in the store/i)).toBeInTheDocument();
+    });
+  });
+
   describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
     it("the tile's button is the probe while unproven; one reached probe makes the step done — no tab detour", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);

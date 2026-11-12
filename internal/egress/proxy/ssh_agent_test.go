@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -248,6 +250,45 @@ func TestBrokerMint_SSHKeyAnswerWithheld(t *testing.T) {
 	}
 }
 
+// A mint answer the relay cannot read whole never reaches the sandbox, even
+// in part: a private key can come before the fields that name it an ssh_key.
+// Cut short (a broken connection), over the size cap, or undecodable, it is a
+// deny with none of the key's bytes in the answer.
+func TestBrokerMint_PartialAnswerFailsClosed(t *testing.T) {
+	const key = "SENTINEL-PRIVATE-KEY"
+	head := `{"kind":"ssh_key","token":"` + key + `","jti":`
+	for _, tc := range []struct {
+		name  string
+		serve func(w http.ResponseWriter)
+	}{
+		{"connection drops mid-answer", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Length", "4096")
+			_, _ = io.WriteString(w, head)
+			w.(http.Flusher).Flush()
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+		}},
+		{"over the size cap", func(w http.ResponseWriter) {
+			_, _ = io.WriteString(w, `{"kind":"git_pat","token":"`+key+`","pad":"`+strings.Repeat("x", maxBrokeredBody)+`"}`)
+		}},
+		{"undecodable 200", func(w http.ResponseWriter) { _, _ = io.WriteString(w, head) }},
+		{"no kind", func(w http.ResponseWriter) { _, _ = io.WriteString(w, `{"token":"`+key+`"}`) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { tc.serve(w) }))
+			t.Cleanup(cp.Close)
+			p, buf, _ := sshAgentProxy(t, uuid.New(), "", "", func(o *Options) { o.Dial = redirectDial(upstreamAddr(cp)) })
+			rec := residentMintCall(t, p, uuid.New())
+			if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), key) {
+				t.Fatalf("answer %d %q, want a refusal with no key bytes", rec.Code, rec.Body.String())
+			}
+			if d := lastDecision(t, buf); d.Decision != egress.Deny || d.RuleSource != ruleSourceMint {
+				t.Fatalf("decision = %+v, want a mint deny", d)
+			}
+		})
+	}
+}
+
 // A grant that is not an ssh_key gets no agent and no key; a grant a
 // broker mints is refused before any mint.
 func TestSSHAgent_RefusesOtherGrants(t *testing.T) {
@@ -294,5 +335,46 @@ func TestSSHAgent_ResidentKey(t *testing.T) {
 	}
 	if n := mints.Load(); n != 0 {
 		t.Fatalf("control-plane mints = %d, want none", n)
+	}
+}
+
+// The agent route answers the sandbox through httpError: a refused dial (whose error names the control
+// plane's URL host and the dial address) and a non-200 mint (whose body the control plane wrote) reach the
+// sandbox with no host, no IP literal and none of that body.
+func TestSSHAgent_MintFailureAnswerHasNoTopology(t *testing.T) {
+	frame := binary.BigEndian.AppendUint32(nil, 1)
+	frame = append(frame, 11) // SSH_AGENTC_REQUEST_IDENTITIES
+	ipLiteral := regexp.MustCompile(`\d{1,3}(\.\d{1,3}){3}`)
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	refused := closed.Addr().String()
+	_ = closed.Close() // nothing listens here now
+	for _, tc := range []struct {
+		name string
+		opts func(*Options)
+	}{
+		{"refused dial", func(o *Options) { o.Dial = redirectDial(refused) }},
+		{"non-200 with a body", func(o *Options) {
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "db host 10.20.30.40 failed: BODY-SENTINEL", http.StatusInternalServerError)
+			}))
+			t.Cleanup(cp.Close)
+			o.Dial = redirectDial(upstreamAddr(cp))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _, _ := sshAgentProxy(t, uuid.New(), "", "", tc.opts)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, routeSSHAgent+uuid.New().String(), bytes.NewReader(frame)))
+			body := rec.Body.String()
+			if rec.Code != http.StatusBadGateway {
+				t.Fatalf("status %d (%q), want 502", rec.Code, body)
+			}
+			if strings.Contains(body, "wardynd.test") || strings.Contains(body, "BODY-SENTINEL") || ipLiteral.MatchString(body) {
+				t.Errorf("the sandbox was answered %q, want no control-plane host, IP literal or control-plane body", body)
+			}
+		})
 	}
 }

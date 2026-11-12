@@ -105,4 +105,20 @@ describe("recordings.getRecording — asciicast v2 parsing", () => {
     expect((err as HttpError).status).toBe(500);
     expect((err as HttpError).message).toBe("recording store offline");
   });
+
+  // A refusal's machine-readable reason survives, so the run page can tell a held rule from a missing cast.
+  it("keeps the reason and sentence of a 403 data_out_blocked", async () => {
+    const sentence = "This run's data_out rule keeps its content in: only a super admin can replay its recording.";
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: sentence, reason: "data_out_blocked" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const err = await recordings.getRecording("run-8").catch((e) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(403);
+    expect((err as HttpError).reason).toBe("data_out_blocked");
+    expect((err as HttpError).message).toBe(sentence);
+  });
 });

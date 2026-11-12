@@ -19,10 +19,12 @@
 // page's Audit tab.
 import { Link } from "react-router-dom";
 import { cn } from "../ui/utils";
+import { ALLOWED_MODELS } from "../../lib/governance-copy";
 import { erasedFieldNames, toolRuleDecision, type AuditEvent } from "../../lib/types";
 import { AUDIT } from "../screens/audit-copy";
 import { Chip } from "./primitives";
 import { PUSH } from "./copy/push";
+import { PUSH_DENY_ALL_SOURCE } from "../../lib/wall-preset-words";
 
 // toolRuleDecision and RuleDecision moved to lib/types/audit.ts: egressFromAudit
 // (lib/api/audit.ts) has to exclude exactly the rows this component relabels,
@@ -86,6 +88,8 @@ export const ATTRIBUTED_RULE_SOURCES: ReadonlySet<string> = new Set([
   "brokered:git:push-too-large",
   "brokered:ado:denied",
   "brokered:ado-git:denied",
+  // The run's allowed-models gate: a refusal names the profile that limits the models, so its owner is who to ask.
+  "brokered:allowed-models",
 ]);
 
 // True for a refusal row (an egress.deny) whose rule_source is in the set. The
@@ -95,13 +99,28 @@ export function isAttributedRefusal(event: AuditEvent): boolean {
   return event.action === "egress.deny" && typeof source === "string" && ATTRIBUTED_RULE_SOURCES.has(source);
 }
 
+const APPROVAL_REASON_LABELS: Record<string, RuleSourceLabel> = {
+  "approval:pending": { label: "Held for approval", tone: "info" },
+  "approval:denied": { label: "Denied by an approver", tone: "danger" },
+  "approval:expired": { label: "Refused: the approval expired undecided", tone: "danger" },
+  "approval:stale": { label: "Refused: the approval could not be re-checked", tone: "danger" },
+  "approval:refused": { label: "Refused: no approval could be raised", tone: "danger" },
+  "approval:host-cap": { label: "Refused: this run reached its limit of hosts it can ask about", tone: "danger" },
+};
+
 export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
+  // Every refusal of the gate reads the same, whatever the cause text on the row says; the cause names which.
+  if (source === "brokered:allowed-models") return { label: ALLOWED_MODELS.AUDIT_REFUSED, tone: "danger" };
   if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };
   // Every other policy:* value the proxy emits is a refusal (denied,
   // default-deny, method, evaluator-error) — the row's outcome column already
   // says deny; this names WHY at the same weight as the builtin refusals.
   if (source.startsWith("policy:")) return { label: "Refused by policy", tone: "danger" };
+  // The proxy's approval:* reasons (internal/egress/proxy/approvals.go, proxy.go): only an approval id
+  // means the request went through; every named reason is a request that was held or refused.
+  const approvalReason = APPROVAL_REASON_LABELS[source];
+  if (approvalReason) return approvalReason;
   if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
   // #181 — a push_rules refusal (never a held request: deny_paths refuses
   // synchronously, before any approval row exists — push_rules.go), named
@@ -118,6 +137,8 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (source === "brokered:git:push-uninspectable") {
     return { label: "Push refused — couldn't be inspected", tone: "danger" };
   }
+  // A run's walls or wall preset refuse every push (push_rules.deny_all): additive to the five labels above, which stay as shipped.
+  if (source === PUSH_DENY_ALL_SOURCE) return { label: "Refused: every push", tone: "danger" };
   // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
   // refusal: recorded once per run, at proxy construction, to audit the
   // deliberate SSRF-guard relaxation for the operator's own configured

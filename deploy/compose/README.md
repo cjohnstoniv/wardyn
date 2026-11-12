@@ -24,7 +24,7 @@
   - 403 on the policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image
   - reading and launching/killing stay open
   - and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling).
-- That admin/member model with owner scoping **shipped in v0.5**; a fully packaged **team mode** (SAML/SCIM) is not built yet — see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md).
+- For the admin/member model with owner scoping, see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md).
 - Members of this stack: [`../../docs/USERS.md`](../../docs/USERS.md).
 
 ## Quick start
@@ -107,13 +107,13 @@ WARDYN_LOCAL_MODE=true docker compose -f deploy/compose/docker-compose.yaml up p
 - Sidecar/run-token auth is unaffected.
 
 > [!WARNING]
-> Local mode **refuses to start on an explicit publicly-routable IP** (it will not serve a no-auth API on a public IP), but on an **unspecified bind** (`0.0.0.0`, the `WARDYN_LISTEN` default) it only **warns**.
+> Local mode **refuses to start on an explicit publicly-routable IP** (it will not serve a no-auth API on a public IP), but on an **unspecified bind** (`:8080`, the `WARDYN_LISTEN` default) it only **warns**.
 > It does not refuse — because that bind might be host-firewalled or purely a docker-bridge address.
 > For a real guarantee, bind/publish loopback-only (the Compose default already publishes `127.0.0.1`) — do not rely on the warning alone, and keep local mode on a trusted single-dev machine.
 
 - The `wardyn` CLI also works with no token against a local-mode daemon.
 
-## ⚠️ Daemon-trust tradeoff (read before running)
+## Daemon trust
 
 > [!WARNING]
 > The `wardynd` service bind-mounts **`/var/run/docker.sock`**.
@@ -189,7 +189,7 @@ remains the source of truth.
   - and POSTs them to wardynd — where they are recorded append-only and fan to every SIEM sink, exactly like every other event.
 - The POSTs ride wardynd's internal TLS listener (`https://wardynd:8443`), pinned to wardynd's internal CA, which wardynd writes to the shared `groundtruth_token` volume as `control-plane-ca.pem`.
   - The sidecar refuses to start on a non-loopback `http://` URL.
-- This tier is **opt-in** (compose profile `groundtruth`) and **honestly degradable**: with it OFF, `wardynd`'s `/healthz` reports `ebpf_groundtruth=unavailable` — never a silent claim that the stream exists.
+- This tier is **opt-in** (compose profile `groundtruth`) and **degrades visibly**: with it OFF, `wardynd`'s `/healthz` reports `ebpf_groundtruth=unavailable` — never a silent claim that the stream exists.
 
 > [!IMPORTANT]
 > **Prerequisite — set a persistent `WARDYN_AGE_KEY` first.**
@@ -221,7 +221,7 @@ docker compose --profile groundtruth up -d tetragon wardyn-tetragon-ingest
 curl -s localhost:8080/healthz | jq .ebpf_groundtruth
 ```
 
-Honest limits (by design, not hidden):
+Limits:
 
 - **Detection, not prevention.** It never blocks. Exec of a dynamic linker
   (`ld-linux*`/`ld-musl*`) is FLAGGED (`data.loader=true`) — the documented
@@ -238,7 +238,7 @@ Honest limits (by design, not hidden):
 - **`kernel.network.connect` needs a kernel that reports container egress.**
   - On WSL2 + Docker Desktop (kernel `*-microsoft-standard-WSL2`, Tetragon v1.1.2) the `tcp_connect` kprobe delivers NO event for a connect that leaves a container over its veth.
   - Only host-netns and container-loopback connects appear.
-  - Measured, not inferred: ~120 real container connects produced zero events while `tetragon_ringbuf_perf_event_lost_total` stayed 0, and it persists with the file kprobe removed entirely.
+  - About 120 real container connects produced zero events while `tetragon_ringbuf_perf_event_lost_total` stayed 0, and it persists with the file kprobe removed entirely.
   - Nothing in Wardyn can fix that from user space, so it is GATED rather than papered over: `/healthz` reports `ebpf_groundtruth.state="partial"` with `missing_kinds:["kernel.network.connect"]`, and every capture/profile carries the matching caveat.
   - Run the ground-truth tier on a normal Linux kernel for connect coverage; on WSL2, treat `partial` as expected, not as a bug.
 - **The shipped policy is loud, and the export keeps only ~50 s.**

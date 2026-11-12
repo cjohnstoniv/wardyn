@@ -75,11 +75,13 @@ func (u *orgUpstream) seen() (int, http.Header, string) {
 type fakeOrg struct {
 	mu                               sync.Mutex
 	injections, mints, raised, polls int
-	gated                            bool          // the GitHub grant needs an approval nobody gives
-	value                            string        // the injected header value; viaOrgSecret when empty
-	failGrant                        uuid.UUID     // this grant's injection resolve fails
-	block                            chan struct{} // decision posts wait on it
+	gated                            bool                // the GitHub grant needs an approval nobody gives
+	value                            string              // the injected header value; viaOrgSecret when empty
+	failGrant                        uuid.UUID           // this grant's injection resolve fails
+	block                            chan struct{}       // decision posts wait on it
+	pollState                        types.ApprovalState // what a poll answers; PENDING when empty
 	decisions                        strings.Builder
+	posts, relayedPosts              int // decision posts, and those carrying DecisionRelayedHeader
 }
 
 func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -110,6 +112,10 @@ func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		b, _ := io.ReadAll(req.Body)
 		f.decisions.Write(b)
+		f.posts++
+		if req.Header.Get(DecisionRelayedHeader) == "1" {
+			f.relayedPosts++
+		}
 		rec.WriteHeader(http.StatusAccepted)
 	case p == "/api/v1/internal/approvals" && req.Method == http.MethodPost:
 		f.raised++
@@ -117,7 +123,7 @@ func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
 		_ = json.NewEncoder(rec).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
 	case strings.HasPrefix(p, "/api/v1/internal/approvals/"):
 		f.polls++
-		_ = json.NewEncoder(rec).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
+		_ = json.NewEncoder(rec).Encode(types.ApprovalRequest{ID: uuid.New(), State: cmpState(f.pollState)})
 	default:
 		rec.WriteHeader(http.StatusNoContent)
 	}

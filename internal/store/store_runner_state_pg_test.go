@@ -330,7 +330,7 @@ func (g *goneRig) holders() (slots, macs int) {
 	if err != nil {
 		g.t.Fatal(err)
 	}
-	m, err := g.st.RunnerMacOSVMHolders(g.t.Context(), ids)
+	m, err := g.st.RunnerMacOSVMHolders(g.t.Context(), ids, uuid.Nil)
 	if err != nil {
 		g.t.Fatal(err)
 	}

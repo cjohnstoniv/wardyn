@@ -28,7 +28,7 @@ func (s *Server) routes() chi.Router {
 	// real TCP peer instead. Handler's trustedProxyClient reads X-Forwarded-For
 	// ONLY from a peer in the explicit WARDYN_TRUSTED_PROXIES allowlist.
 	r.Use(middleware.Recoverer)
-	r.Use(s.securityHeaders, s.dropInboundOnWrite)
+	r.Use(s.securityHeaders, s.dropInboundOnWrite, s.gatewayMintOffGate)
 
 	r.Get("/healthz", s.handleHealthz)
 	// Readiness: proves Postgres is reachable, not just that the process is up
@@ -68,7 +68,7 @@ func (s *Server) routes() chi.Router {
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
-			r.Use(s.humanOrAdminAuth, s.expectedPrincipalGuard)
+			r.Use(s.humanOrAdminAuth, s.expectedPrincipalGuard, s.auditStrictIntent) // strict audit's intent row, once the caller is known (audit_strict.go)
 			// operatorOnly and securityOps are the two gate values over this one
 			// authenticated group (chi's With is what Group is built from):
 			// operatorOnly is the super-admin role gate (requireOperator, which reads
@@ -202,7 +202,7 @@ func (s *Server) routes() chi.Router {
 			// author a policy pairing an operator secret with attacker egress and
 			// then simply select it. Profile authoring lives at /governance below.
 			securityOps := r.With(s.requireSecurityOperator)
-			r.Post("/runs", s.handleCreateRun)
+			r.Post("/runs", s.handleCreateRunRoute)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
 			// deterministic setup checklist — mints/persists/dispatches nothing. The
@@ -229,18 +229,18 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
 			r.Post("/runs/{id}/resume", s.handleResumeRun)
+			r.Post("/runs/{id}/exec", s.handleRunExec) // one command, as an SSH exec runs it, by the person who may enter the run (run_exec.go)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
 
-			// Live-run evidence reads for the run-detail cockpit. All three are
-			// OWNER-OR-ADMIN via getRunAuthorized (a foreign run 404s — no
-			// existence oracle), same gate as GET /runs/{id} above, and all three
-			// are READ-ONLY observations of a sandbox that is already running:
-			// they mint nothing, open no new network path (invariant 3), and
-			// change no run state.
+			// Live-run evidence reads for the run-detail cockpit. All are OWNER-OR-ADMIN
+			// via getRunAuthorized (a foreign run 404s — no existence oracle), same gate
+			// as GET /runs/{id} above, and READ-ONLY: they mint nothing, open no new
+			// network path (invariant 3), and change no run state.
 			r.Get("/runs/{id}/files", s.handleRunFiles)
 			r.Get("/runs/{id}/resources", s.handleRunResources)
+			r.Get("/runs/{id}/model-usage", s.handleRunModelUsage)     // stored token counts; reads a finished run too
 			r.Get("/runs/{id}/containment", s.handleGetRunContainment) // same gate as GET /runs/{id}
 			r.Get("/runs/{id}/attach-holder", s.handleAttachHolder)
 			// The one WRITE in that set: displacing whoever currently holds the
@@ -268,12 +268,12 @@ func (s *Server) routes() chi.Router {
 			// only for a run with no personal owner (mayEnterRun); on a person's run
 			// they get 403 run_owner_only (#1476).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
-			// The three lines above are each issue #658's pre-0.8 alias; their
-			// 0.8 names (mounted alongside, same handlers, kept one minor —
-			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
-			// function into mountRenamedRunRoutes, called once, below.
+			// The three lines above are each issue #658's pre-0.8 alias; their 0.8 names (mounted alongside,
+			// same handlers, kept one minor — docs/sdk.md "Renamed in 0.8") are factored out of this
+			// already-long function into mountRenamedRunRoutes, called once, below.
 			s.mountRenamedRunRoutes(r)
-			s.mountInboundTicketRoutes(r) // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
+			s.mountInboundTicketRoutes(r)   // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
+			s.mountBackgroundWatchRoutes(r) // the ticket to watch a background macOS run's desktop, view only (run_background_watch.go)
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
 			// operator-only: the decision IS the live authorization over an
@@ -496,7 +496,7 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
 			s.mountSecretRoutes(r, operatorOnly, securityOps)
-			s.mountComponentRoutes(r, operatorOnly) // components_routes.go: saved components, the caller's and the organisation's
+			s.mountComponentRoutes(r, operatorOnly, securityOps) // components_routes.go: saved components, the caller's and the organisation's
 
 			// Site config: the operator-wide, admin-authored baseline every run
 			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry
@@ -650,7 +650,7 @@ func (s *Server) routes() chi.Router {
 			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
 			// (user_drives_reclaim.go) joins the family's two halves.
 			s.mountUserDriveFamily(r, operatorOnly, securityOps)
-
+			s.mountKeptMachineRoutes(r, operatorOnly) // kept_machines.go: a person's own kept machines; the super admin's list and delete
 			s.mountRecordingRoutes(r)
 		})
 
@@ -669,8 +669,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/attach", s.handleAttachWS)
 		})
 
-		// Internal sidecar surface (run-token bearer) — see mountInternalRoutes.
-		r.Group(s.mountInternalRoutes)
+		r.Group(s.mountInternalRoutes) // the sidecar surface (run-token bearer)
+		s.mountGatewayIdentityRoute(r) // and its one door gated before internalAuth
 
 		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).
 		// SEPARATE auth group from the run-token internal surface above: the
@@ -720,8 +720,8 @@ func (s *Server) mountRenamedRunRoutes(r chi.Router) {
 	r.Post("/runs/{id}/attach/ticket", s.handleAttachTicket)
 }
 
-// mountRunLeaseRoutes registers a run's end/wait change, its title, its kill
-// and its revive on r — carved out of routes() purely for funlen.
+// mountRunLeaseRoutes registers a run's end/wait change, its title, its kill,
+// its revive and its egress edit on r — carved out of routes() purely for funlen.
 func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// The run's end and wait (#569): owner or SUPER admin, clamped to the
 	// run's captured limits — handleSetRunEndAndWait.
@@ -734,7 +734,7 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// title (ownsRun, no admin bypass), any run state (launch_intent.go).
 	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
-	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go); they open no shell, so #1476 leaves them
+	s.mountRunReviveRoutes(r) // revive and the live egress edit, owner or super admin (run_egress_edit.go)
 	// Desktop sign-ins (#2972): the run's creator only, off unless
 	// WARDYN_DESKTOP_SIGNINS=on (run_desktop_signin.go).
 	r.Post("/runs/{id}/desktop-signin", s.handleBeginDesktopSignin)
@@ -772,14 +772,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	s.mountInvitationRoutes(r, securityOps)
 	s.mountServiceIdentityRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
-	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new
-	// machine (localStorage would not). Scoped to the caller's OWN principal at the store, exactly
-	// like the ssh-keys block above — never a principal taken from the body.
+	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new machine (localStorage
+	// would not). Scoped to the caller's OWN principal at the store, like the ssh-keys block above, never the body's.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	// The caller's own kept launch setups, newest first (launch_intent.go).
 	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
 	s.mountPersonalWallsRoutes(r) // the caller's own walls, keyed by their session (personal_walls.go)
+	s.mountWallPresetRoutes(r)    // named walls picked at launch, with the run templates' authority (wall_presets.go)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
 	// self-service block and nowhere else — both doors refuse a caller with no
@@ -888,7 +888,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// — because the verdict counts every row in the deployment, and
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
-	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	s.mountAuditChainRoutes(securityOps)
 	// Fleet capacity (runs_capacity.go): configured reservations summed from the run rows.
 	// securityOps because it reconstructs nothing GET /runs?view=admin does not already show
 	// that tier; fleet volume stays off members. No exec and no runner call.
@@ -944,10 +944,10 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	r.Post("/internal/decisions", s.handlePostDecision)
 	// The proxy's "bytes moved" presence signal (#572), run from the token.
 	r.Post("/internal/activity", s.handleInternalActivity)
+	r.Post("/internal/proxy/loaded", s.handleInternalProxyLoaded)
 	r.Post("/internal/approvals", s.handleInternalRequestApproval)
 	r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
-	// wardyn-toolgate's own give-up signal (#811): closes the row it
-	// raised instead of leaving it PENDING for the sweep.
+	// wardyn-toolgate's own give-up signal (#811): closes the row it raised instead of leaving it PENDING for the sweep.
 	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
 	// The run proxy's sign-in lane asks whether a credential is the run's

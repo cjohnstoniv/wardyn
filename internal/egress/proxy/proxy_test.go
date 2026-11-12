@@ -63,7 +63,12 @@ func (publicResolver) LookupIP(host string) ([]net.IP, error) {
 // drainSink reads emitted decision logs from a buffer (one JSON object/line).
 func lastDecision(t *testing.T, buf *bytes.Buffer) egress.DecisionLog {
 	t.Helper()
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if !strings.Contains(l, `"rule_source":"`+ruleSourceLLMUsage+`"`) { // a model call's token counts, sent after its decision
+			lines = append(lines, l)
+		}
+	}
 	if len(lines) == 0 || lines[0] == "" {
 		t.Fatalf("no decision logged")
 	}
@@ -613,5 +618,30 @@ func forcePollNow(ap *approvalClient, host string) {
 	defer ap.mu.Unlock()
 	if st, ok := ap.hosts[host]; ok {
 		st.lastPoll = time.Time{}
+	}
+}
+
+// TestUpstreamProxyStartupRowIsNotActivity: the one allow row a proxy writes when it starts with an upstream
+// proxy records configuration, and a via_org engine writes it again on every rebuild, so it must never move
+// the idle clock. The row the proxy really emits is checked against the predicate that excludes it.
+func TestUpstreamProxyStartupRowIsNotActivity(t *testing.T) {
+	up, err := parseUpstreamProxy("http://corp-proxy.internal.test:3128")
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	buf := &bytes.Buffer{}
+	newProxy(Options{
+		RunID:    uuid.New(),
+		Policy:   CompilePolicy(types.RunPolicySpec{}),
+		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Resolver: publicResolver{},
+		Upstream: up,
+	})
+	d := lastDecision(t, buf) // the only row a new proxy writes
+	if d.Decision != egress.Allow {
+		t.Fatalf("start-up row decision = %q, want %q", d.Decision, egress.Allow)
+	}
+	if egress.CountsAsActivity(d) {
+		t.Errorf("the upstream proxy's start-up row (rule_source %q) counts as activity", d.RuleSource)
 	}
 }

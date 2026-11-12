@@ -111,9 +111,12 @@ export function GettingStarted({
 function ReadinessRow({
   status,
   loading,
+  unreachable = false,
 }: {
   status: SetupStatus | null;
   loading: boolean;
+  /** The status read failed: no readiness to show, and "Checking…" would never end. */
+  unreachable?: boolean;
 }) {
   const readiness = status ? deriveReadiness(status) : null;
   const chip = (
@@ -172,6 +175,10 @@ function ReadinessRow({
         This host right now:
       </div>
       <div className="flex flex-wrap gap-2">
+        {unreachable ? (
+          <Chip tone="neutral">Couldn&apos;t reach Wardyn</Chip>
+        ) : (
+          <>
         {chip(
           BrickWall,
           !!readiness?.barrierReady,
@@ -179,6 +186,8 @@ function ReadinessRow({
           "Barrier: needs setup",
         )}
         {modelChip}
+          </>
+        )}
       </div>
     </div>
   );
@@ -221,7 +230,7 @@ export function OnboardingScreen({
         <HowItWorksStrip />
       </div>
 
-      <ReadinessRow status={known} loading={loading} />
+      <ReadinessRow status={known} loading={loading} unreachable={status?.unreachable === true} />
 
       <div className="mt-6 flex flex-wrap items-center gap-2.5">
         <Button onClick={onGetStarted}>

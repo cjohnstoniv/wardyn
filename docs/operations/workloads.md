@@ -16,11 +16,12 @@
 | Intent | What to run: exactly the `intent` of a `kind: Run` document ([Run documents](../sdk.md#run-documents)) |
 | Generation | Counts spec changes. `current_generation` is the one the current run was launched from |
 | Digest | The hex SHA-256 over the intent, `run_in` and `restart_key`. An apply with the same digest changes nothing. The security tier reading another owner's workload does not get it |
-| Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block |
+| Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block, the worse of two with [Wardyn's own check](../SERVICES.md#wardyns-own-check) |
 
 - An owner holds at most 100 workloads (`422` `workload_cap_reached`).
 - The store must be Postgres. Any other backend answers `501` `workloads_unavailable`.
 - A workload is not a schedule or a queue. It has one current run, and it starts a run only when its spec is ahead of its run.
+- It is one run: no replicas, no autoscaling, and a service's health is the sandbox's own claim ([Health is the sandbox's claim](../SERVICES.md#health-is-the-sandboxs-claim)). Replicated production agents belong on the sandbox controller directly.
 
 ## The workload file
 
@@ -58,7 +59,7 @@ intent:
 | Command | What it does |
 |---|---|
 | `wardyn apply -f FILE` | Stores each workload the file names, and starts a run when it is new or changed |
-| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing. A service identity's token gets `403` `service_scope` (exit `2`) |
+| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file, from the server's preview. Writes nothing. A service identity's token may run it |
 | `wardyn delete -f FILE` | Ends each workload's run and deletes the workload |
 | `wardyn workload list` | Lists `NAME`, `OWNER`, `SOURCE`, `STATE`, `GENERATION` (current/latest), `RUN` and `REFUSED` (the last refusal's reason) |
 | `wardyn workload get NAME` | Prints the workload, its document and status, as JSON |
@@ -68,13 +69,13 @@ intent:
 
 - `-f -` reads standard input. `FILE` is required.
 - `workload list|get|restart|delete` take `--owner` for an administrator, or a service identity's sponsor, who acts on another owner's workloads. A `security_admin` may list, get and delete them but not restart one (below). `list` takes `--limit`, `--offset` and `--json`.
-- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads.
+- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads. It can `apply`, `diff` and `apply --dry-run`; see [Apply from a pipeline](../CI.md#apply-from-a-pipeline).
 
 ### apply
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait`. A service identity's token gets the same `403` as `diff` |
+| `--dry-run` | Writes nothing. Prints what the apply would do per workload, the diff and the setup checklist. Exits `1` when an apply would be refused. `--json` adds `preview`. Excludes `--wait`. A service token may run it |
 | `--wait` | Follows each launched run: until it is running for a service, until it ends for any other workload |
 | `--timeout` | Gives up waiting after this long, `30m` by default. The run keeps going |
 | `--json` | Prints the results as a JSON array, with progress on stderr |
@@ -90,7 +91,24 @@ intent:
 | `124` | `--wait` timed out |
 | `--wait` outcome | The run's own exit, as `wardyn run --wait`. A service that ends before it is running exits `1` if FAILED, else `2` |
 
-`wardyn diff` exits `0` when every workload equals the stored one, `1` when any differs or is not stored yet, and `2` or more on an error. A file that does not parse and a spec the server refuses exit `2`.
+`wardyn diff` exits `0` when every workload equals the stored one, `1` when any differs or is not stored yet, and `2` or more on an error. A file that does not parse, a spec the server refuses and a spec the apply would be refused exit `2`. Against a server without the preview route, both commands print one note on stderr and compare client side, which cannot see those refusals.
+
+## Preview an apply
+
+`POST /api/v1/workloads/{name}/preview` takes the body of `PUT /api/v1/workloads/{name}` and answers what the PUT would do. It stores nothing and starts nothing. A service identity's token may call it, for its own workloads.
+
+| Field | Meaning |
+|---|---|
+| `op` | `create`, `update` or `none` (a `description`-only change is `none`) |
+| `outcome` | `created`, `updated` or `unchanged`; empty with a `refusal` |
+| `changes` | Each changed field by path, with `op` `add`, `remove` or `change`, and `from` and `to`. Never `null` |
+| `launch` | `would_launch` (`replaces` is the run that ends), `none`, or `would_refuse` with the launch's `reason` and sentence |
+| `refusal` | The `409` or `422` the PUT would answer, in a `200` so `changes` show |
+
+- A preview is one read: another apply can change the workload after it.
+- A launch refused at a gate that audits may leave the dry-run audit row a refused `POST /runs/preflight` leaves.
+- It cannot see two launch refusals: the image or devcontainer inputs, and an identity-provider `422`.
+- Each preview that owes a launch counts against the caller's preflight rate; over it, the answer is the preflight's `429`.
 
 ## What an apply does
 
@@ -105,12 +123,13 @@ intent:
 | An unchanged spec whose run has ended | `unchanged` | Nothing. An ended run is restarted with `wardyn workload restart`, never relaunched by an apply |
 
 - The new run is created before the old one is ended. A queued replacement lets the old run serve until the new one runs, unless the old run holds the slot the new one needs.
-- A refused launch is a `200`, not an error. The spec is stored at its new generation, and the old run keeps running.
+- A refused launch is not an error: the answer is a `201` when the apply created the workload and a `200` otherwise. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
 - The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
 - With several runners serving one bound namespace, the runner that last applied a workload is the one whose removals count. If that runner is down but still in the pool, remove it from the pool so another can take over.
-- `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
+- `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. A person's workload starts at their next apply.
+- A restart that is not the owner's own request launches only while the service identity is not suspended or retired, its sponsor is unchanged and the sponsor's access is not revoked.
 - A custom resource's workload restarts under the namespace binding that holds now. A binding deleted since, or one without authority, refuses it `workload_binding_inactive`: a `200` with that `launch.reason`, kept as `last_refusal`.
 - The daemon's 30-second sweep retries a launch whose claim lapsed, as the bound service under the same binding rule, at most once every 60 seconds. A refused launch waits for the resource's next report.
 - Deleting a workload removes the row, then ends its run with reason `workload_deleted`. The owner, the service identity's sponsor, a super admin or a `security_admin` may delete.
@@ -189,7 +208,7 @@ The runner writes `status` and nothing else, only to the resource named by the a
 | `Pending` | The current spec has no run yet, or its run is starting |
 | `Queued` | The run is waiting in the queue |
 | `Running` | The run is live and its service, if any, is not unhealthy. A paused run or a stale check reads "service health unknown" in `message`, with the last check |
-| `Unhealthy` | The run's service health is unhealthy |
+| `Unhealthy` | The run's service health, or Wardyn's own check, is unhealthy |
 | `Completed` | The run completed |
 | `Ended` | The run ended another way: failed, killed or stopped |
 | `Refused` | The launch of this spec was refused. The previous run keeps running |
@@ -259,7 +278,7 @@ Do not use the `Ready` condition for health: a completed workload is `Ready=Fals
 > [!WARNING]
 > A resource the runner cannot send gets no status. The runner logs `workload not reported` at warn level, with the namespace, name, operation and error, and sends nothing to the organisation. The resource shows no error.
 
-- That covers a spec over 256 KiB and a name that does not start with a letter. Read the runner's log, not the resource.
+- That covers a spec over 256 KiB and a name that is not a lowercase DNS label starting with a letter, of at most 63 characters. Read the runner's log, not the resource.
 - A resource that grows past the cap after it was reported keeps its last recorded spec running. Its status stays as it was, so the Argo check above reads it as Progressing.
 - A namespace holding more than 1000 resources sends no full-list sync. The runner logs `workload sync not sent`, and a resource deleted while the runner was down is not pruned.
 - The schema leaves `intent` open on purpose, so `kubectl apply` accepts a spec that Wardyn then marks `Invalid`. Read the status after an apply.

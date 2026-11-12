@@ -763,40 +763,44 @@ func TestCloneDuringUpdateTakesOldBase(t *testing.T) {
 	}
 }
 
-// Two updates of one base run one after the other.
+// Two updates of one base never overlap: one that starts while another runs is refused at once, and one
+// that starts after it ends runs.
 func TestConcurrentUpdatesSerialise(t *testing.T) {
 	f, tf, _ := stage2Prep(t)
 	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
 		t.Fatal(err)
 	}
 	var cur, peak, runs atomic.Int64
+	entered, release := make(chan struct{}), make(chan struct{})
 	stage := hookStage(func(context.Context, macvm.Stage2Input) (macvm.ToolsResult, error) {
 		n := cur.Add(1)
 		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
 		}
-		runs.Add(1)
-		time.Sleep(100 * time.Millisecond)
+		if runs.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
 		cur.Add(-1)
 		return noneOnly, nil
 	})
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			o := updateOpts(f, tf, newGuest(), "")
-			o.Force, o.Stage = true, stage
-			_, _, err := macvm.UpdateTools(context.Background(), o)
-			errs <- err
-		}()
+	update := func() error {
+		o := updateOpts(f, tf, newGuest(), "")
+		o.Force, o.Stage = true, stage
+		_, _, err := macvm.UpdateTools(context.Background(), o)
+		return err
 	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+	first := make(chan error, 1)
+	go func() { first <- update() }()
+	<-entered
+	if err := update(); !errors.Is(err, macvm.ErrToolsUpdateBusy) {
+		t.Fatalf("an update while another runs: %v", err)
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := update(); err != nil {
+		t.Fatalf("an update after the first ended: %v", err)
 	}
 	if peak.Load() != 1 || runs.Load() != 2 {
 		t.Fatalf("peak concurrency %d over %d runs", peak.Load(), runs.Load())
@@ -856,6 +860,37 @@ func TestUpdateToolsReportsWaitingForAC(t *testing.T) {
 		return e.Phase == macvm.PhaseTools && e.Paused && e.Detail == "waiting for AC power"
 	}) {
 		t.Fatalf("changed %v err %v events = %+v", changed, err, ev.evs)
+	}
+}
+
+// The tools update stamps the dial it reports, so `macos-vm status` can order it against a run boot's
+// record by the dial's own clock instead of by when the update's log was last appended to.
+func TestUpdateToolsStampsTheDialItReports(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	ev := &events{}
+	o := updateOpts(f, tf, newGuest(), "")
+	o.Force, o.Progress = true, ev.add
+	before := time.Now().UnixNano()
+	if _, _, err := macvm.UpdateTools(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	n := 0
+	for _, e := range ev.evs {
+		if e.ToolsDial == "" {
+			continue
+		}
+		n++
+		if e.ToolsDialAt < before || e.ToolsDialAt > time.Now().UnixNano() {
+			t.Errorf("dial %q stamped %d, want a time from this update (>= %d)", e.ToolsDial, e.ToolsDialAt, before)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("dial events = %d, want 1: %+v", n, ev.evs)
 	}
 }
 

@@ -39,7 +39,7 @@ import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { T } from "../../../lib/integrations";
 import { SITE } from "../../wardyn/copy";
-import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { useOperator } from "../../wardyn/operator-context";
 import { useSiteConfigStep } from "./step-bodies";
 import { EgressTab, isSavedRedirect, useElapsedTimer, type ProbeUiState } from "./corp-network-egress";
@@ -73,6 +73,7 @@ export interface CorpStepActions {
 export function CorpNetworkStep({
   status,
   siteConfig,
+  siteConfigFailed = false,
   reloadSiteConfig,
   saveSiteConfig,
   gate,
@@ -85,6 +86,8 @@ export function CorpNetworkStep({
 }: {
   status: SetupStatus;
   siteConfig: SiteConfig | null;
+  /** The last site-config read failed (setup-screen.tsx's reloadSiteConfig). */
+  siteConfigFailed?: boolean;
   reloadSiteConfig: () => Promise<void>;
   saveSiteConfig: (next: SiteConfig) => Promise<void>;
   /** The proof-of-connectivity facts that gate Next — held by the orchestrator
@@ -278,11 +281,12 @@ export function CorpNetworkStep({
             {egressDot && <span aria-hidden className="ml-1.5 inline-block size-1.5 rounded-full bg-warning" />}
           </TabsTrigger>
         </TabsList>
-      </Tabs>
 
-      {tab === "proxy" ? (
+        <TabsContent value="proxy">
         <HostProxyTab
           siteConfig={siteConfig}
+          loadFailed={siteConfigFailed}
+          onReload={reloadSiteConfig}
           detection={status.host_proxy}
           hostProxyCheck={hostProxyCheck}
           secretNames={secretNames}
@@ -303,7 +307,8 @@ export function CorpNetworkStep({
             onCustomDraftChange: (v) => onGateChange({ customDraft: v }),
           }}
         />
-      ) : (
+        </TabsContent>
+        <TabsContent value="egress">
         <EgressTab
           siteConfig={siteConfig}
           mutate={mutate}
@@ -318,7 +323,8 @@ export function CorpNetworkStep({
           testAllSignal={testAllSignal}
           onTestAllConsumed={() => setTestAllSignal(0)}
         />
-      )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

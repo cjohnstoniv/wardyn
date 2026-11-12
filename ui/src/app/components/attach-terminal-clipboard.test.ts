@@ -365,3 +365,62 @@ describe("pure helpers", () => {
     expect(renderVisible("plain é")).toBe("plain é");
   });
 });
+
+// A run whose data_out rule keeps its content in: the gate offers nothing and the terminal's own copy is
+// swallowed. The server's doors are the control; this is a courtesy.
+describe("a run that keeps its content in", () => {
+  let keepsIn: boolean;
+  let held: CopyGate;
+  beforeEach(() => {
+    gate.dispose();
+    keepsIn = true;
+    held = createCopyGate({
+      term: term as unknown as GateTerm,
+      isWriter: () => writer,
+      onOffer: (o) => offers.push(o),
+      onNotice: (m) => notices.push(m),
+      now: () => t,
+      keepsIn: () => keepsIn,
+    });
+  });
+  afterEach(() => held.dispose());
+
+  it("an OSC 52 write after a real drag makes no offer and no notice", async () => {
+    drag([0, 0], [4, 0]);
+    await write(tmuxCopy("hello"));
+    expect(offers).toEqual([]);
+    expect(notices.filter((n) => n !== null)).toEqual([]);
+  });
+
+  it("the same write is offered once the rule no longer keeps content in", async () => {
+    keepsIn = false;
+    drag([0, 0], [4, 0]);
+    await write(tmuxCopy("hello"));
+    expect(current()).toMatchObject({ text: "hello" });
+  });
+
+  it("a copy event on the terminal is prevented and goes no further", () => {
+    const seen = vi.fn();
+    document.addEventListener("copy", seen);
+    const ev = new Event("copy", { bubbles: true, cancelable: true });
+    const inside = term.element!.querySelector("textarea") ?? term.element!;
+    inside.dispatchEvent(ev);
+    document.removeEventListener("copy", seen);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("a copy event is left alone once the rule no longer keeps content in", () => {
+    keepsIn = false;
+    const ev = new Event("copy", { bubbles: true, cancelable: true });
+    (term.element!.querySelector("textarea") ?? term.element!).dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it("dispose removes the copy listener", () => {
+    held.dispose();
+    const ev = new Event("copy", { bubbles: true, cancelable: true });
+    (term.element!.querySelector("textarea") ?? term.element!).dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+});

@@ -106,6 +106,11 @@ type preflightResponse struct {
 	// (harnessSetFact); absent for an older client's request and a run with no
 	// harness. ModelCredential above is graded from the most resident of them.
 	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
+	// AllowedModels is the governed allowed-models list a run under this caller's profile is held to
+	// (run_allowed_models.go); absent when no limit binds it. AllowedModelsProfile names the profile
+	// that sets it, the caller's own (the name the run page's card shows).
+	AllowedModels        []string `json:"allowed_models,omitempty"`
+	AllowedModelsProfile string   `json:"allowed_models_unit,omitempty"`
 	// RunnerPool is the pool the request resolves to, absent until the pool lane
 	// resolves one; RunnerPools are the permitted choices, an array that is
 	// empty until that lane fills it.
@@ -150,11 +155,23 @@ func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) boo
 // answer (a runner that is offline included), is nil — the default then stays
 // at the policy minimum and Review never refuses on it (handlePreflightRun).
 func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest) []types.ConfinementClass {
-	pc, err := s.requestCapabilities(ctx, req)
-	if err != nil {
-		return nil
+	classes, _ := s.advertisedConfinementRead(ctx, req)
+	return classes
+}
+
+// writeRequestFieldRefusal writes the 400 launch's validation gives a request field the server owns or
+// cannot carry: a reserved task, or a desktop_window the run cannot take (desktopWindowRequestRefusal). It
+// reports whether it wrote one.
+func writeRequestFieldRefusal(w http.ResponseWriter, req createRunRequest) bool {
+	if reservedRunTasks[req.Task] {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
+		return true
 	}
-	return pc.ConfinementClasses
+	if msg := desktopWindowRequestRefusal(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+		return true
+	}
+	return false
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -251,8 +268,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
 		return
 	}
-	if reservedRunTasks[req.Task] {
-		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
+	if writeRequestFieldRefusal(w, req) {
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
@@ -304,9 +320,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Create's no-task coercion, then its interactive/hold conflict, before the derivation below.
-	if !req.Interactive && strings.TrimSpace(req.Task) == "" {
-		req.Interactive = true
-	}
+	req.Interactive = req.Interactive || strings.TrimSpace(req.Task) == ""
 	if msg := interactiveToolApprovalsError(req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldInteractiveConflict, msg)
 		return
@@ -324,6 +338,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// launch's order.
 	f, ok := s.foldRunRequest(w, r, foldPreflight, &req, ceiling, "")
 	if !ok {
+		return
+	}
+	// The create's window grant, after the fold as at create: refused as the create would be, stored by none.
+	if s.macWindowRecordPending(w, r, uuid.Nil, req.DesktopWindow, "", "", false) {
 		return
 	}
 	spec, enforced, mpChoice, modelCred, autonomy := f.spec, f.enforced, f.mpChoice, f.modelCred, f.autonomy
@@ -376,7 +394,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		llmAccess = runLLMAccess(req, mpChoice)
 	}
 
-	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs)
+	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs, &f.placed)
 	if e := f.source.edits; e != nil {
 		items = overrideSecretItems(items, e.missingSecrets)
 	}
@@ -400,9 +418,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: f.autonomy.Level,
-		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, bound)...)
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place, comps: f.comps}, bound)...)
 	warnings = append(warnings, f.fitWarnings...)
-	warnings = append(warnings, serviceWarnings(req.Service != nil, ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0)...)
+	warnings = append(warnings, serviceWarnings(req.Service != nil, ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0, f.end.endSec != nil)...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
 	// non-model run) — omitted rather than published as a guess.
@@ -422,6 +440,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
 	resp.BarrierOptions = f.barrierOptions
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	resp.AllowedModels, resp.AllowedModelsProfile = modelLimitOf(f.ceiling).models, modelLimitOf(f.ceiling).profile
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
 	resp.RunnerPoolSlots = s.runnerPoolSlots(ctx, f.place, *f.req)
 	resp.MainDrive = f.mainDrive.applied()

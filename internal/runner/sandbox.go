@@ -143,6 +143,9 @@ var proxySidecarEnvKnobNames = []string{
 	"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
 	// The git broker's wait for a wait_for_review mint approval (docs/ENV.md).
 	"WARDYN_GIT_APPROVAL_TIMEOUT",
+	// The admin's opt-out from model token counting: off stops the proxy metering. A proxy older than
+	// the meter ignores it, so an older pinned proxy is never refused for it.
+	"WARDYN_MODEL_USAGE",
 }
 
 // ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the
@@ -199,6 +202,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		MITMHosts:            pc.MITMHosts,
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
+		GitPushWithheld:      pc.GitPushWithheld,
 		PATGrants:            pc.PATGrants,
 		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
 		ResidentMints:        pc.ResidentMints,
@@ -214,21 +218,29 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		UpstreamProxyNoProxy: pc.UpstreamProxyNoProxy,
 		LLMUpstreams:         pc.LLMUpstreams,
 		LLMChannelHosts:      pc.LLMChannelHosts,
+		LLMHeaders:           pc.LLMHeaders,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		LocalModels:          pc.LocalModels,
+		AllowedModels:        pc.ModelLimit.proxyList(),
+		BedrockRoutes:        pc.ModelLimit.proxyRoutes(),
+		GatewayIdentity:      pc.GatewayIdentity,
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,
 		CanonicalPushRepos:   pc.CanonicalPushRepos,
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,
+		ForgeHosts:           pc.ForgeHosts,
 		HarnessToolRules:     pc.HarnessToolRules,
 		ViaOrgRoutes:         pc.ViaOrgRoutes,
 		HarnessCredentials:   pc.HarnessCredentials,
 		MCPServers:           pc.MCPServers,
 		MCPBindings:          pc.MCPBindings,
+		MCPApproveEach:       pc.MCPApproveEach,
+		ActivityIgnoreHosts:  pc.ActivityIgnoreHosts,
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
+		NoNetwork:            pc.NoNetwork,
 	}
 	if pc.DesktopSignins {
 		cfg.SigninListen = ":" + strconv.Itoa(SigninListenPort)

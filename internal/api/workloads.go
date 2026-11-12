@@ -52,6 +52,7 @@ const workloadNotFoundMsg = "There is no workload of that name that you may reac
 
 func (s *Server) mountWorkloadRoutes(r, securityOps chi.Router) {
 	r.Put("/workloads/{name}", s.handlePutWorkload)
+	r.Post("/workloads/{name}/preview", s.handlePreviewWorkload)
 	r.Get("/workloads", s.handleListWorkloads)
 	r.Get("/workloads/{name}", s.handleGetWorkload)
 	r.Get("/workloads/{name}/history", s.handleWorkloadHistory)
@@ -122,16 +123,12 @@ func normalizeWorkload(doc client.WorkloadDocument) (store.WorkloadPut, *workloa
 
 // writeWorkloadPutError answers a refused PutWorkload. ok is false when err was answered.
 func writeWorkloadPutError(w http.ResponseWriter, r *http.Request, err error) bool {
-	switch {
-	case err == nil:
+	if err == nil {
 		return true
-	case errors.Is(err, store.ErrWorkloadSourceConflict):
-		writeErrorReason(w, http.StatusConflict, reasonWorkloadSourceConflict,
-			"This workload belongs to its custom resource: change it in Git, not with an apply.")
-	case errors.Is(err, store.ErrWorkloadCapReached):
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkloadCapReached,
-			fmt.Sprintf("You hold %d workloads, the most allowed. Delete one first.", store.MaxWorkloadsPerOwner))
-	default:
+	}
+	if ref, refused := workloadPutRefusal(err); refused {
+		writeErrorReason(w, ref.Status, ref.Reason, ref.Error)
+	} else {
 		writeServerError(w, r, "record workload", err)
 	}
 	return false
@@ -191,12 +188,13 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 }
 
 // viewServiceStatus is v's run's service health as the run routes serve it at now: unknown
-// while paused or stale, with the observation time kept. Nil when the run has no health yet.
+// while paused or stale, with the observation time kept, and Wardyn's own check beside it when the
+// run has a reading of one. Nil when the run has no health yet.
 func viewServiceStatus(v store.WorkloadView, now time.Time) *types.RunServiceStatus {
 	if v.RunState == "" || v.ServiceHealth == "" {
 		return nil
 	}
-	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
+	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth), Probe: v.ServiceProbe}}}
 	if v.ServiceObservedAt != nil {
 		run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
 	}
@@ -212,7 +210,7 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 	if st := viewServiceStatus(v, now); st != nil {
-		out.State += "/" + string(st.Health)
+		out.State += "/" + string(viewServiceHealth(v, st, now)) // the worse of the two readings, as the run list's chip
 	}
 	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
 		out.Digest = v.Digest
@@ -423,6 +421,7 @@ func workloadCreateRequest(r *http.Request, wl store.Workload) (*http.Request, e
 	cr.Method, cr.URL, cr.RequestURI = http.MethodPost, &url.URL{Path: "/api/v1/runs"}, ""
 	cr.Body, cr.ContentLength, cr.GetBody = io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
 	cr.Header.Set("Content-Type", "application/json")
+	cr.Header.Del(idempotencyKeyHeader) // a launch calls handleCreateRun, never the keyed route; this keeps it so
 	return cr, nil
 }
 

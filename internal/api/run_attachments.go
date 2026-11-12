@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -403,12 +404,14 @@ func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, 
 	if refusal := adoOrgConflictRefusal(targets); refusal != nil {
 		return nil, "", refusal
 	}
-	return runAttachmentFacts(targets, at), dir, nil
+	return runAttachmentFacts(targets, at, types.MachineKind(req.MachineKind).IsMacOSVM()), dir, nil
 }
 
 // runAttachmentFacts is the mount map the dry doors return: every attachment of
-// targets, with the one holding the starting folder marked. Never nil.
-func runAttachmentFacts(targets []runTarget, startsHere int) []client.RunAttachment {
+// targets, with the one holding the starting folder marked. Never nil. A macOS
+// VM run's drives are shown at the guest's path; the targets keep the container
+// path the overlap checks read.
+func runAttachmentFacts(targets []runTarget, startsHere int, macOS bool) []client.RunAttachment {
 	out := []client.RunAttachment{}
 	for i, t := range targets {
 		if t.kind == "" {
@@ -422,6 +425,9 @@ func runAttachmentFacts(targets []runTarget, startsHere int) []client.RunAttachm
 			a.WorkspaceID = t.owner
 		case attachmentDrive:
 			a.DriveID = t.driveID
+			if macOS {
+				a.Target = runner.MacGuestPath(t.target)
+			}
 		}
 		out = append(out, a)
 	}

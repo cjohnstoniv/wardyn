@@ -269,6 +269,33 @@ describe("PolicyPanel — live derivations", () => {
   });
 });
 
+describe("PolicyPanel — recording and a macOS VM run", () => {
+  it("says what a level does to a macOS VM run only when it edits a profile ceiling", () => {
+    const { unmount } = render(<Harness initial={VALID} ceiling />);
+    expect(screen.getByTestId("policy-recording-macos")).toBeInTheDocument();
+    unmount();
+    render(<Harness initial={VALID} />);
+    expect(screen.queryByTestId("policy-recording-macos")).toBeNull();
+  });
+
+  it("the New Run policy does not say it", () => {
+    render(<Harness initial={VALID} instance="run" />);
+    expect(screen.queryByTestId("policy-recording-macos")).toBeNull();
+  });
+});
+
+describe("PolicyPanel — data out", () => {
+  it("renders the Data out section on a parsed spec, after Recording, and not on a spec that does not parse", () => {
+    const { unmount } = render(<Harness initial={VALID} />);
+    const section = screen.getByTestId("policy-data-out");
+    expect(within(section).getByRole("radiogroup", { name: "Data out" })).toBeInTheDocument();
+    expect(screen.getByTestId("policy-recording").compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+    render(<Harness initial="allowed_domains: [" />);
+    expect(screen.queryByTestId("policy-data-out")).toBeNull();
+  });
+});
+
 describe("PolicyPanel — run instance extras", () => {
   it("renders Preflight only when the screen passes a handler", async () => {
     const user = userEvent.setup();

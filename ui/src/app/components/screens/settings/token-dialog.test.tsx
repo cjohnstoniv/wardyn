@@ -70,13 +70,13 @@ describe("TokenDialog inbound use (r15 T2-d)", () => {
     expect(within(group).getByRole("radio", { name: T.USE_API })).toBeChecked();
     expect(within(group).getByRole("radio", { name: T.USE_INBOUND })).not.toBeChecked();
     expect(screen.getByText(T.MINT_WARNING("billing"))).toBeInTheDocument();
-    expect(screen.queryByText(T.INBOUND_HELP)).toBeNull();
+    expect(screen.queryByText(T.INBOUND_HELP("billing"))).toBeNull();
   });
 
   it("swaps the warning for the inbound help and mints an inbound token", async () => {
     const { props } = mint();
     await user.click(screen.getByRole("radio", { name: T.USE_INBOUND }));
-    expect(screen.getByText(T.INBOUND_HELP)).toBeInTheDocument();
+    expect(screen.getByText(T.INBOUND_HELP("billing"))).toBeInTheDocument();
     expect(screen.queryByText(T.MINT_WARNING("billing"))).toBeNull();
     await user.click(screen.getByRole("button", { name: T.MINT_SUBMIT }));
     expect(props.submit).toHaveBeenCalledWith({ name: "billing-callers", ttl_seconds: 90 * 86400, kind: "inbound" });
@@ -130,6 +130,16 @@ describe("TokenDialog form", () => {
     setField(screen.getByLabelText(new RegExp(T.NAME_LABEL)), "deploy");
     await user.keyboard("{Enter}");
     expect(props.submit).toHaveBeenCalledWith({ name: "deploy", ttl_seconds: 90 * 86400 });
+  });
+
+  it("lets a person's own API token run to a year or the server's limit, but not an inbound one", async () => {
+    mount({ kind: "mint", initialName: "" });
+    expect(screen.getByText(T.CLAIM_HINT_OPEN)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: T.EXPIRES_LABEL })).toHaveAccessibleDescription(T.CLAIM_HINT_OPEN);
+    expect(await lifetimeOptions()).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS, T.OPT_1_YEAR, T.OPT_LONGEST]);
+    await user.click(screen.getByRole("radio", { name: T.USE_INBOUND }));
+    expect(screen.getByText(T.INBOUND_HELP("you"))).toBeInTheDocument();
+    expect(await lifetimeOptions()).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS]);
   });
 
   it("refuses an empty name before any request, in the field", async () => {
@@ -235,6 +245,7 @@ describe("TokenDialog show-once", () => {
     await revealed({ submit: vi.fn(async () => token({ expires_at: undefined })) });
     const dl = screen.getByText(T.DETAIL_EXPIRES).parentElement!;
     expect(within(dl).getByText(T.NEVER)).toBeInTheDocument();
+    expect(screen.getByText(T.NEVER_NOTE)).toBeInTheDocument();
   });
 
   it("copies the token, says so, and then Done closes at once", async () => {

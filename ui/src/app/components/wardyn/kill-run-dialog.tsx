@@ -13,8 +13,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
-import { RUN_REF } from "./copy/run-ref";
-import { RunRef, shortRunId } from "./run-ref";
+import { CANCEL_NOT_STARTED as NS } from "./copy/cancel-not-started";
+import { toastRunName } from "./copy/run-lifetime";
+import { RunRef } from "./run-ref";
+
+// Said under the question when the run holds a Both ways folder: ending the run does not copy its changes back.
+// The command is set in <code> where it is shown, so its words are held apart from the sentence around it.
+const BOTH_WAYS_FOLDER_LOST = "This run's Both ways folder does not come back: ending a run discards the sandbox's changes. To keep them, run";
+const BRING_BACK_COMMAND = "wardyn folder bring-back <run>";
 
 // Shared kill-run confirm for the two places Kill is offered (the Runs board's
 // row menu and Run Detail's header): an enforcement stop deserves the same
@@ -28,6 +34,8 @@ export function KillRunDialog({
   title,
   onOpenChange,
   onConfirm,
+  notStarted = false,
+  bothWaysFolder = false,
 }: {
   // The run to kill; also doubles as the "is the dialog open" flag (null = closed).
   runId: string | null;
@@ -38,6 +46,11 @@ export function KillRunDialog({
   // Called with the id the dialog is showing, so the kill can only ever hit
   // the run the title names.
   onConfirm: (runId: string) => void;
+  // A run that has not started (scheduled, or waiting for its owner's sign-in) holds no sandbox and no credential,
+  // so the question is a plain cancel and says nothing about tearing anything down.
+  notStarted?: boolean;
+  // The run holds a Both ways computer folder: ending it discards the sandbox's changes to that folder.
+  bothWaysFolder?: boolean;
 }) {
   // First line, bounded: a run named by its task can be a paragraph.
   const line = (title ?? "").trim().split("\n")[0];
@@ -46,24 +59,31 @@ export function KillRunDialog({
     <AlertDialog open={!!runId} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className="break-words">{name ? `Kill "${name}"?` : RUN_REF.killRun(shortRunId(runId ?? ""))}</AlertDialogTitle>
+          <AlertDialogTitle className="break-words">{notStarted ? NS.TITLE(toastRunName({ title })) : `End ${toastRunName({ title })}?`}</AlertDialogTitle>
           <AlertDialogDescription>
             {name && runId && (
               <>
                 <RunRef runId={runId} />.{" "}
               </>
             )}
-            This terminates the agent run, tears down the sandbox, and revokes any brokered
-            credentials. The kill is recorded in the audit trail. This cannot be undone.
+            {notStarted
+              ? NS.BODY
+              : "This terminates the agent run, tears down the sandbox, and revokes any brokered credentials. Ending the run is recorded in the audit trail. This cannot be undone."}
+            {bothWaysFolder && !notStarted && (
+              <>
+                {" "}
+                {BOTH_WAYS_FOLDER_LOST} <code className="font-mono">{BRING_BACK_COMMAND}</code> first.
+              </>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{notStarted ? NS.KEEP : "Cancel"}</AlertDialogCancel>
           <AlertDialogAction
             onClick={() => runId && onConfirm(runId)}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >
-            Kill run
+            {notStarted ? NS.CONFIRM : "End run"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

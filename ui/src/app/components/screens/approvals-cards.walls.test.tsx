@@ -27,12 +27,12 @@ const row = (walls_block?: boolean) =>
     id: "a1", run_id: "r1", kind: "egress_domain", state: "PENDING", requested_at: "",
     requested_scope: { host: "paste.example.net" }, walls_block,
   });
-const show = (it: ReturnType<typeof row>, principal: string, securityOperator = true) =>
+const show = (it: ReturnType<typeof row>, principal: string, securityOperator = true, presetBlocked = false) =>
   render(
     <MemoryRouter>
       <OperatorProvider operator securityOperator={securityOperator} principal={principal}>
         <ModelAccessProvider status={{ harnesses: SCENARIO_HARNESSES.full } as SetupStatus} onRefresh={() => {}}>
-          <ApprovalCard item={it} caps={null} onAct={() => {}} onAdoDecide={async () => {}} onPushDecide={async () => {}} />
+          <ApprovalCard item={it} presetBlocked={presetBlocked} caps={null} onAct={() => {}} onAdoDecide={async () => {}} onPushDecide={async () => {}} />
         </ModelAccessProvider>
       </OperatorProvider>
     </MemoryRouter>,
@@ -94,5 +94,37 @@ describe("ApprovalCard: a host the requester's walls deny", () => {
     await waitFor(() => expect(getRun).toHaveBeenCalled());
     expect(screen.queryByTestId("approval-walls-block")).toBeNull();
     expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
+  });
+});
+
+describe("ApprovalCard: a host the run's wall preset denies (wall_preset_host)", () => {
+  const PRESET_RUN = { ...RUN, wall_preset: { id: "sealed", name: "Sealed", scope: "builtin" as const, version: 1 } };
+
+  it("speaks of the preset to the owner, names who chose it, and turns Approve off", async () => {
+    getRun.mockResolvedValue(PRESET_RUN);
+    show(row(true), "ana@example.com", true, true);
+    const note = await screen.findByTestId("approval-walls-block");
+    expect(note).toHaveTextContent("This run's Sealed wall preset blocks paste.example.net. Launch a new run without it.");
+    expect(note).toHaveTextContent("Set byWall preset: Sealed");
+    expect(note).toHaveTextContent("Chosen byana@example.com");
+    expect(note).toHaveTextContent("Can changeNot on this run. Launch a new run without it.");
+    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /deny/i })).toBeEnabled();
+  });
+
+  it("names the owner's run to an approver who is not the owner", async () => {
+    getRun.mockResolvedValue(PRESET_RUN);
+    show(row(true), "lena@example.com", true, true);
+    const note = await screen.findByTestId("approval-walls-block");
+    expect(note).toHaveTextContent("ana@example.com's run uses the Sealed wall preset, which blocks paste.example.net.");
+    expect(note).toHaveTextContent("Can changeNot on this run. The owner can launch a new run with a different preset.");
+  });
+
+  it("falls back to the walls sentence when the run read names no preset (a personal preset seen by a non-owner)", async () => {
+    getRun.mockResolvedValue({ ...RUN, wall_preset: { scope: "person" } });
+    show(row(true), "lena@example.com", true, true);
+    const note = await screen.findByTestId("approval-walls-block");
+    expect(note).toHaveTextContent("ana@example.com's walls block paste.example.net for this run.");
+    expect(note).not.toHaveTextContent("Sealed");
   });
 });

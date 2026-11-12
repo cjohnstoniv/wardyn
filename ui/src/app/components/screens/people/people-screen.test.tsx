@@ -43,10 +43,13 @@ vi.mock("../../../lib/api/scim", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PeopleScreen } from "./people-screen";
+import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
 import { setField } from "../../../../test/set-field";
+import { STATES } from "../../wardyn/states";
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const HOUR = 3_600_000;
@@ -98,6 +101,13 @@ beforeEach(() => {
 });
 
 describe("the people table", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("shows the heading, lead and each person's state and holdings", async () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: "People", level: 1 })).toBeInTheDocument();
@@ -105,13 +115,24 @@ describe("the people table", () => {
     const ana = (await screen.findByText("ana@example.com")).closest("tr")!;
     expect(within(ana).getByText("User")).toBeInTheDocument();
     expect(within(ana).getByText("Active")).toBeInTheDocument();
-    expect(within(ana).getByText("1 session · 2 tokens · 1 key")).toBeInTheDocument();
+    expect(within(ana).getByText("1 session · 2 tokens · 1 SSH key")).toBeInTheDocument();
     const fresh = screen.getByText("new@example.com").closest("tr")!;
     expect(within(fresh).getByText("Never signed in")).toBeInTheDocument();
     expect(within(fresh).getAllByText("—")).toHaveLength(2);
     const left = screen.getByText("left@example.com").closest("tr")!;
     expect(within(left).getByText("Deactivated")).toBeInTheDocument();
     expect(within(left).getByText("3 credentials")).toBeInTheDocument();
+  });
+
+  it("bounds a long identity with a tooltip and lets the Holds sentence wrap, so the table stays in its column", async () => {
+    const long = "firstname.lastname.contractor@subsidiary.contoso.com";
+    listMock.mockResolvedValue({ people: [person({ principal: "sub-long", email: long })] });
+    renderScreen();
+    const button = await screen.findByRole("button", { name: long });
+    expect(button).toHaveAttribute("title", long);
+    expect(button.className).toContain("truncate");
+    const holds = within(button.closest("tr")!).getByText(/session|token|key|credential/);
+    expect(holds.closest("td")!.className).toContain("whitespace-normal");
   });
 
   it("labels a role the server could not derive from truncated groups as Unknown", async () => {
@@ -194,6 +215,36 @@ describe("the people table", () => {
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
     expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "c1" }));
   });
+
+  it("a failed Load more keeps the pages already read and retries from the same cursor", async () => {
+    listMock
+      .mockResolvedValueOnce({ people: [ROWS[0]], next_cursor: "c1" })
+      .mockRejectedValueOnce(new Error("HTTP 500"))
+      .mockResolvedValueOnce({ people: [ROWS[1]] });
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByText(P.MORE_FAILED)).toBeInTheDocument();
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: P.MORE_RETRY }));
+    expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    expect(screen.queryByText(P.MORE_FAILED)).not.toBeInTheDocument();
+    expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "c1" }));
+  });
+
+  it("disables Load more while the next page is on its way", async () => {
+    let finish: (v: unknown) => void = () => {};
+    listMock.mockResolvedValueOnce({ people: [ROWS[0]], next_cursor: "c1" }).mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("button", { name: P.LOADING_MORE })).toBeDisabled();
+    finish({ people: [ROWS[1]] });
+    expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+  });
 });
 
 describe("who can sign in", () => {
@@ -205,7 +256,7 @@ describe("who can sign in", () => {
 
   it("a security admin sees the super-admin-only line and never calls GET /access", async () => {
     renderScreen({ operator: false });
-    expect(await screen.findByText("Only the super admin can see and change who can sign in.")).toBeInTheDocument();
+    expect(await screen.findByText("Only people with the Admin role can see and change who can sign in.")).toBeInTheDocument();
     await screen.findByText("ana@example.com");
     expect(getAccessMock).not.toHaveBeenCalled();
   });
@@ -233,7 +284,7 @@ describe("the person drawer", () => {
   });
 
   it.each([
-    ["Sign out everywhere", "Sign ana@example.com out of every browser? Their API tokens, including the CLI's, and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.", () => signOutMock],
+    ["Sign out everywhere", "Sign ana@example.com out of every browser and CLI session? Their personal API tokens and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.", () => signOutMock],
     ["Remove all", "Remove every SSH key ana@example.com has added? Their open SSH sessions end.", () => removeKeysMock],
   ])("%s asks first, naming the person, and only then acts", async (button, sentence, mock) => {
     const { user, drawer } = await openAna();
@@ -243,6 +294,38 @@ describe("the person drawer", () => {
     expect(mock()).not.toHaveBeenCalled();
     await user.click(within(confirm).getByRole("button", { name: button }));
     await waitFor(() => expect(mock()).toHaveBeenCalledWith("sub-ana"));
+  });
+
+  it.each([
+    ["idp|123", "wardyn invite -- 'idp|123'"],
+    ["a$b", "wardyn invite -- 'a$b'"],
+    ["o'neil", "wardyn invite -- 'o'\\''neil'"],
+    ["-x", "wardyn invite -- '-x'"],
+  ])("the invite command keeps the subject %s one shell word", (subject, command) => {
+    expect(P.INVITE_CMD(subject)).toBe(command);
+  });
+
+  it("the sign-out copy names browser and CLI sessions and does not say CLI tokens keep working", () => {
+    expect(P.SIGN_OUT_CONFIRM("ana")).toMatch(/^Sign ana out of every browser and CLI session\? Their personal API tokens and SSH keys keep working;/);
+    expect(P.SIGN_OUT_CONFIRM("ana")).not.toContain("CLI's");
+    expect(P.SIGN_OUT_DONE("ana")).toBe("Signed ana out of every browser and CLI session.");
+  });
+
+  it.each([
+    ["Sign out everywhere", "Sign out everywhere?", "Signed ana@example.com out of every browser and CLI session."],
+    ["Remove all", "Remove all SSH keys?", "Removed 1 SSH key for ana@example.com."],
+  ])("%s confirm is titled for its object and its toast says what happened", async (button, title, toastText) => {
+    const { user, drawer } = await openAna();
+    await user.click(within(drawer).getByRole("button", { name: button }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(within(confirm).getByRole("heading", { name: title })).toBeInTheDocument();
+    await user.click(within(confirm).getByRole("button", { name: button }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(toastText));
+  });
+
+  it("tells the admin how to let the person create a token", async () => {
+    const { drawer } = await openAna();
+    expect(within(drawer).getByText("wardyn invite -- 'sub-ana'")).toBeInTheDocument();
   });
 
   // The count beside the list is the server's active count (unrevoked, unexpired), so the list is too.
@@ -327,13 +410,13 @@ describe("the person drawer", () => {
 
 describe("Add a person", () => {
   it("creates the person and re-reads the list", async () => {
-    createMock.mockResolvedValue(undefined);
+    createMock.mockResolvedValue(true);
     const user = userEvent.setup();
     renderScreen();
     await screen.findByText("ana@example.com");
     await user.click(screen.getByRole("button", { name: "Add a person" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Add someone before their first sign-in, so you can give them a user type or key domain ahead of time. They create their own API tokens after they sign in.")).toBeInTheDocument();
     // #2904: the required field says so and says what a subject is; the other says it is optional.
     expect(within(dialog).getByLabelText("Sign-in subject")).toBeRequired();
     expect(within(dialog).getByText("The subject (sub) your identity provider sends for this person, exactly as it sends it.")).toBeInTheDocument();
@@ -344,6 +427,7 @@ describe("Add a person", () => {
     await user.click(within(dialog).getByRole("button", { name: "Add a person" }));
     await waitFor(() => expect(createMock).toHaveBeenCalledWith("sub-zed", "zed@example.com"));
     await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(before));
+    expect(toast.success).toHaveBeenCalledWith("Added zed@example.com.");
   });
 
   it("shows the server's refusal in the dialog", async () => {

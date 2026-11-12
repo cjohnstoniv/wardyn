@@ -20,7 +20,6 @@ package proxy
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -355,9 +354,7 @@ func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, p
 
 // writeADORefusal answers in Azure DevOps' own error shape (adoRefusal).
 func writeADORefusal(w http.ResponseWriter, status int, typeKey, msg string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(adoRefusal{
+	writeJSONStatus(w, status, "application/json; charset=utf-8", adoRefusal{
 		ID:        "1",
 		Message:   msg,
 		TypeName:  "Wardyn.Egress." + typeKey + ", Wardyn",

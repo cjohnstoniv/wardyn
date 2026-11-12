@@ -150,9 +150,10 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	}
 	carriers := rule.index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
+	cloned := runRepoLocators(f.spec, f.req.Repo)
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
-		_, dropped := runCloneEgress(ws, f.ceiling.Spec.AllowedDomains)
+		_, dropped := runSelectedCloneEgress(ws, cloned, f.ceiling.Spec.AllowedDomains)
 		for _, h := range dropped {
 			f.policyWarns = append(f.policyWarns, cloneHostDropWarning(h, "workspace", ws.Name))
 		}
@@ -160,7 +161,27 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	var refusal *runRefusal
 	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, carriers, f.seed,
 		driveTargets(f.drives))
+	if refusal == nil && f.req.Image == "" {
+		// After the seed, no image means neither the request nor an attached workspace set one, and dispatch
+		// takes it from a workspace the policy carries (resolveCreateRunImage), attached or not: the digest
+		// rule binds that base image as it binds an attached one's (seededImageRefusal).
+		if i := slices.IndexFunc(f.wsRefs, func(ws types.Workspace) bool { return workspaceBaseImage(ws) != "" }); i >= 0 {
+			f.carriedImage = workspaceBaseImage(f.wsRefs[i])
+		}
+		refusal = s.imageDigestRefusal(f.r.Context(), f.carriedImage, true)
+	}
 	return !refusal.write(s, f.w, f.r)
+}
+
+// createDigestInput is the image create held to the digest rule: the request's (named, or set by an attached
+// workspace's base image), else a policy-carried workspace's (carried, the fold's carriedImage), "" for the
+// convention image. The run row records it (AgentRun.ImageInput) and the run.create row's exempt mark reads it.
+// It takes the carried image, not the fold: only runFoldSteps steps take the fold.
+func createDigestInput(req createRunRequest, carried string) string {
+	if req.Image != "" {
+		return req.Image
+	}
+	return carried
 }
 
 // stepHarnessSet holds every harness a run-mode request includes to the agent
@@ -202,12 +223,13 @@ func (s *Server) stepPushRuleSets(f *runFold, rec *foldRecorder) bool {
 // The SSH, site-config and ADO lanes need grant wiring that does not exist
 // before the mint and stay create's.
 func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
+	cloned := runRepoLocators(f.spec, f.req.Repo)
 	for _, ws := range f.wsRefs {
 		var contributed types.RunPolicySpec
-		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws}, f.ceiling.Spec.AllowedDomains)
+		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws}, cloned, f.ceiling.Spec.AllowedDomains)
 		recordSpecAdds(rec, types.RunPolicySpec{}, contributed, workspaceProvSource(ws))
 	}
-	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs, f.ceiling.Spec.AllowedDomains)
+	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs, cloned, f.ceiling.Spec.AllowedDomains)
 	return true
 }
 
@@ -243,7 +265,7 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// Review's checklist read the same map.
 	f.present = s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(f.r))
 	selections := resolveWorkspaceSelections(*f.req)
-	ahead := previewWorkspaceEgressHosts(f.wsRefs, f.ceiling.Spec.AllowedDomains)
+	ahead := previewWorkspaceEgressHosts(f.wsRefs, runRepoLocators(f.spec, f.req.Repo), f.ceiling.Spec.AllowedDomains)
 	// The denies create unions after this fold; the dry doors already hold the workspaces' in f.spec.
 	denied := slices.Concat(f.ceiling.Spec.DeniedDomains, workspaceDeniedEgress(f.wsRefs))
 	// One workspace at a time, so each one's additions are its own.
@@ -329,13 +351,14 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 			return false
 		}
 		f.reqCC = reqCC
-		advertised = s.advertisedConfinement(f.r.Context(), *f.req)
+		advertised, f.placed.read = s.advertisedConfinementRead(f.r.Context(), *f.req)
 	}
 	// A pooled run's default class comes from its candidates at every door, the preview included, so the
 	// three doors promise one barrier.
 	if offered := f.place.offeredClasses(); offered != nil {
-		advertised = offered
+		advertised, f.placed.read = offered, true
 	}
+	f.placed.classes = advertised
 	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
@@ -362,18 +385,25 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
 		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}
+	// The kept work folder is its own ask: counting it as a drive worded its refusal for drives, and a runner
+	// that shares drives passed it at Review only for the start to refuse it.
+	ask.MountsDrives, ask.KeepsWorkFolder = len(f.drives) > 0, f.keep != nil
 	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
 		return false
 	}
 	if !types.MachineKind(f.req.MachineKind).IsMacOSVM() {
 		return true
 	}
-	// A macOS VM is not recorded in this release: refused where recording is asked for, else said.
-	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f.place, f.ceiling)
+	// A macOS VM is recorded by the organisation, not its runner: nothing about recording refuses it, and Review
+	// says what its level records (its desktop only at Screen and actions, and then unmasked).
+	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
+		return true
+	}
+	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
-	if notice != "" {
+	if notice := macOSVMRecordingNotice(choice.Resolve(), f.req.Interactive || s.cfg.ExecOutputTailOff); notice != "" {
 		f.policyWarns = append(f.policyWarns, notice)
 	}
 	return true
@@ -414,7 +444,7 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 		w := f.w
 		// Every setup row but model access, which the refusal itself answers.
 		f.w = credentialSetupWriter{w, func() []SetupItem {
-			return s.deriveRunSetupItems(f.r.Context(), s.secretOwnerFromRequest(f.r), preflightRunInput(f.req, f.enforced, f.baseline), f.spec, f.present, nil, f.wsRefs)
+			return s.deriveRunSetupItems(f.r.Context(), s.secretOwnerFromRequest(f.r), preflightRunInput(f.req, f.enforced, f.baseline), f.spec, f.present, nil, f.wsRefs, &f.placed)
 		}}
 		defer func() { f.w = w }()
 	}
@@ -424,6 +454,8 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 	if f.mode == foldPreflight {
 		r = r.WithContext(withPreflightRenewal(r.Context()))
 	}
+	// A No network launch's credentials are not read: stepNoNetwork refuses every chosen provider whatever they say.
+	r = noNetworkSkipsCredential(r, f.source.wallPreset)
 	var choice runProviderChoice
 	if choice, ok = s.enforceRunModelProvider(f.w, r, *f.req, f.spec, f.wsRefs, f.mode != foldPreview, f.queued); !ok {
 		return false
@@ -576,15 +608,15 @@ func (s *Server) stepRunEnd(f *runFold, rec *foldRecorder) bool {
 // stepADOStanding resolves the run's Azure DevOps lane once, from the inputs
 // create grades and dispatch resolves with, and bounds a member's Azure DevOps
 // list (#1384); the narrowing and a decline (f.adoDecline) are said out loud at
-// every door. A list that leaves nothing standing is dispatch's refusal at
-// create, which the dry doors answer before the click.
+// every door. A list that leaves nothing standing, or holds more than the
+// provider row's ceiling, is dispatch's refusal at create, which the dry doors
+// answer before the click.
 func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 	var lane adoEntraRun
 	lane, f.adoDecline = resolveADOEntraLane(f.scmSite, f.spec.WorkspaceRepos, f.req.Repo, adoLaneOwnerOf(f.r))
-	narrowed, dropped, none := adoStandingAtDoor(f.spec, lane, f.ceiling)
+	narrowed, dropped, past, none := adoStandingAtDoor(f.spec, lane, f.ceiling)
 	if f.mode != foldCreate {
-		if none {
-			writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonADOCapabilitiesNonePermitted, adoNonePermitted(f.spec.AzureDevOpsCapabilities))
+		if refuseADOStandingAtDoor(f.w, f.spec.AzureDevOpsCapabilities, past, none) {
 			return false
 		}
 	}
@@ -821,10 +853,18 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		}
 		f.schedule = sch
 	}
+	// A resume goes to the Mac its machine is kept on, as a disk drive's run goes to its Mac; a fresh start
+	// keeps its machine's base, which placement and its checks then read.
+	resumed := s.keptResumeOf(f.r, *f.req)
+	if rf := s.keptFreshBase(f.req, resumed); rf != nil {
+		s.auditKeptMachineDenied(f.r, *f.req, rf, f.mode == foldCreate)
+		return !rf.write(s, f.w, f.r)
+	}
+	f.keptPin = keptPinOf(resumed)
+	drives, driveRunner := keptPlacementPin(mountsDrives(f.drives, f.keep), drivesBoundRunner(f.drives, f.keep), f.keptPin)
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: mountsDrives(f.drives, f.keep), driveRunner: drivesBoundRunner(f.drives, f.keep),
-		noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: drives, driveRunner: driveRunner, noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}
@@ -881,7 +921,27 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 		requestMiB = f.req.Resources.DiskMiB
 	}
 	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
-	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+	if types.MachineKind(f.req.MachineKind) == types.MachineLinuxVM {
+		// A Linux VM's disk is its image-sized base plus an overlay on the runner, not the container's
+		// writable layer, so no runner enforces a size on it whatever it reports for containers.
+		// A process limit counts as written when the run's source policy asked for one (the Requested
+		// side of the applied amount, as the cut is judged) or the caller's governance profile authors
+		// one. The clamp fills an unset limit from the deployment's default, and the composed spec
+		// cannot tell that from an authored one.
+		applied := f.place.applied.PidsLimit
+		pidsWritten := (applied != nil && applied.Requested > 0) ||
+			(f.ceiling.Unit != nil && f.ceiling.Unit.AuthoredResources.PidsLimit > 0)
+		if linuxVMLimitRefusal(md, pidsWritten).write(s, f.w, f.r) {
+			return false
+		}
+		if md.MiB > 0 && !slices.Contains(f.policyWarns, warnLinuxVMDiskNotCapped) {
+			f.policyWarns = append(f.policyWarns, warnLinuxVMDiskNotCapped)
+		}
+		if f.spec.Resources != nil && f.spec.Resources.PidsLimit > 0 && !slices.Contains(f.policyWarns, warnLinuxVMPidsNotCapped) {
+			f.policyWarns = append(f.policyWarns, warnLinuxVMPidsNotCapped)
+		}
+	}
+	if !md.Soft && md.MiB > 0 && types.MachineKind(f.req.MachineKind) != types.MachineLinuxVM && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
 		msg := mainDriveUnenforceableMsg()
 		if !f.place.pooled {
 			msg = mainDriveUnenforceableUnpooledMsg()

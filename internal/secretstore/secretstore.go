@@ -144,6 +144,10 @@ var PlatformNames = map[string]bool{
 	"wardyn-run-config-key": true,
 	// Holds audit rows whose subject key could not be had (internal/audit/seal.go).
 	"wardyn-audit-pending-key": true,
+	// The AI gateway token's signing key (cmd/wardynd's gatewayIdentity).
+	"wardyn-gateway-identity-key": true,
+	// The audit checkpoint signing key (cmd/wardynd's loadOrCreateAuditReceiptKey).
+	"wardyn-audit-receipt-key": true,
 	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid).
 	"wardyn-org-device-credential": true,
 }

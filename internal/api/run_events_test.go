@@ -583,7 +583,7 @@ func TestRunEvents_RevokedPersonEndsTheDelegatedStream(t *testing.T) {
 func TestRunEvents_DeadDelegatedTokenEndsTheStream(t *testing.T) {
 	for name, kill := range map[string]func(t *testing.T, ast *authzStore, via types.DelegationVia, clock *atomic.Int64){
 		"portal revoked": func(t *testing.T, ast *authzStore, via types.DelegationVia, _ *atomic.Int64) {
-			if _, err := ast.RevokeDelegate(context.Background(), via.Delegate, time.Now().UTC()); err != nil {
+			if _, _, err := ast.RevokeDelegate(context.Background(), via.Delegate, time.Now().UTC(), false); err != nil {
 				t.Fatal(err)
 			}
 		},

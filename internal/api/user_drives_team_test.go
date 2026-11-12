@@ -182,7 +182,7 @@ func TestTeamDriveOtherTierMountsNothing(t *testing.T) {
 func TestTeamDriveMountAuditNamesThePerson(t *testing.T) {
 	audit := &recRecorder{}
 	srv := New(Config{BaseCtx: testBaseCtx(t), Audit: audit, LocalMode: true})
-	srv.auditDriveMount(context.Background(), uuid.New(), "sub-alice", []types.DriveMount{
+	srv.auditDriveMount(context.Background(), uuid.New(), "sub-alice", "", []types.DriveMount{
 		{DriveID: uuid.New(), Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-x-t-1", Target: runner.SharedRoot + "/team", ReadOnly: true, Team: true},
 		{DriveID: uuid.New(), Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-y-d-1", Target: runner.DriveTarget},
 	})

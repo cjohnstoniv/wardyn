@@ -15,6 +15,7 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { components as api } from "../../../lib/api/components";
 import type { Component, MyComponents } from "../../../lib/types";
 import { Button } from "../../ui/button";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { MY_COMPONENTS as T } from "../../wardyn/copy/components";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
@@ -26,6 +27,7 @@ const CustomComponentDialog = React.lazy(() =>
 export function MyComponentsCard({ secretsPath = "/secrets" }: { secretsPath?: string }) {
   const [data, setData] = React.useState<MyComponents | null>(null);
   const [failed, setFailed] = React.useState(false);
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   // undefined: closed; null: a new component; a row: editing it.
   const [editing, setEditing] = React.useState<Component | null | undefined>(undefined);
   const [toDelete, setToDelete] = React.useState<Component | null>(null);
@@ -35,7 +37,10 @@ export function MyComponentsCard({ secretsPath = "/secrets" }: { secretsPath?: s
     api
       .mine()
       .then(setData)
-      .catch(() => setFailed(true));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setFailed(true);
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -45,12 +50,7 @@ export function MyComponentsCard({ secretsPath = "/secrets" }: { secretsPath?: s
   return (
     <CollapsibleCard title={T.TITLE} summary={data ? T.SUMMARY(data.mine.length) : undefined} testId="my-components-card">
       {failed ? (
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-danger">{T.LOAD_FAILED}</p>
-          <Button variant="outline" size="sm" onClick={load}>
-            {T.RETRY}
-          </Button>
-        </div>
+        <ErrorState size="compact" title={T.LOAD_FAILED} message={loadMessage} onRetry={load} />
       ) : (
         data && (
           <div className="space-y-3">

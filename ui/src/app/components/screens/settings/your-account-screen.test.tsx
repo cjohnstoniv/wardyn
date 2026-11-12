@@ -32,11 +32,21 @@ vi.mock("../../../lib/api/runners", () => ({
   runners: { listMine: (...a: unknown[]) => listMineMock(...a) },
 }));
 
+// Your kept machines reads /me/machines; the default here is a caller who may keep none, which is "no card".
+const myMachinesMock = vi.fn();
+vi.mock("../../../lib/api/me-machines", () => ({ myMachines: () => myMachinesMock(), deleteMyMachine: vi.fn() }));
+
 // Your walls reads /me/walls; none are set here.
 const getWallsMock = vi.fn();
 vi.mock("../../../lib/api/walls", async (orig) => ({
   ...(await orig<typeof import("../../../lib/api/walls")>()),
   walls: { get: (...a: unknown[]) => getWallsMock(...a) },
+}));
+
+// Wall presets read /wall-presets; the store keeps none here, so that card is absent.
+vi.mock("../../../lib/api/wall-presets", async (orig) => ({
+  ...(await orig<typeof import("../../../lib/api/wall-presets")>()),
+  wallPresets: { list: () => Promise.reject(new HttpError(501, "no", "wall_presets_unavailable")) },
 }));
 
 vi.mock("../../../lib/api/secrets", () => ({
@@ -69,6 +79,7 @@ function renderScreen(operator = false) {
 }
 
 beforeEach(() => {
+  myMachinesMock.mockReset().mockRejectedValue(new HttpError(403, "no person", "kept_machine_not_your_mac"));
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listKeysMock.mockReset().mockResolvedValue([]);
   listMineMock.mockReset().mockRejectedValue(new HttpError(403, "runners are off", "runners_disabled"));
@@ -76,6 +87,18 @@ beforeEach(() => {
 });
 
 describe("YourAccountScreen", () => {
+  // UXA-2: getSetupStatus never rejects; an unreachable answer is made-up facts, so the page says it could not reach Wardyn.
+  it("an unreachable daemon shows Couldn't reach Wardyn with Retry, not the cards", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ unreachable: true }));
+    renderScreen();
+    expect(await screen.findByText("Couldn't reach Wardyn")).toBeInTheDocument();
+    expect(screen.getByText("Settings didn't get an answer, so nothing here would be accurate. Try again in a moment.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: startsWith("Your SSH keys") })).toBeNull();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
+  });
+
   it("titles the page 'Your settings' with the S-3 description", async () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Your settings", level: 1 })).toBeInTheDocument();
@@ -103,7 +126,7 @@ describe("YourAccountScreen", () => {
     getWallsMock.mockRejectedValue(new HttpError(400, "no person", "walls_need_person"));
     renderScreen();
     await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
-    await waitFor(() => expect(getWallsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getWallsMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     expect(screen.queryByRole("heading", { name: startsWith("Your walls") })).not.toBeInTheDocument();
   });
 
@@ -169,6 +192,22 @@ describe("YourAccountScreen — My runner", () => {
     const keys = await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
     expect(runner.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(runner.closest("section")?.id).toBe("my-runner");
+  });
+
+  // KM-4 (km4-page): Your kept machines sits under My runner, in the User view only.
+  it("draws Your kept machines right after My runner, and not in the Admin view", async () => {
+    listMineMock.mockReset().mockResolvedValue([]);
+    myMachinesMock.mockResolvedValue({ machines: [], allowed: true, count: 0, limit: 1, worst_bytes: 0 });
+    renderAt("/account");
+    const titles = async () => (await screen.findAllByRole("heading", { level: 3 })).map((h) => h.textContent ?? "");
+    await screen.findByRole("heading", { name: startsWith("Your kept machines"), level: 3 });
+    const at = await titles();
+    expect(at.findIndex((t) => t.startsWith("Your kept machines"))).toBe(at.findIndex((t) => t.startsWith("My runner")) + 1);
+    cleanup();
+    myMachinesMock.mockClear();
+    renderAt("/admin/account");
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    expect(myMachinesMock).not.toHaveBeenCalled();
   });
 
   it("is not read at all in the Admin view", async () => {

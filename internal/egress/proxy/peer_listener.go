@@ -41,3 +41,29 @@ func (l *peerListener) Accept() (net.Conn, error) {
 		_ = c.Close()
 	}
 }
+
+// peerPacketConn is peerListener for datagrams: it delivers only packets from
+// allowed, and drops any other without a reply, so a caller outside the run's
+// network learns nothing from it.
+type peerPacketConn struct {
+	net.PacketConn
+	allowed  []netip.Prefix
+	lastWarn atomic.Int64 // unix nanos of the last drop warning
+}
+
+func (c *peerPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	for {
+		n, from, err := c.PacketConn.ReadFrom(b)
+		if err != nil {
+			return n, from, err
+		}
+		if ap, perr := netip.ParseAddrPort(from.String()); perr == nil &&
+			slices.ContainsFunc(c.allowed, func(p netip.Prefix) bool { return p.Contains(ap.Addr().Unmap()) }) {
+			return n, from, nil
+		}
+		now, last := time.Now().UnixNano(), c.lastWarn.Load()
+		if now-last >= int64(peerWarnEvery) && c.lastWarn.CompareAndSwap(last, now) {
+			slog.Warn("wardyn-proxy: dropped a datagram from outside the run's network", slog.String("peer", from.String()))
+		}
+	}
+}

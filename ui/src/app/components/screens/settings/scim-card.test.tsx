@@ -5,6 +5,8 @@
 
 // 0.8.6 scim-a7: the Settings SCIM card renders each state of M5's approved copy. The strings here are
 // written out, not read from lib/scim-copy.ts, so a drift in the copy module fails this suite.
+import { STATES } from "../../wardyn/states";
+import { HttpError } from "../../../lib/api/core";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -159,6 +161,21 @@ describe("ScimCard", () => {
   it("one day reads as a day, not days", async () => {
     const card = await open(status({ purge_after_seconds: 86400 }));
     expect(within(card).getByText("1 day")).toBeInTheDocument();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getStatusMock.mockReset().mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "scim_failed"));
+    render(<ScimCard />);
+    await expandCard("SCIM provisioning");
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    getStatusMock.mockReset().mockRejectedValueOnce(new Error("Failed to fetch"));
+    render(<ScimCard />);
+    await expandCard("SCIM provisioning");
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("a failed read shows the error and a retry, with no summary", async () => {

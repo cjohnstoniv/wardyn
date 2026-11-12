@@ -8,8 +8,12 @@ package store_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -141,5 +145,192 @@ func TestPG_Migration0092_BackfillsEndedAt(t *testing.T) {
 	// than with Equal.
 	if got.EndedAt == nil || got.EndedAt.Sub(backdated).Abs() > time.Millisecond {
 		t.Errorf("ended_at = %v, want backfilled updated_at %v", got.EndedAt, backdated)
+	}
+}
+
+// forcedStopAt reads run id's forced_stop_at, nil while it is unmarked.
+func forcedStopAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) *time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := pool.QueryRow(ctx, `SELECT forced_stop_at FROM agent_runs WHERE id = $1`, id).Scan(&at); err != nil {
+		t.Fatalf("read forced_stop_at: %v", err)
+	}
+	return at
+}
+
+// TestPG_StopKeptRunForcedIf_OneWinnerAndTheMarkLandsWithTheEnd pins the forced end's claim: of two callers
+// holding the same kept mark exactly one applies, the mark is present exactly when the end is, and the claim
+// loses to a mark that moved.
+func TestPG_StopKeptRunForcedIf_OneWinnerAndTheMarkLandsWithTheEnd(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	lostAt := time.Now().UTC().Add(-time.Hour)
+	endsAt := time.Now().UTC().Add(-time.Minute)
+	r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+	if at := forcedStopAt(t, ctx, pool, r.ID); at != nil {
+		t.Fatalf("forced_stop_at = %v before any claim, want nil", at)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var stamps []time.Time
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stamp, ok, err := pg.StopKeptRunForcedIf(ctx, r.ID, types.RunStopped, r.LostAt, r.LostReason, r.EndsAt)
+			if err != nil {
+				t.Errorf("StopKeptRunForcedIf: %v", err)
+				return
+			}
+			if ok {
+				mu.Lock()
+				stamps = append(stamps, stamp)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if len(stamps) != 1 {
+		t.Fatalf("%d claims applied, want exactly 1", len(stamps))
+	}
+	got, err := pg.GetRun(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.State != types.RunStopped || got.EndedAt == nil {
+		t.Errorf("state %s, ended_at %v; want STOPPED with an end", got.State, got.EndedAt)
+	}
+	if at := forcedStopAt(t, ctx, pool, r.ID); at == nil || !at.Equal(stamps[0]) {
+		t.Errorf("forced_stop_at = %v, want the winner's stamp %v", at, stamps[0])
+	}
+
+	// A claim carrying any one value other than the row's own mark is refused, and marks nothing: the end, the
+	// lost time and the lost reason each decide it.
+	laterEnd, laterLost := endsAt.Add(time.Hour), lostAt.Add(time.Hour)
+	for name, tc := range map[string]struct {
+		lostAt     *time.Time
+		lostReason types.LostReason
+		endsAt     *time.Time
+	}{
+		"a moved end":         {&lostAt, types.LostOutage, &laterEnd},
+		"no end":              {&lostAt, types.LostOutage, nil},
+		"a moved lost time":   {&laterLost, types.LostOutage, &endsAt},
+		"no lost time":        {nil, types.LostOutage, &endsAt},
+		"another lost reason": {&lostAt, types.LostEnded, &endsAt},
+	} {
+		t.Run(name, func(t *testing.T) {
+			moved := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+			if _, ok, err := pg.StopKeptRunForcedIf(ctx, moved.ID, types.RunStopped, tc.lostAt, tc.lostReason, tc.endsAt); err != nil || ok {
+				t.Fatalf("a stale claim = %v, %v; want refused", ok, err)
+			}
+			if at := forcedStopAt(t, ctx, pool, moved.ID); at != nil {
+				t.Errorf("forced_stop_at = %v on a refused claim, want nil", at)
+			}
+			if got, err := pg.GetRun(ctx, moved.ID); err != nil || got.State != types.RunRunning {
+				t.Errorf("state %v, %v after a refused claim; want RUNNING", got.State, err)
+			}
+		})
+	}
+}
+
+// TestPG_ClearForcedStop_ClearsOnlyTheStampItRead pins that the clear lands only on the stamp it read, and that
+// the listing names the marked run with that stamp.
+func TestPG_ClearForcedStop_ClearsOnlyTheStampItRead(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	lostAt := time.Now().UTC().Add(-time.Hour)
+	endsAt := time.Now().UTC().Add(-time.Minute)
+	r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
+	stamp, ok, err := pg.StopKeptRunForcedIf(ctx, r.ID, types.RunStopped, r.LostAt, r.LostReason, r.EndsAt)
+	if err != nil || !ok {
+		t.Fatalf("StopKeptRunForcedIf = %v, %v; want applied", ok, err)
+	}
+	listed, err := pg.ListForcedStops(ctx)
+	if err != nil {
+		t.Fatalf("ListForcedStops: %v", err)
+	}
+	found := false
+	for _, f := range listed {
+		if f.RunID == r.ID {
+			found = f.At.Equal(stamp)
+		}
+	}
+	if !found {
+		t.Errorf("ListForcedStops = %v, want run %s with stamp %v", listed, r.ID, stamp)
+	}
+	if cleared, err := pg.ClearForcedStop(ctx, r.ID, stamp.Add(-time.Second)); err != nil || cleared {
+		t.Fatalf("ClearForcedStop with another stamp = %v, %v; want refused", cleared, err)
+	}
+	if at := forcedStopAt(t, ctx, pool, r.ID); at == nil {
+		t.Fatal("a clear with another stamp removed the mark")
+	}
+	if cleared, err := pg.ClearForcedStop(ctx, r.ID, stamp); err != nil || !cleared {
+		t.Fatalf("ClearForcedStop with its stamp = %v, %v; want cleared", cleared, err)
+	}
+	if at := forcedStopAt(t, ctx, pool, r.ID); at != nil {
+		t.Errorf("forced_stop_at = %v after the clear, want nil", at)
+	}
+}
+
+// TestPG_UpdateRunStateIf_TerminalToTerminalKeepsEndedAt: a run that already ended keeps its first end when
+// a later transition moves it from one terminal state to another (a re-kill, a kill of a stopped run), a
+// terminal row with no ended_at (the pre-0092 shape) gets now(), and a live run's first end is still now().
+// Proven red by leaving the CASE as now() (the end moves), or by leaving a terminal target's ended_at as it
+// was (a NULL stays NULL).
+func TestPG_UpdateRunStateIf_TerminalToTerminalKeepsEndedAt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	endedAt := func(id uuid.UUID) time.Time {
+		t.Helper()
+		got, err := pg.GetRun(ctx, id)
+		if err != nil || got.EndedAt == nil {
+			t.Fatalf("get run %s: ended_at %v, err %v", id, got.EndedAt, err)
+		}
+		return *got.EndedAt
+	}
+	move := func(id uuid.UUID, from, to types.RunState) {
+		t.Helper()
+		if ok, err := pg.UpdateRunStateIf(ctx, id, from, to); err != nil || !ok {
+			t.Fatalf("UpdateRunStateIf %s -> %s = %v, %v; want applied", from, to, ok, err)
+		}
+	}
+
+	killed := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	move(killed.ID, types.RunRunning, types.RunKilled)
+	t1 := endedAt(killed.ID)
+	time.Sleep(20 * time.Millisecond)
+	move(killed.ID, types.RunKilled, types.RunKilled)
+	if got := endedAt(killed.ID); !got.Equal(t1) {
+		t.Errorf("KILLED -> KILLED moved ended_at from %v to %v", t1, got)
+	}
+
+	stopped := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	move(stopped.ID, types.RunRunning, types.RunStopped)
+	t2 := endedAt(stopped.ID)
+	time.Sleep(20 * time.Millisecond)
+	move(stopped.ID, types.RunStopped, types.RunKilled)
+	if got := endedAt(stopped.ID); !got.Equal(t2) {
+		t.Errorf("STOPPED -> KILLED moved ended_at from %v to %v", t2, got)
+	}
+
+	legacy := persistRun(t, ctx, pool, newRun(types.RunFailed))
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = NULL WHERE id = $1`, legacy.ID); err != nil {
+		t.Fatalf("reset to pre-0092 shape: %v", err)
+	}
+	move(legacy.ID, types.RunFailed, types.RunKilled)
+	if got := endedAt(legacy.ID); time.Since(got) > time.Minute {
+		t.Errorf("a terminal row with no ended_at got %v, want now()", got)
+	}
+
+	completed := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	move(completed.ID, types.RunRunning, types.RunCompleted)
+	if got := endedAt(completed.ID); time.Since(got) > time.Minute {
+		t.Errorf("RUNNING -> COMPLETED stamped %v, want now()", got)
 	}
 }

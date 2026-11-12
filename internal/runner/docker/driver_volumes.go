@@ -27,7 +27,9 @@ import (
 )
 
 // Docker named volumes for MANAGED user drives — the only place in this
-// package that creates a volume, and the only shape it ever creates.
+// package that creates a drive volume, and the only shape it ever creates. The
+// other volume this package creates is a run's own resolver volume
+// (driver_dns.go), which is never a drive and is removed with its run.
 //
 // SECURITY: MANAGED (no host path) means nothing for the bind deny-list to
 // deny and no host-root ceiling to escape; host_path runs that deny matrix
@@ -209,7 +211,7 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 	}
 	name := driveSeedName(runID)
 	remove := func(ctx context.Context) error {
-		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("docker: seed user drive volume %q: remove: %w", drive.ObjectName, err)
 		}
 		return nil

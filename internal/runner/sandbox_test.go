@@ -240,6 +240,30 @@ func TestBuildProxyConfig_VMAndPortRule(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_ForgeHosts: the deny_all guard's code hosts reach the
+// sidecar's config, and a run without them writes no key an older proxy refuses.
+func TestBuildProxyConfig_ForgeHosts(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ForgeHosts: []string{"ghe.corp.example"}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"forge_hosts":["ghe.corp.example"]`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "forge_hosts") {
+		t.Fatalf("a run without code hosts names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_ActivityIgnoreHosts: the hosts whose allowed traffic is not activity reach the sidecar's
+// config, and a run without them writes no key an older proxy refuses.
+func TestBuildProxyConfig_ActivityIgnoreHosts(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ActivityIgnoreHosts: []string{"mask.icloud.com"}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"activity_ignore_hosts":["mask.icloud.com"]`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "activity_ignore_hosts") {
+		t.Fatalf("a run without them names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_LocalModels: a local_model run's allowlist reaches the
 // sidecar's config, and a run without one writes no key an older proxy refuses.
 func TestBuildProxyConfig_LocalModels(t *testing.T) {
@@ -253,6 +277,55 @@ func TestBuildProxyConfig_LocalModels(t *testing.T) {
 	}
 	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "local_models") {
 		t.Fatalf("a run with no local model names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_AllowedModels: a run's governed model list reaches the sidecar's config, so the proxy holds the run to it (and a revive, which replays the stored config, keeps
+// it); a run with no limit writes no key an older proxy refuses.
+func TestBuildProxyConfig_AllowedModels(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ModelLimit: &ModelLimit{Models: []string{"model-a", "small-model-a"},
+		BedrockRoutes: map[string]string{"bedrock-gateway.corp.example": "/bedrock"}}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"allowed_models":["model-a","small-model-a"]`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the list under allowed_models", b, err)
+	}
+	var cfg proxy.Config
+	if err := json.Unmarshal(b, &cfg); err != nil || cfg.AllowedModels == nil || len(*cfg.AllowedModels) != 2 ||
+		cfg.BedrockRoutes["bedrock-gateway.corp.example"] != "/bedrock" {
+		t.Fatalf("the sidecar read %v %v %v, want the two models and the Bedrock route", cfg.AllowedModels, cfg.BedrockRoutes, err)
+	}
+	if _, err := proxy.LoadConfigBytes(b); err != nil && strings.Contains(err.Error(), "bedrock_routes") {
+		t.Fatalf("the sidecar refused the route: %v", err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "allowed_models") || strings.Contains(string(b), "bedrock_routes") {
+		t.Fatalf("a run with no limit names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_GatewayIdentity: a run's gateway routes reach the sidecar's config, and
+// a run without one writes no key an older proxy refuses.
+func TestBuildProxyConfig_GatewayIdentity(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		GatewayIdentity: []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, PathPrefix: "/v1", ProviderID: "p", Audience: "a"}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"gateway_identity":[{"host":"gw.corp.example","port":443,"path_prefix":"/v1","provider_id":"p","audience":"a"}]`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the route under gateway_identity", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "gateway_identity") {
+		t.Fatalf("a run with no route names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_MCPApproveEach: the approve_each marker reaches the sidecar's config with
+// its windows, and a run without one names no key (an older proxy refuses the key).
+func TestBuildProxyConfig_MCPApproveEach(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		MCPApproveEach: &proxy.MCPApproveEachConfig{Windows: map[string]int{"codex-cli": 45}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"mcp_approve_each":{"windows":{"codex-cli":45}}`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the marker under mcp_approve_each", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "mcp_approve_each") {
+		t.Fatalf("a run with no approve_each rule names the key: %s", b)
 	}
 }
 

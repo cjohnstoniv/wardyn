@@ -15,11 +15,13 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 const getRunMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
   runs: {
+    getPolicy: () => new Promise(() => {}),
     getRun: (...a: unknown[]) => getRunMock(...a),
     getGrants: vi.fn().mockResolvedValue([]),
     killRun: vi.fn(),
     getFiles: vi.fn().mockRejectedValue(new Error("no runner")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
     getAttachHolder: vi.fn().mockResolvedValue({ held: false }),
     takeoverAttach: vi.fn(),
     attachTicket: vi.fn(),

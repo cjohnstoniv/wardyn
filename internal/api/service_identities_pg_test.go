@@ -335,7 +335,7 @@ func TestServiceIdentity_AllowListRouteWalk(t *testing.T) {
 		"PUT /api/v1/model-providers/{id}/credential",
 	}
 	wantAllowed = append(wantAllowed, "DELETE /api/v1/workloads/{name}", "GET /api/v1/workloads", "GET /api/v1/workloads/{name}",
-		"POST /api/v1/workloads/{name}/restart", "PUT /api/v1/workloads/{name}")
+		"POST /api/v1/workloads/{name}/restart", "POST /api/v1/workloads/{name}/preview", "PUT /api/v1/workloads/{name}", "POST /api/v1/templates/import")
 	slices.Sort(wantAllowed)
 	if got := slices.Sorted(maps.Keys(serviceAllowed)); !slices.Equal(got, wantAllowed) {
 		t.Errorf("the service allow-list = %v, want exactly %v", got, wantAllowed)

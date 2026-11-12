@@ -91,8 +91,9 @@ test.describe("Run detail — UI apps lane", () => {
 
   // #1220: Open POSTs the ticket via a hidden auto-submitted form — the
   // console never puts it in a URL at all now. Intercepted rather than
-  // stubbed (window.open is gone from this path): the popup's own first
-  // request IS the assertion, and it is fulfilled locally rather than let
+  // stubbed: the click opens a blank tab at once (a browser lets only the
+  // click open one), and the form's POST into that tab once the ticket is
+  // minted and bound IS the assertion. It is fulfilled locally rather than let
   // through, since the `none` runner behind this backend has no sandbox to
   // relay into (a real redeem-and-303 would just 409 here).
   test("Open mints a ticket and POSTs it to the gateway's own origin, never in a URL", async ({ page, context }) => {
@@ -115,7 +116,8 @@ test.describe("Run detail — UI apps lane", () => {
     await popup.waitForLoadState("domcontentloaded").catch(() => {});
     expect(new URL((await mint).url()).searchParams.get("purpose")).toBe("ui");
 
-    expect(captured).not.toBeNull();
+    await expect.poll(() => captured).not.toBeNull();
+    await expect(popup).toHaveURL(/\/__wardyn\/enter$/);
     const { url: openedURL, postData, cookie } = captured!;
     const url = new URL(openedURL);
     // A DIFFERENT origin than the console's — the server's advertised one,

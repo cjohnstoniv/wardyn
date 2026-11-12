@@ -7,13 +7,17 @@
 // server's `access` block. A host is Requested until the server has answered
 // this exact body; only then does its verdict show.
 
-import { Grid3x3 } from "lucide-react";
+import { Grid3x3, Shield } from "lucide-react";
 import { AdoLaunchNote, AdoOwnTokenNote, AdoRunTokenLine, adoLaunchNoteKind, ownTokenNoteOrgs } from "../../../../wardyn/ado-run-token-line";
 import { Switch } from "../../../../wardyn/form-primitives";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
-import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
+import { CC_META } from "../../../../wardyn/cc-meta";
+import { NR_WALLS, YOUR_WALLS } from "../../../../wardyn/copy/personal-walls";
+import { WALL_PRESETS } from "../../../../wardyn/copy/wall-presets";
+import { FORGE_NAME, forgeLimits, readsOnly } from "../../../../../lib/wall-preset-words";
 import type { PersonalWallsSpec } from "../../../../../lib/api/walls";
+import { appURL } from "../../../../../lib/base-path";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessCredential, AccessFacts, AccessUnlisted } from "../../../../../lib/types/new-run-access";
 import { hostBadge, rowLabel, wallsLeaveOut, type HarnessNames, type HostBadge } from "../../lenses/tools-lens";
@@ -36,6 +40,69 @@ export const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success
 
 const TOTAL_CLASS = "flex min-w-0 flex-col gap-2.5 rounded-lg border border-border bg-surface-2 p-3.5";
 const POLICY_CLASS = "border-t border-dashed border-border pt-2.5 text-sm text-muted-foreground";
+
+/** The knobs the person's saved walls name, each as the clause the walls line says it in; none for walls that name nothing. First use of a new site is left out: it is inert on an allow-all run and a stricter ceiling changes it, which the walls alone cannot tell. */
+export function wallsApplyClauses(walls: PersonalWallsSpec | undefined): string[] {
+  if (!walls) return [];
+  const clauses: string[] = [];
+  if (walls.allowed_domains) clauses.push(walls.allowed_domains.length > 0 ? NR_WALLS.APPLY_SITES_LISTED(walls.allowed_domains.length) : NR_WALLS.APPLY_SITES_SETUP_ONLY);
+  if (walls.denied_domains?.length) clauses.push(NR_WALLS.APPLY_SITES_NEVER(walls.denied_domains.length));
+  if (walls.min_confinement_class) clauses.push(NR_WALLS.APPLY_BARRIER(CC_META[walls.min_confinement_class]?.label ?? walls.min_confinement_class));
+  const blocked = Object.entries(walls.desktop ?? {}).flatMap(([dir, rule]) => (rule === "blocked" && NR_WALLS.APPLY_TRANSFERS[dir] ? [NR_WALLS.APPLY_TRANSFERS[dir]] : []));
+  if (blocked.length > 0) clauses.push(NR_WALLS.APPLY_NO_TRANSFER(blocked.length === 1 ? blocked[0] : `${blocked.slice(0, -1).join(NR_WALLS.APPLY_JOIN)}${NR_WALLS.APPLY_OR}${blocked[blocked.length - 1]}`));
+  // Each entry is one restriction: a scoped entry (one host or key) leaves the kind's other credentials allowed, so kinds are not counted.
+  const limits = walls.withheld_grants?.length ?? 0;
+  if (limits > 0) clauses.push(NR_WALLS.APPLY_CREDENTIAL_LIMITS(limits));
+  return clauses;
+}
+
+/**
+ * One neutral line saying which of the person's own walls apply to the run, from the walls they saved; Review and the
+ * Tools step draw it. Nothing for walls that name nothing, and nothing when the walls could not be read (`walls` is then undefined).
+ */
+export function WallsApplyLine({ walls }: { walls: PersonalWallsSpec | undefined }) {
+  const clauses = wallsApplyClauses(walls);
+  if (clauses.length === 0) return null;
+  return (
+    <p data-testid="walls-apply" title={walls?.allowed_domains ? YOUR_WALLS.SITES_ONLY_HINT : undefined} className="flex items-start gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
+      <Grid3x3 aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        {NR_WALLS.APPLY_BEFORE}{clauses.join(NR_WALLS.APPLY_JOIN)}{NR_WALLS.APPLY_AFTER}{" "}
+        {/* A new tab: the draft lives in the New Run route's state, so leaving this page for Settings would drop it. */}
+        <a href={appURL("/account")} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">{NR_WALLS.CHANGE_WALLS}</a>
+      </span>
+    </p>
+  );
+}
+
+/**
+ * The clauses of the chosen wall preset, in the walls line's words: the sites it keeps and refuses, what an unlisted
+ * site meets, the barrier, the desktop transfers and credentials it takes out, read capabilities only, every push
+ * refused. None for a preset that names nothing (Open).
+ */
+export function wallPresetClauses(spec: PersonalWallsSpec): string[] {
+  const sites = wallsApplyClauses({ allowed_domains: spec.allowed_domains, denied_domains: spec.denied_domains });
+  const rest = wallsApplyClauses({ min_confinement_class: spec.min_confinement_class, desktop: spec.desktop, withheld_grants: spec.withheld_grants });
+  return [
+    ...sites,
+    ...(spec.first_use_approval === "always_deny" ? [WALL_PRESETS.CLAUSE_UNLISTED_REFUSED] : []),
+    ...rest,
+    ...(readsOnly(spec) ? [WALL_PRESETS.CLAUSE_READ_ONLY] : forgeLimits(spec).filter((f) => f.reads).map((f) => WALL_PRESETS.CLAUSE_FORGE_READ(FORGE_NAME[f.forge]))),
+    ...(spec.push_rules?.deny_all === true ? [WALL_PRESETS.CLAUSE_EVERY_PUSH] : []),
+  ];
+}
+
+/** One neutral line saying what the chosen wall preset narrows, above the person's own walls line (Tools step). Nothing for Open. */
+export function WallPresetApplyLine({ name, spec }: { name: string; spec: PersonalWallsSpec }) {
+  const clauses = wallPresetClauses(spec);
+  if (clauses.length === 0) return null;
+  return (
+    <p data-testid="wall-preset-apply" className="flex items-start gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
+      <Shield aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 [overflow-wrap:anywhere]">{WALL_PRESETS.PRESET_LINE(name, clauses.join(NR_WALLS.APPLY_JOIN))}</span>
+    </p>
+  );
+}
 
 /** A delivery code in words; a code this console does not know shows no label rather than a raw code. */
 export const deliveryLabel = (delivery: string): string | undefined => DELIVERY[delivery];
@@ -111,6 +178,8 @@ export function Totals({ access, answered, names: harnessNames, providers, ado, 
   const onlyListed = narrow && (narrow.on || access?.unlisted.allow_all) ? narrow : undefined;
   const adoToken = ado?.access?.token_mode === "minted_pat" && !!access?.credentials.some((c) => c.kind === ADO_SIGN_IN) ? ado : undefined;
   return (
+    <>
+    <WallsApplyLine walls={walls} />
     <section aria-label={NR_TOOLS.TOTALS_ARIA} className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
       <div className={TOTAL_CLASS}>
         <h3 className="font-medium">{NR_TOOLS.NETWORK_TITLE}</h3>
@@ -189,5 +258,6 @@ export function Totals({ access, answered, names: harnessNames, providers, ado, 
         {access && renewalHolds(access.credentials) && <p className={POLICY_CLASS}>{NR_TOOLS.CREDENTIALS_POLICY}</p>}
       </div>
     </section>
+    </>
   );
 }

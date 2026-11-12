@@ -12,6 +12,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/cjohnstoniv/wardyn/internal/pctdecode"
 )
 
 // segment is one path segment: its decoded, lowercased text, and whether the
@@ -66,7 +68,7 @@ func decodeSegment(raw string) (string, error) {
 		if i+2 >= len(raw) {
 			return "", fmt.Errorf("ghscope: path segment %q is not decodable", raw)
 		}
-		hi, lo := unhex(raw[i+1]), unhex(raw[i+2])
+		hi, lo := pctdecode.Unhex(raw[i+1]), pctdecode.Unhex(raw[i+2])
 		if hi < 0 || lo < 0 {
 			return "", fmt.Errorf("ghscope: path segment %q is not decodable", raw)
 		}
@@ -123,7 +125,7 @@ const maxDecodeDepth = 4
 // text), since a lenient decoder is the most dangerous one a request could meet.
 func hidesStructure(seg string) bool {
 	for range maxDecodeDepth {
-		next := percentDecodeLenient(seg)
+		next := pctdecode.Lenient(seg)
 		if next == seg {
 			return false
 		}
@@ -133,36 +135,6 @@ func hidesStructure(seg string) bool {
 		seg = next
 	}
 	return true
-}
-
-// percentDecodeLenient decodes every valid %XY in s once and keeps every
-// malformed one as literal text.
-func percentDecodeLenient(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '%' && i+2 < len(s) {
-			if hi, lo := unhex(s[i+1]), unhex(s[i+2]); hi >= 0 && lo >= 0 {
-				b.WriteByte(byte(hi<<4 | lo))
-				i += 2
-				continue
-			}
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
-// unhex is one hex digit's value, or -1.
-func unhex(c byte) int {
-	switch {
-	case c >= '0' && c <= '9':
-		return int(c - '0')
-	case c >= 'a' && c <= 'f':
-		return int(c-'a') + 10
-	case c >= 'A' && c <= 'F':
-		return int(c-'A') + 10
-	}
-	return -1
 }
 
 // ownerName is s as an account or organisation name — letters, digits, "-"

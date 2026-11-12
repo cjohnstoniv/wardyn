@@ -41,6 +41,7 @@ import { useOperatorResolved, usePrincipal } from "./operator-context";
 import { currentView, screenPath, useViewAccess, viewOfPath, viewVerdict } from "./console-view";
 import { DoorDialog } from "./door-dialog";
 import { BANNER, CONNECTIONS } from "./copy/door";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 
 /** Per-viewer, per-browsing-context. Keyed on the viewer's subject because
  *  sessionStorage survives a sign-out in the same tab: an unkeyed flag would
@@ -67,6 +68,15 @@ export function providerStripLine(
   // the connection row and the door.
   const cause = modelConnectionCause(a.provider, { ...a, provider: a.provider.id });
   if (cause?.button) return { sentence: cause.line, button: cause.button, title: "", tone: "warning", dismissible: false };
+  // An endpoint that signs people in: one sentence per state, and a button that names the provider.
+  if (a.provider.sign_in === "oidc")
+    return {
+      sentence: a.state === "expired_signin" ? OIDC_SIGN_IN.STRIP_ENDED(name) : OIDC_SIGN_IN.STRIP_NONE(harnesses, name),
+      button: OIDC_SIGN_IN.BUTTON(name),
+      title: "",
+      tone: "warning",
+      dismissible: false,
+    };
   switch (a.provider.kind) {
     case "bedrock_sso":
       if (a.state === "expired_signin")
@@ -274,6 +284,7 @@ export function ModelAccessBanner() {
           // completed save does.
           toast.success(message);
         }}
+        forHarnesses={door.target?.provider ? harnessDisplayNames(status, door.target.provider.harnesses) : undefined}
         onCloseAutoFocus={(event) => {
           // This handler owns the restore, always: Radix's default focuses the
           // element it remembered when the door opened, and by the time it runs

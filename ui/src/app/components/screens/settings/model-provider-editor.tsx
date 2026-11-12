@@ -17,7 +17,7 @@
 // it the GET /model-providers snapshot it rendered from, and re-reads after
 // onSaved. Every write is the WHOLE document with that snapshot's If-Match.
 import * as React from "react";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
@@ -39,8 +39,7 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
-import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../wardyn/form-actions";
-import { Checkbox } from "../../ui/checkbox";
+import { DANGER_OUTLINE, INLINE_ACTIONS, STICKY_FOOTER } from "../../wardyn/form-actions";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../ui/dialog";
 import { Input } from "../../ui/input";
 import {
@@ -50,7 +49,10 @@ import {
   type AvailabilityDraftValue,
 } from "../../wardyn/availability-control";
 import { Mono } from "../../wardyn/code-block";
+import { CopyButton } from "../../wardyn/copy-button";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { Field, Switch } from "../../wardyn/form-primitives";
+import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
@@ -58,25 +60,33 @@ import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { ModelChips } from "./model-chips";
 import { LaptopRunnersSwitch } from "./model-provider-laptop";
+import { GatewayInspection } from "./model-provider-gateway-inspection";
+import { ExtraHeaders } from "./model-provider-extra-headers";
+import { GatewayPresets } from "./model-provider-gateway-presets";
+import { HarnessBlock } from "./model-provider-harness";
+import { OidcChoice, OidcFields } from "./model-provider-oidc";
+import { applyPreset, type PresetId } from "./model-provider-presets";
 import {
   EDITOR_KINDS,
   addressChanged,
+  directHost,
   draftFrom,
+  draftGatewayAddress,
   editorProvidesLine,
-  incompatibleReason,
+  gatewayKind,
   isBedrock,
   isEndpoint,
   isLocal,
   newDraft,
+  oidcChange,
   providerFrom,
   refusedField,
   laptopBaseUrlRefused,
-  refusedHarness,
   refusedModel,
-  vendorHost,
   type HarnessRow,
   type ProviderDraft,
 } from "./model-provider-draft";
+import { withSignerVar } from "./model-provider-signer-var";
 
 export interface ModelProviderEditorProps {
   // The GET /model-providers read the host rendered from: the document a save
@@ -129,6 +139,8 @@ export function ModelProviderEditor({
   const [baseline, setBaseline] = React.useState<string | null>(() => (editing ? editedText(draftFrom(editing, harnesses), audience) : null));
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
+  // The field the server's refusal named ("oidc.issuer"): outlined beside the alert.
+  const [refusedAt, setRefusedAt] = React.useState<string | null>(null);
   const [stale, setStale] = React.useState<string | null>(null);
   const discard = useDiscardReload(onSaved);
   const [confirm, setConfirm] = React.useState<Confirm>(null);
@@ -144,10 +156,14 @@ export function ModelProviderEditor({
     const doc = { providers: next };
     setSaving(true);
     setRefused(null);
+    setRefusedAt(null);
     try {
       return await modelProviders.putModelProviders(doc, list.etag);
     } catch (e) {
-      if (e instanceof HttpError && e.status === 400) setRefused(e.message);
+      if (e instanceof HttpError && e.status === 400) {
+        setRefused(e.message);
+        setRefusedAt(e.field || null);
+      }
       else if (e instanceof HttpError && e.status === 412) setStale(JSON.stringify(doc, null, 2));
       else toast.error(getErrorMessage(e));
       return null;
@@ -172,8 +188,16 @@ export function ModelProviderEditor({
         await writeAvailability("model_provider", next.id, audience);
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
-        setPartial({ list: { ...snap, connected: list.connected }, provider, message: getErrorMessage(e) });
-        setBaseline(edited);
+        setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e) });
+        // The row is saved now, with identity as the draft has it: later edits compare against that.
+        const kept: ProviderDraft = {
+          ...draft!,
+          gatewaySaved: provider.gateway_identity
+            ? { baseUrl: provider.base_url ?? "", audience: provider.gateway_identity.audience, inspect: provider.gateway_identity.inspection === "gateway" }
+            : null,
+        };
+        setDraft(kept);
+        setBaseline(editedText(kept, audience));
         return;
       }
     }
@@ -197,8 +221,23 @@ export function ModelProviderEditor({
     void save();
   };
 
+  // A sign-in change on its own says what it deletes in its own words; with another address change beside it
+  // the address wording stands, and either way the count and the deletion are the same.
+  const signInChange = (() => {
+    if (!editing || !draft) return null;
+    const next = candidate();
+    const change = oidcChange(editing, next);
+    return change && !addressChanged({ ...editing, oidc: undefined }, { ...next, oidc: undefined }) ? change : null;
+  })();
+  const O = PROVIDER_EDITOR.OIDC;
   const addressBody =
-    n === 1
+    signInChange === "to_sign_in"
+      ? n === 1 ? O.TO_SIGN_IN_ONE : O.TO_SIGN_IN(n)
+      : signInChange === "to_paste"
+        ? n === 1 ? O.TO_PASTE_ONE : O.TO_PASTE(n)
+        : signInChange === "edited"
+          ? n === 1 ? O.CONFIRM_BODY_ONE : O.CONFIRM_BODY(n)
+          : n === 1
       ? keyKind
         ? PROVIDER_EDITOR.ADDRESS_BODY_KEY_ONE
         : PROVIDER_EDITOR.ADDRESS_BODY_ONE
@@ -217,7 +256,7 @@ export function ModelProviderEditor({
             <DialogTitle>{title}</DialogTitle>
             {editing && <Chip tone="neutral">{MODEL_PROVIDERS.KIND[editing.kind]}</Chip>}
           </div>
-          {draft && <DialogDescription>{editorProvidesLine(draft.kind)}</DialogDescription>}
+          {draft && <DialogDescription>{editorProvidesLine(draft.kind, draft.oidcOn)}</DialogDescription>}
         </DialogHeader>
 
         {!draft ? (
@@ -239,7 +278,18 @@ export function ModelProviderEditor({
                 <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
               </div>
             )}
-            <ProviderFields draft={draft} setDraft={setDraft} harnesses={harnesses} refused={refused} />
+            <ProviderFields
+              draft={draft}
+              setDraft={setDraft}
+              harnesses={harnesses}
+              refused={refused}
+              refusedAt={refusedAt}
+              editing={editing}
+              people={n}
+              gatewayIssuer={list.gatewayIssuer}
+              gatewayJwksPath={list.gatewayJwksPath}
+              ssoGateway={list.gatewayIdentityBedrockSso === true}
+            />
             {/* After Use with, above the footer (#923 editors.html section 2). An
                 existing provider's list writes at once, never through Save. */}
             <div className="border-t border-border pt-4">
@@ -267,7 +317,8 @@ export function ModelProviderEditor({
               </div>
             )}
             {stale && <SavedElsewhereBanner documentText={stale} onDiscard={discard} />}
-            <div className={`${INLINE_ACTIONS} pt-2`}>
+            {/* Sticky: on a phone the sign-in fields make this dialog scroll, and Save must stay in reach. */}
+            <div data-testid="provider-editor-footer" className={`${INLINE_ACTIONS} ${STICKY_FOOTER}`}>
               {editing && (
                 <Button type="button" variant="outline" className={`mr-auto ${DANGER_OUTLINE}`} disabled={busy} onClick={() => setConfirm("remove")}>
                   {PROVIDER_EDITOR.REMOVE}
@@ -288,7 +339,11 @@ export function ModelProviderEditor({
           <AlertDialogContent className="sm:max-w-md">
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {confirm === "address" ? PROVIDER_EDITOR.ADDRESS_TITLE(title) : PROVIDER_EDITOR.DELETE_TITLE(title)}
+                {confirm === "address"
+                  ? signInChange
+                    ? O.CONFIRM_TITLE(title)
+                    : PROVIDER_EDITOR.ADDRESS_TITLE(title)
+                  : PROVIDER_EDITOR.DELETE_TITLE(title)}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {confirm === "address"
@@ -371,29 +426,66 @@ function ProviderFields({
   setDraft,
   harnesses,
   refused,
+  refusedAt,
+  editing,
+  people,
+  gatewayIssuer,
+  gatewayJwksPath,
+  ssoGateway,
 }: {
   draft: ProviderDraft;
   setDraft: React.Dispatch<React.SetStateAction<ProviderDraft | null>>;
   harnesses: HarnessRow[];
   // The last refused save's sentence: the field it is about is outlined.
   refused: string | null;
+  // The field the server's refusal named, when it named one.
+  refusedAt: string | null;
+  // The stored provider being edited, and how many people hold a credential for it.
+  editing: ModelProvider | null;
+  people: number;
+  gatewayIssuer?: string;
+  gatewayJwksPath?: string;
+  // The install signs AWS requests at its proxy, so a sign-in row may send run identity.
+  ssoGateway: boolean;
 }) {
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
+  // The gateway preset last pressed: only decides which placeholders and hints show, and is never saved.
+  const [preset, setPreset] = React.useState<PresetId | null>(null);
+  // A new address needs its audience entered again (the server refuses a kept one), so an edit that
+  // leaves the saved address clears it, and one that returns to it restores it.
+  const setBaseUrl = (value: string) => {
+    const saved = draft.gatewaySaved;
+    const patch = isBedrock(draft.kind) ? { bedrockBaseUrl: value } : { baseUrl: value };
+    set(saved ? { ...patch, gatewayAudience: sameAddress(value, saved.baseUrl) ? saved.audience : "" } : patch);
+  };
   const endpoint = isEndpoint(draft.kind);
   const local = isLocal(draft.kind);
   const badField = refusedField(refused);
   const laptopBad = laptopBaseUrlRefused(draft);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
-  const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key";
-  const host = vendorHost(draft.kind);
-  const [before, after] = PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host).split(host);
+  const routeThrough =
+    draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key" || draft.kind === "bedrock_bearer" || (sso && ssoGateway);
+  const host = directHost(draft);
+  // A key kind's gateway address cleared while identity is still on: the server refuses it, so say so first.
+  const addressCleared = routeThrough && draft.gatewayOn && !draftGatewayAddress(draft).trim();
+  const [before, after] = (sso ? PROVIDER_EDITOR.ROUTE_THROUGH_HINT_SSO(host) : PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host)).split(host);
   const rows = Object.keys(draft.harnesses).map((id) => harnesses.find((h) => h.id === id) ?? { id, display: id });
   // E3's "How people sign in" toggle — the ONE field that reaches bedrock_bearer
   // (never a kind-step option of its own). A segmented radio group
   // (role="radiogroup" Buttons over useRovingRadio, not a native radiogroup —
   // CONSOLE-RULES' precedent for a two-option choice with the mock's segmented
   // look).
+  const operator = useOperator();
+  // What saving the choice would delete, read under the choice and again in the confirmation.
+  const switchNote = (() => {
+    if (!editing || people === 0 || !endpoint) return undefined;
+    const change = oidcChange(editing, providerFrom(draft, editing, []));
+    const t = PROVIDER_EDITOR.OIDC;
+    if (change === "to_sign_in") return people === 1 ? t.TO_SIGN_IN_ONE : t.TO_SIGN_IN(people);
+    if (change === "to_paste") return people === 1 ? t.TO_PASTE_ONE : t.TO_PASTE(people);
+    return undefined;
+  })();
   const signInGroup = useRovingRadio(2, sso ? 0 : 1, (i) => set({ kind: i === 0 ? "bedrock_sso" : "bedrock_bearer" }));
 
   return (
@@ -429,14 +521,24 @@ function ProviderFields({
         </Field>
       )}
 
+      {endpoint && !editing && (
+        <GatewayPresets
+          value={preset}
+          onPick={(id) => {
+            setPreset(id);
+            setDraft((d) => d && applyPreset(d, id));
+          }}
+        />
+      )}
+
       <Field label={PROVIDER_EDITOR.NAME} htmlFor="mp-name" hint={PROVIDER_EDITOR.NAME_HINT}>
         <Input id="mp-name" value={draft.name} onChange={(e) => set({ name: e.target.value })} />
       </Field>
 
       {bedrock && (
         <>
-          <p className="text-xs font-medium text-foreground">{PROVIDER_EDITOR.IDC_GROUP}</p>
-          <Field label={PROVIDER_EDITOR.REGION} htmlFor="mp-region" required={bedrock}>
+          {sso && <p className="text-xs font-medium text-foreground">{PROVIDER_EDITOR.IDC_GROUP}</p>}
+          <Field label={sso ? PROVIDER_EDITOR.REGION : PROVIDER_EDITOR.REGION_BEARER} htmlFor="mp-region" required={bedrock}>
             <Input
               id="mp-region"
               required={bedrock}
@@ -570,10 +672,13 @@ function ProviderFields({
               required
               className="font-mono"
               placeholder="https://"
+              aria-invalid={badField === "base_url" || undefined}
               value={draft.baseUrl}
-              onChange={(e) => set({ baseUrl: e.target.value })}
+              onChange={(e) => setBaseUrl(e.target.value)}
             />
           </Field>
+          <OidcChoice draft={draft} set={set} operator={operator} note={switchNote} />
+          {draft.oidcOn && <OidcFields draft={draft} set={set} refusedAt={refusedAt} />}
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={PROVIDER_EDITOR.AUTH_HEADER} htmlFor="mp-auth-header">
               <Input id="mp-auth-header" className="font-mono" value={draft.authHeader} onChange={(e) => set({ authHeader: e.target.value })} />
@@ -582,6 +687,11 @@ function ProviderFields({
               <Input id="mp-auth-format" className="font-mono" value={draft.authFormat} onChange={(e) => set({ authFormat: e.target.value })} />
             </Field>
           </div>
+          <ExtraHeaders
+            rows={draft.headers}
+            onChange={(headers) => set({ headers })}
+            valueHint={draft.headers.some((h) => h.placeholder && !h.value) ? PROVIDER_EDITOR.PORTKEY_SLUG_HINT : undefined}
+          />
         </>
       ) : (
         routeThrough && (
@@ -600,12 +710,23 @@ function ProviderFields({
               id="mp-base-url"
               className="font-mono"
               placeholder="https://"
-              value={draft.baseUrl}
-              onChange={(e) => set({ baseUrl: e.target.value })}
+              aria-invalid={badField === "base_url" || addressCleared || undefined}
+              value={draftGatewayAddress(draft)}
+              onChange={(e) => setBaseUrl(e.target.value)}
             />
           </Field>
         )
       )}
+
+      <GatewayIdentity
+        draft={draft}
+        set={set}
+        issuer={gatewayIssuer}
+        jwksPath={gatewayJwksPath}
+        ssoGateway={ssoGateway}
+        addressCleared={addressCleared}
+        invalid={badField === "gateway_audience"}
+      />
 
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium">{PROVIDER_EDITOR.USE_WITH}</legend>
@@ -615,6 +736,8 @@ function ProviderFields({
             harness={h}
             draft={draft}
             refused={refused}
+            modelPlaceholder={preset === "openrouter" && h.id === "codex-cli" ? PROVIDER_EDITOR.OPENROUTER_MODEL_PLACEHOLDER : undefined}
+            modelFieldHint={preset === "openrouter" && h.id === "codex-cli" ? PROVIDER_EDITOR.OPENROUTER_MODEL_HINT : undefined}
             onChange={(patch) =>
               setDraft((d) => d && { ...d, harnesses: { ...d.harnesses, [h.id]: { ...d.harnesses[h.id], ...patch } } })
             }
@@ -625,123 +748,143 @@ function ProviderFields({
   );
 }
 
-// One agent under "Use with": a checkbox, and under a tick the agent's Model and
-// (endpoint kind) Path. Collapsed unless a required field is empty (QB-2); an
-// agent the kind can't drive is disabled with the catalog's reason, never hidden.
-function HarnessBlock({
-  harness,
+// The kinds that may send run identity to a gateway (gatewayKind) each need an address, or the token would go to the vendor.
+const sameAddress = (a: string, b: string) => a.trim().replace(/\/$/, "") === b.trim().replace(/\/$/, "");
+// The issuer an install gets when it never names its own trust domain.
+const DEFAULT_ISSUER = "spiffe://wardyn.local";
+
+// "Send the person and run to this gateway" (gateway_identity), drawn by the gateway-identity boards M1 and M2.
+// Kinds that can't use it show the switch off with the reason, as Use with does for an agent.
+function GatewayIdentity({
   draft,
-  refused,
-  onChange,
+  set,
+  issuer,
+  jwksPath,
+  ssoGateway,
+  addressCleared,
+  invalid,
 }: {
-  harness: HarnessRow;
   draft: ProviderDraft;
-  refused: string | null;
-  onChange: (patch: Partial<ProviderDraft["harnesses"][string]>) => void;
+  set: (patch: Partial<ProviderDraft>) => void;
+  issuer?: string;
+  jwksPath?: string;
+  ssoGateway: boolean;
+  addressCleared: boolean;
+  invalid: boolean;
 }) {
-  const row = draft.harnesses[harness.id];
-  const endpoint = isEndpoint(draft.kind);
-  const bedrock = isBedrock(draft.kind);
-  const reason = incompatibleReason(draft.kind, harness.id);
-  const needsPath = endpoint && row.ticked && !row.path.trim();
-  // Model is required on a Bedrock provider (mp400ModelNeed) — E3's colfoot:
-  // "Model is required for Bedrock, so that harness's settings are open until
-  // it is filled" (QB-2), the same rule already applied to an endpoint's Path.
-  const needsModel = bedrock && row.ticked && !row.model.trim();
-  const local = isLocal(draft.kind);
-  // A local model's Model is a pick from the list, so it is always shown.
-  const [open, setOpen] = React.useState(needsPath || needsModel || local);
+  const g = PROVIDER_EDITOR.GATEWAY;
+  const operator = useOperator();
+  const root = React.useRef<HTMLDivElement>(null);
+  const noteId = React.useId();
+  const reasonId = React.useId();
+  const sso = draft.kind === "bedrock_sso";
+  // A sign-in row is refused only where the install cannot sign AWS requests at its proxy.
+  const refusedKind = !gatewayKind(draft.kind) || (sso && !ssoGateway);
+  const needsAddress = !refusedKind && !draft.gatewayOn && !draftGatewayAddress(draft).trim() && draft.kind !== "custom_endpoint";
+  const reason = refusedKind
+    ? g.NOT_AVAILABLE[draft.kind as keyof typeof g.NOT_AVAILABLE]
+    : needsAddress
+      ? g.NEEDS_ADDRESS(directHost(draft))
+      : undefined;
+  // Turning identity off is always safe: a sign-in row already on where the install cannot sign can be switched off.
+  const offOnly = sso && refusedKind && draft.gatewayOn;
+  const disabled = !operator || (!!reason && !offOnly);
+  // Switch takes no aria-describedby, so the sentence is attached to the control here, to be read with it.
+  const describedBy = reason ? reasonId : [noteId, !operator && reasonId].filter(Boolean).join(" ");
   React.useEffect(() => {
-    if (needsPath || needsModel) setOpen(true);
-  }, [needsPath, needsModel]);
-  const expanded = row.ticked && open;
-  const base = `mp-h-${harness.id}`;
-  const pathHint = harness.id === "codex-cli" ? PROVIDER_EDITOR.PATH_HINT_CODEX : PROVIDER_EDITOR.PATH_HINT_CLAUDE;
-  const modelHint = bedrock ? PROVIDER_EDITOR.MODEL_HINT_BEDROCK : PROVIDER_EDITOR.MODEL_HINT;
-  // The pick shown is the one a save sends (providerFrom). A pick no longer in the list stays shown,
-  // so the server's refusal of it points at what is on screen.
-  const picked = row.model || draft.models[0] || "";
-  const models = picked && !draft.models.includes(picked) ? [...draft.models, picked] : draft.models;
+    root.current?.querySelector('[role="switch"]')?.setAttribute("aria-describedby", describedBy);
+  }, [describedBy]);
+  const saved = draft.gatewaySaved;
+  const moved = !!saved && !sameAddress(draftGatewayAddress(draft), saved.baseUrl);
+  const keyAddress = jwksPath ? `${window.location.origin}${jwksPath}` : "";
 
   return (
-    <div className="rounded-lg border border-border">
-      <div className="flex items-start gap-2 px-3 py-2">
-        <Checkbox
-          id={base}
-          className="mt-0.5"
-          checked={row.ticked}
-          disabled={!!reason}
-          onCheckedChange={(v) => onChange({ ticked: v === true })}
-        />
-        <div className={reason ? "min-w-0 flex-1 opacity-60" : "min-w-0 flex-1"}>
-          <label htmlFor={base} className="text-body font-normal">
-            {harness.display}
-          </label>
-          {reason && <p className="mt-0.5 text-xs text-muted-foreground">{reason}</p>}
-        </div>
-        {row.ticked && (
-          <button
-            type="button"
-            aria-label={harness.display}
-            aria-expanded={expanded}
-            aria-controls={`${base}-body`}
-            // A required, empty Path or Model stays open: collapsing would
-            // unmount the input its `required` check lives on.
-            disabled={needsPath || needsModel}
-            onClick={() => setOpen(!expanded)}
-            className="text-muted-foreground disabled:opacity-50"
-          >
-            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-          </button>
-        )}
+    <div ref={root} className="space-y-2">
+      <div className="flex items-center gap-2.5">
+        <Switch checked={draft.gatewayOn && gatewayKind(draft.kind)} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
+        <span className="text-body">{g.SWITCH}</span>
       </div>
-      {expanded && (
-        <div id={`${base}-body`} className={endpoint ? "grid gap-4 border-t border-border p-3 sm:grid-cols-2" : "border-t border-border p-3"}>
-          {local ? (
-            <Field
-              label={PROVIDER_EDITOR.MODEL}
-              htmlFor={`${base}-model`}
-              hint={harness.id === "claude-code" ? LOCAL_MODEL_EDITOR.MODEL_HINT_CLAUDE : LOCAL_MODEL_EDITOR.MODEL_HINT}
-            >
-              <select
-                id={`${base}-model`}
-                aria-invalid={refusedHarness(refused) === harness.id || undefined}
-                className="border-input bg-input-background aria-invalid:border-destructive h-9 w-full rounded-md border px-3 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring"
-                value={picked}
-                onChange={(e) => onChange({ model: e.target.value })}
-              >
-                {models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          ) : (
-            <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={modelHint} required={bedrock}>
-              <Input
-                id={`${base}-model`}
-                required={bedrock}
-                className="font-mono"
-                value={row.model}
-                onChange={(e) => onChange({ model: e.target.value })}
-              />
-            </Field>
+      {reason ? (
+        <p id={reasonId} className="text-xs leading-snug text-muted-foreground">
+          {sso && refusedKind ? withSignerVar(reason ?? "", g.SIGNER_VAR) : reason}
+        </p>
+      ) : (
+        <>
+          {draft.gatewayOn && <Chip tone="warning">{g.CHIP}</Chip>}
+          {addressCleared && (
+            <p role="alert" className="text-xs leading-snug text-danger">
+              {g.ADDRESS_CLEARED}
+            </p>
           )}
-          {endpoint && (
-            <Field label={PROVIDER_EDITOR.PATH} htmlFor={`${base}-path`} hint={pathHint} required>
-              <Input
-                id={`${base}-path`}
+          <p id={noteId} className="text-body">
+            {sso ? g.DISCLOSURE_BEDROCK_SSO : g.DISCLOSURE}
+          </p>
+          <a href={g.CLAIMS_URL} target="_blank" rel="noreferrer" className="block text-xs text-info underline-offset-2 hover:underline">
+            {g.CLAIMS_LINK}
+          </a>
+          {!operator && (
+            <p id={reasonId} className="text-xs leading-snug text-muted-foreground">
+              {OPERATOR_ONLY_REASON}
+            </p>
+          )}
+          {!draft.gatewayOn && saved && <p className="text-xs leading-snug text-muted-foreground">{g.OFF_NOTE}</p>}
+          {draft.gatewayOn && (
+            <div className="space-y-4 rounded-lg border border-border p-3">
+              <Field
+                label={g.AUDIENCE}
+                htmlFor="mp-gateway-audience"
                 required
-                className="font-mono"
-                placeholder="/"
-                value={row.path}
-                onChange={(e) => onChange({ path: e.target.value })}
-              />
-            </Field>
+                hint={moved ? <span className="text-danger">{g.ADDRESS_CHANGED}</span> : g.AUDIENCE_HINT}
+              >
+                <Input
+                  id="mp-gateway-audience"
+                  required
+                  className="font-mono"
+                  aria-invalid={invalid || (moved && !draft.gatewayAudience.trim()) || undefined}
+                  value={draft.gatewayAudience}
+                  onChange={(e) => set({ gatewayAudience: e.target.value })}
+                />
+              </Field>
+              {issuer && (
+                <Field
+                  label={g.ISSUER}
+                  hint={
+                    <>
+                      {g.ISSUER_HINT}
+                      {issuer === DEFAULT_ISSUER && <span className="mt-1 block text-warning">{g.ISSUER_DEFAULT}</span>}
+                    </>
+                  }
+                >
+                  <CopyValue text={issuer} label={g.COPY_ISSUER} />
+                </Field>
+              )}
+              {keyAddress && (
+                <Field label={g.KEY_ADDRESS} hint={`${g.KEY_ADDRESS_HINT} ${g.KEY_ADDRESS_OTHER}${saved ? "" : ` ${g.KEY_ADDRESS_UNSAVED}`}`}>
+                  <CopyValue text={keyAddress} label={g.COPY_KEY_ADDRESS} />
+                </Field>
+              )}
+              <GatewayInspection draft={draft} set={set} disabled={!operator} />
+              <p className="text-xs leading-snug text-muted-foreground">{g.MAY_CHANGE}</p>
+            </div>
           )}
-        </div>
+        </>
       )}
+    </div>
+  );
+}
+
+// A value the admin copies into their gateway: shown whole, with a Copy control beside it.
+function CopyValue({ text, label }: { text: string; label: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-input-background px-3 py-2">
+      <code className="min-w-0 break-all font-mono text-xs">{text}</code>
+      <CopyButton
+        text={text}
+        label={label}
+        className="shrink-0 gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
+      >
+        {PROVIDER_EDITOR.GATEWAY.COPY}
+      </CopyButton>
     </div>
   );
 }

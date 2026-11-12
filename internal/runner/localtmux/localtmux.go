@@ -127,6 +127,10 @@ func (s *Substrate) StopSandbox(ctx context.Context, _ string) error { return s.
 func (s *Substrate) KillSandbox(ctx context.Context, _ string) error { return s.kill(ctx) }
 
 func (s *Substrate) kill(ctx context.Context) error {
+	// A context that is done runs no exec at all: answer that, never a nil for a stop that did not happen.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	_ = exec.CommandContext(ctx, s.tmux, "-L", s.socket, "kill-server").Run()
 	return nil
 }

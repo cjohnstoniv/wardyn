@@ -6,6 +6,7 @@ package hoptls
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -147,5 +148,32 @@ func TestParseCA_RefusesPartialBlobs_AndFreshness(t *testing.T) {
 	}
 	if ca.Fresh(now.Add(caTTL - rotateBefore + time.Hour)) {
 		t.Fatal("a CA inside the rotation window must not be kept")
+	}
+}
+
+// SystemPoolWith adds to the system roots, hands back a pool of its own each
+// call, and refuses a bundle holding no certificate.
+func TestSystemPoolWith(t *testing.T) {
+	ca, err := NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := x509.SystemCertPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.AppendCertsFromPEM(ca)
+	got, err := SystemPoolWith(ca)
+	if err != nil || !got.Equal(want) {
+		t.Fatalf("SystemPoolWith(ca) = (%v, %v); want the system roots plus the bundle", got, err)
+	}
+	other, err := SystemPoolWith(ca)
+	if err != nil || other == got {
+		t.Fatalf("second call = (%p, %v); want a pool of its own", other, err)
+	}
+	for _, bad := range [][]byte{nil, []byte(""), []byte("not a certificate")} {
+		if p, err := SystemPoolWith(bad); !errors.Is(err, ErrNoCertificate) || p != nil {
+			t.Errorf("SystemPoolWith(%q) = (%v, %v); want ErrNoCertificate", bad, p, err)
+		}
 	}
 }

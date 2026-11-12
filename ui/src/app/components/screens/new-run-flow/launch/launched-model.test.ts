@@ -54,6 +54,15 @@ describe("why it waits", () => {
     expect(waitingBody("runner_pool_at_capacity", { name: "CI jobs" })).toBeUndefined();
   });
 
+  it("says the limit the server named for a run its runners hold back, whether or not the pool is known", () => {
+    const named = "Every runner in Laptops is at a limit. For example, mac-1: Runs at once: 1 running of 1. This run starts when one has room.";
+    expect(waitingBody("runner_pool_runners_at_capacity", { name: "Laptops" }, named)).toBe(named);
+    expect(waitingBody("runner_pool_runners_at_capacity", undefined, named)).toBe(named);
+    expect(waitingBody("runner_pool_runners_at_capacity", { name: "Laptops" }, undefined)).toBe("Every runner in Laptops is at its limit. This run starts when one has room.");
+    // The sentence belongs to the runners' wait alone: once the wait is another, the reason's own words say it.
+    expect(waitingBody("runner_pool_no_runner_free", { name: "Laptops" }, named)).toBe("None of your runners in Laptops is online. This run starts when one is.");
+  });
+
   it("gives a scheduled run's two waits no pool sentence: the scheduled-run heroes say them", () => {
     const pool = { name: "CI jobs", max: 40 };
     expect(waitingBody("scheduled", pool)).toBeUndefined();

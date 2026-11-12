@@ -25,8 +25,10 @@ vi.mock("../../../lib/api/run-layout", () => ({
 // canvas, not them (widgets.test.tsx owns those).
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
+    getPolicy: () => new Promise(() => {}),
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
   },
 }));
 
@@ -232,6 +234,24 @@ describe("RunCanvas — loading a layout", () => {
   });
 });
 
+describe("RunCanvas — layout presets", () => {
+  it("offers the presets as a labelled group whose buttons say which one is pressed", async () => {
+    const user = userEvent.setup();
+    render(<RunCanvas ctx={ctx()} />);
+    await screen.findByRole("heading", { name: "Egress" });
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+    const group = screen.getByRole("group", { name: RUN_COCKPIT.layoutPresets });
+    const live = within(group).getByRole("button", { name: RUN_COCKPIT.layoutPreset("Live") });
+    const finished = within(group).getByRole("button", { name: RUN_COCKPIT.layoutPreset("Finished") });
+    expect(live).toHaveAttribute("aria-pressed", "true");
+    expect(finished).toHaveAttribute("aria-pressed", "false");
+    await user.click(finished);
+    expect(finished).toHaveAttribute("aria-pressed", "true");
+    expect(live).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
 describe("RunCanvas — saving", () => {
   it("PUTs the preset and the placed widgets in wire shape", async () => {
     const user = userEvent.setup();
@@ -239,12 +259,15 @@ describe("RunCanvas — saving", () => {
     await screen.findByRole("heading", { name: "Egress" });
 
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
-    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.saveLayoutDefault }));
+    await user.click(screen.getByRole("button", { name: "Remove Egress" }));
 
-    expect(putLayout).toHaveBeenCalledTimes(1);
+    // Saving is automatic (debounced): there is no save button to press.
+    expect(screen.queryByRole("button", { name: /save as my default/i })).toBeNull();
+    await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(1), { timeout: 3000 });
     const [preset, layout] = putLayout.mock.calls[0] as [string, Record<string, number>[]];
     expect(preset).toBe("live");
     expect(layout).toContainEqual({ widget: "terminal", x: 0, y: 0, w: 8, h: 12 });
+    expect(layout.some((w) => (w.widget as unknown) === "egress")).toBe(false);
     expect(layout.every((w) => Object.keys(w).sort().join() === "h,w,widget,x,y")).toBe(true);
   });
 
@@ -255,14 +278,14 @@ describe("RunCanvas — saving", () => {
     await screen.findByRole("heading", { name: "Egress" });
 
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
-    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.saveLayoutDefault }));
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.resetLayout }));
 
     // Said once, in place — never a toast per drag.
     expect(await screen.findByText(RUN_COCKPIT.layoutNotPersisted)).toBeInTheDocument();
 
     // The canvas keeps working, and a further edit does NOT try the doomed
     // write again.
-    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.saveLayoutDefault }));
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.resetLayout }));
     expect(putLayout).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("run-terminal-pane")).toBeInTheDocument();
   });
@@ -591,54 +614,67 @@ describe("RunCanvas — the catalog offers only what can actually render", () =>
 });
 
 
-// put() reports THREE outcomes and saveDefault must speak three different
+// put() reports THREE outcomes and the toolbar must speak three different
 // sentences from them, never collapsing "failed" back into "unsupported" —
-// both arms need their own coverage, or a regression there would slip past
-// every other run-detail test. The two sentences are opposites:
-// layoutNotPersisted is a permanent fact about the deployment that also
-// silences every future write (persistRef), layoutSaveFailed is about THIS
-// attempt and the next one is expected to work. A 500 or a network blip must
-// never take the permanent arm — that would wrongly tell an operator their
-// server cannot store layouts, and stop writing for good.
+// both arms need their own coverage. layoutNotPersisted is a permanent fact
+// about the deployment that also silences every future write (persistRef);
+// layoutSaveFailed is about THIS attempt and the next one is expected to work.
+// A 500 or a network blip must never take the permanent arm. Layout changes
+// save themselves, so a failed write has to stay on screen, with its retry,
+// rather than leave Done to read as "saved".
 describe("RunCanvas — a save that merely FAILED is not a deployment that cannot persist", () => {
-  beforeEach(() => {
-    toasted.success.mockReset();
-    toasted.message.mockReset();
-    toasted.error.mockReset();
-  });
-
-  it("says try-again on a 500, keeps persisting, and writes again on the next save", async () => {
+  it("says the layout wasn't saved on a 500, keeps it through Done, and Retry repeats the write", async () => {
     const user = userEvent.setup();
     putLayout.mockRejectedValue(new HttpError(500, "boom"));
     render(<RunCanvas ctx={ctx()} />);
     await screen.findByRole("heading", { name: "Egress" });
 
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
-    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.saveLayoutDefault }));
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.resetLayout }));
 
-    await waitFor(() => expect(toasted.error).toHaveBeenCalledWith(RUN_COCKPIT.layoutSaveFailed));
-    // The permanent claim is never made — neither as a toast nor as the
-    // toolbar's own inline note, which is the same string and the same lie.
-    expect(toasted.message).not.toHaveBeenCalled();
+    expect(await screen.findByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeInTheDocument();
+    // The permanent claim is never made, and nothing is toasted per gesture.
     expect(screen.queryByText(RUN_COCKPIT.layoutNotPersisted)).toBeNull();
+    expect(toasted.error).not.toHaveBeenCalled();
 
-    // Retryable means retried: the 501 arm stops writing forever, this one
-    // must not.
-    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.saveLayoutDefault }));
+    // Done must not imply completion: the failure and its retry outlive the editor.
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.doneEditing }));
+    expect(screen.getByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeInTheDocument();
+
+    // Retry repeats what the person asked for (the reset, i.e. an empty row), and it works.
+    putLayout.mockResolvedValue({ preset: "live", layout: [] });
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.layoutRetry }));
     await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
+    expect(putLayout.mock.calls[1]).toEqual(["live", []]);
+    await waitFor(() => expect(screen.queryByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeNull());
   });
 
-  it("keeps the two arms apart from the other side: a 501 never says try-again", async () => {
+  it("shows Saving, then Saved, for a write that lands", async () => {
+    const user = userEvent.setup();
+    let done: (v: unknown) => void = () => {};
+    putLayout.mockReturnValue(new Promise((r) => (done = r)));
+    render(<RunCanvas ctx={ctx()} />);
+    await screen.findByRole("heading", { name: "Egress" });
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.resetLayout }));
+    expect(await screen.findByText(RUN_COCKPIT.layoutSaving)).toBeInTheDocument();
+
+    done({ preset: "live", layout: [] });
+    expect(await screen.findByText(RUN_COCKPIT.layoutSaved)).toBeInTheDocument();
+  });
+
+  it("keeps the two arms apart from the other side: a 501 never says the layout wasn't saved", async () => {
     const user = userEvent.setup();
     putLayout.mockRejectedValue(new HttpError(501, "layout persistence is not implemented"));
     render(<RunCanvas ctx={ctx()} />);
     await screen.findByRole("heading", { name: "Egress" });
 
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
-    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.saveLayoutDefault }));
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.resetLayout }));
 
-    await waitFor(() => expect(toasted.message).toHaveBeenCalledWith(RUN_COCKPIT.layoutNotPersisted));
-    expect(toasted.error).not.toHaveBeenCalled();
+    expect(await screen.findByText(RUN_COCKPIT.layoutNotPersisted)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeNull();
   });
 });
 
@@ -766,5 +802,24 @@ describe("the Service widget", () => {
     render(<RunCanvas ctx={ctx()} />);
     expect(await screen.findByRole("heading", { name: "Egress" })).toBeInTheDocument();
     expect(widgetHeading("Service")).not.toBeInTheDocument();
+  });
+});
+
+// The default live rail leaves no gap where a tile this viewer can't see would have been (the Desktop and Attach tiles on a
+// run they did not start): Effective policy sits straight under Identity, as Identity sits under Credentials.
+describe("the default live rail, with the Desktop and Attach tiles out of sight", () => {
+  const audit = [{ id: "a1", action: "run.create", data: { clamp_warnings: [] } }] as unknown as WidgetContext["audit"];
+  const stride = () => tileY(widgetHeading("Identity")) - tileY(widgetHeading("Credentials"));
+  const below = () => tileY(widgetHeading("Effective policy")) - tileY(widgetHeading("Identity"));
+
+  it.each<[string, Record<string, unknown>]>([
+    ["a VM run someone else started", { machine_kind: "linux_vm" }],
+    ["a container run someone else started", {}],
+  ])("closes the rows of the hidden tiles on %s", async (_name, over) => {
+    render(<RunCanvas ctx={ctx({ run: { ...RUN, ...over } as unknown as WidgetContext["run"], audit })} />);
+    await screen.findByRole("heading", { name: "Effective policy" });
+    expect(widgetHeading("Desktop")).not.toBeInTheDocument();
+    expect(widgetHeading("Attach from your terminal")).not.toBeInTheDocument();
+    expect(below()).toBe(stride());
   });
 });

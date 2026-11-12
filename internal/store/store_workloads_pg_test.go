@@ -723,6 +723,46 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_ViewReadsTheProbe: the view decodes the run's service_status.probe when it is set, says
+// whether the run asked the control plane to probe it, and leaves the probe nil for a run with none.
+func TestPG_Workload_ViewReadsTheProbe(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	probed := mustPutWorkload(t, st, workloadPut("sub-a", "probed", "d"))
+	plain := mustPutWorkload(t, st, workloadPut("sub-a", "plain", "d"))
+	probedRun := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	plainRun := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service = '{"health":{"probe":"control_plane"}}',
+		service_status = jsonb_build_object('health', 'healthy', 'probe',
+			jsonb_build_object('health', 'unhealthy', 'reason', 'timeout', 'failures', 2, 'observed_at', $2::timestamptz))
+		WHERE id = $1`, probedRun.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service_status = '{"health":"healthy"}' WHERE id = $1`, plainRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct {
+		id  uuid.UUID
+		run uuid.UUID
+	}{{probed.ID, probedRun.ID}, {plain.ID, plainRun.ID}} {
+		if _, err := st.SetWorkloadRun(ctx, w.id, mustClaim(t, st, w.id), 1, w.run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := st.GetWorkloadByRun(ctx, probedRun.ID)
+	if err != nil || !v.ServiceProbeOn || v.ServiceProbe == nil {
+		t.Fatalf("probed view = %+v (%v), want the probe read", v, err)
+	}
+	if p := v.ServiceProbe; p.Health != "unhealthy" || p.Reason != "timeout" || p.Failures != 2 || p.ObservedAt.IsZero() {
+		t.Errorf("probe = %+v", *p)
+	}
+	v, err = st.GetWorkloadByRun(ctx, plainRun.ID)
+	if err != nil || v.ServiceProbeOn || v.ServiceProbe != nil {
+		t.Fatalf("plain view = %+v (%v), want no probe", v, err)
+	}
+}
+
 // TestPG_Workload_ARunningReplacementWaitsForTheNext: generation 2 waited in its queue and is running when
 // generation 3 is recorded, before the sweep ended generation 1. Generation 2 serves, so it stays until
 // generation 3 runs; generation 1, which generation 2 took over from, is owed its end at once.
@@ -1032,5 +1072,69 @@ func TestPG_Workload_ListBoundK8sWorkloadsReadsOneNamespaceOnOnePool(t *testing.
 	}
 	if got, err := st.ListBoundK8sWorkloads(ctx, p.ID, "team-c"); err != nil || len(got) != 0 {
 		t.Fatalf("bound workloads of an unrecorded namespace = %+v (%v), want none", got, err)
+	}
+}
+
+// PlanWorkloadPut answers, without writing, what PutWorkload would: the same write or the same error for
+// every state a row can be in. A new API-source branch in PutWorkload needs its row here.
+func TestPG_Workload_PlanWorkloadPutMatchesPut(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runner, gen := uuid.New(), int64(1)
+
+	if _, err := pool.Exec(ctx, `INSERT INTO workloads (owner, name, source, intent, digest, created_by)
+		SELECT 'plan-cap', 'w' || g, 'api', '{}', 'x', 'plan-cap' FROM generate_series(1, $1::int) g`, store.MaxWorkloadsPerOwner); err != nil {
+		t.Fatal(err)
+	}
+	k8s := workloadPut("plan-k8s", "svc", "d1")
+	k8s.Source, k8s.SourcePoolID, k8s.SourceNamespace, k8s.SourceRunnerID, k8s.K8sGeneration = store.WorkloadSourceK8s, &poolA.ID, "team-a", &runner, &gen
+	mustPutWorkload(t, st, k8s)
+	mustPutWorkload(t, st, workloadPut("plan-same", "web", "d1"))
+	mustPutWorkload(t, st, workloadPut("plan-new", "web", "d1"))
+	mustPutWorkload(t, st, workloadPut("plan-desc", "web", "d1"))
+
+	newDigest := workloadPut("plan-new", "web", "d2")
+	descOnly := workloadPut("plan-desc", "web", "d1")
+	descOnly.Description = "only the description moved"
+	cases := []struct {
+		name    string
+		in      store.WorkloadPut
+		write   store.WorkloadWrite
+		err     error
+		wantRow bool
+	}{
+		{"no row", workloadPut("plan-none", "web", "d1"), store.WorkloadCreated, nil, false},
+		{"cap full", workloadPut("plan-cap", "extra", "d1"), "", store.ErrWorkloadCapReached, false},
+		{"custom resource row", workloadPut("plan-k8s", "svc", "d9"), "", store.ErrWorkloadSourceConflict, true},
+		{"same digest", workloadPut("plan-same", "web", "d1"), store.WorkloadUnchanged, nil, true},
+		{"new digest", newDigest, store.WorkloadUpdated, nil, true},
+		{"description only", descOnly, store.WorkloadUnchanged, nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before, beforeErr := st.GetWorkload(ctx, c.in.Owner, c.in.Name)
+			cur, planned, planErr := st.PlanWorkloadPut(ctx, c.in)
+			after, afterErr := st.GetWorkload(ctx, c.in.Owner, c.in.Name)
+			if !errors.Is(afterErr, beforeErr) || after.Workload.Generation != before.Workload.Generation ||
+				after.Workload.Description != before.Workload.Description || !after.Workload.UpdatedAt.Equal(before.Workload.UpdatedAt) {
+				t.Fatalf("the plan changed the row: before %+v (%v), after %+v (%v)", before.Workload, beforeErr, after.Workload, afterErr)
+			}
+			if (cur != nil) != c.wantRow || cur != nil && cur.ID != before.Workload.ID {
+				t.Fatalf("plan row = %+v, want the stored row = %v", cur, c.wantRow)
+			}
+			_, put, putErr := st.PutWorkload(ctx, c.in)
+			if planned != put || !errors.Is(planErr, putErr) || !errors.Is(putErr, planErr) {
+				t.Fatalf("plan = %q, %v; put = %q, %v; want the same", planned, planErr, put, putErr)
+			}
+			if put != c.write || !errors.Is(putErr, c.err) {
+				t.Fatalf("put = %q, %v; want %q, %v", put, putErr, c.write, c.err)
+			}
+		})
+	}
+
+	if _, _, err := st.PlanWorkloadPut(ctx, k8s); err == nil {
+		t.Fatal("plan of a custom resource's write = nil error, want a refusal: the plan is the API source's alone")
 	}
 }

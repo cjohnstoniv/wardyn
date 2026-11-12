@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -174,12 +175,22 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	if err := d.netPolRefusal(ns); err != nil { // the canary's live verdict; running sandboxes are untouched
+		return runner.Sandbox{}, err
+	}
 
 	// (1) Preflight: fail closed BEFORE creating anything.
 	runtimeClassName, runtimeHandler, enforced, err := d.createPreflight(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	// A No network run's proxy pod reaches only Wardyn: the plan that says how is made before anything
+	// exists (a PVC included), so a refusal is returned bare, with nothing to tear down.
+	proxyEgress, cpPin, err := d.proxyEgressPlan(ctx, spec)
+	if err != nil {
+		return runner.Sandbox{}, err
+	}
+	proxyOnly := d.noNetworkProxyOnly(spec, ns)
 	d.noteNamespace(spec.RunID, ns)
 	defer d.brackets.Delete(proxyPodName(spec.RunID))
 	defer d.brackets.Delete(agentPodName(spec.RunID))
@@ -226,7 +237,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 			Ingress:     []networkingv1.NetworkPolicyIngressRule{}, // empty => deny all ingress
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				Ports: []networkingv1.NetworkPolicyPort{{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(runner.ProxyListenPort))}},
+				Ports: agentToProxyPorts(),
 				To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: proxyLabels}}},
 			}},
 		},
@@ -243,24 +254,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: agentLabels}}},
 			}},
-			// SECURITY: both rules share the metadata-excluding peer — a
-			// peer-less DNS rule would permit port 53 to the metadata address,
-			// voiding the Except on the rule beside it. The DNS rule adds the
-			// cluster DNS pods as a second peer (peers are OR'd, so the
-			// ipBlock and its Except are unchanged): a CNI that selects pods by
-			// identity does not match a pod IP against an ipBlock.
-			Egress: append([]networkingv1.NetworkPolicyEgressRule{
-				{ // DNS
-					Ports: []networkingv1.NetworkPolicyPort{
-						{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
-						{Protocol: protoPtr(corev1.ProtocolUDP), Port: intOrStrPtr(intstr.FromInt32(53))},
-					},
-					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}, clusterDNSPeer()},
-				},
-				{ // everything except the cloud-metadata address
-					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}},
-				},
-			}, d.runnerdPeerRules()...),
+			Egress: proxyEgress, // see proxyEgressPlan
 		},
 	}
 	if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, proxyNetPol, metav1.CreateOptions{}); err != nil {
@@ -312,7 +306,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
 			// for the init container; without it, "permission denied".
-			SecurityContext: &corev1.PodSecurityContext{FSGroup: &proxyNonrootGID},
+			SecurityContext: &corev1.PodSecurityContext{FSGroup: &proxyNonrootGID, Sysctls: proxyDNSSysctls()},
 			// SECURITY: default true injects a <SVC>_SERVICE_HOST/PORT pair for
 			// every namespace Service into every container — a free
 			// service-topology enumeration nothing here needs.
@@ -343,6 +337,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				Env: []corev1.EnvVar{
 					{Name: "WARDYN_RUN_ID", Value: spec.RunID.String()},
 					{Name: "WARDYN_CONTROL_PLANE_URL", Value: spec.ProxyConfig.ControlPlaneURL},
+					{Name: proxy.DNSListenEnv, Value: ":53"},
 				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir, ReadOnly: true},
@@ -386,12 +381,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		proxyPod.Spec.Containers[0].Env = append(proxyPod.Spec.Containers[0].Env,
 			corev1.EnvVar{Name: kv[0], Value: kv[1]})
 	}
+	if !d.runnerMode() {
+		withLiveDenyDir(proxyPod)
+	}
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
 	d.placement.apply(proxyPod, spec.RunID, componentProxy, spec.Labels)
 	if err := d.runnerPodSpec(proxyPod, componentProxy, spec.ProxyConfig.ControlPlaneURL); err != nil {
 		return fail(err)
+	}
+	if cpPin != nil { // a No network run on a server: Wardyn's one address, with no DNS rule to find it
+		proxyPod.Spec.HostAliases = append(proxyPod.Spec.HostAliases, *cpPin)
 	}
 	createdProxy, err := d.createPod(ctx, spec.RunID, componentProxy, proxyPod)
 	if err != nil {
@@ -404,7 +405,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
 	if d.runnerMode() && d.cfg.IPFenced != nil && d.cfg.IPFenced(proxyIP) {
-		// Contained before it ever opens, rather than running to its deadline (Fable L5).
+		// Contained before it ever opens, rather than running to its deadline.
 		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
 	}
 
@@ -432,11 +433,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
 			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
 			// Default ClusterFirst would point the agent at kube-dns, which its
-			// NetworkPolicy denies; DNSNone with a loopback nameserver fails a
-			// proxy-unaware lookup immediately instead of hanging the full
-			// resolver timeout.
+			// NetworkPolicy denies. Its one nameserver is its proxy pod, whose
+			// listener answers every query REFUSED and records it, except AAAA
+			// for its own name: a proxy-unaware lookup fails at once and leaves a run.dns.query row.
 			DNSPolicy: corev1.DNSNone,
-			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{"127.0.0.1"}},
+			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{proxyIP}},
 			Containers: []corev1.Container{{
 				Name:    mainContainerName,
 				Image:   spec.Image,
@@ -483,7 +484,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)
 	}
-	if _, err := d.createPod(ctx, spec.RunID, componentAgent, agentPod); err != nil {
+	if d.cfg.AgentSandbox {
+		if err := d.createAgentSandbox(ctx, clock, agentPod); err != nil {
+			return fail(err)
+		}
+	} else if _, err := d.createPod(ctx, spec.RunID, componentAgent, agentPod); err != nil {
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
 
@@ -498,18 +503,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
-	return podSandbox(spec, enforced, runtimeHandler), nil
-}
-
-// podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
-// a VM run, the machine its RuntimeClass boots.
-func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler string) runner.Sandbox {
-	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}
-	if spec.MachineKind == types.MachineLinuxVM {
-		m := vmMachine(runtimeHandler)
-		sb.Machine = &m
+	sb := podSandbox(spec, enforced, runtimeHandler, proxy.ConfigSHA256(proxyJSON), proxyIP)
+	if spec.ProxyConfig.NoNetwork {
+		sb.NoNetworkProxyOnly = cmp.Or(proxyOnly, noNetworkPodEnforced)
 	}
-	return sb
+	return sb, nil
 }
 
 // ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API

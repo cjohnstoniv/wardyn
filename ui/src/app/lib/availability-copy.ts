@@ -24,6 +24,7 @@ export const AVAILABILITY = {
   CHIP_TYPE: (name: string) => name,
   CHIP_GROUP: (name: string) => `${name} (group)`,
   CHIP_USER: (email: string) => email,
+  CHIP_ALL: "Everyone",
   REMOVE_ARIA: (chip: string) => `Remove ${chip}`,
   ADD_PLACEHOLDER: "Add a type, group or person…",
   ADD_CTA: "Add",
@@ -50,7 +51,11 @@ export const AVAILABILITY = {
     "Only these — people not listed can't run with this provider, even from a workspace pinned to it. Runs already going aren't affected.",
   MODEL_PROVIDER_NOTE:
     "Security admins can change this list from the type editor too. The provider itself is edited only by super admins.",
-  IMAGE_HINT: "Images are off for everyone until you list someone here.",
+  IMAGE_HINT:
+    "Only admins can launch this image unless someone is listed here or a registry prefix on Permissions covers it.",
+  // Under the image control, one line per prefix grant that covers the image. Read-only here.
+  COVERED_BY_PREFIX: (prefix: string, who: string) =>
+    `Also available through a registry prefix: ${prefix} (${who}). Change it on Permissions.`,
   IMAGE_NOTE:
     "Security admins can change this list from the type editor too. The image list itself is edited only by super admins.",
   // Why the last audience's remove button is disabled while "Only these" is

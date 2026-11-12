@@ -103,8 +103,19 @@ describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” sectio
     // What the ceiling grants is not locked.
     expect(box("Edit branch policies")).toBeEnabled();
     expect(box("Edit branch policies").closest("li")).not.toHaveAttribute("title");
-    // Locked count = everything off the ceiling.
-    expect(screen.getAllByTitle(ADO_ACCESS.LOCKED)).toHaveLength(ADO_CAPABILITIES.length - CEILING.length);
+    // Locked count = everything off the ceiling, whose pr stands for its three parts.
+    expect(screen.getAllByTitle(ADO_ACCESS.LOCKED)).toHaveLength(ADO_CAPABILITIES.length - CEILING.length - 3);
+  });
+
+  it("reads pr on the ceiling as its three parts, and the three parts as pr", () => {
+    const { unmount } = render(<Harness initial={BASE} seen={[]} ceiling={CEILING} />);
+    for (const name of ["Open & update pull requests", "Vote on pull requests", "Complete pull requests"]) {
+      expect(box(name), name).toBeEnabled();
+      expect(box(name).closest("li"), name).not.toHaveAttribute("title");
+    }
+    unmount();
+    render(<Harness initial={BASE} seen={[]} ceiling={["pr_create", "pr_vote", "pr_complete"]} />);
+    expect(box("Contribute to pull requests").closest("li")).not.toHaveAttribute("title");
   });
 
   it("lets a stored policy's off-ceiling capability be taken out, never put back", async () => {

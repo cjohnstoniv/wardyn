@@ -14,7 +14,7 @@ import { filesPreflight, limitsFor, MAIN_DRIVE_FACTS, SCENARIO_FILES_WORKSPACES 
 import type { RepoBranches } from "../../../../../lib/api/repo-branches";
 import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives";
 import type { Workspace } from "../../../../../lib/types/workspaces";
-import type { RunIntent } from "../../draft/run-intent";
+import type { NewRunDraft, RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { FilesStep } from "./files-step";
 
@@ -81,9 +81,9 @@ afterEach(() => {
   wfetchMock.mockReset();
 });
 
-function Seed({ intent }: { intent: RunIntent }) {
+function Seed({ intent, origin = { kind: "scratch" } }: { intent: RunIntent; origin?: NewRunDraft["origin"] }) {
   const dispatch = useNewRunDispatch();
-  React.useEffect(() => dispatch({ type: "seed", origin: { kind: "scratch" }, intent }), [dispatch, intent]);
+  React.useEffect(() => dispatch({ type: "seed", origin, intent }), [dispatch, intent, origin]);
   return null;
 }
 const Drawn = () => <p data-testid="intent">{JSON.stringify(useNewRunDraft().intent)}</p>;
@@ -96,11 +96,11 @@ function External() {
   return null;
 }
 
-function show(intent: RunIntent = INTERACTIVE, createUserDrive?: React.ComponentProps<typeof FilesStep>["createUserDrive"]) {
+function show(intent: RunIntent = INTERACTIVE, createUserDrive?: React.ComponentProps<typeof FilesStep>["createUserDrive"], origin?: NewRunDraft["origin"]) {
   render(
     <MemoryRouter>
       <NewRunDraftProvider owner="alice">
-        <Seed intent={intent} />
+        <Seed intent={intent} origin={origin} />
         <FilesStep location={{ screen: "step", step: "files" }} go={go} startFromScratch={() => {}} createUserDrive={createUserDrive} />
         <Drawn />
         <External />
@@ -360,6 +360,30 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(await screen.findByText(NR_FILES.MOUNT_MAIN("0.5 GiB"))).toBeInTheDocument();
   });
 
+  // Mutation caught: `over` only looks at the stored size (the `!dirty && committed` form), so a typed size shows no note.
+  // Mutation caught: the map keeps the typed text (`dirty ? NR_SHARED.GIB(text)`) ahead of the cap, so it reads 12 GiB.
+  it("a size typed over the pool's cap shows the over-cap note at once, and the mount map reads the cap", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    enter("12");
+    expect(screen.getByTestId("nr-main-drive-over-cap")).toHaveTextContent(NR_FILES.OVER_CAP("12 GiB", "8 GiB"));
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("8 GiB"))).toBeInTheDocument();
+    expect(screen.queryByText(NR_FILES.MOUNT_MAIN("12 GiB"))).toBeNull();
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 8192 });
+  });
+
+  // Mutation caught: the note shows for every typed size (the `mib > capMib` test dropped or flipped to `>=`/`<`).
+  it("a size typed under the cap shows no over-cap note", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    enter("4");
+    expect(screen.queryByTestId("nr-main-drive-over-cap")).toBeNull();
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("4 GiB"))).toBeInTheDocument();
+    enter("8");
+    expect(screen.queryByTestId("nr-main-drive-over-cap")).toBeNull();
+  });
+
   it("emptying the field and leaving it keeps the stored size and the clamp note", async () => {
     checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
     show();
@@ -501,5 +525,77 @@ describe("what happens to it (W2)", () => {
     checks.result = null;
     show();
     expect(screen.queryByText(NR_FILES.LIFE_LABEL)).toBeNull();
+  });
+});
+
+// A3.3: a size stored before the cap (a pool change, a template, a run again) is over it without the person typing.
+describe("a stored size over the pool's cap", () => {
+  const OVER = "32 GiB is over the 4 GiB cap. The run gets 4 GiB.";
+  const capped = (mib: number) => ({ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive", mib) });
+  const with32: RunIntent = { ...INTERACTIVE, no_repositories_or_drives: true, resources: { disk_mib: 32768 } } as RunIntent;
+  const summary = () => screen.getByTestId("nr-files-summary");
+
+  it.each([
+    ["a template", { kind: "template", id: "t1", revision: 1, name: "Docs", templateKind: "template" } as const],
+    ["a run again", { kind: "again", runId: "run-1", title: "Docs" } as const],
+  ])("%s: the line says the run gets the cap, the field keeps the request, the summary is not done and Continue works", async (_name, origin) => {
+    checks.result = capped(4096);
+    show(with32, undefined, origin);
+    expect(await screen.findByText(OVER)).toBeInTheDocument();
+    expect(size()).toHaveValue(32);
+    // The summary shows the size the run gets, with the prompt tone, never the check.
+    // The summary settles after its half-second debounce.
+    await waitFor(() => expect(summary()).toHaveTextContent("Main drive 4 GiB"), { timeout: 2000 });
+    expect(summary()).toHaveAttribute("data-tone", "prompt");
+    expect(summary()).not.toHaveTextContent("32 GiB");
+    // The cap note describes the size field, and a held Continue is not added: the server's cut stands.
+    expect(size().getAttribute("aria-describedby")).toBe(screen.getByText(OVER).id);
+    await userEvent.click(screen.getByRole("button", { name: /^Continue/ }));
+    expect(go).toHaveBeenCalled();
+  });
+
+  it("a pool change: a size that fitted the first pool is flagged under the second's smaller cap, and clears under a larger one", async () => {
+    checks.result = capped(65536);
+    show(with32);
+    await screen.findByText(NR_FILES.UP_TO("64 GiB"));
+    expect(screen.queryByText(/is over the/)).toBeNull();
+    checks.result = capped(4096);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    expect(await screen.findByText(OVER)).toBeInTheDocument();
+    checks.result = capped(65536);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-c" })));
+    await waitFor(() => expect(screen.queryByText(/is over the/)).toBeNull());
+  });
+
+  it("reads in MiB when the cap is not a whole half GiB", async () => {
+    checks.result = capped(768);
+    show({ ...INTERACTIVE, resources: { disk_mib: 1024 } } as RunIntent);
+    expect(await screen.findByText("1 GiB is over the 768 MiB cap. The run gets 768 MiB.")).toBeInTheDocument();
+  });
+
+  it("after blur a size typed over the cap is clamped: the over-cap note is gone and the clamp note speaks", async () => {
+    checks.result = capped(4096);
+    show();
+    await screen.findByText(NR_FILES.UP_TO("4 GiB"));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "16");
+    await userEvent.tab();
+    expect(screen.queryByText(/is over the/)).toBeNull();
+    expect(screen.getByText(/^Clamped to 4 GiB/)).toBeInTheDocument();
+    await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "prompt"));
+  });
+
+  // Mutation caught: the summary tone ignores `size.over` (files-step.tsx), so it stays done while the size is over the cap.
+  it("on a settled step, typing a size over the cap drops the summary from done until blur", async () => {
+    checks.result = capped(4096);
+    show({ ...INTERACTIVE, no_repositories_or_drives: true, resources: { disk_mib: 1024 } } as RunIntent);
+    await screen.findByText(NR_FILES.UP_TO("4 GiB"));
+    await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
+    act(() => size().focus());
+    fireEvent.change(size(), { target: { value: "16" } });
+    expect(screen.getByTestId("nr-main-drive-over-cap")).toBeInTheDocument();
+    await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "prompt"), { timeout: 3000 });
+    await userEvent.tab();
+    await waitFor(() => expect(summary()).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
   });
 });

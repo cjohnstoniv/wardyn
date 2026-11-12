@@ -79,6 +79,8 @@ type bedrockTransportAudit struct {
 	hosts                                 []string
 	// signing is the AWS sign-in lane's re-signing choice (awsSigningAudit); nil on the bearer lane.
 	signing *awsSigV4Why
+	// gateway is the host of the gateway a re-signed lane's calls go to, "" for none.
+	gateway string
 }
 
 // providerSubscription reports whether this run chose a Claude subscription
@@ -92,9 +94,13 @@ func (t llmTransport) providerSubscription() bool {
 func (t llmTransport) signsBedrock() bool { return t.bedrockReady && t.bedrock.sigv4Hosts != nil }
 
 // withdrawSigV4 drops the AWS re-signer once the ceiling's re-assertion withheld the Bedrock lane it
-// signed for: the re-signer's grant is that lane's (named in dropped_broker_lanes).
+// signed for: the re-signer's grant is that lane's (named in dropped_broker_lanes). Its gateways'
+// identity routes go with it, so no route is left for a gateway nothing signs for.
 func (p *dispatchLLMPlan) withdrawSigV4(signed bool, llm llmTransport) {
 	if signed && !llm.bedrockReady {
+		if p.awsSigV4 != nil {
+			p.gatewayRoutes = dropSignedGatewayRoutes(p.gatewayRoutes, p.awsSigV4.Gateways)
+		}
 		p.awsSigV4 = nil
 	}
 }
@@ -162,8 +168,12 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 		mode = "sso-inject"
 	}
 	var signing *awsSigV4Why
+	var gateway string
 	if b.ssoInject {
 		signing = &b.sigv4Why
+	}
+	if b.sigv4Gateway != nil {
+		gateway = b.sigv4Gateway.Host
 	}
 	return secretEnvKeys, bedrockTransportAudit{
 		region: b.region, model: b.model, hosts: b.egressHosts,
@@ -172,7 +182,7 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 		// where the call actually went rather than leaving an auditor to infer
 		// it from the region.
 		endpoint: b.runtimeHost,
-		mode:     mode, detail: detail, signing: signing,
+		mode:     mode, detail: detail, signing: signing, gateway: gateway,
 	}
 }
 
@@ -193,6 +203,9 @@ func (s *Server) recordBedrockTransport(ctx context.Context, run types.AgentRun,
 	}
 	if a.signing != nil {
 		awsSigningAudit(data, *a.signing)
+	}
+	if a.gateway != "" {
+		data["aws_signing_gateway"] = a.gateway
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.bedrock.configure",
 		run.ID.String(), "success", mustJSON(data)))
@@ -382,16 +395,24 @@ type dispatchLLMPlan struct {
 	// address (nil when requests go to the vendor host) — a gateway reaches
 	// only the runs that chose it.
 	llmUpstreams map[string]string
+	// llmHeaders is ProxyConfig.LLMHeaders: the chosen custom_endpoint provider's extra gateway headers
+	// by host; nil, so no key is written, unless it has some.
+	llmHeaders map[string]map[string]string
 	// localModels is ProxyConfig.LocalModels: each local_model upstream's model
 	// allowlist and request bounds, for the proxy's route gate.
 	localModels map[string]types.LocalModelSettings
 	// localAllowlists is those allowlists by provider id, as recorded on the run (recordModelAllowlists).
 	localAllowlists map[string][]string
+	// gatewayRoutes is ProxyConfig.GatewayIdentity: nil, so no key is written, unless the run chose a provider with it on.
+	gatewayRoutes []proxy.GatewayIdentityRoute
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
-	// subscription injection or intercept_tls inspection, never a CA minted
-	// purely for artifact tokens. Computed here because every input to it is
-	// decided here.
+	// subscription injection, intercept_tls inspection or an allowed-models
+	// list, never a CA minted purely for artifact tokens. Computed here because
+	// every input to it is decided here.
 	mitmLLM bool
+	// modelLimit is ProxyConfig.ModelLimit: the run's governed list and its lanes' Bedrock gateway
+	// routes, nil when none binds it.
+	modelLimit *runner.ModelLimit
 }
 
 // resolveLLMInjections resolves the LLM transport and authors every proxy-side
@@ -425,6 +446,12 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	if !ok {
 		return dispatchLLMPlan{}, false
 	}
+	// A run held to an allowed-models list never starts on a lane its proxy could not check
+	// (run_allowed_models.go); the doors refused it already, this is the run that got here another way.
+	limited := p.modelLimit.set()
+	if s.refuseUncheckedModelLane(ctx, run, p.modelLimit, llms) {
+		return dispatchLLMPlan{}, false
+	}
 	// Bedrock serves claude-code alone, so a run has one Bedrock lane at most:
 	// every Bedrock consumer below and after this phase reads that lane, or the
 	// run's own agent's lane when it has none.
@@ -450,12 +477,14 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// one), or a component's header, which the proxy can set only inside a
 	// connection it terminates. The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig below);
 	// the sandbox trusts the PUBLIC cert. See provisionDispatchMITMCA for the
-	// trust-store wiring. Once per run, whichever lanes need it.
+	// trust-store wiring. Once per run, whichever lanes need it. An allowed-models list needs it too:
+	// the proxy reads each model request on the vendor hosts to check its model.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if subscription || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
+	if subscription || mitmForInspect || limited || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
 		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 ||
-		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil || s.placeholdersWanted(run, *policy) {
+		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil || s.placeholdersWanted(run, *policy) ||
+		hostRulesNeedCA(policy) {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -486,6 +515,11 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	}
 	awsSigV4 = cmp.Or(awsSigV4, cliSigV4)
 	bedrockMITMHosts = append(bedrockMITMHosts, cliMITMHosts...)
+	if limited {
+		// The gateways the key lanes reach, so a direct connection to one is read and checked too.
+		bedrockMITMHosts = append(bedrockMITMHosts, modelGatewayMITMHosts(prov.upstreams, prov.localModels,
+			slices.Concat(bedrockMITMHosts, azure.mitmHosts))...)
+	}
 	// The Azure CLI row's grant, door and the two hosts it opens. Same contract.
 	var azureCLI azureCLIPlan
 	if injections, azureCLI, ok = s.authorAzureCLI(ctx, run, p.Components.AzureCLI, mitmCACertPEM, mitmCAKeyPEM, policy, sandboxEnv, injections); !ok {
@@ -519,18 +553,20 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	s.recordBedrockTransport(ctx, bedrockRun, llm)
 	s.recordAWSCLIConfigure(ctx, run, p.Components.AWSCLI, cliSigning)
 	s.recordModelAllowlists(ctx, run.ID, prov.localAllowlists)
+	s.recordAllowedModels(ctx, run.ID, p.modelLimit)
 
 	return dispatchLLMPlan{
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
-		bedrockMITMHosts:     bedrockMITMHosts,
+		bedrockMITMHosts:     append(bedrockMITMHosts, hostRuleMITMHosts(policy)...),
 		azure:                azure,
 		channelHosts:         providerSubscriptionChannelHosts(llms, azure.channelHosts),
 		azureCLI:             azureCLI,
 		awsSigV4:             awsSigV4,
 		kubectlCLI:           kubectlCLI,
-		mitmLLM:              subscription || mitmForInspect,
-		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
+		mitmLLM:              subscription || mitmForInspect || limited,
+		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, llmHeaders: prov.extraHeaders, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
+		gatewayRoutes: prov.gatewayRoutes, modelLimit: p.modelLimit.runnerLimit(laneBedrockRoutes(llms)),
 	}, true
 }
 

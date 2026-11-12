@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -48,6 +51,11 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if r, ok = s.stampContextChoice(w, r, req); !ok {
 		return
 	}
+	// The same 400 launch gives a desktop_window it cannot carry, before any step reads the field.
+	if msg := desktopWindowRequestRefusal(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+		return
+	}
 	ceiling, reqCC, refusal := s.authorizePreviewRequest(r, req)
 	if refusal.write(s, w, r) {
 		return
@@ -59,14 +67,23 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The create's window grant, after the fold as at create: refused as the create would be, stored by none.
+	if s.macWindowRecordPending(w, r, uuid.Nil, req.DesktopWindow, "", "", false) {
+		return
+	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
+	// Every push refused outranks it: deny_all refuses an unbrokered push to a known forge host even with the brokers off.
+	response.PushesUnstoppable = slices.Contains(f.policyWarns, unstoppablePushWarning) && (f.spec.PushRules == nil || !f.spec.PushRules.DenyAll)
 	response.Provenance = f.prov
 	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	response.ImageAdmission = s.imageAdmissionPreview(r.Context(), *f.req, f.carriedImage, f.ceiling.Limits.RequiredImageSigners)
+	response.AllowedModels, response.AllowedModelsProfile = modelLimitOf(f.ceiling).models, modelLimitOf(f.ceiling).profile
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
 	response.RunnerPoolSlots = s.runnerPoolSlots(r.Context(), f.place, *f.req)
 	response.MainDrive = f.mainDrive.applied()
+	response.Ungoverned = s.ungovernedNotice(r.Context(), f.ceiling)
 	runRepos := append([]string{f.req.Repo, f.req.DevcontainerRepo}, repoLocatorsOf(f.spec.WorkspaceRepos)...)
 	var signIn *SCMAccess
 	if !adoServiceCaller(r.Context()) {
@@ -82,10 +99,11 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	// A service under an idle pause is frozen while it waits for requests, and one no lifetime cap
 	// applies to ends at its lease. The sentences name no limit.
-	response.Warnings = append(response.Warnings, serviceWarnings(f.req.Service != nil, f.ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0)...)
+	response.Warnings = append(response.Warnings, serviceWarnings(f.req.Service != nil, f.ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0, f.end.endSec != nil)...)
 	// Run-level, never per repository group: the groups include devcontainer_repo,
 	// which the server clones and the lane never serves.
 	response.ADOLaneDeclined = string(f.adoDecline)
+	response.PushDenyAllSecrets = pushDenyAllSecrets(f.spec, f.pushSets)
 	if f.adoDecline != "" {
 		response.Warnings = append(response.Warnings, f.adoDecline.sentence())
 	}
@@ -154,18 +172,20 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 // before the requirements fold so Review grades it; stepDerivedEgress adds the
 // grant lanes after every gate. The site-config, ADO and model-provider host
 // unions remain pending.
-func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace, trusted []string) {
+//
+// cloned is the run's repositories (runRepoLocators), whose clone hosts alone are added.
+func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace, cloned, trusted []string) {
 	unionWorkspaceEgress(spec, workspaces)
 	for _, ws := range workspaces {
-		kept, _ := runCloneEgress(ws, trusted)
+		kept, _ := runSelectedCloneEgress(ws, cloned, trusted)
 		unionAllowedDomains(spec, kept)
 	}
 }
 
 // previewWorkspaceEgressHosts is what unionPreviewWorkspaceEgress adds to an empty allowlist.
-func previewWorkspaceEgressHosts(workspaces []types.Workspace, trusted []string) []string {
+func previewWorkspaceEgressHosts(workspaces []types.Workspace, cloned, trusted []string) []string {
 	var scratch types.RunPolicySpec
-	unionPreviewWorkspaceEgress(&scratch, workspaces, trusted)
+	unionPreviewWorkspaceEgress(&scratch, workspaces, cloned, trusted)
 	return scratch.AllowedDomains
 }
 

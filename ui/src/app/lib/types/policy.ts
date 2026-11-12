@@ -114,6 +114,8 @@ export interface LLMInspectionSpec {
   detect_entropy?: boolean;
   detect_pii?: boolean;
   detector_sidecar_url?: string;
+  // Unset = Wardyn's own format; "presidio" = Presidio's /analyze API.
+  detector_sidecar_format?: string;
   classified_markers?: string[];
   scan_attachments?: boolean;
   inspect_forward_egress?: boolean;
@@ -129,10 +131,22 @@ export interface LLMInspectionSpec {
 // ToolEffect mirrors types.ToolEffect — a CLOSED enum, which is why it is a
 // union here and not `string`: an unrecognised effect is a 400 server-side
 // (validateToolRules), never a silently-ignored rule that reads as enforcement.
-export type ToolEffect = "allow" | "hold" | "deny";
+export type ToolEffect = "allow" | "hold" | "approve_each" | "deny";
 
-// Display order for the effect picker: least to most restrictive.
-export const TOOL_EFFECTS: readonly ToolEffect[] = ["allow", "hold", "deny"];
+// Display order for the effect picker: least to most restrictive. approve_each
+// (every call of one MCP tool waits for a person) sits between hold and deny.
+export const TOOL_EFFECTS: readonly ToolEffect[] = ["allow", "hold", "approve_each", "deny"];
+export const TOOL_EFFECTS_ACCEPTED: readonly ToolEffect[] = ["allow", "hold", "approve_each", "deny"];
+
+// Mirrors types.ValidToolRule: approve_each names one MCP tool's exact name.
+const APPROVE_EACH_TOOL_RE = /^mcp__.+__.+$/;
+const EXACT_TOOL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
+/** Whether approve_each may name this tool: one exact mcp__<server>__<tool> name, as the server accepts. */
+export const canApproveEach = (tool: string): boolean => EXACT_TOOL_NAME_RE.test(tool) && APPROVE_EACH_TOOL_RE.test(tool);
+
+/** Why an editor greys approve_each for any other name or for the default; the server's sentence, word for word. */
+export const APPROVE_EACH_REASON = "Approve each call names one MCP tool. Add it as a rule for that tool.";
 
 // The literal default rule. Policy.ToolEffectFor tries the exact tool name
 // first, then this — so it is the effect for every tool no rule names.
@@ -144,6 +158,23 @@ export const TOOL_RULE_DEFAULT = "*";
 export interface ToolRule {
   tool: string;
   effect: ToolEffect;
+}
+
+// Per-host method and path rules (mirrors types.HostRuleSet / types.HostRule). host_rules is a list of
+// sets, one per layer: every set that names a host must allow a request on it, by first match inside
+// that set. Empty methods or paths match all. "hold" waits for a person to decide the request's host,
+// method and path (a host_call approval).
+export type HostRuleEffect = "allow" | "deny" | "hold";
+
+export interface HostRule {
+  host: string;
+  methods?: string[];
+  paths?: string[];
+  effect: HostRuleEffect;
+}
+
+export interface HostRuleSet {
+  rules: HostRule[];
 }
 
 // Server-side ceilings, mirrored from internal/api/policy.go so the editor can
@@ -200,8 +231,11 @@ export function toolRulesProblem(rules: readonly ToolRule[] | unknown): string |
     seen.add(name);
     // Widened deliberately: a missing/number/object effect is not a ToolEffect,
     // and this closed-enum check is already the refusal for every one of them.
-    if (!(TOOL_EFFECTS as readonly unknown[]).includes(r.effect)) {
-      return `“${String(r.effect)}” is not an effect (want allow, hold or deny).`;
+    if (!(TOOL_EFFECTS_ACCEPTED as readonly unknown[]).includes(r.effect)) {
+      return `“${String(r.effect)}” is not an effect (want allow, hold, approve_each or deny).`;
+    }
+    if (r.effect === "approve_each" && !canApproveEach(name)) {
+      return `“${name}” cannot be approve_each: it applies to one MCP tool's exact name, mcp__<server>__<tool>.`;
     }
   }
   return null;
@@ -233,6 +267,8 @@ export interface PushRulesSpec {
   deny_new_executables?: boolean;
   // Refuses a push introducing a file over this many MiB; 0/absent = off, max 32 (the most a pack can carry is 32 MiB).
   max_file_size_mib?: number;
+  // Refuses every push to every remote: content, ref updates and deletes. false/absent = off.
+  deny_all?: boolean;
 }
 
 // pushRulesIsSet is gone with the New Run rail that was its only caller (it
@@ -258,6 +294,7 @@ export interface RunPolicySpec {
   // unbounded goroutine. Mirrors RunPolicySpec.MaxHolds.
   max_holds?: number;
   allowed_methods?: string[];
+  host_rules?: HostRuleSet[];
   min_confinement_class: ConfinementClass;
   eligible_grants?: GrantSpec[];
   auto_stop_after_sec?: number;
@@ -271,6 +308,9 @@ export interface RunPolicySpec {
   // wins, allowed_domains may be empty. The SSRF/private-IP guard and the
   // exact-host allowlist required for credential injection are UNCHANGED.
   allow_all_egress?: boolean;
+  // When true the proxy refuses every IP-literal host, in any spelling, except an
+  // address listed exactly in allowed_domains. It only narrows.
+  refuse_ip_literals?: boolean;
   // Outbound LLM content inspection. Omitted => OFF (the safe default).
   llm_inspection?: LLMInspectionSpec;
   // Sandbox CPU/memory/PID/disk caps. Omitted => platform defaults.
@@ -320,9 +360,12 @@ export interface RunPolicySpec {
   // How much of a run is recorded (mirrors Go's RunPolicySpec.Recording). Absent chooses nothing:
   // the organisation's level applies. A ceiling's level is a minimum. Keystrokes are never recorded.
   recording?: RecordingLevel;
+  // The run's rule for content leaving it (mirrors Go's RunPolicySpec.DataOut). Absent is allowed.
+  data_out?: "allowed" | "review" | "blocked";
 }
 
-export type TransferRule = "allowed" | "blocked";
+// review (download only): each download waits for a person's yes on that file (Go's types.TransferReview).
+export type TransferRule = "allowed" | "review" | "blocked";
 
 // Mirrors Go's types.DesktopControls.
 export interface DesktopControls {

@@ -72,7 +72,7 @@ func TestAttachCorpus_TakeoverPromotesWebObserverOverSSHHolder(t *testing.T) {
 		}
 
 		// The taker's own (web) socket is promoted IN PLACE — no reconnect.
-		m3 := readNextAttachMode(t, c2)
+		m3 := readPromotionFrame(t, c2, holderSecond)
 		if m3.ReadOnly || m3.Holder == nil || m3.Holder.Principal != holderOwner || m3.Holder.Source != attachSourceWeb {
 			t.Fatalf("the taker's own web observer was not promoted in place: %+v", m3)
 		}

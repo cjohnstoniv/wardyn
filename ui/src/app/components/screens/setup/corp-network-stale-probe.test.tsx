@@ -33,7 +33,7 @@ function Harness(props: Partial<ComponentProps<typeof CorpNetworkStep>> & { spy?
   return (
     <CorpNetworkStep
       status={baseStatus()}
-      siteConfig={null}
+      siteConfig={{}} // loaded and empty: the proxy editor is disabled until the first document loads
       reloadSiteConfig={vi.fn().mockResolvedValue(undefined)}
       saveSiteConfig={vi.fn().mockResolvedValue(undefined)}
       {...rest}

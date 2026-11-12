@@ -28,7 +28,7 @@ vi.mock("../../lib/api/ssh-keys", () => ({
 
 const attachTicketMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
-  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a) },
+  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a), getPolicy: () => new Promise(() => {}) }, // the rule never answers here
 }));
 
 import { ConnectSSHCard } from "./run-detail-ssh";
@@ -65,14 +65,23 @@ function renderCard(run: Partial<RunDetail> = {}, principal = OWNER, operator = 
   );
 }
 
+// enterUIApp opens a named blank tab inside the click and sends the form (or URL) into it.
+let tabStub: { opener: unknown; close: ReturnType<typeof vi.fn>; location: { replace: ReturnType<typeof vi.fn> } };
+
 // Every health() fixture below carries status:"ok" because a real /healthz body
 // always does (handleHealthz in internal/api/healthz.go) — and the card reads exactly that
 // bit to tell "the daemon answered, both gateways are off" apart from "no
 // answer at all", which lib/api/health.ts reports as the same resolved `{}`.
+let openSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   healthMock.mockReset();
   listKeysMock.mockReset();
   attachTicketMock.mockReset();
+  tabStub = { opener: {}, close: vi.fn(), location: { replace: vi.fn() } };
+  openSpy = vi.spyOn(window, "open").mockReturnValue(tabStub as unknown as Window);
+});
+afterEach(() => {
+  openSpy.mockRestore();
 });
 
 describe("ConnectSSHCard — visibility", () => {
@@ -187,7 +196,7 @@ describe("ConnectSSHCard — external-tool notice", () => {
     renderCard({ description: "external:my-tool" });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
     expect(
-      screen.getByText("Managed by an external tool — killing this run tears down that tool's workspace."),
+      screen.getByText("Managed by an external tool — ending this run tears down that tool's workspace."),
     ).toBeInTheDocument();
   });
 
@@ -301,7 +310,8 @@ describe("ConnectSSHCard — UI apps lane", () => {
     // The env var renders in <Mono> (mock visual rule §6), so the frozen
     // string spans several nodes — the paragraph's text content still has to
     // byte-match the canonical table.
-    const off = screen.getByText(/Off on this deployment\. It relays/);
+    // The off-state renders after the health answer, not when the mock is called.
+    const off = await screen.findByText(/Off on this deployment\. It relays/);
     expect(off.textContent).toBe(UI_APPS_LANE.off);
     expect(screen.getByText("WARDYN_UI_SANDBOX_LISTEN")).toBeInTheDocument();
     // No CTA when the gateway is off.
@@ -378,7 +388,6 @@ describe("ConnectSSHCard — UI apps lane", () => {
     });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
-    const openSpy = vi.spyOn(window, "open");
     const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -390,17 +399,17 @@ describe("ConnectSSHCard — UI apps lane", () => {
     const form = submitSpy.mock.instances[0] as HTMLFormElement;
     expect(form.method).toBe("post");
     expect(form.action).toBe("http://ui.local/__wardyn/enter");
-    expect(form.target).toBe("_blank");
+    expect(form.target).toBe(openSpy.mock.calls[0][1]);
     const values = Object.fromEntries(new FormData(form).entries());
     expect(values).toEqual({ run: baseRun.id, app: "vscode", ticket: "tkt_abc123" });
-    // The form is submitted, not window.open'd — no URL ever carries the
+    // The tab is opened blank and the form posted into it — no URL ever carries the
     // ticket for this lane.
-    expect(openSpy).not.toHaveBeenCalled();
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy.mock.calls[0][0]).toBe("");
 
     await screen.findByRole("button", { name: UI_APPS_LANE.cta("vscode") });
     expect(screen.queryByText(UI_APPS_LANE.errorTitle("vscode"))).toBeNull();
     submitSpy.mockRestore();
-    openSpy.mockRestore();
   });
 
   it("substitutes {run} in the POST action for a host-mode template, and still never puts it in a URL", async () => {
@@ -513,41 +522,81 @@ describe("ConnectSSHCard — UI apps lane", () => {
     });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
 
     screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
     await waitFor(() =>
-      expect(openSpy).toHaveBeenCalledWith(
+      expect(tabStub.location.replace).toHaveBeenCalledWith(
         `http://ui.local/__wardyn/enter?run=${baseRun.id}&app=vscode&ticket=tkt_abc123`,
-        "_blank",
-        "noopener",
       ),
     );
     // Never a form POST to the console's own (empty-action) URL.
     expect(submitSpy).not.toHaveBeenCalled();
     expect(screen.queryByText(UI_APPS_LANE.errorTitle("vscode"))).toBeNull();
     submitSpy.mockRestore();
-    openSpy.mockRestore();
+  });
+
+  // The new tab is opened inside the click, before the ticket request resolves, so the browser
+  // still counts it as the person's own action; the form is then sent into that named tab.
+  it("opens a named blank tab before the ticket request and posts the form into it", async () => {
+    healthMock.mockResolvedValue({
+      status: "ok",
+      ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" },
+    });
+    listKeysMock.mockResolvedValue([]);
+    let release: (t: string) => void = () => {};
+    attachTicketMock.mockReturnValue(new Promise<string>((r) => (release = r)));
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
+    expect(submitSpy).not.toHaveBeenCalled();
+    const name = openSpy.mock.calls[0][1];
+    expect(name).toMatch(/^wardyn-enter-/);
+    expect(tabStub.opener).toBeNull();
+
+    release("tkt_abc123");
+    await waitFor(() => expect(submitSpy).toHaveBeenCalled());
+    expect((submitSpy.mock.instances[0] as HTMLFormElement).target).toBe(name);
+    submitSpy.mockRestore();
+  });
+
+  it("says the browser blocked the new tab, and requests no ticket, when window.open returns null", async () => {
+    healthMock.mockResolvedValue({
+      status: "ok",
+      ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" },
+    });
+    listKeysMock.mockResolvedValue([]);
+    openSpy.mockReturnValue(null);
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    expect(await screen.findByText(RUN_SSH.POPUP_BLOCKED)).toBeTruthy();
+    expect(attachTicketMock).not.toHaveBeenCalled();
+    expect(submitSpy).not.toHaveBeenCalled();
+    submitSpy.mockRestore();
   });
 
   it("shows an error rather than POSTing to its own URL when neither enter_post_url nor enter_url_template is published", async () => {
     healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true } });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
-    const openSpy = vi.spyOn(window, "open");
     const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
 
     screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
     await screen.findByText(UI_APPS_LANE.errorTitle("vscode"));
-    expect(openSpy).not.toHaveBeenCalled();
+    // The blank tab opened for the click is closed again when nothing can be sent into it.
+    expect(tabStub.close).toHaveBeenCalled();
     expect(submitSpy).not.toHaveBeenCalled();
     submitSpy.mockRestore();
-    openSpy.mockRestore();
   });
 
   it("renders lane.error.launcher above the server's verbatim body when the ticket mint fails with that message, and leaves the other app untouched", async () => {
@@ -858,6 +907,20 @@ describe("ConnectSSHCard — an advertised ProxyCommand", () => {
     // The card paints ssh_config in place of the one-liner as the primary: the
     // config block comes before the one-line summary in document order.
     expect(config.compareDocumentPosition(details!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("leaves the SSH lane closed when no key is registered", async () => {
+    advertise(PROXY, false);
+    renderCard();
+    await screen.findByText(RUN_SSH.PROXY_NOTE);
+    expect(screen.getByText(RUN_CLI.SSH_TITLE).closest("details")!.open).toBe(false);
+  });
+
+  it("gives the VS Code reason without claiming the sandbox has no internet", async () => {
+    advertise(PROXY);
+    renderCard();
+    expect(await screen.findByText(RUN_SSH.VSCODE_WHY)).toBeInTheDocument();
+    expect(screen.queryByText(/has no internet/)).toBeNull();
   });
 
   it("Case A: the three Copy buttons carry their own accessible names", async () => {

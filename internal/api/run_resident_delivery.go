@@ -29,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -208,7 +209,11 @@ func (s *Server) readResidentValue(ctx context.Context, run types.AgentRun, gran
 		return residentValue{}, err
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "secret.read", secretName, "success", mustJSON(data)))
-	renderings := [][]byte{val}
+	if secretmask.TrimmedTooShort(val) {
+		clear(val)
+		return residentValue{}, errSecretTrimmedTooShort
+	}
+	renderings := envSecretRenderings(val)
 	if class != placement.ClassEnvSecret {
 		renderings = fileSecretRenderings(val)
 	}
@@ -432,6 +437,9 @@ func (s *Server) startResidentErase(runnerID uuid.UUID) {
 		if err := s.finishMacDiskDeletes(s.cfg.BaseCtx); err != nil {
 			slog.WarnContext(s.cfg.BaseCtx, "wardynd: finish disk drive deletes", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
 		}
+		if err := s.sweepKeptMachines(s.cfg.BaseCtx); err != nil {
+			slog.WarnContext(s.cfg.BaseCtx, "wardynd: kept machine sweep", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+		}
 	})
 }
 
@@ -454,7 +462,7 @@ func (s *Server) sweepResidentErase(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(abandonErr, err)
 	}
-	errs := []error{abandonErr, s.finishMacDiskDeletes(ctx)}
+	errs := []error{abandonErr, s.finishMacDiskDeletes(ctx), s.sweepKeptMachines(ctx)}
 	for _, id := range runners {
 		if s.runnerOnline(id) {
 			errs = append(errs, s.eraseResidentOn(ctx, st, id))

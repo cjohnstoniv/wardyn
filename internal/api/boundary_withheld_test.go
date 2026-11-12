@@ -129,7 +129,7 @@ func TestBrokeredLanesWithheldByBoundary(t *testing.T) {
 // hosts it names (an injection and a PAT host here) and keeps the rest, with no allowlist of its own.
 func TestBrokeredLanesWithheldByARestrictionLayer(t *testing.T) {
 	srv, _, _, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
-	policy := types.RunPolicySpec{AllowAllEgress: true}
+	policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "gitlab.example"}} // a credential's host is listed exactly
 	gitID, patID := uuid.New(), uuid.New()
 	injections := []runner.InjectionGrant{componentRule("api.anthropic.com"), componentRule("gitlab.example")}
 	p := dispatchParams{GitGrants: map[string]uuid.UUID{"acme/app": gitID}, GitPATGrants: map[string]string{"gitlab.example": patID.String()}}
@@ -155,7 +155,7 @@ func TestBrokeredLanesWithheldByARestrictionLayer(t *testing.T) {
 // a launch-added one included — a grant outside them is dropped with its injection and listed.
 func TestBrokeredGrantEligibilityStrip(t *testing.T) {
 	srv, _, audit, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
-	policy := types.RunPolicySpec{AllowAllEgress: true}
+	policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "api.other.test"}} // a credential's host is listed exactly
 	kept, gone := types.CredentialGrant{ID: uuid.New(), Spec: anthropicKey}, types.CredentialGrant{ID: uuid.New(), Spec: otherKey}
 	injections := []runner.InjectionGrant{
 		{GrantID: kept.ID, Rule: egress.InjectionRule{Host: "api.anthropic.com"}},
@@ -166,7 +166,7 @@ func TestBrokeredGrantEligibilityStrip(t *testing.T) {
 	var bedrock []string
 	layers := []sealLayer{{rec: boundaryProvenance, grants: &[]types.GrantSpec{anthropicKey}}}
 
-	rows := srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, dispatchCeiling{resolved: true}, layers,
+	rows, _ := srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, dispatchCeiling{resolved: true}, layers,
 		[]types.CredentialGrant{kept, gone}, &p, map[string]string{}, &llm, &bedrock, nil)
 
 	if len(rows) != 1 || rows[0].ID != kept.ID {
@@ -283,6 +283,8 @@ func TestReviveWithheldByBoundary(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New()}
 	layers := boundaryOnly("api.anthropic.com")
 	cfg := &proxy.Config{RunID: run.ID,
+		// The policy names api.other.test exactly, so the binding gate keeps its injection: only the boundary layer withholds it.
+		Policy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "api.other.test"}},
 		Injection: []proxy.InjectionConfig{
 			{InjectionRule: egress.InjectionRule{Host: "api.anthropic.com"}, GrantID: uuid.New()},
 			{InjectionRule: egress.InjectionRule{Host: "api.other.test"}, GrantID: uuid.New()},
@@ -296,6 +298,9 @@ func TestReviveWithheldByBoundary(t *testing.T) {
 	}
 	if len(cfg.Injection) != 1 || cfg.Injection[0].Host != "api.anthropic.com" {
 		t.Errorf("injections = %+v, want only the model provider's", cfg.Injection)
+	}
+	if !slices.Equal(re.droppedInjection, []string{"api.other.test"}) {
+		t.Errorf("dropped injections = %v, want api.other.test, which the policy names but the boundary withholds", re.droppedInjection)
 	}
 	if len(cfg.PATGrants) != 0 || !slices.Equal(re.droppedLane, []string{"gitlab.example"}) {
 		t.Errorf("PAT broker = %v (dropped %v), want gitlab.example withheld", cfg.PATGrants, re.droppedLane)

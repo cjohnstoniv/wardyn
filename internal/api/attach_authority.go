@@ -67,7 +67,9 @@ func (s *Server) attachAuthorityLookupBound() time.Duration {
 // caller (runUngoverned) or an operator-owned run (refuseNoTicketAttach).
 //
 //   - Ticket lane: what redemption asked (ticketAuthority), against the ticket's own issue time and
-//     sequence. The ticket's 30-second redemption window is not the terminal's lifetime; with
+//     sequence, the personal token or CLI session the ticket was minted under (still live: a revoke, an
+//     expiry or a sign-out of it ends the socket), and the run's entry rule (a service identity's sponsor
+//     still its sponsor since the ticket's authority time). The ticket's 30-second redemption window is not the terminal's lifetime; with
 //     RoleStampTTL set the socket ends at the ticket's issue time plus it, and when the handshake also
 //     carries the same person's session cookie, at that cookie's deadline too.
 //   - Session cookie lane: the cookie's owner check as the OIDC middleware asks it (identity, authority
@@ -88,7 +90,8 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 			}
 		}
 		superAdmin := ta.role == oidc.RoleAdmin
-		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() && superAdmin && !s.cfg.GovernAdminRuns {
+		bound := ta.tokenID != uuid.Nil || ta.cliSessionID != uuid.Nil
+		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() && superAdmin && !s.cfg.GovernAdminRuns && !bound {
 			return nil
 		}
 		return func(lctx context.Context) error {
@@ -98,7 +101,10 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 			if _, v := s.ticketAuthority(lctx, ta, runID); v != verdictOK {
 				return errAttachAuthorityEnded
 			}
-			return s.attachUnitCheck(lctx, runID, func(run types.AgentRun) bool { return superAdmin && s.adminDoorExempt(run) })
+			entry := func(run types.AgentRun) bool {
+				return s.mayEnterRunOrSponsor(lctx, run, ta.principal, superAdmin, ta.authorizedAt)
+			}
+			return s.attachUnitCheck(lctx, runID, entry, func(run types.AgentRun) bool { return superAdmin && s.adminDoorExempt(run) })
 		}
 	}
 	sub := oidc.PrincipalFromContext(ctx)
@@ -124,17 +130,23 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 				return errAttachAuthorityEnded
 			}
 		}
-		return s.attachUnitCheck(lctx, runID, func(run types.AgentRun) bool { return !governed || run.OperatorOwned })
+		return s.attachUnitCheck(lctx, runID, nil, func(run types.AgentRun) bool { return !governed || run.OperatorOwned })
 	}
 }
 
-// attachUnitCheck is the attach door's deny_interactive (refuseInteractiveAttach) asked again of runID as it
-// stands now: errAttachAuthorityEnded once the run's profile denies interactive sessions, and the read's
-// error when the run or its profile cannot be read. exempt is the lane's door exemption, asked of the run.
-func (s *Server) attachUnitCheck(ctx context.Context, runID uuid.UUID, exempt func(types.AgentRun) bool) error {
+// attachUnitCheck is the attach door asked again of runID as it stands now: the entry rule when entry is
+// set (the ticket's, refuseAttachEntry's mayEnterRunOrSponsor, so a sponsorship that has ended or
+// cannot be read ends the socket; the grant half, service_attach, stays a mint-time check), then
+// deny_interactive (refuseInteractiveAttach). It returns errAttachAuthorityEnded once either refuses, and the
+// read's error when the run or its profile cannot be read. exempt is the door's exemption from
+// deny_interactive, asked of the run.
+func (s *Server) attachUnitCheck(ctx context.Context, runID uuid.UUID, entry, exempt func(types.AgentRun) bool) error {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return err
+	}
+	if entry != nil && !entry(run) {
+		return errAttachAuthorityEnded
 	}
 	if exempt(run) {
 		return nil

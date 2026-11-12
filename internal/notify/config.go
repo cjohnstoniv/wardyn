@@ -55,6 +55,9 @@ const MaxTiers = 5
 const (
 	TargetRunOwner       = "run_owner"
 	TargetProfileContact = "profile_contact"
+	// TargetUnitAdmins is the emails of user-subject unit-admin grants on the run's unit and its
+	// ancestors. Group-subject grants are not expanded.
+	TargetUnitAdmins = "unit_admins"
 )
 
 // Route is one routing rule. An absent Kinds or Profiles matches anything; the first matching route
@@ -231,8 +234,8 @@ func (c *Config) validateRoute(i int) error {
 			}
 		}
 		for _, n := range t.Notify {
-			if n != TargetRunOwner && n != TargetProfileContact {
-				return fmt.Errorf("approval notify config: route #%d tier #%d: notify must be %s or %s", i+1, j+1, TargetRunOwner, TargetProfileContact)
+			if n != TargetRunOwner && n != TargetProfileContact && n != TargetUnitAdmins {
+				return fmt.Errorf("approval notify config: route #%d tier #%d: notify must be %s, %s or %s", i+1, j+1, TargetRunOwner, TargetProfileContact, TargetUnitAdmins)
 			}
 		}
 	}

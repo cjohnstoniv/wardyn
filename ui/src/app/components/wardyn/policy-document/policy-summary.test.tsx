@@ -6,9 +6,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { RunPolicySpec } from "../../../lib/types";
 import { SUMMARY } from "../../screens/run-detail/policy-tab-copy";
+import { WALL_PRESETS } from "../copy/wall-presets";
 import { PolicySummary, specIsRedacted, type PolicyChangeMarks } from "./policy-summary";
 
 // Every key a RunPolicySpec has, each carrying something the Summary shows.
@@ -86,7 +87,8 @@ describe("PolicySummary — plain names for every key", () => {
     expect(row("Tools and pushes", "Tool rules")).toHaveTextContent("Bash — held" + "Read — allowed" + "Anything else is denied.");
     expect(row("Tools and pushes", "Deny")).toHaveTextContent(".github/**");
     expect(row("Tools and pushes", "Hold for review")).toHaveTextContent("payments/**");
-    expect(row("Tools and pushes", "Pushes")).toHaveTextContent("Only this run's own branch");
+    // The fixture's one capability list holds no code_write: that forge only is named, the other keeps its branch line.
+    expect(row("Tools and pushes", "Pushes")).toHaveTextContent(/no pushes \(no write access\)/);
     expect(row("Apps", "UI apps")).toHaveTextContent("web → localhost:3000/app");
     expect(row("Limits", "CPU")).toHaveTextContent("2 CPU");
     expect(row("Limits", "Memory")).toHaveTextContent("4096 MiB");
@@ -289,6 +291,48 @@ describe("PolicySummary — push limits (#2601)", () => {
   });
 });
 
+describe("PolicySummary — the IP-address switch", () => {
+  const ON = "When allow-all egress is on, refuse connections to IP addresses unless they are listed exactly in Allowed hosts.";
+  const OFF = "This setting adds no IP-address restriction.";
+  const withIp = (v: unknown) => ({ ...FULL, refuse_ip_literals: v }) as unknown as RunPolicySpec;
+
+  it("reads a present true and a present false as a Network row, not as an Other setting", () => {
+    const { unmount } = render(<PolicySummary spec={withIp(true)} />);
+    expect(row("Network", "IP addresses")).toHaveTextContent(ON);
+    expect(screen.queryByText("refuse_ip_literals")).toBeNull();
+    unmount();
+    render(<PolicySummary spec={withIp(false)} />);
+    expect(row("Network", "IP addresses")).toHaveTextContent(OFF);
+    expect(screen.queryByText("refuse_ip_literals")).toBeNull();
+  });
+
+  it("shows no row when the document omits it, and never invents an off value", () => {
+    render(<PolicySummary spec={FULL} />);
+    expect(screen.queryByText("IP addresses")).toBeNull();
+    expect(screen.queryByText(OFF)).toBeNull();
+    expect(screen.queryByText("refuse_ip_literals")).toBeNull();
+  });
+
+  it("flags an addition, and lists a removed value as a struck entry that makes no claim about the policy now", () => {
+    const marks: PolicyChangeMarks = {
+      of: (field, entry) => (field === "refuse_ip_literals" && entry === "false" ? "added" : undefined),
+      removed: (field) => (field === "refuse_ip_literals" ? ["true"] : []),
+    };
+    render(<PolicySummary spec={withIp(false)} marks={marks} />);
+    const r = row("Network", "IP addresses");
+    expect(within(r).getByText(OFF).closest("li")).toHaveTextContent("Added at start");
+    expect(within(r).getByText(ON).closest("li")).toHaveTextContent("Removed at start");
+  });
+
+  it("shows a switch turned off that the wire omits as its struck removed value, and claims no current value", () => {
+    const marks: PolicyChangeMarks = { of: () => undefined, removed: (field) => (field === "refuse_ip_literals" ? ["true"] : []) };
+    render(<PolicySummary spec={FULL} marks={marks} />);
+    const r = row("Network", "IP addresses");
+    expect(within(r).getByText(ON).closest("li")).toHaveTextContent("Removed at start");
+    expect(within(r).queryByText(OFF)).toBeNull();
+  });
+});
+
 // The host marks (#2956, mock R13). The five strings are the approved copy, character for
 // character; cmd/wardyn/run_policy.go prints the same five, so that file is read here too.
 describe("PolicySummary host marks", () => {
@@ -389,5 +433,113 @@ describe("PolicySummary host marks", () => {
     expect(screen.getByText(ALLOW_ALL_TEXT)).toBeInTheDocument();
     expect(screen.getByText(ALLOW_ALL_LINE)).toBeInTheDocument();
     for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.queryByText(s)).toBeNull();
+  });
+});
+
+describe("PolicySummary — traffic checks left to a model gateway", () => {
+  const spec = (inspection: Record<string, unknown>) => ({ allowed_domains: [], llm_inspection: inspection }) as unknown as RunPolicySpec;
+
+  it("names the gateway, and says Wardyn still checks the run's secret values when the policy has that check", () => {
+    render(<PolicySummary spec={spec({ mode: "block", detect_secrets: true })} facts={{ inspectionLeftTo: ["Corp gateway"] }} />);
+    expect(row("Network", "Traffic checks")).toHaveTextContent(
+      "On, except prompts to Corp gateway" +
+        "Your organisation has assigned these checks to Corp gateway. Wardyn still checks them for the secret values the run holds.",
+    );
+  });
+
+  it("says Wardyn does not check them when the policy has no secret-value check", () => {
+    render(<PolicySummary spec={spec({ mode: "alert", detect_pii: true })} facts={{ inspectionLeftTo: ["Corp gateway", "Lab gateway"] }} />);
+    expect(row("Network", "Traffic checks")).toHaveTextContent(
+      "On, except prompts to Corp gateway, Lab gateway" +
+        "Your organisation has assigned these checks to Corp gateway, Lab gateway. Wardyn does not check them.",
+    );
+  });
+
+  it("adds nothing when the policy turns traffic checks off, or no gateway checks prompts", () => {
+    const { unmount } = render(<PolicySummary spec={spec({ mode: "off" })} facts={{ inspectionLeftTo: ["Corp gateway"] }} />);
+    expect(row("Network", "Traffic checks").textContent).toBe("Off");
+    unmount();
+    render(<PolicySummary spec={spec({ mode: "block", detect_secrets: true })} facts={{ inspectionLeftTo: [] }} />);
+    expect(row("Network", "Traffic checks").textContent).toBe("On");
+  });
+});
+
+describe("PolicySummary — the Pushes row", () => {
+  const pushes = (partial: Record<string, unknown>) => {
+    render(<PolicySummary spec={{ git_push_any_branch: false, ...partial } as unknown as RunPolicySpec} />);
+    return row("Tools and pushes", "Pushes");
+  };
+
+  it("says every push is refused for push_rules.deny_all, ahead of where a push could go", () => {
+    expect(pushes({ push_rules: { deny_all: true }, git_push_any_branch: true, github_capabilities: ["code_write"] })).toHaveTextContent(WALL_PRESETS.PUSH_EVERY_REFUSED);
+  });
+
+  const GH_READ = ["code_read", "issues_read"];
+  const ADO_READ = ["code_read", "work_read"];
+  const GH_WRITE = ["code_read", "code_write"];
+  // Table: the global sentence needs BOTH lists present and neither naming code_write. One list names its forge and the
+  // other forge keeps the branch line, because its provider default (an absent list) can still push.
+  it.each([
+    ["both lists, neither writes", { github_capabilities: GH_READ, azure_devops_capabilities: ADO_READ }, [WALL_PRESETS.PUSH_NO_WRITE]],
+    ["GitHub list only, no write: the ADO default can push", { github_capabilities: GH_READ }, ["GitHub: no pushes (no write access)", "Azure DevOps: only this run's own branch"]],
+    ["ADO list only, no write: the GitHub default can push", { azure_devops_capabilities: ADO_READ, git_push_any_branch: true }, ["Azure DevOps: no pushes (no write access)", "GitHub: any branch"]],
+    ["GitHub no write beside an ADO list that writes", { github_capabilities: GH_READ, azure_devops_capabilities: ["code_write"] }, ["GitHub: no pushes (no write access)", "Azure DevOps: only this run's own branch"]],
+    ["both lists write", { github_capabilities: GH_WRITE, azure_devops_capabilities: ["code_write"] }, [SUMMARY.ownBranch]],
+    ["no lists", {}, [SUMMARY.ownBranch]],
+  ])("Pushes: %s", (_name, spec, want) => {
+    const cell = pushes(spec);
+    expect(cell).toHaveTextContent(want.join(""));
+    if (want[0] !== WALL_PRESETS.PUSH_NO_WRITE) expect(cell).not.toHaveTextContent(/^No pushes/);
+  });
+
+  it("a stored policy whose ADO provider default can push is never read as no pushes at all", () => {
+    // A stored policy (Policies screen): a GitHub read list and no ADO list.
+    expect(pushes({ github_capabilities: GH_READ })).not.toHaveTextContent(WALL_PRESETS.PUSH_NO_WRITE);
+  });
+
+  it("keeps the run's own branch, or any branch, when a list names code_write or none is named", () => {
+    expect(pushes({ github_capabilities: ["code_read", "code_write"] })).toHaveTextContent(SUMMARY.ownBranch);
+    cleanup();
+    expect(pushes({ git_push_any_branch: true })).toHaveTextContent(SUMMARY.anyBranch);
+  });
+
+  it("shows no Pushes row when the spec says nothing of pushing", () => {
+    render(<PolicySummary spec={{ allowed_domains: ["a.example.com"] } as unknown as RunPolicySpec} />);
+    expect(screen.queryByText("Pushes")).toBeNull();
+  });
+});
+
+describe("PolicySummary: the wall preset's notes (P-63, P-62b)", () => {
+  const spec = {
+    allowed_domains: ["a.example.com"], denied_domains: ["paste.example.net"], first_use_approval: "always_deny",
+    push_rules: { deny_all: true }, git_push_any_branch: false,
+  } as unknown as RunPolicySpec;
+  const chip = { label: "Wall preset: Sealed", fields: new Set(["allowed_domains", "push_rules"]) };
+  const chipsIn = (group: string, label: string) => within(row(group, label)).queryAllByText("Wall preset: Sealed");
+
+  it("puts the preset's chip on the rows built from fields it decided, and only those", () => {
+    render(<PolicySummary spec={spec} notes={{ chip }} />);
+    expect(chipsIn("Network", "Allowed hosts")).toHaveLength(1);
+    expect(chipsIn("Tools and pushes", "Pushes")).toHaveLength(1);
+    expect(chipsIn("Network", "Blocked hosts")).toHaveLength(0);
+    expect(chipsIn("Network", "Any other host")).toHaveLength(0);
+  });
+
+  it("draws no chip without notes, or for a chip with no fields", () => {
+    render(<PolicySummary spec={spec} notes={{ chip: { ...chip, fields: new Set() } }} />);
+    expect(screen.queryByText("Wall preset: Sealed")).toBeNull();
+  });
+
+  it("reads Pushes can't be stopped on this install when the server says so, ahead of the no-write and branch lines", () => {
+    render(<PolicySummary spec={{ git_push_any_branch: false, github_capabilities: ["code_read"] } as unknown as RunPolicySpec} notes={{ pushesUnstoppable: true }} />);
+    expect(row("Tools and pushes", "Pushes")).toHaveTextContent(WALL_PRESETS.PUSHES_UNSTOPPABLE);
+    expect(row("Tools and pushes", "Pushes")).not.toHaveTextContent(/no write access/);
+  });
+
+  it("under deny_all never says Pushes can't be stopped", () => {
+    render(<PolicySummary spec={spec} notes={{ pushesUnstoppable: true }} />);
+    const pushes = row("Tools and pushes", "Pushes");
+    expect(pushes).toHaveTextContent(WALL_PRESETS.PUSH_EVERY_REFUSED);
+    expect(pushes).not.toHaveTextContent(WALL_PRESETS.PUSHES_UNSTOPPABLE);
   });
 });

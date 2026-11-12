@@ -91,6 +91,30 @@ func ClientConfig(caPEM string) (*tls.Config, error) {
 	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}, nil
 }
 
+// MinClientTLSVersion is the lowest TLS version a client config built for a
+// third-party endpoint (a secret store, a KMS, the egress upstreams, the
+// organisation session) negotiates. It is stated once here.
+const MinClientTLSVersion = tls.VersionTLS12
+
+// ErrNoCertificate is SystemPoolWith's refusal of a bundle holding no PEM
+// certificate.
+var ErrNoCertificate = errors.New("no PEM certificate in the bundle")
+
+// SystemPoolWith returns a fresh pool of the system roots (an empty pool when
+// the platform has none) with the certificates in pem added, or
+// ErrNoCertificate when pem holds none. The system roots stay trusted: this is
+// for an operator CA bundle that ADDS to them, never one that replaces them.
+func SystemPoolWith(pem []byte) (*x509.CertPool, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, ErrNoCertificate
+	}
+	return pool, nil
+}
+
 // CA is the parsed internal CA.
 type CA struct {
 	cert    *x509.Certificate

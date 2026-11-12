@@ -134,12 +134,15 @@ export function Switch({
   disabled,
   /** The switch's accessible name — the field's own label, never new copy. */
   label,
+  describedBy,
   className,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   disabled?: boolean;
   label: string;
+  /** The id of the element holding the sentence that says what the switch does. */
+  describedBy?: string;
   className?: string;
 }) {
   return (
@@ -148,6 +151,7 @@ export function Switch({
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      aria-describedby={describedBy}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(

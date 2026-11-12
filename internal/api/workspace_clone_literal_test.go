@@ -27,6 +27,16 @@ func cloneLiteralWorkspace(owner string, approved ...string) types.Workspace {
 	}
 }
 
+// cloneLiteralRepos is every repository cloneLiteralWorkspace carries, selected onto a run's spec: a
+// run adds a workspace's clone host only for a repository it clones (runSelectedCloneEgress).
+func cloneLiteralRepos() []types.WorkspaceRepo {
+	var out []types.WorkspaceRepo
+	for _, src := range cloneLiteralWorkspace("").Sources {
+		out = append(out, types.WorkspaceRepo{Repo: src.Source})
+	}
+	return out
+}
+
 func TestRunCloneEgress(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -56,7 +66,7 @@ func TestRunCloneEgress(t *testing.T) {
 	// The run's own spec is not authority: with nothing trusted, a spec that already names the address
 	// (as typed, or in another spelling of it) gains nothing from the clone lane.
 	for _, held := range []string{"10.0.0.5", "::ffff:10.0.0.5"} {
-		spec := types.RunPolicySpec{AllowedDomains: []string{held}}
+		spec := types.RunPolicySpec{AllowedDomains: []string{held}, WorkspaceRepos: cloneLiteralRepos()}
 		derived := deriveRunEgress(&spec, []types.Workspace{cloneLiteralWorkspace(govMemberSub)}, "", types.SiteConfig{}, nil, nil)
 		for _, d := range derived {
 			if d.kind == derivedWorkspaceClone && slices.Contains(d.added, "10.0.0.5") {
@@ -138,19 +148,19 @@ func TestWorkspaceCloneHost_DispatchUnionAndPostureAreBounded(t *testing.T) {
 		trusted []string
 		want    bool
 	}{{nil, false}, {[]string{"10.0.0.5:8443"}, false}, {[]string{"10.0.0.5"}, true}} {
-		dispatched := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+		dispatched := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, WorkspaceRepos: cloneLiteralRepos()}
 		newComponentFixture(t).srv.unionRunEgress(t.Context(), uuid.New(), &dispatched, grantWiring{}, []types.Workspace{ws}, "", types.SiteConfig{}, nil, runComponents{}, tc.trusted)
 		if slices.Contains(dispatched.AllowedDomains, "10.0.0.5") != tc.want || !slices.Contains(dispatched.AllowedDomains, "git.example") {
 			t.Errorf("trusted %q: dispatched = %q, want 10.0.0.5 = %v", tc.trusted, dispatched.AllowedDomains, tc.want)
 		}
-		posture := autonomyPostureSpec(types.RunPolicySpec{}, []types.Workspace{ws}, "", types.SiteConfig{}, adoEntraUngraded(), bedrockCredUngraded(), tc.trusted)
+		posture := autonomyPostureSpec(types.RunPolicySpec{WorkspaceRepos: cloneLiteralRepos()}, []types.Workspace{ws}, "", types.SiteConfig{}, adoEntraUngraded(), bedrockCredUngraded(), tc.trusted)
 		if slices.Contains(posture.AllowedDomains, "10.0.0.5") != tc.want {
 			t.Errorf("trusted %q: posture = %q, want 10.0.0.5 = %v", tc.trusted, posture.AllowedDomains, tc.want)
 		}
 	}
 	// The run's own spec is not authority: one that names the address in another spelling does not
 	// let either union add the bare clone host.
-	own := types.RunPolicySpec{AllowedDomains: []string{"::ffff:10.0.0.5"}}
+	own := types.RunPolicySpec{AllowedDomains: []string{"::ffff:10.0.0.5"}, WorkspaceRepos: cloneLiteralRepos()}
 	dispatched := own.Clone()
 	newComponentFixture(t).srv.unionRunEgress(t.Context(), uuid.New(), &dispatched, grantWiring{}, []types.Workspace{ws}, "", types.SiteConfig{}, nil, runComponents{}, nil)
 	posture := autonomyPostureSpec(own, []types.Workspace{ws}, "", types.SiteConfig{}, adoEntraUngraded(), bedrockCredUngraded(), nil)

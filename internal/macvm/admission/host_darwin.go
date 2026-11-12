@@ -66,6 +66,18 @@ func (darwinHost) FreeDiskBytes(path string) (int64, error) {
 	return int64(st.Bavail) * int64(st.Bsize), nil
 }
 
+var _ argsReader = darwinHost{}
+
+// Args reads pid's argv from kern.procargs2, which the kernel gives a non-root caller only for its own
+// user's processes.
+func (darwinHost) Args(pid int) ([]string, error) {
+	b, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		return nil, err
+	}
+	return parseProcArgs2(b)
+}
+
 func (darwinHost) Processes() ([]Proc, error) {
 	kps, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {

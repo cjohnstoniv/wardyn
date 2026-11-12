@@ -179,9 +179,11 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
 	}
 	now := s.cfg.Now().UTC()
+	noImage := "" // a run Wardyn launches itself names no image: the digest rule passes it at revive as at create
 	run := types.AgentRun{
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: stepRunAgent, Task: task,
+		Agent: stepRunAgent, Task: task, ImageInput: &noImage,
+		ImageAdmission:   &types.ImageAdmissionVerdict{Origin: types.ImageOriginWardyn}, // insert-only: the record revive reads
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned, HumanAuthor: requestSponsor(ctx, actor),
 	}

@@ -28,15 +28,24 @@ export interface GovernanceChange {
   decided_by?: string;
   decided_at?: string;
   reason?: string;
+  // The proposer's reason and ticket (PUT /governance/changes/{id}/note); absent when none was written.
+  // Free text: render it as text, never a link.
+  note?: GovernanceChangeNote;
   // GET /governance/changes/{id}: who could decide it, the proposer left out (changeApprover,
   // internal/api/governance_unit_admin.go).
   approvers?: GovernanceChangeApprover[];
 }
 
-// One who could decide a held change: any security admin, or a unit-admin grant (a person or a group)
-// on unit_name that governs every unit the change touches.
+// types.ChangeNote (internal/types/governance_change_note.go).
+export interface GovernanceChangeNote {
+  reason?: string;
+  ticket?: string;
+}
+
+// One who could decide a held change: any security admin, a unit-admin grant (a person or a group)
+// on unit_name that governs every unit the change touches, or, for a request, anyone in the group name names.
 export interface GovernanceChangeApprover {
-  kind: "security" | "unit_admin";
+  kind: "security" | "unit_admin" | "group";
   name?: string;
   unit_name?: string;
   subject_type?: "user" | "group";

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { test, expect, sql, consoleAPI, gotoConsole, navToRoute, ADMIN_TOKEN } from "./fixtures";
 import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
@@ -88,23 +88,25 @@ test.describe("Desktop sign-ins (#2972)", () => {
     const desk = await openVMRun(page, id);
 
     // State 1: Ready, the pause beside Open desktop, the memory note last.
-    await expect(desk.getByText(DESKTOP.ready, { exact: true })).toBeVisible();
+    // The chips are in the tile's header, which holds the region.
+    const tile = (d: Locator) => d.locator("xpath=ancestor::section[1]");
+    await expect(tile(desk).getByText(DESKTOP.ready, { exact: true })).toBeVisible();
     await expect(desk.getByRole("button", { name: "Open desktop" })).toBeVisible();
     await expect(desk.getByText(DESKTOP.signInsNote, { exact: true })).toBeVisible();
     await desk.getByRole("button", { name: "Pause the agent to sign in" }).click();
 
     // State 2: Agent paused, the disclosure verbatim, Resume in the pause's place. A reload reads the
     // server's own row: the pause is the run's state, not the tab's.
-    await expect(desk.getByText("Agent paused", { exact: true })).toBeVisible();
+    await expect(tile(desk).getByText("Agent paused", { exact: true })).toBeVisible();
     await expect(desk.getByText("The agent is paused while you sign in. Once you resume it, it can use what you signed into.", { exact: true })).toBeVisible();
     await page.reload();
     const again = page.getByRole("region", { name: DESKTOP.title });
     await again.scrollIntoViewIfNeeded();
-    await expect(again.getByText(DESKTOP.agentPaused, { exact: true })).toBeVisible();
+    await expect(tile(again).getByText(DESKTOP.agentPaused, { exact: true })).toBeVisible();
     await expect(again.getByRole("button", { name: DESKTOP.pauseToSignIn })).toHaveCount(0);
     await again.getByRole("button", { name: "Resume the agent" }).click();
 
-    await expect(again.getByText(DESKTOP.ready, { exact: true })).toBeVisible();
+    await expect(tile(again).getByText(DESKTOP.ready, { exact: true })).toBeVisible();
     await expect(again.getByText(DESKTOP.pausedNote)).toHaveCount(0);
     await expect(again.getByRole("button", { name: DESKTOP.pauseToSignIn })).toBeVisible();
     expect(seen).toEqual(["pause", "resume"]);

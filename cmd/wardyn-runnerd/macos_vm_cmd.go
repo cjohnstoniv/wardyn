@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,7 +32,7 @@ import (
 // newMacOSVMCommand is `wardyn-runnerd macos-vm`: this Mac's macOS VM state, its base's preparation, and
 // the base's removal.
 func newMacOSVMCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "macos-vm", Short: "Show, prepare or remove this Mac's macOS VM base", Args: cobra.NoArgs}
+	cmd := &cobra.Command{Use: "macos-vm", Short: "Show, prepare, update or remove this Mac's macOS VM base", Args: cobra.NoArgs}
 	open := func(cmd *cobra.Command) (*macOSVMs, string, error) {
 		cfg, err := serveConfig(cmd, "")
 		if err != nil {
@@ -55,7 +57,7 @@ func newMacOSVMCommand() *cobra.Command {
 			return nil, "", err
 		}
 		m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), version: version.String(), uid: os.Getuid(),
-			host: admission.SystemHost(), owner: fileOwner, limitsFile: macOSVMLimitsFile(stateDir)})
+			host: admission.SystemHost(), owner: fileOwner, limitsFile: macOSVMLimitsFile(stateDir), settings: cfg.macOSVMSettings()})
 		if m.helper, err = macVMHelperPath(); err != nil {
 			return nil, "", err
 		}
@@ -144,7 +146,21 @@ func newMacOSVMCommand() *cobra.Command {
 		}
 		return m.editBase(cmd.Context(), cmd.OutOrStdout(), runnerID)
 	}}
-	cmd.AddCommand(status, prepare, editBase, remove)
+	updateTools := &cobra.Command{Use: "update-tools", Short: "Start a tools update of this Mac's macOS base now (it continues in the background)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if err := checkServingHelper(); err != nil {
+			return err
+		}
+		m, _, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		if err := m.updateTools(cmd.Context()); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Updating this Mac's macOS base tools in the background; progress is in %s and in `wardyn-runnerd macos-vm status`.\n", filepath.Join(m.layout.Root, toolsUpdateLog))
+		return nil
+	}}
+	cmd.AddCommand(status, prepare, updateTools, editBase, remove, newMacOSVMMachinesCommand(open))
 	return cmd
 }
 
@@ -224,15 +240,22 @@ type macOSVMStatus struct {
 	Identity      string   `json:"identity"`
 	HeldDiskBytes int64    `json:"held_disk_bytes"` // disk held for ended logins' VMs
 	Leaked        int      `json:"leaked"`          // framework slots held until a restart
-	ToolsDial     string   `json:"tools_dial"`      // how the last run boot's tools-port dial ended, "" before one
-	Error         string   `json:"error"`
-	Failure       string   `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
+	ToolsDial     string   `json:"tools_dial"`      // how the newest tools-port dial ended, "" before one
+	// ToolsDialRead says where ToolsDial was read from and when, and any log that could not be read to its end.
+	ToolsDialRead string `json:"tools_dial_read,omitempty"`
+	// ToolsUpdateWaiting: a tools update is paused until the Mac is on AC power.
+	ToolsUpdateWaiting bool   `json:"tools_update_waiting_for_ac,omitempty"`
+	Error              string `json:"error"`
+	Failure            string `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
 	// Bases are the Mac's other bases (macos_vm_bases_dir), with a failed one's reason.
 	Bases []runnerwire.MacVMDerivedBase `json:"bases,omitempty"`
+	// Kept is the kept machines this Mac holds and the disk they may take (`macos-vm machines` lists them).
+	Kept *macOSVMKeptStatus `json:"kept,omitempty"`
 
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
 	withheld                                 []string // selftestWithheld's lines, for a ready base
+	editRead                                 []string // the last edit's recheck read (editReadLines), for a ready base that has one
 	// byHand: the helper's probe says this Mac has no guest provisioning, so its prepare needs setup by hand.
 	byHand bool
 }
@@ -257,6 +280,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		st.PreparedAt, st.HostOS = c.Base.CreatedAt, macProductVersion()
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
 		st.withheld = selftestWithheld(m.layout.BaseDir(0))
+		st.editRead = m.editReadLines()
 	}
 	if ev, ok, _, _ := lastHelperLines(m.layout.PrepareLog()); ok {
 		st.Phase = ev.Phase
@@ -265,7 +289,8 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	if p := setupCodeWaiting(m.layout.Root); p != "" && !editsCode(m.layout.Root) {
 		st.setupCode, st.Phase = p, "setup_by_hand"
 	}
-	st.ToolsDial = lastToolsDial(m.layout.Root)
+	st.ToolsDial, st.ToolsDialRead = lastToolsDial(m.layout.Root)
+	st.ToolsUpdateWaiting = toolsUpdateWaiting(m.layout.Root)
 	counted, err := m.ledger.Counted()
 	if err != nil {
 		return st, err
@@ -275,6 +300,9 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		return st, err
 	}
 	st.counted = len(counted)
+	if st.Kept, err = m.keptStatus(); err != nil {
+		return st, err
+	}
 	for _, e := range counted {
 		if e.Kind == admission.KindLeaked {
 			st.Leaked++
@@ -286,8 +314,31 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	return st, nil
 }
 
-// statusNow is the clock the base's age is read against (tests replace it).
-var statusNow = time.Now
+// editReadLines are the status lines for what the last passing edit's recheck read in its boot: each
+// certificate and Full Disk Access, with the time that boot read them. A read that failed says it could
+// not be read, never trusted or allowed. None when the base has no edit record, or one that predates the
+// read.
+func (m *macOSVMs) editReadLines() []string {
+	man, err := macvm.ReadManifest(m.layout.BaseDir(0))
+	if err != nil {
+		return nil
+	}
+	rec, ok := macvm.ReadEditRecord(m.layout.BaseDir(0), man)
+	if !ok || rec.ReadAt.IsZero() {
+		return nil
+	}
+	when := rec.ReadAt.Local().Format("2 Jan 15:04")
+	var lines []string
+	if len(rec.Certs) > 0 {
+		var certs []string
+		for _, name := range slices.Sorted(maps.Keys(rec.Certs)) {
+			state := map[string]string{macvm.ItemTrusted: "trusted", macvm.ItemNotTrusted: "not trusted"}[rec.Certs[name]]
+			certs = append(certs, name+" "+cmp.Or(state, "could not be read"))
+		}
+		lines = append(lines, fmt.Sprintf("certificates, read at the last edit (%s): %s", when, strings.Join(certs, ", ")))
+	}
+	return append(lines, fmt.Sprintf("Full Disk Access for the guest agent, read at the last edit (%s): %s", when, cmp.Or(rec.FullDiskAccess, "could not be read")))
+}
 
 // writeText prints the status for a person.
 func (st macOSVMStatus) writeText(out io.Writer) {
@@ -320,6 +371,15 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		for _, l := range st.withheld {
 			fmt.Fprintln(out, l)
 		}
+		for _, l := range st.editRead {
+			fmt.Fprintln(out, l)
+		}
+	}
+	if st.ToolsUpdateWaiting {
+		fmt.Fprintln(out, toolsUpdateWaitingLine)
+	}
+	if st.Kept != nil {
+		st.Kept.writeText(out)
 	}
 	for _, b := range st.Bases {
 		fmt.Fprintf(out, "other base %s: %s", b.Name, b.State)
@@ -332,9 +392,10 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		fmt.Fprintf(out, "thermal: %s\n", st.Thermal)
 	}
 	if st.ToolsDial != "" {
-		fmt.Fprintf(out, "tools_dial: %s\n", st.ToolsDial)
+		fmt.Fprintf(out, "tools_dial: %s (read from %s)\n", st.ToolsDial, st.ToolsDialRead)
 	}
 	fmt.Fprintf(out, "macOS VMs on this Mac (every login): %d; this runner offers %d at once\n", st.counted, st.Max)
+	fmt.Fprintln(out, "That number is this Mac's own sum (Apple's cap, memory, free disk). It does not read the organisation's limits (Runs at once, the CPU, memory and disk totals, other runs' reservations), which can hold fewer.")
 	if st.Leaked > 0 {
 		fmt.Fprintf(out, "VM slots macOS holds until this Mac restarts: %d\n", st.Leaked)
 	}
@@ -351,27 +412,68 @@ const macOSVMSetupWindow = "Wardyn: set up this macOS VM"
 // dial of the tools port ended (docker.MacVMConfig.ToolsDialFile).
 const runToolsDialFile = "run-tools-dial"
 
-// lastToolsDial is how the newest tools-port dial ended, when it is one of the five classes, else "". The
-// candidates are the run boot's record and the last one prepare logged (a prepare's stage 2 boots the guest
-// too; its event carries when it was reported), and the later of the two wins. A prepare does not rewrite a
-// run boot's record, so reading that alone kept a failure from before a prepare that reached ready.
-func lastToolsDial(root string) string {
-	var class string
-	var at time.Time
-	b, err := os.ReadFile(filepath.Join(root, runToolsDialFile))
-	if s := strings.TrimSpace(string(b)); err == nil && macvm.ValidToolsDial(s) {
-		class = s
-		if fi, err := os.Stat(filepath.Join(root, runToolsDialFile)); err == nil {
-			at = fi.ModTime()
+// lastToolsDial is how the newest tools-port dial ended, when it is one of the five classes, else "", and
+// where it was read from (read). The candidates are the run boot's record, the last dial prepare logged and
+// the last one a tools update logged (both stage 2 boots reach the guest agent); the latest of the three
+// wins. A prepare or an update does not rewrite a run boot's record, so reading that alone kept a failure
+// from before a tools update that reached ready. A tools update stamps its dial (macvm.PrepareEvent.ToolsDialAt);
+// an event from a helper that did not has no clock of its own, so its time is when its log was last written, which
+// read says. A log that could not be read to its end is named, since a later dial may sit past the stop.
+func lastToolsDial(root string) (class, read string) {
+	type candidate struct {
+		class, source string
+		at            time.Time
+		logTime       bool
+	}
+	var best candidate
+	var unread []string
+	if b, err := os.ReadFile(filepath.Join(root, runToolsDialFile)); err == nil {
+		if s := strings.TrimSpace(string(b)); macvm.ValidToolsDial(s) {
+			best = candidate{class: s, source: "the last run boot's record"}
+			if fi, err := os.Stat(filepath.Join(root, runToolsDialFile)); err == nil {
+				best.at = fi.ModTime()
+			}
 		}
 	}
-	if pc, pat, err := lastPrepareToolsDial(macvm.Layout{Root: root}.PrepareLog()); err == nil && pc != "" && pat.After(at) {
-		class = pc
+	for _, l := range []struct{ path, source string }{
+		{macvm.Layout{Root: root}.PrepareLog(), "the prepare log"},
+		{filepath.Join(root, toolsUpdateLog), "the tools update log"},
+	} {
+		pc, pat, err := lastPrepareToolsDial(l.path)
+		if err != nil {
+			unread = append(unread, l.source)
+			continue
+		}
+		if pc == "" {
+			continue
+		}
+		c := candidate{class: pc, source: l.source, at: pat}
+		if pat.UnixNano() == 0 {
+			fi, err := os.Stat(l.path)
+			if err != nil {
+				continue
+			}
+			c.at, c.logTime = fi.ModTime(), true
+		}
+		if c.at.After(best.at) {
+			best = c
+		}
 	}
-	if macvm.ValidToolsDial(class) {
-		return class
+	if !macvm.ValidToolsDial(best.class) {
+		return "", ""
 	}
-	return ""
+	read = best.source
+	if !best.at.IsZero() {
+		verb := "reported "
+		if best.logTime {
+			verb = "last written "
+		}
+		read += ", " + verb + best.at.Local().Format("2006-01-02 15:04 MST")
+	}
+	for _, u := range unread {
+		read += "; " + u + " could not be read to its end, so a later dial may be missing"
+	}
+	return best.class, read
 }
 
 // editsCode: the one-time code file at root is an edit's, not setup by hand's. An edit writes its log
@@ -385,17 +487,38 @@ func editsCode(root string) bool {
 	return err != nil || el.ModTime().After(pl.ModTime())
 }
 
-// macOSVMDoctorStages is doctor's macOS VM stage: only while macOS waits for setup by hand, not during an
-// edit (editsCode), it names the file that holds the one-time code, never the code.
-func macOSVMDoctorStages() []doctor.Stage {
+// macOSVMDoctorStages is doctor's macOS VM stages. While macOS waits for setup by hand, not during an edit
+// (editsCode), one names the file that holds the one-time code, never the code. With a base, guest-agent says
+// how the last tools update signed the guest agent, and folder-shares whether a folder can be shared into a
+// run (roots and their source are the drive roots in effect).
+func macOSVMDoctorStages(roots []string, rootsSource string) []doctor.Stage {
 	root, err := macvm.DefaultRoot()
 	if err != nil {
 		return nil
 	}
+	var stages []doctor.Stage
 	if p := setupCodeWaiting(root); p != "" && !editsCode(root) {
-		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p)}
+		stages = append(stages, doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p))
 	}
-	return nil
+	base := macvm.Layout{Root: root}.BaseDir(0)
+	man, err := macvm.ReadManifest(base)
+	if err != nil {
+		return stages
+	}
+	tools, _ := macvm.ReadToolsRecord(base)
+	var fda string
+	if tools.Guest != nil {
+		fda = tools.Guest.FullDiskAccess
+		if st, ok := fileVaultStage(tools.Guest.FileVault); ok {
+			stages = append(stages, st)
+		}
+	}
+	var readAt time.Time
+	if rec, ok := macvm.ReadEditRecord(base, man); ok && rec.FullDiskAccess == fda {
+		readAt = rec.ReadAt
+	}
+	stages = append(stages, guestAgentStage(tools, append(guestAgentWarnings(tools), toolsUpdateWaitWarnings(root)...)))
+	return append(stages, folderSharesStage(roots, rootsSource, fda, tools.AgentSignature == macvm.AgentSignedAdHoc, readAt, tools.TriedAt))
 }
 
 // daysAgo is "1 day ago" for one and "<n> days ago" for every other count.

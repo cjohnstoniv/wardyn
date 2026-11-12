@@ -31,7 +31,9 @@ const auditExportPageSize = 1000
 // response is already decided and the handler must simply return — either
 // auditScope wrote the 400 for a malformed run_id, or the caller's own
 // writeEmpty ran for the member collapse. scope is nil for the global feed and
-// &runID for one run's trail.
+// &runID for one run's trail. unit is non-nil for a unit admin served through
+// their subtrees (unitAuditScopeFor): with a nil scope it is their units' feed,
+// never the global one, and with &runID that run's trail in the unit view.
 //
 // The ORDER here is load-bearing and is the one both handlers spelled: the
 // run_id is parsed BEFORE the role is consulted, so a malformed run_id is a 400
@@ -49,20 +51,22 @@ const auditExportPageSize = 1000
 // verifying its hash chain) is the security admin's job description — a tier
 // that governs approvals and permissions without being able to read what
 // happened is not a security tier at all.
-func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty func()) (*uuid.UUID, bool) {
+func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty func()) (*uuid.UUID, *unitAuditScope, bool) {
 	raw := r.URL.Query().Get("run_id")
 	var runID uuid.UUID
 	if raw != "" {
 		var err error
 		if runID, err = uuid.Parse(raw); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidRunID, "invalid run_id")
-			return nil, false
+			return nil, nil, false
 		}
 	}
 	if !s.isSecurityOperator(r.Context()) {
+		var run types.AgentRun
 		owned := raw != ""
 		if owned {
-			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
+			var gerr error
+			run, gerr = s.cfg.Store.GetRun(r.Context(), runID)
 			if gerr != nil && !errors.Is(gerr, store.ErrNotFound) {
 				// An ownership read that cannot be answered is not "not yours":
 				// the empty 200 below would present an outage as a run with no
@@ -70,19 +74,26 @@ func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty f
 				slog.ErrorContext(r.Context(), "wardyn: audit scope could not read the run",
 					slog.String("run_id", runID.String()), slog.Any("err", gerr))
 				writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditScopeUnavailable, "the audit scope could not be determined; try again")
-				return nil, false
+				return nil, nil, false
 			}
 			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
 		}
 		if !owned {
-			writeEmpty()
-			return nil, false
+			unit := s.unitAuditScopeFor(r, raw != "", run)
+			if unit == nil {
+				writeEmpty()
+				return nil, nil, false
+			}
+			if raw == "" {
+				return nil, unit, true
+			}
+			return &runID, unit, true
 		}
 	}
 	if raw == "" {
-		return nil, true
+		return nil, nil, true
 	}
-	return &runID, true
+	return &runID, nil, true
 }
 
 // Audit-feed default page sizes. Unlike the list endpoints (defaultListLimit),
@@ -124,11 +135,18 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	scope, ok := s.auditScope(w, r, func() { writeJSON(w, http.StatusOK, []types.AuditEvent{}) })
-	if !ok {
+	scope, unit, ok := s.auditScope(w, r, func() { writeJSON(w, http.StatusOK, []types.AuditEvent{}) })
+	if !ok || (unit != nil && !unitTargetFilterOK(w, filter)) {
+		return
+	}
+	if unit != nil && scope == nil {
+		s.serveUnitAuditFeed(w, r, unit, filter)
 		return
 	}
 	served := s.auditRowsFor(r, scope)
+	if unit != nil {
+		served = s.unitAuditRows(r, unit)
+	}
 	// The historical caps differ by shape: a run's whole trail is worth more
 	// rows than the org-wide feed's first screen.
 	limit := auditGlobalDefaultLimit
@@ -271,7 +289,9 @@ func servedPage(served func([]types.AuditEvent, error) ([]types.AuditEvent, erro
 //
 // A member is scoped exactly as in handleQueryAudit: only ?run_id= of a run they
 // created, and an unowned/absent run_id yields an empty (200, zero-line) export —
-// the same no-existence-oracle collapse a collection endpoint uses.
+// the same no-existence-oracle collapse a collection endpoint uses. A unit admin
+// gets that same empty export for every request that is not their own run: they read
+// the unit view on GET /audit and have no export of the runs they govern.
 //
 // Requires a Pager backend (store.PG is one); a non-Pager store (test fakes with
 // no pager) gets 501 rather than a silently-capped read.
@@ -301,8 +321,13 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	// Same gate as handleQueryAudit by construction, not by copy — see the
 	// member paragraph above, which auditScope is now the single home of.
-	scope, ok := s.auditScope(w, r, func() { w.Header().Set("Content-Type", "application/x-ndjson") })
+	writeEmpty := func() { w.Header().Set("Content-Type", "application/x-ndjson") }
+	scope, unit, ok := s.auditScope(w, r, writeEmpty)
 	if !ok {
+		return
+	}
+	if unit != nil {
+		writeEmpty() // a unit admin reads the unit view on GET /audit; the export is not theirs, and answers as a member's does
 		return
 	}
 	served := s.auditRowsFor(r, scope)
@@ -311,17 +336,19 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	offset := 0    // rows read so far; the OFFSET of a store without keyset paging, the log's position otherwise
 	var after int64
 	keyset, _ := pager.(store.AuditKeysetPager)
-	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
-	for {
-		var page []types.AuditEvent
-		var err error
+	readPage := func(after int64, offset int) ([]types.AuditEvent, int64, error) {
 		if keyset != nil {
 			// By position, not OFFSET: rows written while the export runs cannot move a later page.
-			page, after, err = keyset.QueryAuditEventsFilteredAfter(r.Context(), scope, filter, after, auditExportPageSize)
-		} else {
-			page, err = pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
-				store.Page{Limit: auditExportPageSize, Offset: offset})
+			return keyset.QueryAuditEventsFilteredAfter(r.Context(), scope, filter, after, auditExportPageSize)
 		}
+		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
+			store.Page{Limit: auditExportPageSize, Offset: offset})
+		return page, after, err
+	}
+	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
+	for {
+		page, next, err := readPage(after, offset)
+		after = next
 		if err != nil {
 			fail("page read", err)
 			return

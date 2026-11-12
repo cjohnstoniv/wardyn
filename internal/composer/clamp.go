@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -90,6 +91,8 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
 	warns = clampToolRules(&out, ceiling, warns)
+	// Host rules: the ceiling's sets appended to the proposal's, never merged (types.AppendHostRuleSets).
+	out.HostRules = types.AppendHostRuleSets(out.HostRules, ceiling.HostRules)
 
 	// Allowed domains: intersect to the ceiling's allowlist unless it allows all. An empty ceiling
 	// allowlist means default-deny — don't skip this block when empty, or the strictest posture leaks.
@@ -177,8 +180,48 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 	}
 
 	warns = clampPushRules(&out, ceiling, warns)
+	warns = clampDataOut(&out, ceiling, warns)
+	warns = clampGitHubCapabilities(&out, ceiling, warns)
 
 	return out, warns
+}
+
+// clampGitHubCapabilities bounds github_capabilities by the ceiling's list: the proposal keeps only
+// the entries the ceiling lists, in its own order, and a proposal that names none, or keeps none,
+// takes the ceiling's list. Nothing on GitHub reads the list as a grant (nothing widens a run to it),
+// so taking the ceiling's list only narrows: pushes to github.com are withheld without code_write
+// and the GitHub CLI keeps only what it lists. A ceiling that names no list bounds nothing here.
+//
+// azure_devops_capabilities is not bounded here: dispatch bounds it, where the run's Azure DevOps
+// row is known (see the clamp coverage guard's exemptions).
+func clampGitHubCapabilities(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if len(ceiling.GitHubCapabilities) == 0 {
+		return warns
+	}
+	var kept, dropped []ghscope.Capability
+	for _, c := range ghscope.ExpandPR(out.GitHubCapabilities) {
+		if ghscope.Has(ceiling.GitHubCapabilities, c) {
+			kept = append(kept, c)
+		} else {
+			dropped = append(dropped, c)
+		}
+	}
+	if len(dropped) > 0 {
+		names := make([]string, len(dropped))
+		for i, c := range dropped {
+			names[i] = string(c)
+		}
+		w := "github_capabilities: dropped " + strings.Join(names, ",") + ", not in the operator's list"
+		if len(kept) == 0 {
+			w += "; the run takes the operator's list"
+		}
+		warns = append(warns, w)
+	}
+	if len(kept) == 0 {
+		kept = slices.Clone(ceiling.GitHubCapabilities)
+	}
+	out.GitHubCapabilities = kept
+	return warns
 }
 
 // clampResources is Clamp's resource step, split out to keep Clamp readable.
@@ -250,7 +293,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 // clampPushRules only narrows push_rules: a silent ceiling passes the proposal through unclamped;
 // when the ceiling sets one, an unset proposal inherits it wholesale, a set proposal gets the
 // ceiling's deny_paths unioned in (see unionPaths), max_inspect_pack_mib and max_file_size_mib capped
-// (a proposal can neither raise a ceiling's limit nor turn it off with 0), and deny_new_executables kept on.
+// (a proposal can neither raise a ceiling's limit nor turn it off with 0), deny_new_executables and deny_all kept on.
 //
 // IsSet treats an all-zero-but-non-nil PushRulesSpec (push_rules: {} on the wire) as "no opinion"
 // like nil, so an empty ceiling doesn't get inherited wholesale and false-warn.
@@ -282,6 +325,7 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 		merged.MaxFileSizeMiB = ceil
 	}
 	merged.DenyNewExecutables = merged.DenyNewExecutables || ceiling.PushRules.DenyNewExecutables
+	merged.DenyAll = merged.DenyAll || ceiling.PushRules.DenyAll
 	if ceil := ceiling.PushRules.HoldSeconds; ceil > 0 && (merged.HoldSeconds <= 0 || merged.HoldSeconds > ceil) {
 		merged.HoldSeconds = ceil // the shorter of two authored holds, silently: it widens nothing
 	}
@@ -317,6 +361,7 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	out.AllowedDomains = slices.Clone(s.AllowedDomains)
 	out.DeniedDomains = slices.Clone(s.DeniedDomains)
 	out.AllowedMethods = slices.Clone(s.AllowedMethods)
+	out.HostRules = types.CloneHostRuleSets(s.HostRules)
 	out.UIApps = slices.Clone(s.UIApps)
 	for i := range out.UIApps {
 		out.UIApps[i].Callers = slices.Clone(s.UIApps[i].Callers)
@@ -815,13 +860,16 @@ func clampMethods(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns [
 }
 
 // clampOperatorSwitches forces off boolean controls only an operator may widen: allow-all egress and
-// git_push_any_branch. Without this a member could disable push confinement by posting the field.
+// git_push_any_branch. Without this a member could disable push confinement by posting the field. It
+// also keeps refuse_ip_literals on where the ceiling sets it.
 // Split out of Clamp to keep its branch count under the gocyclo gate.
 func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
 	if out.AllowAllEgress && !ceiling.AllowAllEgress {
 		warns = append(warns, "allow_all_egress disabled: operator policy does not permit allow-all egress")
 		out.AllowAllEgress = false
 	}
+	// refuse_ip_literals: a ceiling that sets it keeps it on; a proposal may set it itself.
+	out.RefuseIPLiterals = out.RefuseIPLiterals || ceiling.RefuseIPLiterals
 	if out.GitPushAnyBranch && !ceiling.GitPushAnyBranch {
 		warns = append(warns, "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on")
 		out.GitPushAnyBranch = false
@@ -829,16 +877,9 @@ func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec
 	return warns
 }
 
-// toolStrictness orders the three effects so a clamp can take the stricter: allow < hold < deny.
-func toolStrictness(e types.ToolEffect) int {
-	switch e {
-	case types.ToolDeny:
-		return 2
-	case types.ToolHold:
-		return 1
-	}
-	return 0
-}
+// toolStrictness is types.ToolEffectStrictness, the one order every layer ranks tool effects by:
+// allow < hold < approve_each < deny, an effect it does not know ranked with deny.
+func toolStrictness(e types.ToolEffect) int { return types.ToolEffectStrictness(e) }
 
 // ceilingToolEffect mirrors proxy.Policy.ToolEffectFor's lookup order (exact rule, else "*" default,
 // else hold) so the clamp and enforcement agree.
@@ -907,13 +948,20 @@ func clampInnerWalls(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warn
 
 // clampDesktop blocks every desktop direction the ceiling blocks, its defaults included: a member may
 // block more, never open what the operator keeps shut. A proposal already within is left as written.
+// A proposal that sets no desktop takes a copy of the ceiling's, so it gets what the ceiling gives and
+// not the platform default; that asks for nothing narrower than the ceiling, so it is not warned.
 func clampDesktop(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if out.Desktop == nil && ceiling.Desktop != nil {
+		d := *ceiling.Desktop
+		out.Desktop = &d
+		return warns
+	}
 	if leqDesktop(out.Desktop, ceiling.Desktop) {
 		return warns
 	}
 	m := out.Desktop.Meet(ceiling.Desktop)
 	out.Desktop = &m
-	return append(warns, "desktop narrowed: operator policy blocks a direction the proposal allowed")
+	return append(warns, "desktop narrowed: operator policy is stricter (review or blocked) on a direction the proposal allowed")
 }
 
 // clampRecording raises a proposal's recording level to the ceiling's: a ceiling's level is a minimum,
@@ -935,4 +983,17 @@ func clampInnerWall(field, proposed, ceiling string, warns []string) (string, []
 		warns = append(warns, fmt.Sprintf("%s set to %q: operator policy chooses it", field, ceiling))
 	}
 	return ceiling, warns
+}
+
+// clampDataOut raises data_out to the ceiling's rule. A blocked result denies every push, a member's own
+// blocked included (which no limit follows).
+func clampDataOut(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if r := types.StricterTransfer(out.DataOut.DataOut(), ceiling.DataOut.DataOut()); r != out.DataOut.DataOut() {
+		warns = append(warns, fmt.Sprintf("data_out raised from %q to the ceiling's %q", out.DataOut.DataOut(), r))
+		out.DataOut = r
+	}
+	if out.DataOut.DataOut() == types.TransferBlocked {
+		out.PushRules = pushDenyAll(out.PushRules)
+	}
+	return warns
 }

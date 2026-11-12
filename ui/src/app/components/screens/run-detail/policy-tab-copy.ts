@@ -79,6 +79,15 @@ export const CHANGE_HEADING = {
   overlay: "Set by the policy you chose for this run",
 } as const;
 
+// The refuse_ip_literals switch (approved copy). It describes the setting, not the policy now in force: it applies only
+// under allow-all egress, and an address listed exactly in Allowed hosts is exempt. Off adds no restriction; it does
+// not allow anything.
+export const IP_LITERALS = {
+  label: "IP addresses",
+  on: "When allow-all egress is on, refuse connections to IP addresses unless they are listed exactly in Allowed hosts.",
+  off: "This setting adds no IP-address restriction.",
+} as const;
+
 // The field a change row is about, in the console's words: the middle column of a change group (T4-c, board R16).
 // The Summary's own section and row names are reused; a field this map lacks leaves its cell empty, never a wire
 // name. "Clipboard and files" is the board's word for the desktop directions.
@@ -86,6 +95,7 @@ export const FIELD_LABEL: Record<string, string> = {
   allowed_domains: "Allowed hosts",
   denied_domains: "Blocked hosts",
   allow_all_egress: "Network",
+  refuse_ip_literals: IP_LITERALS.label,
   first_use_approval: "Any other host",
   first_use_hold_seconds: "Any other host",
   allowed_methods: "Request types",
@@ -106,7 +116,7 @@ export const FIELD_LABEL: Record<string, string> = {
   "resources.disk_mib": "Limits",
 };
 
-export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls">;
+export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls" | "wall_preset">;
 
 // S-34 .. S-47: the Summary view.
 export const SUMMARY = {
@@ -179,6 +189,10 @@ export const SUMMARY = {
   // S-45
   off: "Off",
   on: "On",
+  // Traffic checks on a run whose model gateway checks prompts itself (gateway_identity.inspection).
+  onExcept: (providers: string) => `On, except prompts to ${providers}`,
+  leftTo: (providers: string, secrets: boolean) =>
+    `Your organisation has assigned these checks to ${providers}. ${secrets ? "Wardyn still checks them for the secret values the run holds." : "Wardyn does not check them."}`,
   // S-47
   none: "None",
 } as const;

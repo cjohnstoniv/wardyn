@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,6 +90,10 @@ func runGetCmd(client clientFn) *cobra.Command {
 			if detail := adoLaneDeclineDetail(cmd.Context(), client(), run.ID); detail != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nazure devops: %s\n", detail)
 			}
+			// Credentials whose hosts the run's policy did not allow exactly, or a wall denied, were withheld (run.ceiling.reassert, run.revive).
+			if line := withheldCredentialDetail(cmd.Context(), client(), run.ID); line != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", line)
+			}
 			// A FAILED run must not hide its reason on the default surface. Surface
 			// the failure reason from audit inline; fall back to a pointer so the
 			// user is never left with a bare "FAILED".
@@ -106,13 +112,17 @@ func runGetCmd(client clientFn) *cobra.Command {
 }
 
 // serviceLine is a service run's health as one line, "service: healthy · 3 restarts · checked 40s ago", and ""
-// for a run that is not a service. A service wardynd has not yet observed says so.
+// for a run that is not a service. A service wardynd has not yet observed says so. A service that opted in to
+// Wardyn's own check gets that reading on a second line (probeLine).
 func serviceLine(run types.AgentRun, now time.Time) string {
 	if run.Service == nil {
 		return ""
 	}
 	st := run.ServiceStatus
 	if st == nil {
+		if run.Service.ControlPlaneProbe() {
+			return "service: not checked yet\n" + probeLine(nil, now)
+		}
 		return "service: not checked yet"
 	}
 	health := string(st.Health)
@@ -123,7 +133,30 @@ func serviceLine(run types.AgentRun, now time.Time) string {
 	if st.Restarts == 1 {
 		restarts = "1 restart"
 	}
-	return fmt.Sprintf("service: %s \u00b7 %s \u00b7 checked %s ago", health, restarts, agoText(now.Sub(st.ObservedAt)))
+	line := fmt.Sprintf("service: %s \u00b7 %s \u00b7 checked %s ago", health, restarts, agoText(now.Sub(st.ObservedAt)))
+	if run.Service.ControlPlaneProbe() {
+		line += "\n" + probeLine(st.Probe, now)
+	}
+	return line
+}
+
+// probeLine is Wardyn's own check of a service that opted in to it, as the line under serviceLine's:
+// "wardyn's check: healthy (bad_status, HTTP 503) · 1 failed in a row · checked 40s ago".
+func probeLine(p *types.RunServiceProbe, now time.Time) string {
+	if p == nil {
+		return "wardyn's check: not checked yet"
+	}
+	health := string(p.Health)
+	switch {
+	case p.Reason != "" && p.HTTPStatus != 0:
+		health += fmt.Sprintf(" (%s, HTTP %d)", p.Reason, p.HTTPStatus)
+	case p.Reason != "":
+		health += " (" + p.Reason + ")"
+	}
+	if p.Failures > 0 {
+		health += fmt.Sprintf(" \u00b7 %d failed in a row", p.Failures)
+	}
+	return fmt.Sprintf("wardyn's check: %s \u00b7 checked %s ago", health, agoText(now.Sub(p.ObservedAt)))
 }
 
 // agoText is an elapsed time as the terminal says it: seconds, minutes, hours or days, rounded down.
@@ -155,6 +188,38 @@ func adoLaneDeclineDetail(ctx context.Context, c *sdk.Client, runID uuid.UUID) s
 		}
 	}
 	return ""
+}
+
+// withheldCredentialDetail is the line telling that credentials were withheld from the run, because its
+// policy does not allow their hosts exactly or a wall denies them: the hosts named by the dropped_injection_hosts of its
+// run.ceiling.reassert and run.revive rows, in the order first seen. "" when no row names a host or the
+// trail could not be read. Host names only; no credential value or grant name is read.
+func withheldCredentialDetail(ctx context.Context, c *sdk.Client, runID uuid.UUID) string {
+	var hosts []string
+	for _, action := range []string{"run.ceiling.reassert", "run.revive"} {
+		events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{ActionPrefix: action})
+		if err != nil {
+			continue
+		}
+		for _, e := range events {
+			var d struct {
+				Hosts []string `json:"dropped_injection_hosts"`
+			}
+			if e.Action != action || json.Unmarshal(e.Data, &d) != nil {
+				continue
+			}
+			for _, h := range d.Hosts {
+				if h != "" && !slices.Contains(hosts, h) {
+					hosts = append(hosts, h)
+				}
+			}
+		}
+	}
+	if len(hosts) == 0 {
+		return ""
+	}
+	return "credentials withheld for " + strings.Join(hosts, ", ") +
+		": the run's policy does not allow these hosts exactly, or a wall denies them; the run's run.ceiling.reassert and run.revive audit rows say which"
 }
 
 func runKillCmd(client clientFn) *cobra.Command {

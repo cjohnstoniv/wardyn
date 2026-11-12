@@ -9,6 +9,7 @@ import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import type { AppliedResources } from "../../../../lib/types/new-run-contract";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import type { UngovernedNotice } from "../../../../lib/types/policy-preview";
 import { Notices } from "./notices";
 
 afterEach(cleanup);
@@ -183,6 +184,44 @@ describe("the policy under a drop warning", () => {
       render(<Notices askedByYou={false} warnings={warn} />);
       expect(screen.getByText("Your walls narrowed allowed hosts.")).toBeInTheDocument();
       expect(screen.getByText("Your walls narrowed blocked hosts.")).toBeInTheDocument();
+    });
+  });
+
+  describe("the ungoverned admin run line", () => {
+    const text = (u: UngovernedNotice) => {
+      const { container } = render(<Notices askedByYou={false} ungoverned={u} />);
+      return container.textContent;
+    };
+    it("names the unit and joins at most three limits", () => {
+      expect(text({ unit: "Contractors", limits: ["2 CPUs", "4 GiB of memory", "3 runs at once"] })).toBe(
+        "This admin run bypasses member limits. As a member, Contractors would limit this run to 2 CPUs, 4 GiB of memory, and 3 runs at once.",
+      );
+    });
+    it("joins one and two limits without a comma", () => {
+      cleanup();
+      expect(text({ unit: "U", limits: ["no web apps"] })).toContain("to no web apps.");
+      cleanup();
+      expect(text({ unit: "U", limits: ["2 CPUs", "no web apps"] })).toContain("to 2 CPUs and no web apps.");
+    });
+    it("says and more only when the server reports further limits", () => {
+      expect(text({ unit: "U", limits: ["a", "b", "c"] })).not.toContain("and more");
+      cleanup();
+      expect(text({ unit: "U", limits: ["a", "b", "c"], more: true })).toContain("to a, b, c, and more.");
+    });
+    it.each([
+      ["no person", { no_person: true }, NR_REVIEW.ADMIN_BYPASS_NO_PERSON],
+      ["no member profile", { no_unit: true }, NR_REVIEW.ADMIN_BYPASS_NO_PROFILE],
+      ["the comparison failed", { unavailable: true }, NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE],
+      ["a block with no unit", {}, NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE],
+      ["a unit with no headline limit", { unit: "U" }, NR_REVIEW.ADMIN_BYPASS_NO_LIMITS],
+    ])("says the whole sentence for %s, never a blank unit or 'no limits'", (_n, u, want) => {
+      const got = text(u);
+      expect(got).toBe(want);
+      expect(got).not.toMatch(/no limits|undefined|would limit this run to \./i);
+    });
+    it("draws nothing for a governed caller", () => {
+      const { container } = render(<Notices askedByYou={false} />);
+      expect(container).toBeEmptyDOMElement();
     });
   });
 });

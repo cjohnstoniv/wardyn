@@ -87,8 +87,8 @@ func githubCLIRepoRefusal(comps runComponents, req createRunRequest, spec types.
 // owner's repositories) whose scope sets api and carries the capabilities. The
 // door's grant lands on gw for dispatch. A refusal is written here; false
 // means the caller aborts the run.
-func (s *Server) persistGitHubCLIGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time,
-	legacyRepo string, wsRepos []types.WorkspaceRepo, comps runComponents, gw *grantWiring,
+func (s *Server) persistGitHubCLIGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time,
+	legacyRepo string, wsRepos []types.WorkspaceRepo, policyCaps []ghscope.Capability, comps runComponents, gw *grantWiring,
 ) bool {
 	gw.augmentGitBrokerGrants(legacyRepo, wsRepos)
 	caps, attached := comps.githubCLICapabilities()
@@ -100,6 +100,40 @@ func (s *Server) persistGitHubCLIGrants(ctx context.Context, w http.ResponseWrit
 	case len(gw.gitGrants) == 0:
 		return !runError(http.StatusUnprocessableEntity, reasonCLINoGitHubRepo, accessSentences[reasonCLINoGitHubRepo]).write(s, w, r)
 	}
+	// The run's own github_capabilities, where it names a list, narrow the rows' capabilities first:
+	// for a member that list is within their governance profile's (the clamp bounds it, and a run on
+	// the profile itself carries the profile's list). A list that shares nothing with the rows
+	// refuses the run, as a wall's does.
+	caps, policyCaps = ghscope.ExpandPR(caps), ghscope.ExpandPR(policyCaps)
+	if len(policyCaps) > 0 {
+		var within []ghscope.Capability
+		for _, c := range caps {
+			if ghscope.Has(policyCaps, c) {
+				within = append(within, c)
+			}
+		}
+		if len(within) == 0 {
+			return !runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
+				"This run's github_capabilities ("+wallsCapList(policyCaps)+") shares nothing with the GitHub CLI's ("+wallsCapList(caps)+
+					"), so the GitHub CLI would hold no capability. Name a capability the GitHub CLI holds, or launch without the GitHub CLI.").write(s, w, r)
+		}
+		caps = within
+	}
+	// The run owner's walls narrow the rows' capabilities here, before the door and its grants carry
+	// them: every token the broker mints for the door reads them from the grant's scope.
+	kept, refused := s.wallsGitHubCLICapabilities(ctx, run, caps)
+	if refused != nil {
+		return !runError(refused.status, refused.reason, refused.detail).write(s, w, r)
+	}
+	if kept != nil {
+		caps = kept
+	}
+	// The boundary's and the run's restrictions' GitHub cap bounds what is left, last, so nothing before it
+	// (the rows, the policy, the walls) widens past it.
+	caps, capRefused := s.cappedGitHubCLICapabilities(ctx, run, caps)
+	if capRefused != nil {
+		return !capRefused.write(s, w, r)
+	}
 	door := &proxy.GitHubAPIGrant{Capabilities: caps, Repos: slices.Sorted(maps.Keys(gw.gitGrants)), Grants: map[string]uuid.UUID{}}
 	byOwner := map[string][]string{}
 	for _, repo := range door.Repos {
@@ -109,7 +143,7 @@ func (s *Server) persistGitHubCLIGrants(ctx context.Context, w http.ResponseWrit
 	for _, owner := range slices.Sorted(maps.Keys(byOwner)) {
 		id := uuid.New()
 		scope := mustJSON(map[string]any{"repos": byOwner[owner], "api": true, "capabilities": caps})
-		if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{ID: id, RunID: runID, CreatedAt: now,
+		if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{ID: id, RunID: run.ID, CreatedAt: now,
 			Spec: types.GrantSpec{Kind: types.GrantGitHubToken, Scope: scope, TTLSeconds: 3600}}); err != nil {
 			return !runServerError("create grant", err).write(s, w, r)
 		}

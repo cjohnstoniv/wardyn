@@ -282,10 +282,10 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "diff -f FILE",
 		Short: "Show how the workloads in a file differ from the stored ones",
-		Long: "Read each workload through the organisation's door and compare it with the stored workload of the\n" +
-			"same name, as a unified diff of both written as YAML. Exits 0 when every workload is equal, 1 when\n" +
-			"any differs or is not stored yet, and 2 or more on an error, as `diff` and `kubectl diff` do.\n" +
-			"Writes nothing.",
+		Long: "Ask the server what an apply of each workload would do, and show it against the stored workload of\n" +
+			"the same name as a unified diff of both written as YAML. Exits 0 when every workload is equal, 1 when\n" +
+			"any differs or is not stored yet, and 2 or more on an error or a spec the apply would be refused, as\n" +
+			"`diff` and `kubectl diff` do. It checks every workload and names each one the apply would refuse. Writes nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			docs, err := readWorkloadDocs(cmd, file)
@@ -294,15 +294,25 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 			}
 			c := client()
 			differs := 0
+			warned := false
+			var refused []string
 			for _, d := range docs {
-				_, text, err := diffWorkload(cmd.Context(), cmd.ErrOrStderr(), c, d)
+				res, err := diffWorkload(cmd.Context(), cmd.ErrOrStderr(), &warned, c, d)
 				if err != nil {
 					return diffError(err)
 				}
-				if text != "" {
+				if res.differs {
 					differs++
-					fmt.Fprint(cmd.OutOrStdout(), text)
+					fmt.Fprint(cmd.OutOrStdout(), res.text)
 				}
+				if res.preview != nil {
+					if why := previewRefusal(*res.preview); why != "" {
+						refused = append(refused, fmt.Sprintf("workload/%s %s", d.Name, why))
+					}
+				}
+			}
+			if len(refused) > 0 {
+				return usageError(errors.New(strings.Join(refused, "; ")))
 			}
 			if differs > 0 {
 				return &exitError{code: 1, err: fmt.Errorf("%d workload(s) differ from the stored ones", differs)}
@@ -338,12 +348,12 @@ func usageExitsTwo(cmd *cobra.Command) {
 		}
 		return nil
 	}
-	cmd.PreRunE = func(c *cobra.Command, _ []string) error {
+	addPreRunE(cmd, func(c *cobra.Command, _ []string) error {
 		if err := c.ValidateRequiredFlags(); err != nil {
 			return usageError(err)
 		}
 		return nil
-	}
+	})
 }
 
 func workloadDeleteCmd(client clientFn) *cobra.Command {
@@ -372,56 +382,187 @@ func workloadDeleteCmd(client clientFn) *cobra.Command {
 	return cmd
 }
 
-// workloadDryRunReport is one workload's entry of `apply --dry-run --json`.
+// workloadDryRunReport is one workload's entry of `apply --dry-run --json`. Preview is the server's
+// whole answer, absent when the server is older than this CLI.
 type workloadDryRunReport struct {
-	Name      string              `json:"name"`
-	Differs   bool                `json:"differs"`
-	Diff      string              `json:"diff,omitempty"`
-	Preflight sdk.PreflightResult `json:"preflight"`
+	Name      string               `json:"name"`
+	Differs   bool                 `json:"differs"`
+	Diff      string               `json:"diff,omitempty"`
+	Preflight *sdk.PreflightResult `json:"preflight,omitempty"`
+	Preview   *sdk.WorkloadPreview `json:"preview,omitempty"`
 }
 
-// workloadDryRun is `apply --dry-run`: the diff, then the run request the apply would make, checked
-// by the preflight. Nothing is stored and nothing starts.
+// workloadDryRun is `apply --dry-run`: what the apply would do, and the setup checklist of the run it
+// would start. Nothing is stored and nothing starts. It exits 1 when an apply would be refused.
 func workloadDryRun(cmd *cobra.Command, c *sdk.Client, docs []sdk.WorkloadDocument, asJSON bool) error {
 	reports := make([]workloadDryRunReport, 0, len(docs))
+	w := cmd.OutOrStdout()
+	warned, refused := false, 0
 	for _, d := range docs {
-		norm, text, err := diffWorkload(cmd.Context(), cmd.ErrOrStderr(), c, d)
+		res, err := diffWorkload(cmd.Context(), cmd.ErrOrStderr(), &warned, c, d)
 		if err != nil {
 			return err
 		}
-		req, err := sdk.RunDocumentRequest(norm.Intent)
-		if err != nil {
-			return fmt.Errorf("workload/%s: %w", d.Name, err)
+		pv := res.preview
+		if pv != nil && previewRefusal(*pv) != "" {
+			refused++
 		}
-		req.Title, req.Description, req.RunIn = norm.Name, norm.Description, norm.RunIn
-		if asJSON {
-			pf, err := c.Preflight(cmd.Context(), req)
+		var pf *sdk.PreflightResult // nil when the preview carries none: --json then has no preflight entry
+		if pv != nil {
+			pf = pv.Launch.Preflight
+		}
+		if pv == nil {
+			req, err := sdk.RunDocumentRequest(res.norm.Intent)
 			if err != nil {
 				return fmt.Errorf("workload/%s: %w", d.Name, err)
 			}
-			reports = append(reports, workloadDryRunReport{Name: d.Name, Differs: text != "", Diff: text, Preflight: pf})
+			req.Title, req.Description, req.RunIn = res.norm.Name, res.norm.Description, res.norm.RunIn
+			got, err := c.Preflight(cmd.Context(), req)
+			if err != nil {
+				return fmt.Errorf("workload/%s: %w", d.Name, err)
+			}
+			pf = &got
+		}
+		if asJSON {
+			reports = append(reports, workloadDryRunReport{Name: d.Name, Differs: res.differs, Diff: res.text, Preflight: pf, Preview: pv})
 			continue
 		}
-		if text == "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "workload/%s unchanged\n", d.Name)
-		} else {
-			fmt.Fprint(cmd.OutOrStdout(), text)
+		if pv != nil {
+			fmt.Fprintf(w, "workload/%s %s\n", d.Name, previewSentence(*pv))
+		} else if !res.differs {
+			fmt.Fprintf(w, "workload/%s unchanged\n", d.Name)
 		}
-		if err := printPreflight(cmd.Context(), cmd.OutOrStdout(), c, req, false); err != nil {
-			return fmt.Errorf("workload/%s: %w", d.Name, err)
+		fmt.Fprint(w, res.text)
+		if pf != nil {
+			if err := printPreflightResult(w, *pf); err != nil {
+				return err
+			}
 		}
 	}
 	if asJSON {
-		return emitJSON(cmd.OutOrStdout(), reports)
+		if err := emitJSON(w, reports); err != nil {
+			return err
+		}
+	}
+	if refused > 0 {
+		return &exitError{code: 1, err: fmt.Errorf("%d workload(s) would be refused", refused)}
 	}
 	return nil
 }
 
-// diffWorkload normalises the file's workload through the door (as run_file.go does for a Run
+// printPreflightResult is the setup checklist printPreflight prints, for a result already in hand.
+func printPreflightResult(w io.Writer, pf sdk.PreflightResult) error {
+	fmt.Fprintf(w, "dry run: not launched (enforced confinement %s)\n", pf.EnforcedConfinementClass)
+	for _, warn := range pf.Warnings {
+		fmt.Fprintf(w, "warning: %s\n", warn)
+	}
+	tw := newTab(w)
+	fmt.Fprintln(tw, "STATUS\tLABEL\tKIND\tREQUIRED_BY\tDETAIL")
+	for _, it := range pf.SetupItems {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.Status, orDash(it.Label), it.Kind, orDash(it.RequiredBy), orDash(it.Detail))
+	}
+	return tw.Flush()
+}
+
+// refusalSentence is a refusal the store would make, as reason and the server's sentence.
+func refusalSentence(r *sdk.WorkloadPreviewRefusal) string {
+	return fmt.Sprintf("%s: %s", r.Reason, r.Error)
+}
+
+// previewRefusal says why an apply would be refused, by the store or at launch, or "" when it would not.
+// Both commands read it, so they cannot disagree.
+func previewRefusal(pv sdk.WorkloadPreview) string {
+	switch {
+	case pv.Refusal != nil:
+		return "would be refused: " + refusalSentence(pv.Refusal)
+	case pv.Launch.State == sdk.WorkloadPreviewWouldRefuse:
+		return fmt.Sprintf("the launch would be refused: %s: %s", pv.Launch.Reason, pv.Launch.Message)
+	}
+	return ""
+}
+
+// previewSentence is one line about a preview: what the apply does to the stored workload, and whether
+// a run starts.
+func previewSentence(pv sdk.WorkloadPreview) string {
+	if pv.Refusal != nil {
+		return previewRefusal(pv)
+	}
+	s := "would be " + string(pv.Outcome)
+	switch pv.Launch.State {
+	case sdk.WorkloadPreviewWouldLaunch:
+		s += "; a new run starts"
+		if pv.Launch.Replaces != nil {
+			s += fmt.Sprintf(" (run %s ends once it runs)", pv.Launch.Replaces)
+		}
+	case sdk.WorkloadPreviewWouldRefuse:
+		s += "; " + previewRefusal(pv)
+	default:
+		s += "; no run starts"
+	}
+	return s
+}
+
+// workloadDiff is what diffWorkload found: the workload as the server normalises it, a unified diff of
+// stored against file as YAML (empty when equal), and the server's preview (nil from an older server).
+type workloadDiff struct {
+	norm    sdk.WorkloadDocument
+	text    string
+	differs bool
+	preview *sdk.WorkloadPreview
+}
+
+// previewSkewNote is said once when the server has no preview route.
+const previewSkewNote = "the server is older than this CLI: this preview cannot see store refusals or whether a run starts\n"
+
+// diffWorkload asks the server to preview the apply of d and writes the unified diff of the stored
+// workload against it. A workload not stored yet differs from nothing. A server without the preview
+// route (404 or 405 with no workload_ reason) gets the older path: the door normalises the workload
+// and the stored one is read. *warned makes the skew note print once per command.
+func diffWorkload(ctx context.Context, errW io.Writer, warned *bool, c *sdk.Client, d sdk.WorkloadDocument) (workloadDiff, error) {
+	pv, err := c.PreviewWorkload(ctx, d.Name, d.Request())
+	if err == nil {
+		return previewDiff(d.Name, pv)
+	}
+	if !previewMissing(err) {
+		return workloadDiff{norm: d}, fmt.Errorf("workload/%s: %w", d.Name, err)
+	}
+	if !*warned {
+		*warned = true
+		fmt.Fprint(errW, previewSkewNote)
+	}
+	norm, text, err := diffWorkloadClientSide(ctx, errW, c, d)
+	return workloadDiff{norm: norm, text: text, differs: text != ""}, err
+}
+
+func previewMissing(err error) bool {
+	var ae *sdk.APIError
+	return errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusMethodNotAllowed) &&
+		!strings.HasPrefix(ae.Reason, "workload_")
+}
+
+// previewDiff renders a preview's stored and proposed workloads as a unified diff.
+func previewDiff(name string, pv sdk.WorkloadPreview) (workloadDiff, error) {
+	want, err := workloadYAML(pv.Proposed)
+	if err != nil {
+		return workloadDiff{}, err
+	}
+	var have []string
+	from := "workload/" + name + " (not stored)"
+	if pv.Stored != nil {
+		text, err := workloadYAML(*pv.Stored)
+		if err != nil {
+			return workloadDiff{}, err
+		}
+		have, from = splitLines(text), "workload/"+name+" (stored)"
+	}
+	text := unifiedDiff(from, "workload/"+name+" (file)", have, splitLines(want))
+	return workloadDiff{norm: pv.Proposed, text: text, differs: text != "" || len(pv.Changes) > 0, preview: &pv}, nil
+}
+
+// diffWorkloadClientSide normalises the file's workload through the door (as run_file.go does for a Run
 // document), reads the stored one, and returns the normalised workload with a unified diff of
-// stored against file as YAML. The diff is empty when they are equal; a workload not stored yet
-// differs from nothing.
-func diffWorkload(ctx context.Context, errW io.Writer, c *sdk.Client, d sdk.WorkloadDocument) (sdk.WorkloadDocument, string, error) {
+// stored against file as YAML.
+func diffWorkloadClientSide(ctx context.Context, errW io.Writer, c *sdk.Client, d sdk.WorkloadDocument) (sdk.WorkloadDocument, string, error) {
 	src, err := json.Marshal(sdk.TemplateDocument{APIVersion: sdk.TemplateDocumentVersion, Kind: sdk.RunDocumentKind, Intent: d.Intent})
 	if err != nil {
 		return d, "", err

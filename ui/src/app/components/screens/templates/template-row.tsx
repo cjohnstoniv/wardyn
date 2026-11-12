@@ -19,13 +19,13 @@ import { includedGroups, needsSetupLabel, ownerLine, scopeLabel, whyReadOnly } f
 
 // The five columns of the list at md and up (Name, Available to, Owner, Updated, Actions); below that the cells stack, each under its own label.
 // The actions column is fixed so a row with a reason tip lines up with one without, and with the header.
-export const ROW_GRID = "md:grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)_15rem]";
+export const ROW_GRID = "lg:grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)_15rem]";
 
 const startHref = (t: TemplateSummary) =>
   `${NEW_RUN_PATH}?${new URLSearchParams({ template: t.id, rev: String(t.revision) })}`;
 
 /** The cell label: visible at phone width, where the header row is hidden; read aloud from md up, where the header row is decoration. */
-const CellLabel = ({ children }: { children: string }) => <span className="label-eyebrow mb-1 block md:sr-only">{children}</span>;
+const CellLabel = ({ children }: { children: string }) => <span className="label-eyebrow mb-1 block lg:sr-only">{children}</span>;
 
 export function TemplateRow({
   t,
@@ -94,8 +94,8 @@ export function TemplateRow({
         </time>
         <p className="text-xs">{T.REVISION(t.revision)}</p>
       </div>
-      <div role="cell" className="space-y-1.5 md:justify-self-end">
-        <div className="flex flex-wrap gap-1.5 md:justify-end">
+      <div role="cell" className="space-y-1.5 lg:justify-self-end">
+        <div className="flex flex-wrap gap-1.5 lg:justify-end">
           <Button asChild variant="outline" size="sm">
             <Link to={startHref(t)} aria-describedby={nameId}>
               {T.USE}

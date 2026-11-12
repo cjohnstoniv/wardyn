@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/httpkv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
 
@@ -153,7 +154,7 @@ func parseKeyID(setting, raw string) (*url.URL, string, error) {
 	switch {
 	case strings.HasSuffix(host, ".managedhsm.azure.net"):
 		return nil, "", fmt.Errorf("%s %q is a Managed HSM key; only a Key Vault key (https://<vault>.vault.azure.net/keys/<name>) is supported", setting, raw)
-	case !strings.HasSuffix(host, ".vault.azure.net") && !loopback(host):
+	case !strings.HasSuffix(host, ".vault.azure.net") && !httpkv.Loopback(host):
 		return nil, "", fmt.Errorf("%s %q is not in a public-cloud Key Vault (*.vault.azure.net); sovereign clouds are not supported", setting, raw)
 	}
 	name, ok := strings.CutPrefix(u.Path, "/keys/")

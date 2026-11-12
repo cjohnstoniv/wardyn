@@ -132,15 +132,30 @@ type uiSession struct {
 	// Desktop marks a session on a VM's desktop (App uiDesktopAppName, no Port): it lasts at most
 	// uiDesktopSessionTTL and ends when its person closes it (uigateway_desktop.go).
 	Desktop bool `json:"d,omitempty"`
+	// ViewOnly pins a VM desktop session's input off for its whole life, whatever the Mac's caps later say.
+	// Set at enter on a background run's watch alone (backgroundWatch); signed, so it can't be dropped.
+	ViewOnly bool `json:"w,omitempty"`
 	// Inbound marks a session on an app declared inbound: true, the one door a background run keeps
 	// (uigateway_inbound.go). Caller is the callers entry the session's principal matched, empty for the
 	// run's owner: a Caller session skips the owner rule, its run's callers being fixed at create.
 	Inbound bool   `json:"n,omitempty"`
 	Caller  string `json:"k,omitempty"`
+	// CredToken is the personal API token the entry ticket was minted under, and CredSession the CLI session
+	// whose access token did (credentialBinding: a cli_admin step-up binds to its token); both uuid.Nil for a
+	// console session's or the admin token's ticket. The re-check ends the session when that credential is
+	// revoked, expired or signed out, which no person-level cut records (uiSessionStillAuthorized).
+	CredToken   uuid.UUID `json:"ct,omitzero"`
+	CredSession uuid.UUID `json:"cs,omitzero"`
 	// tokenID and sponsor ride an inbound token's session only, never a cookie: the token its rows name,
 	// and the sponsor of the service identity that holds it.
 	tokenID uuid.UUID
 	sponsor string
+}
+
+// backgroundWatch says sess is a view-only watch of a background run's built-in desktop, the one way a person
+// reaches that desktop. Only the watch door's ticket makes one (ticketOpensBackgroundWatch).
+func (sess uiSession) backgroundWatch() bool {
+	return sess.Desktop && sess.ViewOnly && sess.App == uiDesktopAppName && sess.Caller == "" && !sess.Inbound
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -180,6 +195,7 @@ func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, po
 		Run: run.ID, App: app, Port: port,
 		Principal: ta.principal, Role: ta.role, Email: ta.email,
 		Expires: ta.sessionExpiry(now, ttl).Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
+		CredToken: ta.tokenID, CredSession: ta.cliSessionID,
 	}
 }
 
@@ -351,11 +367,27 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 		}
 	}
+	if sess.CredToken != uuid.Nil || sess.CredSession != uuid.Nil {
+		gone, err := s.macWindowCredentialGone(ctx, macWindowAuthority{TokenID: sess.CredToken, CLISessionID: sess.CredSession})
+		if err != nil {
+			slog.ErrorContext(ctx, "wardynd: ui gateway credential lookup failed", "run_id", sess.Run, "err", err)
+			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable,
+				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		}
+		if gone {
+			return s.uiDenyReassert(sess, uiDeniedReasonRevoked,
+				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		}
+	}
 	if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
-	if !sess.Inbound && backgroundOnlyRefusal(run, "web application gateway") != nil {
+	if sess.backgroundWatch() {
+		if de := s.uiBackgroundWatchDenies(ctx, sess, run); de != nil {
+			return de
+		}
+	} else if !sess.Inbound && backgroundOnlyRefusal(run, "web application gateway") != nil {
 		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
 			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
 	}
@@ -389,9 +421,16 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 	return nil
 }
 
+// uiAppIsDesktopSession is whether app puts a person on a desktop, by name: a VM's desktop, a declared noVNC
+// desktop or the sign-in display. deny_interactive closes all three. sess.Desktop marks a VM's alone, and its
+// other readers set that session's lifetime and close, so it is not the question asked here.
+func uiAppIsDesktopSession(app string) bool {
+	return app == uiDesktopAppName || uiDesktopApp(app)
+}
+
 // uiSessionUnitDenies is the re-check's profile arm for a session that is not inbound: the run's profile as it
-// stands now refuses what its door would refuse a new one, deny_ui_apps (uiEnterCommon) and, for a desktop,
-// deny_interactive too (uiEnterDesktop, the harness sign-in run exempt as interactiveDeniedBy exempts it),
+// stands now refuses what its door would refuse a new one, deny_ui_apps (uiEnterCommon) and, for a desktop
+// (uiAppIsDesktopSession), deny_interactive too (the harness sign-in run exempt as interactiveDeniedBy exempts it),
 // with the doors' super-admin exemption. A profile that cannot be read is unverifiable: fail closed.
 func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	if sess.Role == oidc.RoleAdmin && s.adminDoorExempt(run) {
@@ -408,9 +447,11 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 	case p.Limits.DenyUIApps:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("UI apps are not allowed under the governance profile %q this run was launched under.", p.Name))
-	case sess.Desktop && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
+	case uiAppIsDesktopSession(sess.App) && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name))
+	case sess.backgroundWatch() && p.Limits.DenyBackgroundDesktopWatch:
+		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden, backgroundWatchProfileMsg)
 	}
 	return nil
 }
@@ -433,7 +474,7 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 	// honest here too.
 	if s.authFailedLimiter.allow(s.cfg.Now()) {
 		s.auditUISession(sess, "ui.authorize", sess.App, "denied",
-			map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
+			withBackgroundWatch(sess.backgroundWatch(), map[string]any{"app": sess.App, "port": sess.Port, "reason": reason}))
 	}
 	return &uiDialError{status: status, reason: reason, msg: msg}
 }
@@ -456,6 +497,7 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 	if !s.uiReassertDue(sess, now) {
 		return nil
 	}
+	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
 		// Fail CLOSED, for the same reason the revocation arm does: "the check
@@ -467,7 +509,7 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
 		return de
 	}
-	s.markUIReasserted(sess, now)
+	s.markUIReasserted(sess, now, gen)
 	return nil
 }
 
@@ -487,10 +529,15 @@ func (s *Server) uiReassertDue(sess uiSession, now time.Time) bool {
 
 // markUIReasserted records a CLEAN pass only. A refused or unverifiable check
 // leaves the window open, so the next request re-checks instead of being waved
-// through for the rest of the interval.
-func (s *Server) markUIReasserted(sess uiSession, now time.Time) {
+// through for the rest of the interval. A pass read before a governance write is not recorded either: gen is
+// the drop count (uiInboundState.drops) read before the check's first read, and a drop since then means the
+// write would otherwise be skipped for up to uiReassertInterval (dropInboundSessions).
+func (s *Server) markUIReasserted(sess uiSession, now time.Time, gen uint64) {
 	s.uiReassertMu.Lock()
 	defer s.uiReassertMu.Unlock()
+	if s.uiInbound.drops.Load() != gen {
+		return
+	}
 	if s.uiReassert == nil {
 		s.uiReassert = map[string]time.Time{}
 	} else if len(s.uiReassert) > 1024 {

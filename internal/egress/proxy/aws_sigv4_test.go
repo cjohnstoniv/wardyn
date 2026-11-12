@@ -205,9 +205,18 @@ type sigv4Harness struct {
 	lifetime    atomic.Int64 // role credential lifetime; 0 is an hour
 	respond     func(w http.ResponseWriter, r *http.Request)
 	log         func() string
+	// mint answers the run's gateway identity mint (nil: 404); mints counts the asks.
+	mint  func(w http.ResponseWriter, r *http.Request)
+	mints atomic.Int32
 }
 
 func newSigV4Harness(t *testing.T, allowed ...string) *sigv4Harness {
+	t.Helper()
+	return newSigV4HarnessWith(t, nil, allowed...)
+}
+
+// newSigV4HarnessWith is newSigV4Harness with mut applied to the proxy's options first.
+func newSigV4HarnessWith(t *testing.T, mut func(*Options), allowed ...string) *sigv4Harness {
 	t.Helper()
 	h := &sigv4Harness{}
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +240,15 @@ func newSigV4Harness(t *testing.T, allowed ...string) *sigv4Harness {
 				"accessKeyId": sigv4RoleKey, "secretAccessKey": sigv4RoleSecret, "sessionToken": sigv4RoleToken,
 				"expiration": time.Now().Add(life).UnixMilli(),
 			}})
+			return
+		}
+		if r.URL.Path == "/api/v1/internal/gateway-identity" {
+			h.mints.Add(1)
+			if h.mint == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			h.mint(w, r)
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -260,7 +278,7 @@ func newSigV4Harness(t *testing.T, allowed ...string) *sigv4Harness {
 	}))
 	t.Cleanup(cp.Close)
 	buf := &bytes.Buffer{}
-	h.p = newProxy(Options{
+	opts := Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append(sigv4HostPorts(), allowed...)}),
 		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
@@ -271,7 +289,11 @@ func newSigV4Harness(t *testing.T, allowed ...string) *sigv4Harness {
 		TLSClientConfig: testInsecureTLSConfig,
 		AWSSigV4: &AWSSigV4Config{GrantID: grant, PortalHost: sigv4Portal, AccountID: sigv4Account, RoleName: sigv4Role,
 			Hosts: sigv4Hosts},
-	})
+	}
+	if mut != nil {
+		mut(&opts)
+	}
+	h.p = newProxy(opts)
 	h.log = func() string {
 		_ = h.p.sink.close(context.Background())
 		return buf.String()

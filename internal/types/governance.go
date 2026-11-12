@@ -29,12 +29,18 @@ import (
 //     design, so tool_rules can't express "supervised" there either.
 //   - DenyUIApps: a UI app is relay access into the sandbox that no
 //     tool_rules ceiling sees.
+//   - DenyBackgroundDesktopWatch: a screen can show what a background run keeps
+//     out of its logs, and no tool_rules ceiling sees a viewer.
 //   - DenyUserDrive: a drive OUTLIVES the run, so no tool_rules ceiling
 //     describes the escape — the storage itself is the escape.
 //   - DenyPlacements: a placement the people under this profile may not run on;
 //     a deny list, so absent means permitted.
 //   - AllowedMacOSBases: the macOS bases they may pick; an allow list, so
 //     absent means any base a Mac offers.
+//   - RequiredImageSigners: the image signers that must also vouch for their images; a requirement, so
+//     more names is tighter.
+//   - AllowedModels: the hosted models their runs may ask for; an allow list,
+//     so absent means no limit. The run's proxy holds every model request to it.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
 //     not 403.
 //   - MaxCPUMillis/MaxMemoryMiB/MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
@@ -63,6 +69,11 @@ type GovernanceLimits struct {
 	// rather than an empty ceiling ui_apps, which stays "no opinion" so
 	// existing profiles keep their behaviour (#1391).
 	DenyUIApps bool `json:"deny_ui_apps,omitempty"`
+	// DenyBackgroundDesktopWatch refuses watching the desktop of a background macOS run created
+	// under this profile, view only. A DOOR with no zero-value opinion: absent means allowed (the
+	// watch is on by default), and the site switch (SiteMacOSVM.AllowBackgroundWatch) can turn it
+	// off for everyone. It adds to DenyInteractive and DenyUIApps, which close the desktop too.
+	DenyBackgroundDesktopWatch bool `json:"deny_background_desktop_watch,omitempty"`
 	// MaxConcurrentRuns caps how many NON-TERMINAL runs a member under this
 	// profile may hold at once. 0 is unlimited.
 	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty"`
@@ -77,6 +88,27 @@ type GovernanceLimits struct {
 	// also blocks creation (a person who may mount no drive may not make one); this door
 	// narrows only the creating. Operators are exempt from both doors.
 	DenyMemberDrives bool `json:"deny_member_drives,omitempty"`
+	// DenyKeptMachines refuses keeping a machine under this profile, on top of the site switch
+	// for kept machines. A DOOR with no zero-value opinion: false inherits the switch, so an
+	// unset profile changes nothing. Deny wins in composition.
+	DenyKeptMachines bool `json:"deny_kept_machines,omitempty"`
+	// DenyScheduledRuns refuses a start time (start_at) on a run launched under this profile, and
+	// ends a run already booked when its start comes, on top of the deployment's switch for
+	// scheduled runs (WARDYN_SCHEDULED_RUNS), which stays the master: off there refuses everyone.
+	// A DOOR with no zero-value opinion: false inherits the switch, so an unset profile changes
+	// nothing and no existing install refuses more on upgrade. Deny wins in composition, so a
+	// child unit can never re-open what a parent closed. Operators are exempt.
+	DenyScheduledRuns bool `json:"deny_scheduled_runs,omitempty"`
+	// DenyComponents lists stored components, by id, that a run under this profile may not attach
+	// (403 component_denied, at create and again when a queued run starts). DenyModelProviders lists
+	// model providers, by uid, that such a run may not use. Both are DENY LISTS and a hard wall, so
+	// operators are not exempt. Empty means nothing is denied, so an upgrade changes no run and an
+	// unset profile refuses nothing. Deny wins in composition: a child unit's list is the union of its
+	// parents' and its own, and removing an id is a widening an update holds for a second human.
+	// Inline and built-in components carry no id and are never named here; local_self_defined_components
+	// governs the inline ones.
+	DenyComponents     []string `json:"deny_components,omitempty"`
+	DenyModelProviders []string `json:"deny_model_providers,omitempty"`
 	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
 	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
 	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
@@ -87,6 +119,20 @@ type GovernanceLimits struct {
 	// allows any base a Mac offers; a run naming another is refused 403 placement_denied. Operators are
 	// exempt, as from DenyPlacements.
 	AllowedMacOSBases []string `json:"allowed_macos_bases,omitempty"`
+	// AllowedModels are the models a run under this profile may ask a hosted model provider for,
+	// written exactly as the provider names them (ValidAllowedModels). An ALLOW LIST whose empty value
+	// is no limit: there is no deny-all value. A set list is handed to the run's proxy at dispatch,
+	// which refuses a request for any other model; local models keep their own lists. Operators are
+	// exempt, as from every limit.
+	AllowedModels []string `json:"allowed_models,omitempty"`
+	// RequiredImageSigners are site image-admission signers (SiteImageAdmission.Signers, or the built-in
+	// wardyn-release) that must also vouch for a member's image under this profile, whatever the site's own
+	// coverage says. A REQUIREMENT, so more names is tighter: composition unions the lists and Leq asks for a
+	// superset. Empty requires nothing extra. Under site mode off or audit the named signers are enforced
+	// for this profile's members: a profile can opt its people into enforcement, never out. It names
+	// signers only, never keys or identities, so a profile cannot add trust. Operators are exempt, as from
+	// every limit. Off by default: an empty list changes nothing.
+	RequiredImageSigners []string `json:"required_image_signers,omitempty"`
 	// MaxCPUMillis and MaxMemoryMiB cap the sandbox's CPU (millicores) and memory a run under this
 	// profile may be given, whatever its ceiling's own resources or a member's request say. 0 is
 	// unlimited. A CLAMP, NOT A DOOR, like MaxEphemeralDiskMiB. Folded into composer.Clamp at
@@ -233,11 +279,17 @@ type AutonomyRubric struct {
 	// repository hooks and permission rules cannot override the agent-side guardrails. It caps no level
 	// and changes nothing at any other rung.
 	AgentGuardrailLocks bool `json:"agent_guardrail_locks,omitempty"`
+	// SelfDefinedComponent caps the level for a run that carries a component its launcher defined.
+	// It composes with the deployment's own cap (components.autonomy_cap) as a minimum, so a unit
+	// can tighten below that cap and never loosen it. It is named apart from the deployment cap's
+	// custom_component cause so bound_by says which one decided. Empty caps nothing, so a rubric
+	// that leaves it unset changes no run.
+	SelfDefinedComponent AutonomyLevel `json:"self_defined_component,omitempty"`
 }
 
 // Validate reports the first field carrying an undefined AutonomyLevel,
 // naming it — governanceLimitsRefusal prefixes the field name onto its 400
-// so an admin knows which of the nine to fix. An empty field is always
+// so an admin knows which of the ten to fix. An empty field is always
 // valid: unset caps nothing.
 func (a AutonomyRubric) Validate() error {
 	for _, f := range []struct {
@@ -253,6 +305,7 @@ func (a AutonomyRubric) Validate() error {
 		{"confinement_cc1", a.ConfinementCC1},
 		{"confinement_cc2", a.ConfinementCC2},
 		{"confinement_cc3", a.ConfinementCC3},
+		{"self_defined_component", a.SelfDefinedComponent},
 	} {
 		if f.level != "" && !f.level.Valid() {
 			return fmt.Errorf("%s: %q is not a valid autonomy level", f.field, f.level)
@@ -289,6 +342,10 @@ type AutonomyPosture struct {
 	Egress      AutonomyEgressPosture  `json:"egress"`
 	Secrets     AutonomySecretsPosture `json:"secrets"`
 	Confinement ConfinementClass       `json:"confinement"`
+	// CustomComponent is set when the run carries a component its launcher defined; it selects the
+	// rubric's self_defined_component field. Omitted when false, so a run without one records the
+	// posture it always did.
+	CustomComponent bool `json:"custom_component,omitempty"`
 }
 
 // AutonomyResolution is what resolveRunAutonomy (#97) decides for one run: the level, the
@@ -402,4 +459,6 @@ type GovernanceMembership struct {
 	// Legacy marks a membership that existed before the tree (unit-tree migration): per person only the
 	// precedence winner among legacy rows is a context; the rest are dormant for that person.
 	Legacy bool `json:"legacy,omitempty"`
+	// ExpiresAt is an elevation's end (governance_elevation.go): the membership counts until then and the sweep deletes it after. Nil is a permanent membership.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }

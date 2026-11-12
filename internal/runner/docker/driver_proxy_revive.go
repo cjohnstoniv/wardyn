@@ -14,11 +14,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,6 +88,7 @@ const proxyConfigStdinEnv = "WARDYN_PROXY_CONFIG_STDIN"
 const proxyConfigWriteTimeout = 30 * time.Second
 
 var _ runner.ProxyReviver = (*Driver)(nil)
+var _ runner.ProxyReviverHashed = (*Driver)(nil)
 var _ runner.SandboxStarter = (*Driver)(nil)
 
 // proxyPrep is the part of a proxy's start that can fail before any container is touched: its hosts
@@ -192,31 +196,35 @@ func (d *Driver) runSubnets(ctx context.Context, runID uuid.UUID) ([]netip.Prefi
 // any peer as it did before peers-only; otherwise the refusal stands. The refusal comes before the
 // proxy serves anything: on create no agent exists yet, and on revive the agent has no proxy until this
 // returns.
-func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, error) {
+//
+// It also answers proxy.ConfigSHA256 of the bytes written to the proxy that started: the retry's
+// when the first attempt was refused.
+func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, string, error) {
 	image := d.proxyImage()
-	id, err := d.startProxyOn(ctx, image, runID, labels, env, prep, ip)
+	id, sum, err := d.startProxyOn(ctx, image, runID, labels, env, prep, ip)
 	var refused *refusedSettingError
 	switch {
 	case err == nil:
 		if prep.allowedPeers {
 			d.notePeersOnly(image, false)
 		}
-		return id, nil
+		return id, sum, nil
 	case !prep.allowedPeers || !d.cfg.ProxyPeersOnlyByDefault || !errors.As(err, &refused) || refused.setting != "allowed_peers":
-		return id, err
+		return id, "", err
 	}
-	if err := d.removeProxy(ctx, runID); err != nil {
-		return "", fmt.Errorf("docker: remove the proxy that refused allowed_peers: %w", err)
+	// The container that refused, by its id: a proxy started under the name since is not it.
+	if err := d.removeProxyAt(ctx, runID, id); err != nil {
+		return "", "", fmt.Errorf("docker: remove the proxy that refused allowed_peers: %w", err)
 	}
 	if prep.cfgJSON, err = withoutProxyConfigKey(prep.cfgJSON, "allowed_peers"); err != nil {
-		return "", err
+		return "", "", err
 	}
 	prep.allowedPeers = false
-	if id, err = d.startProxyOn(ctx, image, runID, labels, env, prep, ip); err != nil {
-		return id, err
+	if id, sum, err = d.startProxyOn(ctx, image, runID, labels, env, prep, ip); err != nil {
+		return id, "", err
 	}
 	d.notePeersOnly(image, true)
-	return id, nil
+	return id, sum, nil
 }
 
 // notePeersOnly records whether image's proxy just took allowed_peers or, fellBack, refused them and
@@ -249,8 +257,9 @@ func (d *Driver) notePeersOnly(image string, fellBack bool) {
 // network, joins it to the control-plane-facing network, starts it and hands
 // it prep's config on stdin. ip, when valid, is the address it must take on the
 // per-run network (the one the agent's hosts entry pins). On any failure it
-// removes what it created.
-func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, error) {
+// removes what it created. It answers the container id and the hash of the
+// config written to it (startWithConfig).
+func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, string, error) {
 	cfgJSON := prep.cfgJSON
 	cfg := &container.Config{
 		Image:    image,
@@ -303,7 +312,7 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	}
 	cfgJSON, err := d.runnerSinkConfig(runID, cfgJSON)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var netCfg *network.NetworkingConfig
 	if ip.IsValid() {
@@ -318,7 +327,7 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 		Name:             proxyContainerName(runID),
 	})
 	if err != nil {
-		return "", fmt.Errorf("docker: create proxy: %w", err)
+		return "", "", fmt.Errorf("docker: create proxy: %w", err)
 	}
 	remove := func() {
 		_, _ = d.cli.ContainerRemove(context.Background(), resp.ID, client.ContainerRemoveOptions{Force: true})
@@ -331,21 +340,17 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 		EndpointConfig: &network.EndpointSettings{},
 	}); err != nil {
 		remove()
-		return "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
+		return "", "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
 	// An image that predates the ready marker never prints it: wait for it only from an image that
 	// says it does, and watch such a proxy for an early exit as before.
 	marker := d.proxyPrintsReadyMarker(ctx, image)
-	att, err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON, marker)
+	att, sum, err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON, marker)
 	if err != nil {
 		remove()
-		return "", err
+		return "", "", err
 	}
 	defer att.Close()
-	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
-		remove()
-		return "", err
-	}
 	// Wait for the proxy's ready marker: it is printed once the listener is bound, so the agent is
 	// never started into "connection refused", and a proxy that exits first (it refused its own
 	// config) is named here instead of surfacing as the generic "proxy has no IP...". A proxy image
@@ -353,7 +358,7 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	//
 	// On a failure the container is deliberately NOT removed here: on the CreateSandbox path the
 	// caller removes it after also rolling back the per-run network; on the ReplaceProxy path it
-	// stays so its logs still name the cause, and the next revive removes it by name.
+	// stays so its logs still name the cause, and the next revive removes it by the id it inspects.
 	var waitErr error
 	if marker {
 		waitErr = d.awaitProxyReady(ctx, resp.ID, att)
@@ -362,9 +367,15 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	}
 	if err := waitErr; err != nil {
 		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
-		return resp.ID, err
+		return resp.ID, "", err
 	}
-	return resp.ID, nil
+	// Opened only once the proxy is ready: a replacement that waits for its first token renewal serves
+	// nothing before that, and a refused one never gets its local models.
+	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
+		remove()
+		return "", "", err
+	}
+	return resp.ID, sum, nil
 }
 
 // startWithConfig attaches to the created proxy's stdin (and stdout, when stdout is set), starts it, writes cfgJSON to
@@ -374,11 +385,12 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 // marker from it: the attach is the engine's own channel to the process, so it needs no host route
 // to the container (none exists on Docker Desktop for Mac) and no log driver that keeps logs. The
 // config's listen address is first bound to the proxy's own address on runID's per-run network (see
-// listenOnRunNetwork).
-func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte, stdout bool) (att client.ContainerAttachResult, err error) {
+// listenOnRunNetwork). sum is proxy.ConfigSHA256 of exactly the bytes written, the last change to
+// them, so it is what the proxy reports back once it loads them.
+func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte, stdout bool) (att client.ContainerAttachResult, sum string, err error) {
 	att, err = d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: stdout})
 	if err != nil {
-		return att, fmt.Errorf("docker: attach proxy stdin: %w", err)
+		return att, "", fmt.Errorf("docker: attach proxy stdin: %w", err)
 	}
 	defer func() {
 		if err != nil {
@@ -386,19 +398,20 @@ func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string
 		}
 	}()
 	if _, err = d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
-		return att, fmt.Errorf("docker: start proxy: %w", err)
+		return att, "", fmt.Errorf("docker: start proxy: %w", err)
 	}
 	if cfgJSON, err = d.listenOnRunNetwork(ctx, runID, id, cfgJSON); err != nil {
-		return att, err
+		return att, "", err
 	}
+	sum = proxy.ConfigSHA256(cfgJSON)
 	_ = att.Conn.SetWriteDeadline(time.Now().Add(proxyConfigWriteTimeout))
 	if _, err = att.Conn.Write(cfgJSON); err != nil {
-		return att, fmt.Errorf("docker: write proxy config: %w", err)
+		return att, "", fmt.Errorf("docker: write proxy config: %w", err)
 	}
 	if err = att.CloseWrite(); err != nil {
-		return att, fmt.Errorf("docker: close proxy stdin: %w", err)
+		return att, "", fmt.Errorf("docker: close proxy stdin: %w", err)
 	}
-	return att, nil
+	return att, sum, nil
 }
 
 // listenOnRunNetwork returns cfgJSON with its listen address set to the
@@ -651,7 +664,9 @@ func (d *Driver) EnsureProxyImage(ctx context.Context) error {
 
 // CanReplaceProxy — see runner.ProxyReviver: Docker always can.
 func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	return nil
@@ -672,57 +687,112 @@ func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
 //
 // If the NEW proxy then exits at config load, startProxy's watch reports that
 // (wrapped in ErrProxyReplaceFailed below) and leaves the exited container in
-// place, so its logs still name the cause; the next revive removes it by name
+// place, so its logs still name the cause; the next revive removes it (the container it inspects)
 // before starting another.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
-	if d.vmFor(ctx, ref) != nil {
-		return errVMUnsupported
+	_, err := d.ReplaceProxyHashed(ctx, ref, cfgJSON)
+	return err
+}
+
+// ReplaceProxyHashed is ReplaceProxy, answering proxy.ConfigSHA256 of the bytes written to the new
+// proxy (runner.ProxyReviverHashed). The address stays the one the agent pins, so none is answered.
+func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
+	return d.ReplaceProxyHashedAt(ctx, ref, cfgJSON, 0)
+}
+
+// ReplaceProxyHashedAt is ReplaceProxyHashed acting for policy generation gen (runner.ProxyReviverAt). gen 0
+// is none: ReplaceProxyHashed. With gen > 0 the replacement proxy is labelled with it, and a proxy, running or not,
+// labelled gen or newer refuses the replace with runner.ErrProxyGenerationNewer, nothing touched. The proxy
+// removed is the container inspected, never one that took the name since. An agent cut off its run network
+// (FenceProxy) is refused with runner.ErrProxyFenced before anything is removed.
+func (d *Driver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return "", err
+	} else if v != nil {
+		return "", errVMUnsupported
 	}
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
-		return err
+		return "", err
+	}
+	// A run whose network may have an address on the Docker host (one from before the upgrade) is
+	// refused while its proxy still runs; this error is not ErrProxyReplaceFailed either.
+	if err := d.checkRunNetwork(ctx, internalNetName(id), remedyNewRun); err != nil {
+		return "", err
 	}
 	var cp struct {
 		ControlPlaneURL string `json:"control_plane_url"`
 	}
 	if err := json.Unmarshal(cfgJSON, &cp); err != nil {
-		return fmt.Errorf("docker: replace proxy: config: %w", err)
+		return "", fmt.Errorf("docker: replace proxy: config: %w", err)
 	}
 	// A config the new proxy would refuse at load must not cost the running one: load it here, before anything is
 	// removed. This error is not ErrProxyReplaceFailed, so the revive keeps the old proxy.
 	if _, err := proxy.LoadConfigBytes(cfgJSON); err != nil {
-		return fmt.Errorf("docker: replace proxy: the new config does not load: %w", err)
+		return "", fmt.Errorf("docker: replace proxy: the new config does not load: %w", err)
 	}
 	agent, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {
-		return fmt.Errorf("docker: inspect agent for its proxy address: %w", err)
+		return "", fmt.Errorf("docker: inspect agent for its proxy address: %w", err)
+	}
+	if ns := agent.Container.NetworkSettings; ns == nil || ns.Networks[internalNetName(id)] == nil {
+		return "", fmt.Errorf("docker: agent %s has no endpoint on its run network: %w", ref, runner.ErrProxyFenced)
 	}
 	ip := pinnedProxyIP(agent.Container.HostConfig)
 	if !ip.IsValid() {
-		return fmt.Errorf("docker: agent %s pins no proxy address", ref)
+		return "", fmt.Errorf("docker: agent %s pins no proxy address", ref)
 	}
 	var agentLabels map[string]string
 	if agent.Container.Config != nil {
 		agentLabels = agent.Container.Config.Labels
 	}
 	if err := d.ensureImage(ctx, d.proxyImage(), "", func() {}); err != nil {
-		return err
+		return "", err
 	}
 	// Not ErrProxyReplaceFailed either: nothing is removed yet, so the revive keeps the running proxy.
 	prep, err := d.prepareProxy(ctx, id, cfgJSON, agentLabels[labelMachineKind] == string(types.MachineLinuxVM))
 	if err != nil {
-		return fmt.Errorf("docker: replace proxy: %w", err)
+		return "", fmt.Errorf("docker: replace proxy: %w", err)
 	}
-	d.drainSink(ctx, id)
-	// A failed remove may still have removed it.
-	if err := d.removeProxy(ctx, id); err != nil {
-		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
+	if err := d.removeProxyForReplace(ctx, id, gen); err != nil {
+		return "", err
 	}
-	if _, err := d.startProxy(ctx, id, d.labels(id, componentProxy, agentLabels),
-		proxyEnvFromJSON(id, cp.ControlPlaneURL), prep, ip); err != nil {
-		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
+	// The listener only where this agent's resolver is mounted to point at the proxy, as at create.
+	env := proxyEnvFromJSON(id, cp.ControlPlaneURL)
+	if agentMountsResolver(agent.Container.HostConfig, id) {
+		env = withDNSListen(env)
 	}
-	return nil
+	// A replacement serves only after a token renewal under its own token has landed, so a proxy
+	// started late by a superseded revive never serves. A create does not set it.
+	env = withFirstRenewGate(env)
+	proxyLabels := agentLabels
+	if gen > 0 {
+		proxyLabels = maps.Clone(agentLabels)
+		if proxyLabels == nil {
+			proxyLabels = map[string]string{}
+		}
+		proxyLabels[labelProxyGeneration] = strconv.Itoa(gen)
+	}
+	_, sum, err := d.startProxy(ctx, id, d.labels(id, componentProxy, proxyLabels), env, prep, ip)
+	if isNameConflict(err) {
+		// A proxy took the name between the inspect and the create: look again, once, and apply the same rule.
+		if rerr := d.removeProxyForReplace(ctx, id, gen); rerr != nil {
+			return "", rerr
+		}
+		_, sum, err = d.startProxy(ctx, id, d.labels(id, componentProxy, proxyLabels), env, prep, ip)
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
+	}
+	return sum, nil
+}
+
+// withFirstRenewGate puts the flag last and drops any earlier setting of it, so nothing copied into env
+// ahead of it, an operator's knob included, can turn it off.
+func withFirstRenewGate(env []string) []string {
+	key := proxy.FirstRenewGateEnv + "="
+	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, key) })
+	return append(env, key+"1")
 }
 
 // StartSandbox starts the agent ref's kept, stopped container again
@@ -732,11 +802,18 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 // back, and an agent started first could take the address its own hosts
 // entry pins as wardyn-proxy. Recording dirs are prepared again as at create.
 func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
+		return err
+	}
+	// A kept agent goes back onto the network it was created on, so a network from before the upgrade,
+	// which may have an address on the Docker host, refuses the start.
+	if err := d.checkRunNetwork(ctx, internalNetName(id), remedyNewRun); err != nil {
 		return err
 	}
 	p, err := d.cli.ContainerInspect(ctx, proxyContainerName(id), client.ContainerInspectOptions{})
@@ -749,6 +826,10 @@ func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
 	// Read before the start, so an agent whose recording choice cannot be read never starts.
 	record, err := d.recordsAgent(ctx, ref)
 	if err != nil {
+		return err
+	}
+	// A container kept from before the create checked image volumes against the disk limit.
+	if err := d.checkKeptVolumesUnderCap(ctx, ref); err != nil {
 		return err
 	}
 	if _, err := d.cli.ContainerStart(ctx, ref, client.ContainerStartOptions{}); err != nil {

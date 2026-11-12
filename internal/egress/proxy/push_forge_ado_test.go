@@ -385,7 +385,7 @@ func TestADOPushThroughTheBroker(t *testing.T) {
 	t.Run("git prints why a push it could not clear is refused", func(t *testing.T) {
 		h, rest := newRun(t)
 		fail := func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusInternalServerError, `{}`)
+			return writeRawJSON(w, http.StatusInternalServerError, `{}`)
 		}
 		rest.hook.Store(&fail)
 		dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
@@ -405,7 +405,7 @@ func TestADOPushThroughTheBroker(t *testing.T) {
 	})
 }
 
-func writeJSONStatus(w http.ResponseWriter, status int, body string) bool {
+func writeRawJSON(w http.ResponseWriter, status int, body string) bool {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(body))
@@ -429,44 +429,44 @@ func TestADOPushReviewPathFailsClosed(t *testing.T) {
 		why   string
 	}{
 		{name: "a tree read answers 500", why: "answered 500", hook: onTrees(func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusInternalServerError, `{}`)
+			return writeRawJSON(w, http.StatusInternalServerError, `{}`)
 		})},
 		{name: "a tree read answers 401", why: "answered 401", hook: onTrees(func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusUnauthorized, `{}`)
+			return writeRawJSON(w, http.StatusUnauthorized, `{}`)
 		})},
 		{name: "the diff answers 500", why: whyUnread, hook: func(w http.ResponseWriter, r *http.Request) bool {
-			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeJSONStatus(w, http.StatusInternalServerError, `{}`)
+			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeRawJSON(w, http.StatusInternalServerError, `{}`)
 		}},
 		{name: "a sign-in page answers 203", why: "answered 203", hook: func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusNonAuthoritativeInfo, `<html>sign in</html>`)
+			return writeRawJSON(w, http.StatusNonAuthoritativeInfo, `<html>sign in</html>`)
 		}},
 		{name: "a sign-in page answers 200", why: whyUnread, hook: onTrees(func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusOK, `<html>sign in</html>`)
+			return writeRawJSON(w, http.StatusOK, `<html>sign in</html>`)
 		})},
 		{name: "a listing is paged", why: "only part of a listing", hook: onTrees(func(w http.ResponseWriter, r *http.Request) bool {
 			w.Header().Set("x-ms-continuationtoken", "more")
-			return writeJSONStatus(w, http.StatusOK, `{"objectId":"`+strings.TrimPrefix(r.URL.Path[strings.LastIndex(r.URL.Path, "/"):], "/")+`","treeEntries":[]}`)
+			return writeRawJSON(w, http.StatusOK, `{"objectId":"`+strings.TrimPrefix(r.URL.Path[strings.LastIndex(r.URL.Path, "/"):], "/")+`","treeEntries":[]}`)
 		})},
 		{name: "a listing is cut off mid-body", why: whyUnread, hook: onTrees(func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusOK, `{"objectId":"abc","treeEntries":[{"relative`)
+			return writeRawJSON(w, http.StatusOK, `{"objectId":"abc","treeEntries":[{"relative`)
 		})},
 		{name: "a listing names another tree", why: "did not list tree", hook: onTrees(func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusOK, `{"objectId":"abc","treeEntries":[]}`)
+			return writeRawJSON(w, http.StatusOK, `{"objectId":"abc","treeEntries":[]}`)
 		})},
 		{name: "a listing is larger than the broker reads", why: "exceeded", hook: onTrees(func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusOK, tooBig)
+			return writeRawJSON(w, http.StatusOK, tooBig)
 		})},
 		{name: "the base commit names no tree", why: "named no tree", hook: func(w http.ResponseWriter, r *http.Request) bool {
-			return strings.Contains(r.URL.Path, "/commits/") && writeJSONStatus(w, http.StatusOK, `{}`)
+			return strings.Contains(r.URL.Path, "/commits/") && writeRawJSON(w, http.StatusOK, `{}`)
 		}},
 		{name: "the server knows no such commit (404)", why: whyNoBase, hook: func(w http.ResponseWriter, r *http.Request) bool {
-			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeJSONStatus(w, http.StatusNotFound, `{}`)
+			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeRawJSON(w, http.StatusNotFound, `{}`)
 		}},
 		{name: "the server knows no such commit (400)", why: whyNoBase, hook: func(w http.ResponseWriter, r *http.Request) bool {
-			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeJSONStatus(w, http.StatusBadRequest, `{}`)
+			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeRawJSON(w, http.StatusBadRequest, `{}`)
 		}},
 		{name: "the base is outside the default branch", why: whyNoBase, hook: func(w http.ResponseWriter, r *http.Request) bool {
-			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeJSONStatus(w, http.StatusOK, `{"commonCommit":"`+strings.Repeat("a", 40)+`"}`)
+			return strings.HasSuffix(r.URL.Path, "/diffs/commits") && writeRawJSON(w, http.StatusOK, `{"commonCommit":"`+strings.Repeat("a", 40)+`"}`)
 		}},
 		{name: "the read budget runs out", why: "more than 1 reads", setup: func(t *testing.T, _ *adoPushRun) {
 			prev := maxForgeReads
@@ -517,7 +517,7 @@ func TestADOPushReviewPathFailsClosed(t *testing.T) {
 		r := newADOPushRun(t, adoReview(), false)
 		newPushCP(t, types.ApprovalDenied).wire(t, r.p)
 		fail := func(w http.ResponseWriter, _ *http.Request) bool {
-			return writeJSONStatus(w, http.StatusInternalServerError, `{}`)
+			return writeRawJSON(w, http.StatusInternalServerError, `{}`)
 		}
 		r.rest.hook.Store(&fail)
 		body := r.record(t, map[string]string{"lib/b.txt": "b\n"})

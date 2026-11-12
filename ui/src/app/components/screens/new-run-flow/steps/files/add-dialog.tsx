@@ -18,7 +18,7 @@ import { InfoTip } from "../../../../wardyn/info-tip";
 import { Chip } from "../../../../wardyn/primitives";
 import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import type { MeDrive } from "../../../../../lib/api/me-drives";
-import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { NR_FILES, NR_FILES_LOOKUP } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { BranchPicker } from "./branch-picker";
@@ -125,6 +125,8 @@ export interface AddDialogProps {
   folderReason?: string;
   /** WARDYN_COMPUTER_FOLDERS: false shows "Your computer" as blocked by the organisation; undefined while unknown. */
   computerAllowed?: boolean;
+  /** The WARDYN_COMPUTER_FOLDERS read failed: set to the retry. "Your computer" stays open (the server enforces) beside a "couldn't check" note. */
+  computerLookupFailed?: () => void;
   /** Why no drive can be attached at all, from the catalogue. */
   driveReason?: string;
   /** The person may manage drives (Manage drives →). */
@@ -198,7 +200,7 @@ export function AddDialog(props: AddDialogProps) {
   );
 }
 
-function DialogBody({ open, onClose, intent, src, items, folderReason, computerAllowed, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
+function DialogBody({ open, onClose, intent, src, items, folderReason, computerAllowed, computerLookupFailed, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
   const [s, setS] = React.useState<State>(() => initial(open, intent));
   const [creatingDrive, setCreatingDrive] = React.useState(false);
   const [deletingDrive, setDeletingDrive] = React.useState<UserDriveSeam["deleting"]>(null);
@@ -326,7 +328,8 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
             const info = KIND_INFO[kind];
             const reasonId = `nr-kind-reason-${kind}`;
             return (
-              <li key={kind} className="flex">
+              <React.Fragment key={kind}>
+              <li className="flex">
                 <button
                   type="button"
                   disabled={!!reason}
@@ -362,6 +365,15 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                   )}
                 </button>
               </li>
+              {kind === "computer" && computerLookupFailed && (
+                <li role="status" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {NR_FILES_LOOKUP.COMPUTER_UNCHECKED}
+                  <Button type="button" variant="outline" size="sm" onClick={computerLookupFailed}>
+                    {NR_FILES_LOOKUP.RETRY}
+                  </Button>
+                </li>
+              )}
+              </React.Fragment>
             );
           })}
         </ul>

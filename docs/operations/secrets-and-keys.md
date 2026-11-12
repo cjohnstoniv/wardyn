@@ -6,11 +6,12 @@ How to deliver `wardynd`'s boot secrets from files, rotate or split the local ag
 
 ```mermaid
 flowchart LR
-    write["credential write"] --> kek{{"WARDYN_KEK /<br/>WARDYN_SECRET_STORE"}}
-    kek -->|local, default| local["Postgres row<br/>sealed under age key"]
-    kek -->|"KEK=transit, azurekv or awskms"| transit["Postgres row<br/>wrapped by a key service"]
-    kek -->|STORE=vaultkv| vault["value in Vault KV<br/>pointer row only"]
-    kek -->|STORE=azurekv| azure["value in Azure Key Vault<br/>pointer row only"]
+    write["credential write"] --> store{{"WARDYN_SECRET_STORE<br/>default pg"}}
+    store --> kek{{"store pg: WARDYN_KEK<br/>default local"}}
+    store -->|vaultkv| vault["value in Vault KV<br/>pointer row only"]
+    store -->|azurekv| azure["value in Azure Key Vault<br/>pointer row only"]
+    kek -->|local| local["Postgres row<br/>sealed under the age key"]
+    kek -->|"transit, azurekv or awskms"| transit["Postgres row<br/>wrapped by a key service"]
 ```
 
 ## Secrets from files (Vault Agent / CSI)
@@ -138,7 +139,7 @@ env:
 
 ## Rotating the age key
 
-- Each stored secret is an envelope ([`internal/secretstore/pg`](../../internal/secretstore/pg), since 0.7.12).
+- Each stored secret is an envelope ([`internal/secretstore/pg`](../../internal/secretstore/pg)).
 - The value is sealed with AES-256-GCM under its own data key, bound to the row's owner and name.
 - That data key is wrapped by a `local` key-encryption key, derived from `WARDYN_AGE_KEY` with HKDF-SHA256, one per purpose.
 - It's recorded on each row as `kek_id` (`local/cred:<fingerprint of the public recipient>` for credentials, `local/platform:<fingerprint>` for wardynd's own boot keys; rows written before 0.8 say `local:<fingerprint>`, and `wardynd -rewrap` moves them).
@@ -202,7 +203,7 @@ The key file is a **bare `AGE-SECRET-KEY-…` line** (`#` comment lines allowed,
 
 **Rotating on compose:**
 
-1. Take the Postgres dump (see Backup) FIRST. It is the only rollback for the data half; the `.bak` below is only the rollback for the key half.
+1. Take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)) FIRST. It is the only rollback for the data half; the `.bak` below is only the rollback for the key half.
 2. Stop the daemon. Nothing may be writing secrets during the rotation.
    ```sh
    docker compose -f deploy/compose/docker-compose.yaml stop wardynd
@@ -258,6 +259,92 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 
 - With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows under the age key — the boot keys under the platform key stay as they are.
 - Rows sealed under Vault Transit (below) hold nothing under the age key either, and a rotation leaves them alone.
+
+## The AI gateway identity key
+
+The key that signs the short-lived token an AI gateway verifies to learn which person, run and runner a model call belongs to. The token format is `1`, and the key set's address is stable through 0.11.
+
+An admin turns identity on per model provider, by setting `gateway_identity` with an `audience`. On an install that has never turned it on, the key row does not exist and everything below stays off. A run started with identity off sends what it always did.
+
+- **Which providers.** A `custom_endpoint` row, or an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, a subscription row included. So is one audience on two addresses, and a `base_url` change that keeps the audience: use a different one, or save with identity off first.
+- **Turning it on.** The first save that turns identity on makes the key. If the key can't be made, nothing is saved. Each replica notices a change within 30 seconds, so the key set can take that long to answer.
+- **A run started in that window.** Its gateway calls can be refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again.
+- **Turning it off.** The key row stays, and so do the routes of runs already started. Those runs are refused new tokens, so within one token life they stop starting new gateway calls. With no provider on, each replica also stops serving the key set within 30 seconds. Create new runs to use the provider with identity off.
+- **Edits during a run.** A run keeps the provider, address and audience it started with. If any of them changes, or the provider is removed and added again, its token requests are refused and a revive is refused too, and it says to create a new run. Editing the provider back to the original values lets the run go on.
+- **A suspended person.** No new token is issued once the person is suspended, whether or not the kill of their runs has finished. A token already issued is valid until it expires.
+- **An email form shared with another principal.** That form gets no cutoff, so a run owned under it stops only when the kill ends it.
+- **Pause and kill.** Pausing a run does not stop its proxy asking for tokens. Killing it does.
+- **Where it runs.** A run with a route is refused on a person's own runner. It goes to a remote runner only if that runner's `wardyn-runnerd` reports this setting, so a run on an older one is refused.
+
+| | |
+|---|---|
+| Holder | `wardynd` only. Never in the proxy, its config or a sandbox. |
+| Algorithm | ES256 on P-256, with a `kid` in each token's header. |
+| Storage | One secret-store row, `wardyn-gateway-identity-key`, holding the current key and the previous key's public half with its retire time. It is separate from `wardyn-signing-key`, so a gateway token can never authenticate to the internal API. |
+| Created | At the first save that turns identity on, not at boot. |
+| Token lifetime | 60 to 600 seconds, set per provider with `gateway_identity.token_lifetime_seconds`. Unset means 600. There is no `nbf`. |
+| Key set | Anonymous `GET /.well-known/wardyn-experimental/gateway-jwks.json`, under `WARDYN_BASE_PATH` when set, with `Cache-Control: public, max-age=60`. |
+
+**Off answers as nothing.** With identity off the key set's address answers exactly as a path no route holds. A gateway configured with `jwtAuth` against it therefore cannot start until identity is on.
+
+**A key row that fails to decrypt or parse fails closed.** It is never made again, so the mint and the key set answer 503 until a person restores the row. The server still starts, and runs on other providers are untouched.
+
+### What a gateway does with the key set
+
+Read from agentgateway v1.7.0's source, not run:
+
+- It reads the key set when it loads its config, and does not start if that read fails. So start `wardynd` before you restart a gateway.
+- It refetches every 15 minutes by default, and a `Cache-Control` `max-age` overrides that with a floor of 60 seconds. A failed refresh retries after 15 seconds.
+
+`wardynd` sends the 60-second `max-age` because both windows below last until the gateway refetches. The cost is one small anonymous request a minute from each gateway.
+
+### Rotating the key
+
+`wardynd -rotate-gateway-identity-key` is a **maintenance mode, not a server start**, with no environment pair.
+
+1. Stop every replica. Without `WARDYN_HA` the mode refuses while a daemon holds the single-instance lock. With it no lock can tell, so this step is yours: a replica left serving keeps signing with the key it loaded.
+2. Run the mode. It writes the new key, writes a `secret.rekey` audit row and exits. With no key row it refuses, and it never makes a first key.
+3. Start `wardynd`, then restart each gateway.
+
+The old key stays published until 15 minutes after the rotation: the longest token lifetime, 10 minutes, plus a 5-minute overlap for refetches and clock skew. The key set stops publishing it then, restart or not.
+
+Signing moves to the new key at once, so a gateway that has not refetched answers 401 until it does. Restarting it ends that. A second rotation inside those 15 minutes removes the older key early, and calls carrying its tokens fail until they mint again.
+
+### If the key is stolen
+
+`wardynd -rotate-gateway-identity-key -retire-previous` is the same mode, and publishes the new key alone from that moment. Neither the replaced key nor an older previous key stays in the key set.
+
+- **What a thief can do.** A stolen key forges a token naming any person, with any `exp`, at every gateway that trusts this key set, until the key is retired and the gateway has refetched. The token lifetime, 600 seconds at most, bounds nothing here.
+- **The limit.** A gateway accepts a retired key until it refetches, and that interval is the gateway's own. So the procedure restarts each gateway, and everything forged stays valid until then.
+- **The outage.** The rotation stops every replica, so a recovery is an outage. Gateway calls stay refused until the replicas are back and the gateways have reloaded.
+
+To find the row, read the audit log for action `secret.rekey` with target `wardyn-gateway-identity-key`. Its `actor` is `wardyn/rotate-gateway-identity-key`. Its data holds `kid`, `replaced_kid`, `retired_previous`, and `previous_retire_at` on a planned rotation.
+
+## The audit receipt key
+
+The Ed25519 key that signs audit checkpoints, so a rewrite of the log by someone who holds the database fails a receipt. The checkpoints, receipts and offline check are in [OPERATIONS.md](../OPERATIONS.md#signed-checkpoints-and-receipts).
+
+- **Storage.** One secret-store row, `wardyn-audit-receipt-key`, made on first start unless `WARDYN_AUDIT_CHECKPOINT_INTERVAL` is `0`. A row that cannot be decrypted or parsed is never replaced.
+- **Public keys.** `wardyn audit keys` lists the current key and every previous one. Save the file where the control plane cannot change it; `wardyn audit verify` trusts only that file.
+
+### Rotating the key
+
+`wardynd -rotate-audit-receipt-key` is a **maintenance mode, not a server start**.
+
+1. Stop every replica. Without `WARDYN_HA` the mode refuses while a daemon holds the single-instance lock. With it no lock can tell, so this step is yours.
+2. Run the mode. It makes a new current key, keeps the replaced key's public half forever, writes a `secret.rekey` audit row and exits. With no key row it refuses, and it never makes a first key.
+3. Start `wardynd`, then run `wardyn audit keys` again and save the file.
+
+Checkpoints signed by the replaced key keep verifying, so earlier receipts stay good against a key file that lists it.
+
+### If the key is stolen
+
+`wardynd -rotate-audit-receipt-key -retire-previous` is the same mode, and marks the replaced key retired. Unlike an ordinary rotation, where the old key stays valid, a retired key fails every receipt whose checkpoint it signed with `key_retired`, genuine ones from before the theft included. Fetch the key set again to enforce the retirement; fetching a receipt again does not re-sign it, so those receipts stay unverifiable. Your off-box copies of earlier statements are the evidence for that history.
+
+- **What a thief can do.** Forge checkpoints that verify against a key file listing the stolen key, and so cover a rewrite. Retiring it ends that for every verifier that fetches the new file.
+- **A forged checkpoint.** One that reaches the log after wardynd started is logged, counted as `foreign_row` and never chained to; a new genesis starts at the chain head. A forgery already there at the signer's first read after start is chained to. Rows between a late forged checkpoint and the new genesis are not covered by a receipt.
+
+To find the row, read the audit log for action `secret.rekey` with target `wardyn-audit-receipt-key`. Its `actor` is `wardyn/rotate-audit-receipt-key`; its data holds `kid`, `replaced_kid` and `retired_previous`.
 
 ## Separating the platform keys
 
@@ -347,7 +434,7 @@ The two `auth/token/` paths are the client's own token upkeep (`token-file` auth
 
 **Moving an install to Transit, and back.** Reads follow each row's `kek_id`, so a daemon configured with both keys reads every row while `-rewrap` moves them:
 
-1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Set `WARDYN_KEK=transit` and `WARDYN_VAULT_TRANSIT_KEY=wardyn` with the `WARDYN_VAULT_*` client settings, keep `WARDYN_AGE_KEY`, and restart: new rows are wrapped by Transit, and old ones still read.
 3. Rewrap the rest, with the same settings:
    ```sh
@@ -441,7 +528,7 @@ Set the versionless ids, `https://<vault>.vault.azure.net/keys/wardyn-kek` and `
 
 **Moving an install to Key Vault, and back.** As for Transit, above:
 
-1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Set `WARDYN_KEK=azurekv`, both key ids and the identity settings, keep `WARDYN_AGE_KEY`, and restart.
 3. Run `wardynd -rewrap` with the same settings. Expected output: `every sealed secret and principal key is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
 4. Unset `WARDYN_AGE_KEY` and restart.
@@ -557,7 +644,7 @@ Set `WARDYN_AWS_KMS_KEY` to the key's full ARN, `arn:<partition>:kms:<region>:<a
 
 **Moving an install to AWS KMS, and back.** As for Key Vault, above:
 
-1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Set `WARDYN_KEK=awskms` and `WARDYN_AWS_KMS_KEY`, keep `WARDYN_AGE_KEY`, and restart. New rows are wrapped by KMS and old ones still read.
 3. Run `wardynd -rewrap` with the same settings.
 4. Unset `WARDYN_AGE_KEY` and restart.
@@ -652,7 +739,7 @@ Restart every replica with the settings it ran with afterwards. After a move ont
 - Only a person's credential (`owned_by` not empty). The boot keys (signing, session, SSH host and the rest), the operator namespace and the mask key stay v1 under the platform or credential key.
 - The setting does not change that, and no principal key exists for the operator namespace.
 - In store mode (`WARDYN_SECRET_STORE=vaultkv` or `azurekv`) a write is still a pointer to the organisation's store; the setting does nothing there.
-- With the setting `off`, nothing is written as v3 but every v3 row is still read, so turning it back off within 0.8.6 loses nothing.
+- With the setting `off`, nothing is written as v3 but every v3 row is still read, so turning it back off loses nothing.
 
 **Moving existing rows: `wardynd -rewrap-principal-keys`.** A maintenance mode, safe beside a serving daemon with the same settings.
 
@@ -786,7 +873,7 @@ Do it in this order:
 > [!WARNING]
 > **Residual: assignments are the one thing a database writer can move.** Someone who can write the `key_domain_assignments` table can move a subject's future writes into a domain whose key they hold. They cannot declare a domain or read anything already written.
 >
-> The mitigations are four-eyes on the two assignment writes (GOV4, `WARDYN_GOVERNANCE_SECOND_HUMAN`), the audit row each API change writes, and the 30-day `/setup/status` row that reports assignment changes. A write made straight to the table leaves no audit row of its own. A compromised wardynd process still exposes everything it can reach.
+> The mitigations are four-eyes on the two assignment writes (`WARDYN_GOVERNANCE_SECOND_HUMAN`), the audit row each API change writes, and the 30-day `/setup/status` row that reports assignment changes. A write made straight to the table leaves no audit row of its own. A compromised wardynd process still exposes everything it can reach.
 
 ## Store mode: credentials in Vault
 
@@ -907,7 +994,7 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and `WARDYN_VAULT_ROLE_PLATFORM=wardy
 
 **Moving an install to Vault, and back.** Online, one row per transaction, safe while a daemon serves; idempotent and resumable.
 
-1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Configure `WARDYN_VAULT_*` and `WARDYN_SECRET_STORE=vaultkv`, keep `WARDYN_AGE_KEY` set, and restart: new writes go to Vault, old rows still read.
 3. Move the rest:
    ```sh

@@ -600,6 +600,18 @@ var auditActionGrammarAllow = map[string]bool{
 	// The run-output retention sweep (0.8.6): recording.retention.sweep's sibling,
 	// named with a fourth segment by its design before it met this grammar.
 	"run.output.retention.sweep": true,
+	// A run policy generation row (0.10.0), named by the audit design for the generation a revive starts,
+	// a noun with no imperative to stand in for it; the row and its readers ship together.
+	"run.policy.generation": true,
+	// The proxy-start readback rows (0.10.0), named by the policy readback design before they met this grammar:
+	// "enforced" and "unconfirmed" say what the start's check found, and "report_stale" names a report that
+	// arrived too late to count. Each is a fact about a start that already happened, not an act to ask for.
+	"run.policy.enforced":     true,
+	"run.policy.unconfirmed":  true,
+	"run.policy.report_stale": true,
+	// A sandbox's DNS lookup row (0.10), named by the DNS design before it met this grammar: "query" is a
+	// noun, the lookup the run made, with no imperative to stand in for it.
+	"run.dns.query": true,
 	// #1428's per-person Azure DevOps token rows, named by its plan and its
 	// contract (ado_pat_contract.go) before they met this grammar; the docs lane
 	// settles the audit names against it, not the lane that first emits them.

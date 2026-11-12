@@ -6,87 +6,103 @@ What a super admin, a security admin and a member may do, and the governance pro
 bound them. Read this after [who-gets-in.md](who-gets-in.md), which says how a session
 derives its role.
 
-- **Super admin (the deployer).**
-  - Installs the chart, connects the IdP, and owns everything only the chart can say:
-    - the issuer and client, the boot role map (`WARDYN_OIDC_ROLE_MAP` — chart rows always win), the operator allowlist (`WARDYN_OIDC_OPERATOR_EMAILS` — also the boot posture floor),
-    - the default role, the deployment ceiling (`WARDYN_DEFAULT_POLICY`), trust roots, integrations, base images,
-    - and the People page (who gets in, and who else is an admin).
-  - The admin bearer token is the break-glass and remains exempt from every console lockout guard.
-- **Security admin (`security_admin`).**
-  - A mapped tier — never a default, and never derivable from the operator allowlist; you create one by mapping an IdP App Role or group to `security_admin` in the role map (chart or People page).
-  - Security admins read the whole workspace inventory AND any workspace in it — the list, the row (projected), its build status (image and log blanked) and its **observed egress**.
-  - That is because they decide that workspace's allowed and denied hosts and the observed traffic is the input to that decision.
-  - `GET /workspaces/{id}/env-as-code` is NOT in that set (owner-or-super, since F287): its files carry the internal registry coordinate, the site-config artifact redirects and the operator's setup commands, none of which are an egress-decision input.
-  - They cannot otherwise WRITE a workspace: renaming, reassigning, deleting, binding credential material and launching a recording all stay with the super admin.
-  - Security admins author and assign **governance profiles** (named ceilings bound to users or groups), write the org allow/denylists (capability grants).
-  - Mount host paths are the exception: a security admin reads them as `<redacted>`, and may keep a mount, make it read-only or remove it. Only a super admin adds a mount, changes its host path or makes it writable.
-  - They decide escalated approvals — egress, credential, tool — on anyone's run.
-  - They revoke sessions and API tokens, and verify the audit chain.
-  - They can also **stop** any run in the deployment.
-  - Killing a foreign run is incident response, and the most time-critical thing this tier does.
-  - It is a stop, which is deliberately *not* the same as reaching INTO one:
-    - no attach ticket, no shell, no credential material, no host.
-  - Inspect-or-stop is the whole of that warrant.
-  - (The batch form, the sandbox sweep, stays admin-only: it drives the container runtime across every run at once, which is host reach rather than run reach.)
-  - They **promote** a workspace's recorded egress into its allowlist, but they cannot **record** one.
-  - Launching a recording session opens an interactive sandbox with open egress, the workspace's directory bind-mounted and its credentials injected, which is reach into a run, credential material and the host.
-  - These are the three things this tier is defined never to have.
-  - So `POST /workspaces/{id}/record` is admin-only and the console shows a security admin that control disabled beside the promote control it leaves live.
-  - They also cannot touch the People page, integrations, site-config writes, base images, or the deploy funnel.
-  - They run under a governance profile themselves if one is assigned to them, since only `admin` is exempt from ceiling resolution.
-  - A profile can only make the deployer's stored credentials *less* available, never more — and a security admin widening their own egress is an audited act, visible in the log they cannot rewrite.
-  - No capability grant can widen anyone to admin; that invariant is what makes delegating `/permissions` safe.
-- **A security admin's revocations reach the super admin, deliberately.**
-  - "Revoke sessions and API tokens" above is not scoped to members: `POST /api/v1/sessions/revoke` applies no target-role check, so a security admin may cut a *super admin's* sessions and tokens by `sub`.
-  - The `{"all":true}` arm logs out **every** principal and revokes **every** live API token in the deployment — CI and automation credentials included — in one audited call.
-  - That is the tier working as designed.
-  - Incident response is the security admin's job, the two tiers deliberately do not nest (a security admin still cannot reach into a run, and their SSH key and attach ticket still stamp `user`).
-  - A revocation only ever *subtracts* reach — it grants the caller nothing.
+| Role | May | May not |
+| --- | --- | --- |
+| Super admin | Install the chart and connect the IdP; own the People page, integrations, base images, site config and every workspace write | Enter a person's run; only a run of their own or one with no personal owner |
+| Security admin | Author governance profiles and capability grants; read any workspace; decide escalated approvals; revoke sessions and tokens; stop any run | Reach into a run, read credential material or reach the host; record; write a workspace |
+| User (member) | Run agents inside the profile that binds them; ask for more through an escalation | Change what the profile closes |
+
+## Super admin (the deployer)
+
+- Installs the chart, connects the IdP, and owns everything only the chart can say:
+  - the issuer and client, the boot role map (`WARDYN_OIDC_ROLE_MAP` — chart rows always win), the operator allowlist (`WARDYN_OIDC_OPERATOR_EMAILS` — also the boot posture floor),
+  - the default role, the deployment ceiling (`WARDYN_DEFAULT_POLICY`), trust roots, integrations, base images,
+  - and the People page (who gets in, and who else is an admin).
+- The admin bearer token is the break-glass and remains exempt from every console lockout guard.
+- Where admins sign in with SSO, we recommend `WARDYN_GOVERN_ADMIN_RUNS`, so their own runs are governed like a member's ([Admin runs](who-gets-in.md#admin-runs)).
+
+## Security admin (`security_admin`)
+
+- A mapped tier — never a default, and never derivable from the operator allowlist; you create one by mapping an IdP App Role or group to `security_admin` in the role map (chart or People page).
+- Security admins read the whole workspace inventory and any workspace in it: the list, the row (projected), its build status (image and log blanked) and its observed egress. They decide that workspace's allowed and denied hosts, and the observed traffic is the input to that decision.
+- `GET /workspaces/{id}/env-as-code` is NOT in that set (owner or super admin only): its files carry the internal registry coordinate, the site-config artifact redirects and the operator's setup commands, none of which are an egress-decision input.
+- They cannot otherwise WRITE a workspace: renaming, reassigning, deleting, binding credential material and launching a recording all stay with the super admin.
+- Security admins author and assign governance profiles (named ceilings bound to users or groups) and write the org allow/denylists (capability grants).
+- Mount host paths are the exception: a security admin reads them as `<redacted>`, and may keep a mount, make it read-only or remove it. Only a super admin adds a mount, changes its host path or makes it writable.
+- They decide escalated approvals — egress, credential, tool — on anyone's run.
+- They revoke sessions and API tokens, and verify the audit chain.
+- They can also stop any run in the deployment. A stop is deliberately not reaching into one: no attach ticket, no shell, no credential material, no host. Inspect-or-stop is the whole of that warrant.
+- (The batch form, the sandbox sweep, stays admin-only: it drives the container runtime across every run at once, which is host reach rather than run reach.)
+- They promote a workspace's recorded egress into its allowlist, but they cannot record one.
+- Launching a recording session opens an interactive sandbox with open egress, the workspace's directory bind-mounted and its credentials injected, which is reach into a run, credential material and the host.
+- These are the three things this tier is defined never to have.
+- So `POST /workspaces/{id}/record` is admin-only and the console shows a security admin that control disabled beside the promote control it leaves live.
+- They also cannot touch the People page, integrations, site-config writes, base images, or the deploy funnel.
+- They run under a governance profile themselves if one is assigned to them, since only `admin` is exempt from ceiling resolution.
+- A profile can only make the deployer's stored credentials *less* available, never more — and a security admin widening their own egress is an audited act, visible in the log they cannot rewrite.
+- No capability grant can widen anyone to admin; that invariant is what makes delegating `/permissions` safe.
+
+### A security admin's revocations reach the super admin
+
+- "Revoke sessions and API tokens" above is not scoped to members: `POST /api/v1/sessions/revoke` applies no target-role check, so a security admin may cut a *super admin's* sessions and tokens by `sub`.
+- The `{"all":true}` arm logs out every principal and revokes every live API token in the deployment — CI and automation credentials included — in one audited call.
+- Incident response is the security admin's job, the two tiers deliberately do not nest (a security admin still cannot reach into a run, and their SSH key and attach ticket still stamp `user`).
+- A revocation only ever subtracts reach.
 - What bounds it is that a revocation is not a lockout.
-  - The session cutoff is a **timestamp**, not a flag: signing in again mints a session issued after the cutoff, which clears it with no operator action.
-  - The **admin bearer token never consults revocations at all**, so the break-glass above survives a `{"all":true}` — a security admin cannot use this to lock the deployer out of undoing it.
+  - The session cutoff is a timestamp, not a flag: signing in again mints a session issued after the cutoff, which clears it with no operator action.
+  - The admin bearer token never consults revocations at all, so the break-glass above survives a `{"all":true}` — a security admin cannot use this to lock the deployer out of undoing it.
 
 > [!WARNING]
 > API tokens are the one part that does not self-heal: they are revoked permanently and must be re-minted, so treat `{"all":true}` as an incident lever rather than a routine one.
 
 - Every call is audited as `session.revoke` with its scope and the number of tokens revoked, under the calling security admin's own principal.
-- **User (member).**
-  - Signs in, runs agents inside the governance profile their group is assigned (or the deployment ceiling if none).
-  - The profile is enforced outside the sandbox: inline policies are clamped to it, saved policies are clamped to it on selection (for anyone a profile is assigned to).
-  - Authoring no policy at all yields it, and its denied hosts are re-asserted when the run is dispatched.
-  - A denied host cannot receive an injected or brokered credential at all.
-  - What a member can change is what the profile leaves open; what they can ask for is an escalation on the Approvals page.
-- **Unit admins (0.10.0).**
-  - A unit admin is not a fourth role: it is a grant on a unit, held by a person or an IdP group, whatever their role.
-  - It governs that unit and every unit below it, nothing else. A unit admin's widenings are always held for a second human ([unit admins](unit-admins.md)).
-- **Governance profiles.**
-  - One profile per subject; when several match, the most specific wins (user beats group beats user type beats everyone; priority breaks group ties).
-  - The Governance page shows the resolved answer, and `GET /policies/default` returns the ceiling that actually binds the caller.
-  - A profile is either **standalone** or **composed** (0.8.6).
-  - The walkthrough below covers composed profiles from authoring to rollback; the design record is [`docs/design/0.8/0.8.6-comp.md`](../design/0.8/0.8.6-comp.md).
-- *Standalone and composed.*
-  - A standalone profile replaces the deployment ceiling for its subjects, exactly as on 0.8.5.
-  - A composed profile stores no ceiling of its own.
-  - It names a **base**, which is another profile (`parent_id`) or, when that is null, the deployment default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow that base.
-  - The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever authority is read and never stored, so a change to a base reaches every profile built on it.
-  - A composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only `effective: {ceiling, limits}` beside them.
-  - In `GET /api/v1/governance` a composed profile's own `ceiling` holds only what it stores, so read the resolved answer under `effective.ceiling`.
-- *Authoring.*
-  - A profile names at most one base.
-  - A chain is at most three profiles deep, counting the profile itself (a baseline, a division and a team), and a chain cannot loop.
-  - A write that would make a cycle or push any existing descendant past three is a `409` (`governance_unit_cycle`, `governance_unit_depth`).
-  - An overlay lists only the fields it narrows.
-  - An absent field inherits the base unchanged, and a present empty list is a value (`allowed_domains: []` narrows to no domains), except where empty would mean "everything" or "the default": `allowed_methods: []`, `azure_devops_capabilities: []` and `github_capabilities: []` are refused.
-  - The write is strict.
-  - Take an overlay that names something its base does not permit:
-    - a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the base excludes,
-    - `allow_all_egress` on a base without it, a grant the base's grants do not dominate.
-  - Such an overlay is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty rather than narrow.
-  - A `PUT` that omits `parent_id`, `overlay`, `overlay_limits` or `contact` keeps the stored value, so an older client cannot flatten a profile by accident.
-  - Only an explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the request must then carry a valid `ceiling`).
-- *Resolution, and what the meet does.*
-  - Resolution reads the chain once and composes from the deployment down.
-  - Each field has its own meet, taken after the runtime's own defaults are applied to both sides, so a zero that means "the default" is never read as "smaller":
+
+## User (member)
+
+- Signs in, runs agents inside the governance profile their group is assigned (or the deployment ceiling if none).
+- The profile is enforced outside the sandbox: inline policies are clamped to it, saved policies are clamped to it on selection (for anyone a profile is assigned to).
+- Authoring no policy at all yields it, and its denied hosts are re-asserted when the run is dispatched.
+- A denied host cannot receive an injected or brokered credential at all.
+- What a member can change is what the profile leaves open; what they can ask for is an escalation on the Approvals page.
+
+## Unit admins
+
+- A unit admin is not a fourth role: it is a grant on a unit, held by a person or an IdP group, whatever their role.
+- It governs that unit and every unit below it, nothing else. A unit admin's widenings are always held for a second human ([unit admins](unit-admins.md)).
+
+## Governance profiles
+
+- One profile per subject; when several match, the most specific wins (user beats group beats user type beats everyone; priority breaks group ties).
+- The Governance page shows the resolved answer, and `GET /policies/default` returns the ceiling that actually binds the caller.
+- A profile is either **standalone** or **composed**.
+- The design record is [`docs/design/0.8/0.8.6-comp.md`](../design/0.8/0.8.6-comp.md).
+
+### Standalone and composed profiles
+
+- A standalone profile replaces the deployment ceiling for its subjects.
+- A composed profile stores no ceiling of its own.
+- It names a **base**, which is another profile (`parent_id`) or, when that is null, the deployment default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow that base.
+- The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever authority is read and never stored, so a change to a base reaches every profile built on it.
+- A composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only `effective: {ceiling, limits}` beside them.
+- In `GET /api/v1/governance` a composed profile's own `ceiling` holds only what it stores, so read the resolved answer under `effective.ceiling`.
+
+### Authoring a composed profile
+
+- A profile names at most one base.
+- A chain is at most three profiles deep, counting the profile itself (a baseline, a division and a team), and a chain cannot loop.
+- A write that would make a cycle or push any existing descendant past three is a `409` (`governance_unit_cycle`, `governance_unit_depth`).
+- An overlay lists only the fields it narrows.
+- An absent field inherits the base unchanged, and a present empty list is a value (`allowed_domains: []` narrows to no domains), except where empty would mean "everything" or "the default": `allowed_methods: []`, `azure_devops_capabilities: []` and `github_capabilities: []` are refused.
+- The write is strict. An overlay is `400 governance_overlay_invalid` when its meet with the base would be empty rather than narrow, or when it names something its base does not permit:
+  - a domain the base's `allowed_domains` does not cover under the proxy's own matcher, or a method the base excludes,
+  - `allow_all_egress` on a base without it, or a grant the base's grants do not dominate.
+- A `PUT` that omits `parent_id`, `overlay`, `overlay_limits` or `contact` keeps the stored value, so an older client cannot flatten a profile by accident.
+- Only an explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the request must then carry a valid `ceiling`).
+
+### Resolution, and what the meet does
+
+- Resolution reads the chain once and composes from the deployment down.
+- Each field has its own meet, taken after the runtime's own defaults are applied to both sides, so a zero that means "the default" is never read as "smaller":
 
 | `RunPolicySpec` field | Unset means | Meet |
 |---|---|---|
@@ -112,14 +128,16 @@ derives its role.
 | `push_rules.hold_seconds` | 120 | smaller |
 | `push_rules.max_file_size_mib` | off | smaller positive (off is unbounded) |
 | `push_rules.deny_new_executables` | false | OR |
-| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable; a base on the provider default keeps it |
-| `github_capabilities` | the provider row's default | as `azure_devops_capabilities` |
+| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable; a base on the provider default keeps it. The list is standing access above the provider row's default, not a wall below it: a member who names nothing keeps the row's default whole, and a member's pick stays if it is in the default or in the list. To hold a unit read-only, use `eligible_grants` or a second provider row |
+| `github_capabilities` | the provider row's default | Narrow-only: a member's run gets at most these GitHub capabilities; their walls and presets can narrow further, never widen. |
 
 | `GovernanceLimits` field | Unset means | Meet |
 |---|---|---|
-| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives` | false | OR |
+| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives`, `deny_kept_machines`, `deny_scheduled_runs`, `deny_background_desktop_watch` | false | OR |
+| [`deny_components`, `deny_model_providers`](../POLICIES.md#deny_components-and-deny_model_providers) | empty | union |
 | `local_self_defined_components` | false | AND |
 | `deny_placements` | none denied: every placement is permitted | union of the denied placements |
+| `allowed_models` | none listed: no limit | intersection; an empty list on one side yields the other; disjoint is unsatisfiable |
 | `max_concurrent_runs`, `max_ephemeral_disk_mib`, `max_drive_size_mib`, `max_cpu_millis`, `max_memory_mib` | 0 is unlimited | smaller positive |
 | `autonomy_rubric` | caps nothing | per field, the lower level; a field set on one side only takes that side |
 | `max_end_ahead_sec` | 0 is no limit | smaller positive |
@@ -129,52 +147,74 @@ derives its role.
 | `allow_no_end`, `user_changes_limits` | false | AND |
 | `pause_idle_after_sec` | 0 is pause only runs waiting for a decision | smaller positive |
 
-- *Worked example.*
-  - An organisation keeps three profiles.
-  - The **baseline** is a composed profile with no base (so the deployment default is its base) and an overlay that sets `allowed_domains` to the package registries and the forge, `first_use_approval` to `always_deny`, and `limits.max_cpu_millis` to 4000.
-  - The **division** profile names the baseline as its base and an overlay that drops the forge host from `allowed_domains` and sets `max_concurrent_runs` to 6.
-  - The **team** profile names the division and an overlay that sets `allowed_methods` to `GET` and `HEAD`, `denied_domains` to one extra host, and `max_cpu_millis` to 2000.
-  - Assigned to the team's group, the team profile binds this:
-    - the registries only, the forge dropped, `GET` and `HEAD` only, the extra host denied, 2000 millicores (the smaller of 4000 and 2000), six concurrent runs, and the baseline's `always_deny`.
-  - Later the baseline's owner narrows `max_cpu_millis` to 1000: the next read of the division and the team gives 1000, with no write to either.
-  - A baseline edit that would leave a descendant empty (it narrows `allowed_methods` to `POST` while the team overlay allows only `GET` and `HEAD`) is refused with `409 governance_overlay_unsatisfiable` naming that descendant.
-  - Widening the baseline later widens every field a descendant's overlay leaves unset, as any base edit does.
-  - It never switches on an overlay entry the base did not permit, because an overlay is checked against the base at write.
-- *A base that moves under an overlay.*
-  - A write is strict, but a base edit, or a redeploy that narrows the deployment default, is someone else's act arriving later.
-  - At resolve the meet drops what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`.
-  - If nothing satisfies the base and the overlay together (the deployment default narrowed until their `allowed_methods` are disjoint, or an overlay's non-empty `ui_apps` that share none of the base's, say), the launch and every live door refuse with `403 governance_overlay_unsatisfiable`, audited, until an administrator fixes it.
-  - A chain that cannot be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
-  - Neither case is ever read as the deployment's policy.
-  - An administrator sees which profile failed on `GET /governance` (`effective.error`).
-- *Every reader sees the composed answer.*
-  - Create, preflight and dispatch, and the doors that bind runs already going (attach and SSH, UI apps, revive, the limits re-clamp, end extension, the run policy view and the preview) all resolve through one code path.
-  - A source guard fails if any other code reads a raw profile row.
-  - A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or restart.
-  - A base edit now does so for a whole subtree at once, so one edit has a larger reach and the same delay.
-- *What a member sees.*
-  - A member sees their own profile's name and contact, and the effective content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them, never the chain.
-  - A base's name, overlay and contact are not disclosed, and a profile with no `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that would name the base.
-  - Only an admin or a `security_admin` can read the graph (`GET /governance`).
-  - `GET /governance` returns every profile and every assignment. `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
-  - A `PUT /governance/units/{id}` body may be a unit as `GET /governance` returns it; its server-set fields are ignored.
-  - When you write an example for a member, show the effective result and the profile's own name; do not describe the structure behind it.
-- *Deleting and unassigning.*
-  - Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).
-- *Exporting a graph (CLI and SDK).*
-  - `wardyn governance get` exports a composed graph and `wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the same ([`docs/sdk.md`](../sdk.md), "Unit trees").
-  - Profiles are written bases first, every graph reference (`parent_id`, an assignment's `unit_id`) is remapped through the target's names to ids, the read-only `effective` view is never written back, and prune deletes descendants before bases.
-  - Under second-person approval (four-eyes) a write may return `202`: a child whose base is still pending, and an assignment whose profile is pending, are deferred and reported, not sent with a dangling id.
-  - Apply again once the base is approved.
-- *Upgrade and rollback.*
-  - The 0.8.6 migration only adds nullable columns, so every existing profile is standalone and resolves exactly as on 0.8.5.
-  - An older SDK or CLI sees `ceiling: {}` on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send omits the composition fields, which are kept.
+### Allowed models
+
+- `limits.allowed_models` lists the hosted models a run may ask for, exactly as the provider names them (`model-a`, `small-model-a`). Empty is no limit; there is no deny-all.
+- A run is held to the list it started with, kept on a revive. The run's proxy intercepts the vendor hosts and refuses any other model.
+- A harness's small model is not added for you. Local models keep their own lists.
+- Other writes to a model host are refused under `brokered:allowed-models`, file and skill uploads included.
+- A provider whose calls the proxy cannot read is refused with `403 allowed_models_unchecked`.
+- A body carrying `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` is refused too: a gateway reads them to pick another model.
+- An admin run that stands outside governance is not bound by this list. Test with a governed run.
+
+### Worked example
+
+- An organisation keeps three profiles.
+- The **baseline** is a composed profile with no base (so the deployment default is its base) and an overlay that sets `allowed_domains` to the package registries and the forge, `first_use_approval` to `always_deny`, and `limits.max_cpu_millis` to 4000.
+- The **division** profile names the baseline as its base and an overlay that drops the forge host from `allowed_domains` and sets `max_concurrent_runs` to 6.
+- The **team** profile names the division and an overlay that sets `allowed_methods` to `GET` and `HEAD`, `denied_domains` to one extra host, and `max_cpu_millis` to 2000.
+- Assigned to the team's group, the team profile binds this:
+  - the registries only, the forge dropped, `GET` and `HEAD` only, the extra host denied, 2000 millicores (the smaller of 4000 and 2000), six concurrent runs, and the baseline's `always_deny`.
+- Later the baseline's owner narrows `max_cpu_millis` to 1000: the next read of the division and the team gives 1000, with no write to either.
+- A baseline edit that would leave a descendant empty (it narrows `allowed_methods` to `POST` while the team overlay allows only `GET` and `HEAD`) is refused with `409 governance_overlay_unsatisfiable` naming that descendant.
+- Widening the baseline later widens every field a descendant's overlay leaves unset, as any base edit does.
+- It never switches on an overlay entry the base did not permit, because an overlay is checked against the base at write.
+
+### A base that moves under an overlay
+
+- A write is strict, but a base edit, or a redeploy that narrows the deployment default, is someone else's act arriving later.
+- At resolve the meet drops what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`.
+- If nothing satisfies the base and the overlay together (the deployment default narrowed until their `allowed_methods` are disjoint, or an overlay's non-empty `ui_apps` that share none of the base's, say), the launch and every live door refuse with `403 governance_overlay_unsatisfiable`, audited, until an administrator fixes it.
+- A chain that cannot be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
+- Neither case is ever read as the deployment's policy.
+- An administrator sees which profile failed on `GET /governance` (`effective.error`).
+
+### Every reader sees the composed answer
+
+- Create, preflight and dispatch, and the doors that bind runs already going (attach and SSH, UI apps, revive, the limits re-clamp, end extension, the run policy view and the preview) all resolve through one code path.
+- A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or restart.
+- A base edit now does so for a whole subtree at once, so one edit has a larger reach and the same delay.
+
+### What a member sees
+
+- A member sees their own profile's name and contact, and the effective content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them, never the chain.
+- A base's name, overlay and contact are not disclosed, and a profile with no `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that would name the base.
+- Only an admin or a `security_admin` can read the graph (`GET /governance`).
+- `GET /governance` returns every profile and every assignment. `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
+- A `PUT /governance/units/{id}` body may be a unit as `GET /governance` returns it; its server-set fields are ignored.
+- When you write an example for a member, show the effective result and the profile's own name; do not describe the structure behind it.
+
+### Deleting and unassigning
+
+- Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).
+
+### Exporting a graph (CLI and SDK)
+
+- `wardyn governance get` exports a composed graph and `wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the same ([`docs/sdk.md`](../sdk.md), "Unit trees").
+- Profiles are written bases first, every graph reference (`parent_id`, an assignment's `unit_id`) is remapped through the target's names to ids, the read-only `effective` view is never written back, and prune deletes descendants before bases.
+- Under second-person approval (four-eyes) a write may return `202`: a child whose base is still pending, and an assignment whose profile is pending, are deferred and reported, not sent with a dangling id.
+- Apply again once the base is approved.
+
+### Upgrade and rollback
+
+- The 0.8.6 migration only adds nullable columns, so every existing profile is standalone.
+- An older SDK or CLI sees `ceiling: {}` on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send omits the composition fields, which are kept.
 
 > [!IMPORTANT]
 > There is no downgrade: a 0.8.5 binary refuses a database the migration has touched, and converting composed profiles to standalone first changes nothing it sees.
 > Restore the pre-upgrade dump, which holds no composed profile.
 
-*Residual risks.*
+### Residual risks
 
 - Running proxies keep their dispatched egress until revive or restart (above); a base edit
   makes that reach wider, not faster.
@@ -187,74 +227,89 @@ derives its role.
   so some narrowing edits still need a second approver. That is the safe direction.
 - Operators resolve no profile; that is a separate predicate from composition.
 
-Stated honestly: profiles narrow by omission — a profile that omits secret grants revokes them for its subjects (the editor warns).
+### Omission and sandbox size
+
+Profiles narrow by omission: a profile that omits secret grants revokes them for its subjects (the editor warns).
 
 - A member's long-lived API token keeps the group snapshot it was minted with until re-minted.
-- Sandbox size is the exception.
-  - A profile that omits `resources`, or leaves one of its fields at zero, inherits the deployment's size for that field (the default policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox.
-  - A profile that sets a size keeps it. Its `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is unlimited, negatives refused) lower that size for its assigned members at create, preflight and dispatch, but since 0.9 never below the size an untouched run gets (`MemberCap`). Operators are exempt.
-  - So a maximum below the deployment's default no longer shrinks a member's sandbox. To bound members below it, set a smaller size in the profile or lower the deployment's default.
-  - A maximum where no size is set is the size, so setting one can raise the member cap: such an update waits for a second approver, an overlay may not raise the cap above its base's, and a base that later stops bounding lowers the overlay's to its own. A size set in an overlay applies only over a base that sets one; over a base with none the deployment's default size applies.
-- **Limits that reach a running run (0.8.2, #1391, #1392).**
-  - Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
-  - `deny_interactive` also refuses a terminal attach (`wardyn attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
-  - (A super admin enters only a run of their own or one with no personal owner, so the exemption below reaches no person's run.)
-  - The attach is an `authz.denied` row (`governance_unit`, target `runs.attach`), the SSH refusal an `ssh.authenticate` failure naming the profile.
-  - The harness sign-in run is exempt, as it is at create.
-  - `deny_ui_apps` strips `ui_apps` from a run at create, with a `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI gateway refuses a session into a run created under the profile.
-  - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
-  - So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
-  - A super admin is exempt from both at every door, as at create; a security admin is bound.
-  - A limit set later reaches new sessions but does not sever ones already open: a terminal, SSH session or UI-app session opened before the limit was set runs until it ends.
-  - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
-- **The autonomy rubric (0.8, #77).**
-  - A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`).
-    - Each is unset or one of four autonomy levels:
-      - `L0` attended (interactive only, supervised seeding), `L1` gated (adds non-interactive runs, but `tool_approvals` is derived to `hold`),
-      - `L2` unattended (adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the door that routes around every other gate, so it is the top rung).
-  - Below `L3`, an interactive run with a task must use `interactive_start=agent`: the shell startup form (`interactive_start` unset or `shell`) runs the task at sandbox boot the way exec does, and is refused (`runs.interactive_start`).
-  - `resolveRunAutonomy` ([`internal/api/runs_autonomy.go`](../../internal/api/runs_autonomy.go)) grades the run's real posture — egress reach graded on the same union `unionRunEgress` builds, secret power, and the already-enforced confinement class — against the assigned profile's rubric and folds every field the posture matches to its **minimum** level.
-  - A nil rubric, or a posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
-  - The same function backs both `POST /runs` and `POST /runs/preflight`, so the level Review shows is the level launch enforces.
-  - A run whose declared shape exceeds its resolved level is refused `governance_unit` (see [§ Every denial that isn't a 404](denials.md#every-denial-that-isnt-a-404) for its `target`s).
-  - A non-interactive run resolved to exactly `L1` is not refused when its agent has a tool-approval lane (claude-code): it launches with its tool approvals derived to `hold`, and the 201 carries a warning saying so.
-  - Any other agent — codex-cli, a BYOA image — has no lane to derive a hold into, so the same run is refused with target `runs.agent`.
-  - The resolution — level, posture, and every rubric field that tied at that level (`bound_by`) — rides the create audit row's `autonomy` field and is frozen on `agent_runs.autonomy_level`.
-  - **Not in the posture:** the model-provider hosts egress dispatch resolves from global configuration after this gate runs (a Bedrock run's region, for one), and any stored-credential residency.
-  - A run's autonomy level is graded on what the run can reach and hold, not on where its model credential lives.
-- **The baseline the rubric grades against.**
-  - Egress `open` means an allowlisted host beyond the baseline, and secrets `powerful` includes an `api_key` to a host outside it.
-  - Both read one set: Wardyn's built-in public hosts (the vendor model APIs, the public code hosts and the package registries, `safeBaselineDomains` in [`internal/composer/risk.go`](../../internal/composer/risk.go)), plus what the operator declares.
-  - An operator declares hosts with `PUT /governance/egress-baseline`, or in the console under Governance, Baseline hosts.
-    - `baseline_hosts` are exact hostnames.
-    - `internal_host_suffixes` mark existing `internal_hosts` entries, each covering that host only, never a host under it (list those as `baseline_hosts`).
-  - Nothing is declared by default, and `internal_hosts` is never folded in on its own, so an upgrade grades every run as before.
-  - A declared host lowers the grade of every `api_key` to it. A Bedrock provider's credential is graded as an `api_key` to the host its requests go to: its base URL's host when one is set, else the regional data-plane host. Declaring that host covers it too: there is no Bedrock exception either way.
-  - Entries must be exact hostnames, with no wildcard, scheme, port, path or IP address, and a suffix may not be a public suffix such as `co.uk`: either would vouch for hosts nobody named.
-  - The write is a security-admin governance write, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. It takes `If-Match` (a stale ETag is a 412) and is audited as `governance.egress_baseline.write`.
-- **What the rubric can see here, at profile-write time.**
-  - A profile write whose resolved rubric sets any row answers with one more advisory, beside the omission warnings; a held write keeps it in the change's notes.
-  - It names the rows that cap nothing here first, by the editor's labels, then the grades a run can get on this deployment: three short sentences at most.
-  - For example, on a deployment with one Bedrock provider and a substrate that offers only CC1:
 
-    ```text
-    2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it. A run on one of this profile's model providers is always graded secrets powerful.
-    ```
+- A profile that omits `resources`, or leaves one of its fields at zero, inherits the deployment's size for that field (the default policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox.
+- A profile that sets a size keeps it. Its `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is unlimited, negatives refused) lower that size for its assigned members at create, preflight and dispatch, but never below the size an untouched run gets (`MemberCap`). Operators are exempt.
+- So a maximum below the deployment's default no longer shrinks a member's sandbox. To bound members below it, set a smaller size in the profile or lower the deployment's default.
+- A maximum where no size is set is the size, so setting one can raise the member cap: such an update waits for a second approver, an overlay may not raise the cap above its base's, and a base that later stops bounding lowers the overlay's to its own. A size set in an overlay applies only over a base that sets one; over a base with none the deployment's default size applies.
 
-  - It claims only what the deployment forces on every run, so a row it calls inert really is.
-    - Confinement: the classes the deployment's runner offers at or above the profile's floor. With self-hosted runners on, or a runner that cannot answer, every class counts.
-    - Secrets: the weakest model credential any launchable harness folds. A harness no enabled provider serves, and Your own tools, fold none, so `secrets_none` can bind on any deployment that offers one.
-    - A run on a model provider is also named on its own, when its provider's credential forces a higher grade.
-    - Egress: always from `sealed` up, because a run can narrow its allowlist.
+### Limits that reach a running run
+
+- Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
+- `deny_interactive` also refuses a terminal attach (`wardyn attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
+- (A super admin enters only a run of their own or one with no personal owner, so the exemption below reaches no person's run.)
+- The attach is an `authz.denied` row (`governance_unit`, target `runs.attach`), the SSH refusal an `ssh.authenticate` failure naming the profile.
+- The harness sign-in run is exempt, as it is at create.
+- `deny_ui_apps` strips `ui_apps` from a run at create, with a `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI gateway refuses a session into a run created under the profile.
+- An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
+- So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
+- A super admin is exempt from both at every door, as at create, unless `WARDYN_GOVERN_ADMIN_RUNS` is on, when only an operator-owned run is; a security admin is bound.
+- A run's lifetime cap is a hard end: see [At the lifetime cap](run-lifetime.md#at-the-lifetime-cap).
+- A limit set later reaches new sessions and later requests on an open UI-app session, which get a `403`. It does not sever a socket already open: a terminal, an SSH session or an open UI-app socket runs until it ends.
+- A limit set during a desktop sign-in stops new entry. An open display stays until it ends, and the agent comes back at End or within 30 minutes.
+- `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
+- `deny_background_desktop_watch` refuses watching a background macOS run's desktop, view only, under the profile as it stands now. `deny_ui_apps` and `deny_interactive` refuse it too.
+- No role is exempt from a watch, a super admin included, because its ticket is stamped as a member's. An open watch is re-checked every 30 seconds and ends within a minute of a change, unlike the open sockets above. The refusal at the door is `governance_unit` at `runs.desktop_watch`; the re-check that ends an open watch writes a `ui.authorize` row, `denied`, with `data.reason` `governance_unit`.
+
+### The autonomy rubric
+
+- A profile may also carry `limits.autonomy_rubric`, ten closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`), three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`) and [`self_defined_component`](../POLICIES.md#autonomy_rubricself_defined_component).
+  - Each is unset or one of four autonomy levels:
+    - `L0` attended (interactive only, supervised seeding), `L1` gated (adds non-interactive runs, but `tool_approvals` is derived to `hold`),
+    - `L2` unattended (adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the door that routes around every other gate, so it is the top rung).
+- Below `L3`, an interactive run with a task must use `interactive_start=agent`: the shell startup form (`interactive_start` unset or `shell`) runs the task at sandbox boot the way exec does, and is refused (`runs.interactive_start`).
+- `resolveRunAutonomy` ([`internal/api/runs_autonomy.go`](../../internal/api/runs_autonomy.go)) grades the run's real posture — egress reach graded on the same union `unionRunEgress` builds, secret power, and the already-enforced confinement class — against the assigned profile's rubric and folds every field the posture matches to its **minimum** level.
+- A nil rubric, or a posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
+- The same function backs both `POST /runs` and `POST /runs/preflight`, so the level Review shows is the level launch enforces.
+- A run whose declared shape exceeds its resolved level is refused `governance_unit` (see [§ Every denial that isn't a 404](denials.md#every-denial-that-isnt-a-404) for its `target`s).
+- A non-interactive run resolved to exactly `L1` is not refused when its agent has a tool-approval path (claude-code): it launches with its tool approvals derived to `hold`, and the 201 carries a warning saying so.
+- Any other agent — codex-cli, a BYOA image — has no path to derive a hold into, so the same run is refused with target `runs.agent`.
+- The resolution — level, posture, and every rubric field that tied at that level (`bound_by`) — rides the create audit row's `autonomy` field and is frozen on `agent_runs.autonomy_level`.
+- **Not in the posture:** the model-provider hosts egress dispatch resolves from global configuration after this gate runs (a Bedrock run's region, for one), and any stored-credential residency.
+- A run's autonomy level is graded on what the run can reach and hold, not on where its model credential lives.
+
+### The baseline the rubric grades against
+
+- Egress `open` means an allowlisted host beyond the baseline, and secrets `powerful` includes an `api_key` to a host outside it.
+- Both read one set: Wardyn's built-in public hosts (the vendor model APIs, the public code hosts and the package registries, `safeBaselineDomains` in [`internal/composer/risk.go`](../../internal/composer/risk.go)), plus what the operator declares.
+- An operator declares hosts with `PUT /governance/egress-baseline`, or in the console under Governance, Baseline hosts.
+  - `baseline_hosts` are exact hostnames.
+  - `internal_host_suffixes` mark existing `internal_hosts` entries, each covering that host only, never a host under it (list those as `baseline_hosts`).
+- Nothing is declared by default, and `internal_hosts` is never folded in on its own, so an upgrade grades every run as before.
+- A declared host lowers the grade of every `api_key` to it. A Bedrock provider's credential is graded as an `api_key` to the host its requests go to: its base URL's host when one is set, else the regional data-plane host. Declaring that host covers it too: there is no Bedrock exception either way.
+- Entries must be exact hostnames, with no wildcard, scheme, port, path or IP address, and a suffix may not be a public suffix such as `co.uk`: either would vouch for hosts nobody named.
+- The write is a security-admin governance write, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. It takes `If-Match` (a stale ETag is a 412) and is audited as `governance.egress_baseline.write`.
+
+### What the rubric can see at profile-write time
+
+- A profile write whose resolved rubric sets any row answers with one more advisory, beside the omission warnings; a held write keeps it in the change's notes.
+- It names the rows that cap nothing here first, by the editor's labels, then the grades a run can get on this deployment: three short sentences at most.
+- For example, on a deployment with one Bedrock provider and a substrate that offers only CC1:
+
+  ```text
+  2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it. A run on one of this profile's model providers is always graded secrets powerful.
+  ```
+
+- It claims only what the deployment forces on every run, so a row it calls inert really is.
+  - Confinement: the classes the deployment's runner offers at or above the profile's floor. With self-hosted runners on, or a runner that cannot answer, every class counts.
+  - Secrets: the weakest model credential any launchable harness folds. A harness no enabled provider serves, and Your own tools, fold none, so `secrets_none` can bind on any deployment that offers one.
+  - A run on a model provider is also named on its own, when its provider's credential forces a higher grade.
+  - Egress: always from `sealed` up, because a run can narrow its allowlist.
+
 ## When everyone is an admin, and what a refused person is told
 
-**The everyone-is-an-admin warning.** With SSO configured, the setup checklist's "Who is an admin" row grades `warn` — holding the console in the People step and showing every admin a banner above every page — on either of two conditions (#491):
+**The everyone-is-an-admin warning.** With SSO configured, the setup checklist's "Who is an admin" row grades `warn` — holding the console in the People step and showing every admin a banner above every page — on either of two conditions:
 
 - **No role map and no admin list.**
   - A person nobody has mapped derives `admin` when there is **neither** a role map (the chart's `WARDYN_OIDC_ROLE_MAP` or a People-step row) **nor** an admin list (the operator allowlist, `WARDYN_OIDC_OPERATOR_EMAILS`).
   - An admin list alone is enough to clear this: an unmatched person then derives `member`.
 - **A role map IS set (chart or People step), but `WARDYN_OIDC_DEFAULT_ROLE=admin`.**
-  - Every sign-in the map doesn't match still falls through to `admin` — before #491 this read `ok`, since a role map being set was all the check looked for.
+  - Every sign-in the map doesn't match still falls through to `admin`.
   - Fix by setting `WARDYN_OIDC_DEFAULT_ROLE` to `user` or a user type instead.
   - An admin list alone does not trip this: with no role map, a sign-in the (empty) map doesn't match derives `member` regardless of the default role.
 

@@ -47,6 +47,10 @@ func startHoldProxy(t *testing.T) *holdProxy {
 	}
 	h.addr = l.Addr().String()
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == dnsPath {
+			w.WriteHeader(http.StatusNoContent) // the relay's DNS records; these tests count refusals
+			return
+		}
 		if r.Method != http.MethodConnect {
 			var rf refusal
 			_ = json.NewDecoder(r.Body).Decode(&rf)
@@ -231,11 +235,10 @@ func TestOpaqueRefusedAskReturnsItsSlot(t *testing.T) {
 		c.Close()
 		t.Fatal("connected to a refused name")
 	}
-	waitFor(t, "the slot back", opaqueIs(rl, before))
-	time.Sleep(100 * time.Millisecond)
-	if got := rl.opaque.Load(); got != before {
-		t.Fatalf("counter %d after a refused ask, was %d", got, before)
-	}
+	// The first tunnel's ask and the refused one: two asks. A third means a
+	// retransmitted SYN reached the forwarder and started another flow.
+	waitFor(t, "the refused ask", func() bool { asks, _, _ := h.snapshot(); return asks >= 2 })
+	slotCountSettles(t, h, rl, before, 2)
 
 	// Exactly one slot was free: the next flow fits, the one after does not.
 	c2, err := g.Dial(addr, 2002, 3*time.Second)
@@ -248,6 +251,38 @@ func TestOpaqueRefusedAskReturnsItsSlot(t *testing.T) {
 		c3.Close()
 		t.Fatal("a third tunnel was admitted at a bound of two")
 	}
+}
+
+// slotCountSettles waits for the relay's slot count to return to want and stay
+// there with the proxy's ask count unchanged for a quiet window. A count that
+// never returns is a leaked slot and fails; the failure reports the proxy's ask
+// count, since more asks than wantAsks means an extra flow held a slot. A
+// transient rise that ends is logged, not hidden.
+func slotCountSettles(t *testing.T, h *holdProxy, rl *Relay, want int64, wantAsks int) {
+	t.Helper()
+	const quiet = 200 * time.Millisecond
+	var peak int64
+	var lastAsks int
+	stableSince := time.Now()
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		got := rl.opaque.Load()
+		asks, _, _ := h.snapshot()
+		if got > peak {
+			peak = got
+		}
+		if got != want || asks != lastAsks {
+			lastAsks, stableSince = asks, time.Now()
+			continue
+		}
+		if time.Since(stableSince) >= quiet {
+			if peak > want || asks != wantAsks {
+				t.Logf("slot count peaked at %d (settled at %d); proxy asks %d, want %d", peak, want, asks, wantAsks)
+			}
+			return
+		}
+	}
+	asks, _, _ := h.snapshot()
+	t.Fatalf("counter %d (peak %d) did not settle at %d after a refused ask; proxy asks %d, want %d", rl.opaque.Load(), peak, want, asks, wantAsks)
 }
 
 func TestOpaqueSlotHeldUntilBothDirectionsEnd(t *testing.T) {

@@ -122,7 +122,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 			return
 		}
 		ctx := withHumanIdentity(oidc.WithRevocationSeq(r.Context(), t.Principal, t.RevSeq), t.Principal, t.Email, oidc.RoleUser, t.UserType, t.Groups, t.GroupsTruncated)
-		r = r.WithContext(audit.WithDelegation(ctx, types.DelegationVia{Delegate: t.DelegateID, Grant: t.ID}))
+		r = r.WithContext(audit.WithDelegation(ctx, types.DelegationVia{Delegate: t.DelegateID, Grant: t.ID, Actor: t.Actor}))
 		if rctx := chi.RouteContext(r.Context()); rctx == nil || !delegationAllowed[r.Method+" "+rctx.RoutePattern()] {
 			// refuse's row with the reason on the wire too: a portal branches
 			// on delegation_scope, not on the sentence.
@@ -140,6 +140,16 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 func createdVia(ctx context.Context) *uuid.UUID {
 	if via, ok := audit.DelegationFrom(ctx); ok {
 		return &via.Delegate
+	}
+	return nil
+}
+
+// createdViaActor is the run row's created_via_actor: the agent the portal named on the delegated token,
+// nil when it named none or the request is not delegated.
+func createdViaActor(ctx context.Context) *types.DelegationActor {
+	if via, ok := audit.DelegationFrom(ctx); ok && via.Actor != nil {
+		a := *via.Actor
+		return &a
 	}
 	return nil
 }

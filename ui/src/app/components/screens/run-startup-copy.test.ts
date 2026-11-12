@@ -23,7 +23,7 @@ describe("RUN_STARTUP canon", () => {
       BUILD_HINT: "This run needs its own image, so it is built first. This can take several minutes.",
       SLOW: "Still starting. A first start may need to download the image, which can take a few minutes.",
       OVERDUE:
-        "This is taking longer than a start usually does. If nothing changes, kill the run and launch it again.",
+        "This is taking longer than a start usually does. If nothing changes, end the run and launch it again.",
     });
   });
 

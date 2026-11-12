@@ -5,7 +5,7 @@
 // WebSocket. It sits between the browser and the sandbox's websockify, decodes
 // the WebSocket frames, follows the RFB stream inside them, drops a cut-text
 // message whose direction the run's policy blocks, and reports every cut text
-// by direction, size and SHA-256. It never keeps, logs or reports the text.
+// by direction and size. It never keeps, logs or reports the text.
 //
 // It fails closed: anything it cannot follow (a text frame, a WebSocket
 // extension, a security type that encrypts the stream, an encoding or message
@@ -21,12 +21,9 @@ package rfbfilter
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"sync"
 	"time"
@@ -66,7 +63,6 @@ type Event struct {
 	Input     string
 	Direction Direction
 	Bytes     int64
-	SHA256    string
 	Allowed   bool
 }
 
@@ -433,7 +429,6 @@ type parser struct {
 
 	pass   int64 // payload bytes still to stream
 	drop   bool  // the payload being streamed is dropped
-	sum    hash.Hash
 	cut    *Event
 	then   func()
 	rects  int // rectangles left in a FramebufferUpdate
@@ -462,9 +457,8 @@ func (p *parser) stream(n int64, drop bool, then func()) {
 
 func (p *parser) endPass() {
 	if p.cut != nil {
-		p.cut.SHA256 = hex.EncodeToString(p.sum.Sum(nil))
 		*p.events = append(*p.events, *p.cut)
-		p.cut, p.sum = nil, nil
+		p.cut = nil
 	}
 	then := p.then
 	p.then = nil
@@ -476,9 +470,6 @@ func (p *parser) feed(in []byte, events *[]Event) ([]byte, error) {
 	for len(in) > 0 {
 		if p.pass > 0 {
 			n := int(min(p.pass, int64(len(in))))
-			if p.sum != nil {
-				p.sum.Write(in[:n])
-			}
 			if !p.drop {
 				p.forward(in[:n])
 			}
@@ -504,7 +495,7 @@ func (p *parser) feed(in []byte, events *[]Event) ([]byte, error) {
 }
 
 // cutText streams one cut text: through when its direction is allowed, dropped
-// with its header when not, hashed either way.
+// with its header when not, sized either way.
 func (p *parser) cutText(d Direction, hdr []byte) error {
 	size := int64(int32(binary.BigEndian.Uint32(hdr[4:])))
 	if size < 0 {
@@ -514,7 +505,7 @@ func (p *parser) cutText(d Direction, hdr []byte) error {
 	if allowed {
 		p.forward(hdr)
 	}
-	p.cut, p.sum = &Event{Direction: d, Bytes: size, Allowed: allowed}, sha256.New()
+	p.cut = &Event{Direction: d, Bytes: size, Allowed: allowed}
 	p.stream(size, !allowed, p.msgNext)
 	return nil
 }

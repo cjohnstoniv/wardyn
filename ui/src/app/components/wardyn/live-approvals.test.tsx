@@ -11,6 +11,7 @@ import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "./copy";
 import { aheadByHours } from "../../lib/test-clock";
+import { HOST_CALL_CARD } from "./copy/files-review";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -22,11 +23,13 @@ vi.mock("../../lib/api/approvals", () => ({
     deny: (...a: unknown[]) => denyMock(...a),
   },
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+const toastSuccess = vi.fn();
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: (...a: unknown[]) => toastSuccess(...a), info: vi.fn() } }));
 
 import { LiveApprovals } from "./live-approvals";
 import { HttpError } from "../../lib/api/core";
 import { toDatetimeLocalValue } from "../../lib/datetime-local";
+import { APPROVALS } from "../../lib/approvals-copy";
 
 function pending(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return makeApproval({
@@ -45,6 +48,7 @@ describe("LiveApprovals", () => {
     listApprovalsMock.mockReset().mockResolvedValue([]);
     approveMock.mockReset().mockResolvedValue({});
     denyMock.mockReset().mockResolvedValue({});
+    toastSuccess.mockReset();
   });
 
   it("shows the idle hint when nothing is pending", async () => {
@@ -249,6 +253,15 @@ describe("LiveApprovals", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(within(panel).getByRole("button", { name: /approve/i }));
     expect(approveMock).toHaveBeenCalledWith("held", expect.any(String));
+  });
+
+  it("confirms an inline approve with the same toast the Approvals screen gives", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example", mode: "wait_for_review" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(panel).getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(APPROVALS.TOAST_APPROVED));
   });
 
   // The FULL sentence, leading "Denying" included — a partial match on just
@@ -584,6 +597,26 @@ describe("LiveApprovals", () => {
       expect(within(panel).getByRole("button", { name: /^Deny$/ })).not.toBeDisabled();
     });
 
+    // Approve and Deny are the left half of a split button only when the scope caret is drawn beside them.
+    it.each([
+      ["a tool_call row has no caret, so both buttons keep their full outline", { id: "t1", kind: "tool_call", requested_scope: {}, decidable: true }, false, false],
+      ["an egress row the walls block has a Deny caret only, so Approve stays whole", { id: "w1", requested_scope: { host: "paste.example.net" }, decidable: true, walls_block: true }, false, true],
+      ["an egress row with both carets squares both buttons on the right", { id: "e1", requested_scope: { host: "ok.example.net" }, decidable: true }, true, true],
+    ] as const)("%s", async (_name, row, approveSplit, denySplit) => {
+      listApprovalsMock.mockResolvedValue([pending(row as never)]);
+      render(
+        <OperatorProvider operator securityOperator>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      for (const [name, split] of [["Approve", approveSplit], ["Deny", denySplit]] as const) {
+        const cls = within(panel).getByRole("button", { name: new RegExp(`^${name}$`) }).className;
+        expect(cls.includes("rounded-r-none"), `${name} rounded-r-none`).toBe(split);
+        expect(cls.includes("border-r-0"), `${name} border-r-0`).toBe(split);
+      }
+    });
+
     it("decidable=true enables a row role+kind alone would have closed", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "t1", kind: "tool_call", requested_scope: {}, decidable: true })]);
       render(
@@ -848,5 +881,31 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     render(<LiveApprovals runId="r1" run={many} />);
     expect(await screen.findByText("Reach registry.npmjs.org")).toBeInTheDocument();
     expect(screen.queryByText(/Asked by/)).toBeNull();
+  });
+
+  it("a held host request renders the host call card, whole host and run-scope note, not the generic row", async () => {
+    const host = "api.payments.example.com";
+    const path = "/v1/" + "refunds/".repeat(9) + "xxxx"; // 80 chars: the generic row's 72-char title would clip the host away
+    expect(path).toHaveLength(80);
+    listApprovalsMock.mockResolvedValue([
+      pending({
+        id: "h1",
+        kind: "tool_call",
+        requested_scope: { host, method: "POST", path, call_sha256: "7ab4c1e09d3f".padEnd(64, "0") },
+      }),
+    ]);
+    render(
+      <OperatorProvider operator securityOperator principal="dana@acme.example">
+        <LiveApprovals runId="r1" />
+      </OperatorProvider>,
+    );
+    const card = await screen.findByTestId("host-call-card");
+    expect(screen.queryByTestId("live-approval-row")).toBeNull();
+    expect(within(card).getAllByRole("definition").map((d) => d.textContent)).toEqual([host, "POST", path]);
+    expect(card).toHaveTextContent(HOST_CALL_CARD.WHAT("POST", path, host));
+    expect(within(card).getByRole("button", { name: HOST_CALL_CARD.APPROVE })).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /^Approve$/ })).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: HOST_CALL_CARD.APPROVE }));
+    expect(approveMock).toHaveBeenCalledWith("h1", "approved live");
   });
 });

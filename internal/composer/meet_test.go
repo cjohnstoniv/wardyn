@@ -86,6 +86,87 @@ func TestMeetAllowedDomains(t *testing.T) {
 	}
 }
 
+// The meet reads a bare entry under the port rule: it reaches 80 and 443 only, so met with another
+// port it is nothing, in either direction, for a name, a wildcard and a literal IP alike, and met with
+// 443 it is 443. A port both sides name beside a bare host is kept.
+func TestMeetAllowedDomainsReadsABareEntryUnderThePortRule(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		base, ov, want []string
+		bad            bool // refused at write
+	}{
+		{"a bare base met with another port", []string{"b.example"}, []string{"b.example:8443"}, []string{}, true},
+		{"another port met with a bare overlay", []string{"b.example:8443"}, []string{"b.example"}, []string{}, true},
+		{"a bare base met with 443", []string{"b.example"}, []string{"b.example:443"}, []string{"b.example:443"}, false},
+		{"a bare wildcard met with another port", []string{"*.corp.example"}, []string{"*.corp.example:8443"}, []string{}, true},
+		{"a bare wildcard met with 443", []string{"*.corp.example"}, []string{"*.corp.example:443"}, []string{"*.corp.example:443"}, false},
+		{"a bare literal IP met with another port", []string{"10.0.0.5"}, []string{"10.0.0.5:22"}, []string{}, true},
+		{"a bare literal IP met with 443", []string{"10.0.0.5"}, []string{"10.0.0.5:443"}, []string{"10.0.0.5:443"}, false},
+		{"a port both name beside a bare host", []string{"b.example", "b.example:22"}, []string{"b.example", "b.example:22"}, []string{"b.example", "b.example:22"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Authority{Ceiling: types.RunPolicySpec{AllowedDomains: tc.base}}
+			ov := overlayOf(types.CeilingOverlay{AllowedDomains: &tc.ov})
+			err := ValidateOverlay(b, ov)
+			if tc.bad {
+				wantOverlayErr(t, err, ReasonOverlayInvalid, "allowed_domains")
+			} else if err != nil {
+				t.Fatalf("ValidateOverlay: %v", err)
+			}
+			got, _, aerr := ApplyOverlay(b, ov)
+			if aerr != nil {
+				t.Fatal(aerr)
+			}
+			if !slices.Equal(got.Ceiling.AllowedDomains, tc.want) {
+				t.Errorf("allowed_domains = %v, want %v", got.Ceiling.AllowedDomains, tc.want)
+			}
+		})
+	}
+}
+
+// An overlay stored before MEET-PORT-RULE named a port the base only names bare (h:8443 under h). The older
+// write check passed it; ValidateOverlay now refuses it (M2). Resolve still runs the lenient ApplyOverlay on
+// what is stored: it warns that the entry is uncovered (M2') but keeps it in the overlay set, and the base's
+// bare h (80/443) met with h:8443 is nothing (M1), so the run keeps neither h nor h:8443 and reaches h on no
+// port unless another overlay entry covers it. The meet takes no substrate: the result is the same for a VM,
+// a container with the port rule on and one with it off (the reach per substrate is pinned in
+// internal/egress/proxy TestOverlayOracleStoredOverlayNamingAPortUnderABareBase).
+func TestMeetStoredOverlayNamingAPortUnderABareBase(t *testing.T) {
+	const warn = "allowed_domains: 1 entr(y/ies) the base's own allowed_domains do not cover: h.example:8443"
+	for _, tc := range []struct {
+		name           string
+		base, ov, want []string
+		warns          []string
+		bad            bool // refused at write now
+	}{
+		{"M2/M2': h:8443 under a bare h keeps nothing, with a warning", []string{"h.example"}, []string{"h.example:8443"}, []string{}, []string{warn}, true},
+		{"M2/M2': h beside h:8443 under a bare h keeps h only, with a warning", []string{"h.example"}, []string{"h.example", "h.example:8443"}, []string{"h.example"}, []string{warn}, true},
+		{"the documented way: base names h:8443 first, so h:8443 is kept", []string{"h.example:8443"}, []string{"h.example:8443"}, []string{"h.example:8443"}, nil, false},
+		{"h:443 under a bare h is covered and kept as h:443, no warning", []string{"h.example"}, []string{"h.example:443"}, []string{"h.example:443"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Authority{Ceiling: types.RunPolicySpec{AllowedDomains: tc.base}}
+			ov := overlayOf(types.CeilingOverlay{AllowedDomains: &tc.ov})
+			err := ValidateOverlay(b, ov)
+			if tc.bad {
+				wantOverlayErr(t, err, ReasonOverlayInvalid, "allowed_domains")
+			} else if err != nil {
+				t.Fatalf("ValidateOverlay: %v", err)
+			}
+			got, warns, aerr := ApplyOverlay(b, ov)
+			if aerr != nil {
+				t.Fatal(aerr)
+			}
+			if !slices.Equal(got.Ceiling.AllowedDomains, tc.want) {
+				t.Errorf("allowed_domains = %v, want %v", got.Ceiling.AllowedDomains, tc.want)
+			}
+			if !slices.Equal(warns, tc.warns) {
+				t.Errorf("warnings = %q, want %q", warns, tc.warns)
+			}
+		})
+	}
+}
+
 // The meet minimises an overlay's allowed_domains quadratically, so the overlay is count-capped
 // before it, at write and at resolve alike.
 func TestOverlayAllowedDomainsCountCap(t *testing.T) {
@@ -275,6 +356,24 @@ func TestMeetPushRules(t *testing.T) {
 		if !slices.Equal(p.DenyPaths, []string{"a/**", "b/**"}) || !slices.Equal(p.RequireReviewPaths, []string{"c/"}) ||
 			p.MaxFileSizeMiB != 5 || p.HoldSeconds != 120 || !p.DenyNewExecutables {
 			t.Errorf("push_rules = %+v", p)
+		}
+	})
+	t.Run("deny_all is OR'd and never a widening", func(t *testing.T) {
+		on, off := Authority{Ceiling: types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyAll: true}}}, Authority{}
+		for name, c := range map[string]struct {
+			base Authority
+			o    *bool
+			want bool
+		}{
+			"an overlay adds it":         {off, ptr(true), true},
+			"false keeps the base's":     {on, ptr(false), true},
+			"unset keeps the base's":     {on, nil, true},
+			"false under none adds none": {off, ptr(false), false},
+		} {
+			got := mustApply(t, c.base, overlayOf(types.CeilingOverlay{PushRules: &types.PushRulesOverlay{DenyAll: c.o}}))
+			if p := got.Ceiling.PushRules; (p != nil && p.DenyAll) != c.want {
+				t.Errorf("%s: push_rules = %+v, want deny_all %v", name, p, c.want)
+			}
 		}
 	})
 	t.Run("a looser file cap is not taken", func(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -122,7 +123,7 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 	case runnerwire.MethodExecutionResult:
 		return d.executionResult(ctx, args)
 	case runnerwire.MethodAttach, runnerwire.MethodDialDesktop, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose,
-		runnerwire.MethodLocalAttach, runnerwire.MethodLocalAttachMode, runnerwire.MethodLocalAttachTeeAck:
+		runnerwire.MethodLocalAttach, runnerwire.MethodLocalAttachMode, runnerwire.MethodLocalAttachTeeAck, runnerwire.MethodMacWindow:
 		if d.cfg.Streams == nil {
 			return nil, runnerwire.Refuse("runner stream adapter is unavailable")
 		}
@@ -166,6 +167,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.selftest(ctx, args)
 	case runnerwire.MethodReclaimDrive:
 		return d.reclaimDrive(ctx, args)
+	case runnerwire.MethodKeptMachine:
+		return d.keptMachine(ctx, args)
 	}
 	return d.refCall(ctx, method, args)
 }
@@ -189,6 +192,42 @@ func (d *Dispatcher) reclaimDrive(ctx context.Context, args json.RawMessage) (an
 		return nil, err
 	}
 	return runnerwire.ReclaimDriveResult{Outcome: outcome}, nil
+}
+
+// KeptMachineDeleter is a substrate that keeps people's kept machines on its Mac (the Docker driver with
+// macOS VMs). DeleteKeptMachine answers runnerwire.KeptMachineDeleted, or KeptMachineAlreadyAbsent when
+// the Mac holds no such machine; it refuses a machine a VM has booted. by is who asked, for its log.
+type KeptMachineDeleter interface {
+	DeleteKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
+}
+
+// keptMachine acts on one kept machine's folder on this Mac. Its one op is delete, of a machine named
+// by its full id.
+func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any, error) {
+	var a runnerwire.KeptMachineArgs
+	if err := runnerwire.Unmarshal(args, &a); err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(a.ID)
+	switch {
+	case a.Op != runnerwire.KeptMachineOpDelete:
+		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
+	case err != nil || id == uuid.Nil || id.String() != a.ID:
+		return nil, runnerwire.Refuse("kept_machine needs a machine's full id")
+	}
+	km, ok := d.cfg.Substrate.(KeptMachineDeleter)
+	if !ok {
+		return nil, runnerwire.Refuse("this runner keeps no machines")
+	}
+	outcome, err := km.DeleteKeptMachine(ctx, id, a.By)
+	switch {
+	case err != nil:
+		return nil, err
+	case outcome != runnerwire.KeptMachineDeleted && outcome != runnerwire.KeptMachineAlreadyAbsent:
+		// The delete ran: the machine may be gone, so this is no refusal (a refusal means nothing was removed).
+		return nil, fmt.Errorf("kept_machine outcome %q is unknown", outcome)
+	}
+	return runnerwire.KeptMachineResult{Outcome: outcome}, nil
 }
 
 func (d *Dispatcher) local(ref string) (string, error) {
@@ -309,6 +348,8 @@ type refArgs struct {
 	AgentExecID string   `json:"agent_exec_id"`
 	CfgJSON     []byte   `json:"cfg_json"`
 	Generation  int64    `json:"generation"` // runnerwire.AgentPauseArgs
+	// PolicyGeneration is runnerwire.RefArgs' and ReplaceProxyArgs': the policy generation the call acts for.
+	PolicyGeneration int `json:"policy_generation"`
 }
 
 func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (result any, err error) {
@@ -438,15 +479,11 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		return nil, sub.KillSandbox(ctx, ref)
 	case runnerwire.MethodEnd:
 		d.selftests.Delete(ref)
-		if end, ok := sub.(runner.SandboxEnder); ok {
-			return nil, runner.KeptDespiteAWSCacheWipe(ctx, ref, end.EndSandbox(ctx, ref))
-		}
-		return nil, runner.ErrEndUnsupported
+		return nil, endRef(ctx, sub, ref, a.PolicyGeneration)
+	case runnerwire.MethodFenceProxy:
+		return nil, fenceRef(ctx, sub, ref)
 	case runnerwire.MethodStopProxy:
-		if stop, ok := sub.(runner.ProxyStopper); ok {
-			return nil, stop.StopProxy(ctx, ref)
-		}
-		return nil, runner.ErrEndUnsupported
+		return nil, stopProxyRef(ctx, sub, ref, a.PolicyGeneration)
 	case runnerwire.MethodStart:
 		if start, ok := sub.(runner.SandboxStarter); ok {
 			return nil, start.StartSandbox(ctx, ref)
@@ -464,10 +501,54 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		if err != nil {
 			return nil, err
 		}
-		return nil, proxy.ReplaceProxy(ctx, ref, cfg)
+		return replaceProxyRef(ctx, proxy, ref, cfg, a.PolicyGeneration)
 	default:
 		return nil, runnerwire.Refuse("unknown runner method")
 	}
+}
+
+// endRef ends the sandbox, acting for policy generation gen when it names one and the substrate reads it.
+func endRef(ctx context.Context, sub substrate.Substrate, ref string, gen int) error {
+	if at, ok := sub.(runner.ProxyGenerationStopper); ok && gen > 0 {
+		return runner.KeptDespiteAWSCacheWipe(ctx, ref, at.EndSandboxAt(ctx, ref, gen))
+	}
+	if end, ok := sub.(runner.SandboxEnder); ok {
+		return runner.KeptDespiteAWSCacheWipe(ctx, ref, end.EndSandbox(ctx, ref))
+	}
+	return runner.ErrEndUnsupported
+}
+
+// fenceRef cuts the agent off its networks; a substrate that cannot answers runner.ErrEndUnsupported.
+func fenceRef(ctx context.Context, sub substrate.Substrate, ref string) error {
+	if fence, ok := sub.(runner.ProxyFencer); ok {
+		return fence.FenceProxy(ctx, ref)
+	}
+	return runner.ErrEndUnsupported
+}
+
+// stopProxyRef stops the proxy alone, acting for policy generation gen when it names one and the substrate reads it.
+func stopProxyRef(ctx context.Context, sub substrate.Substrate, ref string, gen int) error {
+	if at, ok := sub.(runner.ProxyGenerationStopper); ok && gen > 0 {
+		return at.StopProxyAt(ctx, ref, gen)
+	}
+	if stop, ok := sub.(runner.ProxyStopper); ok {
+		return stop.StopProxy(ctx, ref)
+	}
+	return runner.ErrEndUnsupported
+}
+
+// replaceProxyRef replaces the proxy with cfg, answering the hash when the substrate hashes and acting for
+// policy generation gen when it names one and the substrate reads it.
+func replaceProxyRef(ctx context.Context, proxy runner.ProxyReviver, ref string, cfg []byte, gen int) (any, error) {
+	if at, ok := proxy.(runner.ProxyReviverAt); ok && gen > 0 {
+		sum, err := at.ReplaceProxyHashedAt(ctx, ref, cfg, gen)
+		return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+	}
+	if hashed, ok := proxy.(runner.ProxyReviverHashed); ok {
+		sum, err := hashed.ReplaceProxyHashed(ctx, ref, cfg)
+		return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+	}
+	return nil, proxy.ReplaceProxy(ctx, ref, cfg)
 }
 
 // sweep uses the established two-call orphan-sweep protocol. The driver still

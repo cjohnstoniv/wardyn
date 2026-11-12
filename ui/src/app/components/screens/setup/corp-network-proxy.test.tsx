@@ -19,6 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { HostProxyDetection } from "../../../lib/types";
 import { T } from "../../../lib/integrations";
+import { SITE } from "../../wardyn/copy";
 import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { CorpNetworkStep } from "./corp-network-step";
@@ -57,7 +58,7 @@ function Harness(props: Partial<ComponentProps<typeof CorpNetworkStep>>) {
   return (
     <CorpNetworkStep
       status={baseStatus()}
-      siteConfig={null}
+      siteConfig={{}} // loaded and empty: the proxy editor is disabled until the first document loads
       reloadSiteConfig={vi.fn().mockResolvedValue(undefined)}
       saveSiteConfig={vi.fn().mockResolvedValue(undefined)}
       {...rest}
@@ -134,6 +135,95 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.getByLabelText(/proxy url/i)).toHaveValue("http://proxy.corp.acme.com:8080");
   });
 
+  it("the editor is disabled until the first site-config loads, then holds the stored value — no draft is overwritten", async () => {
+    const wrap = (siteConfig: ComponentProps<typeof CorpNetworkStep>["siteConfig"]) => (
+      <MemoryRouter>
+        <OperatorProvider operator>
+          <Harness siteConfig={siteConfig} />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(wrap(null));
+    const field = screen.getByLabelText(/proxy url/i);
+    expect(field).toBeDisabled();
+    expect(screen.getByText(SITE.PROXY_LOADING)).toBeInTheDocument();
+    await userEvent.type(field, "http://typed-too-early:8080");
+    expect(field).toHaveValue("");
+
+    rerender(wrap({ upstream_proxy_url: "http://proxy.corp.acme.com:8080" }));
+    expect(field).toBeEnabled();
+    expect(field).toHaveValue("http://proxy.corp.acme.com:8080");
+    expect(screen.queryByText(SITE.PROXY_LOADING)).not.toBeInTheDocument();
+  });
+
+  it("a failed first load says so with Try again; a retry that loads enables the editor with the stored value", async () => {
+    // The server answers only once the test lets it: every read before that fails, as setup-screen records it.
+    let serverUp = false;
+    function Loader() {
+      const [cfg, setCfg] = React.useState<ComponentProps<typeof CorpNetworkStep>["siteConfig"]>(null);
+      const [failed, setFailed] = React.useState(true);
+      const reload = async () => {
+        if (!serverUp) return setFailed(true);
+        setCfg({ upstream_proxy_url: "http://proxy.corp.acme.com:8080" });
+        setFailed(false);
+      };
+      return <Harness siteConfig={cfg} siteConfigFailed={failed} reloadSiteConfig={reload} />;
+    }
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator>
+          <Loader />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const field = screen.getByLabelText(/proxy url/i);
+    expect(field).toBeDisabled();
+    expect(screen.getByText(SITE.PROXY_LOAD_FAILED)).toBeInTheDocument();
+    expect(screen.queryByText(SITE.PROXY_LOADING)).not.toBeInTheDocument();
+
+    serverUp = true;
+    await userEvent.click(screen.getByRole("button", { name: SITE.PROXY_RETRY }));
+    await waitFor(() => expect(field).toBeEnabled());
+    expect(field).toHaveValue("http://proxy.corp.acme.com:8080");
+    expect(screen.queryByText(SITE.PROXY_LOAD_FAILED)).not.toBeInTheDocument();
+  });
+
+  it("a viewer, who never reads site-config, sees the field disabled for the role, never Loading", () => {
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false}>
+          <Harness siteConfig={null} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByLabelText(/proxy url/i)).toBeDisabled();
+    expect(screen.getAllByText(T.VIEWER_HINT).length).toBeGreaterThan(0);
+    expect(screen.queryByText(SITE.PROXY_LOADING)).not.toBeInTheDocument();
+  });
+
+  it("before the first load the secret switch and name are unavailable; the loaded secret ref is what shows", async () => {
+    const wrap = (siteConfig: ComponentProps<typeof CorpNetworkStep>["siteConfig"]) => (
+      <MemoryRouter>
+        <OperatorProvider operator>
+          <Harness siteConfig={siteConfig} />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(wrap(null));
+    const toSecret = screen.getByRole("button", { name: /use a stored secret instead/i });
+    expect(toSecret).toBeDisabled();
+    await userEvent.click(toSecret);
+    expect(screen.queryByLabelText(/secret name/i)).not.toBeInTheDocument();
+
+    rerender(wrap({ upstream_proxy_secret_ref: "corp-proxy" }));
+    const name = screen.getByLabelText(/secret name/i);
+    expect(name).toBeEnabled();
+    expect(name).toHaveValue("corp-proxy");
+    await userEvent.clear(name);
+    await userEvent.type(name, "other-proxy");
+    expect(name).toHaveValue("other-proxy");
+  });
+
   it("cred: typing a URL with a username/password auto-switches the field to masked input and shows CRED_URL_NOTE", async () => {
     renderStep();
     const field = screen.getByLabelText(/proxy url/i);
@@ -194,6 +284,20 @@ describe("Host proxy tab — panel states", () => {
     await userEvent.click(screen.getByRole("button", { name: /use a stored secret instead/i }));
     expect(screen.getByLabelText(/secret name/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add secret…/i })).toBeInTheDocument();
+  });
+
+  it("the stored-secret disclosure reports expanded or collapsed and points at its panel", async () => {
+    renderStep();
+    const open = screen.getByRole("button", { name: /use a stored secret instead/i });
+    expect(open).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(open);
+    const toggle = screen.getByRole("button", { name: /use a stored secret instead/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const panel = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
+    expect(panel).toContainElement(screen.getByLabelText(/secret name/i));
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText(/secret name/i)).not.toBeInTheDocument();
   });
 
   // upstream_proxy_secret_ref has no lifecycle integrity — a

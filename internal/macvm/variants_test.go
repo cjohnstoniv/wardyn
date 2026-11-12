@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
@@ -88,6 +89,39 @@ func writeToolsJSON(t *testing.T, dir string, rec macvm.ToolsRecord) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, macvm.ToolsRecordFile), b, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A derivation stamps the dial it reports, as the tools update does.
+func TestDeriveBaseStampsTheDialItReports(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	p, pin := itemFile(t, t.TempDir(), "xcode.cfg", "xcode-config")
+	list := macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "file", Name: "xcode-cfg", Path: p, SHA256: pin, Dest: "/Library/Application Support/Org/xcode.cfg"}}}
+	tf.opts.Items = list
+	g := newItemGuest()
+	ev := &events{}
+	o := updateOpts(f, tf, g.guest, "0.10.0")
+	o.Stage, o.ItemsDigest, o.Progress = tf.itemStage(g), list.Digest(), ev.add
+	before := time.Now().UnixNano()
+	if _, _, err := macvm.DeriveBase(context.Background(), o, "xcode-16"); err != nil {
+		t.Fatal(err)
+	}
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	n := 0
+	for _, e := range ev.evs {
+		if e.ToolsDial != "" {
+			n++
+			if e.ToolsDialAt < before {
+				t.Errorf("dial %q stamped %d, want >= %d", e.ToolsDial, e.ToolsDialAt, before)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("dial events = %d, want 1", n)
 	}
 }
 

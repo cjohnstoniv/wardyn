@@ -12,7 +12,9 @@
 - The full CI gate is green on the commit you intend to tag.
   - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
   - `macos` (not required) and `macos-xcode-27` (not required),
-  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm-conformance` (not required), `vm`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
+  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`,
+  - `conformance-k8s-agent-sandbox` (not required),
+  - `envbuild-integration`, `vm-conformance` (not required), `vm`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
   - the six `stop-early-<gate>` jobs (`stop-early-go-lint`, `stop-early-compose`, `stop-early-gates`, `stop-early-notices`, `stop-early-diagrams`, `stop-early-dco`), which cancel a red pull request run,
   - the ten image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, `trivy-agent-novnc-signin`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
@@ -107,17 +109,6 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
 - A release is a milestone that closed.
 - The steps below do not change; this is how the work reaches them.
 
-```mermaid
-flowchart LR
-  I[Issue on the milestone<br/>labelled approved] --> B[Branch from main<br/>kind/issue-slug]
-  B --> PR[Pull request into main<br/>one issue per PR]
-  PR --> R{Required CI<br/>+ review}
-  R -->|green| M[main]
-  M --> RP[Release PR<br/>CHANGELOG, versions, ROADMAP]
-  RP --> RB[release/X.Y<br/>cut or fast-forwarded]
-  RB --> T[Tag vX.Y.Z<br/>release.yml publishes]
-  M -.->|cherry-pick fixes only| RB
-```
 
 1. **Milestone.** Every planned change is an issue on the `X.Y.Z` milestone,
    filed before work starts and signed off with the `approved` label

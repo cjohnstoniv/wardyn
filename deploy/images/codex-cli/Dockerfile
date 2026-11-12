@@ -36,7 +36,7 @@
 # An ordinary and a release build leave it empty and download as before.
 FROM scratch AS gomodcache
 
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS builder
 
 WORKDIR /build
 
@@ -239,7 +239,7 @@ RUN set -eu; \
         *) echo "unsupported arch '$arch' for gh" >&2; exit 1;; \
     esac; \
     printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
-    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
+    curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
     echo "$sum  /tmp/gh.deb" | sha256sum --strict -c -; \
     dpkg -i /tmp/gh.deb; \
     rm -f /tmp/gh.deb

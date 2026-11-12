@@ -292,7 +292,7 @@ func TestPG_OrgPool_RevokeEndsTheRunWaitingForTheOrgRunner(t *testing.T) {
 	}
 }
 
-// Fable K4 H1: a capped user pool of two laptops whose trust classes differ, the legacy delivery document.
+// A capped user pool of two laptops whose trust classes differ, the legacy delivery document.
 // With the managed_device laptop full, a run promoted to the personal laptop that has room starts there:
 // the invariant TestPG_QueuedRunStartsOnTheRunnerItsPromotionChose pins for two personal laptops.
 func TestPG_RunTrust_PromotedRunStartsOnTheFreePersonalLaptopBesideAFullManagedOne(t *testing.T) {
@@ -311,7 +311,7 @@ func TestPG_RunTrust_PromotedRunStartsOnTheFreePersonalLaptopBesideAFullManagedO
 	}
 }
 
-// Fable K4 round 2: with room on both laptops (max 2 runs each, the managed_device one holding one), the
+// With room on both laptops (max 2 runs each, the managed_device one holding one), the
 // promotion picks the roomier personal laptop and the start keeps it: the promotion's runner's class is
 // judged first, ahead of the higher class that also has room.
 func TestPG_RunTrust_PromotedRunKeepsTheRoomierPersonalLaptopBesideAManagedOneWithRoom(t *testing.T) {

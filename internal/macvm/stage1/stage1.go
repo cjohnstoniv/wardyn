@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"slices"
@@ -34,6 +35,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"golang.org/x/crypto/ssh"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -120,12 +122,14 @@ func (b *Bootstrapper) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (
 		return macvm.BootstrapResult{}, err
 	}
 	defer func() { _ = s.client.Close() }()
-	for i, c := range commands {
+	list := slices.Clone(commands)
+	for i := 0; i < len(list); i++ {
+		c := list[i]
 		if c.OnlyWithCode && s.code == nil {
 			continue
 		}
 		if c.Event != "" {
-			s.emit(c.Event, float64(i)/float64(len(commands)))
+			s.emit(c.Event, float64(i)/float64(len(list)))
 		}
 		if c.MayDropSession {
 			if err := s.beforeOff(ctx, b.cfg.OffWait); err != nil {
@@ -136,12 +140,25 @@ func (b *Bootstrapper) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (
 			continue
 		}
 		if err := s.run(ctx, c); err != nil {
+			if c.Optional && ctx.Err() == nil {
+				// The id only: the error holds the command's stderr and the row's stdin is a secret.
+				slog.Warn("stage 1: an optional step failed and was skipped", "step", c.ID)
+				continue
+			}
 			return macvm.BootstrapResult{}, &StepError{Step: c.Step, Command: c.ID, Err: err}
 		}
 		if c.OnlyWithCode {
 			if err := s.codeReplaced(ctx); err != nil {
 				return macvm.BootstrapResult{}, err
 			}
+		}
+		if c.ThenBaseSettings {
+			rows, err := s.baseSettingCommands()
+			if err != nil { // a macOS version outside the fixed patterns: the table is skipped, not the prepare
+				slog.Warn("stage 1: the base settings were skipped", "step", c.Step, "reason", err.Error())
+				continue
+			}
+			list = slices.Insert(list, i+1, rows...)
 		}
 	}
 	_ = s.client.Close()
@@ -167,7 +184,8 @@ type session struct {
 	agentSHA string
 	pin      []byte // the host key trusted on this boot's first connection
 	client   *ssh.Client
-	epoch    uint64 // the guest's boot epoch just before Remote Login off
+	epoch    uint64               // the guest's boot epoch just before Remote Login off
+	release  basesettings.Release // the guest's macOS, read for the base-settings rows
 }
 
 // guestEpoch is the guest's boot epoch (BootstrapInput.GuestEpoch); any
@@ -421,7 +439,7 @@ func (s *session) run(ctx context.Context, c command) error {
 	if c.CheckAccounts {
 		return s.checkAccounts(out.String())
 	}
-	return nil
+	return s.capture(c, out.String())
 }
 
 // checkAccounts reads dscl's "name UniqueID" lines strictly: a line that is not a name alone (a record with no

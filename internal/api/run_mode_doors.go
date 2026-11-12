@@ -15,6 +15,22 @@ import (
 // (a super admin included: this is the run's shape, not a permission). Logs,
 // audit, status and the authorised lifecycle controls (kill, stop, approve) stay.
 //
+// Two exceptions, both on a macOS VM's built-in desktop alone.
+//
+// The first is a view-only watch (run_background_watch.go). It opens only by its
+// own ticket and answers to backgroundWatchRefusal, at the mint, at the enter, at
+// the stream and at every re-check; nothing reaches the display but read requests,
+// and no clipboard moves either way.
+//
+// The second is the attended window (run_mac_window.go): the run's own person,
+// sitting at the Mac their own runner is on, opens a window onto the VM there. It
+// answers to macWindowRefusal at the grant and at every 30 s re-check, and never
+// to backgroundOnlyRefusal: a background run's owner may sit at it, and no browser
+// session keeps control beside it.
+//
+// A declared noVNC, a Linux VM's desktop, the Files panel, sign-ins, the terminal,
+// exec and SSH refuse as ever.
+//
 // The stored field is agent_runs.experience (types.AgentRun.Experience), written
 // once at create from the request. The single predicate is
 // types.AgentRun.BackgroundOnly, and every door asks it through
@@ -49,7 +65,7 @@ type backgroundDoor struct {
 	// Symbols are the functions the owner edits. A door with no surface yet has none.
 	Symbols []string
 	// Routes are the /runs/{id} routes that open this door, as "METHOD /path".
-	// SSH and the UI gateway are not under /runs/{id}; their Symbols are the guard.
+	// SSH's channels and the UI gateway are not under /runs/{id}; their Symbols are the guard.
 	Routes []string
 	// Enforced is true once every symbol asks backgroundOnlyRefusal.
 	Enforced bool
@@ -67,8 +83,10 @@ var backgroundDoors = []backgroundDoor{
 	{Door: "interactive exec", Owner: "C-mode-doors", Symbols: []string{"establishExec"}, Enforced: true},
 	// sshFreshRun, not the channel handlers: those take a run id and hold no run,
 	// while sshFreshRun is the one fresh read every channel bridge (shell, exec,
-	// sftp, wardyn-sync, direct-tcpip) makes before it execs.
-	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"}, Enforced: true},
+	// sftp, wardyn-sync, direct-tcpip) makes before it execs. POST /runs/{id}/exec is
+	// the exec channel over HTTP (run_exec.go) and makes the same read before it execs.
+	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"},
+		Routes: []string{"POST /runs/{id}/exec"}, Enforced: true},
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	// An app's ticket (handleAppTicket) is minted only for an inbound app, the door's
@@ -81,8 +99,10 @@ var backgroundDoors = []backgroundDoor{
 	// (#2972): signinRun is the one read every sign-in route makes before it acts.
 	// A VM desktop's pause and resume (#2972) refuse in mayPauseDesktopAgent.
 	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent"},
-		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
-			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
+		// POST .../desktop/watch-ticket is the contract's first exception, asked in uiEnterCommon and uiSessionStillAuthorized.
+		// POST .../desktop/window is the contract's second exception, asked in macWindowRefusal.
+		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "POST /runs/{id}/desktop/window", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
+			"POST /runs/{id}/desktop/files/{name}/review", "POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }
 
@@ -97,6 +117,7 @@ var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}/desktop/sign-ins":    "read the desktop's sign-in store; opens nothing",
 	"GET /runs/{id}/events":              "read",
 	"GET /runs/{id}/launch-intent":       "read the setup the run was launched with; opens nothing",
+	"GET /runs/{id}/model-usage":         "read the run's stored token counts; opens nothing",
 	"GET /runs/{id}/files":               "read",
 	"GET /runs/{id}/grants":              "read",
 	"GET /runs/{id}/output":              "logs and output stay available",
@@ -112,6 +133,7 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/profile":            "synthesise a profile from audit",
 	"POST /runs/{id}/profile/synthesize": "synthesise a profile from audit",
 	"POST /runs/{id}/resume":             "lifecycle: resume a paused run",
+	"PATCH /runs/{id}/egress":            "narrows a live run's egress by replacing its proxy, as revive does; opens no shell, terminal or relay",
 	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
 
 	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",

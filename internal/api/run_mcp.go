@@ -255,6 +255,9 @@ type componentMCP struct {
 	// EnvNames is a local server's own variables: its env secrets' and its
 	// config's names.
 	EnvNames []string
+	// GatewayAudience and GatewayUID are an organisation's remote server's: the audience of the
+	// identity token its route sends, and the component and version that route is sealed against.
+	GatewayAudience, GatewayUID string
 }
 
 // mcpDispatch is what dispatch hands on for the run's MCP servers.
@@ -262,6 +265,10 @@ type mcpDispatch struct {
 	servers  []proxy.MCPServerConfig
 	bindings []proxy.MCPBinding
 	files    []runner.ManagedFile
+	// gatewayRoutes are the identity routes of the servers kept; gatewayBad names the keys of kept
+	// servers whose address can hold none, which refuses the run (gatewayMCPRoutesOf).
+	gatewayRoutes []proxy.GatewayIdentityRoute
+	gatewayBad    []string
 }
 
 // dispatchMCP is dispatch's MCP half. Each server's header credential moves
@@ -304,6 +311,11 @@ func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.Inj
 			*injections = slices.Delete(*injections, j, j+1)
 		}
 		out.servers = append(out.servers, cfg)
+		if rt, sends, ok := gatewayMCPDispatchRoute(m); ok {
+			out.gatewayRoutes = append(out.gatewayRoutes, rt)
+		} else if sends {
+			out.gatewayBad = append(out.gatewayBad, m.Key)
+		}
 		for _, h := range m.Harnesses {
 			if _, seen := on[h]; !seen && local[h] == nil {
 				order = append(order, h)

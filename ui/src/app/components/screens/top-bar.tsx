@@ -117,7 +117,7 @@ export function TopBar({
           attention, and only then do they appear. */}
       {(isCustomTrustDomain(meta.trustDomain) ||
         isCustomIdentityProvider(meta.identityProvider)) && (
-        <div className="ml-2 hidden items-center gap-2 lg:flex">
+        <div className="ml-2 hidden min-w-0 items-center gap-2 lg:flex">
           {isCustomTrustDomain(meta.trustDomain) && (
             <EnvIndicator trustDomain={meta.trustDomain} />
           )}
@@ -139,6 +139,7 @@ export function TopBar({
           size="icon"
           onClick={toggle}
           aria-label="Toggle theme"
+          aria-pressed={theme === "dark"}
         >
           {theme === "dark" ? (
             <Sun className="size-4" />
@@ -164,6 +165,7 @@ export function TopBar({
                 back to instead of the bare unthemed browser outline. */}
             <Button
               variant="ghost"
+              aria-label={`Account menu: ${display}`}
               className="h-auto gap-2 rounded-md px-1.5 py-1"
             >
               <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">
@@ -264,9 +266,9 @@ export function TopBar({
 
 function EnvIndicator({ trustDomain }: { trustDomain: string }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs">
-      <span className="size-1.5 rounded-full bg-success" />
-      <span className="font-mono text-muted-foreground">{trustDomain}</span>
+    <span className="inline-flex min-w-0 items-center gap-2 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs">
+      <span className="size-1.5 shrink-0 rounded-full bg-success" />
+      <span className="max-w-[16rem] truncate font-mono text-muted-foreground" title={trustDomain}>{trustDomain}</span>
     </span>
   );
 }

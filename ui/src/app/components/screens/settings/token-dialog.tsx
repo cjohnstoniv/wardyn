@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { HttpError } from "../../../lib/api/core";
 import type { ApiToken } from "../../../lib/types/service-identities";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
-import { Field } from "../../wardyn/form-primitives";
+import { Field, fieldHintId } from "../../wardyn/form-primitives";
 import { STATES } from "../../wardyn/states";
 import { dayOf, inWords, lifetimeWords, ROLE_WORDS, TOKEN_DIALOG as T } from "../../wardyn/copy/service-tokens";
 
@@ -78,13 +78,13 @@ interface Refusal {
   final: boolean;
 }
 
-function lifetimeOptions(kind: "claim" | "mint", limit: number | undefined): [number, string][] {
+function lifetimeOptions(kind: "claim" | "mint", limit: number | undefined, wide = false): [number, string][] {
   const base: [number, string][] = [
     [7 * DAY, T.OPT_7_DAYS],
     [30 * DAY, T.OPT_30_DAYS],
     [90 * DAY, T.OPT_90_DAYS],
   ];
-  if (kind === "mint") return base;
+  if (kind === "mint" && !wide) return base;
   base.push([365 * DAY, T.OPT_1_YEAR]);
   if (!limit) return [...base, [0, T.OPT_LONGEST]];
   const within = base.filter(([s]) => s <= limit);
@@ -233,6 +233,7 @@ export function TokenDialog(props: TokenDialogProps) {
               <dt className="text-muted-foreground">{T.DETAIL_EXPIRES}</dt>
               <dd>{reveal.expiresAt ? T.EXPIRY(dayOf(reveal.expiresAt), inWords(reveal.expiresAt)) : T.NEVER}</dd>
             </dl>
+            {!reveal.expiresAt && <p className="text-sm text-foreground">{T.NEVER_NOTE}</p>}
             {reveal.clamped && <p className="text-sm text-foreground">{T.CLAMPED}</p>}
             <DialogFooter>
               <Button ref={copyRef} type="button" onClick={() => void copy(reveal.token)}>
@@ -265,7 +266,11 @@ export function TokenDialog(props: TokenDialogProps) {
             {!isClaim && (
               <fieldset className="grid gap-2 rounded-md border border-border px-3 py-2.5" disabled={phase === "busy" || refusal?.final}>
                 <legend className="px-1 text-sm font-medium">{T.USE_LABEL}</legend>
-                <RadioGroup value={use} onValueChange={(v) => setUse(v as "api" | "inbound")} aria-label={T.USE_LABEL} className="gap-2">
+                <RadioGroup value={use} onValueChange={(v) => {
+                    setUse(v as "api" | "inbound");
+                    // Inbound keeps the 90-day options, so a longer pick falls back to the default.
+                    if (v === "inbound" && (ttl === 0 || ttl > 90 * DAY)) setTtl(DEFAULT_LIFETIME);
+                  }} aria-label={T.USE_LABEL} className="gap-2">
                   <div className="flex items-center gap-2">
                     <RadioGroupItem id={`${uid}-use-api`} value="api" />
                     <Label htmlFor={`${uid}-use-api`}>{T.USE_API}</Label>
@@ -277,7 +282,7 @@ export function TokenDialog(props: TokenDialogProps) {
                 </RadioGroup>
                 {use === "inbound" && (
                   <p id={`${uid}-use-help`} className="text-xs text-muted-foreground">
-                    {T.INBOUND_HELP}
+                    {T.INBOUND_HELP(own ? "you" : service)}
                   </p>
                 )}
               </fieldset>
@@ -313,14 +318,14 @@ export function TokenDialog(props: TokenDialogProps) {
             <Field
               label={T.EXPIRES_LABEL}
               htmlFor={`${uid}-ttl`}
-              hint={isClaim ? (limitSeconds ? T.CLAIM_HINT_LIMITED(lifetimeWords(limitSeconds)) : T.CLAIM_HINT_OPEN) : T.MINT_HINT}
+              hint={isClaim ? (limitSeconds ? T.CLAIM_HINT_LIMITED(lifetimeWords(limitSeconds)) : T.CLAIM_HINT_OPEN) : own && use === "api" ? T.CLAIM_HINT_OPEN : T.MINT_HINT}
             >
               <Select value={String(ttl)} disabled={phase === "busy" || refusal?.final} onValueChange={(v) => setTtl(Number(v))}>
-                <SelectTrigger id={`${uid}-ttl`}>
+                <SelectTrigger id={`${uid}-ttl`} aria-describedby={fieldHintId(`${uid}-ttl`)}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {lifetimeOptions(kind, limitSeconds).map(([seconds, label]) => (
+                  {lifetimeOptions(kind, limitSeconds, own && use === "api").map(([seconds, label]) => (
                     <SelectItem key={seconds} value={String(seconds)}>
                       {label}
                     </SelectItem>

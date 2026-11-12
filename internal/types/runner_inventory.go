@@ -187,10 +187,12 @@ type RunnerPoolRef struct {
 	Name string    `json:"name"`
 }
 
-// RunnerSettingsRequest turns runners on or off. Enabled is required, so an empty body never
-// switches anything.
+// RunnerSettingsRequest changes the runner settings: whether runners are on, and whether a new local run
+// needs a runner marked managed_device. A field left out is left as stored; a body naming neither is
+// refused, so an empty body never switches anything.
 type RunnerSettingsRequest struct {
-	Enabled *bool `json:"enabled"`
+	Enabled              *bool `json:"enabled"`
+	RequireManagedDevice *bool `json:"require_managed_device,omitempty"`
 }
 
 // RunnerUpdateRequest is an owner's change to their own runner (PUT /me/runners/{id}): the whole limit

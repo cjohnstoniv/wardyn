@@ -50,9 +50,12 @@ func wallsCmd(client clientFn) *cobra.Command {
 		Short: "Replace your walls with the ones in a YAML or JSON file",
 		Long: "Replace your walls with the document in --file: the knobs you want, at the top level\n" +
 			"(allowed_domains, denied_domains, allow_all_egress: false, first_use_approval,\n" +
-			"min_confinement_class, desktop, withheld_grants). A knob the file leaves out is no\n" +
-			"limit. The whole document is replaced, so `wardyn walls` first shows what to keep.\n" +
-			"The server refuses anything that would widen a run.",
+			"min_confinement_class, desktop, withheld_grants, azure_devops_capabilities,\n" +
+			"github_capabilities, tool_rules, push_rules.deny_paths, recording,\n" +
+			"auto_stop_after_sec). A knob the file leaves out is no limit. The whole document is\n" +
+			"replaced, so `wardyn walls` first shows what to keep. The server refuses anything\n" +
+			"that would widen a run: a tool rule that allows, a recording level of off, an\n" +
+			"auto-stop of zero or less, or a capability that does not exist.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			spec, err := readWallsSpec(cmd.InOrStdin(), file)
@@ -82,7 +85,7 @@ func wallsCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(set, clearWalls)
+	cmd.AddCommand(set, clearWalls, wallPresetsCmd(client))
 	return cmd
 }
 

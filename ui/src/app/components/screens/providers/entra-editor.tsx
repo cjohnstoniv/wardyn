@@ -15,6 +15,7 @@
 import { useId, type ReactNode } from "react";
 import type { ADOEntraConfig, GitProvider } from "../../../lib/api/providers";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS, ADO_DEFAULT_PROFILE } from "../../../lib/ado-capabilities";
+import { adoAllows } from "../../../lib/ado-ceilings";
 import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E, ADO_GROUP_COPY } from "../../../lib/workspace-providers-copy";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
@@ -38,7 +39,7 @@ function effectiveDefault(cfg: ADOEntraConfig): string[] {
 export function entraDefaultsOffCeiling(cfg: ADOEntraConfig | undefined): string[] {
   if (!cfg) return [];
   const ceiling = cfg.capability_ceiling ?? [];
-  return effectiveDefault(cfg).filter((c) => !ceiling.includes(c));
+  return effectiveDefault(cfg).filter((c) => !adoAllows(ceiling, c));
 }
 
 // The list with `cap` toggled, in catalogue order.
@@ -313,7 +314,7 @@ export function EntraEditor({
         <Groups label={E.DEFAULT_TITLE} withLead={false}>
           {(groupId) =>
             inGroup(groupId).map(({ cap, highRisk }) => {
-              const onCeiling = ceiling.includes(cap);
+              const onCeiling = adoAllows(ceiling, cap);
               const isDefault = defaults.includes(cap);
               // Off the ceiling and not a default: locked. Off the ceiling but
               // still a default (the ceiling was just narrowed): left

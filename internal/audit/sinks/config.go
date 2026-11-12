@@ -19,7 +19,8 @@ import (
 //	{
 //	  "syslog":  {"network": "udp", "addr": "localhost:514"},
 //	  "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
-//	  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3}
+//	  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3},
+//	  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100}
 //	}
 //
 // Omitting a top-level key disables that sink entirely.
@@ -27,6 +28,7 @@ type Config struct {
 	Syslog  *SyslogConfig  `json:"syslog,omitempty"`
 	Webhook *WebhookConfig `json:"webhook,omitempty"`
 	File    *FileConfig    `json:"file,omitempty"`
+	OTLP    *OTLPConfig    `json:"otlp,omitempty"`
 }
 
 // Source (WARDYN_AUDIT_SOURCE), when set, is stamped as an extra "source"
@@ -111,6 +113,14 @@ func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
 		s, err := NewFileSink(*cfg.File)
 		if err != nil {
 			return out, fmt.Errorf("sinks.ParseSinks: file: %w", err)
+		}
+		out = append(out, s)
+	}
+
+	if cfg.OTLP != nil {
+		s, err := NewOTLPSink(*cfg.OTLP)
+		if err != nil {
+			return out, fmt.Errorf("sinks.ParseSinks: otlp: %w", err)
 		}
 		out = append(out, s)
 	}

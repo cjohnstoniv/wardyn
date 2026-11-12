@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -29,6 +30,22 @@ func main() {
 	// Stage 2 pushes this binary to /usr/local/bin/agent-run too: by that name it is the run launcher.
 	if filepath.Base(os.Args[0]) == filepath.Base(guestagent.MacAgentRunPath) {
 		os.Exit(guestagent.AgentRunMain(os.Args[1:]))
+	}
+	// The SSH gateway's `-L` forward and the UI-app relay exec this mode: a VM has no socat.
+	if len(os.Args) > 1 && os.Args[1] == guestagent.ForwardVerb {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		code := guestagent.ForwardMain(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+	if len(os.Args) > 1 && os.Args[1] == guestagent.TLSCheckVerb {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		code := guestagent.TLSCheckMain(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+	if len(os.Args) > 1 && os.Args[1] == guestagent.HostPrefsCarryVerb {
+		os.Exit(guestagent.HostPrefsCarryMain(os.Args[2:], os.Stdout))
 	}
 	out := flag.String("out", "/var/run/wardyn-guest", "directory for detached execs' output (cleared at boot)")
 	plist := flag.String("plist", guestagent.MacAgentPlistPath, "this agent's LaunchDaemon plist, which tools mode may replace")
@@ -57,9 +74,12 @@ func run(out, plist string) error {
 	if err != nil {
 		return fmt.Errorf("this agent's binary: %w", err)
 	}
-	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}}
+	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}, AgentUID: ids.UID}
 	dial := &guestagent.ToolsDialRecord{}
 	cred := &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups}
+	keychain := guestagent.MacKeychain{Run: runner, Dir: out, RecordDir: guestagent.MacRunCARecordDir}
+	scrub := guestagent.MacScrub{OutDir: out, MarkerDir: "/var/run", AgentUID: int(ids.UID), AgentGID: int(ids.GID),
+		Keychain: keychain, SetDesktopPassword: desktop.SetPassword}
 	srv := &guestagent.Server{
 		Version:    version.String(),
 		Cred:       cred,
@@ -69,9 +89,25 @@ func run(out, plist string) error {
 		MarkerDir:  "/var/run",
 		Desktop:    desktop,
 		ToolsDial:  dial,
-		TrustRunCA: guestagent.MacKeychain{Run: runner, Dir: out}.TrustRunCA,
+		TrustRunCA: keychain.TrustRunCA,
 		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID), Probe: guestagent.ShareProbe{Cred: cred}.Read}.Mount,
 		Disk:       guestagent.MacDisks{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Attach,
+	}
+	srv.ScreenLockOff = guestagent.ScreenLock{Run: runner, Stdin: runner, Console: guestagent.ConsoleOwner{}}.Off
+	srv.Scrub, srv.RecordMCPTables = scrub.Scrub, scrub.RecordMCPTables
+	hostPrefs := guestagent.HostPrefsCarry{Run: runner, Console: guestagent.ConsoleOwner{}, MarkerDir: srv.MarkerDir, Cred: cred, Self: self}.Carry(ctx)
+	slog.Info("wardyn-guest-agent host prefs", "status", hostPrefs)
+	// Before the agent serves, so before any Init: what a past run wrote is gone, whether it stopped
+	// gracefully or not. A restart of this service after Init skips it (BootScrubDue).
+	if guestagent.BootScrubDue(srv.MarkerDir) {
+		sctx, cancel := context.WithTimeout(ctx, time.Minute)
+		r := scrub.Scrub(sctx, guestagent.ScrubAtBoot)
+		cancel()
+		srv.BootScrub = &r
+		slog.Info("wardyn-guest-agent boot scrub", "outcome", r.Outcome, "removed", r.Removed, "ca_sha256", r.CAs)
+		if err := guestagent.WriteHostPrefsStatus(guestagent.MacHostPrefsStatusPath, hostPrefs); err != nil {
+			slog.Warn("wardyn-guest-agent host prefs status", "err", err)
+		}
 	}
 	h, err := srv.Handler()
 	if err != nil {
@@ -92,7 +128,7 @@ func run(out, plist string) error {
 	}()
 	go func() {
 		defer wg.Done()
-		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort, key), screenSharing, desktop.Track)
+		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort, key), screenSharing, desktop.Track, desktop.ServeConsole)
 	}()
 	go func() {
 		defer wg.Done()

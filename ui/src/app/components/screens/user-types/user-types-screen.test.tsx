@@ -9,7 +9,7 @@
 // four state pins there apply here too (one `default` button, delete refused
 // with the server's own message).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const listUserTypesMock = vi.fn();
@@ -23,6 +23,11 @@ vi.mock("../../../lib/api/user-types", () => ({
     updateUserType: (...a: unknown[]) => updateUserTypeMock(...a),
     deleteUserType: (...a: unknown[]) => deleteUserTypeMock(...a),
   },
+}));
+
+const gradePolicyMock = vi.fn();
+vi.mock("../../../lib/api/runs", () => ({
+  runs: { gradePolicy: (...a: unknown[]) => gradePolicyMock(...a) },
 }));
 
 const getGovernanceMock = vi.fn();
@@ -47,6 +52,7 @@ vi.mock("./explain-names", () => ({ useValueNames: () => () => null }));
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { CHANGES } from "../../../lib/governance-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { aheadByHours } from "../../../lib/test-clock";
 import type { UserType } from "../../../lib/types";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
@@ -239,6 +245,63 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
+  // A profile with a base stores `ceiling: {}` and `limits: {}`; what binds is `effective`.
+  it("a based-on profile shows its effective limit and grades its effective ceiling, not the empty stored ones", async () => {
+    gradePolicyMock.mockResolvedValue(null);
+    const t = type();
+    const effectiveCeiling = { allowed_domains: ["example.com"], min_confinement_class: "CC3" };
+    getGovernanceMock.mockResolvedValue({
+      profiles: [
+        {
+          id: "prof-1",
+          name: "Portfolio",
+          parent_id: "base",
+          ceiling: {},
+          limits: {},
+          effective: { ceiling: effectiveCeiling, limits: { deny_interactive: true } },
+          created_at: "",
+          updated_at: "",
+        },
+      ],
+      assignments: [
+        { id: "a1", subject_type: "user_type", subject: t.id, unit_id: "prof-1", priority: 0, created_at: "" },
+      ],
+    });
+    renderScreen([t]);
+    await screen.findByText(t.name);
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
+    expect(await screen.findByText(GOV.LIMIT_INTERACTIVE_LABEL)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.LIMITS_NONE)).not.toBeInTheDocument();
+    await waitFor(() => expect(gradePolicyMock).toHaveBeenCalledWith(effectiveCeiling, undefined));
+    expect(gradePolicyMock).not.toHaveBeenCalledWith({}, undefined);
+  });
+
+  it("a profile whose effective limits could not be worked out says why, not None", async () => {
+    gradePolicyMock.mockResolvedValue(null);
+    const t = type();
+    getGovernanceMock.mockResolvedValue({
+      profiles: [
+        {
+          id: "prof-1",
+          name: "Portfolio",
+          ceiling: {},
+          limits: {},
+          effective: { ceiling: {}, limits: {}, error: "The base profile was deleted." },
+          created_at: "",
+          updated_at: "",
+        },
+      ],
+      assignments: [
+        { id: "a1", subject_type: "user_type", subject: t.id, unit_id: "prof-1", priority: 0, created_at: "" },
+      ],
+    });
+    renderScreen([t]);
+    await screen.findByText(t.name);
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
+    expect(await screen.findByText("The base profile was deleted.")).toBeInTheDocument();
+    expect(screen.queryByText(GOV.LIMITS_NONE)).not.toBeInTheDocument();
+  });
+
   it("a bound profile with no limits reads None", async () => {
     const t = type();
     getGovernanceMock.mockResolvedValue({
@@ -374,6 +437,7 @@ describe("UserTypesScreen — a 202 is submitted, never saved", () => {
     await userEvent.click(screen.getByRole("button", { name: UT.SAVE }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.queryByTestId("user-type-editor")).not.toBeInTheDocument();
     expect(listUserTypesMock).toHaveBeenCalled();
   });

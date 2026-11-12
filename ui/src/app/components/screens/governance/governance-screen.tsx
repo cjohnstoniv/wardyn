@@ -52,9 +52,9 @@ import {
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
-import { PageTabs } from "../../wardyn/page-tabs";
+import { PageTabs, pageTabPanelProps } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
-import { useSecurityOperator } from "../../wardyn/operator-context";
+import { useSecurityOperator, useUnitAdminOf } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { HowItWorks } from "../../wardyn/how-it-works";
@@ -64,8 +64,9 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { AssignmentsBlock } from "./assignments";
 import { ChangesTab } from "./changes";
 import { EgressBaselineTab } from "./egress-baseline";
+import { EnvelopeCard, EnvelopeChip } from "./envelope-card";
 import { Note, noteClass, question, withMono } from "./display";
-import { limitChips, limitsBoundNothing } from "./limit-chips";
+import { profileLimitsContent } from "./limit-chips";
 import { BaseChip, childrenOf } from "./profile-overlay";
 import { ProfileEditor } from "./profile-editor";
 import { RunnerCredentials } from "./runner-credentials";
@@ -78,6 +79,8 @@ export function GovernanceScreen() {
   // securityOps route group gates server-side, and this mirrors that predicate
   // exactly. UX only — the middleware is what refuses a write.
   const securityOperator = useSecurityOperator();
+  // A unit admin opens a profile to read it; the editor stays disabled for them (securityOperator below).
+  const unitAdmin = useUnitAdminOf().length > 0;
   const [snap, setSnap] = React.useState<GovernanceSnapshot>(EMPTY);
   // X3-F5: FORBIDDEN is its own arm — /governance is a securityOps route hidden
   // from a member's nav, so the 403 that answers a URL-typed visit is a verdict
@@ -94,7 +97,7 @@ export function GovernanceScreen() {
   const [changes, setChanges] = React.useState<GovernanceChange[]>([]);
   const [changesError, setChangesError] = React.useState<string | null>(null);
   // A profile write the server held for a second person (202): the note stands until the next write.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   // Runner credentials and Baseline hosts are the security operators' tabs: anyone else is on Profiles,
   // whatever the URL says.
@@ -127,7 +130,7 @@ export function GovernanceScreen() {
           profiles: s.profiles
             .filter((p) => p.id !== DEFAULT_GOVERNANCE_UNIT_ID)
             .map((p) => (p.parent_id === DEFAULT_GOVERNANCE_UNIT_ID ? { ...p, parent_id: undefined } : p)),
-          unit_names: Object.fromEntries(s.profiles.map((p) => [p.id, p.name])),
+          unit_names: { ...s.unit_names, ...Object.fromEntries(s.profiles.map((p) => [p.id, p.name])) },
         });
         setStatus("ready");
       })
@@ -141,6 +144,24 @@ export function GovernanceScreen() {
       .catch((e) => setChangesError(getErrorMessage(e)));
   }, []);
   React.useEffect(load, [load]);
+  // A link to one profile (the run page's allowed-models card) opens its editor once the profiles are read.
+  const askedProfile = searchParams.get("profile");
+  React.useEffect(() => {
+    if (status !== "ready" || !askedProfile) return;
+    const profile = snap.profiles.find((p) => p.id === askedProfile);
+    if (profile) {
+      setOmission([]);
+      setSubmitted(null);
+      setEditing({ profile });
+    }
+    setSearchParams(
+      (sp) => {
+        sp.delete("profile");
+        return sp;
+      },
+      { replace: true },
+    );
+  }, [status, askedProfile, snap.profiles, setSearchParams]);
 
   const assignedCount = React.useCallback(
     (p: GovernanceUnit) => snap.assignments.filter((a) => a.unit_id === p.id).length,
@@ -149,13 +170,13 @@ export function GovernanceScreen() {
 
   const openEditor = (profile: GovernanceUnit | null) => {
     setOmission([]);
-    setSubmitted(false);
+    setSubmitted(null);
     setEditing({ profile });
   };
 
   const openDelete = (p: GovernanceUnit) => {
     setDeleteError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     setToDelete(p);
   };
 
@@ -169,7 +190,7 @@ export function GovernanceScreen() {
       if (e instanceof PendingChangeError) {
         // Held for a second person: the profile is still there.
         setToDelete(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -213,6 +234,7 @@ export function GovernanceScreen() {
       {status !== "forbidden" && status !== "error" && (
         <PageTabs
           className="mt-6"
+          idPrefix="governance"
           value={tab}
           onValueChange={(v) => setSearchParams(v === "profiles" ? {} : { tab: v }, { replace: true })}
           tabs={[
@@ -228,6 +250,8 @@ export function GovernanceScreen() {
         />
       )}
 
+      {/* One panel for whichever tab is selected; the sections below stay as they were, so the editors keep their state. */}
+      <div {...(status !== "forbidden" && status !== "error" ? pageTabPanelProps("governance", tab) : {})}>
       {status !== "forbidden" && status !== "error" && deliveryVisited && securityOperator && (
         <div hidden={tab !== "runner-credentials"}>
           <RunnerCredentials onSubmitted={load} />
@@ -304,7 +328,7 @@ export function GovernanceScreen() {
 
             {submitted && (
               <div className="px-6">
-                <SubmittedNote />
+                <SubmittedNote change={submitted} />
               </div>
             )}
 
@@ -344,25 +368,34 @@ export function GovernanceScreen() {
                       <TableHead>{GOV.COL_LIMITS}</TableHead>
                       <TableHead>{GOV.COL_GRADE}</TableHead>
                       <TableHead>{GOV.COL_UPDATED}</TableHead>
-                      <TableHead className="w-[140px]" />
+                      <TableHead className="w-[140px]">
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {snap.profiles.map((p) => {
                       const n = assignedCount(p);
-                      const chips = limitChips(p.limits);
                       return (
                         <TableRow key={p.id}>
                           {/* A profile name is a human-chosen label, never mono. */}
                           <TableCell className="font-medium">
                             {p.name}
-                            <BaseChip profile={p} profiles={snap.profiles} />
+                            <div className="flex flex-wrap gap-x-1.5">
+                              <BaseChip profile={p} profiles={snap.profiles} />
+                              <EnvelopeChip
+                                profile={p}
+                                profiles={snap.profiles}
+                                envelopes={snap.envelopes ?? []}
+                                unitNames={snap.unit_names}
+                              />
+                            </div>
                           </TableCell>
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
-                              {/* "None" is limitsBoundNothing's call: every limit, not one list. */}
-                              {chips.length > 0 ? chips : limitsBoundNothing(p.limits) && GOV.LIMITS_NONE}
+                              {/* "None" is limitsBoundNothing's call on the effective limits: every limit, not one list. */}
+                              {profileLimitsContent(p)}
                             </span>
                           </TableCell>
                           <TableCell>
@@ -382,7 +415,7 @@ export function GovernanceScreen() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={!securityOperator || editorOpen}
+                                disabled={(!securityOperator && !unitAdmin) || editorOpen}
                                 onClick={() => openEditor(p)}
                                 aria-label={`${GOV.EDIT} ${p.name}`}
                               >
@@ -416,17 +449,21 @@ export function GovernanceScreen() {
                 profile={editing.profile}
                 profiles={snap.profiles}
                 disabled={!securityOperator}
+                deciders={snap.deciders}
+                decidersSupported={snap.envelopes !== undefined}
+                unitNames={snap.unit_names}
+                onDecidersChanged={load}
                 onCancel={() => setEditing(null)}
                 onSaved={(warnings) => {
                   setEditing(null);
                   setOmission(warnings);
-                  setSubmitted(false);
+                  setSubmitted(null);
                   load();
                 }}
-                onSubmitted={(notes) => {
+                onSubmitted={(notes, change) => {
                   setEditing(null);
                   setOmission(notes);
-                  setSubmitted(true);
+                  setSubmitted(change);
                   load();
                 }}
               />
@@ -437,6 +474,9 @@ export function GovernanceScreen() {
               unloaded snapshot is a confident empty state that is a false
               claim (CONSOLE-RULES §10). The profiles card above holds the
               skeleton for both. */}
+          {status === "ready" && snap.envelopes !== undefined && (
+            <EnvelopeCard snapshot={snap} securityOperator={securityOperator} onChanged={load} />
+          )}
           {status === "ready" && (
             <AssignmentsBlock
               snapshot={snap}
@@ -497,6 +537,7 @@ export function GovernanceScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </div>
     </PageContainer>
   );
 }

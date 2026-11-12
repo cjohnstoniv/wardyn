@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1/stage1test"
@@ -144,7 +145,16 @@ func TestPrepareStage1PublishesTheBaseOnlyAfterRemoteLoginIsOff(t *testing.T) {
 // isScreenSharingProbe is stage 1's `launchctl print` of the Screen Sharing service, under sudo or not.
 func isScreenSharingProbe(argv []string) bool {
 	probe := []string{"/bin/launchctl", "print", "system/com.apple.screensharing"}
-	return len(argv) >= len(probe) && slices.Equal(argv[len(argv)-len(probe):], probe)
+	return len(argv) >= len(probe) && slices.Equal(argv[len(argv)-len(probe):], probe) || slices.Contains(argv, "-screenLock") || isOptionalBaseSetting(argv)
+}
+
+// isOptionalBaseSetting is a sw_vers read or a row of the base-settings table, whose failure stage 1 skips: all
+// of them are Optional in stage 1.
+func isOptionalBaseSetting(argv []string) bool {
+	rows, _ := basesettings.Stage1Rows(basesettings.Release{Version: "26.6.2", Build: "25G83"})
+	return slices.Contains(argv, "/usr/bin/sw_vers") || slices.ContainsFunc(rows, func(r basesettings.Row) bool {
+		return len(argv) >= len(r.Argv) && slices.Equal(argv[len(argv)-len(r.Argv):], r.Argv)
+	})
 }
 
 func TestPrepareStage1FailureAtEachStepPublishesNoBase(t *testing.T) {
@@ -155,7 +165,8 @@ func TestPrepareStage1FailureAtEachStepPublishesNoBase(t *testing.T) {
 	execs := srv.Execs()
 	steps := len(execs)
 	for n := 1; n <= steps+1; n++ {
-		// A probe that fails is its row's answer "not loaded", not a failed step: the base is still published.
+		// A probe that fails is its row's answer "not loaded", not a failed step, and the optional screen lock row
+		// may fail: the base is still published.
 		probe := n <= steps && isScreenSharingProbe(execs[n-1].Argv)
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			f, srv := stage1Prep(t)

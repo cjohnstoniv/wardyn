@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -64,4 +65,16 @@ func allowCovers(allowed []string, host string) bool {
 		}
 	}
 	return false
+}
+
+// activityIgnoreHosts is the hosts whose allowed requests are not the run working: a macOS VM run's boot
+// hosts, which its guest calls in the background whatever the policy says, and none for any other kind. A
+// copy, since the caller's config is written through. The control plane judges activity by the same list.
+// The guest's other background requests skip the run's proxy settings, arrive on the vmnet relay lane and
+// never count (egress.Request.Relayed).
+func activityIgnoreHosts(kind types.MachineKind) []string {
+	if !kind.IsMacOSVM() {
+		return nil
+	}
+	return slices.Clone(macOSBootHosts())
 }

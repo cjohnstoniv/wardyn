@@ -14,18 +14,19 @@
 // The SDK covers these wardynd public route families (the ones external tooling
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
-//   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
-//     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
-//     RunSignIn, GetRunPolicy, GetRunSyncRules, RunContainment, RecordRunNode
-//   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
+//   - runs (/api/v1/runs):               CreateRun, CreateRunWith, Preflight, GetRun, ListRuns, ListRunsPage,
+//     ListGrants, ListGrantsPage, KillRun, EditRunEgress, ExecRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
+//     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
+//     OpenMacWindow, GetMacWindow, GetRunMachine
+//   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, ListApprovalsDecidable, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
-//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit
+//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit, SetWorkspaceOwningUnitStrict
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
-//     ExportAuditPartition, AuditRetention, DropAuditPartition
+//     ExportAuditPartition, AuditRetention, DropAuditPartition, AuditReceipt, AuditCheckpoints, AuditReceiptKeys
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
 //     SetMySecret, DeleteMySecret
@@ -37,16 +38,23 @@
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
 //     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
 //     CreateMyDrive, DeleteMyDrive (/api/v1/me/drives)
+//   - machines (/api/v1/me/machines):    ListMyMachines, DeleteMyMachine — the caller's own kept macOS machines;
+//     ListKeptMachines, DeleteKeptMachine (/api/v1/machines/kept, super admin) — everyone's
 //   - walls (/api/v1/me/walls):          GetMyWalls, PutMyWalls, ClearMyWalls — the caller's own narrow-only walls
+//   - wall presets (/api/v1/wall-presets): ListWallPresets, GetWallPreset, SaveWallPreset, DeleteWallPreset — named
+//     narrow-only walls, built in or kept for a person, a group or the organisation
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
 //     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable when its store holds no templates
 //   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
-//     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, CheckGovernance,
-//     GovernanceDryRun
+//     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, PutUnitDeciders, CheckGovernance,
+//     GovernanceDryRun, SetEnvelope, ClearEnvelope, GetGovernanceUnder, PlanGovernanceUnder, ApplyGovernanceResultUnder,
+//     UnitModelUsage
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
-//     ApproveGovernanceChange, RejectGovernanceChange
+//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
+//   - governance requests (/api/v1/governance/requests): ListGovernanceRequests, RequestElevation,
+//     RequestImage, ApproveGovernanceRequest, RejectGovernanceRequest
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
@@ -74,10 +82,11 @@
 //     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
 //     with MoveToken (POST /api/v1/tokens/{id}/move), and the caller's own tokens CreateAPIToken (a signed-in session only) and
 //     RevokeAPIToken (/api/v1/me/tokens)
-//   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
+//   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, PreviewWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
 //     WorkloadHistory, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
 //     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
-//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
+//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin),
+//     SetComponentOwningUnit (security tier) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
@@ -133,6 +142,8 @@
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
+//   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
+//     gateway fetches; a gateway reads it, not an SDK caller
 //   - the console SPA at /   — static assets
 //
 // (The AI Run Composer's /runs/compose* used to be listed here; those routes

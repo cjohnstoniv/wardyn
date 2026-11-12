@@ -43,10 +43,19 @@ func (s *Server) inboundDeclaredRefusal(r *http.Request, req createRunRequest) *
 		"Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.")
 }
 
-// Only member-authored workspace images need this re-check. Applying it to
-// operator-owned workspaces would refuse their images wherever capImage is off.
-func (s *Server) seededImageRefusal(r *http.Request, seededOwner, image string) *runRefusal {
-	if seededOwner == "" {
+// seededImageRefusal re-checks the image an attached workspace's base image set (seed.imageOpen: the
+// request named none). The digest rule binds it whoever owns the workspace. The grant re-check is only for a
+// member-owned workspace's image: applying it to operator-owned workspaces would refuse their images
+// wherever capImage is off.
+func (s *Server) seededImageRefusal(r *http.Request, seed workspaceSeed, image string) *runRefusal {
+	if !seed.imageOpen {
+		return nil
+	}
+	// The digest rule first: a grant, exact or prefix, still needs a pinned ref while it is on.
+	if refusal := s.imageDigestRefusal(r.Context(), image, true); refusal != nil {
+		return refusal
+	}
+	if seed.imageOwner == "" {
 		return nil
 	}
 	granted, err := s.capGranted(r.Context(), capImage, image)
@@ -61,7 +70,7 @@ func (s *Server) seededImageRefusal(r *http.Request, seededOwner, image string) 
 	// only the door differs, and the message says which one.
 	return runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image",
 		"image "+image+" comes from your own workspace's base image and is not granted to you — "+
-			"ask an admin to grant the exact image ref, or launch with the agent's convention image"))
+			"ask an admin for an image grant that covers it, or launch with the agent's convention image"))
 }
 
 func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (governanceCeiling, *runRefusal) {
@@ -79,13 +88,24 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image"))
 	}
 	if req.Image != "" {
+		// The digest rule first: a grant, exact or prefix, still needs a pinned ref while it is on.
+		if refusal := s.imageDigestRefusal(r.Context(), req.Image, false); refusal != nil {
+			return governanceCeiling{}, refusal
+		}
 		granted, err := s.capGranted(r.Context(), capImage, req.Image)
 		if err != nil {
 			return governanceCeiling{}, runServerError("resolve capability", err)
 		}
 		if !granted {
+			// Read only on this refusal, never on a granted launch; the batch is in ctx, so the switch read is
+			// memoized. An error keeps the plain sentence.
+			if binds, berr := s.imageGrantWouldBind(r.Context(), req.Image); berr == nil && binds && s.imageRequestOfferedQuiet(r) {
+				return governanceCeiling{}, runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image",
+					"image "+req.Image+" is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, "+
+						"or launch with the agent's convention image or an onboarded workspace's base image"))
+			}
 			return governanceCeiling{}, runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image",
-				"image "+req.Image+" is not granted to you — ask an admin to grant the exact image ref, "+
+				"image "+req.Image+" is not granted to you — ask an admin for an image grant that covers it, "+
 					"or launch with the agent's convention image or an onboarded workspace's base image"))
 		}
 	}

@@ -119,6 +119,25 @@ export const CAP_MATCH_CASES: Array<[string, string, string, boolean]> = [
   ["egress_host", "secret.example.com", "*.example.com", false],
   ["secret", "GITHUB_TOKEN", "github_token", false],
   ["image", "ghcr.io/a/b:1", "ghcr.io/a/b:2", false],
+  // An image prefix grant: whole path segments, as typed, tag and digest ignored.
+  ["image", "registry.example.com/team/*", "registry.example.com/team/app:1", true],
+  ["image", "registry.example.com/team/*", "registry.example.com/team/app", true],
+  ["image", "registry.example.com/team/*", "registry.example.com/team/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true],
+  ["image", "registry.example.com/team/*", "registry.example.com/team/sub/app:1", true],
+  ["image", "registry.example.com/team/*", "registry.example.com/teamx/app:1", false],
+  ["image", "registry.example.com/team/*", "registry.example.com/team", false],
+  ["image", "registry.example.com/team/*", "registry.example.com/team/", false],
+  ["image", "registry.example.com/team/*", "REGISTRY.example.com/team/app:1", false],
+  ["image", "registry.example.com/team/*", "registry.example.com:443/team/app:1", false],
+  ["image", "docker.io/library/*", "nginx:1", false],
+  ["image", "*", "registry.example.com/team/app:1", true],
+  // A stored image value with any other star matches nothing, not even its own text.
+  ["image", "registry.example.com/te*", "registry.example.com/te*", false],
+  ["image", "team/*", "team/app:1", false],
+  ["image", "registry.example.com/Team/*", "registry.example.com/Team/app", false],
+  ["image", "registry.example.com:99999/team/*", "registry.example.com:99999/team/app", false],
+  // The prefix form is image-only.
+  ["secret", "registry.example.com/team/*", "registry.example.com/team/app", false],
   // DNS names, IPv4 and host:port entries: a ":port" on either side is dropped.
   ["egress_host", "pypi.org:443", "pypi.org", true],
   ["egress_host", "ssh.github.com", "ssh.github.com:443", true],
@@ -158,6 +177,17 @@ export const CAP_OVERLAP_CASES: Array<[string, string, string, boolean]> = [
   // in BOTH directions, so the reversal must not soften a near-miss.
   ["secret", "GITHUB_TOKEN", "github_token", false],
   ["workspace", "*", "1234", true],
+  // Image prefixes overlap a ref they match, and every prefix above or below.
+  ["image", "registry.example.com/team/*", "registry.example.com/team/app:1", true],
+  ["image", "registry.example.com/team/app:1", "registry.example.com/team/*", true],
+  ["image", "registry.example.com/team/*", "registry.example.com/team/sub/*", true],
+  ["image", "registry.example.com/team/sub/*", "registry.example.com/team/*", true],
+  ["image", "registry.example.com/team/*", "registry.example.com/team/*", true],
+  ["image", "registry.example.com/team/*", "registry.example.com/teamx/*", false],
+  ["image", "registry.example.com/team/*", "registry.example.com/other/*", false],
+  ["image", "registry.example.com/team/*", "registry.example.com/teamx/app:1", false],
+  ["image", "registry.example.com/team/app:1", "registry.example.com/other/*", false],
+  ["image", "registry.example.com/te*", "registry.example.com/te*", false],
 ];
 
 describe("the Go/TS matcher table", () => {

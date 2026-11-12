@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -77,6 +78,12 @@ const (
 	// inboundDenyUnreadable is no inbound.deny reason: the run or its policy could not be read, which is no
 	// verdict on the caller. It answers 503 run_unreadable and writes no row.
 	inboundDenyUnreadable = "unreadable"
+	// inboundDenyDataOut is the run's data_out rule keeping a web app other than the desktop closed (review or
+	// blocked), as refuseAppDataOut does the browser entry. It answers 403 data_out_blocked.
+	inboundDenyDataOut = "data_out"
+	// inboundDenyDataOutUnreadable is no inbound.deny reason: the run's data_out rule could not be read, which
+	// is no verdict on the caller. It answers 503 data_out_unreadable and writes no inbound.deny row.
+	inboundDenyDataOutUnreadable = "data_out_unreadable"
 )
 
 const (
@@ -100,6 +107,9 @@ type uiInboundState struct {
 	buckets map[uuid.UUID]*inboundBucket
 	// callers is each caller's request bucket, by principal, over all the runs they call.
 	callers map[string]*inboundBucket
+	// drops counts dropInboundSessions. A check reads it before the first read its decision rests on and keeps
+	// its answer only if the count has not moved (remember, markUIReasserted): the two caches have a lock each.
+	drops atomic.Uint64
 }
 
 type inboundCached struct {
@@ -131,7 +141,14 @@ func (st *uiInboundState) cached(key string, now time.Time) (uiSession, bool) {
 // would ride: a session minted in the same second as the one it replaces has the same debounce key, and
 // would skip the profile arm the write may have changed. The worst case is one extra lookup per live caller,
 // as for a wholesale prune.
+//
+// A check already in flight must not put its pre-write answer back, so the order is: count the drop, then clear
+// each map under its own lock; remember and markUIReasserted compare the count under that same lock. A publisher
+// that holds a map's lock has either seen the new count and stands down, or got in before that map's clear,
+// which wipes it. The request that raced may still pass on its own check; its answer is not kept. All of this is
+// this replica's: another replica's caches last out their 30 seconds (inboundResolveTTL, uiReassertInterval).
 func (s *Server) dropInboundSessions() {
+	s.uiInbound.drops.Add(1)
 	s.uiInbound.mu.Lock()
 	clear(s.uiInbound.sessions)
 	s.uiInbound.mu.Unlock()
@@ -163,17 +180,19 @@ func inboundDropsOn(r *http.Request) bool {
 }
 
 // dropInboundOnWrite drops the inbound session cache (dropInboundSessions) once a write under inboundDropRoots
-// has answered below 400, so a policy, profile or grant change reaches a live caller's next request instead of
-// its next lookup. It runs after the handler, so after the write has committed: a session admitted meanwhile
-// is the one the write is racing, and ends with the window. Every such route is covered here, a held change's
-// approval and a unit admin's scoped write included, rather than at each place the store is written.
+// has answered below 400, so a policy, profile or grant change reaches a live caller's next request on this
+// replica instead of its next lookup; another replica's cache lasts out its window. It drops as the status
+// leaves (inboundDropWriter), since a large answer reaches the client before the handler returns, and again after
+// the handler, in case it wrote that status before committing. A check in flight meanwhile keeps nothing
+// (dropInboundSessions). Every such route is covered here, a held change's approval and a unit admin's scoped
+// write included, rather than at each place the store is written.
 func (s *Server) dropInboundOnWrite(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !inboundDropsOn(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		ww := middleware.NewWrapResponseWriter(&inboundDropWriter{ResponseWriter: w, s: s}, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
 		if ww.Status() < http.StatusBadRequest {
 			s.dropInboundSessions()
@@ -181,9 +200,33 @@ func (s *Server) dropInboundOnWrite(next http.Handler) http.Handler {
 	})
 }
 
-func (st *uiInboundState) remember(key string, sess uiSession, now time.Time) {
+// inboundDropWriter sits under the status-recording writer, which sends every status through WriteHeader, a first
+// Write's and a Flush's included. It drops the inbound session cache before a status below 400 goes out, so a
+// client that has heard the write succeed cannot ride the cache on its next request. No route under
+// inboundDropRoots hijacks.
+type inboundDropWriter struct {
+	http.ResponseWriter
+	s *Server
+}
+
+func (d *inboundDropWriter) WriteHeader(code int) {
+	if code >= http.StatusOK && code < http.StatusBadRequest {
+		d.s.dropInboundSessions()
+	}
+	d.ResponseWriter.WriteHeader(code)
+}
+
+func (d *inboundDropWriter) Flush() { _ = http.NewResponseController(d.ResponseWriter).Flush() }
+
+func (d *inboundDropWriter) Unwrap() http.ResponseWriter { return d.ResponseWriter }
+
+// remember keeps sess unless a drop has run since gen was read (dropInboundSessions).
+func (st *uiInboundState) remember(key string, sess uiSession, now time.Time, gen uint64) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if st.drops.Load() != gen {
+		return
+	}
 	if st.sessions == nil {
 		st.sessions = map[string]inboundCached{}
 	} else if len(st.sessions) > maxInboundEntries {
@@ -335,12 +378,13 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 	if sess, ok := s.uiInbound.cached(key, now); ok {
 		return sess, true
 	}
+	gen := s.uiInbound.drops.Load()
 	sess, refusal, ok := s.admitInboundToken(w, r, runID, app, raw, "", uuid.Nil)
 	if refusal != nil {
 		refusal(context.WithoutCancel(r.Context()))
 	}
 	if ok {
-		s.uiInbound.remember(key, sess, now)
+		s.uiInbound.remember(key, sess, now, gen)
 	}
 	return sess, ok
 }
@@ -348,7 +392,9 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // admitInboundToken is the bearer arm's admission, uncached: a bearer that is not a live inbound token is
 // 401 inbound_credential_invalid; a live one that may not call this app — no run, no such app, an app that
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
-// all four; and one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running. Each
+// all four; one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running; and one
+// that may, on a run whose data_out rule is review or blocked, is 403 data_out_blocked (refuseAppDataOut's
+// answer) for any app but the desktop, its writer adding a run.data_out.deny row. Each
 // refusal returns the writer of its inbound.deny row, for the caller to run (a stream runs it after its
 // close); nil for no row. A run or policy that cannot be read is 503 run_unreadable and no row: no verdict on
 // the caller (readmitInbound keeps a stream on it). ok=false when it has answered.
@@ -368,7 +414,7 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 		writeErrorReason(w, http.StatusUnauthorized, reasonInboundCredentialInvalid, inboundCredentialInvalidMsg)
 		return uiSession{}, refused(principal, tokenID, inboundDenyCredentialInvalid), false
 	}
-	sess, deny := s.inboundSessionFor(r.Context(), runID, app, v)
+	sess, deny, rule := s.inboundSessionFor(r.Context(), runID, app, v)
 	switch deny {
 	case "":
 		return sess, nil, true
@@ -377,6 +423,24 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 	case inboundDenyUnreadable:
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, uiSessionUnverifiableMsg)
 		return uiSession{}, nil, false
+	case inboundDenyDataOutUnreadable:
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDataOutUnreadable, dataOutUnreadableMsg)
+		return uiSession{}, nil, false
+	case inboundDenyDataOut:
+		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutAppsMsg)
+		// Both rows are the writer's, within auth.fail's bound: a refused session is never cached, so a token's
+		// holder could otherwise write a run.data_out.deny row for every request.
+		inbound := refused(v.Principal, v.ID, deny)
+		return uiSession{}, func(ctx context.Context) {
+			if s.authFailedAllowed() {
+				actorType := types.ActorHuman
+				if isServicePrincipal(v.Principal) {
+					actorType = serviceActorType
+				}
+				s.auditDataOutDenied(ctx, runID, actorType, v.Principal, "app", rule)
+			}
+			inbound(ctx)
+		}, false
 	default:
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
 	}
@@ -413,8 +477,8 @@ func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool
 			return false, "", refusal
 		}
 		var body errorBody
-		if json.Unmarshal(w.body, &body) == nil && body.Reason == reasonRunUnreadable {
-			return false, reasonRunUnreadable, nil
+		if json.Unmarshal(w.body, &body) == nil && (body.Reason == reasonRunUnreadable || body.Reason == reasonDataOutUnreadable) {
+			return false, body.Reason, nil
 		}
 		return false, reasonTokenLookupUnavailable, nil
 	}
@@ -570,31 +634,46 @@ func (c *inboundStream) Close() error {
 // (asked after reach, so the state is no oracle). A run or policy that cannot be read is unreadable (logged),
 // not a verdict: the request fails closed, and a retry asks again.
 //
+// After reach and state, so a caller with none learns nothing of the rule, a web app other than the desktop
+// on a run whose data_out rule is review or blocked is data_out (the rule is returned for its audit row), as
+// refuseAppDataOut keeps the browser entry; a rule that cannot be read is data_out_unreadable.
+//
 // The session's authority time is the token's creation, so the re-assert's revocation cutoff and sponsor
 // check order it as they do the token itself. It carries no role: no role gives inbound reach.
-func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app string, v verifiedAPIToken) (uiSession, string) {
+func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app string, v verifiedAPIToken) (uiSession, string, types.TransferRule) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return uiSession{}, inboundDenyNotFound
+			return uiSession{}, inboundDenyNotFound, ""
 		}
 		slog.ErrorContext(ctx, "wardynd: ui gateway inbound run lookup failed", "run_id", runID, "err", err)
-		return uiSession{}, inboundDenyUnreadable
+		return uiSession{}, inboundDenyUnreadable, ""
 	}
 	declared, ok, err := s.inboundAppRead(ctx, runID, app)
 	if err != nil {
-		return uiSession{}, inboundDenyUnreadable
+		return uiSession{}, inboundDenyUnreadable, ""
 	}
 	if !ok {
-		return uiSession{}, inboundDenyNotFound
+		return uiSession{}, inboundDenyNotFound, ""
 	}
 	caller, ok := s.inboundCaller(ctx, run, declared, v.Principal, v.Email, v.Groups, v.CreatedAt)
 	if !ok {
-		return uiSession{}, inboundDenyNotFound
+		return uiSession{}, inboundDenyNotFound, ""
 	}
 	// uiDial's state check, made here so a call it would refuse is never admitted (inbound.allow).
 	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
-		return uiSession{}, inboundDenyNotRunning
+		return uiSession{}, inboundDenyNotRunning, ""
+	}
+	// refuseAppDataOut's rule for the browser entry: the desktop is a display, any other app can carry content out.
+	if !uiDesktopApp(declared.Name) {
+		rule, _, err := s.runDataOutRule(ctx, runID)
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: a run's data_out rule is unreadable; the inbound app is refused", "run_id", runID, "err", err)
+			return uiSession{}, inboundDenyDataOutUnreadable, ""
+		}
+		if rule != types.TransferAllowed {
+			return uiSession{}, inboundDenyDataOut, rule
+		}
 	}
 	now := s.cfg.Now()
 	sess := uiSession{
@@ -610,7 +689,7 @@ func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app str
 	if v.service != nil {
 		sess.sponsor = v.service.Sponsor
 	}
-	return sess, ""
+	return sess, "", ""
 }
 
 // inboundApp is app as the run's effective policy declares it, when it is declared inbound. A policy that

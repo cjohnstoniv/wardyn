@@ -29,8 +29,10 @@ export const people = {
   },
 
   // POST /api/v1/people {principal, email?} -> 201 (created) or 200 (already there).
-  async create(principal: string, email: string): Promise<void> {
-    await ok(await wfetch("/people", { method: "POST", asPerson: true, body: JSON.stringify({ principal, ...(email ? { email } : {}) }) }));
+  // Resolves true for a new row (201), false when the person was already there (200).
+  async create(principal: string, email: string): Promise<boolean> {
+    const res = await ok(await wfetch("/people", { method: "POST", asPerson: true, body: JSON.stringify({ principal, ...(email ? { email } : {}) }) }));
+    return res.status === 201;
   },
 
   // GET /api/v1/people -> the one person with this principal, or undefined. There is no read-one route,

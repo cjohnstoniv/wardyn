@@ -31,6 +31,14 @@ func TestRecordingChoiceResolve(t *testing.T) {
 		{"required raises off", RecordingChoice{Policy: RecordingOff, Required: true}, RecordingTerminal},
 		{"required keeps screen", RecordingChoice{Policy: RecordingScreenActions, Required: true}, RecordingScreenActions},
 		{"required over org off", RecordingChoice{Org: org(RecordingOff, false), Required: true}, RecordingTerminal},
+		{"walls floor, nothing else", RecordingChoice{WallsFloor: RecordingScreenActions}, RecordingScreenActions},
+		{"walls floor below an unlocked org default", RecordingChoice{WallsFloor: RecordingTerminal, Org: org(RecordingScreenActions, false)}, RecordingScreenActions},
+		{"walls floor above an unlocked org default", RecordingChoice{WallsFloor: RecordingScreenActions, Org: org(RecordingTerminal, false)}, RecordingScreenActions},
+		{"walls floor below a locked org", RecordingChoice{WallsFloor: RecordingTerminal, Org: org(RecordingScreenActions, true)}, RecordingScreenActions},
+		{"walls floor above a locked org", RecordingChoice{WallsFloor: RecordingScreenActions, Org: org(RecordingTerminal, true)}, RecordingScreenActions},
+		{"walls floor raises a policy off", RecordingChoice{Policy: RecordingOff, WallsFloor: RecordingTerminal}, RecordingTerminal},
+		{"walls floor below the policy", RecordingChoice{Policy: RecordingScreenActions, WallsFloor: RecordingTerminal}, RecordingScreenActions},
+		{"no walls floor, org default kept", RecordingChoice{Org: org(RecordingScreenActions, false)}, RecordingScreenActions},
 	} {
 		if got := tc.c.Resolve(); got != tc.want {
 			t.Errorf("%s: Resolve() = %q, want %q", tc.name, got, tc.want)
@@ -70,6 +78,9 @@ func TestRecordingChoiceFloor(t *testing.T) {
 		{"required over ceiling off", RecordingChoice{Ceiling: RecordingOff, Required: true}, RecordingTerminal, RecordingFloorRequired},
 		{"highest layer wins the level", RecordingChoice{Ceiling: RecordingScreenActions, Org: org(RecordingTerminal, true)}, RecordingScreenActions, RecordingFloorOrgLocked},
 		{"ceiling under a locked off org", RecordingChoice{Ceiling: RecordingTerminal, Org: org(RecordingOff, true)}, RecordingTerminal, RecordingFloorCeiling},
+		{"walls floor alone", RecordingChoice{WallsFloor: RecordingTerminal}, RecordingTerminal, RecordingFloorWalls},
+		{"walls floor raises the ceiling's level", RecordingChoice{Ceiling: RecordingTerminal, WallsFloor: RecordingScreenActions}, RecordingScreenActions, RecordingFloorCeiling},
+		{"walls floor off", RecordingChoice{WallsFloor: RecordingOff}, RecordingOff, ""},
 	} {
 		if got := tc.c.Floor(); got != tc.want {
 			t.Errorf("%s: Floor() = %q, want %q", tc.name, got, tc.want)

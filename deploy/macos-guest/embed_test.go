@@ -85,7 +85,7 @@ func TestBootHostsAreOnlyBackgroundHosts(t *testing.T) {
 	if err := json.Unmarshal(macosguest.BootHostsJSON, &doc); err != nil || doc.Version != 1 {
 		t.Fatalf("boot-hosts.json = %+v, %v", doc, err)
 	}
-	want := []string{"gdmf.apple.com", "mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com"}
+	want := []string{"gdmf.apple.com", "mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}
 	if !slices.Equal(doc.Hosts, want) {
 		t.Fatalf("hosts = %q, want the starting list %q", doc.Hosts, want)
 	}

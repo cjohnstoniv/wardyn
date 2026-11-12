@@ -230,4 +230,23 @@ describe("ModelProvidersList", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText(M.EMPTY_TITLE)).toBeInTheDocument();
   });
+  it("a sign-in endpoint reads Each person signs in, and carries the chip only when binding is off", async () => {
+    const oidc = { issuer: "https://sso.example.com", client_id: "c", scopes: ["a"] };
+    given(
+      [
+        { ...gateway, id: "bound", name: "Bound", oidc },
+        { ...gateway, id: "unbound", name: "Unbound", oidc: { ...oidc, identity_binding: "none" } },
+        { ...gateway, id: "pasted", name: "Pasted" },
+      ],
+      { bound: 2 },
+    );
+    renderList();
+    await expandCard(M.TITLE);
+    await screen.findByTestId("model-provider-bound");
+    expect(row("bound").getByText(M.PROVIDES.SIGN_IN)).toBeInTheDocument();
+    expect(row("bound").queryByText(M.CHIP_UNBOUND)).toBeNull();
+    expect(row("unbound").getByText(M.CHIP_UNBOUND)).toBeInTheDocument();
+    expect(row("pasted").getByText(M.PROVIDES.TOKEN)).toBeInTheDocument();
+    expect(row("pasted").queryByText(M.CHIP_UNBOUND)).toBeNull();
+  });
 });

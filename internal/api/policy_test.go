@@ -131,6 +131,15 @@ func TestValidateLLMInspection(t *testing.T) {
 		// Checking only the http(s) prefix would let an operator-authored (or
 		// member-smuggled) ceiling point the sidecar at an unlisted host.
 		{"sidecar url host NOT in operator allowlist is rejected", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, nil, false},
+		{"presidio format in alert mode, host allowlisted", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio"}, presidio, true},
+		{"presidio format in block mode at medium", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "medium"}, presidio, true},
+		{"presidio format in block mode at high", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "high"}, presidio, true},
+		{"presidio format in block mode at critical", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "critical"}, presidio, true},
+		{"presidio format in block mode with the default severity is refused", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio"}, presidio, false},
+		{"presidio format in block mode at low is refused", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "presidio", BlockMinSeverity: "low"}, presidio, false},
+		{"presidio format needs detector_sidecar_url", &types.LLMInspectionSpec{Mode: "alert", DetectPII: true, DetectorSidecarFormat: "presidio"}, nil, false},
+		{"an unknown detector_sidecar_format is refused", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:3000/analyze", DetectorSidecarFormat: "custom"}, presidio, false},
+		{"a wardyn-format sidecar in block mode at low stays valid", &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "http://presidio:3000/analyze"}, presidio, true},
 		{"bad sidecar url (no scheme, rejected before the allowlist check)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "presidio:8080"}, nil, false},
 		{"negative max_scan_bytes", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, MaxScanBytes: -1}, nil, false},
 		{"bad on_scanner_error", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, OnScannerError: "explode"}, nil, false},

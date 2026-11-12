@@ -30,3 +30,7 @@ export function keysymOf(e: Pick<KeyboardEvent, "key" | "location">): number | u
   // Latin-1 keysyms are the code point; every other character is 0x01000000 plus it.
   return (cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) ? cp : 0x01000000 | cp;
 }
+
+/** The chord that leaves the desktop for the page (WCAG 2.1.2): the terminal's, Ctrl+Shift+Backspace (TERMINAL.ESCAPE_CHORD). */
+export const isEscapeChord = (e: Pick<KeyboardEvent, "key" | "ctrlKey" | "shiftKey" | "altKey">): boolean =>
+  e.ctrlKey && e.shiftKey && !e.altKey && e.key === "Backspace";

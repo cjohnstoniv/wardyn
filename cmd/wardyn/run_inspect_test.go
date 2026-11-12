@@ -92,10 +92,63 @@ func TestRunGetCmd_PrintsTheADOLaneDecline(t *testing.T) {
 	}
 }
 
-// `run get` prints a service's health on one line, and nothing of the kind for a run that is not a service.
+// `run get` names the hosts whose credentials were withheld (the run's policy did not allow them exactly, or a wall denied them),
+// from the dropped_injection_hosts of the run.ceiling.reassert and run.revive rows, and prints nothing of the kind
+// when no row names a host.
+func TestRunGetCmd_PrintsWithheldCredentialHosts(t *testing.T) {
+	runID := uuid.New()
+	const want = "credentials withheld for api.anthropic.com, api.other.test: the run's policy does not allow these hosts exactly, or a wall denies them; the run's run.ceiling.reassert and run.revive audit rows say which"
+	for _, withRow := range []bool{true, false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/audit" {
+				var rows []types.AuditEvent
+				if withRow {
+					switch r.URL.Query().Get("action_prefix") {
+					case "run.ceiling.reassert":
+						data, _ := json.Marshal(map[string]any{"dropped_injection_hosts": []string{"api.anthropic.com"}})
+						rows = append(rows, types.AuditEvent{RunID: &runID, Action: "run.ceiling.reassert", Outcome: "success", Data: data})
+					case "run.revive":
+						data, _ := json.Marshal(map[string]any{"dropped_injection_hosts": []string{"api.anthropic.com", "api.other.test"}})
+						rows = append(rows, types.AuditEvent{RunID: &runID, Action: "run.revive", Outcome: "success", Data: data})
+					}
+				} else if r.URL.Query().Get("action_prefix") == "run.ceiling.reassert" {
+					data, _ := json.Marshal(map[string]any{"dropped_injection_hosts": []string{}})
+					rows = append(rows, types.AuditEvent{RunID: &runID, Action: "run.ceiling.reassert", Outcome: "success", Data: data})
+				}
+				_ = json.NewEncoder(w).Encode(rows)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, Agent: "claude-code", State: types.RunRunning})
+		}))
+		out := &strings.Builder{}
+		root := rootCmd()
+		root.SetArgs([]string{"run", "get", runID.String(), "--url", srv.URL, "--token", "tok"})
+		root.SetOut(out)
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		if got := strings.Contains(out.String(), want); got != withRow {
+			t.Errorf("row=%v: output carries the withheld line = %v:\n%s", withRow, got, out)
+		}
+		if !withRow && strings.Contains(out.String(), "credentials withheld") {
+			t.Errorf("no host named, yet output has a withheld line:\n%s", out)
+		}
+	}
+}
+
+// `run get` prints a service's health on one line, Wardyn's own check on a second for a service that opted in, and
+// nothing of the kind for a run that is not a service.
 func TestServiceLine(t *testing.T) {
 	now := time.Now()
 	svc := &types.RunService{Restart: types.ServiceRestartOnFailure}
+	probed := &types.RunService{Restart: types.ServiceRestartOnFailure, Port: 8080,
+		Health: &types.ServiceHealth{IntervalSec: 15, FailureThreshold: 3, Probe: types.ServiceProbeControlPlane}}
+	withProbe := func(st *types.RunServiceStatus, p *types.RunServiceProbe) *types.RunServiceStatus {
+		st.Probe = p
+		return st
+	}
 	status := func(h types.ServiceHealthState, reason string, restarts int, ago time.Duration) *types.RunServiceStatus {
 		return &types.RunServiceStatus{Health: h, Reason: reason, Restarts: restarts, ObservedAt: now.Add(-ago)}
 	}
@@ -109,6 +162,15 @@ func TestServiceLine(t *testing.T) {
 		{"unhealthy carries its reason", types.AgentRun{Service: svc, ServiceStatus: status(types.ServiceHealthUnhealthy, "probe_failing", 0, 3*time.Hour)}, "service: unhealthy (probe_failing) \u00b7 0 restarts \u00b7 checked 3h ago"},
 		{"not observed yet", types.AgentRun{Service: svc}, "service: not checked yet"},
 		{"not a service", types.AgentRun{ServiceStatus: status(types.ServiceHealthHealthy, "", 0, 0)}, ""},
+		{"Wardyn's check under the sandbox's", types.AgentRun{Service: probed, ServiceStatus: withProbe(status(types.ServiceHealthHealthy, "", 0, 40*time.Second),
+			&types.RunServiceProbe{Health: types.ServiceHealthUnhealthy, Reason: "bad_status", HTTPStatus: 503, Failures: 3, ObservedAt: now.Add(-40 * time.Second)})},
+			"service: healthy \u00b7 0 restarts \u00b7 checked 40s ago\nwardyn's check: unhealthy (bad_status, HTTP 503) \u00b7 3 failed in a row \u00b7 checked 40s ago"},
+		{"Wardyn's check passing", types.AgentRun{Service: probed, ServiceStatus: withProbe(status(types.ServiceHealthHealthy, "", 0, 40*time.Second),
+			&types.RunServiceProbe{Health: types.ServiceHealthHealthy, HTTPStatus: 200, ObservedAt: now.Add(-40 * time.Second)})},
+			"service: healthy \u00b7 0 restarts \u00b7 checked 40s ago\nwardyn's check: healthy \u00b7 checked 40s ago"},
+		{"Wardyn's check not run yet", types.AgentRun{Service: probed, ServiceStatus: status(types.ServiceHealthStarting, "", 0, 0)},
+			"service: starting \u00b7 0 restarts \u00b7 checked 0s ago\nwardyn's check: not checked yet"},
+		{"neither checked yet", types.AgentRun{Service: probed}, "service: not checked yet\nwardyn's check: not checked yet"},
 	} {
 		if got := serviceLine(tc.run, now); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)

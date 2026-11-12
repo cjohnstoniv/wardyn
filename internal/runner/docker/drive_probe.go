@@ -71,7 +71,7 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	remove := func(id string) {
 		rctx, rcancel := context.WithTimeout(context.Background(), diskProbeCleanup)
 		defer rcancel()
-		_, _ = d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	}
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,

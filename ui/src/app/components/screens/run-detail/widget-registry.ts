@@ -12,7 +12,7 @@
 // The ids are NOT ours to choose: internal/api/ui_layout.go's
 // runLayoutWidgetIDs is a CLOSED set the server validates every PUT against
 // ("terminal, egress, files, sandbox, credentials, identity, effective-policy,
-// ssh, service"). An id outside it is a 400, so this table's keys must match that slice
+// desktop, ssh, service, machine, model-usage"). An id outside it is a 400, so this table's keys must match that slice
 // exactly — the two halves of the contract are kept in sync by hand (C-UI adds
 // `effective-policy` to BOTH, in the same commit — a client-only add would
 // 400 every layout PUT that ever placed it). That file's own doc explains what
@@ -23,7 +23,7 @@
 // use React.createElement rather than turning the registry into a component
 // module.
 import * as React from "react";
-import { Box, FileDiff, Fingerprint, Globe, HeartPulse, KeyRound, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
+import { Box, FileDiff, Fingerprint, Gauge, Globe, HardDrive, HeartPulse, KeyRound, Monitor, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
 import type {
   AuditEvent,
   CredentialGrant,
@@ -33,9 +33,12 @@ import type {
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
 import type { ConsoleView } from "../../wardyn/console-view";
 import { createRequestFromAudit } from "../../../lib/api/audit";
-import { mayEnterRunOrUnknown } from "../../../lib/run-entry";
-import { isMacOSVM } from "../../../lib/types/machine-kind";
+import { isBackgroundRun, mayEnterRunOrUnknown } from "../../../lib/run-entry";
+import { isMacOSVM, isVMKind } from "../../../lib/types/machine-kind";
+import { DesktopCard } from "../run-detail-desktop";
 import { ConnectSSHCard } from "../run-detail-ssh";
+import { MachineWidget } from "./widgets/machine-card";
+import { withheldCredentialHosts } from "./widgets/effective-policy";
 import { ServicePanel } from "./service-panel";
 import {
   CredentialsWidget,
@@ -43,6 +46,7 @@ import {
   EgressWidget,
   FilesChangedWidget,
   IdentityWidget,
+  ModelUsageWidget,
   SandboxWidget,
 } from "./widgets";
 
@@ -59,11 +63,14 @@ export type WidgetId =
   | "egress"
   | "files"
   | "sandbox"
+  | "model-usage"
   | "credentials"
   | "identity"
   | "effective-policy"
+  | "desktop"
   | "ssh"
-  | "service";
+  | "service"
+  | "machine";
 
 // Everything a widget can need, assembled once by the screen. Widgets keep
 // their own props — this is only the bag the registry destructures from, so a
@@ -205,6 +212,18 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: { live: { x: 8, y: 8, w: 4, h: 4 } },
   },
+  // Token counts from the run proxy. Unlike Sandbox it answers for a finished run, so it has a finished slot; that
+  // slot is under Effective policy: the right half of that row is the Desktop tile's on a VM run.
+  "model-usage": {
+    label: "Model usage",
+    Icon: Gauge,
+    component: (ctx) => React.createElement(ModelUsageWidget, { runId: ctx.run.id, live: !ctx.finished }),
+    defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
+    presets: {
+      live: { x: 8, y: 12, w: 4, h: 4 },
+      finished: { x: 0, y: 16, w: 6, h: 4 },
+    },
+  },
   credentials: {
     label: "Credentials",
     Icon: KeyRound,
@@ -216,7 +235,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
       }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
-      live: { x: 8, y: 12, w: 4, h: 4 },
+      live: { x: 8, y: 16, w: 4, h: 4 },
       finished: { x: 0, y: 8, w: 6, h: 4 },
     },
   },
@@ -227,7 +246,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
       React.createElement(IdentityWidget, { run: ctx.run, audit: ctx.audit, onGoPolicy: ctx.onGoPolicy, onGoAudit: ctx.onGoAudit }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
-      live: { x: 8, y: 16, w: 4, h: 4 },
+      live: { x: 8, y: 20, w: 4, h: 4 },
       finished: { x: 6, y: 8, w: 6, h: 4 },
     },
   },
@@ -241,7 +260,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     component: (ctx) => React.createElement(EffectivePolicyWidget, { audit: ctx.audit }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
-      live: { x: 8, y: 25, w: 4, h: 4 },
+      live: { x: 8, y: 33, w: 4, h: 4 },
       finished: { x: 0, y: 12, w: 6, h: 4 },
     },
     // The widget returns null whenever the run's own run.create row never
@@ -249,7 +268,27 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // and a null inside a grid tile is a reserved hole mid-canvas, plus a dock
     // button that opens a blank pane (focus-mode.tsx). Same reason ssh carries
     // one: the predicate must mirror the component's own gate exactly.
-    available: (ctx) => createRequestFromAudit(ctx.audit).clamp_warnings !== undefined,
+    available: (ctx) =>
+      createRequestFromAudit(ctx.audit).clamp_warnings !== undefined || withheldCredentialHosts(ctx.audit).length > 0,
+  },
+  // A VM run's desktop, in its own tile between Identity and Attach (it was a block inside the ssh tile).
+  desktop: {
+    label: "Desktop",
+    Icon: Monitor,
+    component: (ctx) => React.createElement(DesktopCard, { run: ctx.run }),
+    defaultLayout: { w: 4, h: 4, minW: 3, minH: 3 },
+    // Above Attach in the live rail. The finished place is the one the Attach tile had for a finished macOS VM run's disk
+    // line, which this tile now carries. (Migration 0236 appended Attach to saved finished layouts at x 0, below
+    // everything; the console adds this tile to a saved layout itself, withDesktop.)
+    presets: { live: { x: 8, y: 24, w: 4, h: 4 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
+    // DesktopCard's own gate, so the grid never holds an empty tile: a VM run the person may enter, while it runs or,
+    // for a macOS VM, while the Mac's report of its disk has something to say. The admin monitor has
+    // no door at all, even on the admin's own run (admin-member-modes-design.md §4.6, §6).
+    available: (ctx) =>
+      ctx.view === "user" &&
+      isVMKind(ctx.run.machine_kind) &&
+      (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
+      mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
   },
   ssh: {
     label: "Attach from your terminal",
@@ -260,15 +299,16 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // absent (owner-only), and with free placement an absent tile leaves a
     // hole — at the bottom of the rail that hole costs nothing, between two
     // widgets it is a visible gap on every run you did not start.
-    presets: { live: { x: 8, y: 20, w: 4, h: 5 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
-    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check, or a finished macOS VM run with a disk line.
+    presets: { live: { x: 8, y: 28, w: 4, h: 5 } },
+    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check. A background run has no terminal, SSH or apps of
+    // its own to attach to so its desktop's Watch lives in the Desktop tile alone.
     // M-7: AND the user view — the admin monitor carries no Connect-via-SSH
     // door at all, even on the admin's own run (admin-member-modes-design.md
     // §4.6, §6).
-    // A finished macOS VM run keeps the tile while its disk's removal has something to say (mock M-D1 9-11).
     available: (ctx) =>
       ctx.view === "user" &&
-      (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
+      ctx.run.state === "RUNNING" &&
+      !isBackgroundRun(ctx.run) &&
       mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
   },
   // Mock r15 T1-c: the Service panel heads the Overview's right column, above Egress. It exists only on a live service
@@ -280,6 +320,16 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     defaultLayout: { w: 4, h: 5, minW: 3, minH: 3 },
     presets: {},
     available: (ctx) => !!ctx.run.service && ctx.run.state === "RUNNING",
+  },
+  // Board KM-3: the kept machine of a run that keeps or resumed one, in the right column. A run with none has no tile, so
+  // the default layouts leave it out and presetLayout / withMachine add it, below everything, for a run that has one.
+  machine: {
+    label: "Machine",
+    Icon: HardDrive,
+    component: (ctx) => React.createElement(MachineWidget, { run: ctx.run }),
+    defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
+    presets: {},
+    available: (ctx) => !!ctx.run.machine,
   },
 };
 
@@ -315,18 +365,78 @@ export const SERVICE_REMOVED: RunLayoutWidget = { widget: "service", x: 0, y: 0,
 
 export const isServiceRemoved = (w: RunLayoutWidget): boolean => w.widget === "service" && w.w === 1 && w.h === 1;
 
+/**
+ * What a saved layout holds in place of the Desktop tile once the person has removed it, as SERVICE_REMOVED does for
+ * the panel (the tile's smallest size is 3×3, so 1×1 cannot be the tile). A saved layout with no Desktop entry at all
+ * predates the tile and, on a VM run, gets it (withDesktop); one with this entry was saved after, with the tile taken
+ * out, and does not.
+ */
+export const DESKTOP_REMOVED: RunLayoutWidget = { widget: "desktop", x: 0, y: 0, w: 1, h: 1 };
+
+export const isDesktopRemoved = (w: RunLayoutWidget): boolean => w.widget === "desktop" && w.w === 1 && w.h === 1;
+
+/**
+ * The layout with a Desktop tile when it has none: in the Attach tile's place, which the tile sat above in the preset,
+ * with every widget at or below that row moved down to make room (all columns, so nothing a partial-column move
+ * would have pushed into another can collide). With no Attach tile it goes where an add puts it, below everything.
+ * A layout with no overlap stays without one, and a layout that has the tile is left as it is.
+ */
+export function withDesktop(layout: RunLayoutWidget[]): RunLayoutWidget[] {
+  if (layout.some((w) => w.widget === "desktop")) return layout;
+  const ssh = layout.find((x) => x.widget === "ssh");
+  if (!ssh) return addWidget(layout, "desktop");
+  const { h, minW } = RUN_WIDGETS.desktop.defaultLayout;
+  const at = { x: ssh.x, y: ssh.y, w: Math.max(ssh.w, minW), h };
+  return [...layout.map((o) => (o.y >= at.y ? { ...o, y: o.y + at.h } : o)), { widget: "desktop", ...at }];
+}
+
+/**
+ * What a saved layout holds in place of the Machine tile once the person has removed it, as DESKTOP_REMOVED does for the
+ * Desktop tile (the tile's smallest size is 3×2, so 1×1 cannot be the tile). A saved layout with no Machine entry at all
+ * predates the tile and, on a run with a kept machine, gets it (withMachine); one with this entry was saved after, with
+ * the tile taken out, and does not.
+ */
+export const MACHINE_REMOVED: RunLayoutWidget = { widget: "machine", x: 0, y: 0, w: 1, h: 1 };
+
+export const isMachineRemoved = (w: RunLayoutWidget): boolean => w.widget === "machine" && w.w === 1 && w.h === 1;
+
+/** The layout with a Machine tile when it has none: at the foot of the right column, where it costs the rest nothing. A layout that has the tile is left as it is. */
+export function withMachine(layout: RunLayoutWidget[]): RunLayoutWidget[] {
+  if (layout.some((w) => w.widget === "machine")) return layout;
+  const { w, h } = RUN_WIDGETS.machine.defaultLayout;
+  const x = Math.min(rightColumnX(layout), GRID_COLS - w);
+  const y = layout.filter((o) => o.x < x + w && o.x + o.w > x).reduce((bottom, o) => Math.max(bottom, o.y + o.h), 0);
+  return [...layout, { widget: "machine", x, y, w, h }];
+}
+
+/** A layout for a run that has a kept machine: the tile is there unless the person took it out. */
+export function forMachineRun(layout: RunLayoutWidget[], machine: boolean): RunLayoutWidget[] {
+  return machine ? withMachine(layout) : layout;
+}
+
 /** A layout for one run: a service run's live layout has the Service panel, one saved before the panel existed included. */
 export function forRun(layout: RunLayoutWidget[], preset: RunLayoutPreset, service: boolean): RunLayoutWidget[] {
   return service && preset === "live" ? withService(layout) : layout;
 }
 
-/** The situational default for a preset, in wire shape. `service`: the run is a service, which adds its panel. */
-export function presetLayout(preset: RunLayoutPreset, service = false): RunLayoutWidget[] {
+/** A saved layout for a VM run: the Desktop tile is there unless the person took it out. */
+export function forVMRun(layout: RunLayoutWidget[], vm: boolean): RunLayoutWidget[] {
+  return vm ? withDesktop(layout) : layout;
+}
+
+/**
+ * The situational default for a preset, in wire shape. `service`: the run is a service, which adds its panel. `vm`: the
+ * run is a VM run, which has the Desktop tile; any other run's rail closes the tile's rows, so no gap is left in it. `machine`: the
+ * run keeps or resumed a kept machine, which has the Machine tile at the foot of the right column.
+ */
+export function presetLayout(preset: RunLayoutPreset, service = false, vm = false, machine = false): RunLayoutWidget[] {
+  const slot = RUN_WIDGETS.desktop.presets[preset];
   const base = WIDGET_IDS.flatMap((id) => {
+    if (id === "desktop" && !vm) return [];
     const at = RUN_WIDGETS[id].presets[preset];
     return at ? [{ widget: id, ...at }] : [];
-  });
-  return forRun(base, preset, service);
+  }).map((w) => (!vm && slot && w.y >= slot.y + slot.h && w.x < slot.x + slot.w && w.x + w.w > slot.x ? { ...w, y: w.y - slot.h } : w));
+  return forMachineRun(forRun(base, preset, service), machine);
 }
 
 // The ONE guard every layout passes through — load, add, remove, preset
@@ -342,7 +452,7 @@ export function normalizeLayout(
   const seen = new Set<string>();
   const out: RunLayoutWidget[] = [];
   for (const w of layout) {
-    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w)) continue;
+    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w) || isDesktopRemoved(w) || isMachineRemoved(w)) continue;
     seen.add(w.widget);
     out.push({ widget: w.widget, x: w.x, y: w.y, w: w.w, h: w.h });
   }

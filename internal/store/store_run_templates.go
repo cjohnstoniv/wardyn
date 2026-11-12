@@ -78,6 +78,7 @@ type TemplateGrantCheck struct {
 type RunSetupsErased struct {
 	Templates         int `json:"templates"`
 	Grants            int `json:"grants"`
+	WallPresets       int `json:"wall_presets"`
 	AuthorshipCleared int `json:"authorship_cleared"`
 	// LaunchIntents is set by the caller that also erases the person's launch intents (LaunchIntentStore).
 	LaunchIntents int `json:"launch_intents"`
@@ -378,12 +379,17 @@ func (s PG) EraseRunSetupsOf(ctx context.Context, person string) (RunSetupsErase
 		}{
 			{&out.Templates, `DELETE FROM run_templates WHERE scope = 'person' AND owner_id = $1`},
 			{&out.Grants, `DELETE FROM template_group_admins WHERE person = $1`},
+			{&out.WallPresets, `DELETE FROM wall_presets WHERE scope = 'person' AND owner_id = $1`},
 			{&out.AuthorshipCleared, `UPDATE run_templates
 				SET created_by = CASE WHEN created_by = $1 THEN '' ELSE created_by END,
 				    updated_by = CASE WHEN updated_by = $1 THEN '' ELSE updated_by END
 				WHERE created_by = $1 OR updated_by = $1`},
 			{&out.AuthorshipCleared, `UPDATE run_template_revisions SET created_by = '' WHERE created_by = $1`},
 			{&out.AuthorshipCleared, `UPDATE template_group_admins SET granted_by = '' WHERE granted_by = $1`},
+			{&out.AuthorshipCleared, `UPDATE wall_presets
+				SET created_by = CASE WHEN created_by = $1 THEN '' ELSE created_by END,
+				    updated_by = CASE WHEN updated_by = $1 THEN '' ELSE updated_by END
+				WHERE created_by = $1 OR updated_by = $1`},
 		} {
 			if err := count(step.dst, step.stmt); err != nil {
 				return err

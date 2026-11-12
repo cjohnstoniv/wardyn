@@ -48,6 +48,7 @@ type Server struct {
 	attachRef     func(uuid.UUID) string  // a live run's local sandbox ref, for local attach
 	nonces        map[string]*localClient // local attach grants waiting for the org
 	locals        map[streamKey]*localSession
+	windows       map[string]*macWindowSession // attended windows by local sandbox ref: one per run
 	times         localTimes
 	// markRefused, when set, marks a refused output OPEN in place of unacknowledgedSince: a test seam.
 	markRefused func(b *outputBuffer, acks uint64)
@@ -211,6 +212,11 @@ func (s *Server) Offline(peer *runnerwire.Peer) {
 			closeFns = append(closeFns, func() { l.end(LocalReasonLinkLost) })
 		}
 	}
+	for _, m := range s.windows {
+		if m.peer == peer {
+			closeFns = append(closeFns, func() { m.end("", false) })
+		}
+	}
 	s.mu.Unlock()
 	if ok {
 		life.cancel()
@@ -242,6 +248,8 @@ func (s *Server) Call(ctx context.Context, peer *runnerwire.Peer, id uint32, met
 		return s.recoverOutput(ctx, peer, id, args)
 	case runnerwire.MethodOutputAck:
 		return nil, s.outputAck(args)
+	case runnerwire.MethodMacWindow:
+		return s.macWindow(ctx, peer, id, args)
 	case runnerwire.MethodLocalAttach:
 		return s.localAttach(ctx, peer, id, args)
 	case runnerwire.MethodLocalAttachMode:

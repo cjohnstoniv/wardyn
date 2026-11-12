@@ -40,23 +40,38 @@ func TestDesktopLeq(t *testing.T) {
 
 // TestDesktopClampBlocksWhatTheCeilingBlocks: a member cannot open copy out under a ceiling that
 // leaves it at the default, nor paste in under one that blocks it; a proposal already within the
-// ceiling is left exactly as written, so a policy with no desktop setting stays without one.
+// ceiling is left exactly as written. A proposal with no desktop setting takes the ceiling's.
 func TestDesktopClampBlocksWhatTheCeilingBlocks(t *testing.T) {
 	for _, tc := range []struct {
 		proposed, ceiling, want *types.DesktopControls
 		warns                   int
 	}{
 		{nil, nil, nil, 0},
-		{nil, openCopyOut, nil, 0},
+		{nil, openCopyOut, openCopyOut, 0},
 		{openCopyOut, openCopyOut, openCopyOut, 0},
 		{openCopyOut, nil, &types.DesktopControls{PasteIn: "allowed", CopyOut: "blocked", Upload: "allowed", Download: "blocked"}, 1},
-		{nil, shutPasteIn, &types.DesktopControls{PasteIn: "blocked", CopyOut: "blocked", Upload: "allowed", Download: "blocked"}, 1},
+		{nil, shutPasteIn, shutPasteIn, 0},
 	} {
 		out := types.RunPolicySpec{Desktop: tc.proposed}
 		warns := clampDesktop(&out, types.RunPolicySpec{Desktop: tc.ceiling}, nil)
 		if !reflect.DeepEqual(out.Desktop, tc.want) || len(warns) != tc.warns {
 			t.Errorf("clamp(%+v under %+v) = %+v %q, want %+v and %d warning(s)", tc.proposed, tc.ceiling, out.Desktop, warns, tc.want, tc.warns)
 		}
+	}
+}
+
+// TestDesktopClampCopiesTheCeiling: a proposal that takes the ceiling's desktop gets its own copy, so
+// changing the run's rules never changes the ceiling's.
+func TestDesktopClampCopiesTheCeiling(t *testing.T) {
+	ceiling := types.RunPolicySpec{Desktop: &types.DesktopControls{CopyOut: types.TransferAllowed}}
+	out := types.RunPolicySpec{}
+	clampDesktop(&out, ceiling, nil)
+	if out.Desktop == ceiling.Desktop {
+		t.Fatal("the proposal shares the ceiling's desktop pointer")
+	}
+	out.Desktop.CopyOut = types.TransferBlocked
+	if ceiling.Desktop.CopyOut != types.TransferAllowed {
+		t.Fatalf("changing the proposal's desktop changed the ceiling's: %+v", ceiling.Desktop)
 	}
 }
 

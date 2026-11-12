@@ -35,10 +35,13 @@ var isOperatorCensus = map[string]int{
 	"workloads.go:workloadReadTier":       1, // an operator reads another owner's workload in full, as workspaceReadTierFor reads a workspace
 	"workloads.go:mayReachWorkloadsOf":    1, // reach: an operator restarts another owner's workload (workloadOwnerOf, launches), and canRestartWorkload's display flag reads the same rule and grants nothing; the launch is the owner's own run create
 	"attach_ticket.go:handleAttachTicket": 1, // the ticket's reach stamp; its reach is admitRunEntry's
-	"desktop_files.go:desktopRun":         1, // the entry rule (mayEnterRun) and the deny_ui_apps skip, as the ticket's
-	"attach.go:refuseAttachEntry":         1,
-	"run_entry.go:getRunForEntry":         1,
-	"sshkeys.go:handleAddSSHKey":          1,
+	"desktop_files.go:desktopRun":         1, // the entry rule (mayEnterRun) and the skip of deny_ui_apps and deny_interactive, as the ticket's
+	// A desktop sign-in's begin and share: the skip of deny_ui_apps and deny_interactive, as the ticket's.
+	"run_desktop_signin.go:handleBeginDesktopSignin": 1,
+	"run_desktop_signin.go:handleShareDesktopSignin": 1,
+	"attach.go:refuseAttachEntry":                    1,
+	"run_entry.go:getRunForEntry":                    1,
+	"sshkeys.go:handleAddSSHKey":                     1,
 	// A VM desktop's agent pause and resume: the entry rule (mayEnterRun) and the super admin's
 	// 403 on a run that is not theirs. The pause then holds deny_ui_apps and deny_interactive for every caller.
 	"run_desktop_vm_signin.go:mayPauseDesktopAgent": 1,
@@ -49,6 +52,9 @@ var isOperatorCensus = map[string]int{
 	// keyed on the role the ticket it leads to is stamped with (refuseAttachEntry's ticket
 	// lane); the governed-admin answer is adminDoorExempt's, as there.
 	"approvals_takeover.go:loadTakeover": 1,
+	// POST /runs/{id}/exec: the skip of deny_interactive, as SSH authentication's (sshAuth); the
+	// governed-admin answer is adminDoorExempt's, as there.
+	"run_exec.go:handleRunExec": 1,
 	// Base images (design final §3): the security tier writes prewrapped rows only, and a delete
 	// authorizes the stored kind (and force) before naming any workspace.
 	"base_images.go:mayWriteBaseImageKind": 1,
@@ -69,6 +75,8 @@ var isOperatorCensus = map[string]int{
 	// ownership question for it.
 	// The second bounds a removal on stored policy content to the member's own grants.
 	"run_overrides_apply.go:applySecretOverrides": 2,
+	// An operator reading another person's terminal text through a run's output is audited, as a replay is.
+	"run_output.go:auditRunOutputRead": 1,
 	// Reading a recording is a privacy surface, not a launch.
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,
@@ -100,6 +108,7 @@ var isOperatorCensus = map[string]int{
 	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
 	"audit.go:auditRowsFor":                          1,
 	"audit_partition_export.go:exportAuditPartition": 1,
+	"audit_receipt.go:handleAuditReceipt":            1, // a receipt is projected like the partition export
 	// A mount's host path is the super admin's: the spec read tier withholds it below
 	// that tier, and a profile write or its approval sets one only as a super admin.
 	"policies.go:specReadTierFor":                  1,

@@ -7,6 +7,7 @@ ceiling. One sentence is the doctrine: a capability bounds what the MEMBER chose
 the ADMIN pre-authorized.
 
 - The [three-role split](three-roles.md) is deployment-wide.
+- A profile's limits (`max_concurrent_runs` and the two launch modes it can refuse) are not capabilities: they bind only the people the profile is assigned to.
 - A **capability grant** is per-human: a row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or `deny` (`capability_grants`, migration 0042), with a per-kind **enforcement switch** beside it (`capability_enforcement`).
 - One sentence is the doctrine, and every rule below follows from it: **a capability bounds what the MEMBER chose, never what the ADMIN pre-authorized.**
 - So a stored policy, a workspace's own requirements, the hosts a workspace scan seeded, the model provider's own egress, and the grants `applyWorkspaceRequirements` re-adds at launch are all left untouched no matter what a member holds.
@@ -18,22 +19,20 @@ the ADMIN pre-authorized.
 | `egress_host` | host (`:port` dropped) or `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, [`internal/api/approvals.go`](../../internal/api/approvals.go)), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, [`internal/api/inline_policy_bounds.go`](../../internal/api/inline_policy_bounds.go)) |
 | `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, [`internal/api/secrets.go`](../../internal/api/secrets.go)) |
 | `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../../internal/api/runs_create_validate.go)) |
-| `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
+| `image` | exact image ref, or a registry prefix `host/path/*` | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
-| `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) below |
-| `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) below |
-| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) below |
-| `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). |
-| | | | Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. |
-| | | | Checked before the row is read, so an ungranted id is refused whether or not it exists |
-| `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)). |
-| | | | An org component's id is restricted ("Available to") from its create, so nobody may attach it until an allow row names it — a wildcard allow does not. |
-| | | | A component a person defines themselves is the `feature` value `custom_component`'s question, not this kind's |
+| `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) |
+| `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) |
+| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) |
+| `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam) |
+| `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)) |
+
+- `policy` bounds the choice only: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. The id is checked before the row is read, so an ungranted id is refused whether or not it exists.
+- An org `component`'s id is restricted ("Available to") from its create, so nobody may attach it until an allow row names it; a wildcard allow does not. A component a person defines themselves is the `feature` value `custom_component`'s question, not this kind's.
 
 - A withdrawn `component` grant is asked again at the run's next launch, revive or extend. A run already running keeps the component until it ends; to cut it sooner, withdraw the component or stop the run.
 - `*` as a value matches everything of that kind, spelled the same way for all ten.
-- 0.8 retired one more, `integration`, with the AI integrations it bounded: a run's `integration_id` is refused with a `422` for everyone, so there is nothing left for it to gate.
-- Its stored grant rows are inert, and a new one is refused.
+- `integration` is no longer a kind: a run's `integration_id` is refused with a `422` for everyone, so there is nothing left to gate. Its stored grant rows are inert, and a new one is refused.
 - `egress_host` values are matched by `entryCoversAny` ([`internal/api/artifact_redirect.go`](../../internal/api/artifact_redirect.go)):
   - the *same* matcher that decides whether one allowlist entry covers a host, deliberately not a second one, because two host matchers that disagree is how a deny gets bypassed by a port suffix.
 - Every other kind is an exact compare.
@@ -48,7 +47,7 @@ the ADMIN pre-authorized.
 1. **admin, admin token, and local mode are exempt.** A capability bounds a member; the admin tier is the one writing the grants.
 2. Any matching **deny** ⇒ refused.
 3. Any matching **allow** ⇒ permitted.
-4. The kind is **not enforced** ⇒ permitted. A restricted value counts as enforced, so this step never opens it (see "Available to" below).
+4. The kind is **not enforced** ⇒ permitted. A restricted value counts as enforced, so this step never opens it (see "Available to" under the endpoints).
 5. Otherwise ⇒ refused.
 
 - There is no user-over-group precedence: a deny anywhere wins, because "Bob's user allow overrode the group deny" is a breach report.
@@ -56,22 +55,39 @@ the ADMIN pre-authorized.
 - A store error is never permission — the request answers `500`.
 
 - **The widening kind reads the same rows the other way.**
-- For `image` (`capGranted`) an unenforced kind is *refused*, not permitted, because 0.5 refused it too.
+- For `image` (`capGranted`) an unenforced kind is *refused*, not permitted.
 - Both directions obey "an upgrade with no configuration changes nothing".
-- So `image` needs *both* the switch on and an exact-ref grant; the other nine need only the absence of a deny until you enforce them (a value an admin restricted, as a new organisation component is, also needs an allow row naming it).
+- So `image` needs *both* the switch on and an exact-ref grant or a registry-prefix grant (or `*`); the other nine need only the absence of a deny until you enforce them (a value an admin restricted, as a new organisation component is, also needs an allow row naming it).
+- **An `image` grant may be a registry prefix**, such as `registry.example.com/team/*`: a prefix of the reference as typed.
+- It matches `registry.example.com/team/app:1`, `…/app@sha256:…` and `…/sub/app:1`, but not `registry.example.com/team`, `…/teamx/app` or `…/Team/app`. Whole path segments, case-sensitive, nothing normalised: `docker.io/library/*` does not cover `nginx:1`.
+- It must start with a registry host and end in one `/*`, with no tag, digest, uppercase letter, `..` segment or other `*`; anything else is refused `400`. A stored row that breaks these rules matches nothing.
+- A deny prefix overlaps every ref it matches and every prefix above or below it.
+- A deny covers other spellings of the same registry and image (capitals in the host, `:443`, Docker Hub short names such as `nginx`); an allow covers only the spelling written.
+- "Available to" stays exact: a prefix never opens a restricted image, or another tag or digest of its repository, only an allow naming it does.
+- A prefix over mutable tags is weaker than an exact digest ref.
+- **Digest rule (`images.require_digest`, off by default).** With it on, a member's image must be pinned by digest, `image@sha256:<digest>` (a tag beside the digest is fine).
+  - It sits on top of the grants, not instead of them: a prefix grant or an exact grant on a tag ref still needs the run to name the digest form, and `*` does not lift it.
+  - It applies to the image a member names (`image`) and to the base image of a workspace the run attaches or its policy carries, whoever owns the workspace. A run that names no image keeps the agent's convention image, which an operator sets.
+  - A refused run answers `403` with reason `image_digest_required` and a sentence that names the setting and shows the form.
+  - **Operators are not bound by it**, as for other governance. While it is on, an operator's run.create audit row carries `image_digest_exempt: true` when its image is not pinned. An SSO admin is bound when `WARDYN_GOVERN_ADMIN_RUNS` is on.
+  - It is checked when a run is created, previewed (Review), or starts after waiting in a queue, and for a service identity's run, which is a member's.
+  - Reviving or restarting a run checks it again, on the image the run's create checked and under the rule as it is then. A run whose image was not pinned, made while the rule was off or before this release, is refused until a new run starts. The run owner's authority decides: an operator's run stays exempt, marked `image_digest_exempt` on the run.revive row, and an admin reviving a member's run is bound as the member. Extending a run does not check it.
+  - Set it with `PUT /api/v1/site-config` (`"images": {"require_digest": true}`); a body that omits `images` keeps the stored value, and the change is on the `site_config.write` audit row as `images_require_digest`. There is no console control yet.
+  - It reads only the reference as typed: it does not look the image up in a registry, and it cannot verify a signature. To require a signature too, see [image signature checks](image-signature-checks.md). For cluster-side enforcement, see [image admission](image-admission.md).
+  - Not run in CI against a real cluster or registry: the tests cover the control plane's decision.
 - That rule is also why `agent` narrows rather than widens:
   - launching an agent is something every member could already do,
   - so a widening kind would refuse every member run on every deployment that has not enforced it — i.e. all of them on upgrade day.
 
 - **Default posture: an absent enforcement row is off.**
-- A deployment upgraded from 0.5 with no rows written behaves byte-for-byte as before.
+- With no rows written, a deployment behaves as it did before capabilities existed.
 - Turning `workspace` on with no grants written locks every member out of every workspace at once; write the grants (or the targeted denies) first, then flip the switch.
 
 - **Subjects, and the group snapshot's ceiling.**
 - A grant's `subject_type` is
   - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits),
   - `group` (the login-time union of the ID token's `roles` and `groups` claims, lowercased and deduped — so Entra App Roles are grantable for free),
-  - `user_type` (everyone of one user type, named by the type's id — 0.8),
+  - `user_type` (everyone of one user type, named by the type's id),
   - or `all` (every signed-in human).
 
 - A person holds exactly one user type, stamped at sign-in,
@@ -95,11 +111,11 @@ the ADMIN pre-authorized.
 - The snapshot is capped at 2048 payload bytes (`maxSessionGroupsBytes`, [`internal/auth/oidc/derive.go`](../../internal/auth/oidc/derive.go)) so the signed cookie stays under the ~4096 bytes a browser silently drops entirely.
 - Groups are sorted and dropped **from the end**, so the same human loses the same groups every login instead of a coin flip.
 - That is roughly 100 typical group names — past that, grant the user directly, or prefer Entra App Roles on the much smaller `roles` claim.
-- `groups_snapshot_stale` on `GET /me/capabilities` reports the "can't tell yet" state distinctly from "holds no groups", because the two must not read the same — but as of 0.7 it is never a *pre-upgrade cookie* that produces it.
-- The session payload carries a codec version and `decodeSession` requires an exact match (`SessionCodecVersion = 1`, [`internal/auth/oidc/session_codec.go`](../../internal/auth/oidc/session_codec.go)),
+- `groups_snapshot_stale` on `GET /me/capabilities` reports the "can't tell yet" state distinctly from "holds no groups", because the two must not read the same — but it is never a *pre-upgrade cookie* that produces it.
+- The session payload carries a codec version and `decodeSession` requires an exact match (`SessionCodecVersion`, [`internal/auth/oidc/session_codec.go`](../../internal/auth/oidc/session_codec.go)),
   - so a cookie minted before 0.7 — which has no `v` key at all — is not a stale-groups session;
   - it is not a session, and the human is bounced to sign in.
-- See "[Upgrades](../OPERATIONS.md#upgrades)" below.
+- See [Upgrades](../OPERATIONS.md#upgrades).
 
 - **A DENY is never allowed to evaporate with the snapshot.**
 - A group that fell off the 2048-byte cut — or one your directory names with a character the snapshot cannot carry, or a pre-0.7 API token whose completeness was never recorded —
@@ -168,6 +184,7 @@ the ADMIN pre-authorized.
 - `always`-scope decisions stay on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a member's decision into durable workspace config.
 - `GET /workspaces` is not narrowed: visibility is not capability, the launch gate is what refuses.
 - Machine lanes (`/internal/*`, ground-truth ingest, attach tickets) are untouched.
+- Watching a background macOS VM run's desktop is not a capability kind: the site switch and the profile's limits decide it ([macOS VMs](macos-vms.md#watching-a-background-runs-desktop)), and the run's owner alone may open it.
 - And where the operator ceiling sets `allow_all_egress` the allowlist is not the gate for a public host, so `egress_host` narrowing bounds no public reach there — the operator's own posture, not a switch that failed.
 - An `egress_host` grant is never authority for a private address: under that ceiling a member's own exact entry for one is dropped unless the ceiling lists it ([`POLICIES.md`](../POLICIES.md), "It is a name deny").
 
@@ -188,7 +205,7 @@ the ADMIN pre-authorized.
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
 | `GET /permissions/availability/{kind}/{value}` | one resource's "Available to": `restricted`, and `allowed_by`, the allow rows naming it |
 | `PUT /permissions/availability/{kind}/{value}` | `{"restricted": true}` turns on "Only…" for one resource, `false` turns it back to Everyone |
-| `GET /permissions/explain?subject_type=&subject=&kinds=` | the Explain grid (K4), one named subject's state for every kind; see [`GET /permissions/explain`](#get-permissionsexplain) below |
+| `GET /permissions/explain?subject_type=&subject=&kinds=` | the Explain grid, one named subject's state for every kind; see [`GET /permissions/explain`](#get-permissionsexplain) |
 | `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
@@ -199,7 +216,7 @@ the ADMIN pre-authorized.
 - `GET /permissions`'s `ETag` header (a content hash of the enforcement map alone, not the grant table) can be sent back as this `PUT`'s `If-Match`: a document that changed underneath a stale tab is refused `412`.
 - `If-Match` is optional, and the write is audited either way.
 
-- **"Available to" (0.8).**
+- **"Available to".**
 - `workspace`, `image`, `agent`, `workspace_provider`, `model_provider`, `feature`, `policy` and `component` values can each be restricted one at a time (migration `0081_capability_restrictions` began it with the first four).
 - **A restricted value is closed whatever its kind's enforcement switch says.** Its kind counts as enforced for that value (`capRead.enforced` is true when the switch is on or the value is restricted), so the "not enforced ⇒ permitted" step never applies to it. An unenforced `feature` kind does not open `service_attach` or `self_host_runner`.
 - Only a caller holding an allow row that names the value itself gets it: a `*` allow lists nobody, and a deny still wins.
@@ -214,6 +231,7 @@ the ADMIN pre-authorized.
 - Writes are audited as `capability.grant.create` / `.updated` / `.deleted`, `capability.enforcement.write` and `capability.availability.write`.
 - Enforcement lives in its own table rather than in SiteConfig because `PUT /site-config` is a full replace: a stale client round-tripping an older document could otherwise silently disable an authorization control.
 - There is **no cache** — resolution is two indexed reads per check, so a grant applies immediately; a stale permission cache is a security bug, not a slow page.
+
 ### `workspace_provider`
 
 - which git provider row the repositories a member brings in may come from — the row `admitRepoURL` resolves a derived clone URL to ([`internal/api/workspace_providers.go`](../../internal/api/workspace_providers.go)).
@@ -222,6 +240,7 @@ the ADMIN pre-authorized.
 - Inert on a deployment with no provider rows,
   - and on a repository whose host no row CLAIMS
     - (a row that claims the host and refuses anyway — disabled, or a base path that did not match — still keys the check)
+
 ### `model_provider`
 
 - which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use —
@@ -229,28 +248,30 @@ the ADMIN pre-authorized.
   - the one a workspace pins (`llm_cred.provider_ref`),
   - or the agent's default reaching them (`enforceRunModelProvider`, [`internal/api/run_model_provider.go`](../../internal/api/run_model_provider.go); create and Review alike).
 - **A workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt.
-- Such a person never sees that pin's id (0.8.2, #1018): a workspace read (`GET /workspaces`, `GET /workspaces/{id}`, the update response) answers `llm_cred: {"provider_unavailable": true}` in its place, and the launch refusal names no provider.
+- Such a person never sees that pin's id: a workspace read (`GET /workspaces`, `GET /workspaces/{id}`, the update response) answers `llm_cred: {"provider_unavailable": true}` in its place, and the launch refusal names no provider.
 - Inert with no model-provider block
+
 ### `feature`
 
 - whether a member may add an SSH key (`POST /me/ssh-keys`), mint an API token (`POST /me/tokens`) or define a custom component of their own at all
-- One check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key, #564).
+- One check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key).
 - Mint only: a key or token that already exists keeps working until it is removed or revoked.
 - `custom_component` gates saving a component (`POST`/`PUT /me/components`) and attaching one the person defined, inline or saved, to a run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)).
   - It is on for everyone from the release that adds it, until a deny row names it. This is the one value that sets aside "an upgrade with no configuration changes nothing".
   - Where `feature` is already enforced, it is off for anyone no allow row (the value or `*`) covers, so write that row before upgrading.
   - A refusal carries the reason `capability_feature` with the target `runs.component`.
   - See [Custom components](custom-components.md#custom-components).
-- `service_attach` gates a service identity's sponsor entering one of its runs (a terminal or a UI app); see [`service_attach`](#service_attach) below.
-- `self_host_runner` gates a person minting a registration token for a runner of their own; see [`self_host_runner`](#self_host_runner) below.
-- `inbound` gates declaring a UI app that named callers can reach through the gateway; see [`inbound`](#inbound) below.
+- `service_attach` gates a service identity's sponsor entering one of its runs (a terminal or a UI app); see [`service_attach`](#service_attach).
+- `self_host_runner` gates a person minting a registration token for a runner of their own; see [`self_host_runner`](#self_host_runner).
+- `inbound` gates declaring a UI app that named callers can reach through the gateway; see [`inbound`](#inbound).
 - Any other value is refused at write time (`400`), except an allow of a lowercase snake_case name: it is stored inert and grants nothing until a release ships that feature, so it can be staged before upgrading.
+
 #### `service_attach`
 
 - Off for everyone: migration `0167_service_attach_restriction` restricts the value, so a `*` allow grants nobody.
 - An allow row that names `service_attach` admits its subject; one written for subject `all` admits every sponsor.
 - A deny, a user-type deny included, wins; a super admin sponsor needs the grant too.
-- Asked at the attach-ticket mint only: a withdrawn grant refuses the next ticket and ends no session already open.
+- Asked at the attach-ticket mint only: a withdrawn grant refuses the next ticket and ends no session already open. The sponsorship itself is asked again while a terminal is open: a terminal ends at its next check once the person is no longer the identity's sponsor.
 - A portal's delegated token gets no sponsor reach.
 
 #### `self_host_runner`
@@ -279,7 +300,7 @@ the ADMIN pre-authorized.
 
 ### `GET /permissions/explain`
 
-- the Explain grid (K4): for one named `user`, `group` or `user_type` subject, every kind's state —
+- the Explain grid: for one named `user`, `group` or `user_type` subject, every kind's state —
   - `everyone`,
   - `this_type` (an allow, including one written for `all`),
   - `blocked` (a deny that covers the value),

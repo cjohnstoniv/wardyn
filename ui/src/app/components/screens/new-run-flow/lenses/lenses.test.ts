@@ -135,4 +135,12 @@ describe("chooseMachineKind", () => {
     expect(vm).toEqual({ machine_kind: "linux_vm", runner_pool_id: "p" });
     expect(chooseMachineKind(vm, "container")).toEqual({ runner_pool_id: "p" });
   });
+
+  it("a VM clears the harness that starts the run, and keeps a command startup (UXR-1)", () => {
+    const started = { shape: "agent_task", experience: "interactive", startup: { kind: "harness", tool: "claude-code", prompt: "go" } } as const;
+    for (const kind of ["linux_vm", "macos_vm"] as const) expect(chooseMachineKind(started, kind).startup).toBeUndefined();
+    expect(chooseMachineKind(started, "container").startup).toEqual(started.startup);
+    const server = { shape: "application", experience: "interactive", startup: { kind: "command", command: "npm start" } } as const;
+    expect(chooseMachineKind(server, "linux_vm").startup).toEqual(server.startup);
+  });
 });

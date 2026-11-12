@@ -23,7 +23,7 @@ import { JsonBlock, toYaml, YamlBlock } from "../yaml-block";
 import { POLICY_DOCUMENT as D } from "../copy/policy-document";
 import { CopyButton } from "../copy-button";
 import { Segmented } from "../segmented";
-import { PolicySummary, specIsRedacted, type PolicyChangeMarks, type PolicyFacts } from "./policy-summary";
+import { PolicySummary, specIsRedacted, type PolicyChangeMarks, type PolicyFacts, type PolicyPresetNotes } from "./policy-summary";
 
 export type PolicyView = "summary" | "yaml" | "json";
 
@@ -52,6 +52,8 @@ export interface PolicyDocumentProps {
   pending?: readonly PolicyPreviewPending[];
   /** Which allowed hosts the run's proxy opens (run page only). */
   hostMarks?: RunPolicyHostMarks;
+  /** The wall preset's chips and the unstoppable-push line (run page only). */
+  presetNotes?: PolicyPresetNotes;
   /** The spec no longer answers the current draft: it stays readable, its copies are held. */
   stale?: boolean;
   headingLevel?: 3 | 4;
@@ -72,6 +74,7 @@ export function PolicyDocument({
   source,
   pending,
   hostMarks,
+  presetNotes,
   stale,
   headingLevel,
   notes,
@@ -104,7 +107,7 @@ export function PolicyDocument({
       ) : (
         spec &&
         (view === "summary" ? (
-          <PolicySummary spec={spec} marks={marks} facts={facts} pending={pending} hostMarks={hostMarks} headingLevel={headingLevel} />
+          <PolicySummary spec={spec} marks={marks} facts={facts} pending={pending} hostMarks={hostMarks} notes={presetNotes} headingLevel={headingLevel} />
         ) : (
           // A stale preview stays readable; the block's own copy is held with the button below.
           <fieldset disabled={held} className="m-0 min-w-0 border-0 p-0">

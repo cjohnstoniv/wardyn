@@ -34,6 +34,10 @@ var (
 	cliKubeSubdomainRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
 
+// ComponentAccessRestart is a kubectl row's access that reads like read and
+// admits the one change `kubectl rollout restart` sends, on a deployment.
+const ComponentAccessRestart = "restart"
+
 // CLIKubectlTokenPart ends the reserved name a kubectl row's registered
 // service-account token is stored under: wardyn-cli-<component id>-kubectl.
 const CLIKubectlTokenPart = "kubectl"
@@ -90,8 +94,11 @@ func (k *CLIKubectl) validate() error {
 			return fmt.Errorf("cli.kubectl.namespaces[%d]: %q is listed twice", i, ns)
 		}
 	}
-	if k.Access != ComponentAccessRead && k.Access != ComponentAccessWrite {
-		return fmt.Errorf("cli.kubectl.access: %q is not read or write", k.Access)
+	if k.Access != ComponentAccessRead && k.Access != ComponentAccessRestart && k.Access != ComponentAccessWrite {
+		return fmt.Errorf("cli.kubectl.access: %q is not read, restart or write", k.Access)
+	}
+	if k.ApproveEach && k.Access == ComponentAccessRead {
+		return errors.New("cli.kubectl.approve_each: holds writes, so it needs access restart or write")
 	}
 	return nil
 }

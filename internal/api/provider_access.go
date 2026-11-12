@@ -63,13 +63,17 @@ const (
 // AddedAt and LastUsedAt are the caller's own stored credential's metadata
 // (CS-6), absent when none is stored.
 type SetupProviderAccess struct {
-	Provider       string     `json:"provider"`
-	State          string     `json:"state"`
-	Action         string     `json:"action,omitempty"`
-	Deadline       string     `json:"deadline,omitempty"`
-	SourceRunID    string     `json:"source_run_id,omitempty"`
-	AddedAt        *time.Time `json:"added_at,omitempty"`
-	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
+	Provider    string     `json:"provider"`
+	State       string     `json:"state"`
+	Action      string     `json:"action,omitempty"`
+	Deadline    string     `json:"deadline,omitempty"`
+	SourceRunID string     `json:"source_run_id,omitempty"`
+	AddedAt     *time.Time `json:"added_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	// SignedInAt is when the person last signed in to an endpoint that signs people in (the capture's own time).
+	// Unlike AddedAt, which a replaced credential keeps, it moves on every sign-in, and never on a renewal, so a
+	// console can tell a sign-in it just started from the one it began with.
+	SignedInAt     *time.Time `json:"signed_in_at,omitempty"`
 	Cause          string     `json:"cause,omitempty"`
 	ChangedAt      *time.Time `json:"changed_at,omitempty"`
 	NewDestination string     `json:"new_destination,omitempty"`
@@ -297,6 +301,12 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 		s.gradeProviderSubscription(ctx, &row, p, owner)
 	case types.ModelProviderAzureFoundry:
 		s.gradeProviderAzureFoundry(ctx, &row, p, owner)
+	case types.ModelProviderCustomEndpoint:
+		if p.OIDC != nil {
+			s.gradeProviderEndpointOIDC(ctx, &row, p, owner)
+		} else {
+			s.gradeProviderKey(ctx, &row, p, owner)
+		}
 	default:
 		// Every other closed kind is a typed key or token: providerTypedKinds
 		// (model_provider_credentials.go) — anthropic_api_key, openai_api_key,

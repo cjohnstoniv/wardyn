@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -558,9 +560,10 @@ func TestInternalActivity_StampsTheTokensRunOnly(t *testing.T) {
 	if _, thaws := f.rn.counts(); thaws != 0 {
 		t.Errorf("thaws = %d; agent activity must never thaw a paused run", thaws)
 	}
-	if agentActivityDecision(ruleSourceApprovalsPoll) || agentActivityDecision(ruleSourceCredentialReauthTimeout) ||
-		!agentActivityDecision("policy:allowlist") {
-		t.Error("agentActivityDecision: the approvals poll and the re-auth timeout are not activity; an allow is")
+	if egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Allow, RuleSource: egress.RuleSourceApprovals}) ||
+		egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Deny, RuleSource: ruleSourceCredentialReauthTimeout}) ||
+		!egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Allow, RuleSource: "policy:allowlist"}) {
+		t.Error("egress.CountsAsActivity: the approvals poll and the re-auth timeout are not activity; an allow is")
 	}
 }
 
@@ -667,7 +670,15 @@ func TestRunPause_OpenRunPageDoesNotDefeatIdlePause(t *testing.T) {
 	<-walkStarted
 
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
 	time.Sleep(100 * time.Millisecond) // the sampler has reached the walk
 	close(releaseWalk)
 
@@ -692,8 +703,20 @@ func TestRunPause_NoWalkStartsInsideTheIdleSample(t *testing.T) {
 	pr.sample = func() { <-releaseSample }
 
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
-	<-pr.sampleStarted
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
+	select {
+	case <-pr.sampleStarted:
+	case err := <-sweepDone:
+		t.Fatalf("the sweep ended before its sample opened: %v", err)
+	}
 
 	w := doSSO(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/resources", owner, "")
 	close(releaseSample)
@@ -726,7 +749,15 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	go func() { poll1 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()
 	<-walkStarted
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
 	time.Sleep(100 * time.Millisecond) // the sampler is waiting out the walk
 	poll2 := make(chan int, 1)
 	go func() { poll2 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()
@@ -739,7 +770,16 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(releaseSkip)
-	<-pr.sampleStarted
+	select {
+	case <-pr.sampleStarted:
+	case err := <-sweepDone:
+		select {
+		case <-pr.sampleStarted: // the sample opened, and the sweep finished before this wait
+			sweepDone <- err
+		default:
+			t.Fatalf("the sweep ended before its sample opened: %v", err)
+		}
+	}
 	for _, c := range []chan int{poll1, poll2} {
 		if code := <-c; code != http.StatusOK {
 			t.Fatalf("poll = %d, want 200", code)

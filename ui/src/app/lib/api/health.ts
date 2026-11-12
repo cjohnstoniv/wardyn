@@ -191,7 +191,7 @@ export interface PolicyRef {
   email?: string;
   request_url?: string;
   request_text?: string;
-  // On a refusal: the kind of layer that refused ("deployment", "unit" or "personal").
+  // On a refusal: the kind of layer that refused ("deployment", "unit", "personal" or "wall_preset").
   layer?: string;
   // The person changed the policy for this run, inside their ceiling.
   overridden?: boolean;
@@ -385,12 +385,18 @@ export const health = {
     // mirror — same treatment as `network_policy` below.
     confinement_classes?: string[];
     ebpf_groundtruth?: { state?: string; reason?: string };
-    // k8sNetpolVerdict's three-value enum (internal/api/setup.go) — present on
-    // Kubernetes only (absent on Docker, and on an older daemon). The shell's
-    // own chip is gone; the console now surfaces the verdict via
-    // /setup/status's k8s_egress_containment check on the setup Environment
-    // step instead. Kept here as the wire mirror.
-    network_policy?: "enforced" | "unenforced" | "acknowledged";
+    // k8sNetpolVerdict's enum (internal/api/setup.go) — present on
+    // Kubernetes only (absent on Docker, and on an older daemon). "refused" and
+    // "not_proven" follow a failed re-check of the canary; both refuse new
+    // sandboxes. The posture band (confinement-posture.ts) reads it, and
+    // /setup/status's k8s_egress_containment check spells it out.
+    network_policy?: "enforced" | "unenforced" | "acknowledged" | "refused" | "not_proven";
+    // The time of the canary check that produced network_policy (RFC 3339,
+    // UTC). Absent on an older daemon or runner.
+    network_policy_checked_at?: string;
+    // "runner" when network_policy is a connected Kubernetes runner's verdict, worse
+    // than the daemon's own cluster's; absent when it is the daemon's own.
+    network_policy_source?: "runner";
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
     sso?: boolean;

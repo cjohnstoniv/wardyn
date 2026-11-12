@@ -165,19 +165,22 @@ func TestAgentNetPolEgressPeerIsExactlyTheProxy(t *testing.T) {
 	if !maps.Equal(peer.PodSelector.MatchLabels, wantProxy) || len(peer.PodSelector.MatchExpressions) != 0 {
 		t.Errorf("agent netpol egress peer podSelector = %+v, want exactly matchLabels %v (all three reserved keys)", peer.PodSelector, wantProxy)
 	}
-	if len(eg.Ports) != 1 {
-		t.Fatalf("agent netpol egress rule has %d ports, want exactly 1: %+v", len(eg.Ports), eg.Ports)
+	// The proxy's port, and 53 over TCP and UDP for its refuse-all DNS listener, on this one
+	// proxy-peer rule: the agent's DNS reaches its own proxy pod and nothing else.
+	want := []networkingv1.NetworkPolicyPort{
+		{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(runner.ProxyListenPort))},
+		{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
+		{Protocol: protoPtr(corev1.ProtocolUDP), Port: intOrStrPtr(intstr.FromInt32(53))},
 	}
-	p := eg.Ports[0]
-	if p.Protocol == nil || *p.Protocol != corev1.ProtocolTCP || p.Port == nil || p.Port.IntVal != runner.ProxyListenPort || p.EndPort != nil {
-		t.Errorf("agent netpol egress port = %+v, want exactly TCP/%d with no endPort", p, runner.ProxyListenPort)
+	if len(eg.Ports) != len(want) {
+		t.Fatalf("agent netpol egress rule has %d ports, want exactly %d: %+v", len(eg.Ports), len(want), eg.Ports)
+	}
+	for i, p := range eg.Ports {
+		if p.Protocol == nil || *p.Protocol != *want[i].Protocol || p.Port == nil || p.Port.IntVal != want[i].Port.IntVal || p.EndPort != nil {
+			t.Errorf("agent netpol egress port %d = %+v, want exactly %s/%d with no endPort", i, p, *want[i].Protocol, want[i].Port.IntVal)
+		}
 	}
 	for _, r := range np.Spec.Egress {
-		for _, pp := range r.Ports {
-			if pp.Port != nil && pp.Port.IntVal == 53 {
-				t.Errorf("agent netpol permits port 53 (DNS) — the agent must have NO DNS egress: %+v", r)
-			}
-		}
 		if len(r.To) == 0 {
 			t.Errorf("agent netpol egress rule with no To peer permits ALL destinations on its ports: %+v", r)
 		}

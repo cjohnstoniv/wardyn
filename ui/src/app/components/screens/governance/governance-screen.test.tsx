@@ -179,7 +179,7 @@ describe("GovernanceScreen — states", () => {
   it("the tab strip scrolls inside itself and starts at its left edge", async () => {
     renderScreen();
     await screen.findByRole("heading", { name: GOV.TITLE, level: 1 });
-    expect(await screen.findByRole("tablist")).toHaveClass("justify-start", "overflow-x-auto", "border-b");
+    expect(await screen.findByRole("tablist")).toHaveClass("justify-start", "overflow-x-auto");
   });
 
   it("fetch_failed is distinct from empty, says enforcement is unaffected, and offers Retry", async () => {
@@ -719,8 +719,8 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
 
     const editor = await screen.findByTestId("governance-profile-editor");
-    // 5 doors (the member-drive and UI-apps doors among them) + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
-    expect(within(editor).getAllByRole("switch")).toHaveLength(7);
+    // 8 doors (the member-drive, UI-apps, background-watch, kept-machines and scheduled-runs doors among them) + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
+    expect(within(editor).getAllByRole("switch")).toHaveLength(10);
     const door = within(editor).getByRole("switch", { name: GOV.LIMIT_DRIVE_LABEL });
     expect(door).toHaveAttribute("aria-checked", "false");
     expect(within(editor).getByText(GOV.LIMIT_DRIVE_HINT)).toBeInTheDocument();

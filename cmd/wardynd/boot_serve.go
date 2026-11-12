@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -107,10 +106,11 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //
 //   - Lifecycle reaper: stop idle RUNNING sandboxes past their policy threshold.
 //     Disabled when no runner is wired (nothing to stop) or interval <= 0.
-//   - Groundtruth token rotator: keep a shared token file fresh so the
-//     eBPF/Tetragon ingest sidecar — which re-reads the file on a 401 — recovers
-//     when its ~1h token expires instead of going permanently blind. Off
-//     unless WARDYN_GROUNDTRUTH_TOKEN_FILE is configured. Leader-elected
+//   - Groundtruth token rotator: keep a shared token file (or, on Kubernetes,
+//     the sensor's Secret) fresh so the eBPF/Tetragon ingest — which re-reads
+//     the file on a 401 — recovers when its ~1h token expires instead of going
+//     permanently blind. Off unless WARDYN_GROUNDTRUTH_TOKEN_FILE or
+//     WARDYN_GROUNDTRUTH_TOKEN_SECRET is configured (groundtruthTokenDelivery). Leader-elected
 //     across replicas (S2): a Postgres advisory lock acquired once, so at most
 //     one replica rewrites the shared file in the steady state; standbys retry
 //     on a backoff and take over automatically when the leader's session ends.
@@ -139,7 +139,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker, gtWrite gtTokenWriter) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
@@ -176,6 +176,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				snapshotPane:    srv.SnapshotRunPane,
 				// The WARDYN_RUN_MAX_AGE stop's own: the same cascade without the idle_stopped event.
 				cancelMaxAgeApprovals: srv.CancelMaxAgeStoppedRunApprovals,
+				lockEnd:               srv.LockRunEnd,
+				bringBack:             srv.BringComputerFolderBack,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks},
@@ -184,9 +186,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))
 	}
 
-	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
-		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtFile) })
-		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
+	if gtWrite != nil {
+		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtWrite) })
+		slog.Info("wardynd: groundtruth token rotator started", slog.String("target", groundtruthTokenTarget()))
 	}
 
 	if approvalExpiry > 0 {

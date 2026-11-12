@@ -215,6 +215,21 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
+	// The token on these routes comes from the organisation's control plane
+	// through a mint no runner relays, so a run that needs it is refused.
+	"ProxyConfig.GatewayIdentity": func(p LocalPlan) *Refusal {
+		if len(p.Spec.ProxyConfig.GatewayIdentity) > 0 {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.GatewayIdentity", "credential variant has no permitted local rule")
+		}
+		return nil
+	},
+	// The headers set on a provider's gateway belong with the gateway's address, which is never sent.
+	"ProxyConfig.LLMHeaders": func(p LocalPlan) *Refusal {
+		if len(p.Spec.ProxyConfig.LLMHeaders) > 0 {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.LLMHeaders", "credential variant has no permitted local rule")
+		}
+		return nil
+	},
 	// A local model server is the organisation's or the laptop host's network,
 	// never sent with the run, unless the admin allowed it on laptop runners (#2957).
 	"ProxyConfig.LocalModels": func(p LocalPlan) *Refusal {

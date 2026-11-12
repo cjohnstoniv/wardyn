@@ -66,11 +66,17 @@ var kernelDoors = map[string][]string{
 	// egress-host gate — asked from the attention rule (row 8) and from
 	// TestMayDecideAgreesWithDecide, never from decide() itself.
 	"decidableKindAndOwner": {"capEgressHost"},
+	// A unit's decider rule matching the run's owner on an egress approval: the same egress_host grant.
+	"resolveDecider": {"capEgressHost"},
 	// Attaching a component: an org row by id, a person-defined one by feature.
 	"componentAttachRefusal": {"capComponent", "capFeature"},
 	// The hosts a component reaches: the same egress_host rows that bound an
 	// inline policy's hosts.
 	"componentHostsBounded": {"capEgressHost"},
+	// A run's context pins: an organisation component attached by id pins the
+	// run's context only for a caller it is granted to, asked as the attach door
+	// asks it, so an ungranted caller never learns the pinned unit. It grants nothing.
+	"componentPins": {"capComponent"},
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
@@ -109,6 +115,9 @@ var kernelDoors = map[string][]string{
 	// A member's Azure DevOps disconnect: a row they may not use answers as
 	// no row (D-6).
 	"adoDisconnectRow": {"capWorkspaceProvider"},
+	// POST /governance/requests, kind image: an image the person already holds
+	// exactly is a 409, never a second request. It grants nothing.
+	"imageRequestChecks": {"capImage"},
 }
 
 // kernelDoorCalls walks internal/api's non-test sources and returns, per

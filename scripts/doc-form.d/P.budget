@@ -1,3 +1,11 @@
+# POLICIES.md 24576 measured with the recording replay refusal: +8 (a 503 data_out_unreadable writes no row; it is logged).
+# POLICIES.md 24568 measured at ci-guard-docs + w4a: both sides' additions together.
+# POLICIES.md 23951 measured at the rc.17 w4a merge of lane/017-ado-pr-split: both sides' additions together.
+# POLICIES.md 23951 measured at the VCS-CAP lane's merge of lane/017-ado-pr-split: both sides' additions together.
+# POLICIES.md 23930 measured at the rc.16 w3d merge of w3c 1c56b7f55: both sides' additions together.
+# POLICIES.md 23511 measured at the rc.16 w3c merge of w3b 77927a3c4: both sides' additions together.
+# POLICIES.md 23434 measured at the rc.16 w3b merge of w3a 076cab69e: both sides' additions together.
+# POLICIES.md 23159 measured at the rc.16 w3a merge of the rc.15 w2 head 35d37063f: both sides' additions together.
 # Prose must not grow beyond the base count plus cell-expansion headings and summaries (itemised in lane-reports/docs/P-worker.md Round 2).
 # docs/POLICIES.md 17827 adds 692 for the 0.8.9 component docs: 56 (three bullets: a run with a shared component secret exports a record, not a reusable policy), 17 (pointer to docs/CREDENTIALS.md), 6+1+27+3 (`file_secret` in the pairing list, the kind row, a table row and `owner_only`), 34 (the `api_key` echo caveat and the `shared` mark), 5 (the switch is `WARDYN_ALLOW_USER_ENV_SECRET` and governs `file_secret`), 547 (the `file_secret` section and the Custom components section); the diff tool counts 696, the gate 692 (link text).
 # docs/POLICIES.md 17856 adds 29 over 17827: 0.9 final docs pass, measured: tool rules route a background Claude Code run through the tool gate.
@@ -68,9 +76,35 @@
 # docs/POLICIES.md 21137 = 21087 + 50, measured: the unattended cut and the git-printed refusal (#3921)
 # docs/POLICIES.md 21212 = 21137 + 75, measured: deletions at a review path are not held (#3921)
 # docs/POLICIES.md 21248 over 21212: measured, review-path removals named at the rc.10 W2+ merge.
-docs/POLICIES.md=21248 share=12
+# docs/POLICIES.md 21487 adds 239 over 21248, measured: personal walls gain six narrowing knobs (capability lists, tool rules, push deny paths, recording floor, auto-stop cap).
+# docs/POLICIES.md 21538 adds 47 over 21491, measured: a capability wall narrows the provider default where the policy names no list.
+# docs/POLICIES.md 21577 adds 39 over 21538, measured: what a GitHub capability wall does not narrow (git pushes), an approved Azure DevOps capability request, and the 503 create refusal.
+# docs/POLICIES.md 21590 adds 13 over 21577, measured (rc.12): a capability list without code_write now refuses git pushes, replacing the sentence that said it did not.
+# docs/POLICIES.md 21608 adds 18 over 21590, measured (rc.12): github.com named in the push refusal, and the note that the git PAT broker off leaves Azure DevOps git_pat pushes outside the capability lists.
+# docs/POLICIES.md 21781 adds 173 over 21608, measured (rc.12): push_rules.deny_all (field, refusal, walls knob and SSH-exception rows), its two start refusals, and github_capabilities no longer called unenforced.
+# docs/POLICIES.md 21954 adds 173 over 21781, measured (rc.12): the deny_all code-host refusal row, where deny_all is enforced, the known code hosts, and the Review line on secrets a person adds.
+# docs/POLICIES.md 21981 adds 27 over 21954, measured (rc.12): the extension gallery left out of hosted Azure DevOps, and desktop sign-in to a code host refused under deny_all.
+# docs/POLICIES.md 22042 adds 261 over 21781, measured: the Wall presets section (the walls presets commands and --wall-preset).
+# docs/POLICIES.md 22282 measured at the rc.12 w4 train merge (the merged changes together).
+# docs/POLICIES.md 23500 = ours 23423 + theirs 22996 - base 22919 at the 0.10 W7 merge of lane/016-file-review into the rc.16 w3 batch C train.
+# docs/POLICIES.md 23919 = ours 23500 + theirs 23338 - base 22919 at the 0.10 W7 merge of the 0.10 W7 merge of lane/016-d into the rc.16 w3 batch D train.
+# docs/POLICIES.md 24614 measured at the rc.17 w4a merge of the data-out policy editors (ours 24576).
+# docs/POLICIES.md 24935 = ours 24792 + theirs 24884 - base 24741 at the 0.10 W7 merge of zero-egress.
+# docs/POLICIES.md 25782 = ours 25757 + theirs 25355 - base 25330 at the 0.10 W7 merge of merge of lane/018-host-rules df03189d0 into host-rule-holds.
+# docs/POLICIES.md 25820 = ours 25782 + theirs 25393 - base 25355 at the 0.10 W7 merge of merge of lane/018-host-rules 08595b466 into host-rule-holds.
+# docs/POLICIES.md 25871 = ours 25820 + theirs 24792 - base 24741 at the 0.10 W7 merge of merge of train/018-w1b 9fae2024b into host-rule-holds.
+# docs/POLICIES.md 26141 = ours 25917 + theirs 25617 - base 25393 at the 0.10 W7 merge of merge of lane/018-host-rules 1a4cf692e into host-rule-holds.
+# docs/POLICIES.md 26369 = ours 24935 + theirs 26226 - base 24792 at the 0.10 W7 merge of host-rule-holds.
+# docs/POLICIES.md 26444 = ours 26369 + theirs 26301 - base 26226 at the 0.10 W7 merge of host-rule-holds.
+# docs/POLICIES.md 26480 = ours 26444 + theirs 26337 - base 26301 at the 0.10 W7 merge of host-rule-holds.
+# docs/POLICIES.md 26513 = ours 26480 + theirs 26370 - base 26337 at the 0.10 W7 merge of host-rule-holds.
+# docs/POLICIES.md 26530 = ours 26513 + theirs 26387 - base 26370 at the 0.10 W7 merge of host-rule-holds.
+docs/POLICIES.md=26530 share=12 # 24792 measured (+3: the same refusal names api/graphql); earlier: 24789 measured (+33: the git_pat broker refuses a GitLab repository under subgroups api then v<digits>, owner decision); earlier: 24756 measured (+15: the git_pat broker route admits git only outside the forge's API mounts, a Bitbucket Server context path); earlier: 24741 measured (+8: data_out: a run with no policy is allowed on SSH too, and web-app refusal rows are rate-bounded); earlier: 24733 measured (+21: on a macOS VM run only requests through the run proxy settings reset idleness); earlier: 24712 measured (+32: data_out says the desktop app's HTTP answers also leave); earlier: 24680 measured (+66: a run's first_use_approval under a stricter unit); earlier: 24568 measured at ci-guard-docs + w4a; earlier: 23938 measured (+8 over 23930: the push_rules bullet linking the CI trigger guard page); earlier: 23423 measured (+27: the revive row of the deny lists section); earlier: 23396 measured (+248: the deny_components and deny_model_providers section); earlier: 23148 measured (+229: the deny_scheduled_runs and self_defined_component sections); earlier: 22919 measured (+59: the rerouting keys bullet under llm_inspection); earlier: 22860 measured at the rc.14 W3 merge of audit-r4 (ours 22759, theirs 22695, base 22594); earlier: 22759 measured at the rc.14 W3 merge of imgadm-docs (ours 22599, theirs 22754, base 22594); earlier: 22599 measured (+5 over 22594, measured: the barrier guide link); earlier: 22594 measured (+166 over 22428, measured: the approve_each tool-rule effect, its doors and its interactive mapping); earlier: 22428 measured (+8: the git_pat line now says an ssh_key stays in the proxy); earlier: 22420 measured (-88: version narration and filler go; the governance profile and unit bridge sentence is added); earlier: +10 (docs highs), measured: github_token is out of the sandbox only when brokered; earlier:  22498 measured (+16 at the w3 merge: GitHub-capabilities and other policy doc lines together); 22482 measured (+34 at the w3 merge: secrets and headers doc lines together); 22448 measured (+30 over 22418: a Linux VM run refuses disk_mib and pids_limit)
+# docs/POLICIES.md 23940 = 23919 + 21, measured: the pull-request capability names and the GitHub pr alias sentence.
+# docs/POLICIES.md 24483 adds 532 over 23951, measured: `data_out`: the data_out field row and section.
+# docs/POLICIES.md 24560 adds 77 over 24483, measured: `data_out`: the unreadable-rule and no-recorded-policy bullets; network egress is outside the rule.
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
-examples/policies/README.md=1446 share=5
+examples/policies/README.md=1425 share=5 # 1425 measured (+2 over 1423, measured: the barrier guide link); earlier: -23 (docs fix), measured: history lines came out
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

@@ -162,11 +162,10 @@ const (
 	// sign in again; nothing Wardyn can do renews this credential, and Wardyn
 	// does not quietly bill a different model provider instead.
 	//
-	// The remedy names the person's own two doors: Getting started, and the
-	// sign-in banner the console shows on every page.
+	// The remedy names the one place the person reconnects: Your model connections, under Settings in the User view
+	// (the Admin view hides that card).
 	awsSSORefreshSpentSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
-		"and that session can no longer be renewed — sign in to AWS again from Getting started in the console, " +
-		"or from the sign-in banner the console shows on every page. " +
+		"and that session can no longer be renewed — sign in to AWS again in the console's User view, under Settings, in Your model connections. " +
 		"Wardyn does not substitute a different model provider."
 
 	// awsSSORefreshUnavailableSentence: the renewal could not be completed

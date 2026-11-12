@@ -24,6 +24,7 @@ import type {
 import { CAPABILITY } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { usePrincipal } from "../../wardyn/operator-context";
+import type { PolicyPresetNotes } from "../../wardyn/policy-document/policy-summary";
 import { PolicyDocument, type PolicyView } from "../../wardyn/policy-document/policy-document";
 import { lifecycleSummary } from "../../wardyn/policy-document/policy-facts";
 import {
@@ -36,7 +37,10 @@ import {
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
 import { cn } from "../../ui/utils";
-import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
+import { WALL_PRESETS } from "../../wardyn/copy/wall-presets";
+import { audienceOf } from "../../../lib/wall-preset-words";
+import { WallPresetRunLine } from "./wall-preset-run-lines";
+import { CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
 
@@ -90,6 +94,13 @@ export function PolicyTab({ run }: { run: RunDetail }) {
           {POLICY_TAB.preset(view.source.preset, view.source.preset_version ?? 0)}
         </p>
       )}
+      {run.wall_preset && (
+        <WallPresetRunLine
+          name={run.wall_preset.name}
+          audience={run.wall_preset.name ? audienceOf({ scope: run.wall_preset.scope, group_id: run.wall_preset.group_id }, run.wall_preset.group_id && run.wall_preset.group_label ? { [run.wall_preset.group_id]: run.wall_preset.group_label } : undefined) : undefined}
+          version={run.wall_preset.version}
+        />
+      )}
       {view.state === "not_yet" && <p className="mt-2 text-body text-muted-foreground">{POLICY_TAB.notYet}</p>}
       {view.state === "never" && <p className="mt-2 text-body text-muted-foreground">{POLICY_TAB.never}</p>}
       {recorded && (
@@ -104,6 +115,15 @@ export function PolicyTab({ run }: { run: RunDetail }) {
       )}
     </div>
   );
+}
+
+// The wall preset's notes on the summary: its chip on the rows it decided (the provenance's wall_preset layer), none
+// for a personal preset a non-owner reads (no name), and the unstoppable-push line when the server says so.
+function presetNotes(view: RunPolicyView): PolicyPresetNotes | undefined {
+  const name = view.wall_preset?.name;
+  const fields = new Set(Object.entries(view.provenance ?? {}).filter(([, p]) => p.layer === "wall_preset").map(([field]) => field));
+  const chip = name && fields.size > 0 ? { label: WALL_PRESETS.CHIP(name), fields } : undefined;
+  return chip || view.pushes_unstoppable ? { chip, pushesUnstoppable: view.pushes_unstoppable } : undefined;
 }
 
 function sourceText(s: RunPolicySource): string {
@@ -140,8 +160,11 @@ function RecordedPolicy({
   const now = view.stored_policy_now;
   const banner =
     now?.state === "changed" ? POLICY_TAB.changedSince : now?.state === "updated" ? POLICY_TAB.updatedSince : null;
-  const groups = groupChanges(view.changes, ownRun, run.created_by, spec.first_use_hold_seconds);
-  const marks = React.useMemo(() => changeMarks(view.changes), [view.changes]);
+  // A personal preset read by anyone but its owner has no name, and its changes (its spec rows) are not shown.
+  const presetName = run.wall_preset?.name;
+  const changes = React.useMemo(() => view.changes.filter((c) => c.cause !== "wall_preset" || !!presetName), [view.changes, presetName]);
+  const groups = groupChanges(changes, ownRun, run.created_by, spec.first_use_hold_seconds, presetName);
+  const marks = React.useMemo(() => changeMarks(changes), [changes]);
   return (
     <>
       {banner && (
@@ -194,8 +217,9 @@ function RecordedPolicy({
         onViewChange={onMode}
         redacted={view.redacted}
         marks={marks}
-        facts={{ usedClass: run.confinement_class }}
+        facts={{ usedClass: run.confinement_class, inspectionLeftTo: view.inspection_left_to }}
         hostMarks={view.host_marks}
+        presetNotes={presetNotes(view)}
         headingLevel={4}
       />
       <p className="mt-4 max-w-[92ch] border-t border-dashed border-border pt-2.5 text-xs text-muted-foreground">
@@ -219,12 +243,15 @@ function MarkChip({ mark }: { mark: PolicyMark }) {
 
 // The heading a change sits under, and what separates two headings of one cause
 // (a profile's name, a restart's date).
-function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key: string; heading: string } {
+function headingFor(c: RunPolicyChange, ownRun: boolean, person: string, presetName?: string): { key: string; heading: string } {
   switch (c.cause) {
     case "limits":
       return { key: "limits", heading: ownRun ? CHANGE_HEADING.limitsOwn : CHANGE_HEADING.limitsOther(person) };
     case "walls":
       return { key: "walls", heading: ownRun ? CHANGE_HEADING.wallsOwn : CHANGE_HEADING.wallsOther(person) };
+    // A wall preset's own heading, apart from the person's walls. Its changes reach here only with its name.
+    case "wall_preset":
+      return { key: "wall_preset", heading: WALL_PRESETS.CHANGE_HEADING(presetName ?? "") };
     case "unit":
       if (c.unit) return { key: `profile:${c.unit}`, heading: CHANGE_HEADING.unit(c.unit) };
       break;
@@ -245,10 +272,10 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
   return { key: "launch", heading: CHANGE_HEADING.launch };
 }
 
-function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: string, holdSeconds?: number): Group[] {
+function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: string, holdSeconds?: number, presetName?: string): Group[] {
   const groups = new Map<string, Group>();
   for (const c of changes) {
-    const { key, heading } = headingFor(c, ownRun, person);
+    const { key, heading } = headingFor(c, ownRun, person, presetName);
     const g = groups.get(key) ?? { key, heading, detail: [], entries: [] };
     groups.set(key, g);
     // The heading of a restart or a disk change already says what happened.
@@ -266,7 +293,7 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
 // credential id, an app id) and stays in monospace.
 const READABLE_FIELDS = new Set([
   "min_confinement_class", "first_use_approval", "first_use_hold_seconds", "git_push_any_branch",
-  "allow_all_egress", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib", "desktop",
+  "allow_all_egress", "refuse_ip_literals", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib", "desktop",
 ]);
 
 // Single-value fields arrive as one-entry sets of the raw value; each reads in the
@@ -286,6 +313,8 @@ function entryText(field: string, text: string, holdSeconds?: number): string {
       return text === "true" ? SUMMARY.anyBranch : SUMMARY.ownBranch;
     case "allow_all_egress":
       return text === "true" ? CAPABILITY.allowAllEgress : text;
+    case "refuse_ip_literals":
+      return text === "true" ? IP_LITERALS.on : IP_LITERALS.off;
     case "auto_stop_after_sec":
       return lifecycleSummary({ auto_stop_after_sec: n } as RunPolicySpec);
     case "resources.cpu_millis":

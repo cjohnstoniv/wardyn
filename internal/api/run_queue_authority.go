@@ -52,6 +52,8 @@ type queueAuthority struct {
 	// audit rows' via; the start never reads the token's ten-minute expiry.
 	Delegate *uuid.UUID `json:"delegate,omitempty"`
 	Grant    *uuid.UUID `json:"grant,omitempty"`
+	// Actor is the agent the portal named on that token; the start's rows replay it beside the portal.
+	Actor *types.DelegationActor `json:"actor,omitempty"`
 	// Device is the laptop that submitted the launch, which carries no person: the start replays the fold
 	// as that device, so the rules a device keeps at the create door hold when the run is promoted.
 	Device *uuid.UUID `json:"device,omitempty"`
@@ -75,7 +77,7 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 		a.Service, a.Sponsor = name, sponsor
 	}
 	if via, ok := audit.DelegationFrom(ctx); ok {
-		a.Delegate, a.Grant = &via.Delegate, &via.Grant
+		a.Delegate, a.Grant, a.Actor = &via.Delegate, &via.Grant, via.Actor
 	}
 	if d, ok := deviceFromContext(ctx); ok {
 		a.Device = &d.ID
@@ -113,7 +115,7 @@ func (a queueAuthority) via() (types.DelegationVia, bool) {
 	if a.Delegate == nil || a.Grant == nil {
 		return types.DelegationVia{}, false
 	}
-	return types.DelegationVia{Delegate: *a.Delegate, Grant: *a.Grant}, true
+	return types.DelegationVia{Delegate: *a.Delegate, Grant: *a.Grant, Actor: a.Actor}, true
 }
 
 // identityBlocker is the store's one-statement identity read (store.PG.IdentityBlocked): it needs no

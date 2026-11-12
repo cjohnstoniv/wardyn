@@ -97,8 +97,11 @@ test.describe("form action bars (#3064)", () => {
     const save = dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true });
     await expect(save).toBeVisible();
     await inOrder(dialog.getByRole("button", { name: PROVIDER_EDITOR.CANCEL, exact: true }), save);
-    const bar = (await save.locator("xpath=..").boundingBox())!;
+    // The bar is the dialog's sticky footer, padded to the dialog's edges: Save ends at its padding.
+    const barEl = save.locator("xpath=..");
+    const bar = (await barEl.boundingBox())!;
+    const pad = await barEl.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
     const s = (await save.boundingBox())!;
-    expect(Math.abs(bar.x + bar.width - (s.x + s.width))).toBeLessThanOrEqual(1);
+    expect(Math.abs(bar.x + bar.width - pad - (s.x + s.width))).toBeLessThanOrEqual(1);
   });
 });

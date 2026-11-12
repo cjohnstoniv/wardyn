@@ -26,6 +26,7 @@ import type {
   RunPolicyView,
   RunResources,
 } from "../types";
+import type { ModelUsage } from "../types/model-usage";
 import type { ComponentRef } from "../types/components";
 import type { PolicyPreviewResult } from "../types/policy-preview";
 import type {
@@ -41,6 +42,7 @@ import type {
 } from "../types/new-run-contract";
 import {
   asJson,
+  errEnvelope,
   errText,
   HttpError,
   LAUNCH_DEADLINE_MS,
@@ -291,6 +293,23 @@ export const runs = {
     return body.ticket;
   },
 
+  // POST /api/v1/runs/{id}/desktop/watch-ticket — a single-use ticket that opens a background macOS VM run's built-in
+  // desktop, view only. It is spent at app "__desktop" like any desktop ticket; the server refuses it with the
+  // sentence the run's background_watch carried.
+  async watchTicket(runId: string): Promise<string> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/desktop/watch-ticket`, { method: "POST" });
+    const body = await asJson<{ ticket: string; expires_in_seconds: number }>(res);
+    return body.ticket;
+  },
+
+  // POST /api/v1/runs/{id}/desktop/window — opens a window onto a macOS VM run on the caller's own Mac. It answers once
+  // the window is up (the server waits up to 30 seconds for the Mac); a refusal carries its sentence. The run read's
+  // mac_window says the window is open after it.
+  async openMacWindow(runId: string): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/desktop/window`, { method: "POST", body: JSON.stringify({ trigger: "run_page" }) });
+    await asJson<unknown>(res);
+  },
+
   // POST /api/v1/runs/{id}/apps/{app}/ticket — a single-use ticket that opens one inbound app in a browser, for
   // the run's owner or a person its callers name. Any other person, a run that is gone and an app that is not
   // inbound all answer the same 404.
@@ -464,6 +483,19 @@ export const runs = {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/resources`, { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<RunResources>(res);
+  },
+
+  // GET /api/v1/runs/{id}/model-usage — token counts the run proxy read off the
+  // provider's own answers. Stored rows, so a finished run answers too. The
+  // refusal keeps its reason: the console tells a server with no such route (a
+  // 404 with no envelope) from a run the caller may not read (a 404 with one).
+  async getModelUsage(runId: string): Promise<ModelUsage> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/model-usage`, { method: "GET" });
+    if (!res.ok) {
+      const env = await errEnvelope(res);
+      throw new HttpError(res.status, env.message, env.reason);
+    }
+    return asJson<ModelUsage>(res);
   },
 
   // GET /api/v1/runs/{id}/attach/holder (renamed from attach-holder in 0.8 —

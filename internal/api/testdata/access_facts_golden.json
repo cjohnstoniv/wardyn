@@ -136,6 +136,11 @@
               "available": true
             },
             {
+              "effect": "approve_each",
+              "available": false,
+              "reason": "approve_each_default"
+            },
+            {
               "effect": "deny",
               "available": true
             }
@@ -150,6 +155,11 @@
           {
             "effect": "hold",
             "available": true
+          },
+          {
+            "effect": "approve_each",
+            "available": false,
+            "reason": "approve_each_no_remote_mcp"
           },
           {
             "effect": "deny",

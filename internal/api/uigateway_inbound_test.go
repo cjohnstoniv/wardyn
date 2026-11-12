@@ -15,12 +15,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -1076,7 +1078,7 @@ func TestInboundSessionDropIsMountedOnTheRouter(t *testing.T) {
 		return len(srv.uiInbound.sessions)
 	}
 	seed := func() {
-		srv.uiInbound.remember("k", uiSession{}, time.Now())
+		srv.uiInbound.remember("k", uiSession{}, time.Now(), srv.uiInbound.drops.Load())
 	}
 	seed()
 	if w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, `{`); w.Code != http.StatusBadRequest || cached() != 1 {
@@ -1091,7 +1093,7 @@ func TestInboundSessionDropIsMountedOnTheRouter(t *testing.T) {
 // saveRevivedRestrictions changes the restrictions a run's profile folds in, so it drops the cache too.
 func TestInboundSessionDropsOnRevivedRestrictions(t *testing.T) {
 	srv := &Server{cfg: Config{Store: &restrictionSetStore{}}}
-	srv.uiInbound.remember("k", uiSession{}, time.Now())
+	srv.uiInbound.remember("k", uiSession{}, time.Now(), srv.uiInbound.drops.Load())
 	run := types.AgentRun{ID: uuid.New(), RestrictionIDs: []uuid.UUID{uuid.New()}}
 	if err := srv.saveRevivedRestrictions(context.Background(), run, nil); err != nil {
 		t.Fatalf("saveRevivedRestrictions = %+v", err)
@@ -1107,4 +1109,234 @@ type restrictionSetStore struct{ store.Store }
 
 func (*restrictionSetStore) SetRunRestrictionIDs(context.Context, uuid.UUID, []uuid.UUID) error {
 	return nil
+}
+
+// uiWriteRaceStore runs a test's one-shot hook after a read has been answered, so a write can complete between
+// the read a check rests on and that check's publication.
+type uiWriteRaceStore struct {
+	*uiTokenStore
+	afterUnitRead, afterPolicyRead atomic.Pointer[func()]
+}
+
+func runOnce(hook *atomic.Pointer[func()]) {
+	if f := hook.Swap(nil); f != nil {
+		(*f)()
+	}
+}
+
+func (s *uiWriteRaceStore) GetGovernanceUnitChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	chain, err := s.uiTokenStore.GetGovernanceUnitChain(ctx, id)
+	runOnce(&s.afterUnitRead)
+	return chain, err
+}
+
+func (s *uiWriteRaceStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	events, err := s.uiTokenStore.QueryAuditEvents(ctx, runID, limit)
+	runOnce(&s.afterPolicyRead)
+	return events, err
+}
+
+// onWriteRaceStore puts a uiWriteRaceStore under h, and counts the relay's dials in dials.
+func onWriteRaceStore(h *uiHarness, dials *int32) *uiWriteRaceStore {
+	st := &uiWriteRaceStore{uiTokenStore: h.srv.cfg.Store.(*uiTokenStore)}
+	h.srv.cfg.Store = st
+	countingSocat(h, dials)
+	return st
+}
+
+// completeGovernanceWrite is one successful write through the router's drop: apply is the commit.
+func completeGovernanceWrite(h *uiHarness, path string, apply func()) {
+	h.srv.dropInboundOnWrite(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		apply()
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPut, path, nil))
+}
+
+// TestUIGateway_InFlightCheckDoesNotOutliveAWrite: a profile write completes after a check has read the old
+// profile and before that check records its pass. The racing request may pass, but the pass is not kept: the
+// next request, minted in the same second so under the same uiReassertKey, on the warm connection, meets the
+// profile. On the old code the pass lands in the emptied uiReassert map and that request is served (200).
+func TestUIGateway_InFlightCheckDoesNotOutliveAWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// warm: the race is uiReassertRelay's on a pooled connection. Otherwise it is uiDial's on the first
+		// request, whose re-assert reads the profile once before uiDial's own read.
+		warm bool
+	}{
+		{"uiReassertRelay", true},
+		{"uiDial", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := inboundHarnessOn(t, okBackend())
+			var dials int32
+			st := onWriteRaceStore(h, &dials)
+			unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
+			h.store.profiles = []types.GovernanceUnit{unit}
+			h.run.UnitID = &unit.ID
+			h.store.putRun(h.run)
+
+			write := func() {
+				completeGovernanceWrite(h, "/api/v1/governance/units/"+unit.ID.String(), func() {
+					unit.Limits.DenyUIApps = true
+					h.store.profiles = []types.GovernanceUnit{unit}
+				})
+			}
+			if tc.warm {
+				if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+					t.Fatalf("warming call = %d %s, want 200", rec.Code, rec.Body.String())
+				}
+				h.clock.advance(uiReassertInterval + time.Second) // past the session's window and the debounce
+				st.afterUnitRead.Store(&write)
+			} else {
+				afterReassert := func() { st.afterUnitRead.Store(&write) }
+				st.afterUnitRead.Store(&afterReassert)
+			}
+			if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+				t.Fatalf("racing call = %d %s, want 200 on its pre-write check", rec.Code, rec.Body.String())
+			}
+			if st.afterUnitRead.Load() != nil {
+				t.Fatal("the write never ran: the race did not happen")
+			}
+			rec := h.call("wdn_alice", nil)
+			if rec.Code != http.StatusForbidden || respondedReason(t, rec) != string(authz.ReasonGovernanceUnit) {
+				t.Fatalf("call after the write = %d %s, want 403 %s", rec.Code, rec.Body.String(), authz.ReasonGovernanceUnit)
+			}
+			if got := atomic.LoadInt32(&dials); got != 1 {
+				t.Fatalf("%d dials, want 1: the later calls must be on the warm connection", got)
+			}
+		})
+	}
+}
+
+// TestUIGateway_InFlightAdmissionDoesNotOutliveAWrite: a policy write taking the caller off the app completes
+// after an admission has read the old apps and before its session is cached. The racing request may pass, but
+// the session is not kept: the next request is admitted afresh and refused. It is a policy write because that
+// is what this cache holds; a profile's denial is the re-assert's, which meets it either way. On the old code
+// the session lands in the emptied uiInbound.sessions map and that request is served (200) for 30 seconds.
+// This pins the cache against a write in flight; it isn't proof that editing a policy reaches a run already going.
+func TestUIGateway_InFlightAdmissionDoesNotOutliveAWrite(t *testing.T) {
+	h := inboundHarnessOn(t, okBackend(), "user:bob")
+	var dials int32
+	st := onWriteRaceStore(h, &dials)
+	if rec := h.call("wdn_bob", nil); rec.Code != http.StatusOK {
+		t.Fatalf("warming call = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	h.clock.advance(inboundResolveTTL + time.Second)
+	write := func() {
+		completeGovernanceWrite(h, "/api/v1/policies/"+uuid.NewString(), func() {
+			h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{MinConfinementClass: types.CC2,
+				UIApps: []types.UIApp{{Name: "code", Port: uiTestPort, Inbound: true}}})
+		})
+	}
+	st.afterPolicyRead.Store(&write)
+	if rec := h.call("wdn_bob", nil); rec.Code != http.StatusOK {
+		t.Fatalf("racing call = %d %s, want 200 on its pre-write admission", rec.Code, rec.Body.String())
+	}
+	if st.afterPolicyRead.Load() != nil {
+		t.Fatal("the write never ran: the race did not happen")
+	}
+	rec := h.call("wdn_bob", nil)
+	if rec.Code != http.StatusNotFound || respondedReason(t, rec) != reasonInboundNotFound {
+		t.Fatalf("call after the write = %d %s, want 404 %s", rec.Code, rec.Body.String(), reasonInboundNotFound)
+	}
+	if got := atomic.LoadInt32(&dials); got != 1 {
+		t.Fatalf("%d dials, want 1: the later calls must be on the warm connection", got)
+	}
+}
+
+// TestInboundSessionDropsBeforeTheAnswerLeaves: the cache is empty when a successful write's status goes out, by
+// WriteHeader, by a first Write or by a Flush, since a large answer reaches the client before the handler
+// returns. On the old code the drop ran only after the handler. A refused write keeps it.
+func TestInboundSessionDropsBeforeTheAnswerLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer func(http.ResponseWriter)
+		want   int
+	}{
+		{"WriteHeader", func(w http.ResponseWriter) { w.WriteHeader(http.StatusOK) }, 0},
+		{"Write", func(w http.ResponseWriter) { _, _ = w.Write([]byte("{}")) }, 0},
+		{"Flush", func(w http.ResponseWriter) { w.(http.Flusher).Flush() }, 0},
+		{"refused", func(w http.ResponseWriter) { w.WriteHeader(http.StatusConflict) }, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &Server{}
+			srv.uiInbound.remember("k", uiSession{}, time.Now(), 0)
+			srv.dropInboundOnWrite(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				tc.answer(w)
+				srv.uiInbound.mu.Lock()
+				defer srv.uiInbound.mu.Unlock()
+				if n := len(srv.uiInbound.sessions); n != tc.want {
+					t.Errorf("%d sessions cached once the answer went out, want %d", n, tc.want)
+				}
+			})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPut, "/api/v1/policies/"+uuid.NewString(), nil))
+		})
+	}
+}
+
+// TestUIGateway_InboundTokenObeysDataOut: an inbound token reaches a web app under the run's recorded data_out
+// rule as the browser entry does (refuseAppDataOut): review and blocked refuse it with a run.data_out.deny row
+// for the app, allowed admits it, and a caller with no reach still gets the one 404.
+func TestUIGateway_InboundTokenObeysDataOut(t *testing.T) {
+	withRule := func(t *testing.T, rule types.TransferRule, callers ...string) (*uiHarness, chan http.Header) {
+		t.Helper()
+		h, seen := inboundHarness(t, callers...)
+		h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{MinConfinementClass: types.CC2, DataOut: rule,
+			UIApps: []types.UIApp{{Name: "code", Port: uiTestPort, Inbound: true, Callers: callers}}})
+		return h, seen
+	}
+	for _, rule := range []types.TransferRule{types.TransferBlocked, types.TransferReview} {
+		t.Run(string(rule)+" refuses the owner's token", func(t *testing.T) {
+			h, seen := withRule(t, rule)
+			rec := h.call("wdn_alice", nil)
+			if rec.Code != http.StatusForbidden || respondedReason(t, rec) != reasonDataOutBlocked {
+				t.Fatalf("call = %d %s, want 403 %s", rec.Code, rec.Body.String(), reasonDataOutBlocked)
+			}
+			rows := h.audit.auditRows("run.data_out.deny", "denied")
+			if len(rows) != 1 || rows[0].Actor != h.owner || !strings.Contains(string(rows[0].Data), `"path":"app"`) || !strings.Contains(string(rows[0].Data), `"rule":"`+string(rule)+`"`) {
+				t.Errorf("run.data_out.deny rows = %+v, want one by %s for the app under %s", rows, h.owner, rule)
+			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyDataOut) {
+				t.Errorf("inbound.deny rows = %+v, want one data_out by %s", rows, h.owner)
+			}
+			if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != 0 {
+				t.Errorf("inbound.allow rows = %+v, want none", rows)
+			}
+			select {
+			case <-seen:
+				t.Error("the sandbox app was reached under a held data_out rule")
+			default:
+			}
+		})
+	}
+
+	t.Run("a named caller's token is refused too", func(t *testing.T) {
+		h, _ := withRule(t, types.TransferBlocked, "user:bob")
+		if rec := h.call("wdn_bob", nil); rec.Code != http.StatusForbidden || respondedReason(t, rec) != reasonDataOutBlocked {
+			t.Fatalf("call = %d %s, want 403 %s", rec.Code, rec.Body.String(), reasonDataOutBlocked)
+		}
+		if rows := h.audit.auditRows("run.data_out.deny", "denied"); len(rows) != 1 || rows[0].Actor != "bob" {
+			t.Errorf("run.data_out.deny rows = %+v, want one by bob", rows)
+		}
+	})
+
+	t.Run("allowed admits", func(t *testing.T) {
+		h, _ := withRule(t, types.TransferAllowed)
+		if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK || rec.Body.String() != "sandbox app" {
+			t.Fatalf("call = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+		if rows := h.audit.auditRows("run.data_out.deny", "denied"); len(rows) != 0 {
+			t.Errorf("run.data_out.deny rows = %+v, want none", rows)
+		}
+	})
+
+	t.Run("a caller with no reach still gets the one 404", func(t *testing.T) {
+		h, _ := withRule(t, types.TransferBlocked, "user:bob")
+		rec := h.call("wdn_carol", nil)
+		if rec.Code != http.StatusNotFound || respondedReason(t, rec) != reasonInboundNotFound {
+			t.Fatalf("call = %d %s, want 404 %s", rec.Code, rec.Body.String(), reasonInboundNotFound)
+		}
+		if rows := h.audit.auditRows("run.data_out.deny", "denied"); len(rows) != 0 {
+			t.Errorf("run.data_out.deny rows = %+v, want none: the rule is no oracle to a caller with no reach", rows)
+		}
+	})
 }

@@ -21,6 +21,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -245,6 +247,119 @@ func TestTakeover_UnrecordedRunHasNothingToPause(t *testing.T) {
 		if strings.HasPrefix(r[0], "recording.") {
 			t.Fatalf("an unrecorded run wrote %v", r)
 		}
+	}
+}
+
+// TestTakeover_MacOSVMHoldsTheDesktopAndKeepsTheTerminalGap: a macOS VM run's desktop is recorded at
+// Screen and actions as a Linux VM's is, so a take over holds its desktop recording, and the terminal's
+// gap rows stay (its console and SSH sessions are recorded).
+func TestTakeover_MacOSVMHoldsTheDesktopAndKeepsTheTerminalGap(t *testing.T) {
+	for _, tc := range []struct {
+		kind               types.MachineKind
+		desktopPauses, res int
+	}{{types.MachineMacOSVM, 1, 1}, {types.MachineLinuxVM, 1, 1}} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			f := newTakeoverFixture(t, true)
+			ast := f.srv.cfg.Store.(*authzStore)
+			ast.mu.Lock()
+			run := ast.runs[f.run]
+			run.MachineKind, run.RecordingLevel = tc.kind, types.RecordingScreenActions
+			ast.runs[f.run] = run
+			ast.mu.Unlock()
+			id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+			for _, verb := range []string{"/take-over", "/hand-back"} {
+				if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, ""); w.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", verb, w.Code, w.Body.String())
+				}
+			}
+			want := [][2]string{
+				{"takeover.begin/human:" + takeoverOwnerSub, "after_ms,approval_id,surface"},
+				{"recording.pause/system:wardyn", "approval_id,reason"},
+				{"recording.resume/system:wardyn", "approval_id,gap_ms,reason"},
+				{"takeover.close/human:" + takeoverOwnerSub, "approval_id,held_ms"},
+			}
+			if got := takeoverRows(t, f.audit); !slices.Equal(got, want) {
+				t.Fatalf("audit rows =\n%v\nwant\n%v", got, want)
+			}
+			if p, r := desktopRows(f.audit); p != tc.desktopPauses || r != tc.res {
+				t.Errorf("desktop.recording rows: %d pause, %d resume, want %d and %d", p, r, tc.desktopPauses, tc.res)
+			}
+		})
+	}
+}
+
+// takeoverUnitStore serves a run's governance profile chain and its recorded policy envelope on top of authzStore.
+type takeoverUnitStore struct {
+	*authzStore
+	profiles []types.GovernanceUnit
+	events   []types.AuditEvent
+}
+
+func (s *takeoverUnitStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	return unitChainOf(s.profiles, nil, id)
+}
+
+func (s *takeoverUnitStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return s.events, nil
+}
+
+// TestTakeover_SurfaceForAVMRun pins where a take over puts the person (UXR-16): a VM run with the gateway on
+// drives the gateway's built-in desktop, a macOS VM run whose desktop is view only in the browser (no runner
+// caps say control) keeps the terminal, and so does a run with the gateway off, no VM at all, a background VM
+// run, or one whose governance profile denies UI apps (the desktop door would refuse it).
+func TestTakeover_SurfaceForAVMRun(t *testing.T) {
+	denyUI := types.GovernanceUnit{ID: uuid.New(), Name: "no-ui", Limits: types.GovernanceLimits{DenyUIApps: true}}
+	novnc, err := json.Marshal(effectivePolicyDatum{RunPolicySpec: types.RunPolicySpec{UIApps: []types.UIApp{{Name: "novnc", Port: 6080}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		kind    types.MachineKind
+		gateway bool
+		prep    func(t *testing.T, f takeoverFixture, run *types.AgentRun)
+		want    string
+	}{
+		{"linux vm, gateway on", types.MachineLinuxVM, true, nil, "desktop"},
+		{"linux vm, gateway off", types.MachineLinuxVM, false, nil, "terminal"},
+		{"macos vm, view only", types.MachineMacOSVM, true, nil, "terminal"},
+		{"no vm", "", true, nil, "terminal"},
+		{"linux vm, profile denies ui apps", types.MachineLinuxVM, true, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			f.srv.cfg.Store = &takeoverUnitStore{authzStore: f.srv.cfg.Store.(*authzStore), profiles: []types.GovernanceUnit{denyUI}}
+			run.UnitID = &denyUI.ID
+		}, "terminal"},
+		{"linux vm, background run", types.MachineLinuxVM, true, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			run.Experience = types.ExperienceBackground
+		}, "terminal"},
+		{"declared novnc app, gateway off", types.MachineLinuxVM, false, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			f.srv.cfg.Store = &takeoverUnitStore{authzStore: f.srv.cfg.Store.(*authzStore),
+				events: []types.AuditEvent{{Action: "run.policy.resolve", Data: novnc}}}
+		}, "terminal"},
+		{"macos vm, runner caps say control", types.MachineMacOSVM, true, func(t *testing.T, f takeoverFixture, run *types.AgentRun) {
+			data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{Desktop: runnerwire.MacVMDesktopControl}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := uuid.New()
+			sub := remote.New(id.String(), &capsTransport{online: true}, remote.Options{})
+			sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+			f.srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: {sub: sub, link: &remote.Link{}}}
+			run.RunnerID = &id
+		}, "desktop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTakeoverFixture(t, false)
+			if tc.gateway {
+				f.srv.cfg.UIListenAddr, f.srv.cfg.UISessionKey = ":8081", make([]byte, 32)
+			}
+			run := types.AgentRun{ID: f.run, CreatedBy: takeoverOwnerSub, State: types.RunRunning, MachineKind: tc.kind}
+			if tc.prep != nil {
+				tc.prep(t, f, &run)
+			}
+			if got := f.srv.takeoverSurface(context.Background(), run); got != tc.want {
+				t.Fatalf("takeoverSurface = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

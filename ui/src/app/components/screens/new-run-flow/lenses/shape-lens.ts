@@ -47,9 +47,12 @@ export function chooseShape(intent: RunIntent, shape: RunShape): RunIntent {
   // The shape the draft already has: choosing it again changes nothing, so the starter, its prompt and the
   // task a document, a template or an earlier step set are still there after the workload press on Shape.
   if (intent.shape === shape) return intent;
+  // A kept or resumed machine belongs to an interactive run: a shape that is background takes it along. A shape whose mode is
+  // not chosen yet (an agent task) leaves it; the Run step's mode choice, and the server, say the rest.
   const next = withKeys(intent, { shape, ...shapeCarriers(shape, undefined, intent) });
+  const kept = next.machine && next.experience === "background" ? withKeys(next, { machine: undefined }) : next;
   // The ports belong to the server card: leaving it takes them along.
-  return isServer(intent) ? setApps(next, []) : next;
+  return isServer(intent) ? setApps(kept, []) : kept;
 }
 
 export const shapeIssues: StepValidator = (intent) => (intent.shape ? [] : [issue("shape", "shape_required")]);

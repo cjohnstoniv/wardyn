@@ -44,6 +44,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// proxyImageSleep is the wait between proxy image tries at start: sleepCtx, a variable only so a test can
+// end the wait.
+var proxyImageSleep = sleepCtx
+
 func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity, stateDir string, opts serveOptions) (runnerRuntime, error) {
 	switch opts.substrate {
 	case "k8s":
@@ -100,7 +104,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
 		ProxyServesAnyPeer: docker.ProxyServesAnyPeerFromEnv(), UserDriveHostRoots: driveRoots,
 		ProxyPeersOnlyByDefault: docker.ProxyPeersOnlyByDefaultFromEnv(), PeersOnlyFallback: opts.offline.peersOnlyChanged,
-		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})
+		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits, AllowHostReachableRunNetwork: docker.AllowHostReachableRunNetworkFromEnv()})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
@@ -113,9 +117,9 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	watch.onChange = opts.offline.relayChanged
 	extras.report = connectReport{log: opts.offline, relay: watch}
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
-	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM)
+	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
-	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
+	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, stateDir, sub.EndVM)
 	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
 	extras.boundFolders = true
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
@@ -124,7 +128,11 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	rt.hooks.ProxyImage = mirroredProxyImageHook(opts.proxyImageMirror, opts.proxyImagePinned, followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage))
-	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
+	var pair relayPair
+	err = waitForProxyImage(ctx, opts.proxyImage, func(ctx context.Context) (err error) {
+		pair, err = chooseRelay(ctx, sub, opts.proxyImage, eng, want)
+		return err
+	}, opts.offline.waiting, proxyImageSleep)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
 	}
@@ -424,6 +432,9 @@ type runtimeExtras struct {
 	runsNamespaces []string
 	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
 	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
+	// netPolWatch, set by the k8s runner (the driver's OnNetPolChange), takes the hook a canary re-check
+	// calls when the NetworkPolicy verdict changes; the caps go again after it. nil on Docker.
+	netPolWatch func(func())
 }
 
 // proxySettings are the run proxy settings the caps name: every one this build carries, and the
@@ -454,9 +465,11 @@ func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keysto
 }
 
 // hostCaps is the part of the caps report that belongs to the machine and the substrate: what it
-// supports, its name, version and arch, and whether it keeps a sandbox after the run ends.
+// supports, its name, version and arch, whether it keeps a sandbox after the run ends, and whether it can
+// cut an agent off its networks (ProxyFence: the substrate's, never the process's).
 func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
 	_, keeps := sub.(runner.SandboxEnder)
+	_, fences := sub.(runner.ProxyFencer)
 	support, err := sub.Classes(ctx)
 	if err != nil {
 		return runnerwire.Caps{}, err
@@ -466,7 +479,7 @@ func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runner
 	if arch == "" {
 		arch = engineArch(ctx)
 	}
-	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps}, nil
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences}, nil
 }
 
 // checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and
@@ -537,7 +550,13 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return runnerRuntime{}, err
 	}
 	checkLapsesAtStartup(ctx, manager)
-	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
+	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil, netPol: make(chan struct{}, 1)}
+	if extra.netPolWatch != nil {
+		extra.netPolWatch(caps.netPolChanged)
+	}
+	if extra.macOSVM != nil {
+		reportWindowsOn(ctx, caps.online.Load)
+	}
 	hooks := runnerwire.RunnerHooks{
 		Call: dispatcher.Call,
 		// The org never opens a stream toward a runner: a relay is the
@@ -548,8 +567,11 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		Clock: manager.Clock, Pending: manager.Pending, StatePages: manager.StatePages,
 		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Offline: manager.Offline,
 		// manager.Revoked has released the manager's lock before the resident
-		// erase runs (lock order: Resident, then Manager).
-		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
+		// erase runs (lock order: Resident, then Manager). A revoked runner's kept machines go too: a VM booted
+		// from one is torn down, then every machine folder is deleted.
+		Revoked: func(ctx context.Context) error {
+			return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx), extra.macOSVM.eraseKept(ctx))
+		},
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			if err := caps.send(ctx, peer, true, true); err != nil {
 				return err
@@ -587,10 +609,17 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		if w := extra.report.relay; w != nil {
 			go w.run(ctx, func() { caps.resendRelay(ctx) })
 		}
+		if extra.netPolWatch != nil {
+			go caps.resendNetPol(ctx)
+		}
 		go func() {
 			if manager.IsRevoked() {
 				if err := resident.EraseAll(ctx); err != nil {
 					slog.WarnContext(ctx, "runner resident erase after revocation will retry on the sweep", "error", err)
+				}
+				// A failed erase of the kept machines is retried by the kept machines sweep.
+				if err := extra.macOSVM.eraseKept(ctx); err != nil {
+					slog.WarnContext(ctx, "runner kept machines erase after revocation will retry on the sweep", "error", err)
 				}
 			}
 			resident.SweepExpired(ctx, time.Minute)
@@ -869,7 +898,7 @@ func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeEx
 // whose helper's probe does not pass, offers none and says why in its caps as a code, and in its log in words. Container runs are untouched
 // either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
 // the offer sizes each guest at the base's minimum until it does.
-func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool) *macOSVMs {
+func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool, set macOSVMSettings) *macOSVMs {
 	if !on {
 		return nil
 	}
@@ -886,7 +915,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 	if err != nil {
 		slog.WarnContext(ctx, "macOS VM sandboxes: Docker did not report its memory; the ledger subtracts none", "error", err.Error())
 	}
-	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir),
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir), settings: set,
 		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
 	m.helper, err = macVMHelperPath()
 	if err == nil {
@@ -901,7 +930,8 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 	if m.ledger != nil {
 		m.sweepStaging()
 		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
-			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
+			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed, OnUnexpectedWindow: unexpectedWindow,
+			KeptConfig: docker.KeptConfig{LimitBytes: m.kept.limit, Tools: newKeptToolsUpdater(m)}}
 		if err := sub.EnableMacVM(cfg); err != nil {
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
@@ -917,6 +947,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
 		}
 	}
+	m.reapOrphanHelpers(ctx)
 	m.checkSession(ctx)
 	m.recompute()
 	return m

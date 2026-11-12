@@ -17,6 +17,7 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../..
 import { addHarness, agentTask, clearStarter, removeHarness, setAgentTask, setStartPrompt, setStarter, swapHarness } from "../../lenses/harness-lens";
 import { harnessIds } from "../../lenses/lens-keys";
 import { modeOf } from "../../lenses/shape-lens";
+import { isVMKind } from "../../../../../lib/types/machine-kind";
 import { stepIssues } from "../../lenses/local-issues";
 import { flowSteps, StepShell, useAnnounce } from "../step-shell";
 import { useLoaded } from "../shape/use-loaded";
@@ -46,6 +47,8 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   const base = loaded.status === "ready" ? loaded.value : EMPTY;
   const roster = intent.machine_kind === "macos_vm" ? { ...base, macOS: offer } : base;
   const ids = harnessIds(intent);
+  // A VM's terminal opens a shell, not the agent (UXR-1): its run starts no harness.
+  const vm = isVMKind(intent.machine_kind);
   const mode: HarnessMode = intent.shape !== "agent_task" ? "optional" : intent.experience === "background" ? "autonomous" : "interactive";
   // Several agents side by side only in an Autonomous run, and only where the server has the switch on.
   const multi = mode === "autonomous" && roster.multiAgent === true;
@@ -75,8 +78,8 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   const seed = draft.origin.kind === "scratch" && intent.shape === "agent_task" && ids.length === 0 ? addable?.id : undefined;
   React.useEffect(() => {
     if (!seed) return;
-    dispatch({ type: "edit", apply: (i) => (modeOf(i) === "interactive" ? setStarter(addHarness(i, seed), seed) : addHarness(i, seed)) });
-  }, [seed, dispatch]);
+    dispatch({ type: "edit", apply: (i) => (modeOf(i) === "interactive" && !vm ? setStarter(addHarness(i, seed), seed) : addHarness(i, seed)) });
+  }, [seed, vm, dispatch]);
 
   return (
     <StepShell
@@ -109,6 +112,7 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             count={ids.length}
             combination={combos[index]}
             started={intent.startup?.kind === "harness" && intent.startup.tool === id}
+            vm={vm}
             text={mode === "autonomous" ? agentTask(intent, id) : intent.startup?.tool === id ? intent.startup.prompt ?? "" : ""}
             onSwap={(to) => edit((i) => swapHarness(i, id, to))}
             onRemove={() => {

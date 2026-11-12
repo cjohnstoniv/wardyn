@@ -191,6 +191,15 @@ func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.Ru
 		})
 }
 
+// ListRunnerPoolsWithMember returns every pool that holds runnerID as a member, of any scope, owner and
+// state, by id. A caller that may use the runner only through its own person's pool refuses the runner
+// when any pool listed is not that, so this read filters nothing.
+func (s PG) ListRunnerPoolsWithMember(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPool, error) {
+	return collect(ctx, s.Pool, "list", "pools with runner",
+		`SELECT `+runnerPoolCols+` FROM runner_pools WHERE id IN (SELECT pool_id FROM runner_pool_members WHERE runner_id = $1) ORDER BY id`,
+		[]any{runnerID}, scanRunnerPool)
+}
+
 // ListRunnerPoolCatalogue returns the live organization pools and owner's own live user pools
 // (with all, every person's: the organisation's first, then owner's own), by name, each with its use policy, remote-hosted
 // members, the count of owner's own claimed runners it holds and the ids of owner's runners in it.

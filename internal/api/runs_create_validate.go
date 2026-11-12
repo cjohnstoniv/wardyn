@@ -126,6 +126,10 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonMacOSBaseInvalid, msg)
 		return req, noCeiling, "", "", false
 	}
+	if msg := desktopWindowRequestRefusal(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+		return req, noCeiling, "", "", false
+	}
 
 	// The request-level fields a member does not get to choose freely (see
 	// denyUserRequest) — checked before the XOR/builder validation below so a
@@ -276,6 +280,10 @@ func requestIsInteractive(req createRunRequest) bool {
 // flip every run on such a deployment into the hold lane and fire the codex
 // refusal deployment-wide, on an upgrade that changed no configuration. Absent
 // row, absent behaviour change.
+//
+// approve_each is left out on purpose: counting it would refuse a Codex CLI or command run the broker can
+// still ask about. A background run of a gated harness reaches the hold lane through applyToolPosture,
+// which reads the composed rules that carry the ceiling's approve_each (resolvePolicy clones them).
 func governanceHoldRules(ceiling governanceCeiling) bool {
 	// A restriction alone puts a run in the Default unit (withRestrictions); that is no assigned
 	// profile, so the deployment default's tool rules stay what they were for such a person.

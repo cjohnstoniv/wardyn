@@ -14,29 +14,40 @@ import (
 // securityHeaders sets the console's defense-in-depth headers on EVERY response.
 // The console is full-admin (admin bearer in web storage), so frame-ancestors
 // 'none' is load-bearing: a framed click originates INSIDE the origin and would
-// pass the local-mode CSRF Origin guard (http.go). No HSTS: plain http on
-// loopback, where HSTS would poison every localhost port. Each directive:
+// pass the local-mode CSRF Origin guard (http.go). HSTS is sent only when the
+// deployment is known to be served over TLS (OIDCSecureCookies): the default
+// posture is plain http on loopback, where HSTS would poison every localhost
+// port. Each directive:
 //   - style-src 'unsafe-inline': xterm's runtime theme <style>, Radix style
 //     attributes, fallbackStatusPage. font-src data:: inline woff2. connect-src
 //     and media-src: see cspConnectSrc (per request), cspUIBindSrc and
 //     cspMediaSrc (at boot).
 //   - script-src 'wasm-unsafe-eval': the recording replay player compiles WASM;
 //     it permits WASM ONLY (no JS eval), and without it replay never plays.
+//   - form-action: not covered by default-src. The console's one cross-origin
+//     form is the UI-sandbox enter POST, so the gateway origin is allowed (see
+//     cspUIFormSrc); every other form must target the console itself.
 //     run-ui-e2e asserts on console errors so a tightening cannot regress it.
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	const csp = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; " +
-		"object-src 'none'; connect-src %s; " +
+		"object-src 'none'; form-action 'self'%s; connect-src %s; " +
 		"%s; " +
 		"script-src 'self' 'wasm-unsafe-eval'; " +
 		"style-src 'self' 'unsafe-inline'; font-src 'self' data:"
 	mediaSrc := cspMediaSrc(s.cfg.DemoVideoBaseURL)
 	uiBind := s.cspUIBindSrc()
+	uiForm := cspUIFormSrc(uiBind)
+	secure := s.cfg.OIDCSecureCookies
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", fmt.Sprintf(csp, cspConnectSrc(r.Host)+uiBind, mediaSrc))
+		h.Set("Content-Security-Policy", fmt.Sprintf(csp, uiForm, cspConnectSrc(r.Host)+uiBind, mediaSrc))
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		if secure {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		// no-store by DEFAULT, overridden by the SPA/asset handler (ui.go), which
 		// Sets its own Cache-Control after this middleware has run.
 		//
@@ -78,6 +89,19 @@ func cspConnectSrc(host string) string {
 		return "'self'"
 	}
 	return "'self' ws://" + host + " wss://" + host
+}
+
+// cspUIFormSrc is the form-action entry (leading space, or "") for the gateway
+// origin, derived from cspUIBindSrc's entry: the same scheme and host, with the
+// path dropped, because the enter POST answers with a redirect on the gateway
+// origin and a browser checks form-action against that redirect target too.
+func cspUIFormSrc(bindSrc string) string {
+	if bindSrc == "" {
+		return ""
+	}
+	scheme, rest, _ := strings.Cut(strings.TrimPrefix(bindSrc, " "), "://")
+	host, _, _ := strings.Cut(rest, "/")
+	return " " + scheme + "://" + host
 }
 
 // cspMediaSrc builds the media-src directive (without the trailing "; ") for the

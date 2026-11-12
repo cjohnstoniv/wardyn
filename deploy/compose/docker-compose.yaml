@@ -343,6 +343,9 @@ services:
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
       WARDYN_GIT_APPROVAL_TIMEOUT: "${WARDYN_GIT_APPROVAL_TIMEOUT:-}"
+      WARDYN_MODEL_USAGE: "${WARDYN_MODEL_USAGE:-}"
+      # Empty falls back to wardynd's 5m default, so the line is inert until set in .env.
+      WARDYN_MIGRATE_TIMEOUT: "${WARDYN_MIGRATE_TIMEOUT:-}"
       # AWS sign-in lane: "on" or empty. "off" was removed in 0.10.0 and
       # refuses boot (docs/OPERATIONS.md "Removed in 0.10.0"). Empty lands on
       # flagEnv's own compiled default ("on") like every other empty
@@ -532,6 +535,9 @@ services:
       # (threatmodel/THREAT-MODEL.md §5 #18).
       WARDYN_UI_SANDBOX_LISTEN: "${WARDYN_UI_SANDBOX_LISTEN:-}"
       WARDYN_UI_SANDBOX_ADVERTISE: "${WARDYN_UI_SANDBOX_ADVERTISE:-}"
+      # With the sso profile (WARDYN_OIDC_ISSUER set) wardynd refuses to start the gateway on one shared origin
+      # unless this is true, which is what a compose stack runs (no wildcard DNS).
+      WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN: "${WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
       # A key joining harness ids with "+" declares an image carrying all of them, e.g.

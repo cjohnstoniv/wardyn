@@ -14,7 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -88,7 +90,9 @@ func wallsAuditRow(events []types.AuditEvent, action string) *types.AuditEvent {
 
 // TestValidatePersonalWalls: walls may only narrow, and each refusal names the first path it refuses.
 func TestValidatePersonalWalls(t *testing.T) {
-	on, empty, cc9, review := true, types.FirstUseMode("ask_me"), types.ConfinementClass("CC9"), types.FirstUseWaitForReview
+	screen, fiveMin := types.RecordingScreenActions, 300
+	on, off, empty, cc9, review := true, false, types.FirstUseMode("ask_me"), types.ConfinementClass("CC9"), types.FirstUseWaitForReview
+	keystrokes, recOff, zero, negative := types.RecordingLevel("keystrokes"), types.RecordingOff, 0, -1
 	tooMany := make([]string, maxWallsDomains+1)
 	for i := range tooMany {
 		tooMany[i] = "h" + strings.Repeat("x", i%5) + ".example"
@@ -106,6 +110,21 @@ func TestValidatePersonalWalls(t *testing.T) {
 		{"an unknown first-use mode", types.PersonalWallsSpec{FirstUseApproval: &empty}, "first_use_approval"},
 		{"an unknown barrier", types.PersonalWallsSpec{MinConfinementClass: &cc9}, "min_confinement_class"},
 		{"a desktop direction allowed", types.PersonalWallsSpec{Desktop: &types.DesktopControls{CopyOut: types.TransferAllowed}}, "desktop.copy_out"},
+		{"an empty ado list", types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{}}, "azure_devops_capabilities:"},
+		{"an unknown ado capability", types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapCodeRead, "root"}}, "azure_devops_capabilities[1]"},
+		{"an ado area no capability can be held over", types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapDiscovery}}, "azure_devops_capabilities[0]"},
+		{"an empty github list", types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{}}, "github_capabilities:"},
+		{"an unknown github capability", types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{"root"}}, "github_capabilities[0]"},
+		{"a tool rule that allows", types.PersonalWallsSpec{ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}, {Tool: "Read", Effect: types.ToolAllow}}}, "tool_rules[1]"},
+		{"an unknown tool effect", types.PersonalWallsSpec{ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: "ask"}}}, "tool_rules[0]"},
+		{"a duplicate tool rule", types.PersonalWallsSpec{ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}, {Tool: "Bash", Effect: types.ToolDeny}}}, "tool_rules[1]"},
+		{"an empty deny path", types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyPaths: wallsList("a/**", "")}}, "push_rules.deny_paths[1]"},
+		{"too many deny paths", types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyPaths: &tooMany}}, "push_rules.deny_paths:"},
+		{"deny_all false", types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyAll: &off}}, "push_rules.deny_all"},
+		{"an unknown recording level", types.PersonalWallsSpec{Recording: &keystrokes}, "recording"},
+		{"recording off", types.PersonalWallsSpec{Recording: &recOff}, "recording"},
+		{"a zero auto-stop", types.PersonalWallsSpec{AutoStopAfterSec: &zero}, "auto_stop_after_sec"},
+		{"a negative auto-stop", types.PersonalWallsSpec{AutoStopAfterSec: &negative}, "auto_stop_after_sec"},
 		{"an unknown grant kind", types.PersonalWallsSpec{WithheldGrants: []types.GrantSpec{{Kind: "nope"}}}, "withheld_grants[0]"},
 		{"owner_only_refs authored", types.PersonalWallsSpec{WithheldGrants: []types.GrantSpec{{Kind: types.GrantSSHKey, OwnerOnlyRefs: []string{"x"}}}}, "withheld_grants[0]"},
 	} {
@@ -117,10 +136,20 @@ func TestValidatePersonalWalls(t *testing.T) {
 	ok := types.PersonalWallsSpec{
 		AllowedDomains: wallsList("pypi.org", "*.github.com"), DeniedDomains: wallsList("*.evil.example"),
 		FirstUseApproval: &review, Desktop: &types.DesktopControls{PasteIn: types.TransferBlocked},
-		WithheldGrants: []types.GrantSpec{{Kind: types.GrantSSHKey}},
+		WithheldGrants:          []types.GrantSpec{{Kind: types.GrantSSHKey}},
+		AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapCodeRead}, GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead},
+		ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}, {Tool: "*", Effect: types.ToolHold}},
+		PushRules: &types.PersonalWallsPushRules{DenyPaths: wallsList("secrets/**", ".github/workflows/**"), DenyAll: &on},
+		Recording: &screen, AutoStopAfterSec: &fiveMin,
 	}
 	if err := validatePersonalWalls(ok); err != nil {
 		t.Errorf("valid walls refused: %v", err)
+	}
+	if knobs, _ := wallsAuditData(ok)["knobs"].([]string); !slices.Contains(knobs, "push_rules.deny_all") {
+		t.Errorf("audit knobs = %v, want push_rules.deny_all", knobs)
+	}
+	if knobs, _ := wallsAuditData(types.PersonalWallsSpec{})["knobs"].([]string); slices.Contains(knobs, "push_rules.deny_all") {
+		t.Errorf("walls naming nothing record push_rules.deny_all: %v", knobs)
 	}
 }
 
@@ -421,7 +450,7 @@ func TestReassertNamesOnlyTheLayersPresent(t *testing.T) {
 		{"boundary", listLayer("boundary", []string{"api.anthropic.com"}), true, false},
 	} {
 		srv, _, audit, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
-		policy := types.RunPolicySpec{AllowAllEgress: true}
+		policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "gitlab.example"}} // a credential's host is listed exactly
 		injections := []runner.InjectionGrant{componentRule("api.anthropic.com"), componentRule("gitlab.example")}
 		var p dispatchParams
 		var llm llmTransport
@@ -439,4 +468,227 @@ func TestReassertNamesOnlyTheLayersPresent(t *testing.T) {
 			t.Errorf("%s: personal_walls %v, want %v (%s)", tc.name, got, tc.personal, ev.Data)
 		}
 	}
+}
+
+// wallsMeetStep runs spec through personalWallsRunStep as sub, under an organisation whose recording block
+// is org (nil for none), and answers the spec the walls left and the refusal, if any.
+func wallsMeetStep(t *testing.T, srv *Server, st *uvStore, walls types.PersonalWallsSpec, org *types.SiteRecording, spec types.RunPolicySpec) (types.RunPolicySpec, *runRefusal) {
+	t.Helper()
+	const sub = "sub-walls-widen"
+	saveWalls(t, st, sub, walls)
+	st.site.Recording = org
+	source := policySourceRecord{knobs: startProvenance(memberProvenance)}
+	if _, refusal := srv.personalWallsRunStep(memberCtxFor(sub), &spec, &source); refusal != nil {
+		return types.RunPolicySpec{}, refusal
+	}
+	return spec, nil
+}
+
+// TestPersonalWallsNeverWiden: the spec the run step is handed is already as narrow as the ceiling and the
+// deployment make it. For each of the five narrowing knobs, walls wider than that spec leave it as it
+// is, and walls narrower than it set their own value. Empty walls leave the spec byte for byte as it was.
+func TestPersonalWallsNeverWiden(t *testing.T) {
+	srv, st, _ := uvServer(t)
+	run := func(walls types.PersonalWallsSpec, org *types.SiteRecording, spec types.RunPolicySpec) types.RunPolicySpec {
+		t.Helper()
+		got, refusal := wallsMeetStep(t, srv, st, walls, org, spec)
+		if refusal != nil {
+			t.Fatalf("refusal %+v", refusal)
+		}
+		return got
+	}
+	sec := func(n int) *int { return &n }
+	rec := func(l types.RecordingLevel) *types.RecordingLevel { return &l }
+	rules := func(r ...types.ToolRule) *[]types.ToolRule { return &r }
+	read, write := adoscope.CapCodeRead, adoscope.CapCodeWrite
+
+	t.Run("azure_devops_capabilities", func(t *testing.T) {
+		ceiling := types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{read}}
+		wider := types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{read, write}}
+		if got := run(wider, nil, ceiling); !slices.Equal(got.AzureDevOpsCapabilities, []adoscope.Capability{read}) {
+			t.Errorf("a wider list: %v, want the ceiling's [code_read]", got.AzureDevOpsCapabilities)
+		}
+		narrower := types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{read}}
+		if got := run(narrower, nil, types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{read, write}}); !slices.Equal(got.AzureDevOpsCapabilities, []adoscope.Capability{read}) {
+			t.Errorf("a narrower list: %v, want the wall's [code_read]", got.AzureDevOpsCapabilities)
+		}
+		// A policy that names no list falls back to the provider row's default profile, which create
+		// does not know: the walls add no list here, and say nothing. Dispatch meets the default with
+		// them (personal_walls_capabilities_test.go).
+		if got := run(wider, nil, types.RunPolicySpec{}); len(got.AzureDevOpsCapabilities) != 0 {
+			t.Errorf("no list in the policy: %v, want none added", got.AzureDevOpsCapabilities)
+		}
+		saveWalls(t, st, "sub-walls-widen", wider)
+		noop := policySourceRecord{knobs: startProvenance(memberProvenance)}
+		bare := types.RunPolicySpec{}
+		warns, _ := srv.personalWallsRunStep(memberCtxFor("sub-walls-widen"), &bare, &noop)
+		if slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, "azure_devops_capabilities") }) {
+			t.Errorf("no list in the policy: warnings %v, want none naming the list: dispatch applies it", warns)
+		}
+		// A list with nothing in common is refused with the person's own words, never a server error.
+		_, refusal := wallsMeetStep(t, srv, st, types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{write}}, nil, ceiling)
+		if refusal == nil || refusal.err != nil || refusal.status != http.StatusForbidden || refusal.body.Reason != reasonGovernanceOverlayUnsatisfiable ||
+			!strings.Contains(refusal.body.Error, "azure_devops_capabilities") {
+			t.Errorf("a disjoint list: %+v, want 403 %s naming azure_devops_capabilities", refusal, reasonGovernanceOverlayUnsatisfiable)
+		}
+	})
+
+	t.Run("github_capabilities", func(t *testing.T) {
+		ceiling := types.RunPolicySpec{GitHubCapabilities: []ghscope.Capability{ghscope.CapCodeRead}}
+		wider := types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite}}
+		if got := run(wider, nil, ceiling); !slices.Equal(got.GitHubCapabilities, []ghscope.Capability{ghscope.CapCodeRead}) {
+			t.Errorf("a wider list: %v, want the ceiling's [code_read]", got.GitHubCapabilities)
+		}
+		narrower := types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead}}
+		if got := run(narrower, nil, types.RunPolicySpec{GitHubCapabilities: []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite}}); !slices.Equal(got.GitHubCapabilities, []ghscope.Capability{ghscope.CapCodeRead}) {
+			t.Errorf("a narrower list: %v, want the wall's [code_read]", got.GitHubCapabilities)
+		}
+		saveWalls(t, st, "sub-walls-widen", wider)
+		noop := policySourceRecord{knobs: startProvenance(memberProvenance)}
+		bare := types.RunPolicySpec{}
+		warns, _ := srv.personalWallsRunStep(memberCtxFor("sub-walls-widen"), &bare, &noop)
+		if slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, "github_capabilities") }) || len(bare.GitHubCapabilities) != 0 {
+			t.Errorf("no list in the policy: warnings %v list %v, want neither: the GitHub CLI's grants apply it", warns, bare.GitHubCapabilities)
+		}
+	})
+
+	t.Run("tool_rules", func(t *testing.T) {
+		ceiling := types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}, {Tool: "Bash", Effect: types.ToolDeny}, {Tool: "Read", Effect: types.ToolAllow}}}
+		loose := types.PersonalWallsSpec{ToolRules: rules(types.ToolRule{Tool: "Bash", Effect: types.ToolHold})}
+		if got := run(loose, nil, ceiling); !slices.Equal(got.ToolRules, ceiling.ToolRules) {
+			t.Errorf("a hold under the ceiling's deny: %v, want the ceiling's %v", got.ToolRules, ceiling.ToolRules)
+		}
+		// Adding a rule leaves every tool the wall does not name as the policy had it.
+		got := run(types.PersonalWallsSpec{ToolRules: rules(types.ToolRule{Tool: "WebFetch", Effect: types.ToolDeny})}, nil, ceiling)
+		want := append(slices.Clone(ceiling.ToolRules), types.ToolRule{Tool: "WebFetch", Effect: types.ToolDeny})
+		if !slices.Equal(got.ToolRules, want) {
+			t.Errorf("a deny on one tool: %v, want the ceiling's rules plus WebFetch deny", got.ToolRules)
+		}
+		got = run(types.PersonalWallsSpec{ToolRules: rules(types.ToolRule{Tool: "Read", Effect: types.ToolDeny})}, nil, ceiling)
+		if eff := effectiveToolEffect(got.ToolRules, "Read"); eff != types.ToolDeny || effectiveToolEffect(got.ToolRules, "Glob") != types.ToolAllow {
+			t.Errorf("a deny on Read: %v, want Read denied and an unnamed tool still allowed", got.ToolRules)
+		}
+		// The order of a document's rules does not matter: a rule for a named tool beats "*" in either, and
+		// an inherited deny is kept.
+		star, bashHold := types.ToolRule{Tool: "*", Effect: types.ToolDeny}, types.ToolRule{Tool: "Bash", Effect: types.ToolHold}
+		for _, doc := range [][]types.ToolRule{{star, bashHold}, {bashHold, star}} {
+			wall := types.PersonalWallsSpec{ToolRules: rules(doc...)}
+			got = run(wall, nil, types.RunPolicySpec{})
+			if effectiveToolEffect(got.ToolRules, "Bash") != types.ToolHold || effectiveToolEffect(got.ToolRules, "Glob") != types.ToolDeny {
+				t.Errorf("walls %v over no rules: %+v, want Bash held and an unnamed tool denied", doc, got.ToolRules)
+			}
+			got = run(wall, nil, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}})
+			if effectiveToolEffect(got.ToolRules, "Bash") != types.ToolDeny || effectiveToolEffect(got.ToolRules, "Glob") != types.ToolDeny {
+				t.Errorf("walls %v over an inherited Bash deny: %+v, want Bash still denied", doc, got.ToolRules)
+			}
+		}
+		// A policy with no rules gets none it did not ask for beyond the wall's own.
+		got = run(types.PersonalWallsSpec{ToolRules: rules(types.ToolRule{Tool: "Bash", Effect: types.ToolHold})}, nil, types.RunPolicySpec{})
+		if !slices.Equal(got.ToolRules, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}) {
+			t.Errorf("a hold on a policy with no rules: %v, want just the hold", got.ToolRules)
+		}
+	})
+
+	t.Run("push_rules.deny_paths", func(t *testing.T) {
+		ceiling := types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{"secrets/**"}}}
+		wall := types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyPaths: wallsList("secrets/**")}}
+		if got := run(wall, nil, ceiling); got.PushRules == nil || !slices.Equal(got.PushRules.DenyPaths, []string{"secrets/**"}) {
+			t.Errorf("a path the ceiling already denies: %+v, want the ceiling's list as it was", got.PushRules)
+		}
+		// Paths add to the ceiling's, never take one away.
+		wall = types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyPaths: wallsList(".github/workflows/**")}}
+		got := run(wall, nil, ceiling)
+		if got.PushRules == nil || !slices.Contains(got.PushRules.DenyPaths, "secrets/**") || !slices.Contains(got.PushRules.DenyPaths, ".github/workflows/**") {
+			t.Errorf("an added path: %+v, want the ceiling's path and the wall's", got.PushRules)
+		}
+		if got := run(wall, nil, types.RunPolicySpec{}); got.PushRules == nil || !slices.Equal(got.PushRules.DenyPaths, []string{".github/workflows/**"}) {
+			t.Errorf("a path on a policy with no push rules: %+v, want just the wall's", got.PushRules)
+		}
+	})
+
+	t.Run("push_rules.deny_all", func(t *testing.T) {
+		on := true
+		wall := types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyAll: &on}}
+		ceiling := types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{"secrets/**"}}}
+		if got := run(wall, nil, ceiling); got.PushRules == nil || !got.PushRules.DenyAll || !slices.Equal(got.PushRules.DenyPaths, []string{"secrets/**"}) {
+			t.Errorf("deny_all over a policy with paths: %+v, want deny_all and the policy's paths", got.PushRules)
+		}
+		if got := run(wall, nil, types.RunPolicySpec{}); got.PushRules == nil || !got.PushRules.DenyAll {
+			t.Errorf("deny_all on a policy with no push rules: %+v, want deny_all", got.PushRules)
+		}
+	})
+
+	t.Run("recording", func(t *testing.T) {
+		if got := run(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, nil, types.RunPolicySpec{Recording: types.RecordingScreenActions}); got.Recording != types.RecordingScreenActions {
+			t.Errorf("a lower floor under the ceiling's: %q, want screen_actions", got.Recording)
+		}
+		if got := run(types.PersonalWallsSpec{Recording: rec(types.RecordingScreenActions)}, nil, types.RunPolicySpec{Recording: types.RecordingTerminal}); got.Recording != types.RecordingScreenActions {
+			t.Errorf("a higher floor: %q, want the wall's screen_actions", got.Recording)
+		}
+		// A policy that names no level stays naming none at create: the floor is applied at dispatch, after
+		// the organisation's default, so it can only raise the level the run would have had.
+		resolved := func(walls types.PersonalWallsSpec, org *types.SiteRecording, spec types.RunPolicySpec) types.RecordingLevel {
+			t.Helper()
+			got := run(walls, org, spec)
+			owner := types.AgentRun{CreatedBy: "sub-walls-widen"}
+			floor, err := srv.wallsRecordingFloor(context.Background(), owner)
+			if err != nil {
+				t.Fatalf("read the floor: %v", err)
+			}
+			return recordingChoice(owner, got, dispatchCeiling{}, types.SiteConfig{Recording: org}, nil, floor).Resolve()
+		}
+		unlocked := &types.SiteRecording{Level: types.RecordingScreenActions}
+		if got := run(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, unlocked, types.RunPolicySpec{}); got.Recording != "" {
+			t.Errorf("a floor on a policy that names no level: %q, want none pinned at create", got.Recording)
+		}
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, unlocked, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor under an unlocked organisation default: %q, want screen_actions", got)
+		}
+		terminalOrg := &types.SiteRecording{Level: types.RecordingTerminal}
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingScreenActions)}, terminalOrg, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor over the organisation's terminal: %q, want screen_actions", got)
+		}
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingScreenActions)}, nil, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor over the terminal default: %q, want screen_actions", got)
+		}
+		// An organisation default raised after create still counts: nothing was pinned from the old one.
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, &types.SiteRecording{Level: types.RecordingScreenActions, Locked: true}, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor under a locked organisation level: %q, want screen_actions", got)
+		}
+		// Walls that cannot be read at dispatch refuse the run: no level, never a lower one.
+		st.prefs["sub-walls-bad|"+types.PersonalWallsPrefKey] = json.RawMessage(`{"spec":{"bogus":true}}`)
+		if floor, err := srv.wallsRecordingFloor(context.Background(), types.AgentRun{CreatedBy: "sub-walls-bad"}); err == nil || floor != "" {
+			t.Errorf("unreadable walls: floor %q err %v, want an error and no level", floor, err)
+		}
+	})
+
+	t.Run("auto_stop_after_sec", func(t *testing.T) {
+		if got := run(types.PersonalWallsSpec{AutoStopAfterSec: sec(900)}, nil, types.RunPolicySpec{AutoStopAfterSec: 300}); got.AutoStopAfterSec != 300 {
+			t.Errorf("a longer cap under the ceiling's: %d, want 300", got.AutoStopAfterSec)
+		}
+		if got := run(types.PersonalWallsSpec{AutoStopAfterSec: sec(60)}, nil, types.RunPolicySpec{AutoStopAfterSec: 300}); got.AutoStopAfterSec != 60 {
+			t.Errorf("a shorter cap: %d, want the wall's 60", got.AutoStopAfterSec)
+		}
+		for _, never := range []int{0, -1} {
+			if got := run(types.PersonalWallsSpec{AutoStopAfterSec: sec(600)}, nil, types.RunPolicySpec{AutoStopAfterSec: never}); got.AutoStopAfterSec != 600 {
+				t.Errorf("a cap on a policy that never stops (%d): %d, want the wall's 600", never, got.AutoStopAfterSec)
+			}
+		}
+	})
+
+	t.Run("empty walls change nothing", func(t *testing.T) {
+		spec := types.RunPolicySpec{
+			AllowAllEgress: true, AzureDevOpsCapabilities: []adoscope.Capability{read, write}, GitHubCapabilities: []ghscope.Capability{ghscope.CapCodeRead},
+			ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolAllow}}, PushRules: &types.PushRulesSpec{DenyPaths: []string{"a"}},
+			Recording: types.RecordingTerminal, AutoStopAfterSec: 300,
+		}
+		before := mustJSON(spec)
+		for name, walls := range map[string]types.PersonalWallsSpec{
+			"none saved": {}, "naming no rule": {ToolRules: rules()}, "naming no path": {PushRules: &types.PersonalWallsPushRules{}},
+		} {
+			if got := run(walls, nil, spec); !slices.Equal(mustJSON(got), before) {
+				t.Errorf("%s: %s, want %s", name, mustJSON(got), before)
+			}
+		}
+	})
 }

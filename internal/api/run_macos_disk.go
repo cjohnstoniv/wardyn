@@ -93,5 +93,8 @@ func (s *Server) runnerMacOSVMDisks(ctx context.Context, runnerID uuid.UUID, rep
 			slog.WarnContext(ctx, "wardynd: record a macOS VM disk report", slog.String("runner_id", runnerID.String()),
 				slog.String("run_id", r.RunID.String()), slog.Any("err", err))
 		}
+		if reason == runner.MacOSVMDiskKeptMachine {
+			s.recordKeptMachineStop(ctx, runnerID, r) // the stop report of a kept machine's session (kept_machine_delete.go)
+		}
 	}
 }

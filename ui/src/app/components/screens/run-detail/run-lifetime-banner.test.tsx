@@ -8,7 +8,7 @@
 // state's own copy and actions, and that only one ever renders (the
 // tightened note is the one exception, F19).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
@@ -17,6 +17,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 import { weekdayClock } from "./run-ends-row";
 import { shortTime } from "../../../lib/format";
+import { ELEV } from "../../wardyn/copy/elevation";
 
 const reviveRunMock = vi.fn();
 const setRunEndAndWaitMock = vi.fn();
@@ -35,6 +36,10 @@ const listAuditMock = vi.fn();
 vi.mock("../../../lib/api/audit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/api/audit")>()),
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
+}));
+const listRequestsMock = vi.fn();
+vi.mock("../../../lib/api/governance-requests", () => ({
+  requests: { list: (...a: unknown[]) => listRequestsMock(...a), create: vi.fn() },
 }));
 const toastInfoMock = vi.fn();
 const toastErrorMock = vi.fn();
@@ -281,6 +286,37 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(screen.queryByRole("button", { name: "Extend and revive" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+});
+
+describe("RunLifetimeBanner — End run asks first (UXR-15)", () => {
+  const ended = () => detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true, title: "nightly build" });
+
+  it("opens the shared confirm and kills nothing until it is confirmed", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    renderBanner(ended(), [], onChanged);
+    await user.click(screen.getByRole("button", { name: "End run" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveAccessibleName("End nightly build?");
+    expect(dialog).toHaveTextContent("This cannot be undone.");
+    expect(killRunMock).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(killRunMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "End run" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "End run" }));
+    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("a failed kill names the run by its title, not its id", async () => {
+    const user = userEvent.setup();
+    killRunMock.mockRejectedValue(new Error("boom"));
+    renderBanner(ended());
+    await user.click(screen.getByRole("button", { name: "End run" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "End run" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Couldn't end nightly build", expect.anything()));
   });
 });
 
@@ -667,6 +703,101 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
 
   it("a local run on an online computer, running normally, has no local banner", () => {
     const { container } = renderBanner(local());
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("RunLifetimeBanner: a run that ends with its elevation", () => {
+  const killed = (o: Partial<RunDetail> = {}) =>
+    detail({ state: "KILLED", status_reason: "max_lifetime_reached", lifetime_cap_at: new Date(NOW - 60_000).toISOString(), lifetime_cap_source: "elevation", ...o });
+
+  it("the elevation warning has Dismiss only and the elevation sentence", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation", run_limits: { user_changes_limits: true } }));
+    const banner = screen.getByTestId("run-lifetime-warning");
+    expect(banner).toHaveTextContent("This run ends in 10 minutes");
+    expect(banner).toHaveTextContent(`At ${weekdayClock(cap)} the run stops, because your elevation ends then. Push or save anything you need before then.`);
+    expect(banner).not.toHaveTextContent("files are kept");
+    expect(screen.queryByRole("button", { name: "Extend 1 day" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change end…" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("run-lifetime-warning")).not.toBeInTheDocument();
+  });
+
+  it("the warning counts down to the cap when the run has no end of its own", () => {
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ lifetime_cap_at: cap, lifetime_cap_source: "elevation" }));
+    expect(screen.getByTestId("run-lifetime-warning")).toHaveTextContent("This run ends in 10 minutes");
+  });
+
+  it("a pool-capped run keeps Extend 1 day and the files sentence", () => {
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "pool" }));
+    expect(screen.getByRole("button", { name: "Extend 1 day" })).toBeInTheDocument();
+    expect(screen.getByTestId("run-lifetime-warning")).toHaveTextContent("Its files are kept for a while after that");
+  });
+
+  it("a run KILLED at its elevation's end shows the elevation-ended banner", () => {
+    renderBanner(killed());
+    const banner = screen.getByTestId("run-lifetime-elevation-ended");
+    expect(banner).toHaveTextContent("This run ended when your elevation ended");
+    expect(banner).toHaveTextContent("To keep working, ask for elevation again and start a new run.");
+    expect(within(banner).getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
+    for (const name of ["Revive", "Extend", "End run"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  });
+
+  it("Request elevation opens the request dialog for the run's unit and reads the offers once", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    let resolve!: (v: unknown) => void;
+    listRequestsMock.mockReturnValue(new Promise((r) => (resolve = r)));
+    renderBanner(killed({ unit_id: "u1" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Request elevation" }));
+    expect(await screen.findByRole("dialog", { name: ELEV.TITLE })).toBeInTheDocument();
+    expect(listRequestsMock).toHaveBeenCalledTimes(1);
+    resolve({ offered: [{ unit_id: "u1", unit_name: "Payments", max_elevation: "4h" }] });
+    expect(await screen.findByText("Payments")).toBeInTheDocument();
+  });
+
+  it("an operator viewing another person's run sees the ended banner without the button; the owner sees it with the button", () => {
+    const view = renderBanner(killed({ created_by: "someone-else" }), [], () => {}, { operator: true, principal: OWNER });
+    expect(screen.getByTestId("run-lifetime-elevation-ended")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request elevation" })).not.toBeInTheDocument();
+    view.unmount();
+    renderBanner(killed({ created_by: OWNER }), [], () => {}, { operator: false, principal: OWNER });
+    expect(screen.getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
+  });
+
+  it("an operator viewing another person's run reads 'the elevation', never 'your elevation', on the ended banner", () => {
+    renderBanner(killed({ created_by: "someone-else" }), [], () => {}, { operator: true, principal: OWNER });
+    const banner = screen.getByTestId("run-lifetime-elevation-ended");
+    expect(banner).toHaveTextContent("This run ended when the elevation ended");
+    expect(banner).toHaveTextContent("To keep working, ask for elevation again and start a new run.");
+    expect(banner).not.toHaveTextContent("your elevation");
+  });
+
+  it("an operator viewing another person's run reads 'the elevation' in the warning", () => {
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ created_by: "someone-else", ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation" }), [], () => {}, { operator: true, principal: OWNER });
+    const banner = screen.getByTestId("run-lifetime-warning");
+    expect(banner).toHaveTextContent(`At ${weekdayClock(cap)} the run stops, because the elevation ends then. Push or save anything you need before then.`);
+    expect(banner).not.toHaveTextContent("your elevation");
+  });
+
+  it("a viewer who cannot act sees the elevation-ended banner without the button", () => {
+    renderBanner(killed(), [], () => {}, { operator: false, principal: "someone-else" });
+    expect(screen.getByTestId("run-lifetime-elevation-ended")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request elevation" })).not.toBeInTheDocument();
+  });
+
+  it("a run KILLED max_lifetime_reached under a pool cap shows nothing", () => {
+    const { container } = renderBanner(killed({ lifetime_cap_source: "pool" }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("a run KILLED by a person shows nothing", () => {
+    const { container } = renderBanner(killed({ status_reason: "killed_by_user" }));
     expect(container).toBeEmptyDOMElement();
   });
 });

@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -389,5 +390,185 @@ func TestDesktopFiles_OneReadDecidesTheTransfer(t *testing.T) {
 	w := doSSO(t, e.srv, http.MethodPut, e.path("in.txt"), e.ses["owner"], fileSentinel)
 	if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonDesktopTransferBlocked || e.folder.execs != 0 {
 		t.Fatalf("an upload the stored rules block: %d %s (%d execs), want 403 %s and no exec", w.Code, w.Body.String(), e.folder.execs, reasonDesktopTransferBlocked)
+	}
+}
+
+// desktopDoorUnitStore gives the env's run the profile, and the machine kind, a row asks for.
+type desktopDoorUnitStore struct {
+	*envelopeStore
+	unit types.GovernanceUnit
+	kind types.MachineKind
+}
+
+func (s *desktopDoorUnitStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.envelopeStore.GetRun(ctx, id)
+	run.UnitID, run.MachineKind = &s.unit.ID, s.kind
+	return run, err
+}
+
+func (s *desktopDoorUnitStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	return unitChainOf([]types.GovernanceUnit{s.unit}, nil, id)
+}
+
+// The profile's deny_interactive closes the Files door as it closes the terminal and the desktop:
+// the owner gets the governance refusal on all three routes, whatever the machine kind and even
+// though the rules allow both directions. Nothing reaches the sandbox and no transfer is recorded.
+func TestDesktopFiles_DenyInteractiveClosesEveryEndpoint(t *testing.T) {
+	unit := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	allowed := &types.DesktopControls{Upload: types.TransferAllowed, Download: types.TransferAllowed}
+	for _, kind := range []types.MachineKind{"", types.MachineMacOSVM} {
+		e := newDesktopFilesEnv(t, allowed)
+		e.srv.cfg.Store = &desktopDoorUnitStore{envelopeStore: e.srv.cfg.Store.(*envelopeStore), unit: unit, kind: kind}
+		for _, r := range []struct{ method, name, body string }{
+			{http.MethodGet, "", ""}, {http.MethodPut, "in.txt", "x"}, {http.MethodGet, "agent-report.csv", ""},
+		} {
+			w := doSSO(t, e.srv, r.method, e.path(r.name), e.ses["owner"], r.body)
+			if w.Code != http.StatusForbidden || reasonOf(t, w) != string(authz.ReasonGovernanceUnit) {
+				t.Errorf("machine kind %q, %s %q: %d %s, want 403 %s", kind, r.method, r.name, w.Code, w.Body.String(), authz.ReasonGovernanceUnit)
+			}
+		}
+		if e.folder.execs != 0 || len(e.transferRows("upload"))+len(e.transferRows("download")) != 0 {
+			t.Fatalf("machine kind %q: %d execs reached the sandbox, or a transfer row was written", kind, e.folder.execs)
+		}
+	}
+}
+
+// desktopDoorPausedStore answers the Files door's envelope read on a pauseStore, which has none.
+type desktopDoorPausedStore struct {
+	*pauseStore
+	envelope *envelopeStore
+}
+
+func (s *desktopDoorPausedStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, n int) ([]types.AuditEvent, error) {
+	return s.envelope.QueryAuditEvents(ctx, runID, n)
+}
+
+// desktopDoorPausedRunner refuses an exec into a paused sandbox, as the daemon does.
+type desktopDoorPausedRunner struct {
+	*flakyThaw
+	st     *pauseStore
+	folder *fakeTransferFolder
+}
+
+func (r *desktopDoorPausedRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if at, _ := r.st.paused(); at != nil {
+		return nil, errors.New("synthetic exec into a paused sandbox")
+	}
+	return r.folder.exec(spec)
+}
+
+// Only a transfer the rules allow wakes a paused run. A list, however the rules read, a denied
+// upload or download and a bad file name leave it paused with no presence and no run.resume row;
+// a list that would have to read the folder answers the 409 the run page's other reads do.
+func TestDesktopFiles_PausedRunThawsOnlyForATransfer(t *testing.T) {
+	blocked := &types.DesktopControls{Upload: types.TransferBlocked, Download: types.TransferBlocked}
+	allowed := &types.DesktopControls{Upload: types.TransferAllowed, Download: types.TransferAllowed}
+	rig := func(t *testing.T, desktop *types.DesktopControls) (*pauseFixture, *flakyThaw, *fakeTransferFolder) {
+		t.Helper()
+		f, rn, _ := pausedRunClock(t, 0)
+		env := &envelopeStore{spec: types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{{Name: "novnc", Port: 6080}}, Desktop: desktop}}
+		f.srv.cfg.Store = &desktopDoorPausedStore{pauseStore: f.st, envelope: env}
+		folder := &fakeTransferFolder{files: map[string][]byte{"agent-report.csv": []byte("agent,wrote,this\n")}}
+		f.srv.cfg.Runner = &desktopDoorPausedRunner{flakyThaw: rn, st: f.st, folder: folder}
+		return f, rn, folder
+	}
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+	files := func(f *pauseFixture, name string) string {
+		p := "/api/v1/runs/" + f.run.ID.String() + "/desktop/files"
+		if name != "" {
+			p += "/" + name
+		}
+		return p
+	}
+
+	for _, c := range []struct {
+		what         string
+		desktop      *types.DesktopControls
+		method, name string
+		code         int
+		reason       string
+	}{
+		{"a list that reads the folder", allowed, http.MethodGet, "", http.StatusConflict, reasonRunInspectPaused},
+		{"a list that runs no exec", blocked, http.MethodGet, "", http.StatusOK, ""},
+		{"a denied upload", blocked, http.MethodPut, "in.txt", http.StatusForbidden, reasonDesktopTransferBlocked},
+		{"a denied download", blocked, http.MethodGet, "agent-report.csv", http.StatusForbidden, reasonDesktopTransferBlocked},
+		{"an upload with a bad name", allowed, http.MethodPut, ".hidden", http.StatusBadRequest, reasonDesktopTransferBadRequest},
+		{"a download with a bad name", allowed, http.MethodGet, ".hidden", http.StatusBadRequest, reasonDesktopTransferBadRequest},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			f, rn, folder := rig(t, c.desktop)
+			w := doSSO(t, f.srv, c.method, files(f, c.name), owner, "x")
+			if w.Code != c.code || (c.reason != "" && reasonOf(t, w) != c.reason) {
+				t.Fatalf("%d %s, want %d %s", w.Code, w.Body.String(), c.code, c.reason)
+			}
+			if at, _ := f.st.paused(); at == nil || rn.tries != 0 || f.st.stamps != 0 || folder.execs != 0 {
+				t.Errorf("paused_at %v, %d thaws, %d presence stamps, %d execs; want it left paused and untouched", at, rn.tries, f.st.stamps, folder.execs)
+			}
+			if rows := f.rows("run.resume", "success"); len(rows) != 0 {
+				t.Errorf("run.resume rows = %+v, want none", rows)
+			}
+		})
+	}
+
+	for _, c := range []struct {
+		what         string
+		method, name string
+		body         string
+	}{
+		{"an allowed upload", http.MethodPut, "in.txt", fileSentinel},
+		{"an allowed download", http.MethodGet, "agent-report.csv", ""},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			f, rn, folder := rig(t, allowed)
+			if w := doSSO(t, f.srv, c.method, files(f, c.name), owner, c.body); w.Code != http.StatusOK {
+				t.Fatalf("%d %s, want 200", w.Code, w.Body.String())
+			}
+			if at, _ := f.st.paused(); at != nil || rn.tries != 1 || folder.execs != 1 {
+				t.Fatalf("paused_at %v, %d thaws, %d execs; want it resumed once and the transfer sent", at, rn.tries, folder.execs)
+			}
+			rows := f.rows("run.resume", "success")
+			if len(rows) != 1 || rows[0].Actor != pauseOwner || leaseAuditData(t, rows[0])["reason"] != "presence" {
+				t.Fatalf("run.resume rows = %+v, want one for the owner with reason presence", rows)
+			}
+		})
+	}
+
+	// A thaw that fails sends nothing, and says so as the old door did.
+	t.Run("a failed thaw", func(t *testing.T) {
+		f, rn, folder := rig(t, allowed)
+		rn.fail = -1
+		w := doSSO(t, f.srv, http.MethodPut, files(f, "in.txt"), owner, "x")
+		if w.Code != http.StatusBadGateway || reasonOf(t, w) != reasonDesktopTransferFailed || folder.execs != 0 {
+			t.Fatalf("%d %s, %d execs; want 502 %s and nothing sent", w.Code, w.Body.String(), folder.execs, reasonDesktopTransferFailed)
+		}
+	})
+}
+
+// A name with one of ( ) ! * ' next to a space or a non-ASCII letter reaches the handler with Go's
+// RawPath set, and chi then hands the segment back still percent-encoded. The upload, the download
+// and the review request must all see the decoded name, and a decoded slash stays refused.
+func TestDesktopFiles_PercentEncodedNamesAreDecodedOnce(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"report%20(1).pdf", "report (1).pdf"},
+		{"caf%C3%A9%20(2).txt", "café (2).txt"},
+		{"report%2520(1).pdf", "report%20(1).pdf"}, // a real name with a literal percent sequence: decoded once, not twice
+	} {
+		e := newReviewEnv(t, types.TransferReview)
+		if w := doSSO(t, e.srv, http.MethodPut, e.path(tc.raw), e.ses["owner"], fileSentinel); w.Code != http.StatusOK ||
+			!strings.Contains(w.Body.String(), `"name":"`+tc.want+`"`) || string(e.folder.files[tc.want]) != fileSentinel {
+			t.Fatalf("upload %s: %d %s (folder has %v)", tc.raw, w.Code, w.Body.String(), e.folder.files)
+		}
+		if w := doSSO(t, e.srv, http.MethodPost, e.path(tc.raw)+"/review", e.ses["owner"], ""); w.Code != http.StatusAccepted {
+			t.Fatalf("review %s: %d %s", tc.raw, w.Code, w.Body.String())
+		}
+		d := newDesktopFilesEnv(t, &types.DesktopControls{Download: types.TransferAllowed})
+		d.folder.files[tc.want] = []byte(fileSentinel)
+		if w := doSSO(t, d.srv, http.MethodGet, d.path(tc.raw), d.ses["owner"], ""); w.Code != http.StatusOK || w.Body.String() != fileSentinel {
+			t.Fatalf("download %s: %d %q", tc.raw, w.Code, w.Body.String())
+		}
+	}
+	e := newDesktopFilesEnv(t, nil)
+	if w := doSSO(t, e.srv, http.MethodPut, e.path("a%2Fb(1)"), e.ses["owner"], "x"); w.Code != http.StatusBadRequest || len(e.folder.files) != 1 {
+		t.Fatalf("an encoded slash: %d %s (folder has %v)", w.Code, w.Body.String(), e.folder.files)
 	}
 }

@@ -17,8 +17,23 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
+)
+
+const (
+	// DefaultOutputCap is the most one detached exec's output file keeps.
+	DefaultOutputCap = 64 << 20
+	// drainWait is how long a detached exec's output may keep draining after its process has exited
+	// and its process group is gone: a process that left the group (setsid) can still hold the pipe.
+	drainWait = 2 * time.Second
+	// CADir is where an Init carrying the run's CA writes it; the CA variables name these files.
+	CADir = "/tmp/wardyn"
+	// SystemRoots is the guest image's trust store, which the combined bundle starts from.
+	SystemRoots = "/etc/ssl/certs/ca-certificates.crt"
+	// runCAEnv is the Init env variable that carries the run's CA, as a PEM.
+	runCAEnv = "WARDYN_MITM_CA_PEM"
 )
 
 // Server is the guest agent's HTTP handler. The zero value is not usable; set every field.
@@ -29,8 +44,15 @@ type Server struct {
 	Cred *syscall.Credential
 	// Home is the exec user's home, its HOME and its working directory when it exists.
 	Home string
-	// OutDir holds detached execs' output files. In a guest it is a tmpfs.
+	// OutDir holds detached execs' output files. In a guest it is on the root disk, so a chatty
+	// harness cannot fill the tmpfs that holds the marker and the pause order.
 	OutDir string
+	// OutputCap is the most each detached exec's output file keeps; past it the file ends with a
+	// line that says so and the rest is dropped. Zero is DefaultOutputCap.
+	OutputCap int64
+	// CADir and SystemRoots are where an Init that carries the run's CA writes mitm-ca.pem and
+	// ca-bundle.pem (the system roots, then the CA). Empty CADir writes none (tests only).
+	CADir, SystemRoots string
 	// Mount mounts one virtiofs share; nil refuses an Init that names one.
 	Mount func(Mount) error
 	// MarkerDir holds the marker of this boot's Init and the order of its pauses (PauseFence). In a
@@ -64,6 +86,9 @@ type detached struct {
 	mu   sync.Mutex
 	done bool
 	code int
+	// exited is set once the process is gone and its group has been signalled for the last time: its
+	// group id may name someone else's from then on, so pause and resume leave it alone.
+	exited bool
 	// changed is closed and replaced whenever output is written or the process exits.
 	changed chan struct{}
 }
@@ -77,6 +102,12 @@ func (d *detached) state() ExecState {
 		s.ExitCode = &code
 	}
 	return s
+}
+
+func (d *detached) hasExited() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.exited
 }
 
 func (d *detached) notify() {
@@ -178,6 +209,10 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := s.writeRunCA(in.Env[runCAEnv]); err != nil {
+		http.Error(w, "the run's CA: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	for _, m := range in.Mounts {
 		if s.Mount == nil {
 			http.Error(w, "this agent cannot mount shares", http.StatusInternalServerError)
@@ -196,6 +231,30 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.inited = true
 	writeJSON(w, res)
+}
+
+// writeRunCA writes the run's CA (a PEM) as CADir/mitm-ca.pem and, after the system roots, as
+// CADir/ca-bundle.pem: the files the CA variables in the run's env name. Both are root's and 0644 in a
+// sticky world-writable directory, so every exec reads them and none replaces them. No CA, no files.
+func (s *Server) writeRunCA(pem string) error {
+	if pem == "" || s.CADir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(s.CADir, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(s.CADir, 0o777|os.ModeSticky); err != nil {
+		return err
+	}
+	ca := []byte(strings.TrimRight(pem, "\n") + "\n")
+	if err := s.writeFile(File{Path: filepath.Join(s.CADir, "mitm-ca.pem"), Mode: 0o644, Content: ca}); err != nil {
+		return err
+	}
+	roots := s.SystemRoots
+	if roots == "" {
+		roots = SystemRoots
+	}
+	return writeCAFull(roots, ca, filepath.Join(s.CADir, "ca-bundle.pem"))
 }
 
 // signalAgent sends sig to the latest detached exec's process group: the harness and every process
@@ -222,7 +281,7 @@ func (s *Server) signalLatest(gen int64, sig unix.Signal) (int, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d := s.execs[s.latest]
-	if d == nil || !d.state().Running {
+	if d == nil || !d.state().Running || d.hasExited() {
 		return http.StatusNotFound, "no agent is running"
 	}
 	next := s.fence
@@ -331,11 +390,21 @@ func (s *Server) writeFile(f File) error {
 	return err
 }
 
+// errRestarted is the refusal of an exec after the agent restarted: its Init marker is there, but its
+// memory of the run's env is not, and an exec would run without the proxy, the CA and the secrets.
+var errRestarted = errors.New("the guest agent restarted and lost the run's environment; end this run and start a new one")
+
 func (s *Server) command(er ExecRequest) (*exec.Cmd, error) {
 	if len(er.Argv) == 0 {
 		return nil, errors.New("an exec needs argv")
 	}
 	s.mu.Lock()
+	if !s.inited {
+		if _, err := os.Lstat(filepath.Join(s.MarkerDir, "wardyn-guest-init")); err == nil {
+			s.mu.Unlock()
+			return nil, errRestarted
+		}
+	}
 	env := append([]string{"HOME=" + s.Home, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}, s.env...)
 	s.mu.Unlock()
 	if er.TTY {
@@ -365,7 +434,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	cmd, err := s.command(er)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		code := http.StatusBadRequest
+		if errors.Is(err, errRestarted) {
+			code = http.StatusConflict
+		}
+		http.Error(w, err.Error(), code)
 		return
 	}
 	rc := http.NewResponseController(w)
@@ -374,7 +447,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	_ = rc.Flush()
 	out := &frameWriter{w: w, rc: rc}
 	if er.Detach {
-		id, err := s.startDetached(cmd)
+		id, err := s.startDetached(cmd, er)
 		if err != nil {
 			_ = out.frame(FrameError, []byte(err.Error()))
 			return
@@ -523,8 +596,10 @@ func exitCode(cmd *exec.Cmd, err error) (int, error) {
 	return cmd.ProcessState.ExitCode(), nil
 }
 
-// startDetached starts cmd with its output (stdout and stderr together) in a file of OutDir.
-func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
+// startDetached starts cmd with its output (stdout and stderr together) in a file of OutDir, on a
+// terminal when er asks for one. It is done when the process exits, not when everything that inherited
+// its output has let go: the process group is then killed, and the output drains for drainWait more.
+func (s *Server) startDetached(cmd *exec.Cmd, er ExecRequest) (string, error) {
 	s.mu.Lock()
 	s.counter++
 	id := strconv.Itoa(s.counter)
@@ -534,19 +609,30 @@ func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pr, pw, err := os.Pipe()
+	var src, child *os.File // the end the drain reads, and the end the process gets
+	if er.TTY {
+		src, child, err = openPTY(er.Cols, er.Rows)
+		if err == nil {
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = child, child, child
+			cmd.SysProcAttr.Setctty = true
+		}
+	} else {
+		src, child, err = os.Pipe()
+		if err == nil {
+			cmd.Stdout, cmd.Stderr = child, child
+		}
+	}
 	if err != nil {
 		f.Close()
 		return "", err
 	}
-	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {
 		f.Close()
-		pr.Close()
-		pw.Close()
+		src.Close()
+		child.Close()
 		return "", err
 	}
-	pw.Close()
+	child.Close()
 	d := &detached{id: id, pid: cmd.Process.Pid, path: path, changed: make(chan struct{})}
 	s.mu.Lock()
 	if s.execs == nil {
@@ -555,32 +641,89 @@ func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
 	s.execs[id] = d
 	s.latest = id
 	s.mu.Unlock()
+	drained := make(chan struct{})
 	go func() {
-		buf := make([]byte, 32<<10)
-		for {
-			n, rerr := pr.Read(buf)
-			if n > 0 {
-				if _, err := f.Write(buf[:n]); err != nil {
-					slog.Error("guest agent: detached output write", "id", id, "err", err)
-				}
-				d.notify()
-			}
-			if rerr != nil {
-				break
-			}
-		}
-		pr.Close()
-		f.Close()
-		code, err := exitCode(cmd, cmd.Wait())
+		defer close(drained)
+		s.drain(src, f, d)
+	}()
+	go func() {
+		code, err := reapAndKillGroup(cmd, d)
 		if err != nil {
 			code = -1
 		}
+		select {
+		case <-drained:
+		case <-time.After(drainWait):
+			src.Close() // a holder outside the group; keep what was read
+			select {
+			case <-drained:
+			case <-time.After(time.Second):
+			}
+		}
+		src.Close()
 		d.mu.Lock()
 		d.done, d.code = true, code
 		d.mu.Unlock()
 		d.notify()
 	}()
 	return id, nil
+}
+
+// reapAndKillGroup waits for cmd's process to exit, kills what is left of its process group while the
+// exited process still holds the group id (it is reaped only after), and returns its exit code.
+func reapAndKillGroup(cmd *exec.Cmd, d *detached) (int, error) {
+	pid := cmd.Process.Pid
+	var info unix.Siginfo
+	for {
+		err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if err != unix.EINTR {
+			break
+		}
+	}
+	_ = unix.Kill(-pid, unix.SIGKILL)
+	d.mu.Lock()
+	d.exited = true
+	d.mu.Unlock()
+	return exitCode(cmd, cmd.Wait())
+}
+
+// drain copies src to the exec's output file until src ends, keeping at most the output cap and ending
+// the file with a line that says so when it drops the rest. It reads on past the cap so the process
+// never blocks on a full pipe.
+func (s *Server) drain(src io.Reader, f *os.File, d *detached) {
+	defer f.Close()
+	limit := s.OutputCap
+	if limit <= 0 {
+		limit = DefaultOutputCap
+	}
+	var written int64
+	var truncated bool
+	buf := make([]byte, 32<<10)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 && !truncated {
+			chunk := buf[:n]
+			if written+int64(n) > limit {
+				chunk = chunk[:limit-written]
+				truncated = true
+			}
+			if _, err := f.Write(chunk); err != nil {
+				slog.Error("guest agent: detached output write", "id", d.id, "err", err)
+			}
+			written += int64(len(chunk))
+			if truncated {
+				unit := fmt.Sprintf("%d bytes", limit)
+				if limit%(1<<20) == 0 {
+					unit = fmt.Sprintf("%d MiB", limit>>20)
+				}
+				_, _ = fmt.Fprintf(f, "\n[output truncated at %s]\n", unit)
+			}
+			d.notify()
+		}
+		if rerr != nil {
+			return
+		}
+	}
 }
 
 // handleOutput streams a detached exec's output from offset until it has exited and all of it is sent.

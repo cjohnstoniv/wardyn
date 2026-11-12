@@ -258,6 +258,52 @@ describe("AttachTerminal reconnect", () => {
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
   });
 
+  // The daemon accepts the socket and sends the attach-mode frame before the guest has started the shell, so an
+  // open that carries no terminal byte is not an attach. A guest that errors at once closes it 1011 every time.
+  it("stops after the budget when each socket opens, gets the mode frame, then closes 1011 with no byte", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    for (let i = 0; i < 12; i++) {
+      const sock = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      act(() => sock.open());
+      act(() => sock.message(attachModeFrame(false, "me@example.com")));
+      act(() => sock.drop(1011, "exec failed"));
+      await act(() => vi.advanceTimersByTimeAsync(6000));
+    }
+    // 1 initial + MAX_RECONNECT_ATTEMPTS (4) reconnects, then the exhausted state.
+    expect(FakeWebSocket.instances).toHaveLength(5);
+    expect(screen.getByRole("button", { name: /reconnect/i })).toBeInTheDocument();
+  });
+
+  it("gives the budget back once a socket has carried a terminal byte", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    for (let i = 0; i < 3; i++) {
+      const sock = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      act(() => sock.open());
+      act(() => sock.drop(1011, "exec failed"));
+      await act(() => vi.advanceTimersByTimeAsync(6000));
+    }
+    const live = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    act(() => live.open());
+    act(() => live.message(new ArrayBuffer(4)));
+    act(() => live.drop(1006, "abnormal"));
+    expect(screen.getByText("Reconnecting — attempt 1 of 4.")).toBeInTheDocument();
+  });
+
+  it("gives the budget back once a socket has stayed open for 15 seconds without a byte", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    for (let i = 0; i < 3; i++) {
+      const sock = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      act(() => sock.open());
+      act(() => sock.drop(1011, "exec failed"));
+      await act(() => vi.advanceTimersByTimeAsync(6000));
+    }
+    const quiet = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    act(() => quiet.open());
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    act(() => quiet.drop(1006, "abnormal"));
+    expect(screen.getByText("Reconnecting — attempt 1 of 4.")).toBeInTheDocument();
+  });
+
   // ponytail: ptyCols pins the visual grid to the forced width (rows still
   // fit): the login CLI is a full-screen TUI that cursor-addresses whatever
   // grid it is told, so PTY and xterm must agree on width — a decoupled

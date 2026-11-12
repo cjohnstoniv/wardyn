@@ -46,6 +46,10 @@ const (
 	reasonAuditUnavailable    = "audit_spool_unavailable"
 	// The upstream answered HTTP/2 on a connection that negotiated HTTP/1.1.
 	reasonProtocolMismatch = "upstream_protocol_mismatch"
+	// The control plane refused the run's gateway identity for good: the portal
+	// that started the run was revoked with its in-flight runs cut. Answered
+	// 403 on every shape, since asking again can only fail the same way.
+	reasonGatewayAccessCut = "gateway_access_cut"
 )
 
 // egressHeaderWardynReason carries the fixed reason on the forward lane, where
@@ -129,7 +133,7 @@ func shapeOfVendor(vendor string) errShape {
 func (p *Proxy) gatewayVendorOf(host string) (vendor string, ok bool) {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	for v, u := range p.llmUpstreams {
-		if !sameHost(u.host, h) {
+		if !sameHostIP(u.host, h) {
 			continue
 		}
 		if ok && vendor != v {
@@ -140,10 +144,10 @@ func (p *Proxy) gatewayVendorOf(host string) (vendor string, ok bool) {
 	return vendor, ok
 }
 
-// sameHost compares two host names, as parsed addresses when both are IP
+// sameHostIP compares two host names, as parsed addresses when both are IP
 // literals so that every spelling of one address (zero-compressed, mixed-case,
 // IPv4-mapped, bracketed) is the same host.
-func sameHost(a, b string) bool {
+func sameHostIP(a, b string) bool {
 	if a == b {
 		return true
 	}
@@ -211,7 +215,7 @@ func classifyUpstreamErr(err error) string {
 // precedent) and any other fault 500, AWS's own InternalServerException.
 func reasonStatus(shape errShape, reason string) int {
 	switch {
-	case reason == reasonEgressDenied || reason == reasonTLSUntrusted:
+	case reason == reasonEgressDenied || reason == reasonTLSUntrusted || reason == reasonGatewayAccessCut:
 		return http.StatusForbidden
 	case shape != shapeAWS:
 		return http.StatusBadGateway
@@ -252,6 +256,8 @@ func faultHint(host, reason, ruleSource string, err error) string {
 		return "its certificate is not from a trusted CA: the runner or daemon needs WARDYN_TRUSTED_CA_FILE"
 	case reasonUpstreamUnreachable:
 		return "the sandbox's proxy could not connect to it"
+	case reasonGatewayAccessCut:
+		return gatewayCutSentence
 	case reasonCredentialUnavailable:
 		// On the portal the credential is the owner's SSO session the proxy injects: a
 		// sign-in inside the sandbox is not the fix, so the hint must not read like one.
@@ -364,6 +370,9 @@ func (p *Proxy) writeBrokeredFault(w http.ResponseWriter, shape errShape, host s
 	reason, cause := f.reason, p.dialFailureCause(err)
 	if reason == "" {
 		reason, cause = classifyUpstreamErr(err), p.causeSentence(err)
+	}
+	if reason == reasonGatewayAccessCut {
+		cause = "" // the hint is the whole sentence
 	}
 	status := reasonStatus(shape, reason)
 	slog.Warn("proxy error returned to the sandbox", "reason", reason, "status", status, "err", cause)

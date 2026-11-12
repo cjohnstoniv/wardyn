@@ -28,7 +28,8 @@ export function MacOSOfferProvider({ load = loadPools, children }: { load?: Load
     if (pools.status !== "ready") return undefined;
     const id = selectedPoolId(intent, pools.list);
     // The profile that says which bases the caller may pick is the allowance's, on the same list.
-    return macOSOfferOf(usablePools(pools.list).find((p) => p.id === id)?.macos_vm, pools.list.allowance?.unit_name);
+    const pool = usablePools(pools.list).find((p) => p.id === id);
+    return macOSOfferOf(pool?.macos_vm, pools.list.allowance?.unit_name, pool?.scope);
   }, [pools, intent]);
   return <MacOSOfferContext.Provider value={offer}>{children}</MacOSOfferContext.Provider>;
 }

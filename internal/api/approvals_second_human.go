@@ -32,8 +32,9 @@ const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 func EgressSecondHumanEnabled() bool { return envEnabled(envEgressSecondHuman) }
 
 // envCapabilitySecondHuman is envEgressSecondHuman's twin for Azure DevOps
-// capability escalations (a tool_call approval known by adoEscalationScope): the
-// human who DECIDES one must not be the human who created the run. Without it,
+// capability escalations (a tool_call approval known by adoEscalationScope) and
+// for one MCP call (isMCPCallRow): the human who DECIDES one must not be the
+// human who created the run. Without it,
 // ownership is the whole member rule, so a run's creator can approve their own
 // escalation, admin-class capabilities included. DEFAULT OFF, for the same
 // single-operator-deadlock reason as the egress switch.
@@ -51,13 +52,35 @@ func CapabilitySecondHumanEnabled() bool { return envEnabled(envCapabilitySecond
 // Each branch names its const directly because envEnabled reads must be
 // listed in envToggles (TestEnvTogglesListEveryEnvEnabledRead).
 func secondHumanGate(ap types.ApprovalRequest) (name string, on bool) {
+	if ap.Kind == types.ApprovalFileDownload { // always on: nobody approves a download of their own (desktop_review.go)
+		return fileDownloadSecondHumanSwitch, true
+	}
 	if ap.Kind == types.ApprovalEgressDomain {
 		return envEgressSecondHuman, envEnabled(envEgressSecondHuman)
 	}
-	if _, isADO := adoEscalationScope(ap); isADO {
+	// A host rule hold is both an egress decision and one exact call: either switch makes it four-eyes,
+	// and the capability switch names it when both are on.
+	if isHostCallRow(ap) {
+		if envEnabled(envCapabilitySecondHuman) {
+			return envCapabilitySecondHuman, true
+		}
+		return envEgressSecondHuman, envEnabled(envEgressSecondHuman)
+	}
+	if _, isADO := adoEscalationScope(ap); isADO || isExactCallRow(ap) { // one MCP call or kubectl write: the same owner rule
 		return envCapabilitySecondHuman, envEnabled(envCapabilitySecondHuman)
 	}
 	return "", false
+}
+
+// secondHumanGateUnder is secondHumanGate with the unit deciders rule that governs ap: the gate is on when the
+// switch is or when the rule states second_human, never weaker. A switch that is on keeps its own name; a rule
+// alone reads as deciderSwitchName.
+func secondHumanGateUnder(ap types.ApprovalRequest, dv deciderVerdict) (name string, on bool) {
+	name, on = secondHumanGate(ap)
+	if !on && dv.secondHuman() {
+		return deciderSwitchName(dv.unit), true
+	}
+	return name, on
 }
 
 // decideErrorClass names WHY a decision failed for the break-glass audit row,
@@ -168,7 +191,15 @@ func bypassRunID(ap types.ApprovalRequest, haveAP bool) *uuid.UUID {
 // worth keeping, since it is what holds this line correct if an empty principal
 // ever becomes reachable.
 func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) (string, bool) {
-	if !envEnabled(envEgressSecondHuman) && !envEnabled(envCapabilitySecondHuman) {
+	return s.requireSecondHumanUnder(w, r, id, ap, run, haveAP, haveRun, deciderVerdict{})
+}
+
+// requireSecondHumanUnder is requireSecondHuman under the unit deciders rule dv (deciders_resolve.go): its
+// second_human turns the gate on for its kind, credential and push_content included, and every arm above holds
+// unchanged: an approval rule is refused, the admin token is the audited break-glass, local mode answers 503,
+// and a run that cannot be read fails closed.
+func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool, dv deciderVerdict) (string, bool) {
+	if !envEnabled(envEgressSecondHuman) && !envEnabled(envCapabilitySecondHuman) && !dv.secondHuman() && !(haveAP && ap.Kind == types.ApprovalFileDownload) {
 		return "", true
 	}
 	actorType, principal := actorFromRequest(r)
@@ -190,9 +221,9 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 			return "", false
 		}
 	}
-	sw, on := secondHumanGate(ap)
+	sw, on := secondHumanGateUnder(ap, dv)
 	if !on {
-		return "", true // no switch governs this kind, or its switch is off
+		return "", true // no switch or rule governs this kind, or its switch is off
 	}
 	// An approval rule authored no run, so the creator compare below would pass it: it is never a second human.
 	if _, isPolicy := policyDeciderFrom(r.Context()); isPolicy {
@@ -249,14 +280,37 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 			sw+" is set, but the service identity that created this run could not be read to verify a second human decided it")
 		return "", false
 	}
-	if !authored {
+	if !authored && !askedForDownload(ap, principal) {
 		return "", true
 	}
-	if sw == envCapabilitySecondHuman {
-		sc, _ := adoEscalationScope(ap)
+	if ap.Kind == types.ApprovalFileDownload {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you asked for this download or it is your run's, so someone else approves or denies it").
+			OnRun(ap.RunID))
+		return "", false
+	}
+	if isKubeCallRow(ap) {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you created this run, so someone else approves or denies this kubectl change").
+			OnRun(ap.RunID))
+		return "", false
+	}
+	if isMCPCallRow(ap) {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you created this run, so someone else approves or denies this MCP call").
+			OnRun(ap.RunID)) // the approval id is the target; no tool detail, which the 403 body would read as a harness
+		return "", false
+	}
+	if sc, isADO := adoEscalationScope(ap); isADO {
 		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
 			" is set: a second human must decide this — you created this run, so someone else approves or denies its Azure DevOps access").
 			OnRun(ap.RunID).With("capability", sc.Capability))
+		return "", false
+	}
+	if ap.Kind != types.ApprovalEgressDomain { // a credential or a push held under a rule's second_human
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — it is your run's request, so someone else approves or denies it").
+			OnRun(ap.RunID))
 		return "", false
 	}
 	s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+

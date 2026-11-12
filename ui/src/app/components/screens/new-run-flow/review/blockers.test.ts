@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { KEEP_NEW_RUN } from "../../../wardyn/copy/keep-machine";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
@@ -21,6 +22,17 @@ const EVERYTHING: BlockerInput = {
   setupItems: [ITEM],
   stale: true,
 };
+
+describe("Review blockers: a failed read of the kept machines", () => {
+  it("holds Launch with the plain sentence, pointing at the Run step, and marks the Where group", () => {
+    const [b] = buildBlockers({ ...NOTHING, keptReadFailed: true });
+    expect(b).toMatchObject({ id: "kept:read", text: KEEP_NEW_RUN.READ_FAILED, to: { screen: "step", step: "run" }, field: "machine" });
+    expect([...groupsBlockedBy([b])]).toEqual(["where"]);
+  });
+  it("says nothing when the read did not fail", () => {
+    expect(buildBlockers(NOTHING)).toEqual([]);
+  });
+});
 
 describe("Review blockers", () => {
   it("lists local issues, unsupported fields, template setup, the refusal, then missing setup, in that order", () => {
@@ -68,6 +80,13 @@ describe("Review blockers", () => {
     expect(buildBlockers({ ...NOTHING, keepLimit, refusal: { text: "x", reason: "runner_offline" } }).map((x) => x.kind)).toEqual(["local", "refusal"]);
   });
 
+  it("never makes a refusal naming desktop_window a blocker (the choice is cleared instead), and keeps one that only shares its reason", () => {
+    const profile = "Your organisation's governance profile doesn't allow an interactive desktop on this run.";
+    expect(buildBlockers({ ...NOTHING, refusal: { text: profile, reason: "governance_unit", field: "desktop_window" } })).toEqual([]);
+    expect(buildBlockers({ ...NOTHING, refusal: { text: "x", reason: "mac_window_unrecorded", field: "desktop_window" } })).toEqual([]);
+    expect(buildBlockers({ ...NOTHING, refusal: { text: profile, reason: "governance_unit" } }).map((x) => x.kind)).toEqual(["refusal"]);
+  });
+
   it("says a missing pool in the canon's words (FR-0099)", () => {
     expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }] })[0].text).toBe(NR_RUN.POOL_HELP);
   });
@@ -89,6 +108,44 @@ describe("Review blockers", () => {
     }
   });
 
+  it("a byoi_user refusal is a blocker in the server's sentence, with and without the Approvals clause", () => {
+    const tail = "or launch with the agent's convention image or an onboarded workspace's base image";
+    const plain = `image ghcr.io/acme/tool:1 is not granted to you — ask an admin for an image grant that covers it, ${tail}`;
+    const offered = `image ghcr.io/acme/tool:1 is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, ${tail}`;
+    for (const text of [plain, offered]) {
+      const out = buildBlockers({ ...NOTHING, refusal: { text, reason: "byoi_user" } });
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ kind: "refusal", text });
+    }
+  });
+
+  it("holds Launch for a wall preset that is gone, never swapping it for Open, and links it to the Tools step", () => {
+    const [b] = buildBlockers({ ...NOTHING, wallPreset: { name: "Docs triage", unavailable: true } });
+    expect(b).toMatchObject({ id: "wall_preset_unknown", kind: "refusal", text: "Docs triage is no longer available. Choose another wall preset to continue.", to: { screen: "step", step: "tools" }, field: "wall_preset" });
+    expect(b.hint).toBeUndefined();
+  });
+
+  it("turns the server's wall_preset_unknown refusal into the one blocker, with the server's sentence under it", () => {
+    const sentence = 'wall preset "Docs triage" does not exist or is not open to you';
+    const out = buildBlockers({ ...NOTHING, refusal: { text: sentence, reason: "wall_preset_unknown" }, wallPreset: { name: "Docs triage", unavailable: true } });
+    expect(out.map((b) => b.id)).toEqual(["wall_preset_unknown"]);
+    expect(out[0].hint).toBe(sentence);
+    // A refusal alone, before the list says so, still blocks, with no name invented.
+    expect(buildBlockers({ ...NOTHING, refusal: { text: sentence, reason: "wall_preset_unknown" } })[0].text).toContain("The chosen wall preset is no longer available");
+  });
+
+  it("links the no_network_needs_egress create refusal to the Tools step, by its reason or by the wall_preset field it names", () => {
+    const sentence = "This run needs a host that No network refuses: the model provider. Choose another wall preset, or remove what needs it.";
+    for (const refusal of [{ text: sentence, reason: "no_network_needs_egress" }, { text: sentence, reason: "something_new", field: "wall_preset" }]) {
+      const [b] = buildBlockers({ ...NOTHING, refusal });
+      expect(b).toMatchObject({ id: "refusal", kind: "refusal", text: sentence, to: { screen: "step", step: "tools" } });
+    }
+  });
+
+  it("does not block for a wall preset that is available", () => {
+    expect(buildBlockers({ ...NOTHING, wallPreset: { name: "Sealed", unavailable: false } })).toEqual([]);
+  });
+
   it("links a refusal to nowhere when its reason is not known", () => {
     const out = buildBlockers({ ...NOTHING, issues: [{ home: "shape", code: "shape_required", focus: "nr-workload" }], refusal: { text: "Refused.", reason: "something_new" } });
     expect(out[1].to).toBeUndefined();
@@ -108,6 +165,7 @@ describe("Review blockers", () => {
 
   it("adds the stale line only when nothing else holds Launch", () => {
     expect(buildBlockers({ ...NOTHING, stale: true })).toEqual([{ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE }]);
+    expect(buildBlockers({ ...NOTHING, stale: true, expired: true })).toEqual([{ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_EXPIRED }]);
     expect(buildBlockers({ ...EVERYTHING }).some((b) => b.kind === "stale")).toBe(false);
     expect(buildBlockers(NOTHING)).toEqual([]);
   });

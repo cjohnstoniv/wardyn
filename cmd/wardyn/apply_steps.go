@@ -13,18 +13,20 @@ import (
 // printApplySteps writes what a partial apply made: a count per outcome, then
 // one line per step, so an operator sees which writes landed before a failure.
 func printApplySteps(w io.Writer, steps []sdk.ApplyStep) {
-	var applied, pending, failed int
+	var applied, pending, deferred, failed int
 	for _, s := range steps {
 		switch s.Outcome {
 		case "applied":
 			applied++
 		case "pending":
 			pending++
+		case "deferred":
+			deferred++
 		case "failed":
 			failed++
 		}
 	}
-	fmt.Fprintf(w, "applied: %d, pending: %d, failed: %d\n", applied, pending, failed)
+	fmt.Fprintf(w, "applied: %d, pending: %d, deferred: %d, failed: %d\n", applied, pending, deferred, failed)
 	for _, s := range steps {
 		target := s.Name
 		if target == "" {

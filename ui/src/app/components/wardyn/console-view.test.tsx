@@ -48,6 +48,17 @@ describe("viewVerdict — the §2.3 table", () => {
     expect(viewVerdict("/admin/audit", "user-only")).toEqual({ kind: "refuse" });
     expect(viewVerdict("/admin", "user-only")).toEqual({ kind: "refuse" });
   });
+  it("a user with a unit-admin grant passes on exactly Governance and Audit", () => {
+    expect(viewVerdict("/admin/governance", "user-only", true)).toEqual({ kind: "pass" });
+    expect(viewVerdict("/admin/governance/", "user-only", true)).toEqual({ kind: "pass" });
+    expect(viewVerdict("/admin/audit", "user-only", true)).toEqual({ kind: "pass" });
+    expect(viewVerdict("/admin/governance", "user-only", false)).toEqual({ kind: "refuse" });
+    expect(viewVerdict("/admin/audit", "user-only", false)).toEqual({ kind: "refuse" });
+    expect(viewVerdict("/admin/runs", "user-only", true)).toEqual({ kind: "refuse" });
+    expect(viewVerdict("/admin/audit/x", "user-only", true)).toEqual({ kind: "refuse" });
+    expect(viewVerdict("/admin/governance", "session-user", true)).toEqual({ kind: "to-admin" });
+    expect(viewVerdict("/admin/governance", "session-admin", false)).toEqual({ kind: "pass" });
+  });
   it("an admin in the User view is asked, never redirected, into the Admin view", () => {
     expect(viewVerdict("/admin/audit", "session-user")).toEqual({ kind: "to-admin" });
     expect(viewVerdict("/runs", "session-user")).toEqual({ kind: "pass" });

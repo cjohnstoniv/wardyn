@@ -46,6 +46,7 @@ import { PushRulesSection } from "./policy-push-rules";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
 import { RAIL_CHECK } from "./copy";
 import { GitPATSection } from "./policy-git-pat";
+import { DataOutSection } from "./policy-data-out";
 import { RecordingSection } from "./policy-recording";
 import { DefaultPolicyPreview, type DefaultPolicyView } from "./policy-default-preview";
 import { egressSummary, lifecycleSummary } from "./policy-document/policy-facts";
@@ -262,6 +263,8 @@ export interface PolicyPanelProps {
   /** The Azure DevOps row's capability_ceiling (/setup/status scm_access);
    *  capabilities off it render locked. Undefined = unknown, nothing locked. */
   adoCeiling?: readonly string[];
+  /** The panel edits a profile's ceiling: the Recording section says what a level does to a macOS VM run. */
+  ceiling?: boolean;
   /** Each of the person's Azure DevOps organisations' ceilings, when there are several (#2146): a capability only
    *  some allow stays open and is hinted with the ones that refuse it. */
   adoOrgCeilings?: readonly OrgCeiling[];
@@ -299,6 +302,7 @@ export function PolicyPanel({
   preflightDisabled,
   interactive,
   adoCeiling,
+  ceiling,
   adoOrgCeilings,
   modelProviders,
   serverError,
@@ -420,7 +424,8 @@ export function PolicyPanel({
               {/* git_pat narrowing (repos, access, api, forge): one block per
                   stored-token grant, with the honesty lines packet M7 fixes. */}
               {parsed.ok && <GitPATSection spec={parsed.spec} serverError={serverError} onSpecChange={onSpecChange} />}
-              {parsed.ok && <RecordingSection spec={parsed.spec} onSpecChange={onSpecChange} />}
+              {parsed.ok && <RecordingSection spec={parsed.spec} onSpecChange={onSpecChange} ceiling={ceiling} />}
+              {parsed.ok && <DataOutSection spec={parsed.spec} onSpecChange={onSpecChange} ceiling={ceiling} />}
 
               {/* The safety meter grades the DOCUMENT as typed (debounced, advisory),
                   distinct from the run instance's Preflight of the RESOLVED run — so
@@ -435,7 +440,6 @@ export function PolicyPanel({
               <div className="rounded-lg border border-border">
                 <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                   <SectionLabel>Fields</SectionLabel>
-                  <span className="ml-auto text-meta text-muted-foreground">Full reference: docs/POLICIES.md</span>
                 </div>
                 <ul className="scroll-thin max-h-72 divide-y divide-border overflow-y-auto">
                   {fields.map((key) => {

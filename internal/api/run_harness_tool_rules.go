@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -113,9 +114,10 @@ func policyToolEffect(policy []types.ToolRule, laneDefault types.ToolEffect, too
 	return laneDefault
 }
 
-// stricterToolEffect is the stricter of two effects ("" is no opinion).
+// stricterToolEffect is the stricter of two effects ("" is no opinion), by the one order every
+// layer ranks by (types.ToolEffectStrictness).
 func stricterToolEffect(a, b types.ToolEffect) types.ToolEffect {
-	if effectRank(b) > effectRank(a) {
+	if types.ToolEffectStrictness(b) > types.ToolEffectStrictness(a) {
 		return b
 	}
 	return a
@@ -144,7 +146,7 @@ func (s *Server) applyToolPosture(req *createRunRequest, spec *types.RunPolicySp
 		return
 	}
 	if !slices.ContainsFunc(req.Tools, hasPersonalToolRules) && !slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool {
-		return r.Effect == types.ToolHold || r.Effect == types.ToolDeny
+		return r.Effect == types.ToolHold || r.Effect == types.ToolApproveEach || r.Effect == types.ToolDeny
 	}) {
 		return
 	}
@@ -221,6 +223,9 @@ func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, com
 // own rules and default for that harness count with the policy's. An allow is
 // what happens anyway, so it stands.
 func localMCPRulesRefusal(req createRunRequest, spec types.RunPolicySpec, comps runComponents) *runRefusal {
+	if refused := approveEachLocalMCPRefusal(req, spec, comps); refused != nil {
+		return refused
+	}
 	keys := mcpServerKeys(comps.attached)
 	for i, a := range comps.attached {
 		if !a.snapshot.Definition.LocalMCP() {
@@ -330,7 +335,7 @@ var exactToolNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 // whether one is within the policy is the fold's question
 // (toolRulesWithinPolicyRefusal), and within it the allow is already there.
 func narrowToolRule(rules []types.ToolRule, nr types.ToolRule) (out []types.ToolRule, replaced types.ToolEffect, applied bool) {
-	if nr.Effect == types.ToolAllow || effectRank(nr.Effect) <= effectRank(effectiveToolEffect(rules, nr.Tool)) {
+	if nr.Effect == types.ToolAllow || types.ToolEffectStrictness(nr.Effect) <= types.ToolEffectStrictness(effectiveToolEffect(rules, nr.Tool)) {
 		return rules, "", false
 	}
 	out = slices.Clone(rules)
@@ -341,10 +346,61 @@ func narrowToolRule(rules []types.ToolRule, nr types.ToolRule) (out []types.Tool
 	return append(out, nr), "", true
 }
 
-// effectRank orders no opinion < allow < hold < deny.
-func effectRank(e types.ToolEffect) int {
-	return map[types.ToolEffect]int{"": 0, types.ToolAllow: 1, types.ToolHold: 2, types.ToolDeny: 3}[e]
+// narrowToolRules adds one walls document's rules to base, the run's rules before the document, so the
+// result does not depend on the order the document lists them. For every tool the composed effect is
+// the stricter of what base says and what the document says, and within the document a rule for the
+// named tool beats "*". An allow in the document never narrows and is not read. base is returned as it
+// was when nothing changes.
+func narrowToolRules(base, doc []types.ToolRule) []types.ToolRule {
+	var star types.ToolEffect
+	exact := map[string]types.ToolEffect{}
+	for _, r := range doc {
+		switch {
+		case r.Effect != types.ToolHold && r.Effect != types.ToolApproveEach && r.Effect != types.ToolDeny:
+		case r.Tool == "*":
+			star = stricterEffect(star, r.Effect)
+		default:
+			exact[r.Tool] = stricterEffect(exact[r.Tool], r.Effect)
+		}
+	}
+	out := slices.Clone(base)
+	if star != "" && types.ToolEffectStrictness(star) > types.ToolEffectStrictness(effectiveToolEffect(base, "*")) {
+		if i := slices.IndexFunc(out, func(r types.ToolRule) bool { return r.Tool == "*" }); i >= 0 {
+			out[i].Effect = star
+		} else {
+			out = append(out, types.ToolRule{Tool: "*", Effect: star})
+		}
+	}
+	// A tool the run already names exactly takes the stricter of its rule and the document's for it.
+	for i, r := range out {
+		if r.Tool == "*" {
+			continue
+		}
+		named := star
+		if e, ok := exact[r.Tool]; ok {
+			named = e
+		}
+		out[i].Effect = stricterEffect(r.Effect, named)
+	}
+	// A tool the document names that the run has no exact rule for is pinned where the composed effect
+	// would not already be the stricter of the two.
+	for _, tool := range slices.Sorted(maps.Keys(exact)) {
+		if slices.ContainsFunc(out, func(r types.ToolRule) bool { return r.Tool == tool }) {
+			continue
+		}
+		want := stricterEffect(effectiveToolEffect(base, tool), exact[tool])
+		if effectiveToolEffect(out, tool) != want {
+			out = append(out, types.ToolRule{Tool: tool, Effect: want})
+		}
+	}
+	if slices.Equal(out, base) {
+		return base
+	}
+	return out
 }
+
+// stricterEffect is the higher of a and b by types.ToolEffectStrictness.
+func stricterEffect(a, b types.ToolEffect) types.ToolEffect { return stricterToolEffect(a, b) }
 
 // effectiveToolEffect is what a rule list says about a tool: its exact rule,
 // else the "*" default, else nothing. The lookup order of proxy.Policy.ToolEffectFor
@@ -403,5 +459,7 @@ func sidecarPolicy(policy types.RunPolicySpec, p dispatchParams) types.RunPolicy
 	}
 	// The proxy enforces nothing about recording, and a previous release's proxy refuses the key.
 	policy.Recording = ""
+	// data_out is kept by the control plane's doors, never the proxy, and a previous release's proxy refuses the key.
+	policy.DataOut = ""
 	return policy
 }

@@ -34,6 +34,10 @@ import (
 // shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
 const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
 
+// VMNoDriveShare refuses a Linux VM run that carries a drive on a runner whose caps do not say it can
+// share one into the guest.
+const VMNoDriveShare = "This runner's version can't attach drives to a Linux VM. Update the runner, or run without drives."
+
 // MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM; runner is how the
 // sentence names it.
 func MacOSVMNotOffered(runner string) string {
@@ -112,16 +116,20 @@ func New(runnerID string, t Transport, opts Options) *Substrate {
 }
 
 var (
-	_ substrate.Substrate    = (*Substrate)(nil)
-	_ runner.SandboxEnder    = (*Substrate)(nil)
-	_ runner.ProxyStopper    = (*Substrate)(nil)
-	_ runner.ProxyReviver    = (*Substrate)(nil)
-	_ runner.SandboxStarter  = (*Substrate)(nil)
-	_ runner.Selftester      = (*Substrate)(nil)
-	_ runner.LocalAttacher   = (*Substrate)(nil)
-	_ runner.SubstrateProber = (*Substrate)(nil)
-	_ runner.DriveProber     = (*Substrate)(nil)
-	_ runner.OutputRecoverer = (*Substrate)(nil)
+	_ substrate.Substrate           = (*Substrate)(nil)
+	_ runner.SandboxEnder           = (*Substrate)(nil)
+	_ runner.ProxyStopper           = (*Substrate)(nil)
+	_ runner.ProxyReviver           = (*Substrate)(nil)
+	_ runner.ProxyReviverHashed     = (*Substrate)(nil)
+	_ runner.ProxyReviverAt         = (*Substrate)(nil)
+	_ runner.ProxyFencer            = (*Substrate)(nil)
+	_ runner.ProxyGenerationStopper = (*Substrate)(nil)
+	_ runner.SandboxStarter         = (*Substrate)(nil)
+	_ runner.Selftester             = (*Substrate)(nil)
+	_ runner.LocalAttacher          = (*Substrate)(nil)
+	_ runner.SubstrateProber        = (*Substrate)(nil)
+	_ runner.DriveProber            = (*Substrate)(nil)
+	_ runner.OutputRecoverer        = (*Substrate)(nil)
 )
 
 // Name is "runner:<id>".
@@ -196,10 +204,16 @@ func (s *Substrate) own(ref string) error {
 }
 
 func (s *Substrate) refCall(ctx context.Context, method, ref string, result any) error {
+	return s.refCallAt(ctx, method, ref, 0, result)
+}
+
+// refCallAt is refCall naming the policy generation the call acts for (0 names none, and the wire omits it).
+// Callers send a generation only to a runner whose caps carry ProxyFence (fenceAware).
+func (s *Substrate) refCallAt(ctx context.Context, method, ref string, gen int, result any) error {
 	if err := s.own(ref); err != nil {
 		return err
 	}
-	return s.call(ctx, method, runnerwire.RefArgs{Ref: ref}, result)
+	return s.call(ctx, method, runnerwire.RefArgs{Ref: ref, PolicyGeneration: gen}, result)
 }
 
 // checkVMCaps refuses a VM spec for a runner whose last caps do not offer that kind. A VM is asked of
@@ -222,6 +236,9 @@ func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
 	// Nor a VM that carries a folder of a runner that cannot share one into the guest.
 	if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
 		return runnerwire.Refuse(VMNoFolderShare)
+	}
+	if len(spec.Drives) > 0 && !c.LinuxVM.Drives {
+		return runnerwire.Refuse(VMNoDriveShare)
 	}
 	return nil
 }
@@ -439,8 +456,14 @@ func (s *Substrate) AgentStatus(ctx context.Context, ref, agentExecID string) (r
 // teardown calls a verb that keeps working while the runner is away: offline,
 // it is queued as a pending action and answers runner.ErrPendingOnRunner.
 func (s *Substrate) teardown(ctx context.Context, method string, kind types.RunnerActionKind, ref string) error {
+	return s.teardownAt(ctx, method, kind, ref, 0)
+}
+
+// teardownAt is teardown naming the policy generation the call acts for. A call queued for an offline runner
+// carries none: the runner replays it as the plain verb.
+func (s *Substrate) teardownAt(ctx context.Context, method string, kind types.RunnerActionKind, ref string, gen int) error {
 	var res runnerwire.TeardownResult
-	err := s.refCall(ctx, method, ref, &res)
+	err := s.refCallAt(ctx, method, ref, gen, &res)
 	// A kill or an end is the last this substrate does for the sandbox, so its machine kind goes when the
 	// runner answered it (even with a failure, and a local deadline counts as one), and when it was queued
 	// for the runner to replay on its own side, which never comes back through here. The kind stays only for
@@ -482,16 +505,72 @@ func (s *Substrate) macOSVMDisks(ctx context.Context, reports []runner.MacOSVMDi
 	}
 }
 
+// StopSandbox queued for an offline runner is an end, which keeps the stopped sandbox, or a kill on a
+// runner that said it cannot keep one: such a runner refuses an end, and on it a stop deletes anyway.
 func (s *Substrate) StopSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodStop, types.RunnerActionEnd, ref)
+	kind := types.RunnerActionEnd
+	if s.endsUnkept() {
+		kind = types.RunnerActionKill
+	}
+	return s.teardown(ctx, runnerwire.MethodStop, kind, ref)
 }
 
 func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 	return s.teardown(ctx, runnerwire.MethodKill, types.RunnerActionKill, ref)
 }
 
+// EndSandbox answers runner.ErrEndUnsupported for a runner that said it cannot keep an ended sandbox,
+// online or not, so no end is queued that the runner can only refuse.
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+	return s.endAt(ctx, ref, 0)
+}
+
+func (s *Substrate) endAt(ctx context.Context, ref string, gen int) error {
+	if s.endsUnkept() {
+		if err := s.own(ref); err != nil {
+			return err
+		}
+		return runner.ErrEndUnsupported
+	}
+	return s.teardownAt(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref, gen)
+}
+
+// fenceAware is whether the runner's last caps carry ProxyFence: it serves fence_proxy and reads the policy
+// generation on stop_proxy, end and replace_proxy. A runner without it is sent the plain verbs.
+func (s *Substrate) fenceAware() bool {
+	c, ok := s.Caps()
+	return ok && c.ProxyFence
+}
+
+// FenceProxy cuts the run's agent off every network it is attached to (runner.ProxyFencer). It is an
+// observation of the runner's state, not an action to replay, so an offline runner answers
+// runner.ErrRunnerOffline and nothing is queued.
+func (s *Substrate) FenceProxy(ctx context.Context, ref string) error {
+	return s.refCall(ctx, runnerwire.MethodFenceProxy, ref, nil)
+}
+
+// StopProxyAt is StopProxy acting for policy generation gen (runner.ProxyGenerationStopper). The generation
+// goes only to a runner that advertised ProxyFence; any other gets the plain StopProxy, queue included.
+func (s *Substrate) StopProxyAt(ctx context.Context, ref string, gen int) error {
+	if gen == 0 || !s.fenceAware() {
+		return s.StopProxy(ctx, ref)
+	}
+	return s.teardownAt(ctx, runnerwire.MethodStopProxy, types.RunnerActionStopProxy, ref, gen)
+}
+
+// EndSandboxAt is EndSandbox acting for policy generation gen, sent as StopProxyAt sends it.
+func (s *Substrate) EndSandboxAt(ctx context.Context, ref string, gen int) error {
+	if gen == 0 || !s.fenceAware() {
+		return s.EndSandbox(ctx, ref)
+	}
+	return s.endAt(ctx, ref, gen)
+}
+
+// endsUnkept is whether the runner's last caps, kept across a link drop, said its substrate cannot keep
+// an ended sandbox. Before any caps it is false, as for a runner older than 0.9.4.
+func (s *Substrate) endsUnkept() bool {
+	c, ok := s.Caps()
+	return ok && c.EndsUnkept
 }
 
 // vmKind is the machine kind ref was created with here, "" when this substrate did not create it.
@@ -523,10 +602,51 @@ func (s *Substrate) CanReplaceProxy(ctx context.Context, ref string) error {
 // ReplaceProxy hands the org's stored, already-stripped proxy config to the
 // runner, which re-applies its resident values from its keystore.
 func (s *Substrate) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
-	if err := s.own(ref); err != nil {
-		return err
+	_, err := s.ReplaceProxyHashed(ctx, ref, cfgJSON)
+	return err
+}
+
+// ReplaceProxyHashed is ReplaceProxy, answering the runner's hash of the bytes its new proxy was
+// handed (runner.ProxyReviverHashed); empty from a runner that predates it.
+func (s *Substrate) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
+	return s.replaceProxyAt(ctx, ref, cfgJSON, 0)
+}
+
+// ReplaceProxyHashedAt is ReplaceProxyHashed acting for policy generation gen (runner.ProxyReviverAt),
+// sent only to a runner that advertised ProxyFence.
+func (s *Substrate) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
+	if gen == 0 || !s.fenceAware() {
+		return s.ReplaceProxyHashed(ctx, ref, cfgJSON)
 	}
-	return s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, nil)
+	return s.replaceProxyAt(ctx, ref, cfgJSON, gen)
+}
+
+func (s *Substrate) replaceProxyAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
+	if err := s.own(ref); err != nil {
+		return "", err
+	}
+	if err := s.checkRevivedModelList(cfgJSON); err != nil {
+		return "", err
+	}
+	var res runnerwire.ReplaceProxyResult
+	err := s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON, PolicyGeneration: gen}, &res)
+	return res.ConfigSHA256, err
+}
+
+// checkRevivedModelList refuses, before anything is sent, a revived config that limits the run's
+// models on a runner that did not advertise the list: an older runner would start the replacement
+// proxy without it, admitting every model.
+func (s *Substrate) checkRevivedModelList(cfgJSON []byte) error {
+	var head struct {
+		AllowedModels *[]string `json:"allowed_models"`
+	}
+	if err := json.Unmarshal(cfgJSON, &head); err != nil {
+		return fmt.Errorf("remote: read the revived proxy config: %w", err)
+	}
+	if c, _ := s.Caps(); head.AllowedModels != nil && !slices.Contains(c.ProxySettings, runnerwire.ProxySettingAllowedModels) {
+		return &ProxySettingError{Setting: runnerwire.ProxySettingAllowedModels}
+	}
+	return nil
 }
 
 func (s *Substrate) EnsureProxyImage(ctx context.Context) error {
@@ -562,6 +682,17 @@ func (s *Substrate) ReclaimMacDisk(ctx context.Context, mount types.DriveMount) 
 		return "", runner.ErrDriveInUse
 	}
 	return res.Outcome, nil
+}
+
+// KeptMachine asks this runner's Mac to act on a kept machine's folder (kept_machine). A runner whose
+// caps do not say it keeps machines is never asked.
+func (s *Substrate) KeptMachine(ctx context.Context, args runnerwire.KeptMachineArgs) (runnerwire.KeptMachineResult, error) {
+	var res runnerwire.KeptMachineResult
+	if c, ok := s.Caps(); !ok || c.MacOSVM == nil || !c.MacOSVM.KeptMachines {
+		return res, runnerwire.Refuse("this runner keeps no machines")
+	}
+	err := s.call(ctx, runnerwire.MethodKeptMachine, args, &res)
+	return res, err
 }
 
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the

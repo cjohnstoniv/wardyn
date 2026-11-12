@@ -182,6 +182,39 @@ describe("DirectoryCombobox — searching", () => {
     expect(screen.queryByRole("button", { name: row(ALICE) })).not.toBeInTheDocument();
   });
 
+  it("a pick leaves focus in the field, not on the body", async () => {
+    searchMock.mockResolvedValue([ALICE]);
+    render(<Harness kind="user" />);
+    await userEvent.type(field(), "ali");
+    const suggestion = await screen.findByRole("button", { name: row(ALICE) });
+    suggestion.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(field()).toHaveValue(ALICE.claim_value);
+    expect(field()).toHaveFocus();
+  });
+
+  it("announces the lookup messages through a status region that was mounted before them", async () => {
+    let land: (rows: DirectoryEntry[]) => void = () => {};
+    searchMock.mockReturnValue(new Promise<DirectoryEntry[]>((resolve) => (land = resolve)));
+    render(<Harness kind="user" />);
+    const region = screen.getByRole("status");
+    expect(region).toBeEmptyDOMElement();
+    await userEvent.type(field(), "ali");
+    expect(await screen.findByText(DIRECTORY.SEARCHING)).toBeInTheDocument();
+    expect(region).toContainElement(screen.getByText(DIRECTORY.SEARCHING));
+    await act(async () => {
+      land([]);
+    });
+    expect(region).toHaveTextContent(DIRECTORY.NO_MATCHES);
+  });
+
+  it("announces a failed lookup through the status region", async () => {
+    searchMock.mockRejectedValue(new HttpError(500, "boom"));
+    render(<Harness kind="user" />);
+    await userEvent.type(field(), "ali");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(DIRECTORY.LOOKUP_FAILED));
+  });
+
   it("a picked GROUP says what actually got stored", async () => {
     searchMock.mockResolvedValue([PLATFORM]);
     render(<Harness kind="group" />);

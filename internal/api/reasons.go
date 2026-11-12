@@ -91,6 +91,7 @@ const (
 	reasonInvalidRunIDParam            = "invalid_run_id_param"            // ?run_id= does not parse as a UUID
 	reasonListingUnscopedBackend       = "listing_unscoped_backend"        // the store backend cannot scope this listing to the caller's own runs (approvals AND runs listings — same missing capability)
 	reasonApprovalRunEnded             = "approval_run_ended"              // the run ended before the approval was decided; it was auto-cancelled
+	reasonApprovalRunPastLifetime      = "approval_run_past_lifetime"      // the run reached its lifetime cap before the approval was decided; the sweep that ends it cancels the approval
 	reasonCredentialReauthNotDecidable = "credential_reauth_not_decidable" // a credential-reauth approval is resolved by signing in again, not Approve/Deny
 	reasonDecisionScopeInvalidForKind  = "decision_scope_invalid_for_kind" // decision_scope was sent on an approval kind that does not accept one
 	reasonTakeoverNotDecidable         = "takeover_not_decidable"          // a takeover request is answered by taking over or declining, not Approve/Deny
@@ -146,6 +147,7 @@ const (
 	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included), or two repositories clone into one directory
 	reasonWorkspacePinConflict    = "workspace_pin_conflict"     // the attached workspaces pin two different model providers
 	reasonImageConflict           = "image_conflict"             // the attached workspaces use two different base images: a refusal about the run's image, not a workspace field
+	reasonImageDigestRequired     = "image_digest_required"      // images.require_digest is on and a member's image is not pinned by digest (image@sha256:<digest>)
 	reasonAllowedImageInvalid     = "allowed_image_invalid"      // allowed_image is malformed, or is combined with image or devcontainer_repo
 	reasonWorkspaceADOOrgConflict = "workspace_ado_org_conflict" // the attached workspaces use two Azure DevOps organisations
 	reasonResourcesInvalid        = "resources_invalid"          // resources carries a negative or absurd CPU or memory value
@@ -237,6 +239,35 @@ const (
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run ended or kept moving between the read and the write
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
+	// Watching a background macOS run's desktop (run_background_watch.go, run_background_watch_limit.go). A
+	// profile's deny_background_desktop_watch answers as governance_unit. Kept out of the run-mode block above.
+	reasonRunBackgroundWatchSiteOff       = "run_background_watch_site_off"       // macos_vm.allow_background_watch is false: no one may watch a background desktop on this install
+	reasonRunBackgroundWatchNotBackground = "run_background_watch_not_background" // the run is not a background task: its desktop has its own door
+	reasonRunBackgroundWatchOldBoot       = "run_background_watch_old_boot"       // the run's boot predates asking its helper to force the desktop view only
+	reasonRunBackgroundWatchUnconfirmed   = "run_background_watch_unconfirmed"    // no report that this boot's desktop is forced view only, or the Mac's caps don't say observe
+	reasonRunBackgroundWatchOffline       = "run_background_watch_offline"        // the run's runner is not connected, so its caps can't be read
+	reasonRunBackgroundWatchControl       = "run_background_watch_control"        // the run's Mac offers desktop control, which a watch does not open
+	reasonRunBackgroundWatchPaused        = "run_background_watch_paused"         // the run is paused, and a watch never wakes it
+
+	// An attended window onto a macOS VM run (run_mac_window.go). A profile's deny_ui_apps or deny_interactive
+	// answers as governance_unit, and an agent whose desktop sign-ins are Not allowed as desktop_sign_ins_off.
+	reasonMacWindowSiteOff        = "mac_window_site_off"        // macos_vm.allow_attended_window is not true: no window on this install
+	reasonMacWindowNotMacOSVM     = "mac_window_not_macos_vm"    // the run is not a macOS VM run
+	reasonMacWindowNotYourMac     = "mac_window_not_your_mac"    // the run is not on a Mac whose runner the caller registered
+	reasonMacWindowUnrecorded     = "mac_window_unrecorded"      // the run's recording level is Screen and actions, and a window on the Mac isn't recorded
+	reasonMacWindowOffline        = "mac_window_offline"         // the run's runner is not connected
+	reasonMacWindowRunnerTooOld   = "mac_window_runner_too_old"  // the runner's caps say it can't open a window
+	reasonMacWindowDesktopControl = "mac_window_desktop_control" // a browser desktop that had control of the run did not close in time: one keyboard at a time
+	reasonMacWindowPaused         = "mac_window_paused"          // the run is paused
+	reasonMacWindowPreparing      = "mac_window_preparing"       // the run is still being prepared
+	reasonMacWindowNotHere        = "mac_window_not_here"        // the runner is connected through another server, and nothing routes the call there
+	reasonMacWindowOpen           = "mac_window_open"            // the run already has a window open
+	reasonMacWindowNotAtMac       = "mac_window_not_at_mac"      // the person isn't signed in at the Mac's screen, or it is locked
+	reasonMacWindowLockUnknown    = "mac_window_lock_unknown"    // the Mac can't tell whether its screen is locked, so the window fails closed
+	reasonMacWindowRevoked        = "mac_window_revoked"         // the caller's session was cut off
+	reasonMacWindowFailed         = "mac_window_failed"          // the runner could not open the window
+	reasonDesktopWindowInvalid    = "desktop_window_invalid"     // desktop_window is not "at_start", or is on a run that is not a macOS VM
+
 	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
 	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
 	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
@@ -251,8 +282,17 @@ const (
 	// agent pod). Nothing changed; stop the run and start a new one.
 	reasonReviveUnsupported = "revive_unsupported"
 
-	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history
-	// paging (runs_policy.go) — one reason per rejected query parameter.
+	// Policy readback (run_proxy_readback.go). POST /runs/{id}/revive: a start that must confirm its
+	// policy on a substrate that cannot answer the new proxy's config hash (409, nothing changed); a
+	// new proxy that did not confirm it, so the run is lost again (502). POST /internal/proxy/loaded:
+	// a report whose body is not a config hash (400), or one the store could not record (503).
+	reasonReviveReadbackUnsupported   = "revive_readback_unsupported"
+	reasonRevivePolicyUnconfirmedLost = "revive_policy_unconfirmed_lost"
+	reasonProxyReportInvalid          = "proxy_report_invalid"
+	reasonProxyReportUnrecorded       = "proxy_report_unrecorded" // the report could not be stored (503); the proxy retries
+
+	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history paging (runs_policy.go): one
+	// reason per rejected query parameter.
 	reasonInvalidOwnerParam         = "invalid_owner_param"          // ?owner= is not "", "me", or "all"
 	reasonInvalidStatusParam        = "invalid_status_param"         // ?status= names a value outside the closed set
 	reasonStatusNeedsExclusive      = "status_needs_exclusive"       // status=needs was combined with another status value
@@ -315,6 +355,11 @@ const (
 	reasonRecordingInvalid = "recording_level_invalid" // the recording level is not one (off, terminal or screen_actions)
 	reasonRecordingStale   = "recording_level_stale"   // If-Match does not match the current recording ETag
 
+	// PUT/DELETE /governance/units/{id}/envelope (governance_envelope.go).
+	reasonEnvelopeInvalid    = "envelope_invalid"     // the unit is unknown or Default, or the group list is not valid
+	reasonEnvelopeNested     = "envelope_nested"      // an envelope already sits on a unit above or below this one
+	reasonEnvelopeGroupTaken = "envelope_group_taken" // a group is already approved on another unit's envelope
+
 	// GET/PUT /governance/boundary, POST /governance/dry-run, and the boundary's own refusals.
 	reasonBoundaryInvalid = "boundary_invalid" // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
 	// POST/PUT/DELETE /governance/restrictions, PUT /workspaces/{id}/owning-unit, and the restriction refusals at a launch.
@@ -328,25 +373,44 @@ const (
 	reasonGrantWithheldUnread        = "credential_withheld_unread"    // the run, its grants, its profile or the boundary could not be read to check the mint
 	reasonBreakGlassReasonRequired   = "break_glass_reason_required"   // an admin-token break-glass run without a usable reason
 
+	// PUT /components/{id}/owning-unit, and the strict switch of PUT /workspaces/{id}/owning-unit.
+	reasonComponentOwningUnitDefault         = "component_owning_unit_default"           // the Default unit cannot pin a component: unpin it with null instead
+	reasonWorkspaceOwningUnitStrictNeedsUnit = "workspace_owning_unit_strict_needs_unit" // a strict workspace pin needs a unit
+
 	// GET/PUT/DELETE /me/walls (personal_walls.go), and the walls' refusals at an approval.
 	reasonWallsInvalid      = "walls_invalid"       // the walls name a knob wider than no limit, a site that is not a DNS name or wildcard, or a list over its cap
 	reasonWallsNeedPerson   = "walls_need_person"   // the caller is no signed-in person (the admin token, local mode, a service identity)
 	reasonWallsUnavailable  = "walls_unavailable"   // the store keeps no personal settings (not the Postgres store)
 	reasonPersonalWallsHost = "personal_walls_host" // an egress approval would admit a host the run owner's walls deny
 
+	// /wall-presets (wall_presets.go), a run's wall_preset at launch, and the preset's refusals at an approval.
+	reasonWallPresetInvalid         = "wall_preset_invalid"          // 422: a preset that names a wider value or no limit, or a launch whose frozen copy no longer validates
+	reasonWallPresetScopeForbidden  = "wall_preset_scope_forbidden"  // 403: a write to the organisation or a group the caller may not save to
+	reasonWallPresetBuiltin         = "wall_preset_builtin"          // 403: an edit or delete of Open, Read-only or Sealed
+	reasonWallPresetHost            = "wall_preset_host"             // 403: an egress approval would admit a host the run's wall preset denies
+	reasonWallPresetNotFound        = "wall_preset_not_found"        // 404: no such preset, or the caller may not see it
+	reasonWallPresetNameTaken       = "wall_preset_name_taken"       // 409: another preset of the same audience, or a built-in, uses the name (case-insensitive)
+	reasonWallPresetVersionConflict = "wall_preset_version_conflict" // 409: the preset changed since the version the caller read
+	reasonWallPresetLimitReached    = "wall_preset_limit_reached"    // 409: the audience already holds the most presets it may
+	reasonWallPresetUnknown         = "wall_preset_unknown"          // 422: a launch names a preset that does not exist or the caller may not see
+	reasonWallPresetsUnavailable    = "wall_presets_unavailable"     // 501: the store keeps no wall presets (not the Postgres store)
+	reasonNoNetworkNeedsEgress      = "no_network_needs_egress"      // 422: a launch with the No network preset that needs a host; the message names each source
+	reasonHostRulesNeedInspectedVM  = "host_rules_need_inspected_vm" // 422: a VM run whose policy has host_rules, which are not yet judged on a VM guest's flows
+
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
 	reasonApprovalRuleNotFound      = "approval_rule_not_found"      // no approval rule has that name
 	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
-	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
+	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, one MCP call, a run no service identity created, or a match that no longer holds
 	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
+	reasonApprovalRuleHostDenied    = "approval_rule_host_denied"    // a person's deny for this host still stands on this run, so a rule does not decide it
 
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 
-	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
+	// POST /site-config/test-proxy and POST /site-config/test-redirect (site_config_probe.go).
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
 	reasonSiteConfigProbeURLInvalid     = "site_config_probe_url_invalid"     // the probe target is not a plain http(s) URL
 	reasonEgressRedirectFromRequired    = "egress_redirect_from_required"     // an egress-redirect edit named no `from`
@@ -478,6 +542,9 @@ const (
 	reasonDelegateClientIDInvalid    = "delegate_client_id_invalid"
 	reasonDelegateClientIDIsPortal   = "delegate_client_id_is_portal" // idp_client_id named this deployment's own OIDC client
 	reasonDelegateGroupInvalid       = "delegate_group_invalid"
+	reasonDelegateRunInUnderInvalid  = "delegate_run_in_under_invalid" // run_in_under names no existing governance unit
+	reasonPortalUnitScope            = "portal_unit_scope"             // a pinned portal's launch resolved outside its unit
+	reasonPortalUnitUnavailable      = "portal_unit_unavailable"       // the portal's row or the units could not be read (503)
 
 	// /api/v1/setup/integrations and /api/v1/setup/onboarding.
 	reasonIntegrationInvalid              = "integration_invalid"                // the integration write fails validation
@@ -601,6 +668,8 @@ const (
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
 	reasonGitPATBrokerOffResident        = "git_pat_broker_off_resident"        // the PAT broker is off, and a member's run (or any, under WARDYN_GIT_PAT_BROKER_OFF_REFUSED) may not hold the PAT
+	reasonPushDenyAllResidentPAT         = "push_deny_all_resident_pat"         // the run refuses every push, and the broker-off lane would put a git PAT in the sandbox
+	reasonPushDenyAllSSHKey              = "push_deny_all_ssh_key"              // the run refuses every push, and an ssh_key would let it push over SSH, which no broker sees
 )
 
 // Run templates (template_document.go, template_refusals.go): the refusals of
@@ -644,6 +713,21 @@ const (
 // carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
 const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
 
+// A run's gateway identity (internal_gateway_identity.go): the provider no longer matches what the run was
+// dispatched with, so the mint or the revive is refused and a new run is the way on; and a check or the
+// signing key that could not be read just now, on a mint or on the save that turns identity on.
+const (
+	reasonGatewayIdentityChanged     = "gateway_identity_changed"
+	reasonGatewayIdentityUnavailable = "gateway_identity_unavailable"
+)
+
+// A portal revoke with ?cut_in_flight=true (gateway_identity_cut.go): the runs it launched get no more
+// gateway tokens (403 on the mint, 409 on a revive), and a value of the parameter that is not true or false.
+const (
+	reasonGatewayAccessCut        = "gateway_access_cut"
+	reasonInvalidCutInFlightParam = "invalid_cut_in_flight_param"
+)
+
 // A run refused at create because its laptop local model is on a port the runner's person has not allowed
 // (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
 const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"
@@ -655,6 +739,11 @@ const reasonSignInRequired = "sign_in_required"
 // A run launch refused because the host is short of memory or over its load ceiling
 // (writeHostCapacityRefusal): a wait, not a fault, so it is a 503 with a Retry-After.
 const reasonHostCapacityRefused = "host_capacity_refused"
+
+// A run held to the allowed-models list whose chosen model provider's calls the run's proxy could not
+// check (stepAllowedModelsChecked, run_allowed_models.go), refused at every door before it starts, and
+// the run failed at dispatch for the same lane.
+const reasonAllowedModelsUnchecked = "allowed_models_unchecked"
 
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
@@ -692,6 +781,11 @@ const (
 	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
 )
 
+// POST /runs correlation_id (run_correlation_id.go).
+const (
+	reasonCorrelationIDInvalid = "correlation_id_invalid" // correlation_id is over 128 characters or holds anything but ASCII letters, digits and . _ : / -
+)
+
 // GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,
 // run_files.go): the two widgets read the identical run-state facts, so they
 // share a reason per cause rather than each inventing its own synonym.
@@ -704,6 +798,15 @@ const (
 	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
 	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
 	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
+)
+
+// POST /runs/{id}/exec (run_exec.go) and strict audit (audit_strict.go).
+const (
+	reasonRunExecInvalid     = "run_exec_invalid"     // command is empty or over 128 KiB, or timeout_sec is outside 1 to 300
+	reasonRunExecUnavailable = "run_exec_unavailable" // the run cannot take a command now: no runner, not running, ended, a background task, or paused and not resumed
+	reasonRunExecFailed      = "run_exec_failed"      // the runner could not start the command, or lost it before it ended
+	reasonRunExecBusy        = "run_exec_busy"        // 429: the run already holds its most SSH channels and commands at once (WARDYN_SSH_MAX_SESSIONS_PER_RUN)
+	reasonAuditUnavailable   = "audit_unavailable"    // strict audit is on and the change's intent row could not be written first; nothing was changed
 )
 
 // GET /runs/{id}/output (run_output.go).
@@ -762,4 +865,51 @@ const (
 const (
 	reasonMemberDriveDeleteDeferred = "member_drive_delete_deferred" // 202: the Mac is offline; the disk is removed when it reconnects
 	reasonMemberDriveRecordOnly     = "member_drive_record_only"     // 200: the Mac is no longer registered; only the record was removed
+)
+
+// POST /runs Idempotency-Key (runs_idempotency.go).
+const (
+	reasonIdempotencyKeyInvalid  = "idempotency_key_invalid"   // 400: not one value of 1-255 visible ASCII characters
+	reasonIdempotencyKeyReused   = "idempotency_key_reused"    // 422: the key was used with a different request in the last 24 hours
+	reasonIdempotencyKeyInFlight = "idempotency_key_in_flight" // 409: a request with the key is still being answered; Retry-After says when to try again
+)
+
+// One MCP call's approval raise on the internal route (approvals_mcp_call.go).
+const (
+	// 400: a requested_scope carrying call_sha256 that is not the hash of its own server, tool and arguments, repeats a key or spells one in another case, shows a tool name that is not its raw tool's, or is on a kind other than tool_call
+	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid"
+	// 400: an MCP call larger than a person can be shown (arguments over 32 KiB, or a scope over 64 KiB)
+	reasonMCPCallTooLarge = "mcp_call_too_large"
+	// 400: a requested_scope naming cluster that is not exactly one kubectl write's scope, on tool_call, hashing to its own call_sha256 (approvals_kube_call.go)
+	reasonKubeCallScopeInvalid = "kube_call_scope_invalid"
+	// 400: a requested_scope naming host and call_sha256 that is not exactly one host rule hold's scope, on tool_call, hashing to its own call_sha256 (approvals_host_call.go)
+	reasonHostCallScopeInvalid = "host_call_scope_invalid"
+)
+
+// The signed audit receipt, checkpoint and key routes (audit_receipt.go).
+const (
+	reasonAuditReceiptRequestInvalid   = "audit_receipt_request_invalid"   // 400: events or one run, in the shapes the route reads
+	reasonAuditReceiptNotFound         = "audit_receipt_not_found"         // 404: no such audit event, or the run has no audit rows
+	reasonAuditReceiptPending          = "audit_receipt_pending"           // 409: newer than the last signed checkpoint; retry after Retry-After
+	reasonAuditReceiptUnchained        = "audit_receipt_unchained"         // 409: in no checkpoint and will never be (no row hash, or before signing began)
+	reasonAuditReceiptTooLarge         = "audit_receipt_too_large"         // 413: more events or checkpoints than one receipt carries
+	reasonAuditReceiptSigningOff       = "audit_receipt_signing_off"       // 503: checkpoint signing is off, or its key could not be loaded
+	reasonAuditReceiptStoreUnavailable = "audit_receipt_store_unavailable" // 501: needs the Postgres store
+	reasonAuditReceiptReadFailed       = "audit_receipt_read_failed"       // 500: the receipt could not be read or assembled
+)
+
+// Image admission's refusals (run_image_admission.go): the same values as imageadmit.Reason.
+const (
+	reasonImageAdmissionNoPolicy    = "image_admission_no_policy"   // no signer the site trusts covers the member's image, or a signer the profile requires does not or is undefined
+	reasonImageSignatureMissing     = "image_signature_missing"     // no signature on the image's digest from a signer that covers it
+	reasonImageSignatureInvalid     = "image_signature_invalid"     // signed, but by another identity or key than the covering signer requires
+	reasonImageAttestationMissing   = "image_attestation_missing"   // the signer did not attest a type it requires
+	reasonImageAdmissionUnavailable = "image_admission_unavailable" // the image's registry or a trust root could not be read (503)
+)
+
+// A run's model token usage (run_model_usage.go).
+const (
+	reasonModelUsageUnsupported = "model_usage_unsupported"  // 501: this store keeps no model usage
+	reasonModelUsageReadFailed  = "model_usage_read_failed"  // 500: the run's usage rows could not be read
+	reasonModelUsageWriteFailed = "model_usage_write_failed" // 500: a usage record could not be stored; the proxy retries
 )

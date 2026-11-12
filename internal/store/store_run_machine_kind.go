@@ -39,11 +39,12 @@ func scanRunMachine(r *types.AgentRun, kind string, vmMachineRaw []byte) error {
 
 // RunnerMacOSVMHolders counts the macos_vm runs holding a sandbox on each of ids, by the predicate
 // RunnerSlotHolders uses, so placement can say a Mac is at its licence cap before it sends a create. A
-// runner with none is absent from the map.
-func (s PG) RunnerMacOSVMHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+// runner with none is absent from the map. except is a run never counted (uuid.Nil for none), as in
+// RunnerUsage: a promoted run's start does not count the run's own place.
+func (s PG) RunnerMacOSVMHolders(ctx context.Context, ids []uuid.UUID, except uuid.UUID) (map[uuid.UUID]int, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT runner_id, count(*)::int FROM agent_runs
-		WHERE runner_id = ANY($1) AND machine_kind = 'macos_vm' AND state = ANY($2) AND `+HoldsSandboxSQL+` GROUP BY 1`,
-		ids, slotHoldingStateNames())
+		WHERE runner_id = ANY($1) AND machine_kind = 'macos_vm' AND state = ANY($2) AND id <> $3 AND `+HoldsSandboxSQL+` GROUP BY 1`,
+		ids, slotHoldingStateNames(), except)
 	if err != nil {
 		return nil, fmt.Errorf("store: count macos_vm runs by runner: %w", err)
 	}

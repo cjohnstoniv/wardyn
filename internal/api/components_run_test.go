@@ -20,10 +20,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// componentTestStore is govEscapeStore plus the component seam: the two
-// methods the gate and the create door use, and the one read a workspace_id
-// launch needs. The embedded ComponentStore is nil — any other method of the
-// seam being called is a test failure worth a panic.
+// componentTestStore is govEscapeStore plus the component seam: the three
+// methods the gate, the run's unit pins and the create door use, and the one
+// read a workspace_id launch needs. The embedded ComponentStore is nil — any
+// other method of the seam being called is a test failure worth a panic.
 type componentTestStore struct {
 	*govEscapeStore
 	store.ComponentStore
@@ -43,6 +43,18 @@ func (s *componentTestStore) ListComponentsByIDs(_ context.Context, owner string
 		}
 	}
 	return out, nil
+}
+
+// GetComponent answers as the real store does: the row with id AND owner, else ErrNotFound.
+func (s *componentTestStore) GetComponent(_ context.Context, id uuid.UUID, owner string) (types.Component, error) {
+	s.cmu.Lock()
+	defer s.cmu.Unlock()
+	for _, c := range s.components {
+		if c.ID == id && c.Owner == owner {
+			return c, nil
+		}
+	}
+	return types.Component{}, store.ErrNotFound
 }
 
 func (s *componentTestStore) PutRunComponents(_ context.Context, runID uuid.UUID, comps []types.RunComponent) error {

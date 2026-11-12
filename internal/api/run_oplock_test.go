@@ -212,26 +212,56 @@ func TestRunOp_AHeldRunDoesNotDelayAnotherOrTheTokenSweep(t *testing.T) {
 	}
 }
 
-// TestRunOp_AnExpiredKeptRunIsTornDownWhileItsReviveIsInFlight: a member who
-// keeps reviving must not dodge expiry. The teardown sits outside the lock's
-// skip path.
-func TestRunOp_AnExpiredKeptRunIsTornDownWhileItsReviveIsInFlight(t *testing.T) {
-	f := newLostFixture(t)
+// TestRunOp_AnExpiredKeptRunEndsOnlyUnderItsLock: an expired kept run's end publishes nothing while its
+// lock is held (here by a revive in flight), and lands on the first pass after the lock is free. A member
+// who keeps reviving cannot hold the end off: past the expiry the revive is refused. The clock is at the
+// expiry, inside keptEndHoldOffLimit: a lock still held past that is cut by forceKeptStop instead.
+func TestRunOp_AnExpiredKeptRunEndsOnlyUnderItsLock(t *testing.T) {
+	f := newReviveFixture(t)
 	end := f.now.Add(time.Hour)
+	f.st.mu.Lock()
 	f.st.run.EndsAt = &end
-	f.ls.lapsed = true
-	f.sweepTokens(t)
-	f.now = end.Add(8 * 24 * time.Hour)
-	run, _ := f.st.GetRun(context.Background(), f.run.ID)
-	f.srv.reviving.Store(run.ID, struct{}{})
-	_, unlock, err := f.srv.lockRunOp(context.Background(), run.ID)
+	f.st.mu.Unlock()
+	f.now = end.Add(f.srv.cfg.EndedRunGrace)
+	ctx := context.Background()
+	run, _ := f.st.GetRun(ctx, f.run.ID)
+	_, unlock, err := f.srv.lockRunOp(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unlock()
-	f.srv.leaseRun(context.Background(), f.ls, run)
+	f.srv.leaseRun(ctx, f.ls, run)
+	if f.st.State() != types.RunRunning {
+		t.Fatalf("state %s while the run's lock was held; want RUNNING, nothing published", f.st.State())
+	}
+	unlock()
+	if code := f.revive(t); code != http.StatusConflict {
+		t.Fatalf("revive past the expiry = %d, want 409", code)
+	}
+	f.srv.leaseRun(ctx, f.ls, run)
 	if f.st.State() != types.RunStopped {
-		t.Fatalf("state %s; want the expired kept run STOPPED even with a revive in flight", f.st.State())
+		t.Fatalf("state %s; want the expired kept run STOPPED once its lock is free", f.st.State())
+	}
+}
+
+// TestRunOp_ARevivePastTheExpiryAtItsClaimIsRefused: a revive that passes its checks inside the grace
+// and reaches its claim after it, behind a slow proxy image pull, is refused, and the run stays lost. A
+// rebooted run is the case: the claim's own guard checks the end only for an ended or outage run.
+func TestRunOp_ARevivePastTheExpiryAtItsClaimIsRefused(t *testing.T) {
+	f, sr := newRebootFixture(t)
+	end := f.now.Add(time.Hour)
+	f.st.mu.Lock()
+	f.st.run.EndsAt = &end
+	f.st.mu.Unlock()
+	f.run = f.st.run
+	f.rr.onEnsure = func() { f.now = end.Add(f.srv.cfg.EndedRunGrace) }
+	if code := f.revive(t); code != http.StatusConflict {
+		t.Fatalf("revive = %d, want 409", code)
+	}
+	if len(f.rr.replaced) != 0 || len(sr.starts()) != 0 {
+		t.Errorf("proxies replaced %d, agent starts %v; want none", len(f.rr.replaced), sr.starts())
+	}
+	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostReboot || f.st.State() != types.RunRunning {
+		t.Errorf("lost %v %q, state %s; want the run still lost (reboot) and RUNNING", lostAt, reason, f.st.State())
 	}
 }
 

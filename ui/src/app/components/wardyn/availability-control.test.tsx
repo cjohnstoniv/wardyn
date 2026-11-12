@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { CHANGES } from "../../lib/governance-copy";
+import { CHANGE_NOTE } from "./copy/change-note";
 import { aheadByHours } from "../../lib/test-clock";
 
 const getAvailabilityMock = vi.fn();
@@ -303,6 +304,9 @@ describe("AvailabilityControl — states.html", () => {
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
 
     const err = await screen.findByText(UNKNOWN_TYPE);
+    // Announced, and tied to the field it is about.
+    expect(err).toHaveAttribute("role", "alert");
+    expect(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveAccessibleDescription(UNKNOWN_TYPE);
     expect(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveValue("analyst");
     // Under the adder, above the note — not a toast.
     const input = screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER);
@@ -376,6 +380,27 @@ describe("AvailabilityControl — states.html", () => {
 });
 
 describe("AvailabilityControl — the image family (decision 2)", () => {
+  it("says, under the control, which registry prefix also covers the image, and not when none does", async () => {
+    const img = "registry.example.com/team/app:1";
+    getAvailabilityMock.mockResolvedValue({
+      ...view(false),
+      kind: "image",
+      value: img,
+      covered_by: [{ prefix: "registry.example.com/team/*", who: { subject_type: "all", subject: "" } }],
+    });
+    const { unmount } = render(<AvailabilityControl kind="image" value={img} adminsOnly />);
+    expect(await screen.findByTestId("availability-covered-by")).toHaveTextContent(
+      AVAILABILITY.COVERED_BY_PREFIX("registry.example.com/team/*", "Everyone"),
+    );
+    expect(screen.getByText(AVAILABILITY.IMAGE_HINT)).toBeInTheDocument();
+    unmount();
+
+    getAvailabilityMock.mockResolvedValue({ ...view(false), kind: "image", value: img, covered_by: [] });
+    render(<AvailabilityControl kind="image" value={img} adminsOnly />);
+    await screen.findByText(AVAILABILITY.IMAGE_HINT);
+    expect(screen.queryByTestId("availability-covered-by")).not.toBeInTheDocument();
+  });
+
   it("reads Admins only / Only these, with the image hint under the choice and the image lock", async () => {
     getAvailabilityMock.mockResolvedValue({ ...view(true, [DEV]), kind: "image", value: "ghcr.io/acme/dev-toolbox:1.4" });
     render(<AvailabilityControl kind="image" value="ghcr.io/acme/dev-toolbox:1.4" adminsOnly note={AVAILABILITY.IMAGE_NOTE} />);
@@ -504,6 +529,7 @@ describe("AvailabilityControl — a 202 is submitted, never saved", () => {
     await userEvent.click(only());
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(first()).toBeChecked();
   });
 
