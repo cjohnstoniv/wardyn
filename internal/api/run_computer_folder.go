@@ -821,6 +821,12 @@ type computerFolderRunView struct {
 	Error     string                  `json:"error,omitempty"`
 	Seed      *types.FolderPassRecord `json:"seed,omitempty"`
 	Back      *types.FolderPassRecord `json:"back,omitempty"`
+	// Fate, SandboxCopy, LastReport and GiveUpAt are the fate of the changes not yet back (folderFateOf); each is
+	// absent when the run is live or the server cannot tell.
+	Fate        *string           `json:"fate,omitempty"`
+	SandboxCopy *string           `json:"sandbox_copy,omitempty"`
+	LastReport  *folderLastReport `json:"last_report,omitempty"`
+	GiveUpAt    *time.Time        `json:"give_up_at,omitempty"`
 }
 
 // computerFolderRunState values.
@@ -855,6 +861,9 @@ func (s *Server) computerFolderRunView(ctx context.Context, id uuid.UUID) *compu
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(ctx, id); err == nil {
 			v.Seed, v.Back = rec.Seed, rec.Back
+			if run, err := s.cfg.Store.GetRun(ctx, id); err == nil {
+				s.setFolderFate(ctx, v, run, rec, seed.SeededAt != nil)
+			}
 		}
 	}
 	return v

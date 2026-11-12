@@ -6,12 +6,15 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	auditlog "github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -322,5 +325,133 @@ func TestFolderKeepAndExpiry(t *testing.T) {
 	run.UpdatedAt, run.EndedAt = end, nil
 	if expired, _ := s.folderExpiredOwed(context.Background(), run, st, end.Add(s.pendingCap())); !expired {
 		t.Error("a run with no ended_at is not timed from its last update")
+	}
+}
+
+func folderFateFor(t *testing.T, run types.AgentRun, st types.RunLocalFolderStatus, seeded, owed bool) folderFate {
+	t.Helper()
+	return folderFateOf(run, st, seeded, owed, 7*24*time.Hour)
+}
+
+func fateRun(state types.RunState, ref string) types.AgentRun {
+	end := time.Now().Add(-time.Hour).UTC()
+	return types.AgentRun{ID: uuid.New(), State: state, SandboxRef: ref, EndedAt: &end}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<absent>"
+	}
+	return *s
+}
+
+// A terminal run that owes its copy back is retained, with its sandbox kept, the last report's count and
+// names, and the day the keep ends. The same fields come out of the run view.
+func TestFolderFate_RetainedWhileOwed(t *testing.T) {
+	run := fateRun(types.RunStopped, "sbx")
+	f := folderFateFor(t, run, owedStatus(), true, true)
+	if deref(f.fate) != "retained" || deref(f.sandboxCopy) != "kept" || f.lastReport == nil || f.lastReport.Unsynced == nil || *f.lastReport.Unsynced != 3 ||
+		len(f.lastReport.Paths) != 3 || f.lastReport.PathsMore != 0 || f.giveUpAt == nil || !f.giveUpAt.Equal(run.EndedAt.Add(7*24*time.Hour)) {
+		t.Fatalf("fate = %s %s %+v %v; want retained, kept, 3 changes named, the keep's end", deref(f.fate), deref(f.sandboxCopy), f.lastReport, f.giveUpAt)
+	}
+
+	// More changes than names: the rest are counted.
+	st := owedStatus()
+	st.Resume.Unsynced = 80
+	st.Resume.Paths = make([]string, 60)
+	f = folderFateFor(t, run, st, true, true)
+	if len(f.lastReport.Paths) != runnerwire.MaxFolderUnsyncedPaths || f.lastReport.PathsMore != 30 || *f.lastReport.Unsynced != 80 {
+		t.Errorf("report = %+v, want 50 names and 30 more of 80", f.lastReport)
+	}
+
+	// Through the run view, from the store.
+	s, cs, _, vrun := giveUpFixture(t)
+	v := s.computerFolderRunView(context.Background(), vrun.ID)
+	if v == nil || deref(v.Fate) != "retained" || deref(v.SandboxCopy) != "kept" || v.LastReport == nil || v.GiveUpAt == nil {
+		t.Fatalf("run view = %+v, want the retained fate", v)
+	}
+	cs.dataOut = types.TransferBlocked
+	if v := s.computerFolderRunView(context.Background(), vrun.ID); v == nil || v.Fate != nil {
+		t.Errorf("a folder whose data_out rule keeps its content in has fate %v, want none: nothing is owed", v)
+	}
+}
+
+// A record given up while its stop is not yet confirmed: given up, and still kept, with its own report and
+// no claim that the copy is gone.
+func TestFolderFate_GivenUpButKept(t *testing.T) {
+	at := time.Now().UTC()
+	n := 4
+	st := types.RunLocalFolderStatus{Gen: 8, Back: &types.FolderPassRecord{At: at, Refused: []types.FolderRefusal{}, Error: "given up",
+		GivenUpAt: &at, GivenUpCount: &n, GivenUpPaths: []string{"a.txt", "b.txt"}, GivenUpPathsMore: 2}}
+	f := folderFateFor(t, fateRun(types.RunStopped, "sbx"), st, true, false)
+	if deref(f.fate) != "given_up" || deref(f.sandboxCopy) != "kept" || f.lastReport == nil || *f.lastReport.Unsynced != 4 ||
+		len(f.lastReport.Paths) != 2 || f.lastReport.PathsMore != 2 || f.giveUpAt != nil {
+		t.Errorf("fate = %s %s %+v %v; want given_up, kept, the give-up's own report", deref(f.fate), deref(f.sandboxCopy), f.lastReport, f.giveUpAt)
+	}
+}
+
+// Deleted is said for a terminal run whose ref is clear and which had a sandbox, and for nothing else.
+func TestFolderFate_DeletedOnlyAfterConfirmedTeardown(t *testing.T) {
+	done := types.RunLocalFolderStatus{Gen: 3, Back: &types.FolderPassRecord{At: time.Now().UTC(), Refused: []types.FolderRefusal{}}}
+	for name, c := range map[string]struct {
+		run    types.AgentRun
+		st     types.RunLocalFolderStatus
+		seeded bool
+		want   string
+	}{
+		"ended, ref clear, seeded":             {fateRun(types.RunStopped, ""), done, true, "deleted"},
+		"ended, ref clear, never seeded":       {fateRun(types.RunFailed, ""), types.RunLocalFolderStatus{}, false, "<absent>"},
+		"ended, ref still set":                 {fateRun(types.RunStopped, "sbx"), done, true, "kept"},
+		"ended, owed, ref still set":           {fateRun(types.RunStopped, "sbx"), owedStatus(), true, "kept"},
+		"live, ref clear":                      {fateRun(types.RunRunning, ""), types.RunLocalFolderStatus{}, true, "<absent>"},
+		"live, ref set":                        {fateRun(types.RunRunning, "sbx"), types.RunLocalFolderStatus{}, true, "<absent>"},
+		"given up, ref clear (stop confirmed)": {fateRun(types.RunStopped, ""), types.RunLocalFolderStatus{Back: &types.FolderPassRecord{GivenUpAt: &time.Time{}}}, true, "deleted"},
+	} {
+		f := folderFateFor(t, c.run, c.st, c.seeded, false)
+		if got := deref(f.sandboxCopy); got != c.want {
+			t.Errorf("%s: sandbox_copy = %s, want %s", name, got, c.want)
+		}
+	}
+}
+
+// A count with no names keeps its count and has no list; a count nobody made is null, never zero.
+func TestFolderFate_CountOnlyKeepsCount(t *testing.T) {
+	run := fateRun(types.RunStopped, "sbx")
+	back := &types.FolderPassRecord{At: time.Now().UTC(), Refused: []types.FolderRefusal{}, Error: "cut"}
+	for name, c := range map[string]struct {
+		resume *types.FolderResume
+		want   string
+	}{
+		"count, no names":             {&types.FolderResume{Stalled: 1, Unsynced: 5, Counted: true}, `"unsynced":5`},
+		"a count from before Counted": {&types.FolderResume{Stalled: 1, Unsynced: 5}, `"unsynced":5`},
+		"never counted":               {&types.FolderResume{Stalled: 1}, `"unsynced":null`},
+	} {
+		f := folderFateFor(t, run, types.RunLocalFolderStatus{Gen: 2, Resume: c.resume, Back: back}, true, true)
+		b, err := json.Marshal(f.lastReport)
+		if err != nil || !strings.Contains(string(b), c.want) || strings.Contains(string(b), `"paths`) {
+			t.Errorf("%s: last_report = %s (%v), want %s and no list", name, b, err, c.want)
+		}
+	}
+	at := time.Now().UTC()
+	given := folderFateFor(t, run, types.RunLocalFolderStatus{Gen: 8, Back: &types.FolderPassRecord{At: at, GivenUpAt: &at, Refused: []types.FolderRefusal{}}}, true, false)
+	if b, _ := json.Marshal(given.lastReport); !strings.Contains(string(b), `"unsynced":null`) {
+		t.Errorf("a give-up of changes nobody counted reports %s, want unsynced null", b)
+	}
+}
+
+func TestFolderFate_AbsentWhenLive(t *testing.T) {
+	f := folderFateFor(t, fateRun(types.RunRunning, "sbx"), owedStatus(), true, true)
+	if f.fate != nil || f.sandboxCopy != nil || f.lastReport != nil || f.giveUpAt != nil {
+		t.Errorf("a live run has fate %s, copy %s, report %+v, give-up %v; want none", deref(f.fate), deref(f.sandboxCopy), f.lastReport, f.giveUpAt)
+	}
+	// A done record is complete only when its pass ended without an error.
+	run := fateRun(types.RunStopped, "")
+	ok := types.RunLocalFolderStatus{Gen: 2, Back: &types.FolderPassRecord{At: time.Now().UTC(), Refused: []types.FolderRefusal{}}}
+	if f := folderFateFor(t, run, ok, true, false); deref(f.fate) != "complete" {
+		t.Errorf("a completed pass has fate %s, want complete", deref(f.fate))
+	}
+	ok.Back.Error = "the sandbox was stopped with changed files not brought back: 1"
+	if f := folderFateFor(t, run, ok, true, false); f.fate != nil {
+		t.Errorf("a pass that ended in an error has fate %s, want none: the server cannot say it is complete", deref(f.fate))
 	}
 }
