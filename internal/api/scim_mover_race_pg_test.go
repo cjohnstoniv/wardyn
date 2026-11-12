@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"runtime/debug"
 	"slices"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ func TestSCIMGroupRemovalSweeperWaitsForAnAddInFlight(t *testing.T) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("panic: %v", r)
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
 				done <- nil
 			}
 		}()

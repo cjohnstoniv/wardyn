@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -672,7 +673,7 @@ func TestRunPause_OpenRunPageDoesNotDefeatIdlePause(t *testing.T) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("panic: %v", r)
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
 				sweepDone <- nil
 			}
 		}()
@@ -705,13 +706,17 @@ func TestRunPause_NoWalkStartsInsideTheIdleSample(t *testing.T) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("panic: %v", r)
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
 				sweepDone <- nil
 			}
 		}()
 		sweepDone <- f.srv.sweepRunPauses(context.Background())
 	}()
-	<-pr.sampleStarted
+	select {
+	case <-pr.sampleStarted:
+	case err := <-sweepDone:
+		t.Fatalf("the sweep ended before its sample opened: %v", err)
+	}
 
 	w := doSSO(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/resources", owner, "")
 	close(releaseSample)
@@ -747,7 +752,7 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("panic: %v", r)
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
 				sweepDone <- nil
 			}
 		}()
@@ -765,7 +770,11 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(releaseSkip)
-	<-pr.sampleStarted
+	select {
+	case <-pr.sampleStarted:
+	case err := <-sweepDone:
+		t.Fatalf("the sweep ended before its sample opened: %v", err)
+	}
 	for _, c := range []chan int{poll1, poll2} {
 		if code := <-c; code != http.StatusOK {
 			t.Fatalf("poll = %d, want 200", code)

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -515,7 +516,7 @@ func TestDesktopSignin_FailedContinueRetriesOnlyTheSignal(t *testing.T) {
 func TestDesktopSignin_ContinueTriesRunOutAndKillTheRun(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.Errorf("panic: %v", r)
+			t.Errorf("panic: %v\n%s", r, debug.Stack())
 		}
 	}()
 	f := newSigninFixture(t)

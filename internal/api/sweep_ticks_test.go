@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -106,7 +107,7 @@ func TestOrphanedBuildSweeper_RecordsAnErroringTickAsAnAttempt(t *testing.T) {
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("panic: %v", r)
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
 			}
 		}()
 		srv.orphanedBuildSweeper(ctx, 5*time.Millisecond)

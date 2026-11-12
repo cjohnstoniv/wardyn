@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -590,7 +591,7 @@ func TestOrphanedBuildSweeper_RunsOnCadence(t *testing.T) {
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("panic: %v", r)
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
 			}
 		}()
 		srv.orphanedBuildSweeper(ctx, time.Millisecond)
