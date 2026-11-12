@@ -417,7 +417,7 @@ func folderBackResume(prev *types.FolderResume, res *runnerwire.FolderPass, errT
 	}
 	res.Unsynced = next.Unsynced
 	if next.Stalled < computerFolderStalls {
-		return next, errText + "; the sandbox is kept with its agent stopped and no egress, and a later sweep, about hourly, tries the sync again"
+		return next, "the sandbox is kept with its agent stopped and no egress, and a later sweep, about hourly, tries the sync again: " + boundReason(errText)
 	}
 	return nil, folderBackGivenUp(errText, fmt.Sprintf("%d passes in a row brought nothing back", next.Stalled), next.Unsynced)
 }
@@ -429,9 +429,9 @@ func folderNotPreservedText(unsynced int, why, passErr string) string {
 	if unsynced > 0 {
 		s = fmt.Sprintf("the pass back could not confirm %d changed files kept on the laptop, so they count as not copied back", unsynced)
 	}
-	s += ": " + why
+	s += ": " + boundReason(why)
 	if passErr != "" && !strings.Contains(passErr, why) {
-		s += "; " + passErr
+		s += "; " + boundReason(passErr)
 	}
 	return s
 }
@@ -443,8 +443,15 @@ func folderBackGivenUp(errText, why string, unsynced int) string {
 	if unsynced > 0 {
 		left = fmt.Sprintf("changed files not brought back: %d", unsynced)
 	}
-	return fmt.Sprintf("%s; %s, so the sandbox was stopped with %s", errText, why, left)
+	return fmt.Sprintf("the sandbox was stopped with %s, because %s: %s", left, why, boundReason(errText))
 }
+
+// maxFolderReason bounds the runner's or the sandbox's reason in a pass back's record, which puts its
+// outcome first: a long reason is cut, and the outcome before it stays.
+const maxFolderReason = 300
+
+// boundReason is a pass back's reason as its record keeps it: one line of at most maxFolderReason runes.
+func boundReason(s string) string { return localFolderErrorText(s, maxFolderReason) }
 
 // notQuiescable is quiesceKeptSandbox's answer for a sandbox whose substrate cannot stop its
 // agent and its egress and keep the folder, as opposed to one where that failed.
