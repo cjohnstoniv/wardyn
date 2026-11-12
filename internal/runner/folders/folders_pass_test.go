@@ -172,7 +172,22 @@ func TestSyncFolder_AnOlderServersSeedIsNotCutAtTheBackLimit(t *testing.T) {
 		t.Errorf("skewed runner's seed = %+v, want it complete", skewed)
 	}
 	s.Clock = nil
-	back := runPass(t, sub, newSandbox(t), "/home/agent/work", runnerwire.SyncFolderArgs{RunID: uuid.New(), Path: app, RemoteDir: "/home/agent/work", Pull: true})
+	// The cut can end the pass back before its stream is taken, so sync_folder then finds no stream: also a cut.
+	p, err := sub.SyncFolder(context.Background(), runnerwire.SyncFolderArgs{RunID: uuid.New(), Path: app, RemoteDir: "/home/agent/work", Pull: true})
+	if errors.Is(err, runnerwire.ErrNoStream) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("sync_folder: %v", err)
+	}
+	srv := newSandbox(t).serve(p.Stream, "/home/agent/work")
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	back, err := p.Wait(ctx)
+	if err != nil {
+		t.Fatalf("sync_folder_wait: %v", err)
+	}
 	if back.Error == "" {
 		t.Errorf("older server's pass back = %+v, want it cut at the back limit", back)
 	}
