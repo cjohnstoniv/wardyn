@@ -5,6 +5,7 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -24,6 +25,12 @@ type FolderPass struct {
 	Wait   func(context.Context) (runnerwire.FolderPass, error)
 }
 
+// PassEnded is SyncFolder's answer for a pass that ended before the server took its stream: Pass is the
+// runner's account of it, whose Error is the pass's own reason.
+type PassEnded struct{ Pass runnerwire.FolderPass }
+
+func (e *PassEnded) Error() string { return "the runner's pass ended before its stream was taken" }
+
 // SyncFolder starts one pass on a folder-only runner. The caller joins Stream to the sandbox's
 // sftp-server and closes it when either side ends.
 func (s *Substrate) SyncFolder(ctx context.Context, args runnerwire.SyncFolderArgs) (FolderPass, error) {
@@ -36,6 +43,15 @@ func (s *Substrate) SyncFolder(ctx context.Context, args runnerwire.SyncFolderAr
 		return FolderPass{}, err
 	}
 	st, err := sess.TakeStream(res.Stream)
+	if errors.Is(err, runnerwire.ErrNoStream) {
+		// A pass that ended before the server took its stream has no stream left to take: the runner's
+		// account of it is still there to ask for, and is its own reason.
+		var out runnerwire.FolderPass
+		if werr := sess.Call(ctx, runnerwire.MethodSyncFolderWait, runnerwire.SyncFolderWaitArgs{Stream: res.Stream}, &out); werr != nil {
+			return FolderPass{}, fmt.Errorf("%w (asking for the pass's outcome failed: %v)", err, werr)
+		}
+		return FolderPass{}, &PassEnded{Pass: out}
+	}
 	if err != nil {
 		return FolderPass{}, err
 	}

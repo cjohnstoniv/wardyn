@@ -5,15 +5,18 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -184,5 +187,86 @@ func TestBusy_StoreFaultKeepsAndLogs(t *testing.T) {
 	}
 	if more := strings.TrimPrefix(logged.String(), out); strings.Contains(more, "recording a busy folder pass failed") {
 		t.Errorf("a miss logged as a fault: %q", more)
+	}
+}
+
+// scriptedFolderRunner is a folder runner whose pass has already ended when the server comes for its stream:
+// sync_folder answers a stream id no call opened, and sync_folder_wait answers account. sent is the last
+// sync_folder call's arguments.
+type scriptedFolderRunner struct {
+	account runnerwire.FolderPass
+	mu      sync.Mutex
+	sent    runnerwire.SyncFolderArgs
+}
+
+func (r *scriptedFolderRunner) args() runnerwire.SyncFolderArgs {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sent
+}
+
+// endpoint connects r as the folder runner id, sharing folders.
+func (r *scriptedFolderRunner) endpoint(t *testing.T, id uuid.UUID) runnerEndpoint {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	org, run := runnerwire.Loopback()
+	link := &remote.Link{}
+	sub := remote.New(id.String(), link, remote.Options{})
+	orgPeer := link.Attach(ctx, org)
+	peer := runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: func(_ context.Context, _ uint32, method string, raw json.RawMessage) (any, error) {
+		switch method {
+		case runnerwire.MethodSyncFolder:
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if err := json.Unmarshal(raw, &r.sent); err != nil {
+				return nil, err
+			}
+			return runnerwire.StreamResult{Stream: 4242}, nil
+		case runnerwire.MethodSyncFolderWait:
+			return r.account, nil
+		}
+		return nil, runnerwire.Refuse("scripted folder runner")
+	}})
+	go func() { _ = peer.Run(ctx) }()
+	t.Cleanup(func() { orgPeer.Close(); peer.Close() })
+	data, _ := json.Marshal(runnerwire.Caps{Folders: true, FolderPassOnce: true, MachineName: "alice-laptop"})
+	if err := peer.Event(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, ok := sub.Caps(); ok {
+			return runnerEndpoint{sub: sub, link: link}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the runner's caps never arrived")
+		}
+	}
+}
+
+// scriptedFolderFixture is a computer folder run whose runner is a scriptedFolderRunner.
+func scriptedFolderFixture(t *testing.T, account runnerwire.FolderPass) (*Server, *computerFolderStore, types.AgentRun, *scriptedFolderRunner) {
+	t.Helper()
+	s, cs, _, run, _, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	r := &scriptedFolderRunner{account: account}
+	id := cs.runner.ID
+	s.runnerStreams.subsMu.Lock()
+	s.runnerStreams.subs[id] = r.endpoint(t, id)
+	s.runnerStreams.subsMu.Unlock()
+	run.SandboxRef = "sbx"
+	return s, cs, run, r
+}
+
+// A pass that ended before the server took its stream is settled, with the runner's own account: its reason is
+// the pass's error and its counts stand, so a copy back is recorded for what it did, not for a missing stream.
+func TestComputerFolderPass_PassEndedIsSettled(t *testing.T) {
+	account := runnerwire.FolderPass{Pulled: 1, Unsynced: 2, Error: "the pass ran out of time"}
+	s, cs, run, _ := scriptedFolderFixture(t, account)
+	got, cut, settled, err := s.computerFolderPass(context.Background(), context.Background(), run, *cs.folder, true, passGuard{})
+	if err != nil || cut || !settled {
+		t.Fatalf("computerFolderPass = cut %v settled %v err %v, want the pass settled, not cut, no error", cut, settled, err)
+	}
+	if got.Error != account.Error || got.Pulled != 1 || got.Unsynced != 2 {
+		t.Errorf("the pass = %+v, want the runner's account %+v", got, account)
 	}
 }

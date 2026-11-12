@@ -799,6 +799,11 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		RunID: run.ID, Path: folder.Path, RemoteDir: folder.RemoteDir, Pull: pull, Deny: s.cfg.SyncDeny,
 	})
 	if err != nil {
+		// A pass that ended before its stream was taken has its own account: settled, as any pass the runner answered for.
+		var ended *remote.PassEnded
+		if errors.As(err, &ended) {
+			return ended.Pass, false, true, nil
+		}
 		return runnerwire.FolderPass{}, false, runnerReplied(err), fmt.Errorf("the runner could not start the sync: %w", err)
 	}
 	defer func() { _ = pass.Stream.Close() }()
