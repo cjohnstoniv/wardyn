@@ -73,7 +73,7 @@ type TerminalSandboxCursor struct {
 type RunContainer interface {
 	ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool) ([]TerminalSandboxRow, *TerminalSandboxCursor, error)
 	MarkRunFenced(ctx context.Context, id uuid.UUID) error
-	SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, now, since time.Time) (bool, error)
+	SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error)
 	ClearRunContainmentError(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
@@ -83,7 +83,8 @@ var _ RunContainer = PG{}
 // page of at most limit rows (never more than 500) after the cursor, or from the newest when after is nil.
 // The cursor answered is nil on the last page. With unfencedOnly it skips runs whose agent was already cut
 // off (fenced_at set) and reads agent_runs_unfenced_sandbox_idx; without it the page reads
-// agent_runs_terminal_sandbox_idx. No running run is ever listed.
+// agent_runs_terminal_sandbox_idx. No running run is ever listed. Each row says whether it is due, decided by
+// the database's now(), so the caller's clock never gates a visit.
 func (s PG) ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool) ([]TerminalSandboxRow, *TerminalSandboxCursor, error) {
 	rows, next, err := s.listTerminalSandboxPage(ctx, after, limit, unfencedOnly, 0)
 	for i := range rows {
@@ -154,9 +155,9 @@ func (s PG) listTerminalSandboxPage(ctx context.Context, after *TerminalSandboxC
 }
 
 // MarkRunFenced records that an ended run's agent was cut off every network: fenced_at is set once, and
-// only on a terminal run. It is written only after FenceProxy returned nil; a probe never counts.
+// only on a terminal run that still holds a sandbox. It is written only after FenceProxy returned nil; a probe never counts.
 func (s PG) MarkRunFenced(ctx context.Context, id uuid.UUID) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET fenced_at = now() WHERE id=$1 AND fenced_at IS NULL AND state = ANY($2)`,
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET fenced_at = now() WHERE id=$1 AND fenced_at IS NULL AND sandbox_ref <> '' AND state = ANY($2)`,
 		id, terminalRunStates); err != nil {
 		return fmt.Errorf("store: mark run fenced: %w", err)
 	}
@@ -165,18 +166,27 @@ func (s PG) MarkRunFenced(ctx context.Context, id uuid.UUID) error {
 
 // SetRunContainmentErrorSince records a failed containment cut of an ended run: the message always, and
 // the time the failures began. containment_error_at keeps an earlier stamp only if it is not older than
-// since; one older than since, or a missing one, is set to now. since is the caller's streak start (the
-// later of the run's due time, its last unobserved round and the process start), so a stamp left over
-// from before it never starts an ended run's streak: a kept-phase failure is recorded while the run is
-// still RUNNING, and nothing clears it at the end. It answers started when this call set the stamp to
-// now. A run that is not terminal has no row to update: started false, no error.
-func (s PG) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, now, since time.Time) (bool, error) {
+// the streak start; one older than that, or a missing one, is set to the database's now(). Every time in
+// it is the database's: the streak start is the latest of the run's due time (its end plus the lag, from
+// the row), now() minus startedAgo (how long ago this process started the loop) and now() minus
+// unobservedAgo (how long ago the run's last unobserved round, when there was one). The caller sends those
+// two as lengths of time measured on its monotonic clock, so a wrong server clock moves neither stamp nor
+// streak. A stamp left over from before the streak start never starts an ended run's streak: a kept-phase
+// failure is recorded while the run is still RUNNING, and nothing clears it at the end. It answers started
+// when this call set the stamp. A run that is not terminal, or holds no sandbox, has no row to update:
+// started false, no error.
+func (s PG) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error) {
+	var unobservedSecs *float64
+	if unobservedAgo != nil {
+		secs := unobservedAgo.Seconds()
+		unobservedSecs = &secs
+	}
 	var started bool
 	err := s.Pool.QueryRow(ctx, `
 		UPDATE agent_runs SET containment_error = $2,
-		       containment_error_at = CASE WHEN containment_error_at IS NULL OR containment_error_at < $4 THEN $3 ELSE containment_error_at END
-		 WHERE id = $1 AND state = ANY($5)
-		RETURNING containment_error_at = $3`, id, msg, pgTime(now), pgTime(since), terminalRunStates).Scan(&started)
+		       containment_error_at = CASE WHEN containment_error_at IS NULL OR containment_error_at < GREATEST(`+ContainmentDueSQL+`, now() - make_interval(secs => $3::float8), now() - make_interval(secs => $4::float8)) THEN now() ELSE containment_error_at END
+		 WHERE id = $1 AND sandbox_ref <> '' AND state = ANY($5)
+		RETURNING containment_error_at = now()`, id, msg, startedAgo.Seconds(), unobservedSecs, terminalRunStates).Scan(&started)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
