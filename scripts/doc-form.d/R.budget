@@ -57,7 +57,8 @@ RELEASING.md=6240 share=35 # +3 (rc.12 agent-sandbox backend), measured: the con
 # ROADMAP.md 1630 = 1601 + 29, measured: the v0.10.0-rc.16 Shipped row the release commit adds
 # ROADMAP.md 1670 = 1630 + 40, measured: the v0.10.0-rc.17 Shipped row the release commit adds
 # ROADMAP.md 1714 = 1670 + 44, measured: the v0.10.0-rc.18 Shipped row the release commit adds
-ROADMAP.md=1714 share=5
+# ROADMAP.md 1757 = 1714 + 43, measured: the v0.10.0-rc.19 Shipped row the release commit adds
+ROADMAP.md=1757 share=5
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6881 share=35 # -9 (internal wording removed), measured
 # docs/LIVE-TESTS.md 2517, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
