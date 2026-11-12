@@ -295,8 +295,8 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 | Safari `WarnAboutFraudulentWebsites` (Safe Browsing) | bool false, read back once | agent | yes | 2 |
 | Setup Assistant asked to quit in the agent's session for 2 minutes once the desktop is up | SIGTERM, off unless the base has `/Library/Wardyn/setup-assistant-quit` | agent | no | run |
 
-- The run-start Setup Assistant step is off by default, so the Apple Account pane can stay up in a run's window. When on, it waits until Dock and Finder run as `agent`, and never kills. Not yet tried on a real Mac.
-- To turn it on in a base, run `sudo touch /Library/Wardyn/setup-assistant-quit` in `edit-base`'s admin Terminal. Remove the file to turn it off.
+- The setup-assistant-quit switch signs the agent user out on macOS 26.6.2; leave it off. Without it, the default, Setup Assistant's Apple Account pane can stay up in a run's window.
+- To turn it off in a base, run `sudo rm -f /Library/Wardyn/setup-assistant-quit` in `edit-base`'s admin Terminal.
 - The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` skips the whole table.
 - The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" or "the console is not the agent account's", and the next update applies them.
 - The first update after an upgrade is answered by the base's old guest agent, which has no route for this: `tools.json` says "agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again". Run that command twice; it updates even when the base looks current.

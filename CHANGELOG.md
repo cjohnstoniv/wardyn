@@ -37,6 +37,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Known issues
 
+- macOS VM: the setup-assistant-quit switch signs the agent user out on macOS 26.6.2, and the run stops at the login window; leave it off.
 - A forced stop of an ended run, after its lock was held 5 minutes past the end, normally stops the sandbox. Changes not yet copied back to the laptop are lost and the run records "not brought back". The exception is a Docker sandbox hosted on the server. If its folder record could not be read, or its copy back may still be in flight, it is kept with its network proxy stopped, and "not brought back" may not be recorded. A failed stop is retried on the next watcher tick, normally within a minute. The same applies on runners, virtual machines and Kubernetes in server mode, which cannot stop the proxy alone.
 - A copy back that finds the folder busy on a sandbox that cannot be held (a virtual machine, or an agent that cannot be stopped alone) stops the sandbox at that visit and records "not brought back". The same happens to such a sandbox whose last pass may still be running on an older runner. Changes the running pass had not finished copying are lost.
 - Changes not yet copied back are lost when the laptop's runner is offline at the end of the run.
