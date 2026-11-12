@@ -81,4 +81,5 @@ const (
 	reasonEgressEditSuperseded    = "egress_edit_superseded"      // another revive replaced the edit's proxy start before it confirmed
 	// reasonEgressEditContainmentUnresolved: the new proxy did not confirm the edit, and its stop is not confirmed yet.
 	reasonEgressEditContainmentUnresolved = "egress_edit_containment_unresolved"
+	reasonEgressEditNoNetwork             = "egress_edit_no_network" // 409: a No network run's edit; it has nothing to narrow
 )

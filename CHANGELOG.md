@@ -26,6 +26,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A live egress edit that the run's substrate cannot apply now says what to do: "This run's network can't be changed while it runs on this substrate. Start a new run with the narrower policy." On a runner that must be updated first, it says to update the runner.
 - macOS VM windows say that paste from your Mac does not reach the VM, and the edit window says Type code types only the one-time code.
 - Ending a run with a Both ways folder now says that the folder does not come back, and names `wardyn folder bring-back`. The folder docs no longer point at a Bring back control the console does not have.
+- Kubernetes: where the egress canary shows NetworkPolicy enforced, a No network run's proxy pod now reaches only Wardyn. Its NetworkPolicy has no DNS rule and no route out of the cluster, and on a server Wardyn's internal address is pinned in the proxy pod's hosts file. A server without `WARDYN_K8S_CONTROL_PLANE_NAMESPACE` and `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` (the chart sets both) refuses No network runs. Under `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`, No network stays proxy-level, and the run's `run.dispatch` audit row says so.
+- A live egress edit of a No network run is refused with `409 egress_edit_no_network`, on every substrate.
 
 ### Fixed
 
@@ -73,6 +75,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If a run's lost mark cannot be written after its database lock was lost, the server tries to stop its proxy anyway, even when a newer revive has taken the run over.
 - On Docker, a late network edit can remove the proxy that a newer edit of the same run just started. The run then has no network (it never widens), but its policy reads as enforced until a background sweep ends the run, within about 66 minutes. Start a new run.
 - On Kubernetes, a narrowed proxy restarts on its launch policy if its deny list is lost: a node's disk wiped under the pod, or someone with exec rights deleting it. It allows the denied hosts until the next edit. One restarted over about 30 minutes in cannot renew, so its run ends within 65 minutes of its last renewal.
+- Kubernetes: a No network run's proxy pod reaches Wardyn through a pod-selector NetworkPolicy peer behind a Service address. A CNI that matches NetworkPolicy before Service translation blocks it, and the run fails about a minute after it starts, with a hint that names this. Use a CNI that matches after translation.
+- Kubernetes: where the server's proxy image, or the runner, is older than 0.10.0-rc.18, that proxy never confirms the policy it loaded, so nothing waits for it and the failure above does not happen. On such a CNI the run goes on until its run token lapses, about 65 minutes later, and the older token-lapse handling then ends it or marks it lost, without the hint that names this cause. A run that cannot be kept gets only the hint "run token lapsed: the control plane was unreachable past its renew window", which does not name the cause.
 
 ### Before you upgrade
 

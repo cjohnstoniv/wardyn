@@ -235,6 +235,10 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 		return egressEditResult{}, reviveRefused(http.StatusConflict, reasonEgressEditRunNotLive,
 			"the run is not live (state="+string(run.State)+"), so its egress cannot be edited; revive it first")
 	}
+	if noNetworkPreset(run.WallPreset) {
+		return egressEditResult{}, reviveRefused(http.StatusConflict, reasonEgressEditNoNetwork,
+			"This run has no network, so an edit has nothing to change. Start a new run with the policy you want.")
+	}
 	if rerr := s.egressEditSupported(r.Context(), run); rerr != nil {
 		return egressEditResult{}, rerr
 	}

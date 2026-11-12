@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -167,7 +168,7 @@ func testAgentCannotReachAnythingButTheProxy(t *testing.T, r runner.Runner, agen
 	}
 	ctlScript := "mkdir -p /tmp/www && echo ok > /tmp/www/index.html && httpd -p 8080 -h /tmp/www || exit 1\n" +
 		reachabilityScript(ctlTargets) + "exec sleep 3600\n"
-	ctlIP, ctl := startControlPod(t, ctx, cs, ns, agentImage, ctlScript)
+	ctlIP, ctl := startControlPod(t, ctx, cs, ns, agentImage, ctlScript, nil)
 	for _, k := range []string{"apiserver", "cluster_pod", "dns_cluster", "dns_own"} {
 		if ctl[k] != "REACHED" {
 			t.Fatalf("an unconfined pod in namespace %s could not reach %s (%s) — on this cluster the agent's BLOCKED there would prove nothing", ns, k, ctl[k])
@@ -208,15 +209,186 @@ func testAgentCannotReachAnythingButTheProxy(t *testing.T, r runner.Runner, agen
 	}
 }
 
-// startControlPod runs script in an UNCONFINED pod (no wardyn labels, so no
+// The label a stand-in for Wardyn carries, and the one TestConformanceK8s's ControlPlanePeer selects.
+const (
+	standInLabelKey   = "wardyn.conformance-control-plane"
+	standInLabelValue = "true"
+)
+
+// testNoNetworkProxyPodReachesOnlyWardyn proves, on a cluster whose CNI enforces NetworkPolicy, what a No
+// network run's proxy NetworkPolicy lets through. A stand-in for Wardyn (a pod with the suite's peer label, and
+// a Service in front of it) is the one thing it may reach. A probe pod that carries a run's proxy labels is
+// selected by that run's proxy policy, and dials the targets:
+//
+//	wardyn_pod         the stand-in pod, on its port 8080
+//	wardyn_other_port  the stand-in pod, on 8081: the rule's port limit
+//	wardyn_svc         the stand-in's ClusterIP on 8080: a pod-selector peer matched after Service translation
+//	cluster_pod        an ordinary pod in the same namespace
+//	apiserver          the control-plane Service
+//	dns_cluster        the cluster DNS Service, asked for kubeName (UDP 53)
+//	metadata, public   169.254.169.254:80 and 1.1.1.1:80
+//
+// An ordinary run's probe is the control: it must reach all but metadata and public, or the No network
+// verdicts prove nothing on this cluster. The No network run's probe must reach the stand-in and its
+// ClusterIP, and nothing else.
+func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agentImage string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cs, ns := conformanceClientset(t)
+
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skip("no ConfinementClasses declared; cannot create a sandbox")
+	}
+	dnsSvc, err := cs.CoreV1().Services("kube-system").Get(ctx, "kube-dns", metav1.GetOptions{})
+	if err != nil || dnsSvc.Spec.ClusterIP == "" {
+		t.Fatalf("the cluster DNS Service kube-system/kube-dns: %v", err)
+	}
+	dnsIP := dnsSvc.Spec.ClusterIP
+	serve := "mkdir -p /tmp/www && echo ok > /tmp/www/index.html && httpd -p 8080 -h /tmp/www"
+
+	// The unconfined control: what this cluster lets an ordinary pod reach.
+	ctlScript := serve + " || exit 1\n" + reachabilityScript([]probeTarget{
+		{name: "apiserver", host: "$KUBERNETES_SERVICE_HOST", port: "$KUBERNETES_SERVICE_PORT"},
+		{name: "metadata", host: "169.254.169.254", port: "80"},
+		{name: "public", host: "1.1.1.1", port: "80"},
+		{name: "dns_cluster", host: dnsIP, dns: true},
+	}) + "exec sleep 3600\n"
+	ctlIP, ctl := startControlPod(t, ctx, cs, ns, agentImage, ctlScript, nil)
+	for _, k := range []string{"apiserver", "dns_cluster"} {
+		if ctl[k] != "REACHED" {
+			t.Fatalf("an unconfined pod in namespace %s could not reach %s (%s) — on this cluster the proxy pod's BLOCKED there would prove nothing", ns, k, ctl[k])
+		}
+	}
+
+	// The stand-in for Wardyn, on two ports, and a Service in front of it on one.
+	standLabels := map[string]string{standInLabelKey: standInLabelValue}
+	standIP, _ := startControlPod(t, ctx, cs, ns, agentImage, serve+" && httpd -p 8081 -h /tmp/www || exit 1\necho done=1\nexec sleep 3600\n", standLabels)
+	svc, err := cs.CoreV1().Services(ns).Create(ctx, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "wardyn-conformance-standin-" + uuid.NewString()[:8], Namespace: ns},
+		Spec: corev1.ServiceSpec{
+			Selector: standLabels,
+			Ports:    []corev1.ServicePort{{Name: "http", Protocol: corev1.ProtocolTCP, Port: 8080, TargetPort: intstr.FromInt32(8080)}},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create the stand-in's Service: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cs.CoreV1().Services(ns).Delete(context.Background(), svc.Name, metav1.DeleteOptions{})
+	})
+	svcIP := svc.Spec.ClusterIP
+	if svcIP == "" {
+		t.Fatalf("the stand-in's Service %s has no ClusterIP", svc.Name)
+	}
+
+	// probe creates a run and a probe pod that carries its proxy's labels, and returns what the probe reached.
+	// settle is how many seconds the pod waits before it probes anything.
+	// The probes fire once, at container start, so the script first retries wardyn_pod for up to about 2 minutes
+	// (20 tries of a 3 s connect and a 3 s sleep; the NetworkPolicy may not be programmed yet) and then
+	// wardyn_svc for up to about 1 minute (10 tries; its endpoints may lag).
+	probe := func(what string, noNetwork bool, settle int) map[string]string {
+		spec := runner.SandboxSpec{
+			RunID:            uuid.New(),
+			Image:            agentImage,
+			ConfinementClass: caps.ConfinementClasses[len(caps.ConfinementClasses)-1],
+			Labels:           map[string]string{"wardyn.conformance": "true"},
+			// Loopback passes the proxy's plaintext check, and 8080 is the No network rule's port.
+			ProxyConfig: runner.ProxyConfig{ControlPlaneURL: "http://127.0.0.1:8080", RunToken: "conformance", NoNetwork: noNetwork},
+			Resources:   runner.Resources{CPUMillis: 250, MemoryMiB: 128},
+		}
+		sb, err := r.CreateSandbox(ctx, spec)
+		if err != nil {
+			t.Fatalf("CreateSandbox (%s): %v", what, err)
+		}
+		t.Cleanup(func() {
+			stopCtx, stop := context.WithTimeout(context.Background(), time.Minute)
+			defer stop()
+			_ = r.StopSandbox(stopCtx, sb.Ref)
+		})
+		proxies, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: "wardyn.run-id=" + spec.RunID.String() + ",wardyn.component=proxy",
+		})
+		if err != nil || len(proxies.Items) != 1 {
+			t.Fatalf("%s: the run's proxy pod (err %v, %d pods)", what, err, len(proxies.Items))
+		}
+		src := proxies.Items[0].Labels
+		labels := map[string]string{
+			"wardyn.managed":   src["wardyn.managed"],
+			"wardyn.run-id":    src["wardyn.run-id"],
+			"wardyn.component": src["wardyn.component"],
+		}
+		retry := func(host, port string, tries int) string {
+			return fmt.Sprintf("n=0\nuntil nc -z -w3 %s %s >/dev/null 2>&1; do n=$((n+1)); [ \"$n\" -ge %d ] && break; sleep 3; done\n", host, port, tries)
+		}
+		script := fmt.Sprintf("sleep %d\n", settle) + retry(standIP, "8080", 20) + retry(svcIP, "8080", 10) + reachabilityScript([]probeTarget{
+			{name: "wardyn_pod", host: standIP, port: "8080"},
+			{name: "wardyn_other_port", host: standIP, port: "8081"},
+			{name: "wardyn_svc", host: svcIP, port: "8080"},
+			{name: "cluster_pod", host: ctlIP, port: "8080"},
+			{name: "apiserver", host: "$KUBERNETES_SERVICE_HOST", port: "$KUBERNETES_SERVICE_PORT"},
+			{name: "dns_cluster", host: dnsIP, dns: true},
+			{name: "metadata", host: "169.254.169.254", port: "80"},
+			{name: "public", host: "1.1.1.1", port: "80"},
+		}) + "exec sleep 3600\n"
+		_, got := startControlPod(t, ctx, cs, ns, agentImage, script, labels)
+		if got["done"] != "1" || got["tool_nc"] != "ok" || got["tool_nslookup"] != "ok" || got["env_apiserver"] == ":" {
+			t.Fatalf("%s: the probe could not run (done=%q tool_nc=%q tool_nslookup=%q env_apiserver=%q) — an environment problem, not a verdict either way",
+				what, got["done"], got["tool_nc"], got["tool_nslookup"], got["env_apiserver"])
+		}
+		if got["wardyn_pod"] != "REACHED" {
+			t.Fatalf("%s: the probe pod's NetworkPolicy was not programmed in about 2 minutes (wardyn_pod %s)", what, got["wardyn_pod"])
+		}
+		return got
+	}
+
+	// The control: an ordinary run's proxy pod reaches all of it.
+	ordinary := probe("ordinary run", false, 0)
+	for _, k := range []string{"wardyn_pod", "wardyn_other_port", "wardyn_svc", "cluster_pod", "apiserver", "dns_cluster"} {
+		if ordinary[k] != "REACHED" {
+			t.Fatalf("an ordinary run's proxy pod could not reach %s (%s) — on this cluster the No network verdicts prove nothing", k, ordinary[k])
+		}
+	}
+
+	got := probe("No network run", true, 0)
+	// wardyn_pod is REACHED before the proxy's policy selects the probe pod and after it, so it cannot show the
+	// policy is programmed. A CNI that programs it late reads a target REACHED that the policy blocks: such a
+	// target is probed once more, by a fresh run whose probe pod waits 10 s before it probes, so that run's policy
+	// has had that long to be programmed, and fails only if that pod reads REACHED again.
+	for _, k := range []string{"wardyn_other_port", "cluster_pod", "apiserver", "dns_cluster", "metadata", "public"} {
+		if got[k] == "REACHED" {
+			t.Logf("the first No network probe read %s REACHED (all: %v); probing once more with a fresh pod", k, got)
+			got = probe("No network run, second probe", true, 10)
+			break
+		}
+	}
+	if got["wardyn_svc"] != "REACHED" {
+		t.Fatalf("a pod-selector NetworkPolicy peer was not matched after Service translation: a No network run's proxy cannot reach Wardyn on this CNI (wardyn_svc %s)", got["wardyn_svc"])
+	}
+	for _, k := range []string{"wardyn_other_port", "cluster_pod", "apiserver", "dns_cluster", "metadata", "public"} {
+		switch {
+		case got[k] != "BLOCKED":
+			t.Errorf("a No network run's proxy pod reached %s (%s) — its NetworkPolicy must allow Wardyn on its port and nothing else", k, got[k])
+		case (k == "metadata" || k == "public") && ctl[k] != "REACHED":
+			t.Logf("%s: BLOCKED, but the unconfined control could not reach it either, so this cluster does not prove it", k)
+		}
+	}
+}
+
+// startControlPod runs script in an UNCONFINED pod (no wardyn labels unless labels says so, so no
 // run NetworkPolicy selects it; PSS-restricted security context, so it is
 // admitted where runs are) and returns its IP and the key=value lines the
-// script logged up to done=1.
-func startControlPod(t *testing.T, ctx context.Context, cs kubernetes.Interface, ns, image, script string) (string, map[string]string) {
+// script logged up to done=1. labels, when set, are the pod's own: a probe that carries a run's proxy labels
+// is selected by that run's proxy NetworkPolicy.
+func startControlPod(t *testing.T, ctx context.Context, cs kubernetes.Interface, ns, image, script string, labels map[string]string) (string, map[string]string) {
 	t.Helper()
 	name := "wardyn-conformance-netctl-" + uuid.NewString()[:8]
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: ptr(false),

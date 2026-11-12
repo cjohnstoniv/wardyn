@@ -1196,3 +1196,34 @@ func TestEgressEdit_SupersededAfterAFailedReplaceStartsFromTheEditedConfig(t *te
 		}
 	}
 }
+
+// A live edit of a No network run is refused 409 egress_edit_no_network before anything else: it has nothing to
+// narrow, so no proxy is replaced or reloaded, and the run.egress.edit row carries the reason. A run with
+// another preset still reaches the substrate check. Catches the check placed after the revive.
+func TestEgressEdit_NoNetworkRunIsRefused(t *testing.T) {
+	const msg = "This run has no network, so an edit has nothing to change. Start a new run with the policy you want."
+	f := newEgressEditFixture(t)
+	f.st.run.WallPreset = &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Name: "No network", Scope: types.WallPresetScopeBuiltin}
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	if w.Code != http.StatusConflict || errorReason(w) != reasonEgressEditNoNetwork || !strings.Contains(w.Body.String(), msg) {
+		t.Fatalf("edit: %d %s, want 409 %s saying %q", w.Code, w.Body.String(), reasonEgressEditNoNetwork, msg)
+	}
+	if n := len(f.rr.replaced); n != 0 {
+		t.Errorf("ReplaceProxy calls = %d, want 0", n)
+	}
+	ev := f.audit.eventsFor(f.run.ID, "run.egress.edit")
+	if len(ev) != 1 || ev[0].Outcome != "denied" {
+		t.Fatalf("run.egress.edit rows = %+v, want one denied", ev)
+	}
+	if d := leaseAuditData(t, ev[0]); d["reason"] != reasonEgressEditNoNetwork {
+		t.Errorf("row reason = %v, want %s", d["reason"], reasonEgressEditNoNetwork)
+	}
+
+	// Another preset goes on to the substrate check, which a runner that cannot hash refuses.
+	g := newEgressEditFixture(t)
+	g.st.run.WallPreset = &types.WallPresetOnRun{ID: "other", Name: "Other", Scope: types.WallPresetScopeBuiltin}
+	g.srv.cfg.Runner = g.rr
+	if w := g.editEgress(t, `{"deny_hosts":["evil.example"]}`); w.Code != http.StatusConflict || errorReason(w) != reasonEgressEditUnsupported {
+		t.Errorf("another preset: %d %s, want 409 %s from the substrate check", w.Code, w.Body.String(), reasonEgressEditUnsupported)
+	}
+}
