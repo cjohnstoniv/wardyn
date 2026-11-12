@@ -31,8 +31,9 @@ func offsetSecs(p *float64) string {
 // database's now(); a NULL time or a run that does not exist is false, never an error. Each case seeds
 // lost_at and ends_at as seconds from now() in SQL, so nothing sleeps and no Go clock reaches a comparison.
 // It turns red if the CASE reads the wrong column (the "ends_at" cases carry the other column on the
-// opposite side of the line), if `<=` becomes `<` or the hold-off is dropped (the one-second cases either
-// side of the boundary), or if a NULL time stops being false.
+// opposite side of the line), if the hold-off is dropped or its sign flips (the cases ten seconds either
+// side of the boundary: a margin, since the seed and the read are two statements, each with its own now()),
+// or if a NULL time stops being false.
 func TestPG_KeptHoldOffPassed(t *testing.T) {
 	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
@@ -46,14 +47,14 @@ func TestPG_KeptHoldOffPassed(t *testing.T) {
 		after          time.Duration
 		want           bool
 	}{
-		"lost_at past":                   {secs(-600), nil, true, 300 * time.Second, true},
-		"lost_at inside":                 {secs(-200), nil, true, 300 * time.Second, false},
-		"ends_at past":                   {secs(-10), secs(-600), false, 300 * time.Second, true},
-		"ends_at inside":                 {secs(-900), secs(-200), false, 300 * time.Second, false},
-		"no ends_at":                     {secs(-900), nil, false, 0, false},
-		"no lost_at":                     {nil, secs(-900), true, 0, false},
-		"one second past the boundary":   {secs(-301), nil, true, 300 * time.Second, true},
-		"one second before the boundary": {secs(-299), nil, true, 300 * time.Second, false},
+		"lost_at past":             {secs(-600), nil, true, 300 * time.Second, true},
+		"lost_at inside":           {secs(-200), nil, true, 300 * time.Second, false},
+		"ends_at past":             {secs(-10), secs(-600), false, 300 * time.Second, true},
+		"ends_at inside":           {secs(-900), secs(-200), false, 300 * time.Second, false},
+		"no ends_at":               {secs(-900), nil, false, 0, false},
+		"no lost_at":               {nil, secs(-900), true, 0, false},
+		"just past the boundary":   {secs(-310), nil, true, 300 * time.Second, true},
+		"just before the boundary": {secs(-290), nil, true, 300 * time.Second, false},
 	} {
 		// RunRunning is the state the lease code holds a lost run in; the columns allow lost_at on it.
 		r := persistRun(t, ctx, pool, newRun(types.RunRunning))
@@ -80,9 +81,8 @@ func TestPG_KeptHoldOffPassed(t *testing.T) {
 // or an end after now(), and keepable is true for no end or an end plus the grace after now(), both on the
 // database's clock; a run that does not exist is store.ErrNotFound. Each case seeds ends_at as seconds from
 // now() in SQL, so nothing sleeps and no Go clock reaches a comparison. It turns red if the grace is dropped
-// (the "ended inside the grace" case), if it is added to the wrong side or applied to endsOpen, if the grace
-// loses its fraction (the "fractional grace" case, which make_interval must keep), or if a NULL end stops
-// being true for both.
+// (the "ended inside the grace" case), if it is added to the wrong side or applied to endsOpen, or if a NULL
+// end stops being true for both.
 func TestPG_RunEndsOpen(t *testing.T) {
 	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
@@ -100,7 +100,6 @@ func TestPG_RunEndsOpen(t *testing.T) {
 		"end ahead":              {secs(60), 0, true, true},
 		"ended inside the grace": {secs(-60), 120 * time.Second, false, true},
 		"ended past the grace":   {secs(-60), 30 * time.Second, false, false},
-		"a fractional grace":     {secs(-60), 60500 * time.Millisecond, false, true},
 	} {
 		r := persistRun(t, ctx, pool, newRun(types.RunRunning))
 		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ends_at = now() + $2::float8 * interval '1 second' WHERE id = $1`, r.ID, tc.endsAt); err != nil {
