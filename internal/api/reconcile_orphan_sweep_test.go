@@ -536,12 +536,13 @@ func cutFailureRows(audit *deadCtxRefusingAudit, id uuid.UUID) int {
 	return n
 }
 
-// Cuts that never answer share the label sweep's one bound, not a fresh bound each: three of them hold the sweep no
-// longer than that bound, plus one runTeardownBudget for the failure row of the cut it ended; the first is sent and
-// times out, and the others are not sent once it is spent. None of the runs is called an orphan or loses its ref, so
-// each is still owed to the terminal sweep, and the next sweep, whose cuts answer, decides every one of them. Nothing
-// is dropped. Catches: a fresh bound per cut (N times the bound per tick), and a timed-out cut read as an orphan whose
-// stop then fails on the spent sweep.
+// Cuts that never answer share the label sweep's one bound, not a fresh bound each: three of them take that bound in
+// all, and the failure row of the cut it ended may take up to one runTeardownBudget past it (the allowance the
+// slow-row pin, TestOrphanSweep_ASlowFailureRowTakesOneTeardownBudgetPastTheBound, tests; the sweep's own reads and
+// the lock's release are outside both). The first cut is sent and times out, and the others are not sent once the
+// bound is spent. None of the runs is called an orphan or loses its ref, so each is still owed to the terminal sweep,
+// and the next sweep, whose cuts answer, decides every one of them. Nothing is dropped. Catches: a fresh bound per
+// cut (N times the bound per sweep), and a timed-out cut read as an orphan whose stop then fails on the spent sweep.
 func TestOrphanSweep_HangingCutsShareTheSweepsBoundAndAreLeftOwed(t *testing.T) {
 	old := reconcileCutBound
 	reconcileCutBound = 100 * time.Millisecond // a fresh per-cut bound, were one given, would also time out
@@ -618,9 +619,10 @@ func (a *slowRowAudit) noted() (deadline, returned time.Time) {
 
 // The failure row of the cut the sweep's bound ended is the one write allowed past that bound: on an audit log that
 // is slow but honours its context, the row's context ends no later than the sweep's end plus one runTeardownBudget,
-// the row is written, and the sweep returns once that write does. Catches: a row on a context that outlives the
-// budget (so the tick's stated bound is wrong), a row on the spent sweep context (lost), and a wait after the row.
-func TestOrphanSweep_ASlowFailureRowHoldsTheTickNoMoreThanOneTeardownBudgetPastTheBound(t *testing.T) {
+// the row is written, and the sweep returns once that write does. It pins that allowance on the cuts and their row,
+// not a bound on the whole sweep (whose own reads here are a fake's). Catches: a row on a context that outlives the
+// budget (so the stated allowance is wrong), a row on the spent sweep context (lost), and a wait after the row.
+func TestOrphanSweep_ASlowFailureRowTakesOneTeardownBudgetPastTheBound(t *testing.T) {
 	const bound, slow, slack = 100 * time.Millisecond, 300 * time.Millisecond, time.Second
 	srv, st, rn, audit := keptSweepRig(t, 1, bound)
 	sa := &slowRowAudit{deadCtxRefusingAudit: audit, slow: slow}

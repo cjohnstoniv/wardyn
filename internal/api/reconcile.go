@@ -283,9 +283,13 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
-	// hazard); what one sweep leaves, the next takes. The cuts the sweep makes, and the lock each one takes, share
-	// this bound: they hold the tick for at most orphanSweepBound, plus one runTeardownBudget for the failure-row
-	// write of the cut that the bound ended (copyBackCut writes that row on a teardownCtx of its own).
+	// hazard); what one sweep leaves, the next takes. The run-op lock waits and the cuts the sweep makes run inside
+	// this bound, orphanSweepBound. One cut's failure row may then take up to one runTeardownBudget past it:
+	// copyBackCut writes the row on a teardownCtx of its own, so the row of a cut the bound ended, or of one that
+	// failed just before it, gets that budget (TestOrphanSweep_ASlowFailureRowTakesOneTeardownBudgetPastTheBound
+	// pins this allowance). The sum covers the lock waits, the cuts and that one row, not the whole sweep: each
+	// lock's release (its connection closes on a budget of its own) and the sweep's own reads (runsByID,
+	// LiveImageCheckAttempts, RunWatcherFresh) run on ctx, outside it.
 	sctx, cancel := context.WithTimeout(ctx, orphanSweepBound)
 	defer cancel()
 	sweepEnd, _ := sctx.Deadline()
@@ -315,9 +319,9 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 			defer unlock()
 			// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
 			// owner's give-up at the cap ends the keep. The cut runs on the sweep's own bound, not a fresh one per
-			// run, so cuts that never answer hold the sweep for one bound in all, plus one runTeardownBudget for the
-			// failure row of the cut that the bound ended. A cut that bound ended decides nothing: the run keeps its
-			// ref and is left to the terminal sweep and the next label sweep.
+			// run, so cuts that never answer take one bound in all, and one failure row up to one runTeardownBudget
+			// past it (the allowance at sctx above; the lock's release is outside both). A cut that bound ended
+			// decides nothing: the run keeps its ref and is left to the terminal sweep and the next label sweep.
 			vctx, vcancel := context.WithDeadline(lctx, sweepEnd)
 			defer vcancel()
 			v, _, _ := s.folderKeepVerdict(vctx, run, "sandbox.orphan.sweep")
@@ -431,9 +435,10 @@ func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
 // reconcileCutBound is the bound of one boot orphan pass cut; a variable only so a test can shorten it.
 var reconcileCutBound = reconcileFinalizeTimeout
 
-// orphanSweepBound is the label sweep's bound (sweepOrphanedSandboxes), which every cut it makes shares. Its cuts
-// hold the sweep's tick for at most this, plus one runTeardownBudget for the failure-row write of the cut that the
-// bound ended. A variable only so a test can shorten it.
+// orphanSweepBound is the label sweep's bound (sweepOrphanedSandboxes) on its run-op lock waits and the cuts it
+// makes, which all share it; one cut's failure row may take up to one runTeardownBudget past it. It does not bound
+// the whole sweep: the locks' release and the sweep's own reads are outside it. A variable only so a test can
+// shorten it.
 var orphanSweepBound = reconcileFinalizeTimeout
 
 // boundedKeepVerdict is folderKeepVerdict on the bound of one boot teardown call (reconcileFinalizeTimeout): the
