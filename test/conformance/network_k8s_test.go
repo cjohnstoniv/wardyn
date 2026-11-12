@@ -287,10 +287,11 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 	}
 
 	// probe creates a run and a probe pod that carries its proxy's labels, and returns what the probe reached.
+	// settle is how many seconds the pod waits before it probes anything.
 	// The probes fire once, at container start, so the script first retries wardyn_pod for up to about 2 minutes
 	// (20 tries of a 3 s connect and a 3 s sleep; the NetworkPolicy may not be programmed yet) and then
 	// wardyn_svc for up to about 1 minute (10 tries; its endpoints may lag).
-	probe := func(what string, noNetwork bool) map[string]string {
+	probe := func(what string, noNetwork bool, settle int) map[string]string {
 		spec := runner.SandboxSpec{
 			RunID:            uuid.New(),
 			Image:            agentImage,
@@ -324,7 +325,7 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 		retry := func(host, port string, tries int) string {
 			return fmt.Sprintf("n=0\nuntil nc -z -w3 %s %s >/dev/null 2>&1; do n=$((n+1)); [ \"$n\" -ge %d ] && break; sleep 3; done\n", host, port, tries)
 		}
-		script := retry(standIP, "8080", 20) + retry(svcIP, "8080", 10) + reachabilityScript([]probeTarget{
+		script := fmt.Sprintf("sleep %d\n", settle) + retry(standIP, "8080", 20) + retry(svcIP, "8080", 10) + reachabilityScript([]probeTarget{
 			{name: "wardyn_pod", host: standIP, port: "8080"},
 			{name: "wardyn_other_port", host: standIP, port: "8081"},
 			{name: "wardyn_svc", host: svcIP, port: "8080"},
@@ -346,22 +347,22 @@ func testNoNetworkProxyPodReachesOnlyWardyn(t *testing.T, r runner.Runner, agent
 	}
 
 	// The control: an ordinary run's proxy pod reaches all of it.
-	ordinary := probe("ordinary run", false)
+	ordinary := probe("ordinary run", false, 0)
 	for _, k := range []string{"wardyn_pod", "wardyn_other_port", "wardyn_svc", "cluster_pod", "apiserver", "dns_cluster"} {
 		if ordinary[k] != "REACHED" {
 			t.Fatalf("an ordinary run's proxy pod could not reach %s (%s) — on this cluster the No network verdicts prove nothing", k, ordinary[k])
 		}
 	}
 
-	got := probe("No network run", true)
+	got := probe("No network run", true, 0)
 	// wardyn_pod is REACHED before the proxy's policy selects the probe pod and after it, so it cannot show the
 	// policy is programmed. A CNI that programs it late reads a target REACHED that the policy blocks: such a
-	// target is probed once more, 10 s later, by a fresh pod, and fails only if that pod reads REACHED again.
+	// target is probed once more, by a fresh run whose probe pod waits 10 s before it probes, so that run's policy
+	// has had that long to be programmed, and fails only if that pod reads REACHED again.
 	for _, k := range []string{"wardyn_other_port", "cluster_pod", "apiserver", "dns_cluster", "metadata", "public"} {
 		if got[k] == "REACHED" {
 			t.Logf("the first No network probe read %s REACHED (all: %v); probing once more with a fresh pod", k, got)
-			time.Sleep(10 * time.Second)
-			got = probe("No network run, second probe", true)
+			got = probe("No network run, second probe", true, 10)
 			break
 		}
 	}

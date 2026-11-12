@@ -656,7 +656,7 @@ func (s *Server) runOnKubernetes(run types.AgentRun) bool {
 // runUnrevivable: in server mode, the run's own substrate cannot replace a proxy, as the runner answers
 // through CanReplaceProxy (the orchestrator wraps every substrate, so the interface alone says nothing); on a
 // runner, its last caps say EndsUnkept. Any other CanReplaceProxy error, and caps not held, read as revivable,
-// so such a run keeps today's handling. As reviveSourceConfig reads the same answer.
+// so such a run keeps today's handling. reviveSourceConfig reads the same answer.
 func (s *Server) runUnrevivable(ctx context.Context, run types.AgentRun) bool {
 	if run.RunnerID == nil {
 		rv, ok := s.cfg.Runner.(runner.ProxyReviver)

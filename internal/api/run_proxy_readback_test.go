@@ -764,6 +764,7 @@ func TestReadback_NoNetworkFirstStartDecidedBySubstrateAnswer(t *testing.T) {
 		{"Docker alone, answers nil, background", "docker", canRevive, false, false, false, plain},
 		{"Docker alone, answers nil, still starting", "docker", canRevive, false, true, true, plain},
 		{"Docker alone, answers another error, interactive", "docker", unreadable, false, true, false, kept},
+		{"Docker alone, answers unsupported, interactive", "docker", unsupported, false, true, false, plain},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newEgressEditFixture(t)
