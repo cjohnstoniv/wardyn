@@ -350,7 +350,8 @@ func TestViaOrg_PerRunCaps(t *testing.T) {
 	}
 
 	// The total is the run's: an idle release and a runner reconnect keep it spent.
-	setViaOrgSeams(t, 150*time.Millisecond, 20*time.Millisecond, 8)
+	// The watcher never ticks here: the test makes the idle release itself, so nothing depends on the clock.
+	setViaOrgSeams(t, viaOrgIdleTimeout, time.Hour, 8)
 	k := newViaOrgAPIFixture(t)
 	exhausted := func(stage string) {
 		t.Helper()
@@ -358,9 +359,21 @@ func TestViaOrg_PerRunCaps(t *testing.T) {
 			t.Fatalf("%s = %d %s, want 429 via_org_cap_exceeded", stage, w.Code, w.Body)
 		}
 	}
-	k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost)
+	if w := k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK {
+		t.Fatalf("the first forward = %d %s, want 200", w.Code, w.Body)
+	}
+	if hits, _, _ := k.up.seen(); hits != 1 {
+		t.Fatalf("the first forward reached the destination %d times, want 1", hits)
+	}
 	exhausted("past the total")
-	waitFor(t, "the idle release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })
+	k.srv.viaOrg.mu.Lock()
+	kRun := k.srv.viaOrg.runs[k.run.ID]
+	k.srv.viaOrg.mu.Unlock()
+	idleGen := kRun.closeIdle(time.Now().Add(2 * viaOrgIdleTimeout))
+	if idleGen == nil {
+		t.Fatal("no idle release past the timeout")
+	}
+	closeViaOrgGen(k.run.ID, idleGen)
 	exhausted("after the idle release")
 	k.srv.RecordRunnerDisconnected(context.Background(), k.rn.ID, nil)
 	waitFor(t, "the disconnect release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })

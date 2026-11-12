@@ -300,6 +300,9 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 		return nil, nil, errors.New("via_org: the run's egress closed")
 	}
 	run.engine, run.routes = &viaOrgGen{engine: engine}, routes
+	run.smu.Lock()
+	run.idleSince = time.Now() // a fresh engine is not idle: it has the whole timeout to admit its stream
+	run.smu.Unlock()
 	return run.engine, routes, nil
 }
 
