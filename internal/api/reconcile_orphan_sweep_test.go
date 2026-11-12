@@ -536,10 +536,11 @@ func cutFailureRows(audit *deadCtxRefusingAudit, id uuid.UUID) int {
 }
 
 // Cuts that never answer share the label sweep's one bound, not a fresh bound each: three of them hold the sweep no
-// longer than that bound, the first is sent and times out, and the others are not sent once it is spent. None of
-// the runs is called an orphan or loses its ref, so each is still owed to the terminal sweep, and the next sweep,
-// whose cuts answer, decides every one of them. Nothing is dropped. Catches: a fresh bound per cut (N times the
-// bound per tick), and a timed-out cut read as an orphan whose stop then fails on the spent sweep.
+// longer than that bound, plus one runTeardownBudget for the failure row of the cut it ended; the first is sent and
+// times out, and the others are not sent once it is spent. None of the runs is called an orphan or loses its ref, so
+// each is still owed to the terminal sweep, and the next sweep, whose cuts answer, decides every one of them. Nothing
+// is dropped. Catches: a fresh bound per cut (N times the bound per tick), and a timed-out cut read as an orphan whose
+// stop then fails on the spent sweep.
 func TestOrphanSweep_HangingCutsShareTheSweepsBoundAndAreLeftOwed(t *testing.T) {
 	old := reconcileCutBound
 	reconcileCutBound = 100 * time.Millisecond // a fresh per-cut bound, were one given, would also time out
@@ -581,6 +582,68 @@ func TestOrphanSweep_HangingCutsShareTheSweepsBoundAndAreLeftOwed(t *testing.T) 
 	}
 	if rn.cuts() != 1+len(st.runs) {
 		t.Errorf("%d cuts over two sweeps; want %d: every run cut in the second", rn.cuts(), 1+len(st.runs))
+	}
+}
+
+// slowRowAudit is deadCtxRefusingAudit whose cut failure rows are slow but honour their context: each waits slow, or
+// until its context ends, and the row's context deadline and the time the write returned are noted.
+type slowRowAudit struct {
+	*deadCtxRefusingAudit
+	slow               time.Duration
+	mu                 sync.Mutex
+	deadline, returned time.Time
+}
+
+func (a *slowRowAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if ev.Action == "sandbox.orphan.sweep" && ev.Outcome == "failure" {
+		dl, _ := ctx.Deadline()
+		select {
+		case <-ctx.Done():
+		case <-time.After(a.slow):
+		}
+		a.mu.Lock()
+		a.deadline, a.returned = dl, time.Now()
+		a.mu.Unlock()
+	}
+	return a.deadCtxRefusingAudit.Record(ctx, ev)
+}
+
+func (a *slowRowAudit) noted() (deadline, returned time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.deadline, a.returned
+}
+
+// The failure row of the cut the sweep's bound ended is the one write allowed past that bound: on an audit log that
+// is slow but honours its context, the row's context ends no later than the sweep's end plus one runTeardownBudget,
+// the row is written, and the sweep returns once that write does. Catches: a row on a context that outlives the
+// budget (so the tick's stated bound is wrong), a row on the spent sweep context (lost), and a wait after the row.
+func TestOrphanSweep_ASlowFailureRowHoldsTheTickNoMoreThanOneTeardownBudgetPastTheBound(t *testing.T) {
+	const bound, slow, slack = 100 * time.Millisecond, 300 * time.Millisecond, time.Second
+	srv, st, rn, audit := keptSweepRig(t, 1, bound)
+	sa := &slowRowAudit{deadCtxRefusingAudit: audit, slow: slow}
+	srv.cfg.Audit = sa
+	rn.hang.Store(true)
+	start := time.Now()
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	took, end := time.Since(start), time.Now()
+	cutEnd := rn.deadline(0)
+	dl, returned := sa.noted()
+	if cutEnd.IsZero() || dl.IsZero() || returned.IsZero() {
+		t.Fatalf("cut deadline %v, row deadline %v, row returned %v; want a timed-out cut and its row", cutEnd, dl, returned)
+	}
+	if !dl.After(cutEnd) || dl.After(start.Add(bound+runTeardownBudget+slack)) {
+		t.Errorf("the row's context ends %v after the cut's and %v after the sweep began; want past the cut and within "+
+			"the bound %v plus one runTeardownBudget %v", dl.Sub(cutEnd), dl.Sub(start), bound, runTeardownBudget)
+	}
+	if n := cutFailureRows(audit, st.runs[0].ID); n != 1 {
+		t.Errorf("%d cut failure rows; want the timed-out cut's one row", n)
+	}
+	if end.Sub(returned) > slack || took > bound+runTeardownBudget+slack {
+		t.Errorf("the sweep took %v and returned %v after the row's write; want it back once the write is, within %v",
+			took, end.Sub(returned), bound+runTeardownBudget+slack)
 	}
 }
 
