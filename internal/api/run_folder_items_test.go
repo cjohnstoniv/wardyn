@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -504,7 +505,7 @@ func TestFolderBack_OfflineFolderRunnerKeepsAHoldableSandbox(t *testing.T) {
 		t.Error("a pass was sent to a runner that is offline")
 	}
 	st := f.cs.folderStatus()
-	if st.Resume == nil || *st.Resume != (types.FolderResume{}) || st.Gen != 2 || st.Settled != 2 || st.Back == nil || st.Back.Error != folderPassAwayMsg {
+	if st.Resume == nil || !reflect.DeepEqual(*st.Resume, types.FolderResume{}) || st.Gen != 2 || st.Settled != 2 || st.Back == nil || st.Back.Error != folderPassAwayMsg {
 		t.Errorf("record %+v, want a resume with nothing counted, settled at gen 2, with the runner-offline text", st)
 	}
 	if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", folderPassAwayMsg); ev == nil || ev.Outcome != "failure" {
