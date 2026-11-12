@@ -194,6 +194,14 @@ type computerFolderStore struct {
 	runner types.Runner
 	smu    sync.Mutex
 	status types.RunLocalFolderStatus
+	// giveUpApplies makes GiveUpRunLocalFolder apply as the statement does for a run that is due: the
+	// Resume dropped, Back set, Gen moved on. giveUpErr fails it. giveUps records each call, and marks
+	// each generation MarkGivenUpAudited was called for (markErr fails it).
+	giveUpApplies bool
+	giveUpErr     error
+	giveUps       []store.GiveUpParams
+	markErr       error
+	marks         []int
 }
 
 // QueryAuditEvents answers no policy envelope: these runs carry no data_out rule, which reads as allowed.
@@ -243,6 +251,42 @@ func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.
 	}
 	s.status.Gen, s.status.GenAt = s.status.Gen+1, at
 	return s.status, true, nil
+}
+
+func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	s.giveUps = append(s.giveUps, p)
+	if s.giveUpErr != nil {
+		return store.GiveUpOutcome{}, s.giveUpErr
+	}
+	if !s.giveUpApplies || (s.status.Back != nil && s.status.Resume == nil) {
+		return store.GiveUpOutcome{}, nil
+	}
+	back := p.Back
+	s.status.Resume, s.status.Back = nil, &back
+	s.status.Gen++
+	return store.GiveUpOutcome{Applied: true, Gen: s.status.Gen}, nil
+}
+
+func (s *computerFolderStore) MarkGivenUpAudited(_ context.Context, _ uuid.UUID, gen int) (bool, error) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	s.marks = append(s.marks, gen)
+	if s.markErr != nil {
+		return false, s.markErr
+	}
+	if s.status.Gen != gen || s.status.Back == nil || s.status.Back.GivenUpAt == nil {
+		return false, nil
+	}
+	back := *s.status.Back
+	back.GivenUpAudited = true
+	s.status.Back = &back
+	return true, nil
+}
+
+func (s *computerFolderStore) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid.UUID, *uuid.UUID, error) {
+	return nil, nil, nil
 }
 
 // folderSandboxRunner is execCountRunner whose ExecStream runs an in-memory sftp-server, the sandbox's.
