@@ -236,7 +236,9 @@ func (s *Server) settlePause(ctx context.Context, f runner.Freezer, id uuid.UUID
 	case cur.LostAt != nil || db.LockHeld(lctx) != nil:
 		return false
 	}
-	if err := moveSandbox(lctx, f, cur.SandboxRef, cur.PausedAt != nil); err != nil {
+	mctx, cancel := context.WithTimeout(lctx, pauseRuntimeCallTimeout)
+	defer cancel()
+	if err := moveSandbox(mctx, f, cur.SandboxRef, cur.PausedAt != nil); err != nil {
 		slog.WarnContext(ctx, "wardynd: settling a pause could not move the sandbox to its row",
 			slog.String("run_id", id.String()), slog.Bool("paused", cur.PausedAt != nil), slog.Any("err", err))
 		return false
