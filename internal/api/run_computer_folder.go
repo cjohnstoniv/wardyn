@@ -264,12 +264,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if !ok {
 		// Kept only for a bump lost to an owner a fresh read proves moved the record on. A store error (whose
 		// bump may have landed), or a record never read, stops the sandbox, so a terminal run does not keep
-		// its agent and egress until a sweep; the run then says why.
-		if lost && !unread && s.folderGenTaken(ctx, runID, prev.Gen) {
-			return true
-		}
-		s.recordFolderBumpMissed(ctx, runID, *folder, prev.Gen, lost)
-		return false
+		// its agent and egress until a sweep; the run then says why (recordFolderBumpMissed).
+		return s.keepAfterBumpMiss(ctx, runID, *folder, prev.Gen, lost, unread)
 	}
 	if folderBroughtBack(rec) {
 		// A pass back completed between the read above and the bump: none runs again.
@@ -456,6 +452,16 @@ const maxFolderReason = 300
 
 // boundReason is a pass back's reason as its record keeps it: one line of at most maxFolderReason runes.
 func boundReason(s string) string { return localFolderErrorText(s, maxFolderReason) }
+
+// keepAfterBumpMiss answers whether the sandbox stays up after a bump that did not land: only when another
+// owner moved the record on, which a fresh read proves; otherwise the miss is recorded and the sandbox stops.
+func (s *Server) keepAfterBumpMiss(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost, unread bool) bool {
+	if lost && !unread && s.folderGenTaken(ctx, id, gen) {
+		return true
+	}
+	s.recordFolderBumpMissed(ctx, id, folder, gen, lost)
+	return false
+}
 
 // recordFolderBumpMissed is what a pass back that stops its sandbox without a pass leaves when its record
 // could not be moved to the pass's generation: one failure row, and one try at the record on gen, the
