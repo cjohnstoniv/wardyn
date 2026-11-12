@@ -8,6 +8,7 @@ package docker
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -89,8 +90,12 @@ type createdContainer struct {
 	// connectedTo lists networks NetworkConnect attached this container to,
 	// in order.
 	connectedTo []string
-	state       *container.State
-	removed     bool
+	// cut lists networks NetworkDisconnect took the container off: an endpoint that is gone stays gone.
+	cut map[string]bool
+	// id, when set, is the id inspect reports for the container (the name's other face, as a daemon has two).
+	id      string
+	state   *container.State
+	removed bool
 	// forceRemoved records whether the removal asked for Force, which a
 	// container that may be running needs.
 	forceRemoved bool
@@ -134,6 +139,11 @@ type fakeDocker struct {
 	onNetworkCreate func(name string, opts client.NetworkCreateOptions)
 
 	containers map[string]*createdContainer // id (== name) -> record
+
+	// disconnects records every NetworkDisconnect as network/container; failDisconnect names the networks
+	// whose disconnect fails outright.
+	disconnects    []string
+	failDisconnect map[string]bool
 
 	// stats is the canned ContainerStats body per container id; statsCalls records every read's options.
 	stats      map[string]container.StatsResponse
@@ -671,6 +681,46 @@ func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID string, opts 
 	return client.NetworkConnectResult{}, nil
 }
 
+// onNet says whether the container has an endpoint on the network now: its primary NetworkMode, an
+// explicit endpoint, or one NetworkConnect added, less what NetworkDisconnect took away.
+func (c *createdContainer) onNet(name string) bool {
+	if c.cut[name] {
+		return false
+	}
+	if c.host != nil && string(c.host.NetworkMode) == name {
+		return true
+	}
+	if c.net != nil {
+		if _, ok := c.net.EndpointsConfig[name]; ok {
+			return true
+		}
+	}
+	return slices.Contains(c.connectedTo, name)
+}
+
+// NetworkDisconnect takes the container off the network, and answers the daemon's "is not connected" for one
+// it is not on. A cut endpoint is not brought back by a start.
+func (f *fakeDocker) NetworkDisconnect(ctx context.Context, networkID string, opts client.NetworkDisconnectOptions) (client.NetworkDisconnectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.disconnects = append(f.disconnects, networkID+"/"+opts.Container)
+	if f.failDisconnect[networkID] {
+		return client.NetworkDisconnectResult{}, errors.New("fake: disconnect: daemon busy")
+	}
+	c := f.containers[opts.Container]
+	if c == nil || c.removed {
+		return client.NetworkDisconnectResult{}, fakeNotFound{msg: "No such container: " + opts.Container}
+	}
+	if !c.onNet(networkID) {
+		return client.NetworkDisconnectResult{}, fmt.Errorf("container %s is not connected to network %s", opts.Container, networkID)
+	}
+	if c.cut == nil {
+		c.cut = map[string]bool{}
+	}
+	c.cut[networkID] = true
+	return client.NetworkDisconnectResult{}, nil
+}
+
 func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -984,6 +1034,9 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		if name == "" || name == "none" || name == "host" || name == "bridge" || name == "default" {
 			return
 		}
+		if c.cut[name] {
+			return
+		}
 		if _, ok := nets[name]; !ok {
 			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr(ip), NetworkID: name}
 		}
@@ -1016,7 +1069,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		// Real Docker reports the name with a leading slash; mirror that so
 		// name-based run-id recovery is exercised faithfully. (v29 inlined the
 		// old ContainerJSONBase fields onto InspectResponse.)
-		ID:              id,
+		ID:              cmp.Or(c.id, id),
 		Name:            "/" + c.name,
 		State:           c.state,
 		Config:          c.cfg,
