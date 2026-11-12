@@ -325,9 +325,6 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if dl, ok := ctx.Deadline(); ok {
 		d = min(d, time.Until(dl)-runTeardownBudget)
 	}
-	if dl, ok := holdDeadline(ctx); ok {
-		d = min(d, time.Until(dl)-runTeardownBudget)
-	}
 	out := s.computerFolderPassWithin(ctx, d, run, *folder, true, guard)
 	switch {
 	case out.busy:
@@ -692,7 +689,7 @@ func (s *Server) keepsSandboxForFolder(ctx context.Context, run types.AgentRun) 
 const computerFolderAccountTime = 5 * time.Second
 
 // computerFolderPassWithin is computerFolderPass under a deadline of d derived from ctx: the pass
-// ends by d, or by ctx's own deadline, its end hold's (holdDeadline) or its cancel when that comes first. A pass with no time left
+// ends by d, or by ctx's own deadline or cancel when that comes first. A pass with no time left
 // does not start. cut is a pass that started and was stopped by that end; a pass back stops
 // computerFolderAccountTime before it, for the runner's account. The caller records the outcome:
 // the seed on ctx (seedComputerFolder), the pass back on teardownCtx, since a finalizing caller's
@@ -700,9 +697,6 @@ const computerFolderAccountTime = 5 * time.Second
 func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, run types.AgentRun, folder types.RunLocalFolder, pull bool, last passGuard) folderPassOutcome {
 	end := time.Now().Add(d)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(end) {
-		end = dl
-	}
-	if dl, ok := holdDeadline(ctx); ok && dl.Before(end) {
 		end = dl
 	}
 	stop := end

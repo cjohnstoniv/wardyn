@@ -107,8 +107,8 @@ func (s *Server) SweepRunnerExits(ctx context.Context) error {
 }
 
 // runnerExitTimeout bounds one receipt's transition and terminal tail: 30 s, and for a macOS VM run
-// macOSVMTeardownBudget more, which its sandbox stop alone can use, so the tail is not cut short after
-// the stop and run again (#3886).
+// macOSVMTeardownBudget more for its sandbox stop, so the tail is not cut short after the stop and run again
+// (#3886). A pass back that runs long can still leave that stop less; the next sweep then repeats the stop.
 func (s *Server) runnerExitTimeout(ctx context.Context, runID uuid.UUID) time.Duration {
 	if s.macOSVMRun(ctx, runID) {
 		return 30*time.Second + macOSVMTeardownBudget

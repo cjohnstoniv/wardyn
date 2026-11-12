@@ -379,28 +379,25 @@ func TestEndHold_RunnerExitIsAHold(t *testing.T) {
 	})
 }
 
-// A pass back under an end hold ending 40 s out leaves its record the teardown's 15 s inside the hold: the pass is
-// sent a deadline at most 25 s out, and its record is written. Catches the cap applied only inside
-// computerFolderPassWithin, which would send the pass a deadline 35 s out.
-func TestEndHold_PassBudgetLeavesTheRecordItsTeardown(t *testing.T) {
-	if runTeardownBudget != 15*time.Second {
-		t.Fatalf("runTeardownBudget = %v: this pin names 15 s", runTeardownBudget)
-	}
+// A first pass back under an end hold with less time left than the teardown's 15 s is still sent, with the budget it
+// has without a hold (a deadline past the hold's), and is recorded: the hold caps the stop and the writes after the
+// pass, not the pass. Catches a pass budget that reads the hold's deadline: that pass is never sent, is recorded
+// settled as "no time was left", and its sandbox is stopped with the changes still in it. Also catches the cap
+// applied only inside computerFolderPassWithin, which would send the pass a deadline inside the hold.
+func TestEndHold_PassBackKeepsItsBudgetUnderAShortHold(t *testing.T) {
 	f := newPassFixture(t, 2, 2, nil)
 	r := &scriptedFolderRunner{}
 	id := f.cs.runner.ID
 	f.s.runnerStreams.subsMu.Lock()
 	f.s.runnerStreams.subs[id] = r.endpoint(t, id)
 	f.s.runnerStreams.subsMu.Unlock()
-	before := time.Now()
-	ctx := withHoldDeadline(context.Background(), before.Add(40*time.Second))
-	_ = f.s.bringComputerFolderBack(ctx, f.run.ID, "sbx")
-	got := r.args().DeadlineUnixMs
-	if got == 0 || got > time.Now().Add(25*time.Second).UnixMilli() {
-		t.Errorf("the pass was sent deadline %d, %v from the start; want at most 25 s out", got, time.UnixMilli(got).Sub(before))
+	hold := time.Now().Add(10 * time.Second)
+	_ = f.s.bringComputerFolderBack(withHoldDeadline(context.Background(), hold), f.run.ID, "sbx")
+	if got := r.args().DeadlineUnixMs; got <= hold.UnixMilli() {
+		t.Errorf("the pass was sent deadline %d (0 is no pass sent), want one past the hold's %d", got, hold.UnixMilli())
 	}
-	if st := f.cs.folderStatus(); st.Back == nil {
-		t.Errorf("record %+v after the pass, want its pass back written inside the hold", st)
+	if st := f.cs.folderStatus(); st.Back == nil || st.Back.Error != "" {
+		t.Errorf("record %+v, want the pass back written with no error", st)
 	}
 }
 
@@ -609,9 +606,9 @@ func TestEndHold_KeptRunEndIsAHold(t *testing.T) {
 // The tail owner's run (tailRun) is an end hold for the dedicated budget: the stop after its pass back carries a
 // deadline 3 minutes from the call; with every hold taken it runs nothing; and past its hold (an outer hold
 // already passed, which it re-enters) no pass is sent and nothing is stopped. No pass is sent because the first
-// read on a teardown ctx already done stops it (folderBackEligible, run_computer_folder.go:230-233), not the pass
-// budget, which is not reached; the terminal-effects guard stops the stop. The pass budget's cap is pinned by
-// TestEndHold_PassBudgetLeavesTheRecordItsTeardown. Catches tailRun's own tryLockRunOp left in place. The deadline
+// read on a teardown ctx already done stops it (folderBackEligible, run_computer_folder.go:230-233); the pass
+// budget does not read the hold (TestEndHold_PassBackKeepsItsBudgetUnderAShortHold), and the terminal-effects
+// guard stops the stop. Catches tailRun's own tryLockRunOp left in place. The deadline
 // is injected as an outer hold on the ctx, so the passed case proves the caps downstream, not that tailRun's own B
 // supplies it; "the hold is set" and "every hold taken" cover that it takes its own hold.
 func TestEndHold_TailOwnerRunIsAHold(t *testing.T) {

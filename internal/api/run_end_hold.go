@@ -17,15 +17,22 @@ import (
 
 // An end hold is a run's lock held from its terminal write through its tail (holdRunEnd). Each hold has an
 // outer deadline, B from when it was taken, carried on its ctx as a value (withHoldDeadline). The tail's floors
-// are capped at it (teardownCtxWithin, settleAfterTeardown, the pass back's budget), and past it the holder neither
-// stops the sandbox nor records anything. The deadline does not cancel the holder's other calls: the audit of the
-// end, the revoke of the run's credentials and approvals, the output's drain and persist, the model-access note
-// and the agent stop before a pass run on the holder's own ctx, and the lock is released when they return. A
-// sweep's, a runner exit's, the reaper's, a kept run's and the tail owner's own ctx ends by B. The completion
-// watcher's and a person's bring-back's ctx has no deadline, so their release is bounded only by those calls' own
-// limits, as it was before the hold: a revoke cut at B would be worse than a long hold. The readers (the
-// containment loop and the tail owner) finish the run from there. Each B is the holder's own, and a macOS VM run's
-// gets macOSVMTeardownBudget more (endHoldBudget).
+// are capped at it (teardownCtxWithin, settleAfterTeardown), and past it the holder neither stops the sandbox nor
+// records anything. The pass back is not capped at it: it keeps the budget it has without a hold
+// (bringComputerFolderBack), since a pass refused for want of hold time was recorded as settled and its sandbox
+// stopped with the changes still in it. So a pass can be running at B and after it: for up to
+// computerFolderBackTimeout on the completion watcher and a person's bring-back, whose ctx has no deadline (a
+// bring-back's agent stop, bringBackExecBound, can come first), and on a sweep's end for the time it waited for the
+// run's lock, less runTeardownBudget. A runner exit's, the reaper's, the lease sweep's and the tail owner's own ctx
+// ends the pass before B. A pass that ends past B is not recorded and its sandbox is not stopped here.
+// The deadline does not cancel the holder's other calls either: the audit of the end, the revoke of the run's
+// credentials and approvals, the output's drain and persist, the model-access note and the agent stop before a pass
+// run on the holder's own ctx, and the lock is released when they return. The completion watcher's and a person's
+// bring-back's ctx has no deadline, so their release is bounded only by those calls' own limits, as it was before
+// the hold: a revoke cut at B would be worse than a long hold. The readers (the containment loop and the tail owner)
+// finish the run from there. Each B is the holder's own, and a macOS VM run's gets macOSVMTeardownBudget more
+// (endHoldBudget) for its sandbox stop; a pass back still running can leave that stop less, and the next sweep then
+// repeats the stop with a full hold.
 const (
 	endHoldSweep     = 60 * time.Second // a sweep's end: reconcile finalize, a lease or kept run's end, a Mac-prep failure
 	endHoldDedicated = 3 * time.Minute  // the completion watcher, a person's bring-back and the tail owner
