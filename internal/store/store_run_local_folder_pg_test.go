@@ -428,6 +428,43 @@ func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 	}
 }
 
+// Done and the statement's guard decide "final" as the server's folderDone does on the decoded record (a Back and
+// no Resume), JSON null included: a null back is no back, and a null resume is no resume. A record the server
+// reads as not final is given up; one it reads as final is not, and is answered Done. Catches: a SQL "final" that
+// counts a key's presence, which keeps a null back from its give-up for ever.
+func TestPG_GiveUpReadsFinalAsTheDecodedRecordDoes(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	const back = `{"at": "2026-01-01T00:00:00Z", "files": 0, "bytes": 0, "refused": []}`
+	for name, c := range map[string]struct {
+		status string
+		done   bool
+	}{
+		"a null back":                   {`{"gen": 7, "back": null}`, false},
+		"a null back and a null resume": {`{"gen": 7, "back": null, "resume": null}`, false},
+		"a null back and a resume":      {`{"gen": 7, "back": null, "resume": {"unsynced": 1}}`, false},
+		"a back and a null resume":      {`{"gen": 7, "back": ` + back + `, "resume": null}`, true},
+		"a back and no resume":          {`{"gen": 7, "back": ` + back + `}`, true},
+	} {
+		id := newGiveUpRun(t, pool, endedLongAgo())
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = $2::jsonb WHERE id = $1`, id, c.status); err != nil {
+			t.Fatal(err)
+		}
+		st, err := pg.RunLocalFolderStatus(ctx, id)
+		if err != nil {
+			t.Fatalf("%s: the planted record does not decode: %v", name, err)
+		}
+		if decoded := st.Back != nil && st.Resume == nil; decoded != c.done {
+			t.Fatalf("%s: the decoded record is final = %v; the case says %v", name, decoded, c.done)
+		}
+		out, err := pg.GiveUpRunLocalFolder(ctx, id, store.GiveUpParams{Back: givenUpBack(3), Cap: giveUpCap})
+		if err != nil || out.Done != c.done || out.Applied == c.done {
+			t.Errorf("%s: give-up = %+v %v; want done %v and applied %v, as the decoded record reads", name, out, err, c.done, !c.done)
+		}
+	}
+}
+
 // The statement's D1 due is the containment due: COALESCE(ended_at, updated_at) + ContainmentLag, the arithmetic of
 // ContainmentDueSQL, over its value table.
 func TestPG_GiveUpDueMatchesContainmentDue(t *testing.T) {

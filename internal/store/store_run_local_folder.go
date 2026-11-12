@@ -242,10 +242,11 @@ func terminalStateNames() []string {
 	return stateNames([]types.RunState{types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived})
 }
 
-// folderDoneSQL is a stored folder record that is final (types: a Back and no Resume), read from its JSON keys
-// alone, so it answers for a record that does not decode.
-const folderDoneSQL = `(COALESCE(local_folder_status, '{}'::jsonb) ? 'back'
-		           AND NOT (COALESCE(local_folder_status, '{}'::jsonb) ? 'resume'))`
+// folderDoneSQL is a stored folder record that is final, as the server's folderDone decides it from the decoded
+// record (a Back and no Resume): a back that is present and not JSON null, and a resume that is absent or JSON null,
+// as decoding reads them. It reads the JSON alone, so it also answers for a record that does not decode.
+const folderDoneSQL = `(COALESCE(local_folder_status->'back', 'null'::jsonb) <> 'null'::jsonb
+		           AND COALESCE(local_folder_status->'resume', 'null'::jsonb) = 'null'::jsonb)`
 
 // GiveUpRunLocalFolder implements RunLocalFolderStatuses. A run's lifetime cap and max age bound a live
 // run and so are not terms here: nothing that already ended is ended again by them. The same statement reads
