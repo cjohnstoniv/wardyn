@@ -55,6 +55,8 @@ type Config struct {
 	RunToken string `json:"run_token"`
 	// Policy is the compiled egress allowlist / method rules / first-use flag.
 	Policy types.RunPolicySpec `json:"policy"`
+	// LiveDenies are hosts a live egress edit denied; set only by WithLiveDenies, checked before every allow.
+	LiveDenies []string `json:"live_denies,omitempty"`
 	// Injection rules drive proxy-side credential injection (plain HTTP only).
 	// Each rule carries the grant_id the secret is minted from at startup.
 	Injection []InjectionConfig `json:"injection,omitempty"`

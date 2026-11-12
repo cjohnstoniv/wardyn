@@ -72,7 +72,14 @@ func main() {
 	// process environment. See StageProxyConfig.
 	stageConfigSrc := flag.String("stage-config-src", "", "internal: read the proxy config JSON from this path and stage it (k8s init container only; requires -stage-config-dst)")
 	stageConfigDst := flag.String("stage-config-dst", "", "internal: destination path for -stage-config-src (k8s init container only)")
+	// narrow is wardynd's Kubernetes driver reaching the running proxy of this pod: it sends the live deny
+	// request on stdin to the proxy's narrowing socket (narrow.go). No config is loaded.
+	narrow := flag.Bool("narrow", false, "internal: send a live deny request from stdin to this pod's running proxy (wardynd's Kubernetes driver only)")
 	flag.Parse()
+
+	if *narrow {
+		os.Exit(runNarrow(os.Stdin, os.Stdout))
+	}
 
 	if *egressCanary != "" {
 		conn, err := net.DialTimeout("tcp", *egressCanary, egressCanaryTimeout)
@@ -112,6 +119,17 @@ func main() {
 	if err != nil {
 		slog.Error("wardyn-proxy: load config failed", slog.Any("err", err))
 		os.Exit(1)
+	}
+	// A Kubernetes proxy keeps the hosts live egress edits denied in this directory and enforces them at every start.
+	liveDenyDir, base := os.Getenv(proxy.LiveDenyDirEnv), raw
+	if liveDenyDir != "" {
+		if raw, base, err = applyLiveDenies(raw, liveDenyDir); err == nil {
+			cfg, err = proxy.LoadConfigBytes(raw)
+		}
+		if err != nil {
+			slog.Error("wardyn-proxy: apply the live deny list failed", slog.Any("err", err))
+			os.Exit(1)
+		}
 	}
 
 	if code := applyLLMScanSwitch(cfg, os.Getenv("WARDYN_LLM_SCAN")); code != 0 {
@@ -161,12 +179,19 @@ func main() {
 	// The runner holds the agent back until the marker appears: it prints only once :3128 is bound, which for
 	// a self-lapsing proxy is after its first renew. The log line is printed with it, so it is true when read.
 	srv.OnListening(func() {
+		// The narrowing socket listens before the ready marker and the boot report go out.
+		if liveDenyDir != "" {
+			if err := srv.ServeNarrow(ctx, liveDenyDir, base, loadedReport); err != nil {
+				slog.Error("wardyn-proxy: narrowing socket failed", slog.Any("err", err))
+				os.Exit(1)
+			}
+		}
 		slog.Info("wardyn-proxy: listening",
 			slog.String("addr", srv.Addr()),
 			slog.String("run_id", cfg.RunID.String()),
 		)
 		fmt.Fprintln(os.Stdout, proxy.ReadyMarker)
-		go srv.ReportLoaded(ctx, loadedReport(raw))
+		srv.StartLoadedReport(ctx, loadedReport(raw))
 	})
 
 	errCh := make(chan error, 1)
