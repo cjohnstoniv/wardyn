@@ -189,8 +189,8 @@ func TestDispatcherSweepListsCandidatesDespiteASeedError(t *testing.T) {
 	}
 }
 
-// callRef sends a ref verb to a dispatcher over a loopback peer.
-func callRef(t *testing.T, d *Dispatcher, method string, args any) (any, error) {
+// callRefArgs sends a ref verb to a dispatcher over a loopback peer.
+func callRefArgs(t *testing.T, d *Dispatcher, method string, args any) (any, error) {
 	t.Helper()
 	a, b := runnerwire.Loopback()
 	defer b.Close()
@@ -210,7 +210,7 @@ func TestDispatch_FenceProxyRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := callRef(t, d, runnerwire.MethodFenceProxy, runnerwire.RefArgs{Ref: ref}); err != nil {
+	if _, err := callRefArgs(t, d, runnerwire.MethodFenceProxy, runnerwire.RefArgs{Ref: ref}); err != nil {
 		t.Fatalf("fence_proxy = %v; want nil", err)
 	}
 	if !fake.Called("fence_proxy", "fake-ref") {
@@ -224,7 +224,7 @@ func TestDispatch_FenceProxyRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := callRef(t, bare, runnerwire.MethodFenceProxy, runnerwire.RefArgs{Ref: ref}); !errors.Is(err, runner.ErrEndUnsupported) {
+	if _, err := callRefArgs(t, bare, runnerwire.MethodFenceProxy, runnerwire.RefArgs{Ref: ref}); !errors.Is(err, runner.ErrEndUnsupported) {
 		t.Errorf("fence_proxy on a substrate without a fence = %v; want runner.ErrEndUnsupported", err)
 	}
 }
@@ -253,7 +253,7 @@ func TestDispatch_GenerationRoutesToAt(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := callRef(t, d, tc.method, tc.args(gen)); err != nil {
+				if _, err := callRefArgs(t, d, tc.method, tc.args(gen)); err != nil {
 					t.Fatalf("%s at generation %d = %v", tc.method, gen, err)
 				}
 				wantAt := gen > 0

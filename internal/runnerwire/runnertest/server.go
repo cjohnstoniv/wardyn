@@ -259,11 +259,7 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		if !ok {
 			return nil, runner.ErrReviveUnsupported
 		}
-		if at, ok := rv.(runner.ProxyReviverAt); ok && a.PolicyGeneration > 0 && !s.Legacy {
-			sum, err := at.ReplaceProxyHashedAt(ctx, ref, a.CfgJSON, a.PolicyGeneration)
-			return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
-		}
-		return replaceProxy(ctx, rv, ref, a.CfgJSON)
+		return s.replaceProxyAt(ctx, rv, ref, a)
 	}
 	a, err := decode[runnerwire.RefArgs](args)
 	if err != nil {
@@ -284,20 +280,9 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 	case runnerwire.MethodKill:
 		return s.teardown(ref, s.sub.KillSandbox(ctx, ref))
 	case runnerwire.MethodFenceProxy:
-		f, ok := s.sub.(runner.ProxyFencer)
-		if !ok || s.Legacy {
-			return nil, fmt.Errorf("unknown method %q", method)
-		}
-		return nil, f.FenceProxy(ctx, ref)
+		return nil, s.fence(ctx, method, ref)
 	case runnerwire.MethodEnd:
-		if at, ok := s.sub.(runner.ProxyGenerationStopper); ok && a.PolicyGeneration > 0 && !s.Legacy {
-			return s.teardown(ref, at.EndSandboxAt(ctx, ref, a.PolicyGeneration))
-		}
-		e, ok := s.sub.(runner.SandboxEnder)
-		if !ok {
-			return nil, runner.ErrEndUnsupported
-		}
-		return s.teardown(ref, e.EndSandbox(ctx, ref))
+		return s.end(ctx, ref, a.PolicyGeneration)
 	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
 		p, ok := s.sub.(runner.AgentPauser)
 		if !ok {
@@ -317,14 +302,7 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		}
 		return runnerwire.AgentPauseResult{FencedPause: true}, err
 	case runnerwire.MethodStopProxy:
-		if at, ok := s.sub.(runner.ProxyGenerationStopper); ok && a.PolicyGeneration > 0 && !s.Legacy {
-			return nil, at.StopProxyAt(ctx, ref, a.PolicyGeneration)
-		}
-		p, ok := s.sub.(runner.ProxyStopper)
-		if !ok {
-			return nil, runner.ErrEndUnsupported
-		}
-		return nil, p.StopProxy(ctx, ref)
+		return nil, s.stopProxy(ctx, ref, a.PolicyGeneration)
 	case runnerwire.MethodStart:
 		st, ok := s.sub.(runner.SandboxStarter)
 		if !ok {
@@ -339,6 +317,55 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		return nil, rv.CanReplaceProxy(ctx, ref)
 	}
 	return nil, fmt.Errorf("unknown method %q", method)
+}
+
+// generation is the substrate's generation-aware stop, when the call names a generation and the server is not
+// playing a runner that predates them.
+func (s *Server) generation(gen int) (runner.ProxyGenerationStopper, bool) {
+	at, ok := s.sub.(runner.ProxyGenerationStopper)
+	return at, ok && gen > 0 && !s.Legacy
+}
+
+// end serves end, acting for the generation it names when the substrate reads it.
+func (s *Server) end(ctx context.Context, ref string, gen int) (any, error) {
+	if at, ok := s.generation(gen); ok {
+		return s.teardown(ref, at.EndSandboxAt(ctx, ref, gen))
+	}
+	e, ok := s.sub.(runner.SandboxEnder)
+	if !ok {
+		return nil, runner.ErrEndUnsupported
+	}
+	return s.teardown(ref, e.EndSandbox(ctx, ref))
+}
+
+// stopProxy serves stop_proxy, acting for the generation it names when the substrate reads it.
+func (s *Server) stopProxy(ctx context.Context, ref string, gen int) error {
+	if at, ok := s.generation(gen); ok {
+		return at.StopProxyAt(ctx, ref, gen)
+	}
+	p, ok := s.sub.(runner.ProxyStopper)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return p.StopProxy(ctx, ref)
+}
+
+// fence serves fence_proxy; a server playing an older runner, or a substrate that cannot fence, does not know it.
+func (s *Server) fence(ctx context.Context, method, ref string) error {
+	f, ok := s.sub.(runner.ProxyFencer)
+	if !ok || s.Legacy {
+		return fmt.Errorf("unknown method %q", method)
+	}
+	return f.FenceProxy(ctx, ref)
+}
+
+// replaceProxyAt serves replace_proxy, acting for the generation it names when the substrate reads it.
+func (s *Server) replaceProxyAt(ctx context.Context, rv runner.ProxyReviver, ref string, a runnerwire.ReplaceProxyArgs) (any, error) {
+	if at, ok := rv.(runner.ProxyReviverAt); ok && a.PolicyGeneration > 0 && !s.Legacy {
+		sum, err := at.ReplaceProxyHashedAt(ctx, ref, a.CfgJSON, a.PolicyGeneration)
+		return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+	}
+	return replaceProxy(ctx, rv, ref, a.CfgJSON)
 }
 
 // teardown answers a stop, kill or end as the real dispatcher does: a teardown
