@@ -492,23 +492,57 @@ const keptAgentStopWait = 2 * time.Second
 // agent ends only with the sandbox, so no pass runs. A sandbox already stopped answers
 // errSandboxStopped.
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
-	if run.RunnerID != nil {
-		return notQuiescable("a sandbox on a runner is not kept")
+	if !isTerminalRunState(run.State) {
+		// A run still RUNNING (a person's bring-back, or a first pass kept at the run's end) is quiesced as
+		// before the cut existed: cutAgent cuts only an ended run's agent.
+		if run.RunnerID != nil {
+			return notQuiescable("a sandbox on a runner is not kept")
+		}
+		if run.MachineKind.IsVM() {
+			return notQuiescable("a virtual machine is not quiesced from the server's Docker")
+		}
+		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
+		if !ok {
+			return notQuiescable("its substrate cannot stop its proxy alone")
+		}
+		if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
+			return notQuiescable("its substrate cannot stop its proxy alone")
+		} else if err != nil {
+			// Not unlessStopped: Docker's StopProxy fails closed by stopping the agent's container, so
+			// a stopped sandbox here is this failure's own doing, and the record names the proxy.
+			return fmt.Errorf("its proxy did not stop: %w", err)
+		}
+		return s.killKeptAgent(ctx, run, ref)
 	}
 	if run.MachineKind.IsVM() {
 		return notQuiescable("a virtual machine is not quiesced from the server's Docker")
 	}
-	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
-	if !ok {
-		return notQuiescable("its substrate cannot stop its proxy alone")
-	}
-	if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
+	cutRun := run
+	cutRun.SandboxRef = ref // the sandbox being quiesced is the one to cut
+	if run.RunnerID != nil {
+		if !s.keepable(run) {
+			return notQuiescable("a sandbox on a runner is not kept")
+		}
+		if kind, err := s.cutAgent(ctx, cutRun); kind != cutFenced || err != nil {
+			return notQuiescable("a sandbox on a runner is not kept")
+		}
+	} else if kind, err := s.cutAgent(ctx, cutRun); kind == cutUnsupported && err == nil || errors.Is(err, runner.ErrEndUnsupported) {
 		return notQuiescable("its substrate cannot stop its proxy alone")
 	} else if err != nil {
-		// Not unlessStopped: Docker's StopProxy fails closed by stopping the agent's container, so
-		// a stopped sandbox here is this failure's own doing, and the record names the proxy.
 		return fmt.Errorf("its proxy did not stop: %w", err)
 	}
+	err := s.killKeptAgent(ctx, run, ref)
+	if err != nil && run.RunnerID != nil && !errors.Is(err, errSandboxStopped) {
+		// A runner run took rc.19's unquiesced first pass; a failed kill after its cut keeps that answer,
+		// and the cut stays.
+		return notQuiescable("a sandbox on a runner is not kept: " + err.Error())
+	}
+	return err
+}
+
+// killKeptAgent kills every process of a kept sandbox's agent and checks it is gone: the agent kill that
+// follows the sandbox's proxy being stopped or its agent cut off.
+func (s *Server) killKeptAgent(ctx context.Context, run types.AgentRun, ref string) error {
 	if run.AgentExecID == runner.MainProcessExecID {
 		// An exec-less sandbox (the container is the agent): its agent ends only with the sandbox.
 		return s.unlessStopped(ctx, ref, errors.New("its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"))

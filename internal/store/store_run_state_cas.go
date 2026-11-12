@@ -17,13 +17,14 @@ import (
 // a single UPDATE ... WHERE id=$ AND state=$from, returning whether it applied.
 // TOCTOU-safe: a concurrent kill/stop that already moved the run to a terminal
 // state is never clobbered. From QUEUED it is LeaveRunQueue, so the run's queue row goes in the same statement. False with a nil error means someone else won the
-// transition (or the run doesn't exist); the caller does nothing.
+// transition (or the run doesn't exist); the caller does nothing. A run already terminal keeps its first
+// ended_at; no caller moves a run from terminal back to live.
 func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
 	if fromState == types.RunQueued {
 		return s.LeaveRunQueue(ctx, id, toState, nil)
 	}
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $4 THEN now() ELSE ended_at END
+		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $4 THEN COALESCE(ended_at, now()) ELSE ended_at END
 		 WHERE id=$2 AND state=$3`,
 		string(toState), id, string(fromState), toState.IsTerminal(),
 	)
