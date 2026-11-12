@@ -179,12 +179,14 @@ func isControlRune(r rune) bool { return r < 0x20 || r == 0x7f || (r >= 0x80 && 
 // audits and publishes nothing, and leaves the run to that owner.
 func (s *Server) seedComputerFolder(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, wait time.Duration) {
 	prev := s.folderStatus(ctx, run.ID)
+	// Asked before the bump, which moves the record off the generation the database ages (lastPassPast).
+	past := s.lastPassPast(ctx, run.ID, prev)
 	rec, ok, _ := s.bumpComputerFolderGen(ctx, run.ID, prev.Gen)
 	if !ok {
 		return
 	}
 	gen := rec.Gen
-	out := s.computerFolderPassWithin(ctx, wait, run, folder, false, passGuard{last: prev, id: run.ID})
+	out := s.computerFolderPassWithin(ctx, wait, run, folder, false, passGuard{last: prev, past: past})
 	res, errText := out.FolderPass, out.errText
 	// Recorded on ctx, not the pass's own deadline: a pass that timed out still leaves its record.
 	recorded := s.writeComputerFolderStatus(ctx, run.ID, gen, func(st *types.RunLocalFolderStatus) {
@@ -259,9 +261,12 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return false
 	}
 	run.SandboxRef = ref
-	// While the last pass is open (lastPassOpen), no pass is sent (keepForOpenPass).
-	guard := passGuardFor(run, prev, unread)
+	// While the last pass is open (lastPassOpen), no pass is sent (keepForOpenPass). Whether it is past its bound
+	// is read once, here, before the bump below moves the record on (lastPassPast), and every check after the bump
+	// reads that answer.
 	octx, ocancel := teardownCtx(ctx)
+	past := s.lastPassPast(octx, runID, prev)
+	guard := passGuardFor(run, prev, unread, past)
 	open := s.lastPassOpen(octx, run, *folder, guard)
 	ocancel()
 	if open {
@@ -283,7 +288,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	gen := rec.Gen
 	rctx, cancel = teardownCtx(ctx)
 	defer cancel()
-	if s.unansweredStallsPast(ctx, runID, prev) {
+	if unansweredStallsPast(prev, past) {
 		errText := folderBackGivenUp("the runner did not answer for its last pass back",
 			fmt.Sprintf("%d passes in a row brought nothing back", prev.Resume.Stalled), prev.Resume.Unsynced)
 		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
@@ -773,7 +778,7 @@ func (s *Server) writeComputerFolderStatus(ctx context.Context, id uuid.UUID, ge
 // checked again here on the endpoint the pass is sent to), nothing is sent and nothing is settled.
 func (s *Server) computerFolderPass(ctx, account context.Context, run types.AgentRun, folder types.RunLocalFolder, pull bool, last passGuard) (_ runnerwire.FolderPass, cut, settled bool, _ error) {
 	sub, refusal := s.folderRunner(ctx, run.CreatedBy, *folder.RunnerID)
-	if s.mayStillRun(ctx, last) && passMayRunBeside(sub, refusal) {
+	if mayStillRun(last) && passMayRunBeside(sub, refusal) {
 		if refusal != nil {
 			return runnerwire.FolderPass{}, false, false, fmt.Errorf("%s; %w", refusal.body.Error, errFolderPassUnconfirmed)
 		}

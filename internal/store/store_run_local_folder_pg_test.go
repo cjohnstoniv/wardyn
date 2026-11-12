@@ -629,3 +629,57 @@ func TestPG_FolderGenPastBound(t *testing.T) {
 		t.Errorf("an unknown run = %v, %v; want false, nil", got, err)
 	}
 }
+
+// StampFolderGenAt gives a record with no send time the database's now(), only at the asked generation and only
+// once: a record that has a send time keeps it. Catches: a stamp from the caller's clock, one that moves a send time
+// already there (the wait would start again), and one at another generation.
+func TestPG_StampFolderGenAt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runner := uuid.New()
+	r := newRun(types.RunRunning)
+	r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
+	if _, err := pg.CreateRun(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, r.ID, store.FolderStatusGuard{}, types.RunLocalFolderStatus{Resume: &types.FolderResume{}}); !ok || err != nil {
+		t.Fatalf("record: %v %v", ok, err)
+	}
+	stamp := func(gen int) bool {
+		t.Helper()
+		ok, err := pg.StampFolderGenAt(ctx, r.ID, gen)
+		if err != nil {
+			t.Fatalf("StampFolderGenAt(%d): %v", gen, err)
+		}
+		return ok
+	}
+	if stamp(1) {
+		t.Error("a record at gen 0 was stamped at gen 1")
+	}
+	if !stamp(0) {
+		t.Fatal("a record with no send time was not stamped")
+	}
+	var fresh bool
+	if err := pool.QueryRow(ctx, `SELECT (local_folder_status->>'gen_at')::timestamptz BETWEEN now() - interval '1 minute' AND now()
+		FROM agent_runs WHERE id = $1`, r.ID).Scan(&fresh); err != nil || !fresh {
+		t.Errorf("gen_at is the database's now: %v, %v; want true", fresh, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = jsonb_set(local_folder_status, '{gen_at}', to_jsonb(now() - interval '10 minutes')) WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if stamp(0) {
+		t.Error("a record with a send time was stamped again")
+	}
+	if past, err := pg.FolderGenPastBound(ctx, r.ID, 0, 5*time.Minute); !past || err != nil {
+		t.Errorf("the send time already there = past %v, %v; want it kept, 10 minutes old", past, err)
+	}
+	st, err := pg.RunLocalFolderStatus(ctx, r.ID)
+	if err != nil || st.Resume == nil || st.GenAt.IsZero() {
+		t.Errorf("record %+v, %v; want the resume kept and a send time", st, err)
+	}
+	if ok, err := pg.StampFolderGenAt(ctx, uuid.New(), 0); ok || err != nil {
+		t.Errorf("an unknown run = %v, %v; want false, nil", ok, err)
+	}
+}

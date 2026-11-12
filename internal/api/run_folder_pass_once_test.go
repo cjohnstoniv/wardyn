@@ -356,6 +356,107 @@ func TestPassBack_AnOlderRunnersUnansweredPassIsRetriedOnceBeforeItGivesUp(t *te
 	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back")
 }
 
+// genAgesStore is computerFolderStore that stamps and ages the send time itself (store.FolderGenAges) with the
+// database's semantics: past the bound only while the record still holds the generation asked about, against the
+// fake database's clock (dbNow), which also stamps the bump. A pass back's own bump moves the record on before its
+// pass is sent, as on Postgres.
+type genAgesStore struct{ *computerFolderStore }
+
+func (s *genAgesStore) FolderGenPastBound(ctx context.Context, _ uuid.UUID, gen int, bound time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	st := s.status
+	return st.Gen == gen && !st.GenAt.IsZero() && !st.GenAt.Add(bound).After(s.dueNow()), nil
+}
+
+func (s *genAgesStore) StampFolderGenAt(ctx context.Context, _ uuid.UUID, gen int) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	if s.status.Gen != gen || !s.status.GenAt.IsZero() {
+		return false, nil
+	}
+	s.status.GenAt = s.dueNow()
+	return true, nil
+}
+
+func (s *genAgesStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, _ time.Time) (types.RunLocalFolderStatus, bool, error) {
+	return s.computerFolderStore.BumpRunLocalFolderGen(ctx, id, guard, s.dueNow())
+}
+
+// onTheDatabasesClock makes the fixture's store one that ages the send time itself (genAgesStore).
+func (f *passFixture) onTheDatabasesClock() {
+	f.s.cfg.Store = &genAgesStore{f.cs}
+}
+
+// On a store that ages the send time itself, answering only for the generation the record holds (as Postgres does),
+// the bound is decided before the pass back's own bump: an older runner's unanswered pass is sent once
+// oldPassBound has passed since it was sent, and one that was a stall in a row of them gives up there, with no
+// pass, and the sandbox is stopped. Catches: the bound asked after the bump with the generation it moved from,
+// which that store always answers "not past", so the pass is never sent and the give-up never comes.
+func TestPassBack_TheBoundOnTheDatabasesClockIsDecidedBeforeTheBump(t *testing.T) {
+	f := newPassFixture(t, 2, 1, &types.FolderResume{Stalled: 1, Unsynced: 1})
+	f.onTheDatabasesClock()
+	f.runnerAs(t, &olderRunnerCaps)
+	seen := passSeen(f.sb)
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("inside the bound: pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	f.advance(oldPassBound)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 {
+		t.Errorf("past the bound: pass %v, record %+v; want the pass sent, at gen 3, settled", seen.Load(), st)
+	}
+
+	f = newPassFixture(t, 2, 1, &types.FolderResume{Stalled: computerFolderStalls, Unsynced: 1})
+	f.onTheDatabasesClock()
+	f.runnerAs(t, &olderRunnerCaps)
+	seen = passSeen(f.sb)
+	f.advance(oldPassBound)
+	if err := f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if seen.Load() {
+		t.Error("a pass was sent at the give-up")
+	}
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back")
+}
+
+// A record with no send time is stamped by the clock that ages it: on a store that keeps its own (the database), the
+// visit that keeps the sandbox writes the database's now, not this server's, and the give-up comes oldPassBound
+// after that on the database's clock. Catches: the stamp taken from the server's clock while the age is read on the
+// database's, which moves the give-up by the clocks' difference.
+func TestPassBack_AMissingSendTimeIsStampedOnTheDatabasesClock(t *testing.T) {
+	f := newPassFixture(t, 2, 1, &types.FolderResume{Stalled: computerFolderStalls, Unsynced: 1})
+	f.set(func(st *types.RunLocalFolderStatus) { st.GenAt = time.Time{} })
+	const skew = 10 * time.Minute // the database runs this far behind the server
+	f.cs.dbNow = func() time.Time { return f.s.cfg.Now().Add(-skew) }
+	f.onTheDatabasesClock()
+	f.runnerAs(t, &olderRunnerCaps)
+	seen := passSeen(f.sb)
+	stamped := f.cs.dueNow()
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	if st := f.cs.folderStatus(); !st.GenAt.Equal(stamped) || st.Gen != 2 || st.Resume == nil {
+		t.Fatalf("record %+v, want gen 2 kept, stamped %v (the database's now, not the server's)", st, stamped)
+	}
+	f.advance(oldPassBound - time.Second)
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("inside the bound on the database's clock: pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	f.advance(time.Second)
+	if err := f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back")
+}
+
 // runnerTurnsAfterBump is computerFolderStore whose folder runner turns into another, once, at the first
 // runner read after the pass record moved to gen: between a pass back's check and its send. It records the
 // sandbox refs the sweeps clear.

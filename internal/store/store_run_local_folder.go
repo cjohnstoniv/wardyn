@@ -193,11 +193,15 @@ func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard Folde
 	return st, err == nil, err
 }
 
-// FolderGenAges answers, on the database's clock, whether a folder record's generation was sent bound ago or more.
+// FolderGenAges stamps and ages a folder record's send time on the database's clock: whether its generation was
+// sent bound ago or more, and a send time for a record that has none.
 type FolderGenAges interface {
 	// FolderGenPastBound is true when the record is at generation gen, has a send time (gen_at), and that time plus
 	// bound has passed against now(). A record at another generation, or with no send time, is false.
 	FolderGenPastBound(ctx context.Context, id uuid.UUID, gen int, bound time.Duration) (bool, error)
+	// StampFolderGenAt sets the send time of a record at generation gen that has none to now(), and reports whether
+	// it did. A record at another generation, or one with a send time, is left as it is.
+	StampFolderGenAt(ctx context.Context, id uuid.UUID, gen int) (bool, error)
 }
 
 var _ FolderGenAges = PG{}
@@ -215,6 +219,19 @@ func (s PG) FolderGenPastBound(ctx context.Context, id uuid.UUID, gen int, bound
 		return false, fmt.Errorf("store: read folder generation age: %w", err)
 	}
 	return past, nil
+}
+
+// StampFolderGenAt implements FolderGenAges.
+func (s PG) StampFolderGenAt(ctx context.Context, id uuid.UUID, gen int) (bool, error) {
+	pred, args := FolderStatusGuard{Gen: gen}.sql(2)
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs
+		SET local_folder_status = COALESCE(local_folder_status, '{}'::jsonb) || jsonb_build_object('gen_at', now())
+		WHERE id = $1 AND local_folder IS NOT NULL AND (local_folder_status->>'gen_at') IS NULL AND `+pred,
+		append([]any{id}, args...)...)
+	if err != nil {
+		return false, fmt.Errorf("store: stamp run local folder send time: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // terminalStateNames is the states RunState.IsTerminal names, as the text[] a `state = ANY($n)` argument takes.
