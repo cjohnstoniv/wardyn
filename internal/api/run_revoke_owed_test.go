@@ -242,7 +242,7 @@ func TestRevoke_OrphanSweepClearsRefButRevokeStaysOwed(t *testing.T) {
 	now := time.Now().UTC()
 	orphans := &orphanSweepStore{runs: []types.AgentRun{{
 		ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
-		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunFailed,
+		ConfinementClass: types.CC1, State: types.RunFailed,
 		RunnerTarget: "docker", SandboxRef: "orphan-container-1",
 	}}}
 	type owedOrphans struct {
