@@ -202,11 +202,31 @@ type computerFolderStore struct {
 	giveUps       []store.GiveUpParams
 	markErr       error
 	marks         []int
+	// seedErr fails the folder and seed read. dataOut is the run's recorded data_out rule, and policyErr fails
+	// the read of it.
+	seedErr   error
+	dataOut   types.TransferRule
+	policyErr error
 }
 
-// QueryAuditEvents answers no policy envelope: these runs carry no data_out rule, which reads as allowed.
-func (s *computerFolderStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
-	return nil, nil
+// QueryAuditEvents answers no policy envelope unless dataOut is set: these runs carry no data_out rule, which
+// reads as allowed.
+func (s *computerFolderStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	if s.policyErr != nil {
+		return nil, s.policyErr
+	}
+	if s.dataOut == "" {
+		return nil, nil
+	}
+	data, _ := json.Marshal(types.RunPolicySpec{DataOut: s.dataOut})
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
+}
+
+func (s *computerFolderStore) RunLocalFolderSeed(ctx context.Context, id uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if s.seedErr != nil {
+		return nil, store.LocalFolderSeed{}, s.seedErr
+	}
+	return s.localFolderStore.RunLocalFolderSeed(ctx, id)
 }
 
 func (s *computerFolderStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
@@ -693,7 +713,7 @@ func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *
 		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept", n)
 	}
 	st := cs.folderStatus()
-	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep, about hourly, tries the sync again") {
+	if st.Resume == nil || st.Resume.Stalled != want.Stalled || st.Resume.Unsynced != want.Unsynced || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep, about hourly, tries the sync again") {
 		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
 	}
 	// Kept past the run's end, the sandbox runs only the pass back: no agent, no egress.

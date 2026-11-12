@@ -189,7 +189,7 @@ func TestReadbackContainment_ARunningRunsEndDecidesItsSandboxAfterTheProxyStop(t
 	if n := sb.stopCount(); n != 0 {
 		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept for its copy back", n)
 	}
-	if st := cs.folderStatus(); st.Resume == nil || *st.Resume != (types.FolderResume{Stalled: 1}) {
+	if st := cs.folderStatus(); st.Resume == nil || st.Resume.Stalled != 1 || st.Resume.Unsynced != 0 {
 		t.Errorf("resume = %+v, want the cut pass's", st.Resume)
 	}
 	if got := cs.State(); got != types.RunFailed {

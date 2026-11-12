@@ -226,8 +226,12 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	// The reads, like the record, are on a teardownCtx: a caller already cancelled still gets the
 	// record that no time was left.
 	rctx, cancel := teardownCtx(ctx)
-	folder, seed, err := st.RunLocalFolderSeed(rctx, runID)
-	if err != nil || folder == nil || folder.RunnerID == nil || folder.Direction != types.ComputerFolderBoth || seed.SeededAt == nil || !s.runDataOutAllowed(rctx, runID) {
+	if ok, err := s.folderBackEligible(rctx, runID); err != nil || !ok {
+		cancel()
+		return false
+	}
+	folder, _, err := st.RunLocalFolderSeed(rctx, runID)
+	if err != nil || folder == nil {
 		cancel()
 		return false
 	}
@@ -235,7 +239,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	unread := false
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(rctx, runID); err == nil {
-			if folderBroughtBack(rec) {
+			// A record given up is final: no pass runs again, and the sandbox is stopped.
+			if folderBroughtBack(rec) || (rec.Back != nil && rec.Back.GivenUpAt != nil) {
 				cancel()
 				return false
 			}
@@ -247,6 +252,10 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	run, err := s.cfg.Store.GetRun(rctx, runID)
 	cancel()
 	if err != nil {
+		return false
+	}
+	// Killing a run doesn't bring the folder back (bringBackNotRunningMsg).
+	if run.State == types.RunKilled {
 		return false
 	}
 	run.SandboxRef = ref
@@ -405,7 +414,7 @@ func (s *Server) folderBackVerdict(ctx context.Context, run types.AgentRun, res 
 // and saved it in the runner's state: bytes of a file it did not finish are lost with the cut.
 // res.Unsynced is set to the count the record names.
 func folderBackResume(prev *types.FolderResume, res *runnerwire.FolderPass, errText string) (*types.FolderResume, string) {
-	next := &types.FolderResume{Unsynced: res.Unsynced}
+	next := folderResumeFor(prev, res)
 	if prev != nil && next.Unsynced == 0 {
 		next.Unsynced = prev.Unsynced
 	}
