@@ -739,6 +739,7 @@ func TestForceKeptStop_AFailedStopIsRetriedOnTheNextTickWhileTheLockIsHeld(t *te
 // its sandbox.
 func TestForceKeptStop_ACrashAfterTheClaimIsStoppedOnTheNextTick(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the retry reaches the stop
 	f.claimOnly(t)
 	if f.sb.stopCount() != 0 || f.leaser.markCount() != 1 {
 		t.Fatalf("%d stops, %d marks after the claim alone; want 0 and 1", f.sb.stopCount(), f.leaser.markCount())
@@ -1144,6 +1145,7 @@ func TestSweepForcedStops_AnOfflineRunnerWithARowKeepsTheMark(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			f.withoutOwedPass() // no pass back owed: the retry reaches the stop
 			f.claimOnly(t)
 			f.release()
 			f.onRunner(f.cs.runner.ID)
@@ -1171,6 +1173,7 @@ func TestSweepForcedStops_AGoneRunnerClearsTheMarkWithOneFailureRow(t *testing.T
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			f.withoutOwedPass() // no pass back owed: the retry reaches the stop
 			f.claimOnly(t)
 			if tc.free {
 				f.release()

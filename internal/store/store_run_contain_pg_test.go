@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -301,6 +302,7 @@ func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 // read; a run with no ended_at is timed from updated_at; the plain listing fills Due the same way and leaves
 // CapPassed false; an unknown run is ErrNotFound. Catches: either flag decided from a caller's clock, and the two reads disagreeing.
 func TestPG_TerminalDueFlags(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)

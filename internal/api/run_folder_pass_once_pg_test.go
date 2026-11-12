@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -51,6 +52,7 @@ func pgUnansweredPassRun(t *testing.T, e *poolEnv, stalled int) uuid.UUID {
 // generation is settled. Catches: the bound asked after the bump with the generation it moved from, which Postgres
 // always answers "not past", so the give-up never comes and no pass is sent again until the 7-day cap.
 func TestPG_PassBack_TheBoundIsReadBeforeTheBump(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	e := newPoolEnv(t, false)
 	ctx := context.Background()
 	e.srv.cfg.Runner = &fakeRunner{}

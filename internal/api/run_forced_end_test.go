@@ -112,11 +112,12 @@ func resumedRows(audit *recRecorder, action string) int {
 // The first retry, on a new server, cancels the approval and writes the row; the second writes neither again.
 func TestForcedStop_CrashAfterClaimGetsApprovalsAndRow(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the retry reaches the stop
 	fa := newFakeApprovals()
 	seedPendingApproval(t, fa, f.run.ID)
 	f.s.cfg.Approvals = fa
 	f.claimOnly(t)
-	f.sb.stopErr = errors.New("the runner did not answer the stop") // the lock is held, so the mark stays
+	f.sb.stopErr = errors.New("the runner did not answer the stop") // the stop fails, so the mark stays for the next tick
 	restarted := New(f.s.cfg)
 	f.tick(t, restarted)
 	if calls := fa.cancelledCalls(); len(calls) != 1 || calls[0].Count != 1 || calls[0].Reason != "run_ended" {

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -378,6 +379,7 @@ func TestPG_GiveUpOnceAcrossReplicas(t *testing.T) {
 // says the record was already final, from the SQL alone, so a final record that does not decode is still found
 // final; it is false for an unknown run.
 func TestPG_GiveUpReportsNotApplied(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -437,6 +439,7 @@ func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 // reads as not final is given up; one it reads as final is not, and is answered Done. Catches: a SQL "final" that
 // counts a key's presence, which keeps a null back from its give-up for ever.
 func TestPG_GiveUpReadsFinalAsTheDecodedRecordDoes(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -659,6 +662,7 @@ func sortUUIDs(ids []uuid.UUID) {
 // has passed against now() is true; a fresh stamp, another generation, a record with no gen_at and an unknown run
 // are false. Catches: the age read against a caller's clock, and a NULL gen_at failing the scan.
 func TestPG_FolderGenPastBound(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -708,6 +712,7 @@ func TestPG_FolderGenPastBound(t *testing.T) {
 // once: a record that has a send time keeps it. Catches: a stamp from the caller's clock, one that moves a send time
 // already there (the wait would start again), and one at another generation.
 func TestPG_StampFolderGenAt(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
