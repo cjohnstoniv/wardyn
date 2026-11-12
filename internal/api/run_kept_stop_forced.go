@@ -228,6 +228,7 @@ func (s *Server) clearForcedMarkIf(ctx context.Context, fs store.ForcedStopper, 
 			return
 		}
 		cleared = true
+		s.forgetTeardownRow(id, "run.revoke") // a mark cleared after a pending-only revoke drops its once-per-process entry too
 		if onCleared != nil {
 			onCleared(sctx)
 		}
@@ -390,13 +391,26 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		}
 	}
 	if stopped {
-		settleAfterTeardown(ctx, func(sctx context.Context) { _ = s.clearSandboxRef(sctx, run.ID) })
-		// One success row per confirmed stop, whatever the revoke does: the empty-ref clear that follows a failed
-		// revoke writes none.
+		// One success row per confirmed stop across replicas: only the clear that changed the row writes it,
+		// whatever the revoke does (the empty-ref clear that follows a failed revoke writes none). A store that
+		// is not Postgres has one writer, and counts as the one that cleared; so does a clear that failed, which
+		// keeps the row rather than losing it.
+		cleared := true
 		settleAfterTeardown(ctx, func(sctx context.Context) {
-			s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", sandboxSweepAction, ref, "success",
-				mustJSON(map[string]any{"sandbox_ref": ref, "sandbox_stopped": true, "forced": true})))
+			if pg, ok := s.cfg.Store.(store.PG); ok {
+				if changed, cerr := pg.ClearSandboxRefRetainingIf(sctx, run.ID, ref); cerr == nil {
+					cleared = changed
+				}
+				return
+			}
+			_ = s.clearSandboxRef(sctx, run.ID)
 		})
+		if cleared {
+			settleAfterTeardown(ctx, func(sctx context.Context) {
+				s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", sandboxSweepAction, ref, "success",
+					mustJSON(map[string]any{"sandbox_ref": ref, "sandbox_stopped": true, "forced": true})))
+			})
+		}
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
 		s.forgetTeardownRow(run.ID, sandboxSweepAction)
 		return

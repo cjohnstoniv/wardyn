@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -514,4 +517,105 @@ func TestForcedRetry_CrashBeforeSettleRunnerNotHereKeepsTheCopyBack(t *testing.T
 			t.Errorf("%d runner-gone rows, %d marks; want one row and the mark cleared", len(rows), f.leaser.markCount())
 		}
 	})
+}
+
+// clearOnly is a ForcedStopper whose mark clears whenever asked.
+type clearOnly struct{ store.ForcedStopper }
+
+func (clearOnly) ClearForcedStop(context.Context, uuid.UUID, time.Time) (bool, error) {
+	return true, nil
+}
+
+// A mark cleared after a revoke that left only a pending run PAT revoke drops the revoke row's
+// once-per-process entry: the revoke itself keeps it, as the PAT sweep owns the retry.
+func TestForcedMark_ClearDropsTheRevokeEntry(t *testing.T) {
+	fx := newADOPATFixture(t)
+	fx.ok(t, "dev.azure.com", nil)
+	fx.pats.revokeErr = &adoPATError{Status: http.StatusServiceUnavailable}
+	key := teardownRowKey{fx.srv, fx.run.ID, "run.revoke"}
+	ctx := context.Background()
+	if err := fx.srv.revokeRunCascade(forcedCtx(ctx), fx.run.ID); err != nil {
+		t.Fatalf("the cascade with only a run PAT revoke pending = %v, want it done", err)
+	}
+	if _, held := teardownRowsWritten.Load(key); !held {
+		t.Fatal("the pending-only revoke left no once-per-process entry; the case is not exercised")
+	}
+	if !fx.srv.clearForcedMarkIf(ctx, clearOnly{}, fx.run.ID, time.Now(), true, nil) {
+		t.Fatal("the mark was not cleared")
+	}
+	if _, held := teardownRowsWritten.Load(key); held {
+		t.Error("the once-per-process revoke entry outlived the cleared mark")
+	}
+}
+
+// stopBarrierRunner stops a sandbox only once n callers are stopping it, so concurrent retries reach the
+// clear of the run's ref together.
+type stopBarrierRunner struct {
+	runner.Runner
+	n       int32
+	arrived atomic.Int32
+	stops   atomic.Int32
+}
+
+func (r *stopBarrierRunner) StopSandbox(ctx context.Context, _ string) error {
+	r.stops.Add(1)
+	r.arrived.Add(1)
+	deadline := time.Now().Add(10 * time.Second)
+	for r.arrived.Load() < r.n && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// Two replicas retrying one forced stop both stop the sandbox, and only the clear that changed the run's ref
+// writes the success row.
+func TestForcedRetry_TwoReplicasOneSuccessRow(t *testing.T) {
+	pool := throwawayPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	id := uuid.New()
+	now := time.Now().UTC()
+	if _, err := pg.CreateRun(ctx, types.AgentRun{
+		ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunRunning, RunnerTarget: "docker",
+		SandboxRef: "sbx-forced", SPIFFEID: "spiffe://wardyn.local/agent-run/" + id.String(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = $2, lost_reason = 'ended' WHERE id = $1`, id, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	run, err := pg.GetRun(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := pg.StopKeptRunForcedIf(ctx, id, types.RunStopped, run.LostAt, run.LostReason, run.EndsAt); err != nil || !applied {
+		t.Fatalf("forced claim = %v, %v; want applied", applied, err)
+	}
+	marks, err := pg.ListForcedStops(ctx)
+	if err != nil || len(marks) != 1 {
+		t.Fatalf("marks = %v, %v; want one", marks, err)
+	}
+	rec := &recRecorder{}
+	rn := &stopBarrierRunner{n: 2}
+	var wg sync.WaitGroup
+	for range 2 {
+		srv := New(Config{Store: pg, Runner: rn, Audit: rec})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.retryForcedStop(ctx, pg, marks[0])
+		}()
+	}
+	wg.Wait()
+	if rn.stops.Load() != 2 {
+		t.Fatalf("%d sandbox stops, want both replicas to stop it", rn.stops.Load())
+	}
+	if rows := sweepRows(rec, "success", "sandbox_stopped"); len(rows) != 1 {
+		t.Errorf("%d success rows, want 1", len(rows))
+	}
 }
