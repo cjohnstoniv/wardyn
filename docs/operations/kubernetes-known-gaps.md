@@ -27,6 +27,13 @@
 
 - In place of a revive, a run whose proxy is out of date is stopped and a new run started ([run lifetime](run-lifetime.md)).
 
+## What No network guarantees on Kubernetes
+
+- At the proxy: every request from the sandbox is refused (`policy:no-network`), and the proxy opens no connection for it.
+- Proxy DNS: every query gets `REFUSED` and a `run.dns.query` row, except an `AAAA` for the proxy's own name, `wardyn-proxy`, which gets an empty answer and no row. The proxy's own calls to Wardyn go on: the request and DNS rows, approvals and the policy readback.
+- At the agent pod: its NetworkPolicy lets it reach only its proxy pod, the same for every run.
+- At the proxy pod: its NetworkPolicy is the same as any run's, DNS and every address but the cloud-metadata one. So No network is enforced by the proxy, not by the proxy pod's NetworkPolicy.
+
 ## The agent-sandbox backend
 
 - The optional agent-sandbox backend is experimental and off by default. It has its own limits: server mode only, no warm pools, pause, `linux_vm` or revive, and a trusted controller with cluster-wide pod rights.
