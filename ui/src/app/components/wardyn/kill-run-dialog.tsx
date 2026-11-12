@@ -18,8 +18,9 @@ import { toastRunName } from "./copy/run-lifetime";
 import { RunRef } from "./run-ref";
 
 // Said under the question when the run holds a Both ways folder: ending the run does not copy its changes back.
-const BOTH_WAYS_FOLDER_LOST =
-  "This run's Both ways folder does not come back: ending a run discards the sandbox's changes. To keep them, run `wardyn folder bring-back <run>` first.";
+// The command is set in <code> where it is shown, so its words are held apart from the sentence around it.
+const BOTH_WAYS_FOLDER_LOST = "This run's Both ways folder does not come back: ending a run discards the sandbox's changes. To keep them, run";
+const BRING_BACK_COMMAND = "wardyn folder bring-back <run>";
 
 // Shared kill-run confirm for the two places Kill is offered (the Runs board's
 // row menu and Run Detail's header): an enforcement stop deserves the same
@@ -68,7 +69,12 @@ export function KillRunDialog({
             {notStarted
               ? NS.BODY
               : "This terminates the agent run, tears down the sandbox, and revokes any brokered credentials. Ending the run is recorded in the audit trail. This cannot be undone."}
-            {bothWaysFolder && !notStarted && ` ${BOTH_WAYS_FOLDER_LOST}`}
+            {bothWaysFolder && !notStarted && (
+              <>
+                {" "}
+                {BOTH_WAYS_FOLDER_LOST} <code className="font-mono">{BRING_BACK_COMMAND}</code> first.
+              </>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

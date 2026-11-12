@@ -35,7 +35,8 @@ describe("KillRunDialog", () => {
     const { rerender } = render(<KillRunDialog runId={ID} title="t" onOpenChange={() => {}} onConfirm={() => {}} bothWaysFolder />);
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent("does not come back");
-    expect(dialog).toHaveTextContent("wardyn folder bring-back");
+    expect(dialog).toHaveTextContent("wardyn folder bring-back <run> first.");
+    expect(dialog).not.toHaveTextContent("`");
     rerender(<KillRunDialog runId={ID} title="t" onOpenChange={() => {}} onConfirm={() => {}} />);
     expect(screen.getByRole("alertdialog")).not.toHaveTextContent("does not come back");
     expect(screen.getByRole("alertdialog")).not.toHaveTextContent("wardyn folder bring-back");
