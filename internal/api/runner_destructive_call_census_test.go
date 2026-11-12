@@ -69,6 +69,9 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	// sweeps (sweepLapsedRunTokens, keepRebootedRun, the gone-runner end), the lease sweep's re-stop; and the stop
 	// after a lost mark that could not be written (loseWriteFailed).
 	{"internal/api/run_lost.go", "Server.stopLostSandbox", "StopProxy"}: {1, "unguarded: K11, K14"},
+	// The lost-run stops that name a policy generation: the runner refuses a call for an older proxy generation.
+	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "StopProxyAt"}:  {1, guardFenced},
+	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "EndSandboxAt"}: {1, guardFenced},
 	// The headless proxy stop of a run whose revive or edit failed (stopUnconfirmedProxyAt).
 	{"internal/api/run_proxy_readback.go", "Server.stopProxyOrAudit", "StopProxy"}: {1, "unguarded: K12"},
 	// The end's stop: the lock's loss and the end hold's deadline are asked before the call, not during it.
