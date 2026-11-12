@@ -111,5 +111,5 @@
 | Portkey | `1.15.2` | the same test |
 | Presidio analyzer | `2.2.363` | the same test |
 
-- The test pins and asserts these versions; it passes in the nightly. It runs in the `docker-tagged-live` nightly against [`test/gatewayfake`](../../test/gatewayfake), with the images pinned by digest. It asserts the credential swap, the Portkey headers, metered streaming usage, the rerouting refusal, and a Presidio hit and a code-like prompt it does not block.
+- The test pins and asserts these versions. It runs in the `docker-tagged-live` nightly against [`test/gatewayfake`](../../test/gatewayfake), with the images pinned by digest. It asserts the credential swap, the Portkey headers, metered streaming usage, the rerouting refusal, and a Presidio hit and a code-like prompt it does not block.
 - Hosted Portkey's header contract is covered by [`gateway_portkey_strip_test.go`](../../internal/egress/proxy/gateway_portkey_strip_test.go). OpenRouter and Codex CLI through Portkey or OpenRouter are not tested.
