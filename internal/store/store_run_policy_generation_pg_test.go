@@ -620,3 +620,67 @@ func TestMarkRunRevivedAtSlot_ClaimsOnlyOnTheSlotItRead(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_AbandonNoted_ReportsCurrentAndNewest: an abandon that changes nothing because a newer generation
+// slot exists reports the generation the run then enforces and the newest slot, read in its own
+// transaction. Behind a newer generation that was undone too, the current one is the abandoned gen itself;
+// behind one that is still current, it is not. An abandon that applies, or finds its gen already abandoned,
+// reports nothing. None of the no-ops touches the generations, the digest, the config or the start.
+func TestPG_AbandonNoted_ReportsCurrentAndNewest(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	r := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, r)
+	if err := pg.SetRunPolicyDigest(ctx, r.ID, "d1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.PutRunProxyConfig(ctx, r.ID, []byte("sealed-1")); err != nil {
+		t.Fatal(err)
+	}
+	if gen, err := pg.AdvanceRunPolicyGeneration(ctx, r.ID, store.PolicySlot{Generation: 1}, "d-a", nil, "jti-a", []byte("sealed-a")); err != nil || gen != 2 {
+		t.Fatalf("A's advance = %d, %v; want 2", gen, err)
+	}
+	if gen, err := pg.AdvanceRunPolicyGeneration(ctx, r.ID, store.PolicySlot{Generation: 2}, "d-b", nil, "jti-b", []byte("sealed-b")); err != nil || gen != 3 {
+		t.Fatalf("B's advance = %d, %v; want 3", gen, err)
+	}
+
+	// B is current: A's undo of 2 changes nothing, and the current generation is B's.
+	before := snapshotPolicyRow(t, ctx, pg, r.ID)
+	noop, err := pg.AbandonRunPolicyGenerationNoted(ctx, r.ID, 2, []byte("sealed-restore-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noop == nil || noop.Current != 3 || noop.Newest != 3 {
+		t.Fatalf("A's abandon behind B's current 3 = %+v, want {Current:3 Newest:3}", noop)
+	}
+	if after := snapshotPolicyRow(t, ctx, pg, r.ID); !reflect.DeepEqual(after, before) {
+		t.Errorf("a no-op abandon changed the row:\n%+v\nwant\n%+v", after, before)
+	}
+
+	// B undoes its own generation, the newest, which applies and reports nothing.
+	if noop, err := pg.AbandonRunPolicyGenerationNoted(ctx, r.ID, 3, []byte("sealed-1")); err != nil || noop != nil {
+		t.Fatalf("B's abandon of the newest 3 = %+v, %v; want it applied, nothing reported", noop, err)
+	}
+
+	// 3 is abandoned and 2 is current again: A's undo of 2 still changes nothing, and now says so.
+	before = snapshotPolicyRow(t, ctx, pg, r.ID)
+	noop, err = pg.AbandonRunPolicyGenerationNoted(ctx, r.ID, 2, []byte("sealed-restore-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noop == nil || noop.Current != 2 || noop.Newest != 3 {
+		t.Fatalf("A's abandon behind B's undone 3 = %+v, want {Current:2 Newest:3}", noop)
+	}
+	if after := snapshotPolicyRow(t, ctx, pg, r.ID); !reflect.DeepEqual(after, before) {
+		t.Errorf("a no-op abandon changed the row:\n%+v\nwant\n%+v", after, before)
+	}
+	if st, _, err := store.RunPolicyStateOf(ctx, pool, r.ID); err != nil || st.CurrentGeneration() != 2 || len(st.Generations) != 3 {
+		t.Errorf("state = %+v, %v; want 3 entries with 2 current", st, err)
+	}
+
+	// An already abandoned newest generation is not a no-op of this kind.
+	if noop, err := pg.AbandonRunPolicyGenerationNoted(ctx, r.ID, 3, nil); err != nil || noop != nil {
+		t.Errorf("a second abandon of 3 = %+v, %v; want nothing reported", noop, err)
+	}
+}
