@@ -276,3 +276,61 @@ func TestPG_ClearForcedStop_ClearsOnlyTheStampItRead(t *testing.T) {
 		t.Errorf("forced_stop_at = %v after the clear, want nil", at)
 	}
 }
+
+// TestPG_UpdateRunStateIf_TerminalToTerminalKeepsEndedAt: a run that already ended keeps its first end when
+// a later transition moves it from one terminal state to another (a re-kill, a kill of a stopped run), a
+// terminal row with no ended_at (the pre-0092 shape) gets now(), and a live run's first end is still now().
+// Proven red by leaving the CASE as now() (the end moves), or by leaving a terminal target's ended_at as it
+// was (a NULL stays NULL).
+func TestPG_UpdateRunStateIf_TerminalToTerminalKeepsEndedAt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	endedAt := func(id uuid.UUID) time.Time {
+		t.Helper()
+		got, err := pg.GetRun(ctx, id)
+		if err != nil || got.EndedAt == nil {
+			t.Fatalf("get run %s: ended_at %v, err %v", id, got.EndedAt, err)
+		}
+		return *got.EndedAt
+	}
+	move := func(id uuid.UUID, from, to types.RunState) {
+		t.Helper()
+		if ok, err := pg.UpdateRunStateIf(ctx, id, from, to); err != nil || !ok {
+			t.Fatalf("UpdateRunStateIf %s -> %s = %v, %v; want applied", from, to, ok, err)
+		}
+	}
+
+	killed := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	move(killed.ID, types.RunRunning, types.RunKilled)
+	t1 := endedAt(killed.ID)
+	time.Sleep(20 * time.Millisecond)
+	move(killed.ID, types.RunKilled, types.RunKilled)
+	if got := endedAt(killed.ID); !got.Equal(t1) {
+		t.Errorf("KILLED -> KILLED moved ended_at from %v to %v", t1, got)
+	}
+
+	stopped := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	move(stopped.ID, types.RunRunning, types.RunStopped)
+	t2 := endedAt(stopped.ID)
+	time.Sleep(20 * time.Millisecond)
+	move(stopped.ID, types.RunStopped, types.RunKilled)
+	if got := endedAt(stopped.ID); !got.Equal(t2) {
+		t.Errorf("STOPPED -> KILLED moved ended_at from %v to %v", t2, got)
+	}
+
+	legacy := persistRun(t, ctx, pool, newRun(types.RunFailed))
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = NULL WHERE id = $1`, legacy.ID); err != nil {
+		t.Fatalf("reset to pre-0092 shape: %v", err)
+	}
+	move(legacy.ID, types.RunFailed, types.RunKilled)
+	if got := endedAt(legacy.ID); time.Since(got) > time.Minute {
+		t.Errorf("a terminal row with no ended_at got %v, want now()", got)
+	}
+
+	completed := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	move(completed.ID, types.RunRunning, types.RunCompleted)
+	if got := endedAt(completed.ID); time.Since(got) > time.Minute {
+		t.Errorf("RUNNING -> COMPLETED stamped %v, want now()", got)
+	}
+}

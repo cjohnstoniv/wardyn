@@ -150,6 +150,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   const clientGo = ["client.go", "runs_create.go", "runs_new_run.go", "runs_mode.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+  const runsFolderTs = readFileSync(join(root, "ui/src/app/lib/types/runs-folder.ts"), "utf8");
   const runCreateTs = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
 
   it("every CreateRunRequest json tag is carried by intentToWire, sent by the Name dialog, or excluded by the registry", () => {
@@ -299,8 +300,8 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
 
   it("RunComputerFolder and RunFolderPass's keys are exactly computerFolderRunView's and types.FolderPassRecord's json tags (GET /runs/{id} computer_folder)", () => {
     const viewGo = readFileSync(join(root, "internal/api/run_computer_folder.go"), "utf8");
-    expect(tsInterfaceKeys(runsTs, "RunComputerFolder").sort()).toEqual(goJSONTags(viewGo, "computerFolderRunView").sort());
-    expect(tsInterfaceKeys(runsTs, "RunFolderPass").sort()).toEqual(goJSONTags(typesGo, "FolderPassRecord").sort());
+    expect(tsInterfaceKeys(runsFolderTs, "RunComputerFolder").sort()).toEqual(goJSONTags(viewGo, "computerFolderRunView").sort());
+    expect(tsInterfaceKeys(runsFolderTs, "RunFolderPass").sort()).toEqual(goJSONTags(typesGo, "FolderPassRecord").sort());
   });
 
   it("RunSync and RunSyncOpen's keys are exactly runSyncView's and runSyncOpen's json tags (GET /runs/{id} sync.open, sshgateway_sync.go)", () => {

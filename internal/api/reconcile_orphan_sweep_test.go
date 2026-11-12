@@ -360,6 +360,18 @@ func (s *keptFolderStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUI
 	return st, err == nil, err
 }
 
+func (s *keptFolderStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.GiveUpParams) (store.GiveUpOutcome, error) {
+	return store.GiveUpOutcome{}, nil
+}
+
+func (s *keptFolderStore) MarkGivenUpAudited(context.Context, uuid.UUID, int) (bool, error) {
+	return false, nil
+}
+
+func (s *keptFolderStore) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid.UUID, *uuid.UUID, error) {
+	return nil, nil, nil
+}
+
 // orphanVerdictRunner records the orphan sweep's verdict on each run it is asked about.
 type orphanVerdictRunner struct {
 	*orphanSweepRunner

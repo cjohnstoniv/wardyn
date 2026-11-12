@@ -226,8 +226,12 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	// The reads, like the record, are on a teardownCtx: a caller already cancelled still gets the
 	// record that no time was left.
 	rctx, cancel := teardownCtx(ctx)
-	folder, seed, err := st.RunLocalFolderSeed(rctx, runID)
-	if err != nil || folder == nil || folder.RunnerID == nil || folder.Direction != types.ComputerFolderBoth || seed.SeededAt == nil || !s.runDataOutAllowed(rctx, runID) {
+	if ok, err := s.folderBackEligible(rctx, runID); err != nil || !ok {
+		cancel()
+		return false
+	}
+	folder, _, err := st.RunLocalFolderSeed(rctx, runID)
+	if err != nil || folder == nil {
 		cancel()
 		return false
 	}
@@ -235,7 +239,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	unread := false
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(rctx, runID); err == nil {
-			if folderBroughtBack(rec) {
+			// A record given up is final: no pass runs again, and the sandbox is stopped.
+			if folderFinal(rec) {
 				cancel()
 				return false
 			}
@@ -247,6 +252,10 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	run, err := s.cfg.Store.GetRun(rctx, runID)
 	cancel()
 	if err != nil {
+		return false
+	}
+	// Killing a run doesn't bring the folder back (bringBackNotRunningMsg).
+	if run.State == types.RunKilled {
 		return false
 	}
 	run.SandboxRef = ref
@@ -407,7 +416,7 @@ func (s *Server) folderBackVerdict(ctx context.Context, run types.AgentRun, res 
 // and saved it in the runner's state: bytes of a file it did not finish are lost with the cut.
 // res.Unsynced is set to the count the record names.
 func folderBackResume(prev *types.FolderResume, res *runnerwire.FolderPass, errText string) (*types.FolderResume, string) {
-	next := &types.FolderResume{Unsynced: res.Unsynced}
+	next := folderResumeFor(prev, res)
 	if prev != nil && next.Unsynced == 0 {
 		next.Unsynced = prev.Unsynced
 	}
@@ -525,23 +534,55 @@ const keptAgentStopWait = 2 * time.Second
 // agent ends only with the sandbox, so no pass runs. A sandbox already stopped answers
 // errSandboxStopped.
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
-	if run.RunnerID != nil {
-		return notQuiescable("a sandbox on a runner is not kept")
+	if !isTerminalRunState(run.State) {
+		// A run still RUNNING (a person's bring-back, or a first pass kept at the run's end) is quiesced as
+		// before the cut existed: cutAgent cuts only an ended run's agent.
+		if run.RunnerID != nil {
+			return notQuiescable("a sandbox on a runner is not kept")
+		}
+		if run.MachineKind.IsVM() {
+			return notQuiescable("a virtual machine is not quiesced from the server's Docker")
+		}
+		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
+		if !ok {
+			return notQuiescable("its substrate cannot stop its proxy alone")
+		}
+		if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
+			return notQuiescable("its substrate cannot stop its proxy alone")
+		} else if err != nil {
+			// Not unlessStopped: Docker's StopProxy fails closed by stopping the agent's container, so
+			// a stopped sandbox here is this failure's own doing, and the record names the proxy.
+			return fmt.Errorf("its proxy did not stop: %w", err)
+		}
+		return s.killKeptAgent(ctx, run, ref)
 	}
 	if run.MachineKind.IsVM() {
 		return notQuiescable("a virtual machine is not quiesced from the server's Docker")
 	}
-	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
-	if !ok {
-		return notQuiescable("its substrate cannot stop its proxy alone")
-	}
-	if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
+	if run.RunnerID != nil {
+		if !s.keepable(run) {
+			return notQuiescable("a sandbox on a runner is not kept")
+		}
+		if kind, err := s.cutAgent(ctx, run); kind != cutFenced || err != nil {
+			return notQuiescable("a sandbox on a runner is not kept")
+		}
+	} else if kind, err := s.cutAgent(ctx, run); kind == cutUnsupported && err == nil || errors.Is(err, runner.ErrEndUnsupported) {
 		return notQuiescable("its substrate cannot stop its proxy alone")
 	} else if err != nil {
-		// Not unlessStopped: Docker's StopProxy fails closed by stopping the agent's container, so
-		// a stopped sandbox here is this failure's own doing, and the record names the proxy.
 		return fmt.Errorf("its proxy did not stop: %w", err)
 	}
+	err := s.killKeptAgent(ctx, run, ref)
+	if err != nil && run.RunnerID != nil && !errors.Is(err, errSandboxStopped) {
+		// A runner run answers as one that cannot be quiesced, which takes the unquiesced first pass; a
+		// failed kill after its cut keeps that answer, and the cut stays.
+		return notQuiescable("a sandbox on a runner is not kept: " + err.Error())
+	}
+	return err
+}
+
+// killKeptAgent kills every process of a kept sandbox's agent and checks it is gone: the agent kill that
+// follows the sandbox's proxy being stopped or its agent cut off.
+func (s *Server) killKeptAgent(ctx context.Context, run types.AgentRun, ref string) error {
 	if run.AgentExecID == runner.MainProcessExecID {
 		// An exec-less sandbox (the container is the agent): its agent ends only with the sandbox.
 		return s.unlessStopped(ctx, ref, errors.New("its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"))
@@ -646,6 +687,11 @@ func (s *Server) resumeComputerFolderBack(ctx context.Context, id uuid.UUID) {
 	defer unlock()
 	run, err := s.cfg.Store.GetRun(lctx, id)
 	if err != nil || !isTerminalRunState(run.State) || run.SandboxRef == "" || !s.computerFolderKept(lctx, id) {
+		return
+	}
+	// A run whose stop is owed gets no new pass: the containment loop stops it, and a pass begun now would
+	// be cut by that stop.
+	if s.containStopOwed(lctx, run) {
 		return
 	}
 	fctx, cancel := context.WithTimeout(lctx, reconcileFinalizeTimeout)
@@ -882,6 +928,12 @@ type computerFolderRunView struct {
 	Error     string                  `json:"error,omitempty"`
 	Seed      *types.FolderPassRecord `json:"seed,omitempty"`
 	Back      *types.FolderPassRecord `json:"back,omitempty"`
+	// Fate, SandboxCopy, LastReport and GiveUpAt are the fate of the changes not yet back (folderFateOf); each is
+	// absent when the run is live or the server cannot tell.
+	Fate        *string           `json:"fate,omitempty"`
+	SandboxCopy *string           `json:"sandbox_copy,omitempty"`
+	LastReport  *folderLastReport `json:"last_report,omitempty"`
+	GiveUpAt    *time.Time        `json:"give_up_at,omitempty"`
 }
 
 // computerFolderRunState values.
@@ -916,6 +968,9 @@ func (s *Server) computerFolderRunView(ctx context.Context, id uuid.UUID) *compu
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(ctx, id); err == nil {
 			v.Seed, v.Back = rec.Seed, rec.Back
+			if run, err := s.cfg.Store.GetRun(ctx, id); err == nil {
+				s.setFolderFate(ctx, v, run, rec, seed.SeededAt != nil)
+			}
 		}
 	}
 	return v
