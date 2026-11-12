@@ -2339,7 +2339,8 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 			if l.busy(row.ID) {
 				t.Errorf("%s: the run is still claimed after its item ended, want it released for the next visit", c.name)
 			}
-			_, unlock, ok, err := l.srv.locker().TryLock(context.Background(), db.NewLockKey(db.RunOpLockClass, row.ID.String()))
+			// The probe goes to the wrapped locker, so its release is not counted as an item's.
+			_, unlock, ok, err := lk.Locker.TryLock(context.Background(), db.NewLockKey(db.RunOpLockClass, row.ID.String()))
 			if err != nil || !ok {
 				t.Fatalf("%s: another holder cannot take the run's lock after the item: ok=%v err=%v", c.name, ok, err)
 			}
