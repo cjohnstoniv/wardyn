@@ -98,9 +98,9 @@ type containState struct {
 
 	inFlight   map[uuid.UUID]*containEntry // claimed runs, shared by the cut and stop pools
 	lastGen    uint64                      // the generation of the latest claim
-	unobserved map[uuid.UUID]time.Time     // run id -> when its sandbox was last not observed
+	unobserved map[uuid.UUID]time.Time     // run id -> when its sandbox was last not observed (time.Now, monotonic)
 	seen       map[uuid.UUID]struct{}      // ids listed since the cursor last wrapped
-	started    time.Time                   // when this process started the loop
+	started    time.Time                   // when this process started the loop (time.Now, monotonic)
 	cursor     *store.TerminalSandboxCursor
 
 	cutQ       chan containJob
@@ -139,7 +139,7 @@ func (s *Server) startContainLoop() {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
-	c.started = s.cfg.Now()
+	c.started = time.Now()
 	c.mu.Unlock()
 	s.goBackground(func() { s.containLoop(ctx, containTick) })
 	for range containWorkers {
@@ -565,7 +565,7 @@ func (s *Server) containCallDone(f *containFlight, ans containAnswer) {
 	push := false
 	if f.abandoned {
 		if notObserved(ans.lateErr()) {
-			c.unobserved[f.run.ID] = s.cfg.Now()
+			c.unobserved[f.run.ID] = time.Now()
 		}
 		push = c.containLateStopLocked(f)
 	}
@@ -667,7 +667,8 @@ func (s *Server) containFailed(ctx context.Context, st store.RunContainer, run t
 	if ctx.Err() != nil {
 		return
 	}
-	started, err := st.SetRunContainmentErrorSince(ctx, run.ID, cause.Error(), s.streakSince(run))
+	startedAgo, unobservedAgo := s.streakAges(run.ID)
+	started, err := st.SetRunContainmentErrorSince(ctx, run.ID, cause.Error(), startedAgo, unobservedAgo)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: recording an ended run's containment failure failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return
@@ -685,27 +686,25 @@ func (s *Server) containFailed(ctx context.Context, st store.RunContainer, run t
 func (s *Server) containNoteUnobserved(id uuid.UUID) {
 	c := &s.contain
 	c.init()
-	now := s.cfg.Now()
 	c.mu.Lock()
-	c.unobserved[id] = now
+	c.unobserved[id] = time.Now()
 	c.mu.Unlock()
 }
 
-// streakSince is the earliest a failure stamp may be and still count toward a streak for run: the latest of
-// the run's containment due time, the last round that did not observe it, and when this process started.
-func (s *Server) streakSince(run types.AgentRun) time.Time {
+// streakAges is how long ago this process started the loop, and how long ago the run's last round that did
+// not observe it, if any. They are lengths of time on the process's monotonic clock, never wall times: the
+// store turns them into times on the database's clock, so a wrong server clock cannot move a streak.
+func (s *Server) streakAges(id uuid.UUID) (startedAgo time.Duration, unobservedAgo *time.Duration) {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	since := c.started
-	if due, ok := containmentDue(run); ok && due.After(since) {
-		since = due
+	startedAgo = time.Since(c.started)
+	if t, ok := c.unobserved[id]; ok {
+		ago := time.Since(t)
+		unobservedAgo = &ago
 	}
-	if t := c.unobserved[run.ID]; t.After(since) {
-		since = t
-	}
-	return since
+	return startedAgo, unobservedAgo
 }
 
 // d1Due reports whether the cut item should hand run to the stop pool. The stop path decides it.

@@ -16,78 +16,71 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// containErrAt reads a run's containment_error_at.
-func containErrAt(t *testing.T, ctx context.Context, pg store.PG, id uuid.UUID) *time.Time {
-	t.Helper()
-	got, err := pg.GetRun(ctx, id)
-	if err != nil {
-		t.Fatalf("get run: %v", err)
-	}
-	return got.ContainmentErrorAt
-}
-
-// TestPG_SetRunContainmentErrorSince: no stamp, or one older than since, becomes the database's now(), not
-// a time the caller names; one not older than since is kept; a run that is not terminal has no row. Proven
-// red by the COALESCE form, which keeps a kept-phase stamp from before the end, and by stamping a time
-// the caller passes in, which the one-second check against now() in SQL would not match.
+// TestPG_SetRunContainmentErrorSince: a missing stamp, or one older than the streak start, becomes the
+// database's now(); one not older is kept; a run that is not terminal has no row. The streak start is the
+// latest of the run's due time (end plus the lag), now minus startedAgo and now minus unobservedAgo, all on
+// the database's clock. Each case seeds ended_at and the stamp as seconds before now() in SQL, so nothing
+// sleeps and no Go time reaches the comparison. Proven red by the COALESCE form, which keeps a kept-phase
+// stamp from before the end; by dropping the due time (the "due wins" cases), startedAgo ("started wins")
+// or unobservedAgo ("unobserved wins") from the GREATEST; and by stamping a time the caller passes in.
 func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	since := now.Add(-time.Minute)
-	stamp := func(id uuid.UUID, at *time.Time) {
-		t.Helper()
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error_at = $2 WHERE id = $1`, id, at); err != nil {
-			t.Fatalf("set stamp: %v", err)
-		}
-	}
-	older, newer := now.Add(-time.Hour), now.Add(-30*time.Second)
-	// stampedNow reports, in SQL, whether the stamp is within a second of the database's own now().
-	stampedNow := func(id uuid.UUID) bool {
-		t.Helper()
-		var ok bool
-		if err := pool.QueryRow(ctx, `SELECT abs(extract(epoch FROM now() - containment_error_at)) < 1 FROM agent_runs WHERE id = $1`, id).Scan(&ok); err != nil {
-			t.Fatalf("compare the stamp with now(): %v", err)
-		}
-		return ok
-	}
+	secs := func(n float64) *float64 { return &n }
+	ago := func(d time.Duration) *time.Duration { return &d }
+	lag := store.ContainmentLag.Seconds()
 
 	for name, tc := range map[string]struct {
 		state       types.RunState
-		stamp       *time.Time
+		endedAgo    float64  // seconds before now() the run ended
+		stampAgo    *float64 // seconds before now() of the stored stamp; nil: none
+		startedAgo  time.Duration
+		unobserved  *time.Duration
 		wantStarted bool
-		wantAt      *time.Time // nil: the stamp is the database's now()
 	}{
-		"null":        {types.RunKilled, nil, true, nil},
-		"older":       {types.RunKilled, &older, true, nil},
-		"newer":       {types.RunKilled, &newer, false, &newer},
-		"at since":    {types.RunKilled, &since, false, &since},
-		"running row": {types.RunRunning, &older, false, &older},
+		"null stamp":                    {types.RunKilled, 3600, nil, time.Minute, nil, true},
+		"older than the start":          {types.RunKilled, 3600, secs(3000), time.Minute, nil, true},
+		"newer than the start":          {types.RunKilled, 3600, secs(30), time.Minute, nil, false},
+		"due wins, stamp before it":     {types.RunKilled, lag + 60, secs(120), time.Hour, nil, true},
+		"due wins, stamp after it":      {types.RunKilled, lag + 60, secs(30), time.Hour, nil, false},
+		"started wins, stamp before":    {types.RunKilled, 3600, secs(600), 5 * time.Minute, nil, true},
+		"started wins, stamp after":     {types.RunKilled, 3600, secs(120), 5 * time.Minute, nil, false},
+		"unobserved wins, stamp before": {types.RunKilled, 3600, secs(60), time.Hour, ago(30 * time.Second), true},
+		"unobserved wins, stamp after":  {types.RunKilled, 3600, secs(10), time.Hour, ago(30 * time.Second), false},
+		"running row":                   {types.RunRunning, 3600, secs(3000), time.Minute, nil, false},
 	} {
 		run := newRun(tc.state)
 		run.SandboxRef = "ref-" + run.ID.String()
 		r := persistRun(t, ctx, pool, run)
-		stamp(r.ID, tc.stamp)
-		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", since)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = now() - $2::float8 * interval '1 second',
+			containment_error_at = now() - $3::float8 * interval '1 second' WHERE id = $1`, r.ID, tc.endedAgo, tc.stampAgo); err != nil {
+			t.Fatalf("%s: seed the row: %v", name, err)
+		}
+		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", tc.startedAgo, tc.unobserved)
 		if err != nil || started != tc.wantStarted {
 			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want %v", name, started, err, tc.wantStarted)
 		}
-		got := containErrAt(t, ctx, pg, r.ID)
-		switch {
-		case got == nil:
-			t.Errorf("%s: containment_error_at is NULL, want %v", name, tc.wantAt)
-		case tc.wantAt == nil && !stampedNow(r.ID):
-			t.Errorf("%s: containment_error_at = %v, want within a second of the database's now()", name, got)
-		case tc.wantAt != nil && !got.Equal(*tc.wantAt):
-			t.Errorf("%s: containment_error_at = %v, want %v", name, got, tc.wantAt)
+		// The stamp's age in SQL: a stamp this call set is within a second of now(); one kept is still the
+		// seeded age, give or take the seconds the test took.
+		var age *float64
+		if err := pool.QueryRow(ctx, `SELECT extract(epoch FROM now() - containment_error_at)::float8 FROM agent_runs WHERE id = $1`, r.ID).Scan(&age); err != nil {
+			t.Fatalf("%s: read the stamp's age: %v", name, err)
 		}
-		run, err := pg.GetRun(ctx, r.ID)
+		switch {
+		case age == nil:
+			t.Errorf("%s: containment_error_at is NULL", name)
+		case tc.wantStarted && (*age < 0 || *age >= 1):
+			t.Errorf("%s: stamp is %.2f s old, want within a second of the database's now()", name, *age)
+		case !tc.wantStarted && (tc.stampAgo == nil || *age < *tc.stampAgo || *age > *tc.stampAgo+2):
+			t.Errorf("%s: stamp is %.2f s old, want the seeded %v s", name, *age, tc.stampAgo)
+		}
+		got, err := pg.GetRun(ctx, r.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if wantMsg := tc.state.IsTerminal(); (run.ContainmentError == "boom") != wantMsg {
-			t.Errorf("%s: containment_error = %q, written = %v, want %v", name, run.ContainmentError, run.ContainmentError == "boom", wantMsg)
+		if wantMsg := tc.state.IsTerminal(); (got.ContainmentError == "boom") != wantMsg {
+			t.Errorf("%s: containment_error = %q, written = %v, want %v", name, got.ContainmentError, got.ContainmentError == "boom", wantMsg)
 		}
 	}
 }
@@ -147,7 +140,7 @@ func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = '' WHERE id = $1`, r.ID); err != nil {
 			t.Fatalf("clear the ref: %v", err)
 		}
-		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", time.Now().Add(-time.Minute))
+		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", time.Minute, nil)
 		if err != nil || started {
 			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want false, nil", state, started, err)
 		}

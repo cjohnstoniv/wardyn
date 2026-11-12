@@ -109,9 +109,10 @@ func (f *containStore) MarkRunFenced(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// SetRunContainmentErrorSince stamps with this store's own clock, as the Postgres statement stamps with the
-// database's now(): the caller's clock never reaches the stamp.
-func (f *containStore) SetRunContainmentErrorSince(_ context.Context, id uuid.UUID, msg string, since time.Time) (bool, error) {
+// SetRunContainmentErrorSince is the Postgres statement over rows in memory: the stamp and the streak start
+// are both on this store's own clock, the streak start being the latest of the row's due time, now minus
+// startedAgo and now minus unobservedAgo. The caller's clock reaches neither.
+func (f *containStore) SetRunContainmentErrorSince(_ context.Context, id uuid.UUID, msg string, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error) {
 	time.Sleep(f.lag)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -120,9 +121,18 @@ func (f *containStore) SetRunContainmentErrorSince(_ context.Context, id uuid.UU
 		return false, nil
 	}
 	r.msg = msg
+	now := time.Now()
+	since := containRowKey(r.TerminalSandboxRow).Add(store.ContainmentLag)
+	if t := now.Add(-startedAgo); t.After(since) {
+		since = t
+	}
+	if unobservedAgo != nil {
+		if t := now.Add(-*unobservedAgo); t.After(since) {
+			since = t
+		}
+	}
 	started := false
 	if r.ContainmentErrorAt == nil || r.ContainmentErrorAt.Before(since) {
-		now := time.Now()
 		r.ContainmentErrorAt = &now
 		started = true
 	}
@@ -357,7 +367,7 @@ func (l *containLab) startCutOnly() {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
-	c.started = s.cfg.Now()
+	c.started = time.Now()
 	c.mu.Unlock()
 	s.goBackground(func() { s.containLoop(ctx, containTick) })
 	for range containWorkers {
@@ -689,8 +699,8 @@ func TestW2_RunnerNotConnectedSkippedNotCounted(t *testing.T) {
 		if fences, stops, _ := l.rn.counts(); fences+stops != 0 || l.st.stampWrites() != 0 {
 			t.Errorf("calls = %d, stamps = %d while the runner was away; want none", fences+stops, l.st.stampWrites())
 		}
-		if got := l.srv.streakSince(containRunOf(row)); time.Since(got) > containTick {
-			t.Errorf("streakSince = %v, want a round within the last tick", got)
+		if _, ago := l.srv.streakAges(row.ID); ago == nil || *ago > containTick {
+			t.Errorf("unobserved age = %v, want a round within the last tick", ago)
 		}
 		l.online.Store(true)
 		time.Sleep(containTick)
@@ -1009,9 +1019,8 @@ func TestContain_LateOfflineAnswerMarksTheRoundUnobserved(t *testing.T) {
 		})
 		l.startCutOnly()
 		time.Sleep(containCall + 16*time.Second)
-		answered := time.Now()
-		if got := l.srv.streakSince(containRunOf(row)); answered.Sub(got) > 2*time.Second {
-			t.Errorf("streakSince = %v, want the late answer's time %v", got, answered)
+		if _, ago := l.srv.streakAges(row.ID); ago == nil || *ago > 2*time.Second {
+			t.Errorf("unobserved age = %v, want the late answer's, under 2 s ago", ago)
 		}
 		l.stop()
 	})
@@ -1770,16 +1779,17 @@ func TestBringComputerFolderBack_AFencingRunnerRunIsCutAndItsPassSent(t *testing
 	}
 }
 
-// A failure stamp comes from the store's clock and never from the server's: with the server's clock two
-// minutes ahead or behind (set after the loop started), the hung cut is stamped at the end of its call
-// phase and the streak the stop path sees is the same. Caught by: stamping from the server's clock.
+// A failure stamp and its streak start come from the store's clock and never from the server's: with the
+// server's clock two minutes ahead or behind from before the loop starts, process start included, the hung
+// cut is stamped at the end of its call phase and the streak the stop path sees is the same. Caught by:
+// stamping from the server's clock, or taking the streak start from a wall time on it (a clock ahead puts
+// the start after every fresh stamp, so each call resets the stamp and no streak ages).
 func TestContain_StreakIgnoresTheServerClock(t *testing.T) {
 	for name, offset := range map[string]time.Duration{"clock ahead": 2 * time.Minute, "clock behind": -2 * time.Minute} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				l := newContainLab(t, true)
-				var skew atomic.Int64
-				l.srv.cfg.Now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+				l.srv.cfg.Now = func() time.Time { return time.Now().Add(offset) }
 				id := l.st.add(dueRow(nil, 10*time.Minute))
 				l.rn.setHook(func(ctx context.Context, _ string) error {
 					<-ctx.Done()
@@ -1787,7 +1797,6 @@ func TestContain_StreakIgnoresTheServerClock(t *testing.T) {
 				})
 				start := time.Now()
 				l.start()
-				skew.Store(int64(offset))
 				time.Sleep(containItem)
 				if stamp := l.st.stamp(id); stamp == nil {
 					t.Fatal("the hung cut left no stamp")

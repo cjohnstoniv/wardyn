@@ -50,7 +50,7 @@ type TerminalSandboxCursor struct {
 type RunContainer interface {
 	ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool) ([]TerminalSandboxRow, *TerminalSandboxCursor, error)
 	MarkRunFenced(ctx context.Context, id uuid.UUID) error
-	SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, since time.Time) (bool, error)
+	SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error)
 	ClearRunContainmentError(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
@@ -109,19 +109,27 @@ func (s PG) MarkRunFenced(ctx context.Context, id uuid.UUID) error {
 
 // SetRunContainmentErrorSince records a failed containment cut of an ended run: the message always, and
 // the time the failures began. containment_error_at keeps an earlier stamp only if it is not older than
-// since; one older than since, or a missing one, is set to the database's now(), so the stamp comes from
-// the one clock every replica shares and not from the process that wrote it. since is the caller's streak
-// start (the later of the run's due time, its last unobserved round and the process start), so a stamp left
-// over from before it never starts an ended run's streak: a kept-phase failure is recorded while the run is
-// still RUNNING, and nothing clears it at the end. It answers started when this call set the stamp. A run
-// that is not terminal, or holds no sandbox, has no row to update: started false, no error.
-func (s PG) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, since time.Time) (bool, error) {
+// the streak start; one older than that, or a missing one, is set to the database's now(). Every time in
+// it is the database's: the streak start is the latest of the run's due time (its end plus the lag, from
+// the row), now() minus startedAgo (how long ago this process started the loop) and now() minus
+// unobservedAgo (how long ago the run's last unobserved round, when there was one). The caller sends those
+// two as lengths of time measured on its monotonic clock, so a wrong server clock moves neither stamp nor
+// streak. A stamp left over from before the streak start never starts an ended run's streak: a kept-phase
+// failure is recorded while the run is still RUNNING, and nothing clears it at the end. It answers started
+// when this call set the stamp. A run that is not terminal, or holds no sandbox, has no row to update:
+// started false, no error.
+func (s PG) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error) {
+	var unobservedSecs *float64
+	if unobservedAgo != nil {
+		secs := unobservedAgo.Seconds()
+		unobservedSecs = &secs
+	}
 	var started bool
 	err := s.Pool.QueryRow(ctx, `
 		UPDATE agent_runs SET containment_error = $2,
-		       containment_error_at = CASE WHEN containment_error_at IS NULL OR containment_error_at < $3 THEN now() ELSE containment_error_at END
-		 WHERE id = $1 AND sandbox_ref <> '' AND state = ANY($4)
-		RETURNING containment_error_at = now()`, id, msg, pgTime(since), terminalRunStates).Scan(&started)
+		       containment_error_at = CASE WHEN containment_error_at IS NULL OR containment_error_at < GREATEST(`+ContainmentDueSQL+`, now() - make_interval(secs => $3::float8), now() - make_interval(secs => $4::float8)) THEN now() ELSE containment_error_at END
+		 WHERE id = $1 AND sandbox_ref <> '' AND state = ANY($5)
+		RETURNING containment_error_at = now()`, id, msg, startedAgo.Seconds(), unobservedSecs, terminalRunStates).Scan(&started)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
