@@ -353,9 +353,10 @@ func TestStopTerminalSandbox_RunnerProxyStoppedResumeIsKept(t *testing.T) {
 	t.Run("the runner is not connected", func(t *testing.T) {
 		f, fr, online := setup(t)
 		online.Store(false)
+		before := len(f.audit.snapshot()) // the fixture's own seed rows, written before the call
 		left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
-		if !left || !errors.Is(err, errRunnerNotHere) || fr.calls() != 0 || len(f.audit.snapshot()) != 0 {
-			t.Errorf("left %v, err %v, %d calls, %d rows; want left, errRunnerNotHere, 0, 0", left, err, fr.calls(), len(f.audit.snapshot()))
+		if rows := len(f.audit.snapshot()) - before; !left || !errors.Is(err, errRunnerNotHere) || fr.calls() != 0 || rows != 0 {
+			t.Errorf("left %v, err %v, %d calls, %d new rows; want left, errRunnerNotHere, 0, 0", left, err, fr.calls(), rows)
 		}
 	})
 }
