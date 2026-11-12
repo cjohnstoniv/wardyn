@@ -89,6 +89,9 @@ const (
 	// MethodKeptMachine acts on one kept machine's folder on the Mac (KeptMachineArgs), answered with
 	// KeptMachineResult. It is sent only to a runner whose caps carry MacVMCaps.KeptMachines.
 	MethodKeptMachine = "kept_machine"
+	// MethodFenceProxy cuts a contained run's agent off every network it is attached to (RefArgs, an empty
+	// reply). Sent only to a runner whose caps carry ProxyFence.
+	MethodFenceProxy = "fence_proxy"
 )
 
 // KeptMachineOpDelete is kept_machine's one op.
@@ -160,6 +163,9 @@ type CreateSandboxResult struct {
 type RefArgs struct {
 	ExecutionGeneration uuid.UUID `json:"execution_generation,omitempty"`
 	Ref                 string    `json:"ref"`
+	// PolicyGeneration is the run's policy generation the call acts for, sent only to a runner whose caps
+	// carry ProxyFence; 0 is none.
+	PolicyGeneration int `json:"policy_generation,omitempty"`
 }
 
 // AgentPauseArgs is pause_agent's and resume_agent's. Generation is the run's pause generation, which
@@ -340,6 +346,9 @@ type AgentStatusArgs struct {
 type ReplaceProxyArgs struct {
 	Ref     string `json:"ref"`
 	CfgJSON []byte `json:"cfg_json"`
+	// PolicyGeneration is the run's policy generation the call acts for, sent only to a runner whose caps
+	// carry ProxyFence; 0 is none.
+	PolicyGeneration int `json:"policy_generation,omitempty"`
 }
 
 // ReplaceProxyResult is replace_proxy's answer: runner.ProxyReviverHashed's hash of the bytes the
