@@ -315,6 +315,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	switch {
 	case out.busy:
 		return s.keepBusy(ctx, run, *folder, gen, qerr)
+	case out.away:
+		return s.keepAway(ctx, run, *folder, gen, qerr)
 	case out.unconfirmed:
 		// The runner the pass was to go to turned out to be one that may still run the last: kept, as
 		// lastPassOpen keeps it, with nothing counted.
@@ -680,6 +682,8 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 	res, cut, settled, err := s.computerFolderPass(passCtx, account, run, folder, pull, last)
 	out := folderPassOutcome{FolderPass: res, cut: cut, settled: settled, busy: errors.Is(err, runner.ErrFolderPassBusy),
 		unconfirmed: errors.Is(err, errFolderPassUnconfirmed)}
+	var away folderRunnerAway
+	out.away = errors.As(err, &away)
 	switch {
 	case cut:
 		out.errText = "the sync was cut short: " + passCtx.Err().Error()
@@ -694,12 +698,19 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 // folderPassOutcome is one pass as computerFolderPassWithin ended it. settled is a pass the runner
 // answered for, or one that sent nothing; busy is a runner refusing it while it runs another pass for
 // the run (folder_pass_busy): a pass that did not start; unconfirmed is a pass not sent, as the runner
-// may still run the last one (errFolderPassUnconfirmed).
+// may still run the last one (errFolderPassUnconfirmed); away is a pass not sent because the computer's runner
+// is offline or not connected here (folderRunnerAway).
 type folderPassOutcome struct {
 	runnerwire.FolderPass
-	errText                         string
-	cut, settled, busy, unconfirmed bool
+	errText                               string
+	cut, settled, busy, unconfirmed, away bool
 }
+
+// folderRunnerAway is the refusal of a pass because the computer's runner is offline or not connected here: the
+// refusal's own text, as an error that says so.
+type folderRunnerAway struct{ text string }
+
+func (e folderRunnerAway) Error() string { return e.text }
 
 // auditComputerFolderPass records one pass as run.folder.transfer: direction seed (the computer to
 // the sandbox, before the agent starts), back (the sandbox to the computer, when the run ends) or
@@ -792,6 +803,9 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		return runnerwire.FolderPass{}, false, false, errFolderPassUnconfirmed
 	}
 	if refusal != nil {
+		if refusal.body.Reason == reasonComputerRunnerOffline {
+			return runnerwire.FolderPass{}, false, true, folderRunnerAway{refusal.body.Error}
+		}
 		return runnerwire.FolderPass{}, false, true, errors.New(refusal.body.Error)
 	}
 	sess, reason, err := s.execSFTPServer(ctx, run, "-d", folder.RemoteDir)

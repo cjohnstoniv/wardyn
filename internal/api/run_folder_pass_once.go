@@ -160,6 +160,34 @@ func (s *Server) keepBusy(ctx context.Context, run types.AgentRun, folder types.
 	return s.recordFolderPassBusy(ctx, run.ID, folder, gen)
 }
 
+// folderPassAwayMsg is the record of a pass back not sent because the computer's runner was offline.
+const folderPassAwayMsg = "kept: the computer's runner was offline at the end; the copy back is tried again when it is back"
+
+// keepAway keeps the sandbox of a pass back not sent because the computer's runner is offline or not connected
+// here, once it is safe to keep (holdUnquiesced), with a resume and nothing counted, so a later sweep tries
+// again when the runner is back. One not safe to keep (a virtual machine, an agent that cannot be stopped
+// alone, a sandbox on that same offline computer) is stopped with its changes not brought back, as before.
+func (s *Server) keepAway(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
+	const head = "no pass ran; the computer's runner was offline at the end"
+	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+		return s.stopNotKept(ctx, run.ID, folder, gen, true, head, err)
+	}
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	if s.writeComputerFolderStatus(rctx, run.ID, gen, func(st *types.RunLocalFolderStatus) {
+		if st.Resume == nil {
+			st.Resume = &types.FolderResume{}
+		}
+		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, folderPassAwayMsg, true)
+		st.Settled = gen
+	}) {
+		s.auditComputerFolderPass(rctx, run.ID, folder, true, runnerwire.FolderPass{}, folderPassAwayMsg)
+		return true
+	}
+	// A resume that did not land leaves the sweeps nothing to resume: kept only for an owner that moved the record on.
+	return s.folderGenTaken(rctx, run.ID, gen) || s.stopNotKept(ctx, run.ID, folder, gen, true, head, errors.New("its record could not be written"))
+}
+
 // keepUnconfirmed keeps the sandbox of a pass back not sent because the runner may still run the last
 // (errFolderPassUnconfirmed), once it is safe to keep (holdUnquiesced), with the last pass's send time
 // (genAt) kept, so the wait does not start again. One not safe to keep is stopped with its changes not

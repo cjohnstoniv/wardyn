@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -481,5 +482,74 @@ func TestFinalize_PlainCancelStillStops(t *testing.T) {
 	}
 	if after, _ := cfg.Store.GetRun(t.Context(), run.ID); after.SandboxRef != "" {
 		t.Errorf("sandbox ref %q after a stop, want it cleared", after.SandboxRef)
+	}
+}
+
+// A copy back whose computer's runner is offline at the end sends no pass and keeps a sandbox that can be held
+// (here a container whose quiesce worked): a resume is written, nothing is counted or stopped, and the record
+// and its audit row say the copy back is tried again when the runner is back. A refusal that still settled it
+// would stop the sandbox with the changes lost.
+func TestFolderBack_OfflineFolderRunnerKeepsAHoldableSandbox(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	f.runnerAs(t, nil)
+	seen := passSeen(f.sb)
+	err := f.finalizeWithin(30 * time.Second)
+	if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
+		t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
+	}
+	if seen.Load() {
+		t.Error("a pass was sent to a runner that is offline")
+	}
+	st := f.cs.folderStatus()
+	if st.Resume == nil || *st.Resume != (types.FolderResume{}) || st.Gen != 2 || st.Settled != 2 || st.Back == nil || st.Back.Error != folderPassAwayMsg {
+		t.Errorf("record %+v, want a resume with nothing counted, settled at gen 2, with the runner-offline text", st)
+	}
+	if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", folderPassAwayMsg); ev == nil || ev.Outcome != "failure" {
+		t.Errorf("audit row %v, want a failure row with the runner-offline text", ev)
+	}
+}
+
+// offlineExecRunner is a runner whose agent cannot be asked about: the exec that reads PID 1 fails, as it does
+// on a sandbox on the very laptop that is offline.
+type offlineExecRunner struct{ *agentSandbox }
+
+func (r *offlineExecRunner) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if len(spec.Argv) == 2 && spec.Argv[1] == "/proc/1/cmdline" {
+		return nil, runner.ErrRunnerOffline
+	}
+	return r.agentSandbox.ExecStream(ctx, ref, spec)
+}
+
+// A sandbox that cannot be held is stopped as before with its changes not brought back: a virtual machine, and a
+// sandbox on the offline laptop itself, whose agent cannot be reached to stop it alone.
+func TestFolderBack_OfflineFolderRunnerStopsAnUnholdableSandbox(t *testing.T) {
+	for name, setup := range map[string]func(*passFixture, *testing.T) string{
+		"a virtual machine": func(f *passFixture, _ *testing.T) string {
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.run.MachineKind = types.MachineLinuxVM
+			ds.mu.Unlock()
+			return "a virtual machine's agent cannot be stopped alone"
+		},
+		"a sandbox on the offline laptop": func(f *passFixture, t *testing.T) string {
+			ag := f.onARunner(t, false)
+			f.s.cfg.Runner = &offlineExecRunner{ag}
+			return "its agent is not one that can be stopped alone"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 1, 1, nil)
+			f.runnerAs(t, nil)
+			why := setup(f, t)
+			if err := f.finalizeWithin(30 * time.Second); errors.Is(err, errComputerFolderResumes) {
+				t.Errorf("finalize = %v, want the sandbox left to its stop", err)
+			}
+			for _, want := range []string{"no pass ran; the computer's runner was offline at the end", why, "its changes not brought back yet, uncounted"} {
+				assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, want)
+			}
+			if st := f.cs.folderStatus(); st.Resume != nil || st.Settled != 2 {
+				t.Errorf("record %+v, want no resume, settled at gen 2", st)
+			}
+		})
 	}
 }
