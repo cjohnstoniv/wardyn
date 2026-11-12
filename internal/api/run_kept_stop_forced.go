@@ -477,21 +477,26 @@ func (s *Server) settleUnsettledForcedFolder(ctx context.Context, run types.Agen
 	return true
 }
 
-// reviveExpiryDue refuses a revive whose run reached the end it is kept until (keptUntil) while the
-// revive got ready: the claim comes after the slow proxy image pull, and a revive that started inside
-// the run's grace must not land past it. It reads the run again, as the claim's own guard would.
+// reviveExpiryDue refuses a revive whose run reached the end it is kept until (keptUntil), or its maximum
+// age (pastLifetimeCap), while the revive got ready: the claim comes after the slow proxy image pull, and a
+// revive that started inside the run's grace must not land past it. It reads the run again, as the claim's
+// own guard would. The cap is its own test: keptUntil has no cap term, and a run can have a cap and no end.
 func (s *Server) reviveExpiryDue(ctx context.Context, id uuid.UUID) *reviveError {
 	cur, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil || cur.LostAt == nil {
 		// A failed read, or a run no longer lost, is the claim's to refuse (reasonReviveRunChanged).
 		return nil
 	}
+	now := s.cfg.Now()
 	until, ok := s.keptUntil(cur)
-	if !ok || s.cfg.Now().Before(until) {
-		return nil
-	}
-	if cur.LostReason == types.LostEnded {
+	past := ok && !now.Before(until)
+	switch {
+	case cur.LostReason == types.LostEnded && past:
 		return reviveRefused(http.StatusConflict, reasonReviveEndedFilesGone, "run has ended and its files are no longer kept; start a new run")
+	case pastLifetimeCap(cur, now):
+		return reviveRefused(http.StatusConflict, reasonReviveMaxAge, "this run has reached its maximum age, so it can't be revived; start a new run")
+	case !past:
+		return nil
 	}
 	return reviveRefused(http.StatusConflict, reasonRevivePastEnd, "run has passed its end; extend it first")
 }

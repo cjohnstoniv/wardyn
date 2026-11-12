@@ -396,3 +396,65 @@ func TestEndHold_PassBudgetLeavesTheRecordItsTeardown(t *testing.T) {
 		t.Errorf("record %+v after the pass, want its pass back written inside the hold", st)
 	}
 }
+
+// A revive of a run past its maximum age is refused with its own reason, through the revive handler: before the
+// end's answer, which asks for an extension the cap refuses, and after the files-gone answer. Also when the cap
+// passes while the revive pulls its proxy image, from the re-read before the claim. Catches the cap tested after
+// reviveEligible's past-end arm, or after reviveExpiryDue's early return for a run still inside its keep.
+func TestRevive_MaxAgeHasItsOwnReason(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set    func(f *reviveFixture, run *types.AgentRun) // the stored run, before the revive
+		during func(f *reviveFixture)                      // while the proxy image is pulled; nil for none
+		want   string
+	}{
+		"no end, past its cap": {set: func(f *reviveFixture, run *types.AgentRun) {
+			lost, limit := f.now.Add(-time.Minute), f.now.Add(-time.Second)
+			run.EndsAt, run.LostAt, run.LostReason, run.LifetimeCapAt = nil, &lost, types.LostOutage, &limit
+		}, want: reasonReviveMaxAge},
+		"end passed inside its grace, cap passed": {set: func(f *reviveFixture, run *types.AgentRun) {
+			limit := f.now.Add(-time.Second)
+			run.LifetimeCapAt = &limit
+		}, want: reasonReviveMaxAge},
+		"ended inside its files grace, end ahead, cap passed": {set: func(f *reviveFixture, run *types.AgentRun) {
+			end, limit := f.now.Add(time.Hour), f.now.Add(-time.Second)
+			run.EndsAt, run.LifetimeCapAt = &end, &limit
+		}, want: reasonReviveMaxAge},
+		"end passed, cap ahead": {set: func(f *reviveFixture, run *types.AgentRun) {
+			limit := f.now.Add(time.Hour)
+			run.LifetimeCapAt = &limit
+		}, want: reasonRevivePastEnd},
+		"ended, files gone, cap passed": {set: func(f *reviveFixture, run *types.AgentRun) {
+			limit := f.now.Add(-time.Second)
+			run.LifetimeCapAt = &limit
+			f.now = f.now.Add(f.srv.cfg.EndedRunGrace + time.Second)
+		}, want: reasonReviveEndedFilesGone},
+		"cap passes during the pull": {set: func(f *reviveFixture, run *types.AgentRun) {
+			end, limit := f.now.Add(time.Hour), f.now.Add(time.Minute)
+			run.EndsAt, run.LifetimeCapAt = &end, &limit
+		}, during: func(f *reviveFixture) { f.now = f.now.Add(2 * time.Minute) }, want: reasonReviveMaxAge},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, sr := newEndedFixture(t)
+			if f.srv.cfg.EndedRunGrace < time.Hour {
+				t.Fatalf("EndedRunGrace = %v: these cases need a grace of an hour or more", f.srv.cfg.EndedRunGrace)
+			}
+			f.st.mu.Lock()
+			tc.set(f, &f.st.run)
+			f.run = f.st.run
+			f.st.mu.Unlock()
+			if tc.during != nil {
+				f.rr.onEnsure = func() {
+					f.rr.onEnsure = nil
+					tc.during(f)
+				}
+			}
+			code, body := f.reviveAs(t, true)
+			if code != http.StatusConflict || errorReasonOf(body) != tc.want {
+				t.Fatalf("revive = %d %s, want 409 %s", code, body, tc.want)
+			}
+			if len(f.rr.replaced) != 0 || len(sr.starts()) != 0 {
+				t.Errorf("proxies replaced %d, agent starts %v; want none", len(f.rr.replaced), sr.starts())
+			}
+		})
+	}
+}
