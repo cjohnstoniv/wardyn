@@ -243,7 +243,7 @@ func TestAttachSlots_ASlotIsHeldUntilTheRecordingIsPersisted(t *testing.T) {
 	recvSlotEvent(t, casts.entered, "the recording to start persisting")
 
 	// The keyboard moves at once...
-	if mode := readAttachMode(t, observers[0]); mode.ReadOnly {
+	if mode := readPromotionFrame(t, observers[0], holderOwner); mode.ReadOnly {
 		t.Fatal("the oldest observer was not promoted while the recording persisted")
 	}
 	// ...but the slot does not: reconnects are refused until the cast has left memory.
