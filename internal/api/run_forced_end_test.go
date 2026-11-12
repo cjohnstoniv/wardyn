@@ -7,9 +7,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -142,4 +149,369 @@ func TestForcedStop_ResumedRowOncePerProcess(t *testing.T) {
 	if n := resumedRows(f.audit, "run.ended"); n != 2 {
 		t.Errorf("%d resumed rows after a restart's first tick, want 2", n)
 	}
+}
+
+// fencingRunner is the forced fixture's runner that also fences, counting its cut calls. fenceErr is what
+// FenceProxy answers.
+type fencingRunner struct {
+	*passWindowSandbox
+	fences     atomic.Int32
+	proxyStops atomic.Int32
+	fenceErr   error
+}
+
+func (r *fencingRunner) FenceProxy(context.Context, string) error {
+	r.fences.Add(1)
+	return r.fenceErr
+}
+
+func (r *fencingRunner) StopProxy(ctx context.Context, ref string) error {
+	r.proxyStops.Add(1)
+	return r.passWindowSandbox.StopProxy(ctx, ref)
+}
+
+// calls is every call that would cut, stop or queue anything on the runner.
+func (r *fencingRunner) calls() int {
+	return int(r.fences.Load()) + int(r.proxyStops.Load()) + r.sb().stopCount()
+}
+
+func (r *fencingRunner) sb() *agentSandbox { return r.passWindowSandbox.agentSandbox }
+
+// owedRecord is a computer folder record with a pass back owed (a resume), its generation settled.
+var owedRecord = types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}}
+
+// unsettledOwedRecord is owedRecord left unsettled: a forced end died between its claim and the settle.
+var unsettledOwedRecord = types.RunLocalFolderStatus{Gen: 3, Settled: 2, Resume: &types.FolderResume{Unsynced: 1}}
+
+// onFencedRunner puts the forced fixture's run on its runner, connected here with the fence capability, and
+// answers the switch that reports the runner online or not.
+func (f *forced) onFencedRunner(t *testing.T) (*fencingRunner, *atomic.Bool) {
+	t.Helper()
+	id := f.cs.runner.ID
+	f.onRunner(id)
+	fr := &fencingRunner{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+	f.s.cfg.Runner = fr
+	online := &atomic.Bool{}
+	online.Store(true)
+	f.s.cfg.RunnerOnline = func(uuid.UUID) bool { return online.Load() }
+	seamConnect(t, f.s, id, runnerwire.Caps{ProxyFence: true})
+	return fr, online
+}
+
+// terminalRun is the run as the store holds it.
+func (f *forced) terminalRun(t *testing.T) types.AgentRun {
+	t.Helper()
+	run, err := f.cs.GetRun(context.Background(), f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// A forced end whose cut was observed keeps the sandbox for the owed pass: nothing stops the sandbox, the
+// record carries a resume at its new generation, and the mark waits for the lock; with the lock free the retry
+// keeps it and clears the mark. A hosted container and a connected runner that fences.
+func TestForcedEnd_ObservedCutKeepsTheOwedSandbox(t *testing.T) {
+	for name, setup := range map[string]func(*testing.T, *forced) *fencingRunner{
+		"a hosted container": func(*testing.T, *forced) *fencingRunner { return nil },
+		"a fenced runner": func(t *testing.T, f *forced) *fencingRunner {
+			fr, _ := f.onFencedRunner(t)
+			return fr
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			fr := setup(t, f)
+			f.setRecord(owedRecord)
+			f.end(f.s)
+			if f.sb.stopCount() != 0 {
+				t.Fatalf("%d sandbox stops, want the sandbox kept for its pass back", f.sb.stopCount())
+			}
+			if fr != nil && fr.fences.Load() == 0 {
+				t.Error("the runner's agent was not fenced")
+			}
+			rec := f.cs.folderStatus()
+			if rec.Resume == nil || rec.Gen != 4 || rec.Settled != 4 || rec.Back == nil || !strings.Contains(rec.Back.Error, "Kept for its copy back") {
+				t.Fatalf("record %+v; want generation 4 settled with a resume, kept for its copy back", rec)
+			}
+			if run := f.terminalRun(t); run.SandboxRef == "" || run.State != types.RunStopped || f.leaser.markCount() != 1 {
+				t.Errorf("ref %q, state %s, %d marks; want the ref kept, STOPPED, marked until the lock is free", run.SandboxRef, run.State, f.leaser.markCount())
+			}
+			f.release()
+			f.tick(t, f.s)
+			if f.sb.stopCount() != 0 || f.leaser.markCount() != 0 {
+				t.Errorf("with the lock free: %d stops, %d marks; want the sandbox kept and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+			}
+		})
+	}
+}
+
+// A cut that was not observed, or a sandbox that cannot be kept, settles the record as not brought back and
+// stops the sandbox: a virtual machine, Kubernetes in server mode, a runner without the fence, and a runner
+// whose last caps are known but whose session is not online.
+func TestForcedEnd_UnobservedCutStillSettlesAndStops(t *testing.T) {
+	for name, set := range map[string]func(*testing.T, *forced){
+		"a virtual machine": func(_ *testing.T, f *forced) {
+			f.cs.dispatchTestStore.mu.Lock()
+			f.cs.run.MachineKind = types.MachineLinuxVM
+			f.cs.dispatchTestStore.mu.Unlock()
+		},
+		"kubernetes in server mode": func(_ *testing.T, f *forced) { f.sb.proxyErr = runner.ErrEndUnsupported },
+		"a runner without the fence": func(t *testing.T, f *forced) {
+			id := f.cs.runner.ID
+			f.onRunner(id)
+			seamConnect(t, f.s, id, runnerwire.Caps{})
+		},
+		"a runner with stale caps and offline": func(t *testing.T, f *forced) {
+			fr, online := f.onFencedRunner(t)
+			_ = fr
+			online.Store(false)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			set(t, f)
+			f.setRecord(owedRecord)
+			f.end(f.s)
+			rec := f.cs.folderStatus()
+			if rec.Resume != nil || rec.Gen != 4 || rec.Settled != 4 || rec.Back == nil || !strings.Contains(rec.Back.Error, "Not brought back") {
+				t.Errorf("record %+v; want generation 4 settled, no resume, not brought back", rec)
+			}
+			if f.sb.stopCount() != 1 {
+				t.Errorf("%d sandbox stops, want 1: the cut was not observed", f.sb.stopCount())
+			}
+		})
+	}
+}
+
+// A crash after the claim with a pass back owed: the retry keeps the sandbox the forced end would have kept,
+// settling an unsettled record with a resume and not as not brought back.
+func TestForcedRetry_KeepsWhatTheForcedEndKept(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.setRecord(unsettledOwedRecord)
+	f.tick(t, f.s) // the lock is held
+	rec := f.cs.folderStatus()
+	if rec.Resume == nil || rec.Gen != 4 || rec.Settled != 4 || rec.Back == nil || !strings.Contains(rec.Back.Error, "Kept for its copy back") {
+		t.Fatalf("record %+v; want generation 4 settled with a resume, kept for its copy back", rec)
+	}
+	if f.sb.stopCount() != 0 || f.leaser.markCount() != 1 {
+		t.Fatalf("%d stops, %d marks with the lock held; want the sandbox kept and the mark waiting", f.sb.stopCount(), f.leaser.markCount())
+	}
+	f.release()
+	f.tick(t, f.s)
+	if f.sb.stopCount() != 0 || f.leaser.markCount() != 0 {
+		t.Errorf("with the lock free: %d stops, %d marks; want the sandbox kept and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+	}
+}
+
+// A connected runner that fences keeps a sandbox whose pass back is owed.
+func TestStopTerminalSandbox_FencedRunnerRunIsKept(t *testing.T) {
+	f := newForced(t)
+	fr, _ := f.onFencedRunner(t)
+	f.claimOnly(t)
+	f.setRecord(owedRecord)
+	left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
+	if !left || err != nil || f.sb.stopCount() != 0 || fr.fences.Load() != 1 {
+		t.Errorf("left %v, err %v, %d sandbox stops, %d fences; want kept, no error, none, one", left, err, f.sb.stopCount(), fr.fences.Load())
+	}
+}
+
+// A connected runner without the fence is kept once its proxy stop answers nil, stopped with one failure row
+// when the proxy stop fails, and left in place, with nothing sent or written, when it is not connected.
+func TestStopTerminalSandbox_RunnerProxyStoppedResumeIsKept(t *testing.T) {
+	setup := func(t *testing.T) (*forced, *fencingRunner, *atomic.Bool) {
+		f := newForced(t)
+		fr, online := f.onFencedRunner(t)
+		seamConnect(t, f.s, f.cs.runner.ID, runnerwire.Caps{}) // no fence: the proxy is stopped alone
+		fr.fenceErr = errors.New("a fence must not be asked")
+		f.claimOnly(t)
+		f.setRecord(owedRecord)
+		return f, fr, online
+	}
+	t.Run("the proxy stop answers nil", func(t *testing.T) {
+		f, fr, _ := setup(t)
+		left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
+		if !left || err != nil || f.sb.stopCount() != 0 || fr.proxyStops.Load() != 1 {
+			t.Errorf("left %v, err %v, %d sandbox stops, %d proxy stops; want kept, no error, none, one", left, err, f.sb.stopCount(), fr.proxyStops.Load())
+		}
+	})
+	t.Run("the proxy stop fails", func(t *testing.T) {
+		f, _, _ := setup(t)
+		f.sb.proxyErr = errors.New("the runner did not answer the proxy stop")
+		left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
+		if left || err != nil || f.sb.stopCount() != 1 {
+			t.Errorf("left %v, err %v, %d sandbox stops; want stopped, no error, one", left, err, f.sb.stopCount())
+		}
+		if rows := sweepRows(f.audit, "failure", "teardown_error"); len(rows) != 1 {
+			t.Errorf("%d failure rows, want 1", len(rows))
+		}
+	})
+	t.Run("the runner is not connected", func(t *testing.T) {
+		f, fr, online := setup(t)
+		online.Store(false)
+		left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
+		if !left || !errors.Is(err, errRunnerNotHere) || fr.calls() != 0 || len(f.audit.snapshot()) != 0 {
+			t.Errorf("left %v, err %v, %d calls, %d rows; want left, errRunnerNotHere, 0, 0", left, err, fr.calls(), len(f.audit.snapshot()))
+		}
+	})
+}
+
+// Kubernetes in server mode cannot stop a proxy alone, so its owed sandbox is stopped, and no cut other than
+// the one proxy stop is made for it.
+func TestStopTerminalSandbox_K8sServerHeldIsStopped(t *testing.T) {
+	f := newForced(t)
+	f.sb.proxyErr = runner.ErrEndUnsupported
+	f.claimOnly(t)
+	f.setRecord(owedRecord)
+	left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
+	if left || err != nil || f.sb.stopCount() != 1 {
+		t.Errorf("left %v, err %v, %d sandbox stops; want stopped, no error, one", left, err, f.sb.stopCount())
+	}
+}
+
+// A runner run whose runner is not connected here, with a pass back owed or a record that cannot be read, is
+// left alone: nothing is stopped, queued or counted as swept, and no row is written.
+func TestStopTerminalSandbox_RunnerNotHereLeavesTheOwedSandbox(t *testing.T) {
+	t.Run("an owed pass, through the terminal sandbox sweep", func(t *testing.T) {
+		f := newForced(t)
+		fr, online := f.onFencedRunner(t)
+		f.claimOnly(t)
+		f.setRecord(owedRecord)
+		online.Store(false)
+		f.release()
+		if f.s.sweepTerminalSandboxRun(context.Background(), f.terminalRun(t)) {
+			t.Error("the sweep counted a left sandbox as swept")
+		}
+		if rows := sweepRows(f.audit, "failure", ""); fr.calls() != 0 || len(rows) != 0 {
+			t.Errorf("%d calls, %d failure rows; want none", fr.calls(), len(rows))
+		}
+	})
+	t.Run("a record that cannot be read", func(t *testing.T) {
+		f := newForced(t)
+		fr, online := f.onFencedRunner(t)
+		f.claimOnly(t)
+		f.s.cfg.Store = unreadableRecordStore{f.s.cfg.Store.(markedStore)}
+		online.Store(false)
+		left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
+		if !left || !errors.Is(err, errRunnerNotHere) || fr.calls() != 0 {
+			t.Errorf("left %v, err %v, %d calls; want left, errRunnerNotHere, 0", left, err, fr.calls())
+		}
+	})
+}
+
+// A hosted sandbox whose proxy stop fails stays kept with the stop's error and one failure row.
+func TestStopTerminalSandbox_HostedProxyStopErrorKeepsWithRow(t *testing.T) {
+	f := newForced(t)
+	f.sb.proxyErr = errors.New("the daemon did not answer the proxy stop")
+	f.claimOnly(t)
+	f.setRecord(owedRecord)
+	left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
+	if !left || !errors.Is(err, errProxyStopUnconfirmed) || f.sb.stopCount() != 0 {
+		t.Errorf("left %v, err %v, %d sandbox stops; want kept with the stop's error and no sandbox stop", left, err, f.sb.stopCount())
+	}
+	if rows := sweepRows(f.audit, "failure", "teardown_error"); len(rows) != 1 {
+		t.Errorf("%d failure rows, want 1", len(rows))
+	}
+}
+
+// The runner that kept an owed sandbox drops: the retry sends it nothing and the mark waits, lock held or free;
+// when it returns the next tick fences, keeps and clears the mark; a runner whose row is revoked clears the
+// mark with the runner_gone row and no stop.
+func TestForcedRetry_RunnerNotHereKeepsTheOwedSandbox(t *testing.T) {
+	kept := func(t *testing.T) (*forced, *fencingRunner, *atomic.Bool) {
+		f := newForced(t)
+		fr, online := f.onFencedRunner(t)
+		f.setRecord(owedRecord)
+		f.end(f.s)
+		if f.sb.stopCount() != 0 || f.leaser.markCount() != 1 {
+			t.Fatalf("%d stops, %d marks after the forced end; want the sandbox kept and marked", f.sb.stopCount(), f.leaser.markCount())
+		}
+		return f, fr, online
+	}
+	t.Run("the runner returns", func(t *testing.T) {
+		f, fr, online := kept(t)
+		online.Store(false)
+		before := fr.calls()
+		f.tick(t, f.s) // the lock is held
+		f.release()
+		f.tick(t, f.s) // the lock is free
+		if fr.calls() != before || f.leaser.markCount() != 1 || len(sweepRows(f.audit, "failure", "")) != 0 {
+			t.Fatalf("%d calls after %d, %d marks; want no call and the mark kept", fr.calls(), before, f.leaser.markCount())
+		}
+		online.Store(true)
+		f.tick(t, f.s)
+		if f.sb.stopCount() != 0 || fr.fences.Load() < 2 || f.leaser.markCount() != 0 {
+			t.Errorf("%d stops, %d fences, %d marks; want the sandbox fenced and kept and the mark cleared", f.sb.stopCount(), fr.fences.Load(), f.leaser.markCount())
+		}
+	})
+	t.Run("the runner is revoked", func(t *testing.T) {
+		f, fr, online := kept(t)
+		online.Store(false)
+		f.cs.runner.State = types.RunnerRevoked
+		before := fr.calls()
+		f.tick(t, f.s)
+		rows := sweepRows(f.audit, "failure", "runner_gone")
+		if fr.calls() != before || len(rows) != 1 || f.leaser.markCount() != 0 {
+			t.Errorf("%d calls after %d, %d runner-gone rows, %d marks; want no call, one row, the mark cleared", fr.calls(), before, len(rows), f.leaser.markCount())
+		}
+	})
+}
+
+// A forced end whose process died after the claim and before the settle, on a runner that is not here, settles
+// nothing and sends nothing; the runner's return settles with a resume and keeps the sandbox; a revoked
+// runner settles as not brought back and clears the mark with the runner_gone row.
+func TestForcedRetry_CrashBeforeSettleRunnerNotHereKeepsTheCopyBack(t *testing.T) {
+	t.Run("not connected, then back", func(t *testing.T) {
+		f := newForced(t)
+		fr, online := f.onFencedRunner(t)
+		f.claimOnly(t)
+		f.setRecord(unsettledOwedRecord)
+		online.Store(false)
+		f.tick(t, f.s)
+		if rec := f.cs.folderStatus(); rec.Gen != 3 || rec.Settled != 2 {
+			t.Fatalf("record %+v; want generation 3 left unsettled", rec)
+		}
+		if fr.calls() != 0 || f.leaser.markCount() != 1 {
+			t.Fatalf("%d calls, %d marks; want none and the mark kept", fr.calls(), f.leaser.markCount())
+		}
+		online.Store(true)
+		f.release()
+		f.tick(t, f.s)
+		rec := f.cs.folderStatus()
+		if rec.Resume == nil || rec.Gen != 4 || rec.Settled != 4 || f.sb.stopCount() != 0 || f.leaser.markCount() != 0 {
+			t.Errorf("record %+v, %d stops, %d marks; want generation 4 settled with a resume, no stop, the mark cleared", rec, f.sb.stopCount(), f.leaser.markCount())
+		}
+	})
+	t.Run("connected at the gate, offline at the settle", func(t *testing.T) {
+		f := newForced(t)
+		fr, _ := f.onFencedRunner(t)
+		f.claimOnly(t)
+		f.setRecord(unsettledOwedRecord)
+		fr.fenceErr = fmt.Errorf("%w: the link dropped", runner.ErrRunnerOffline)
+		f.tick(t, f.s)
+		if rec := f.cs.folderStatus(); rec.Gen != 3 || rec.Settled != 2 {
+			t.Fatalf("record %+v; want generation 3 left unsettled", rec)
+		}
+		if fr.proxyStops.Load() != 0 || f.sb.stopCount() != 0 || f.leaser.markCount() != 1 {
+			t.Errorf("%d proxy stops, %d sandbox stops, %d marks; want none and the mark kept", fr.proxyStops.Load(), f.sb.stopCount(), f.leaser.markCount())
+		}
+	})
+	t.Run("revoked", func(t *testing.T) {
+		f := newForced(t)
+		_, online := f.onFencedRunner(t)
+		f.claimOnly(t)
+		f.setRecord(unsettledOwedRecord)
+		online.Store(false)
+		f.cs.runner.State = types.RunnerRevoked
+		f.sb.stopErr = fmt.Errorf("%w: no registered substrate", runner.ErrRunnerOffline)
+		f.tick(t, f.s)
+		rec := f.cs.folderStatus()
+		if rec.Resume != nil || rec.Back == nil || !strings.Contains(rec.Back.Error, "Not brought back") {
+			t.Errorf("record %+v; want settled as not brought back", rec)
+		}
+		if rows := sweepRows(f.audit, "failure", "runner_gone"); len(rows) != 1 || f.leaser.markCount() != 0 {
+			t.Errorf("%d runner-gone rows, %d marks; want one row and the mark cleared", len(rows), f.leaser.markCount())
+		}
+	})
 }

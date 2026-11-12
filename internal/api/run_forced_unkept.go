@@ -5,6 +5,9 @@ package api
 
 import (
 	"context"
+	"sync"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -30,4 +33,25 @@ func (s *Server) forceUnkeptHeld(ctx context.Context, leaser store.RunLeaser, ru
 	s.stopKeptRun(ctx, leaser, run, types.RunFailed, "run.lost", map[string]any{
 		"kept": false, "lost_error": runner.ErrEndUnsupported.Error(), "reason": string(run.LostReason),
 	})
+}
+
+// forcedResumeRowWritten holds, per server and run, the retry's resumed row this process has written. In
+// memory only, like teardownRowsWritten: a restart writes its own, which is the case it reports.
+var forcedResumeRowWritten sync.Map
+
+type forcedResumeKey struct {
+	srv *Server
+	run uuid.UUID
+}
+
+// forcedCutObserved reports a cut of the agent that was seen to hold: cutAgent answered no error and fenced
+// the sandbox, or stopped the proxy of a server-hosted one. A proxy stop on a runner without the fence is not
+// seen to cut the agent off, and is not observed.
+func forcedCutObserved(run types.AgentRun, kind cutKind, err error) bool {
+	return err == nil && (kind == cutFenced || (run.RunnerID == nil && kind == cutProxyStopped))
+}
+
+// auditCutFailure writes the failure row a cut that failed leaves under action, as stopProxyOrAudit wrote it.
+func (s *Server) auditCutFailure(ctx context.Context, runID uuid.UUID, ref, action string, err error) {
+	s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
 }

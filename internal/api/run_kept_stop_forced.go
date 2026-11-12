@@ -30,8 +30,7 @@ const keptEndHoldOffLimit = 5 * time.Minute
 // does not reach here). Until the run's due end is keptEndHoldOffLimit past, it does nothing, and the next
 // pass retries the end. The due end is read from the run's fresh row, so neither a slow sweep, a chain of
 // lock holders nor a restart moves it; only a change to the stored end does (an extension, or a revive
-// that claimed before expiry). A gone run, or a lost one with no end, is due when it was lost, and so is an
-// end that cannot be kept (data says kept: false): it is held off from its end, not from its keep grace.
+// that claimed before expiry). A gone run, or a lost one with no end, is due when it was lost.
 //
 // Past it, the end is taken without the lock, by the one terminal claim every end competes for: it goes on
 // only when the fresh row still carries the listing row's lost mark and end, and StopKeptRunForcedIf then
@@ -51,6 +50,7 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	if err != nil || cur.State.IsTerminal() || cur.SandboxRef == "" || cur.LostAt == nil || !sameKeptMark(cur, run) {
 		return
 	}
+	// An end that cannot be kept (data says kept: false) is held off from its end, not from its keep grace.
 	until, ok := s.keptUntil(cur)
 	if !ok || cur.LostReason == types.LostGone || data["kept"] == false {
 		until = *cur.LostAt
@@ -71,9 +71,17 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	s.metrics.runTerminal(terminal)
 	fctx, cancel := context.WithTimeout(forcedCtx(ctx), forcedStopBound)
 	defer cancel()
-	proxyErr := s.stopProxyOrAudit(fctx, run.ID, cur.SandboxRef, action)
-	s.settleForcedFolder(fctx, run.ID)
-	keep := s.forcedKeepsSandbox(fctx, cur, proxyErr)
+	// The agent is cut off every network first. When that was observed and the sandbox is keepable, the
+	// computer folder's pass is owed (settled as a resume) and the sandbox stays for the resume path to run
+	// it under the lock; otherwise the record is settled as not brought back and the sandbox is stopped.
+	cur.State = terminal
+	kind, cutErr := s.cutAgent(fctx, cur)
+	if cutErr != nil {
+		s.auditCutFailure(fctx, run.ID, cur.SandboxRef, action, cutErr)
+	}
+	observed := forcedCutObserved(cur, kind, cutErr)
+	s.settleForcedFolder(fctx, run.ID, observed && s.keepable(cur))
+	keep := s.forcedKeepsSandbox(fctx, cur, observed)
 	s.finalizeRunTailOrdered(context.WithValue(fctx, forcedEndKey{}, forcedEnd{keep: keep}), run.ID, cur.SandboxRef, action, "success", data, false, terminal == types.RunStopped)
 	stopped := false
 	settleAfterTeardown(ctx, func(sctx context.Context) { stopped = s.forcedStopConfirmed(sctx, fs, run.ID, stamp) })
@@ -126,11 +134,16 @@ func (s *Server) forcedFolder(ctx context.Context, id uuid.UUID) (folder *types.
 	return folder, false
 }
 
+// forcedKeptForCopyBack is the text a forced end records for a computer folder whose sandbox it kept for the
+// resume path to bring back.
+const forcedKeptForCopyBack = "Kept for its copy back: the run was ended past its end while another operation held it"
+
 // settleForcedFolder moves a both-ways seeded computer folder's record to the next generation and settles
-// it there with no resume, recording that its changes were not brought back. A record that cannot be read,
-// that already holds a completed pass back, or that another owner moved first (the bump is not applied) is
-// left as it is: forcedKeepsSandbox then reads it.
-func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID) {
+// it there. With keep the pass back is owed: the record carries a resume with nothing counted, for the
+// resume path to run under the lock. Without keep it carries no resume, recording that its changes were not
+// brought back. A record that cannot be read, that already holds a completed pass back, or that another
+// owner moved first (the bump is not applied) is left as it is: forcedKeepsSandbox then reads it.
+func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID, keep bool) {
 	folder, _ := s.forcedFolder(ctx, id)
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if folder == nil || !ok {
@@ -146,16 +159,20 @@ func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID) {
 	}
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
+	if keep {
+		s.recordFolderBackAt(rctx, id, *folder, next.Gen, true, &types.FolderResume{}, runnerwire.FolderPass{}, forcedKeptForCopyBack)
+		return
+	}
 	s.recordFolderBackAt(rctx, id, *folder, next.Gen, true, nil, runnerwire.FolderPass{}, forcedNotBroughtBack)
 }
 
-// forcedKeepsSandbox is rule R: the forced end's sandbox decision without the run's lock. A sandbox is
-// kept, with its proxy stopped, only when it is server-hosted and not a virtual machine (the locked path's
-// own test, stopTerminalSandbox), its proxy stop was confirmed, and its computer folder's record may be in
-// flight. Every other sandbox is stopped, as the locked path stops it: a runner, a virtual machine and
-// Kubernetes in server mode cannot stop a proxy alone without that loss.
-func (s *Server) forcedKeepsSandbox(ctx context.Context, run types.AgentRun, proxyErr error) bool {
-	return proxyErr == nil && run.RunnerID == nil && !run.MachineKind.IsVM() && s.forcedRecordInFlight(ctx, run.ID)
+// forcedKeepsSandbox is rule R: the forced end's sandbox decision without the run's lock. A sandbox is kept,
+// its agent cut off every network, only when that cut was observed (observed: cutAgent fenced it, or stopped
+// the proxy of a server-hosted one), the sandbox is keepable (never a virtual machine; hosted, or on a
+// connected runner that fences), and its computer folder's record may be in flight. Every other sandbox is
+// stopped, as the locked path stops it.
+func (s *Server) forcedKeepsSandbox(ctx context.Context, run types.AgentRun, observed bool) bool {
+	return observed && s.keepable(run) && s.forcedRecordInFlight(ctx, run.ID)
 }
 
 // forcedRecordInFlight reports whether run id's computer folder record may belong to a pass that is
@@ -276,15 +293,6 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 	return nil
 }
 
-// forcedResumeRowWritten holds, per server and run, the retry's resumed row this process has written. In
-// memory only, like teardownRowsWritten: a restart writes its own, which is the case it reports.
-var forcedResumeRowWritten sync.Map
-
-type forcedResumeKey struct {
-	srv *Server
-	run uuid.UUID
-}
-
 // retryForcedStop retries one marked run's sandbox stop. It never takes a Status probe for a stopped sandbox: a
 // Docker agent that was only ended is exited and still present, and still holds the run's files and its network.
 // The stop itself is the check for a sandbox that is gone, because Docker and Kubernetes answer a stop of a
@@ -298,7 +306,9 @@ type forcedResumeKey struct {
 //
 // Every other failure, a failed revoke included, keeps the mark, and its first row is the only one this process
 // writes. A proxy stop that failed on a kept sandbox leaves a cause (withStopCause) and so keeps it too.
-// A record the forced end left unsettled is settled as not brought back before anything is stopped.
+// A record the forced end left unsettled is settled before anything is stopped: owed (a resume) when the cut
+// is observed and the sandbox keepable, otherwise as not brought back. A run on a runner that is not here, and
+// can come back, has nothing settled, stopped or queued, and the mark waits for it.
 func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) {
 	ctx = forcedCtx(ctx)
 	run, err := s.cfg.Store.GetRun(ctx, m.RunID)
@@ -325,9 +335,22 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
 		return
 	}
-	s.settleUnsettledForcedFolder(ctx, run.ID)
+	// A runner that can come back: nothing is settled, stopped or queued, so a crash between the claim and the
+	// settle keeps the copy back; the mark waits. A runner that is gone (absent or revoked) takes the tail's
+	// runner_gone row below.
+	if run.RunnerID != nil {
+		if _, ok := s.runnerConnected(*run.RunnerID); !ok && s.runnerGoneReason(ctx, run, runner.ErrRunnerOffline) == "" {
+			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+			return
+		}
+	}
+	if !s.settleUnsettledForcedFolder(ctx, run) {
+		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+		return
+	}
 	ref := run.SandboxRef
 	cctx, cause := withStopCause(ctx)
+	why := error(nil)
 	stopped := false
 	lctx, unlock, locked := s.tryLockRunOp(cctx, run.ID)
 	if locked {
@@ -337,6 +360,10 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		}
 		left, serr := s.stopTerminalSandbox(lctx, run, sandboxSweepAction)
 		switch {
+		case errors.Is(serr, errRunnerNotHere):
+			// A runner that is not here gets no stop, end or kill queued: the queued end or kill would replay on
+			// reconnect and lose the copy back; the runner contains egress itself at its lapse (CheckLapses).
+			why = runner.ErrRunnerOffline
 		case serr == nil && !left:
 			stopped = true
 		case serr == nil || (left && cause.last() == nil):
@@ -348,12 +375,19 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 			return
 		}
 	} else {
-		proxyErr := s.stopProxyOrAudit(cctx, run.ID, ref, sandboxSweepAction)
-		if s.forcedKeepsSandbox(cctx, run, proxyErr) {
+		kind, cutErr := s.cutAgent(cctx, run)
+		if cutErr != nil && !notObserved(cutErr) {
+			s.auditCutFailure(cctx, run.ID, ref, sandboxSweepAction, cutErr)
+		}
+		if s.forcedKeepsSandbox(cctx, run, forcedCutObserved(run, kind, cutErr)) {
 			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil) // kept with the lock held: the mark waits for it
 			return
 		}
-		stopped = s.stopSandboxOrAudit(cctx, run.ID, ref, sandboxSweepAction)
+		if notObserved(cutErr) && s.forcedRecordInFlight(cctx, run.ID) {
+			why = runner.ErrRunnerOffline // owed and the runner is not here: no stop is queued for it
+		} else {
+			stopped = s.stopSandboxOrAudit(cctx, run.ID, ref, sandboxSweepAction)
+		}
 	}
 	if stopped {
 		settleAfterTeardown(ctx, func(sctx context.Context) { _ = s.clearSandboxRef(sctx, run.ID) })
@@ -367,7 +401,10 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		s.forgetTeardownRow(run.ID, sandboxSweepAction)
 		return
 	}
-	if reason := s.runnerGoneReason(ctx, run, cause.last()); reason != "" {
+	if why == nil {
+		why = cause.last()
+	}
+	if reason := s.runnerGoneReason(ctx, run, why); reason != "" {
 		cleared := s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, func(sctx context.Context) {
 			s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", sandboxSweepAction, ref, "failure",
 				mustJSON(map[string]any{"sandbox_ref": ref, "sandbox_stopped": false, "forced": true, "runner_gone": true,
@@ -413,17 +450,28 @@ func (s *Server) runnerGoneReason(ctx context.Context, run types.AgentRun, cause
 	return ""
 }
 
-// settleUnsettledForcedFolder settles run id's computer folder record as not brought back when a forced end
-// left it unsettled (its process died between the claim and the settle), and leaves a settled record alone.
-func (s *Server) settleUnsettledForcedFolder(ctx context.Context, id uuid.UUID) {
+// settleUnsettledForcedFolder settles run's computer folder record when a forced end left it unsettled (its
+// process died between the claim and the settle), and leaves a settled record alone. It cuts the agent off first,
+// as the forced end does: owed (a resume) when that is observed and the sandbox keepable, otherwise as not
+// brought back. It reports false, having settled nothing, for a run on a runner that is not here and can come
+// back: the settle waits for the runner.
+func (s *Server) settleUnsettledForcedFolder(ctx context.Context, run types.AgentRun) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
-		return
+		return true
 	}
-	if rec, err := st.RunLocalFolderStatus(ctx, id); err != nil || rec.Gen == rec.Settled {
-		return
+	if rec, err := st.RunLocalFolderStatus(ctx, run.ID); err != nil || rec.Gen == rec.Settled {
+		return true
 	}
-	s.settleForcedFolder(ctx, id)
+	if folder, _ := s.forcedFolder(ctx, run.ID); folder == nil {
+		return true // nothing to settle: no pass back was owed
+	}
+	kind, cutErr := s.cutAgent(ctx, run)
+	if notObserved(cutErr) && run.RunnerID != nil && s.runnerGoneReason(ctx, run, runner.ErrRunnerOffline) == "" {
+		return false
+	}
+	s.settleForcedFolder(ctx, run.ID, forcedCutObserved(run, kind, cutErr) && s.keepable(run))
+	return true
 }
 
 // reviveExpiryDue refuses a revive whose run reached the end it is kept until (keptUntil) while the
