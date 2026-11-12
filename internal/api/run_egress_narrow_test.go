@@ -933,6 +933,29 @@ func TestNarrowEdit_UnconfirmedRunHintSaysNarrowed(t *testing.T) {
 	})
 }
 
+// runStopHint gives the narrowed words only on a context an in-place narrowing marked, and the replace
+// path's words, with the image cause, on any other. The subtests above go through a whole edit, where a
+// report can win the race and contain on its own context; this pins the choice itself. Catches: a hint
+// chosen without reading the mark, or a mark read the wrong way round.
+func TestRunStopHint_TheMarkChoosesTheWords(t *testing.T) {
+	marked := withNarrowedStart(context.Background())
+	for _, c := range []struct {
+		name    string
+		ctx     context.Context
+		stopped bool
+		want    string
+	}{
+		{"marked, stopped", marked, true, unconfirmedNarrowedHint},
+		{"marked, stop pending", marked, false, unconfirmedNarrowedStopPendingHint},
+		{"unmarked, stopped", context.Background(), true, unconfirmedPolicyHint},
+		{"unmarked, stop pending", context.Background(), false, unconfirmedStopPendingHint},
+	} {
+		if got := runStopHint(c.ctx, c.stopped); got != c.want {
+			t.Errorf("%s: hint = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // A local-mode caller who is not the owner is refused with the revive path's 403 and audit row before
 // any exec.
 func TestNarrowEdit_OwnerCheckBeforeExec(t *testing.T) {
