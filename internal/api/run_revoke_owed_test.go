@@ -417,6 +417,13 @@ func (s *killRefStore) SetSandboxRef(_ context.Context, _ uuid.UUID, ref string)
 	return nil
 }
 
+func (s *killRefStore) ClearSandboxRefRetaining(context.Context, uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sets = append(s.sets, "")
+	return nil
+}
+
 func (s *killRefStore) writes() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -464,7 +471,18 @@ func TestKill_QueuedKillKeepsRef(t *testing.T) {
 	}
 }
 
-// killRecordStore is recordStore whose run keeps a ref that SetSandboxRef clears.
+// A confirmed kill clears the ref once, through the retaining clear; the two tests above see no write.
+func TestKill_ConfirmedKillClearsRef(t *testing.T) {
+	srv, st := killRefServer(t, nil)
+	if data := srv.killTeardownTail(context.Background(), st.run, types.ActorSystem, "test", nil, true); data["runner_error"] != nil {
+		t.Fatalf("kill data = %v, want a confirmed kill", data)
+	}
+	if w := st.writes(); !slices.Equal(w, []string{""}) {
+		t.Fatalf("ref writes = %q, want one clear", w)
+	}
+}
+
+// killRecordStore is recordStore whose run keeps a ref that SetSandboxRef or the retaining clear clears.
 type killRecordStore struct {
 	*recordStore
 	mu sync.Mutex
@@ -480,6 +498,13 @@ func (s *killRecordStore) SetSandboxRef(_ context.Context, _ uuid.UUID, ref stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recordStore.run.SandboxRef = ref
+	return nil
+}
+
+func (s *killRecordStore) ClearSandboxRefRetaining(context.Context, uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordStore.run.SandboxRef = ""
 	return nil
 }
 
@@ -600,32 +625,71 @@ func dominatedBy(path []ast.Node, guards []string) bool {
 }
 
 // A ref means "a sandbox may exist". It is cleared in four places, each after a confirmed teardown; a fifth,
-// or one that lost its condition, would drop the only record of a sandbox still running.
+// or one that lost its condition, would drop the only record of a sandbox still running. Three go through
+// clearSandboxRef; killTeardownTail calls ClearSandboxRefRetaining on the store it asserted to
+// sandboxRefRetainingClearer.
 func TestSandboxRefClearCensus(t *testing.T) {
-	frozen := map[string][]string{
-		"run_kept_stop_forced.go:retryForcedStop":    {"stopped"},
-		"reconcile.go:reconcileOrphanedRun":          {"torn"},
-		"run_terminal_effects.go:finalizeRunEffects": {"teardownOK"},
-		"runs_lifecycle.go:killTeardownTail":         {"kerr", "queued"},
+	type site struct {
+		call   string
+		guards []string
 	}
+	frozen := map[string]site{
+		"run_kept_stop_forced.go:retryForcedStop":    {"clearSandboxRef", []string{"stopped"}},
+		"reconcile.go:reconcileOrphanedRun":          {"clearSandboxRef", []string{"torn"}},
+		"run_terminal_effects.go:finalizeRunEffects": {"clearSandboxRef", []string{"teardownOK"}},
+		"runs_lifecycle.go:killTeardownTail":         {"ClearSandboxRefRetaining", []string{"kerr", "queued"}},
+	}
+	files := goFilesOfAPI(t)
 	found := map[string]bool{}
-	callsOf(goFilesOfAPI(t), "clearSandboxRef", func(file, fn string, path []ast.Node) {
-		key := file + ":" + fn
-		guards, ok := frozen[key]
-		if !ok {
-			t.Errorf("%s clears a run's sandbox ref and is not in the frozen list: the ref means a sandbox may exist, so add a clear only after a confirmed teardown, and add it here in the same change", key)
-			return
-		}
-		found[key] = true
-		if !dominatedBy(path, guards) {
-			t.Errorf("%s clears the ref outside a condition on %v: it must run only after a confirmed teardown", key, guards)
-		}
-	})
+	for _, call := range []string{"clearSandboxRef", "ClearSandboxRefRetaining"} {
+		callsOf(files, call, func(file, fn string, path []ast.Node) {
+			key := file + ":" + fn
+			if call == "ClearSandboxRefRetaining" && key == "run_terminal_effects.go:clearSandboxRef" {
+				return // clearSandboxRef's own store.PG branch
+			}
+			want, ok := frozen[key]
+			if !ok || want.call != call {
+				t.Errorf("%s clears a run's sandbox ref with %s and is not in the frozen list: the ref means a sandbox may exist, so add a clear only after a confirmed teardown, and add it here in the same change", key, call)
+				return
+			}
+			found[key] = true
+			if !dominatedBy(path, want.guards) {
+				t.Errorf("%s clears the ref outside a condition on %v: it must run only after a confirmed teardown", key, want.guards)
+			}
+			if call == "ClearSandboxRefRetaining" && !assertedTo(path, "sandboxRefRetainingClearer") {
+				t.Errorf("%s calls ClearSandboxRefRetaining outside an if that asserts the store to sandboxRefRetainingClearer", key)
+			}
+		})
+	}
+	if len(frozen) != 4 {
+		t.Errorf("the frozen list has %d clears, want four", len(frozen))
+	}
 	for key := range frozen {
 		if !found[key] {
 			t.Errorf("%s is in the frozen list and no longer clears the ref: remove it from the list", key)
 		}
 	}
+}
+
+// assertedTo reports whether the call at the end of path is inside the body of an if whose init asserts a
+// value to the named interface.
+func assertedTo(path []ast.Node, iface string) bool {
+	for i, n := range path[:len(path)-1] {
+		is, ok := n.(*ast.IfStmt)
+		if !ok || path[i+1] != ast.Node(is.Body) {
+			continue
+		}
+		as, ok := is.Init.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		if ta, ok := as.Rhs[0].(*ast.TypeAssertExpr); ok {
+			if id, ok := ta.Type.(*ast.Ident); ok && id.Name == iface {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // revokeRunCascade writes and clears the revoke owed mark itself, so a caller needs nothing more to be

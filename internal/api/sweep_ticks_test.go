@@ -102,7 +102,15 @@ func TestOrphanedBuildSweeper_RecordsAnErroringTickAsAnAttempt(t *testing.T) {
 	srv := &Server{cfg: Config{ImageBuilder: &failingSweepBuilder{}, SweepHealth: sweephealth.New(ticks, "r1", nil)}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); srv.orphanedBuildSweeper(ctx, 5*time.Millisecond) }()
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v", r)
+			}
+		}()
+		srv.orphanedBuildSweeper(ctx, 5*time.Millisecond)
+	}()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {

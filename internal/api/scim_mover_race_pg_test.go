@@ -96,7 +96,15 @@ func TestSCIMGroupRemovalSweeperWaitsForAnAddInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- e.b.srv.SweepSCIMPurge(ctx) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v", r)
+				done <- nil
+			}
+		}()
+		done <- e.b.srv.SweepSCIMPurge(ctx)
+	}()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var waiting int

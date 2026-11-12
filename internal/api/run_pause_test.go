@@ -669,7 +669,15 @@ func TestRunPause_OpenRunPageDoesNotDefeatIdlePause(t *testing.T) {
 	<-walkStarted
 
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v", r)
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
 	time.Sleep(100 * time.Millisecond) // the sampler has reached the walk
 	close(releaseWalk)
 
@@ -694,7 +702,15 @@ func TestRunPause_NoWalkStartsInsideTheIdleSample(t *testing.T) {
 	pr.sample = func() { <-releaseSample }
 
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v", r)
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
 	<-pr.sampleStarted
 
 	w := doSSO(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/resources", owner, "")
@@ -728,7 +744,15 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	go func() { poll1 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()
 	<-walkStarted
 	sweepDone := make(chan error, 1)
-	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v", r)
+				sweepDone <- nil
+			}
+		}()
+		sweepDone <- f.srv.sweepRunPauses(context.Background())
+	}()
 	time.Sleep(100 * time.Millisecond) // the sampler is waiting out the walk
 	poll2 := make(chan int, 1)
 	go func() { poll2 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()

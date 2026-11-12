@@ -513,6 +513,11 @@ func TestDesktopSignin_FailedContinueRetriesOnlyTheSignal(t *testing.T) {
 // stored on the row; then the run is killed with the named reason and the row
 // closes. Later passes find nothing to do.
 func TestDesktopSignin_ContinueTriesRunOutAndKillTheRun(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("panic: %v", r)
+		}
+	}()
 	f := newSigninFixture(t)
 	signinMissingHelper(f.rn)
 	f.rn.contFail = 1000

@@ -324,6 +324,11 @@ func TestSCIMSweeperPurgesOnceAcrossInstances(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic: %v", r)
+				}
+			}()
 			if err := n.srv.SweepSCIMPurge(context.Background()); err != nil {
 				t.Errorf("sweep: %v", err)
 			}
