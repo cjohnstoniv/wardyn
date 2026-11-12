@@ -2171,3 +2171,25 @@ func TestContain_StopPathReadsTheDatabasesClock(t *testing.T) {
 		})
 	}
 }
+
+// A due read that fails answers not due: a database error never stops a sandbox.
+func TestContain_D1DueReadFailureIsNotDue(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, _ := d1ServerLab(t, time.Second, time.Second)
+		ctx := context.Background()
+		vm := containRunOf(l.rowDue(-time.Minute, nil, types.MachineLinuxVM))
+		held := l.rowDue(-(containServerKeepWait + time.Minute), nil, "")
+		l.ds.owe(held.ID)
+		run := containRunOf(held)
+		if !l.srv.d1Due(ctx, vm, cutUnsupported, nil) || !l.srv.d1Due(ctx, run, cutUnsupported, nil) {
+			t.Fatal("both rows must be due before the read fails")
+		}
+		l.ds.dueErr = errors.New("database down")
+		if l.srv.d1Due(ctx, vm, cutUnsupported, nil) {
+			t.Error("a virtual machine past its due: d1Due = true on a failed due read")
+		}
+		if l.srv.d1Due(ctx, run, cutUnsupported, nil) {
+			t.Error("a held server-mode run past its wait: d1Due = true on a failed due read")
+		}
+	})
+}
