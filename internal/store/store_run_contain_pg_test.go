@@ -200,3 +200,47 @@ func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_ContainmentStreakDue_DBClock: a recorded failure counts when it is at least tau old on the database's
+// clock and not older than the run's due or than since. A stamp the process clock put ahead of the database's is
+// not old enough, one from before since or before the due never counts, and a run with no stamp, or no row, is false.
+func TestPG_ContainmentStreakDue_DBClock(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	var dbNow time.Time
+	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		t.Fatalf("read the database clock: %v", err)
+	}
+	dbNow = dbNow.UTC().Truncate(time.Microsecond)
+	r := persistRun(t, ctx, pool, newRun(types.RunKilled))
+	due := dbNow.Add(-time.Hour)
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = $2 WHERE id = $1`, r.ID, due.Add(-store.ContainmentLag)); err != nil {
+		t.Fatalf("place the run: %v", err)
+	}
+	at := func(ts time.Time) *time.Time { return &ts }
+	since, early := dbNow.Add(-time.Minute), dbNow.Add(-2*time.Hour)
+	for name, tc := range map[string]struct {
+		stamp *time.Time
+		since time.Time
+		want  bool
+	}{
+		"no stamp":                      {nil, since, false},
+		"old enough":                    {at(dbNow.Add(-5 * time.Second)), since, true},
+		"ahead of the database's clock": {at(dbNow.Add(time.Hour)), since, false},
+		"before since":                  {at(since.Add(-time.Second)), since, false},
+		"at since":                      {at(since), since, true},
+		"before the due":                {at(due.Add(-time.Second)), early, false},
+		"at the due":                    {at(due), early, true},
+	} {
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error_at = $2 WHERE id = $1`, r.ID, tc.stamp); err != nil {
+			t.Fatalf("%s: set the stamp: %v", name, err)
+		}
+		if got, err := pg.ContainmentStreakDue(ctx, r.ID, time.Second, tc.since); err != nil || got != tc.want {
+			t.Errorf("%s: ContainmentStreakDue = %v, %v; want %v", name, got, err, tc.want)
+		}
+	}
+	if got, err := pg.ContainmentStreakDue(ctx, uuid.New(), time.Second, since); err != nil || got {
+		t.Errorf("no such run: ContainmentStreakDue = %v, %v; want false", got, err)
+	}
+}

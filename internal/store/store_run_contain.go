@@ -56,6 +56,14 @@ type RunContainer interface {
 
 var _ RunContainer = PG{}
 
+// ContainmentStreaker is the stop path's failure-streak test. PG implements it; it is a separate surface so
+// a store that lists and stamps ended runs need not answer it.
+type ContainmentStreaker interface {
+	ContainmentStreakDue(ctx context.Context, id uuid.UUID, tau time.Duration, since time.Time) (bool, error)
+}
+
+var _ ContainmentStreaker = PG{}
+
 // ListTerminalSandboxPage lists ended runs that hold a sandbox, newest end first, ties by id, one keyset
 // page of at most limit rows (never more than 500) after the cursor, or from the newest when after is nil.
 // The cursor answered is nil on the last page. With unfencedOnly it skips runs whose agent was already cut
@@ -128,4 +136,24 @@ func (s PG) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg s
 		return false, fmt.Errorf("store: set run containment error since: %w", err)
 	}
 	return started, nil
+}
+
+// ContainmentStreakDue reports whether run id's recorded containment failure began at least tau ago and is
+// not older than since or than the run's containment due: a second failure that far after the first. The
+// age is measured on the database's clock, so replicas with different clocks agree. A stamp from before
+// since (a kept-phase failure, a round that did not observe the sandbox, an older process) never counts,
+// and neither does a missing stamp or run.
+func (s PG) ContainmentStreakDue(ctx context.Context, id uuid.UUID, tau time.Duration, since time.Time) (bool, error) {
+	var due bool
+	err := s.Pool.QueryRow(ctx, `SELECT containment_error_at IS NOT NULL
+		AND containment_error_at >= GREATEST(`+ContainmentDueSQL+`, $3)
+		AND containment_error_at <= now() - make_interval(secs => $2)
+		FROM agent_runs WHERE id = $1`, id, tau.Seconds(), pgTime(since)).Scan(&due)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: containment streak: %w", err)
+	}
+	return due, nil
 }

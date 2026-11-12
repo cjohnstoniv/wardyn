@@ -648,8 +648,25 @@ func (s *Server) streakSince(run types.AgentRun) time.Time {
 	return since
 }
 
-// d1Due reports whether the cut item should hand run to the stop pool. The stop path decides it.
+// d1Due reports whether the cut item should hand run to the stop pool, in its post phase. It is true only
+// once the run is past its containment due, and then in two cases. The run's substrate has no contain call
+// (cutUnsupported with no error: a virtual machine, Kubernetes in server mode), or the cut failed and the
+// database holds a failure at least a streak older than now that is not older than the run's due, its last
+// unobserved round or this process's start. An answer that did not observe the sandbox is never a failure.
+// A folder read that fails makes it false for the tick. It reads the clock when it is called, not when the
+// item began.
 func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool {
+	due, ok := containmentDue(run)
+	if !ok || s.cfg.Now().Before(due) {
+		return false
+	}
+	switch {
+	case err == nil && kind == cutUnsupported:
+		return s.d1UnsupportedDue(ctx, run)
+	case err != nil && !notObserved(err) && s.d1StreakDue(ctx, run):
+		_, _, readable := s.d1FolderOwed(ctx, run)
+		return readable
+	}
 	return false
 }
 
@@ -658,5 +675,14 @@ func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 	return nil
 }
 
-// runStopItem is the stop pool's item for one run. The stop path writes it.
-func (s *Server) runStopItem(ctx context.Context, run types.AgentRun) {}
+// runStopItem is the stop pool's item for one run. A run with a contain call is cut once more first. Each
+// phase runs on a context of its own, so a phase that overruns takes nothing from the next: the item ends
+// within containD1 (containD1Unsupported with no last cut).
+func (s *Server) runStopItem(ctx context.Context, run types.AgentRun) {
+	base := context.WithoutCancel(ctx)
+	run, ok := s.d1Reread(base, run)
+	if !ok || (!s.d1NoCall(run) && !s.d1LastCut(base, run)) || !s.d1GiveUp(base, run) {
+		return
+	}
+	s.d1Stop(base, run)
+}
