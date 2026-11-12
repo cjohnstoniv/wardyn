@@ -472,12 +472,14 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 
 // stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
 // (computerFolderKeptRead); left reports a sandbox left in place. A sandbox kept for its pass back stays
-// with only its proxy stopped: nil once that stop is confirmed, and a stop that failed is action's
-// failure row with teardown_error (stopProxyOrAudit). A record that cannot be read is logged, and the sandbox stays only once its proxy is
-// stopped, as a failure row with folder_record_error that stays unresolved so a later pass reads it again.
-// It fails closed: a sandbox that cannot be kept (one on a runner, a virtual machine, one whose proxy
-// cannot be stopped alone, as quiesceKeptSandbox decides) is stopped whatever its record says, and so is
-// one whose record cannot be read and whose proxy did not stop. Any other sandbox is stopped.
+// when the agent's cut is confirmed (copyBackCut: hosted, a fenced runner, a connected runner whose proxy
+// stop answered nil), and a stop that failed is action's failure row with teardown_error. A record that
+// cannot be read is logged, and the sandbox stays only once that cut is confirmed, as a failure row with
+// folder_record_error that stays unresolved so a later pass reads it again. A runner run whose runner is
+// not connected here is left in place with errRunnerNotHere, nothing stopped, queued or written, until its
+// runner is. It fails closed: a sandbox that cannot be kept (a virtual machine, Kubernetes in server mode,
+// a runner sandbox whose cut failed, as quiesceKeptSandbox decides) is stopped whatever its record says,
+// and so is one whose record cannot be read and whose cut did not hold. Any other sandbox is stopped.
 func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) (left bool, err error) {
 	if run.SandboxRef == "" {
 		return false, nil
@@ -488,9 +490,11 @@ func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, ac
 			slog.String("run_id", run.ID.String()), slog.String("action", action), slog.Any("err", ferr))
 	}
 	var stopErr error
-	if (kept || ferr != nil) && run.RunnerID == nil && !run.MachineKind.IsVM() {
-		stopErr = s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, action)
+	if (kept || ferr != nil) && !run.MachineKind.IsVM() {
+		stopErr = s.copyBackCut(ctx, run, action)
 		switch {
+		case errors.Is(stopErr, errRunnerNotHere):
+			return true, stopErr // no row: the runner is not here, and the next pass asks again
 		case stopErr == nil && ferr != nil:
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
 				mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
