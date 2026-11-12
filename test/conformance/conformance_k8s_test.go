@@ -43,6 +43,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,9 +160,11 @@ func TestConformanceK8s(t *testing.T) {
 
 // heldScript holds a connection to the proxy and prints held=1 once it has stayed up for 2 s. busybox nc
 // never exits while its stdin is open, so the script watches the agent's own socket table instead: it
-// finds the one ESTABLISHED socket to port 3128 (hex 0C38) and prints gone=<state> when that socket
-// leaves ESTABLISHED, or gone=absent when it leaves the table. A table it cannot read or parse prints
-// observer-error=<why> and stops, never gone=. HELD_PROC_NET stands in for /proc/net in a local check.
+// finds the one ESTABLISHED socket to port 3128 (hex 0C38) and reports how it leaves ESTABLISHED.
+// gone=08 or gone=09 (CLOSE_WAIT, LAST_ACK) means the peer, the proxy, sent FIN; gone=absent means the
+// peer sent RST. Any other state means this end closed first, which is observer-error=, never a pass. A
+// table it cannot read or parse prints observer-error=<why> and stops, never gone=. HELD_PROC_NET stands
+// in for /proc/net in a local check.
 const heldScript = `sleep 3600 | nc -v wardyn-proxy 3128 2>&1 &
 pid=$!
 sleep 2
@@ -187,7 +190,8 @@ while :; do
 	case "$1 $3" in
 	"0 ") echo gone=absent; break ;;
 	"1 01") ;;
-	"1 "[0-9A-F][0-9A-F]) echo "gone=$3"; break ;;
+	"1 08"|"1 09") echo "gone=$3"; break ;;
+	"1 "[0-9A-F][0-9A-F]) echo "observer-error=local port $lp is in state $3: this end closed first"; exit 1 ;;
 	*) echo "observer-error=unexpected rows for local port $lp: $out"; exit 1 ;;
 	esac
 done
@@ -284,20 +288,42 @@ func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, 
 	if sess.Stdin != nil {
 		_ = sess.Stdin.Close()
 	}
-	held, closed := make(chan struct{}), make(chan struct{})
+	// closed is the end of the stream, which a pod's death brings. failed is an observer-error= line: the
+	// script stopped on its own, so the stream's end after it would prove nothing.
+	var mu sync.Mutex
+	var lines []string
+	held, closed, failed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(closed)
+		var sawHeld, sawFailed bool
 		sc := bufio.NewScanner(sess.Stdout)
 		for sc.Scan() {
-			if strings.TrimSpace(sc.Text()) == "held=1" {
+			line := strings.TrimSpace(sc.Text())
+			mu.Lock()
+			lines = append(lines, line)
+			mu.Unlock()
+			switch {
+			case line == "held=1" && !sawHeld:
+				sawHeld = true
 				close(held)
+			case strings.HasPrefix(line, "observer-error=") && !sawFailed:
+				sawFailed = true
+				close(failed)
 			}
 		}
 	}()
+	observed := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Join(lines, " | ")
+	}
+	defer func() { t.Logf("held-connection observer printed: %s", observed()) }()
 	select {
 	case <-held:
+	case <-failed:
+		t.Fatalf("the held-connection observer failed before the connection was held: %s", observed())
 	case <-closed:
-		t.Fatal("the connection from the agent to its proxy did not stay up for 2 s — an environment problem, not a verdict: the check has nothing to find closed")
+		t.Fatalf("the connection from the agent to its proxy did not stay up for 2 s — an environment problem, not a verdict: the check has nothing to find closed (the script printed: %s)", observed())
 	case <-time.After(time.Minute):
 		t.Fatal("the held-connection script never reported — an environment problem, not a verdict")
 	}
@@ -326,6 +352,11 @@ func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, 
 	case <-closed:
 	case <-time.After(closedOffBound):
 		open = append(open, fmt.Errorf("the connection the agent held to its proxy was still up %s after teardown returned", closedOffBound))
+	}
+	select {
+	case <-failed:
+		t.Fatalf("the held-connection observer failed, so the end of its stream proves nothing: %s", observed())
+	default:
 	}
 	return errors.Join(open...)
 }

@@ -133,8 +133,8 @@ func proxyAnswer(t *testing.T, r runner.Runner, ref, host string) string {
 
 // holdConnection holds a connection from the agent to its proxy. gone closes on heldScript's first gone=
 // line, and failed on its first observer-error= line. The end of the stream closes neither, so it never
-// passes for a close. Every line the script printed is logged at cleanup.
-func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-chan struct{}) {
+// passes for a close. heldAt is when held=1 was read. Every line the script printed is logged at cleanup.
+func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-chan struct{}, heldAt time.Time) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	sess, err := r.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", heldScript}})
@@ -161,6 +161,7 @@ func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-c
 			switch {
 			case line == "held=1" && !sawHeld:
 				sawHeld = true
+				heldAt = time.Now()
 				close(held)
 			case strings.HasPrefix(line, "gone=") && !sawGone:
 				sawGone = true
@@ -197,7 +198,7 @@ func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-c
 	case <-time.After(time.Minute):
 		t.Fatal("the held-connection script never reported: an environment problem, not a verdict")
 	}
-	return goneCh, failedCh
+	return goneCh, failedCh, heldAt
 }
 
 func narrower(t *testing.T, r runner.Runner) runner.ProxyNarrower {
@@ -223,7 +224,7 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 	uid, ip, version := s.pod.UID, s.pod.Status.PodIP, secretVersion(t, cs, ns, s.spec.RunID)
 
 	// 2. A connection from the agent to the proxy, held open.
-	closed, observerFailed := holdConnection(t, r, s.sb.Ref)
+	closed, observerFailed, heldAt := holdConnection(t, r, s.sb.Ref)
 
 	// 3. The proxy's state: the config it enforces is the one the driver handed it, with no list.
 	st, err := n.ProxyNarrowState(ctx, s.sb.Ref)
@@ -248,6 +249,14 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 	case <-observerFailed:
 		t.Fatal("the held-connection observer failed before the narrowing")
 	default:
+	}
+	// The agent-facing http.Server that proxy.newServer builds has ReadHeaderTimeout: 30 * time.Second. It
+	// closes a connection that has sent no request on its own, as the held one has not, and that close would
+	// look like a narrowing's. So the narrowing must be sent well inside that window, or the check says nothing.
+	sentAfter := time.Since(heldAt)
+	t.Logf("narrow sent %s after hold", sentAfter)
+	if sentAfter >= 20*time.Second {
+		t.Fatalf("inconclusive: narrow sent %s after hold, inside the 30 s ReadHeaderTimeout window", sentAfter)
 	}
 	after, err := n.NarrowProxy(ctx, s.sb.Ref, []string{narrowedHost})
 	t.Logf("narrow exec: answer=%+v err=%v", after, err)
