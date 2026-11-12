@@ -100,7 +100,7 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 var forcedStopBound = reconcileFinalizeTimeout
 
 // forcedNotBroughtBack is the text a forced end records for a computer folder whose changes it did not bring back.
-const forcedNotBroughtBack = "Not brought back: the run was ended past its end while another operation held it"
+const forcedNotBroughtBack = "Not brought back: the run was ended past its end while another operation held it or too many runs were ending at once"
 
 // sameKeptMark reports whether a and b carry the same lost mark and end: the three values StopKeptRunIf
 // compares.
@@ -136,7 +136,7 @@ func (s *Server) forcedFolder(ctx context.Context, id uuid.UUID) (folder *types.
 
 // forcedKeptForCopyBack is the text a forced end records for a computer folder whose sandbox it kept for the
 // resume path to bring back.
-const forcedKeptForCopyBack = "Kept for its copy back: the run was ended past its end while another operation held it"
+const forcedKeptForCopyBack = "Kept for its copy back: the run was ended past its end while another operation held it or too many runs were ending at once"
 
 // settleForcedFolder moves a both-ways seeded computer folder's record to the next generation and settles
 // it there. With keep the pass back is owed: the record carries a resume with nothing counted, for the

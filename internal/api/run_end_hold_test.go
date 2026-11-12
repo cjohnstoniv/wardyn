@@ -35,9 +35,11 @@ func takeEndHolds(t *testing.T, s *Server, n int) {
 	}
 }
 
-// A finalize whose end hold has passed stops nothing and writes nothing: the runner is not called, the run's ref
-// stays and no teardown row is written, and the caller hears the hold ran out. The tail owner's finalize, which
-// holds no end hold, then stops the sandbox and clears the ref. Catches a stop or a write made past the hold.
+// A finalize whose end hold has passed makes no stop and no teardown record: the runner is not called, the run's
+// ref is kept and no run.complete row is written, and the caller hears the hold ran out. The tail owner's finalize,
+// which holds no end hold, then stops the sandbox and clears the ref. The holder's other calls, which run on its own
+// ctx and ignore the deadline (the audit of the end, the revoke, the output's drain), are not asserted here.
+// Catches a stop or a teardown record made past the hold.
 func TestEndHold_PastDeadlineNoStopNoRecord(t *testing.T) {
 	pool, cfg, _, run, _, probe := runnerExitAPIFixture(t)
 	srv := New(cfg)
@@ -268,7 +270,9 @@ func (s *lateWriteStore) SetSandboxRef(ctx context.Context, id uuid.UUID, ref st
 // A person's bring-back is an end hold: with every hold taken it is refused 503 lock_unavailable and the run stays
 // RUNNING. A bring-back whose hold passes while it runs (here its agent stop returns after the hold's deadline,
 // which the server's base ctx carries in, so the bring-back's own hold re-enters it) stops no sandbox and writes
-// no folder record or ref after the deadline. Catches the bring-back's own lockRunOp left in place.
+// no folder record or ref after the deadline. Catches the bring-back's own lockRunOp left in place. The deadline is
+// injected as an outer hold on the base ctx, so the second case proves the caps downstream, not that the bring-back's
+// own B supplies it; the first case covers that the bring-back takes its own hold.
 func TestEndHold_BringBackIsAHold(t *testing.T) {
 	t.Run("every hold taken", func(t *testing.T) {
 		s, cs, audit, run, sb, _ := bringBackFixture(t)
@@ -311,7 +315,8 @@ func TestEndHold_BringBackIsAHold(t *testing.T) {
 // A runner exit is an end hold, always: with every hold taken its receipt is not applied and stays pending, and a
 // later sweep applies it. One whose hold has passed (an outer hold already past, which the exit's own re-enters)
 // is accepted but stops nothing and leaves its tail incomplete for the next sweep. Catches the runner exit's own
-// lockRunOp left in place.
+// lockRunOp left in place. The deadline is injected as an outer hold on the ctx, so the second case proves the caps
+// downstream, not that the exit's own B supplies it; the first case covers that the exit takes its own hold.
 func TestEndHold_RunnerExitIsAHold(t *testing.T) {
 	stage := func(t *testing.T) (*Server, Config, store.PG, types.Runner, types.AgentRun, runnerwire.AgentExit, *runnerExitTailProbe, func(uuid.UUID) (bool, bool)) {
 		t.Helper()
@@ -402,7 +407,8 @@ func TestEndHold_PassBudgetLeavesTheRecordItsTeardown(t *testing.T) {
 // A revive of a run past its maximum age is refused with its own reason, through the revive handler: before the
 // end's answer, which asks for an extension the cap refuses, and after the files-gone answer. Also when the cap
 // passes while the revive pulls its proxy image, from the re-read before the claim. Catches the cap tested after
-// reviveEligible's past-end arm, or after reviveExpiryDue's early return for a run still inside its keep.
+// reviveEligible's past-end arm, or after reviveExpiryDue's early return for a run still inside its keep. The
+// "no end" pull case is a run with no end (keptUntil answers false): only reviveExpiryDue's own cap arm refuses it.
 func TestRevive_MaxAgeHasItsOwnReason(t *testing.T) {
 	for name, tc := range map[string]struct {
 		set    func(f *reviveFixture, run *types.AgentRun) // the stored run, before the revive
@@ -430,6 +436,10 @@ func TestRevive_MaxAgeHasItsOwnReason(t *testing.T) {
 			run.LifetimeCapAt = &limit
 			f.now = f.now.Add(f.srv.cfg.EndedRunGrace + time.Second)
 		}, want: reasonReviveEndedFilesGone},
+		"no end, cap passes during the pull": {set: func(f *reviveFixture, run *types.AgentRun) {
+			lost, limit := f.now.Add(-time.Minute), f.now.Add(time.Minute)
+			run.EndsAt, run.LostAt, run.LostReason, run.LifetimeCapAt = nil, &lost, types.LostOutage, &limit
+		}, during: func(f *reviveFixture) { f.now = f.now.Add(2 * time.Minute) }, want: reasonReviveMaxAge},
 		"cap passes during the pull": {set: func(f *reviveFixture, run *types.AgentRun) {
 			end, limit := f.now.Add(time.Hour), f.now.Add(time.Minute)
 			run.EndsAt, run.LifetimeCapAt = &end, &limit
@@ -505,7 +515,10 @@ func (r *holdSeeingSandbox) StopSandbox(ctx context.Context, ref string) error {
 // A kept run's end (stopKeptRun) is an end hold for a sweep's budget: the stop's ctx carries a deadline 60 s from
 // the call, and the slot is given back; with every hold taken it is a busy refusal and ends nothing; and past its
 // hold (an outer hold already passed, which it re-enters) the terminal-effects guard reads the deadline and nothing
-// is stopped. Catches stopKeptRun's own tryLockRunOpHeld left in place.
+// is stopped. Catches stopKeptRun's own tryLockRunOpHeld left in place. The passed deadline is injected as an outer
+// hold on the ctx, so that case proves the caps downstream, not that stopKeptRun's own B supplies it; "the hold is
+// set" and "every hold taken" cover that it takes its own hold. A full semaphore answers held (a busy refusal), so
+// a run lost more than keptEndHoldOffLimit past its due end is cut by forceKeptStop, as a lock held elsewhere is.
 func TestEndHold_KeptRunEndIsAHold(t *testing.T) {
 	setup := func(t *testing.T) (*leaseFixture, *holdSeen) {
 		t.Helper()
@@ -538,6 +551,51 @@ func TestEndHold_KeptRunEndIsAHold(t *testing.T) {
 			t.Errorf("state %s, %d stops with every end hold taken; want RUNNING and none", f.st.State(), len(seen.calls()))
 		}
 	})
+	// A lost run (as heldEndFixture loses one, run_forced_end_test.go:28-31) with every hold taken: the full
+	// semaphore is a busy answer, so stopKeptRun hands the run to forceKeptStop, which waits out
+	// keptEndHoldOffLimit from the loss (data kept: false counts it from the loss, run_kept_stop_forced.go:55-58).
+	lost := func(t *testing.T) (*leaseFixture, *holdSeen, types.AgentRun) {
+		t.Helper()
+		f, seen := setup(t)
+		if applied, err := f.st.MarkRunEnded(context.Background(), f.run.ID, f.now); err != nil || !applied {
+			t.Fatalf("MarkRunEnded = %v, %v; want the claim to land", applied, err)
+		}
+		run, err := f.st.GetRun(context.Background(), f.run.ID)
+		if err != nil || run.LostAt == nil {
+			t.Fatalf("lost run %+v, %v", run, err)
+		}
+		takeEndHolds(t, f.srv, maxEndHolds)
+		return f, seen, run
+	}
+	// Control: green with or without held=true; it pins that nothing happens inside keptEndHoldOffLimit.
+	t.Run("every hold taken, inside the hold-off", func(t *testing.T) {
+		f, seen, run := lost(t)
+		f.now = run.LostAt.Add(keptEndHoldOffLimit - time.Second)
+		f.srv.stopKeptRun(context.Background(), f.st, run, types.RunStopped, "run.ended", map[string]any{"kept": false})
+		if f.st.State() != types.RunRunning || len(seen.calls()) != 0 {
+			t.Errorf("state %s, %d stops inside the hold-off; want RUNNING and none", f.st.State(), len(seen.calls()))
+		}
+		if n := len(f.audit.eventsFor(run.ID, "run.ended")); n != 0 {
+			t.Errorf("%d run.ended rows inside the hold-off, want 0", n)
+		}
+	})
+	t.Run("every hold taken, past the hold-off", func(t *testing.T) {
+		f, seen, run := lost(t)
+		f.now = run.LostAt.Add(keptEndHoldOffLimit + time.Minute)
+		f.srv.stopKeptRun(context.Background(), f.st, run, types.RunStopped, "run.ended", map[string]any{"kept": false})
+		if f.st.State() != types.RunStopped || len(seen.calls()) != 1 {
+			t.Fatalf("state %s, %d stops past the hold-off; want STOPPED and one stop (the forced end)", f.st.State(), len(seen.calls()))
+		}
+		forced := 0
+		for _, ev := range f.audit.eventsFor(run.ID, "run.ended") {
+			if leaseAuditData(t, ev)["forced"] == true {
+				forced++
+			}
+		}
+		if forced != 1 {
+			t.Errorf("%d forced run.ended rows, want 1", forced)
+		}
+	})
 	t.Run("the hold passed", func(t *testing.T) {
 		f, seen := setup(t)
 		ctx := withHoldDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -550,8 +608,12 @@ func TestEndHold_KeptRunEndIsAHold(t *testing.T) {
 
 // The tail owner's run (tailRun) is an end hold for the dedicated budget: the stop after its pass back carries a
 // deadline 3 minutes from the call; with every hold taken it runs nothing; and past its hold (an outer hold
-// already passed, which it re-enters) the pass back's budget reads the deadline, so no pass is sent, and the
-// terminal-effects guard reads it, so nothing is stopped. Catches tailRun's own tryLockRunOp left in place.
+// already passed, which it re-enters) no pass is sent and nothing is stopped. No pass is sent because the first
+// read on a teardown ctx already done stops it (folderBackEligible, run_computer_folder.go:230-233), not the pass
+// budget, which is not reached; the terminal-effects guard stops the stop. The pass budget's cap is pinned by
+// TestEndHold_PassBudgetLeavesTheRecordItsTeardown. Catches tailRun's own tryLockRunOp left in place. The deadline
+// is injected as an outer hold on the ctx, so the passed case proves the caps downstream, not that tailRun's own B
+// supplies it; "the hold is set" and "every hold taken" cover that it takes its own hold.
 func TestEndHold_TailOwnerRunIsAHold(t *testing.T) {
 	setup := func(t *testing.T) (*passFixture, types.AgentRun, *holdSeen) {
 		t.Helper()
