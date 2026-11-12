@@ -96,3 +96,40 @@ func TestViaOrg_IdleTickNeverCutsAnOpenStream(t *testing.T) {
 	}
 	closeViaOrgGen(run.id, fresh)
 }
+
+// The watcher's idle arm retires a run's idle engine on its own tick, keeps the run and its byte total, and
+// does not end it: the run is still there for its next request.
+func TestViaOrg_WatcherReleasesAnIdleEngineAndKeepsTheRun(t *testing.T) {
+	runner := uuid.New()
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	s := &Server{cfg: Config{Store: &flakyRunStore{runner: runner, fail: func(int32) bool { return false }}, BaseCtx: ctx},
+		bgWaitBudget: 10 * time.Second}
+	run, gen := idleTestRun(t)
+	run.runner = runner
+	run.period = 2 * time.Millisecond
+	run.bytes.Store(7)
+	go s.watchViaOrgRun(run)
+	defer func() { s.releaseViaOrgRun(run, true, false) }()
+
+	// Wait on the condition, with a deadline of seconds so a slow tick under the race detector stays green.
+	released := func() bool {
+		run.mu.Lock()
+		defer run.mu.Unlock()
+		return run.engine == nil && gen.engine.Closed()
+	}
+	deadline := time.After(30 * time.Second)
+	for poll := time.NewTicker(2 * time.Millisecond); !released(); {
+		select {
+		case <-poll.C:
+		case <-deadline:
+			t.Fatal("the watcher did not release the idle engine")
+		}
+	}
+	if run.isClosed() {
+		t.Fatal("the idle arm ended the run instead of releasing its engine")
+	}
+	if got := run.bytes.Load(); got != 7 {
+		t.Fatalf("the run's byte total = %d after an idle release, want 7", got)
+	}
+}

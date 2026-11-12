@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A request through the organisation-credential route that arrived after a quiet period could be cut off, or answered 503, while the route was being set up again. This no longer happens.
+- A request through a grant delivered `via_org` that arrived after 10 minutes without one could be cut off, or answered 503, while the server set the route up again. An idle release no longer cuts off or refuses a request.
 
 ## [0.10.0-rc.19] — 2026-11-11
 

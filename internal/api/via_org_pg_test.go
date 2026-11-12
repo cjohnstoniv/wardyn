@@ -668,7 +668,11 @@ func TestViaOrg_FreshEngineSurvivesAnIdleTick(t *testing.T) {
 	t.Cleanup(func() { viaOrgAfterEngine = nil; resume() })
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost) }()
-	<-acquired
+	select {
+	case <-acquired:
+	case w := <-done:
+		t.Fatalf("the request returned before it parked = %d %s", w.Code, w.Body)
+	}
 	run.mu.Lock()
 	built := run.engine
 	run.mu.Unlock()
@@ -703,7 +707,11 @@ func TestViaOrg_RetiredEngineIsNeverServed(t *testing.T) {
 	t.Cleanup(func() { viaOrgAfterEngine = nil })
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost) }()
-	<-acquired
+	select {
+	case <-acquired:
+	case w := <-done:
+		t.Fatalf("the request returned before it parked = %d %s", w.Code, w.Body)
+	}
 	f.srv.viaOrg.mu.Lock()
 	run := f.srv.viaOrg.runs[f.run.ID]
 	f.srv.viaOrg.mu.Unlock()

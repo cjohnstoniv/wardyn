@@ -5413,10 +5413,10 @@ What the switch needs, and refuses to render or boot without:
   replica elects and is fenced on a pool of any size ([ENV.md](ENV.md),
   `WARDYN_PG_DSN`).
 - **A PodDisruptionBudget** (`minAvailable: 1`, at two or more replicas) and a preferred **pod anti-affinity**
-  across nodes (soft, so a one-node cluster still schedules every replica; an
-  `affinity.podAntiAffinity` of your own replaces it).
-- **Per-replica limits add up.** A local run's `via_org` byte total is 8 GiB per replica and
-  resets on restart; a stream can pass it by about one chunk.
+  across nodes (soft, so a one-node cluster still schedules; your own
+  `affinity.podAntiAffinity` replaces it).
+- **Per-replica limits add up.** A local run's `via_org` total: 8 GiB per replica, reset on
+  restart; headers are not counted; each open stream can pass the total by about one chunk each way.
 
 > [!WARNING]
 > `allowMultiReplica` and the `-allow-multi-instance` flag are **removed**, a
