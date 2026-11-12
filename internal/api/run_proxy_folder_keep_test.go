@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -622,7 +623,8 @@ func TestReadback_KeptFolderProxyStopFailureIsAuditedAndUnresolved(t *testing.T)
 
 // A terminal sandbox whose folder record cannot be read keeps its egress cut and its revoke on every substrate:
 // it is kept only once its proxy is stopped alone, as a folder_record_error row; it is stopped where it cannot be
-// kept (on a runner, a virtual machine), where its proxy cannot be stopped alone, and where that stop failed.
+// kept (a virtual machine), where its proxy cannot be stopped alone, and where that stop failed. A run on a runner
+// that is not connected here is left in place, with nothing sent, until its runner is.
 func TestSweepTerminalSandboxes_UnreadableFolderRecordFailsClosed(t *testing.T) {
 	runnerID := uuid.New()
 	for _, tc := range []struct {
@@ -630,6 +632,7 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordFailsClosed(t *testing.T) 
 		noProxy  bool
 		proxyErr error
 		edit     func(*types.AgentRun)
+		connect  bool // the run's runner is connected here, without the fence
 		left     bool
 		row      string
 		proxied  int
@@ -638,7 +641,8 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordFailsClosed(t *testing.T) 
 		{name: "proxy stop failed", proxyErr: errors.New("the daemon did not answer the proxy stop"), row: `"teardown_error"`, proxied: 1},
 		{name: "proxy stop unsupported", proxyErr: runner.ErrEndUnsupported, proxied: 1},
 		{name: "no proxy stop", noProxy: true},
-		{name: "on a runner", edit: func(r *types.AgentRun) { r.RunnerID = &runnerID }},
+		{name: "on a runner whose cut failed", proxyErr: errors.New("the runner did not answer the proxy stop"), edit: func(r *types.AgentRun) { r.RunnerID = &runnerID }, connect: true, row: `"teardown_error"`, proxied: 1},
+		{name: "on a runner that is not connected", edit: func(r *types.AgentRun) { r.RunnerID = &runnerID }, left: true},
 		{name: "virtual machine", edit: func(r *types.AgentRun) { r.MachineKind = types.MachineLinuxVM }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -648,6 +652,10 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordFailsClosed(t *testing.T) 
 			}
 			srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{run}}, unreadable: run.ID})
 			rr.proxyErr = tc.proxyErr
+			if tc.connect {
+				srv.cfg.RunnerOnline = func(uuid.UUID) bool { return true }
+				seamConnect(t, srv, runnerID, runnerwire.Caps{})
+			}
 			if tc.noProxy {
 				srv.cfg.Runner = rr.sweepAliveRunner
 			}

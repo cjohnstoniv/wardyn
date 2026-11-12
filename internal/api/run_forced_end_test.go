@@ -619,3 +619,11 @@ func TestForcedRetry_TwoReplicasOneSuccessRow(t *testing.T) {
 		t.Errorf("%d success rows, want 1", len(rows))
 	}
 }
+
+// withoutOwedPass takes the fixture's computer folder out of the both-ways shape, so a forced end owes no pass back
+// and reaches the sandbox stop.
+func (f *forced) withoutOwedPass() {
+	f.cs.localFolderStore.mu.Lock()
+	defer f.cs.localFolderStore.mu.Unlock()
+	f.cs.folder.Direction = types.ComputerFolderIn
+}
