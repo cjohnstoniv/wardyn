@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- macOS VM bases: an opt-in switch, `/Library/Wardyn/setup-assistant-carry`, copies the agent user's per-host settings into each run's new machine identity at boot, when the guest agent starts, so a Setup Assistant pane finished once in `edit-base` may stay closed in runs. Off by default; not yet tried on a real Mac.
+
 ### Changed
 
 - A live network edit or revive on Docker now fails if the new proxy can't renew its token with the server within 10 seconds: a run that can be kept is lost until revived, and any other run ends. Creates are unchanged.
@@ -38,6 +42,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A revive, live egress edit or failed proxy start's containment whose run lock was lost could mark the run lost and stop the proxy of a newer revive that had taken the run over on another server. That lost mark now lands only while the attempt's policy generation is still the run's newest, and a miss stops nothing; a store error still triggers an attempt to stop the proxy. A revive of a lost or ended run whose lock was lost before its replace now gives the run back its lost mark, instead of leaving it looking live with its agent stopped. A policy generation write that answered an error is read back, and the revive tries to abandon one it wrote all the same.
 - A run's Folders from your computer card now says what became of the sandbox's copy after the run ends: kept for now, given up, stopped and deleted, or not yet confirmed as stopped.
 - A request through a grant delivered `via_org` that arrived after 10 minutes without one could be cut off, or answered 503, while the server set the route up again. The server no longer cuts off or refuses a request for this reason.
+- macOS VM runs: the guest agent no longer asks Setup Assistant to quit at run start. On macOS 26.6.2 that signed the agent user out and left the run at the login window. The setup-assistant-quit switch is no longer read; remove it from your base.
 
 ### Known issues
 
