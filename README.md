@@ -25,7 +25,7 @@
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.19/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.20/install.sh | sh
 ```
 
 - Cosign-signed, not tip-of-`main` — the script installs its own release (`WARDYN_VERSION` overrides).
