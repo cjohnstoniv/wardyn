@@ -62,4 +62,88 @@ describe("Folders from your computer", () => {
     show("COMPLETED", { ...FOLDER, state: "synced", seed: { at: AT, files: 1, bytes: 1, refused: [] }, back: { at: AT, files: 0, bytes: 0, refused: [], error: "laptop-7f2 is offline" } });
     expect(screen.getByRole("alert")).toHaveTextContent(C.BACK_FAILED("laptop-7f2 is offline"));
   });
+
+  describe("what became of the sandbox copy", () => {
+    const SYNCED: RunComputerFolder = { ...FOLDER, state: "synced", seed: { at: AT, files: 9, bytes: 1, refused: [] } };
+    const GIVE_UP_AT = "2026-11-12T14:30:00Z";
+    const NAMES = ["README.md", "src/app/main.ts"];
+    const REPORT = { unsynced: 4, paths: NAMES, at: AT };
+
+    it("a terminal run with a pending pass is kept until the deadline, with count, list and time", () => {
+      show("COMPLETED", { ...SYNCED, fate: "retained", sandbox_copy: "kept", last_report: { ...REPORT, paths_more: 2 }, give_up_at: GIVE_UP_AT });
+      expect(screen.getByText(C.NOT_BACK)).toBeInTheDocument();
+      expect(screen.getByText(C.FILES("4"))).toBeInTheDocument();
+      expect(screen.getByText(C.KEPT_LIST)).toBeInTheDocument();
+      const list = screen.getByRole("list", { name: C.PATHS_LABEL });
+      expect(list).toHaveTextContent("README.md");
+      expect(list).toHaveTextContent("src/app/main.ts");
+      expect(screen.getByText(C.MORE("2"))).toBeInTheDocument();
+      expect(screen.getByText(C.KEPT_DEADLINE("12 Nov 2026, 14:30 UTC"))).toBeInTheDocument();
+      expect(screen.getByText(C.KEEP_RUNNER_ONLINE("laptop-7f2"))).toBeInTheDocument();
+      expect(screen.queryByText(C.MAY_BE_GONE)).toBeNull();
+    });
+
+    it("a give-up shows the count and its list", () => {
+      show("COMPLETED", { ...SYNCED, fate: "given_up", last_report: { unsynced: 2, paths: NAMES, at: AT } });
+      expect(screen.getByText(C.GIVEN_UP)).toBeInTheDocument();
+      expect(screen.getByText(C.FILES("2"))).toBeInTheDocument();
+      expect(screen.getByText(C.GAVE_UP_LIST)).toBeInTheDocument();
+      expect(screen.getByRole("list", { name: C.PATHS_LABEL })).toHaveTextContent("src/app/main.ts");
+    });
+
+    it("a give-up whose stop is not confirmed says so and claims no deletion", () => {
+      show("COMPLETED", { ...SYNCED, fate: "given_up", sandbox_copy: "kept", last_report: REPORT });
+      expect(screen.getByText(C.STOP_UNCONFIRMED)).toBeInTheDocument();
+      expect(screen.queryByText(C.DELETED)).toBeNull();
+      expect(screen.queryByText(C.GAVE_UP_LIST)).toBeNull();
+    });
+
+    it("says deleted only for sandbox_copy deleted, never for an ended run alone", () => {
+      show("COMPLETED", { ...SYNCED, fate: "complete", sandbox_copy: "deleted" });
+      expect(screen.getByText(C.DELETED)).toBeInTheDocument();
+      cleanup();
+      for (const copy of [undefined, "kept"] as const) {
+        show("COMPLETED", { ...SYNCED, fate: "complete", sandbox_copy: copy });
+        expect(screen.queryByText(C.DELETED)).toBeNull();
+        cleanup();
+      }
+      show("COMPLETED", { ...SYNCED, fate: "given_up", last_report: REPORT });
+      expect(screen.queryByText(C.DELETED)).toBeNull();
+    });
+
+    it("a count with no names shows the count and no list", () => {
+      show("COMPLETED", { ...SYNCED, fate: "retained", last_report: { unsynced: 7, at: AT }, give_up_at: GIVE_UP_AT });
+      expect(screen.getByText(C.FILES("7"))).toBeInTheDocument();
+      expect(screen.getByText(C.KEPT_NO_LIST)).toBeInTheDocument();
+      expect(screen.queryByRole("list", { name: C.PATHS_LABEL })).toBeNull();
+    });
+
+    it("a count the runner never made reads Not counted, never 0", () => {
+      show("COMPLETED", { ...SYNCED, fate: "retained", last_report: { unsynced: null, at: AT }, give_up_at: GIVE_UP_AT });
+      expect(screen.getByText(C.NOT_COUNTED)).toBeInTheDocument();
+      expect(screen.queryByText(C.FILES("0"))).toBeNull();
+      cleanup();
+      show("COMPLETED", { ...SYNCED, fate: "given_up" });
+      expect(screen.getByText(C.NOT_COUNTED)).toBeInTheDocument();
+      expect(screen.getByText(C.GAVE_UP_NO_LIST)).toBeInTheDocument();
+      expect(screen.queryByText(C.FILES("0"))).toBeNull();
+    });
+
+    it("with no fate the neutral line stays", () => {
+      show("COMPLETED", SYNCED);
+      expect(screen.getByText(C.MAY_BE_GONE)).toBeInTheDocument();
+      expect(screen.queryByText(C.NOT_BACK)).toBeNull();
+    });
+
+    it("long paths wrap inside the scroll box instead of being cut off", () => {
+      const long = "src/features/billing/invoices/components/line-items/adjustments/regional-tax/rounding-rules/fixtures/generated/en-GB/invoice.snapshot.test.ts";
+      show("COMPLETED", { ...SYNCED, fate: "retained", last_report: { unsynced: 1, paths: [long], at: AT }, give_up_at: GIVE_UP_AT });
+      const box = screen.getByTestId("run-computer-folder-paths");
+      expect(box).toHaveTextContent(long);
+      expect(box.className).toMatch(/break-all/);
+      expect(box.className).not.toMatch(/truncate|whitespace-nowrap|text-ellipsis/);
+      expect(box.className).toMatch(/overflow-y-auto/);
+      expect(box).toHaveAttribute("tabindex", "0");
+    });
+  });
 });
