@@ -46,7 +46,10 @@ type Fake struct {
 	FencedPause bool
 	// EndErr, when set, is what EndSandbox answers, as an end that failed on the runner.
 	EndErr error
-	disks  map[string]runner.MacOSVMDisk // SetMacOSVMDisk's reports, by local ref
+	// PolicyGens is the policy generation of each fence-aware stop_proxy, end and replace_proxy the fake was
+	// sent (StopProxyAt, EndSandboxAt, ReplaceProxyHashedAt), in order.
+	PolicyGens []PolicyGenCall
+	disks      map[string]runner.MacOSVMDisk // SetMacOSVMDisk's reports, by local ref
 	// workloads is every workload_status the runner was sent, in order.
 	workloads []runnerwire.WorkloadStatusArgs
 }
@@ -61,17 +64,61 @@ func NewFake() *Fake {
 }
 
 var (
-	_ substrate.Substrate          = (*Fake)(nil)
-	_ runner.SandboxEnder          = (*Fake)(nil)
-	_ runner.ProxyStopper          = (*Fake)(nil)
-	_ runner.ProxyReviver          = (*Fake)(nil)
-	_ runner.ProxyReviverHashed    = (*Fake)(nil)
-	_ runner.SandboxStarter        = (*Fake)(nil)
-	_ runner.DriveProber           = (*Fake)(nil)
-	_ runner.DriveLifecycleChecker = (*Fake)(nil)
-	_ runner.OutputRecoverer       = (*Fake)(nil)
-	_ runner.MacOSVMDiskReporter   = (*Fake)(nil)
+	_ substrate.Substrate           = (*Fake)(nil)
+	_ runner.SandboxEnder           = (*Fake)(nil)
+	_ runner.ProxyStopper           = (*Fake)(nil)
+	_ runner.ProxyReviver           = (*Fake)(nil)
+	_ runner.ProxyReviverHashed     = (*Fake)(nil)
+	_ runner.ProxyReviverAt         = (*Fake)(nil)
+	_ runner.ProxyFencer            = (*Fake)(nil)
+	_ runner.ProxyGenerationStopper = (*Fake)(nil)
+	_ runner.SandboxStarter         = (*Fake)(nil)
+	_ runner.DriveProber            = (*Fake)(nil)
+	_ runner.DriveLifecycleChecker  = (*Fake)(nil)
+	_ runner.OutputRecoverer        = (*Fake)(nil)
+	_ runner.MacOSVMDiskReporter    = (*Fake)(nil)
 )
+
+// PolicyGenCall is one call that named a policy generation: Verb is "stop_proxy", "end" or "replace_proxy".
+type PolicyGenCall struct {
+	Verb, Ref string
+	Gen       int
+}
+
+func (f *Fake) noteGen(verb, ref string, gen int) {
+	f.note(verb+"_at", ref)
+	f.mu.Lock()
+	f.PolicyGens = append(f.PolicyGens, PolicyGenCall{Verb: verb, Ref: ref, Gen: gen})
+	f.mu.Unlock()
+}
+
+// FenceProxy records the fence, as a driver that cuts the agent off its networks would.
+func (f *Fake) FenceProxy(_ context.Context, ref string) error {
+	f.note("fence_proxy", ref)
+	return nil
+}
+
+// StopProxyAt is StopProxy that records the generation it acts for.
+func (f *Fake) StopProxyAt(ctx context.Context, ref string, gen int) error {
+	f.noteGen("stop_proxy", ref, gen)
+	return nil
+}
+
+// EndSandboxAt is EndSandbox that records the generation it acts for.
+func (f *Fake) EndSandboxAt(ctx context.Context, ref string, gen int) error {
+	f.noteGen("end", ref, gen)
+	f.mu.Lock()
+	f.StoppedRef[ref] = true
+	err := f.EndErr
+	f.mu.Unlock()
+	return err
+}
+
+// ReplaceProxyHashedAt is ReplaceProxyHashed that records the generation it acts for.
+func (f *Fake) ReplaceProxyHashedAt(ctx context.Context, ref string, cfg []byte, gen int) (string, error) {
+	f.noteGen("replace_proxy", ref, gen)
+	return proxy.ConfigSHA256(cfg), nil
+}
 
 // SetMacOSVMDisk stores ref's macOS VM disk report, as a driver's teardown or sweep would.
 func (f *Fake) SetMacOSVMDisk(ref string, d runner.MacOSVMDisk) {

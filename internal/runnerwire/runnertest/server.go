@@ -40,6 +40,9 @@ type Server struct {
 	// KeptMachineCalls is every kept_machine call received, in order. The fake holds no machines: the
 	// first delete of an id answers deleted, a repeat answers already_absent.
 	KeptMachineCalls []runnerwire.KeptMachineArgs
+	// Legacy makes the server a runner from before proxy fencing and the folder pass limit: PublishCaps sends
+	// neither flag, fence_proxy is an unknown method, and a policy generation is not read.
+	Legacy bool
 }
 
 // Serve runs the runner side of a session over conn, backed by sub, until the
@@ -59,7 +62,8 @@ func (s *Server) PublishCaps(ctx context.Context, capacity placement.Capacity, r
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings})
+	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings,
+		ProxyFence: !s.Legacy, FolderPassOnce: !s.Legacy})
 	if err != nil {
 		return err
 	}
@@ -255,6 +259,10 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		if !ok {
 			return nil, runner.ErrReviveUnsupported
 		}
+		if at, ok := rv.(runner.ProxyReviverAt); ok && a.PolicyGeneration > 0 && !s.Legacy {
+			sum, err := at.ReplaceProxyHashedAt(ctx, ref, a.CfgJSON, a.PolicyGeneration)
+			return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+		}
 		return replaceProxy(ctx, rv, ref, a.CfgJSON)
 	}
 	a, err := decode[runnerwire.RefArgs](args)
@@ -275,7 +283,16 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		return s.teardown(ref, s.sub.StopSandbox(ctx, ref))
 	case runnerwire.MethodKill:
 		return s.teardown(ref, s.sub.KillSandbox(ctx, ref))
+	case runnerwire.MethodFenceProxy:
+		f, ok := s.sub.(runner.ProxyFencer)
+		if !ok || s.Legacy {
+			return nil, fmt.Errorf("unknown method %q", method)
+		}
+		return nil, f.FenceProxy(ctx, ref)
 	case runnerwire.MethodEnd:
+		if at, ok := s.sub.(runner.ProxyGenerationStopper); ok && a.PolicyGeneration > 0 && !s.Legacy {
+			return s.teardown(ref, at.EndSandboxAt(ctx, ref, a.PolicyGeneration))
+		}
 		e, ok := s.sub.(runner.SandboxEnder)
 		if !ok {
 			return nil, runner.ErrEndUnsupported
@@ -300,6 +317,9 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		}
 		return runnerwire.AgentPauseResult{FencedPause: true}, err
 	case runnerwire.MethodStopProxy:
+		if at, ok := s.sub.(runner.ProxyGenerationStopper); ok && a.PolicyGeneration > 0 && !s.Legacy {
+			return nil, at.StopProxyAt(ctx, ref, a.PolicyGeneration)
+		}
 		p, ok := s.sub.(runner.ProxyStopper)
 		if !ok {
 			return nil, runner.ErrEndUnsupported

@@ -348,6 +348,8 @@ type refArgs struct {
 	AgentExecID string   `json:"agent_exec_id"`
 	CfgJSON     []byte   `json:"cfg_json"`
 	Generation  int64    `json:"generation"` // runnerwire.AgentPauseArgs
+	// PolicyGeneration is runnerwire.RefArgs' and ReplaceProxyArgs': the policy generation the call acts for.
+	PolicyGeneration int `json:"policy_generation"`
 }
 
 func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (result any, err error) {
@@ -477,11 +479,22 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		return nil, sub.KillSandbox(ctx, ref)
 	case runnerwire.MethodEnd:
 		d.selftests.Delete(ref)
+		if at, ok := sub.(runner.ProxyGenerationStopper); ok && a.PolicyGeneration > 0 {
+			return nil, runner.KeptDespiteAWSCacheWipe(ctx, ref, at.EndSandboxAt(ctx, ref, a.PolicyGeneration))
+		}
 		if end, ok := sub.(runner.SandboxEnder); ok {
 			return nil, runner.KeptDespiteAWSCacheWipe(ctx, ref, end.EndSandbox(ctx, ref))
 		}
 		return nil, runner.ErrEndUnsupported
+	case runnerwire.MethodFenceProxy:
+		if fence, ok := sub.(runner.ProxyFencer); ok {
+			return nil, fence.FenceProxy(ctx, ref)
+		}
+		return nil, runner.ErrEndUnsupported
 	case runnerwire.MethodStopProxy:
+		if at, ok := sub.(runner.ProxyGenerationStopper); ok && a.PolicyGeneration > 0 {
+			return nil, at.StopProxyAt(ctx, ref, a.PolicyGeneration)
+		}
 		if stop, ok := sub.(runner.ProxyStopper); ok {
 			return nil, stop.StopProxy(ctx, ref)
 		}
@@ -502,6 +515,10 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		cfg, err := d.cfg.Resident.fillReplacedProxy(ctx, a.CfgJSON)
 		if err != nil {
 			return nil, err
+		}
+		if at, ok := proxy.(runner.ProxyReviverAt); ok && a.PolicyGeneration > 0 {
+			sum, err := at.ReplaceProxyHashedAt(ctx, ref, cfg, a.PolicyGeneration)
+			return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
 		}
 		if hashed, ok := proxy.(runner.ProxyReviverHashed); ok {
 			sum, err := hashed.ReplaceProxyHashed(ctx, ref, cfg)
