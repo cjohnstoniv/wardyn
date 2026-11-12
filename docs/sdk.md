@@ -313,7 +313,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 - It is the SSH gateway's exec, over HTTP: the command runs through `/bin/sh -c` from the sandbox user's home directory, with no TTY and no added environment.
 - It is on whether or not the SSH gateway is (`WARDYN_SSH_LISTEN`), and the per-run controls below apply either way: `deny_interactive`, the `data_out` rule and background-only runs.
 - As with SSH exec, the output is neither masked nor recorded.
-- Only the person who may enter the run may call it, as for the terminal; a profile's `deny_interactive` closes it too.
+- Only the person who may enter the run may call it, as for the terminal; a profile's `deny_interactive` closes it too. A super admin is the exception on their own run or an operator-owned one, unless `WARDYN_GOVERN_ADMIN_RUNS` is on, when only an operator-owned run is.
 - A run whose `data_out` rule is `review` or `blocked`, or whose rule cannot be read, answers `409 data_out_blocked`.
   The command never reaches the sandbox, and a `run.data_out.deny` row with `path` `exec` is written, as for an SSH command.
 - A background run (`experience: background`) answers `409 run_exec_unavailable`; create the run with `experience: interactive` to use exec. Exec is for interactive runs: a background run's only way in is its task. A run that cannot take a command now (not running, ended, or paused and not resumed) answers it too.

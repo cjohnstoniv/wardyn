@@ -17,6 +17,10 @@ import { CANCEL_NOT_STARTED as NS } from "./copy/cancel-not-started";
 import { toastRunName } from "./copy/run-lifetime";
 import { RunRef } from "./run-ref";
 
+// Said under the question when the run holds a Both ways folder: ending the run does not copy its changes back.
+const BOTH_WAYS_FOLDER_LOST =
+  "This run's Both ways folder does not come back: ending a run discards the sandbox's changes. To keep them, run `wardyn folder bring-back <run>` first.";
+
 // Shared kill-run confirm for the two places Kill is offered (the Runs board's
 // row menu and Run Detail's header): an enforcement stop deserves the same
 // question, in the same words, wherever it is fired from — the two copies had
@@ -30,6 +34,7 @@ export function KillRunDialog({
   onOpenChange,
   onConfirm,
   notStarted = false,
+  bothWaysFolder = false,
 }: {
   // The run to kill; also doubles as the "is the dialog open" flag (null = closed).
   runId: string | null;
@@ -43,6 +48,8 @@ export function KillRunDialog({
   // A run that has not started (scheduled, or waiting for its owner's sign-in) holds no sandbox and no credential,
   // so the question is a plain cancel and says nothing about tearing anything down.
   notStarted?: boolean;
+  // The run holds a Both ways computer folder: ending it discards the sandbox's changes to that folder.
+  bothWaysFolder?: boolean;
 }) {
   // First line, bounded: a run named by its task can be a paragraph.
   const line = (title ?? "").trim().split("\n")[0];
@@ -61,6 +68,7 @@ export function KillRunDialog({
             {notStarted
               ? NS.BODY
               : "This terminates the agent run, tears down the sandbox, and revokes any brokered credentials. Ending the run is recorded in the audit trail. This cannot be undone."}
+            {bothWaysFolder && !notStarted && ` ${BOTH_WAYS_FOLDER_LOST}`}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

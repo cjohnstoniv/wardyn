@@ -282,6 +282,7 @@ export function SummaryHeader({
           title={run.title?.trim() || run.task}
           onOpenChange={(o) => !o && setConfirmId(null)}
           onConfirm={onKill}
+          bothWaysFolder={run.computer_folder?.direction === "both"}
         />
       </div>
 
