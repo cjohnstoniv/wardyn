@@ -256,8 +256,8 @@ test("Escape over a Deny confirm closes only the confirm, and the next Escape cl
     // The confirm takes focus as it opens; an Escape sent before that reaches the view under it.
     await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role="alertdialog"]'))).toBe(true);
     // Focus lands before Radix makes the confirm the top layer and attaches its Escape listener, so an earlier key
-    // reaches the view under it. Radix react-dismissable-layer 1.2.1 greys the view under the top layer in that same
-    // update, so wait for that, then one frame for the listener effect.
+    // reaches the view under it. Radix react-dismissable-layer 1.2.1 turns off pointer events on the view under the top
+    // layer in that same update, so wait for that, then one frame for the listener effect.
     await expect.poll(() => dialog.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none");
     await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
     await page.keyboard.press("Escape");
