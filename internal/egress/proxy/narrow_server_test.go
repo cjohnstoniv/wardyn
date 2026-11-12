@@ -708,6 +708,86 @@ func TestNarrow_CancelsPreviousReportLoop(t *testing.T) {
 	e.wantReport(ans2.ConfigSHA256)
 }
 
+// The socket listens before the boot report starts, so an edit's report can start first. The boot
+// report, for an older config, then neither cancels it nor is sent.
+func TestNarrow_BootReportAfterAnEditKeepsTheEditReport(t *testing.T) {
+	e := newNarrowEnv(t, shortDir(t))
+	bootHash := ConfigSHA256(e.base)
+	loadedReportAttempt = time.Minute // a report ends only by being cancelled, never by its own timeout
+	editHash := e.effHash("tls.test")
+	inFlight := make(chan struct{}, 8)
+	cancelled := make(chan struct{}, 8)
+	var bootSent atomic.Int32
+	e.onReport = func(r *http.Request, rep LoadedReport) int {
+		switch rep.ConfigSHA256 {
+		case bootHash:
+			bootSent.Add(1)
+		case editHash:
+			inFlight <- struct{}{}
+			select {
+			case <-r.Context().Done(): // the edit's loop was cancelled
+				cancelled <- struct{}{}
+				return http.StatusServiceUnavailable
+			case <-time.After(time.Second):
+			}
+		}
+		return 0
+	}
+	ctx := e.start()
+	ans := e.mustAsk(narrowBody("tls.test"))
+	if ans.ConfigSHA256 != editHash {
+		t.Fatalf("narrowing answer %+v, want hash %s", ans, editHash)
+	}
+	select {
+	case <-inFlight:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the edit's report was never sent")
+	}
+	e.srv.StartBootReport(ctx, LoadedReport{ConfigSHA256: bootHash, ProxyVersion: "test"})
+	select {
+	case <-cancelled:
+		t.Fatal("the boot report cancelled the edit's report")
+	case <-time.After(1500 * time.Millisecond):
+	}
+	e.wantReport(editHash)
+	if n := bootSent.Load(); n != 0 {
+		t.Errorf("the boot report was sent %d times after an edit's report started", n)
+	}
+}
+
+// With no edit first, the boot report goes out as before.
+func TestNarrow_BootReportWithNoEditIsSent(t *testing.T) {
+	e := newNarrowEnv(t, shortDir(t))
+	ctx := e.start()
+	e.srv.StartBootReport(ctx, LoadedReport{ConfigSHA256: ConfigSHA256(e.base), ProxyVersion: "test"})
+	e.wantReport(ConfigSHA256(e.base))
+}
+
+// Once the list is kept and enforced, a config that cannot be built leaves the request unanswered
+// (uncertain to the client), never refused. A probe, which changes nothing, is still refused.
+func TestNarrow_UnbuildableConfigAfterSwapIsUnanswered(t *testing.T) {
+	e := newNarrowEnv(t, shortDir(t))
+	old := withLiveDenies
+	withLiveDenies = func([]byte, []string) ([]byte, error) { return nil, errors.New("injected build failure") }
+	t.Cleanup(func() { withLiveDenies = old })
+	e.start()
+	if ans, line, ok := ask(t, e.dir, narrowBody("tls.test")); ok {
+		t.Fatalf("a narrowing whose config could not be built was answered %+v (%s); want no answer", ans, line)
+	}
+	if !e.denied("tls.test") {
+		t.Error("the list was swapped but tls.test is not denied")
+	}
+	if list, ok := e.fileList(); !ok || !slices.Equal(list, []string{"tls.test"}) {
+		t.Errorf("list file = %v (present %v), want [tls.test]", list, ok)
+	}
+	if e.built.Load() != 0 {
+		t.Errorf("%d reports built for an unanswered narrowing", e.built.Load())
+	}
+	if ans := e.mustAsk(narrowBody()); ans.State != "refused" {
+		t.Errorf("probe answer %+v, want refused", ans)
+	}
+}
+
 // spyConn records the calls that reach the connection it wraps.
 type spyConn struct {
 	net.Conn

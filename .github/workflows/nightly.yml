@@ -2735,6 +2735,98 @@ jobs:
             gh issue create --title "$title" --body "$body"
           fi
 
+  # A node reboot under a proxy that was narrowed in place (TestK8sNodeRestartKeepsLiveDenies): the
+  # narrowed list sits in an emptyDir of the proxy pod, and nothing else checks that it outlives the
+  # node. It passes when the list is still enforced afterwards, or when the proxy is back on the
+  # policy it was launched with; the test logs which. Its own job, on conformance-k8s's setup, because
+  # conformance-k8s gates releases and a node reboot is slow.
+  #
+  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT (scripts/test-repo-guards.sh), kept out of
+  # notify-new-lanes' needs and release.yml's watched= until two scheduled runs in a row are green.
+  kind-node-restart:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        id: buildx
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+          use: false
+      - name: Build wardyn-proxy image (local only)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.proxy
+          tags: wardyn/wardyn-proxy:kind-test
+          load: true
+          cache-from: type=gha,scope=wardyn-proxy
+      - name: Build the conformance agent image (busybox + wardyn-rec)
+        run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
+      - uses: ./.github/actions/kind-binary
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          cluster_name: wardyn-node-restart
+          config: deploy/kind/conformance-kind-config.yaml
+          wait: 90s
+      - name: Load images into kind (no registry pull)
+        run: |
+          kind load docker-image wardyn/wardyn-proxy:kind-test --name wardyn-node-restart
+          kind load docker-image wardyn/conformance-agent:kind-test --name wardyn-node-restart
+      - name: Install Calico (single-file, version-pinned manifest, NetworkPolicy enforcement)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
+      - name: Label a PSS-restricted namespace for runs
+        run: |
+          kubectl create namespace wardyn-conformance
+          kubectl label namespace wardyn-conformance \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=v1.30
+      - name: Repoint KUBECONFIG at the node's internal IP
+        run: |
+          NODE_IP=$(kubectl get nodes wardyn-node-restart-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+          kind get kubeconfig --name wardyn-node-restart --internal \
+            | sed "s/wardyn-node-restart-control-plane:6443/${NODE_IP}:6443/" \
+            > "$RUNNER_TEMP/kubeconfig-internal.yaml"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
+      - name: Narrow a proxy, restart the node, read the proxy again
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_K8S_NAMESPACE: wardyn-conformance
+          WARDYN_PROXY_IMAGE: wardyn/wardyn-proxy:kind-test
+          WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
+          WARDYN_TEST_K8S_NODE_RESTART: wardyn-node-restart
+        # `shell: bash` runs with pipefail, so tee does not hide a red test (see the note at the top of the jobs).
+        shell: bash
+        run: go test -tags k8s -count=1 -timeout 15m -v -run '^TestK8sNodeRestartKeepsLiveDenies$' ./test/conformance/ 2>&1 | tee node-restart.log
+      - name: Print the case the run took
+        if: always()
+        run: |
+          grep -E 'node-restart: list (kept|lost)' node-restart.log || echo "no case line, so the test did not reach its verdict"
+
   # ai-gateway-kind is outside notify-new-lanes (scripts/test-repo-guards.sh, NOTIFY_EXEMPT), so a
   # scheduled red reaches someone through this job instead.
   notify-ai-gateway-kind:

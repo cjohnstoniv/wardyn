@@ -391,6 +391,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		proxyPod.Spec.Containers[0].Env = append(proxyPod.Spec.Containers[0].Env,
 			corev1.EnvVar{Name: kv[0], Value: kv[1]})
 	}
+	if !d.runnerMode() {
+		withLiveDenyDir(proxyPod)
+	}
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}

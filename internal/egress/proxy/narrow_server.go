@@ -84,11 +84,28 @@ func (c *trackedConn) CloseWrite() error {
 	return nil
 }
 
+// StartBootReport starts ReportLoaded for the config the proxy booted with, unless a narrowing already
+// started its own report. A narrowing's config holds the boot list and more, so the boot report is
+// never the newer one, and the narrowing socket may take an edit before the boot report starts.
+func (s *Server) StartBootReport(ctx context.Context, r LoadedReport) {
+	s.live.reportMu.Lock()
+	defer s.live.reportMu.Unlock()
+	if s.live.reportCancel != nil {
+		return
+	}
+	s.startReportLocked(ctx, r)
+}
+
 // StartLoadedReport starts ReportLoaded for r after cancelling the loop it started before, so a report
 // still retrying can no longer land after a newer one.
 func (s *Server) StartLoadedReport(ctx context.Context, r LoadedReport) {
 	s.live.reportMu.Lock()
 	defer s.live.reportMu.Unlock()
+	s.startReportLocked(ctx, r)
+}
+
+// startReportLocked is StartLoadedReport with s.live.reportMu held.
+func (s *Server) startReportLocked(ctx context.Context, r LoadedReport) {
 	if s.live.reportCancel != nil {
 		s.live.reportCancel()
 	}
@@ -270,7 +287,11 @@ func (n *narrowing) handle(deny []string) *NarrowAnswer {
 		return n.refused(err)
 	}
 	if len(req) == 0 {
-		return n.answer("current", false)
+		ans, err := n.answer("current", false)
+		if err != nil {
+			return n.refused(err)
+		}
+		return ans
 	}
 	next, err := NormalizeLiveDenies(append(append([]string{}, n.set...), req...))
 	if err != nil {
@@ -290,24 +311,30 @@ func (n *narrowing) handle(deny []string) *NarrowAnswer {
 		slog.Error("wardyn-proxy: sync the live deny directory; the request is left unanswered", slog.Any("err", err))
 		return nil
 	}
-	ans := n.answer("applied", changed)
-	if ans.State == "applied" {
-		n.s.StartLoadedReport(n.ctx, n.report(n.eff))
+	ans, err := n.answer("applied", changed)
+	if err != nil {
+		// The list is kept and enforced, so a refusal would be false: the outcome is left uncertain.
+		slog.Error("wardyn-proxy: build the narrowed config; the request is left unanswered", slog.Any("err", err))
+		return nil
 	}
+	n.s.StartLoadedReport(n.ctx, n.report(n.eff))
 	return ans
 }
 
+// withLiveDenies builds answer's config bytes. A variable, so a test can fail it.
+var withLiveDenies = WithLiveDenies
+
 // answer is the state's answer for the list n.set, and keeps the config bytes it hashed in n.eff.
-func (n *narrowing) answer(state string, changed bool) *NarrowAnswer {
-	eff, err := WithLiveDenies(n.base, n.set)
+func (n *narrowing) answer(state string, changed bool) (*NarrowAnswer, error) {
+	eff, err := withLiveDenies(n.base, n.set)
 	if err != nil {
-		return n.refused(err)
+		return nil, err
 	}
 	n.eff = eff
 	return &NarrowAnswer{
 		State: state, Changed: changed, ConfigSHA256: ConfigSHA256(eff), BaseSHA256: n.baseSH,
 		LiveDenies: append([]string{}, n.set...),
-	}
+	}, nil
 }
 
 // persistLiveDenies writes list to dir as a tmp file, fsyncs it, renames it over the list file and

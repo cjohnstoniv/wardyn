@@ -119,6 +119,11 @@ ingress:
   # /api/v1/admin/runs/restart) answers once, after it has restarted every run it
   # was sent, one at a time, up to 3.5 minutes each: a batch slower than 60 s
   # gets the same 504, so give it a timeout that covers your largest batch.
+  # The egress edit request (PATCH /api/v1/runs/{id}/egress), counted from
+  # wardynd's own time limits, can take up to 425s, or 485s for a run with a
+  # both-ways computer folder; a stalled database read at sign-in or at the
+  # audit write is not counted. Set a proxy read timeout of at least 540s for
+  # it; a shorter one can return 504 to the caller while the edit continues.
   annotations: {}
   hosts: []
   # hosts:

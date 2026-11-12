@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - macOS VM bases: an opt-in switch, `/Library/Wardyn/setup-assistant-carry`, copies the agent user's per-host settings into each run's new machine identity at boot, when the guest agent starts, so a Setup Assistant pane finished once in `edit-base` may stay closed in runs. Off by default; not yet tried on a real Mac.
+- On Kubernetes, a live egress edit now narrows the running proxy in place: the edit's hosts join its deny list, open connections through the proxy drop, and the answer waits for its policy readback. An edit that is not confirmed ends the run. Older runs, runs on a registered runner and edits that need a new proxy are refused as before (`409 egress_edit_unsupported`).
 
 ### Changed
 
@@ -71,6 +72,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If the server stops right after restarting a revived run's agent, or cannot record that the agent restarted, later network edits of that run are refused until it is revived from its page.
 - If a run's lost mark cannot be written after its database lock was lost, the server tries to stop its proxy anyway, even when a newer revive has taken the run over.
 - On Docker, a late network edit can remove the proxy that a newer edit of the same run just started. The run then has no network (it never widens), but its policy reads as enforced until a background sweep ends the run, within about 66 minutes. Start a new run.
+- On Kubernetes, a narrowed proxy restarts on its launch policy if its deny list is lost: a node's disk wiped under the pod, or someone with exec rights deleting it. It allows the denied hosts until the next edit. One restarted over about 30 minutes in cannot renew, so its run ends within 65 minutes of its last renewal.
 
 ### Before you upgrade
 

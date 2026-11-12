@@ -191,7 +191,8 @@ func main() {
 			slog.String("run_id", cfg.RunID.String()),
 		)
 		fmt.Fprintln(os.Stdout, proxy.ReadyMarker)
-		srv.StartLoadedReport(ctx, loadedReport(raw))
+		// An edit the socket already took started a newer report, which the boot report must not cancel.
+		srv.StartBootReport(ctx, loadedReport(raw))
 	})
 
 	errCh := make(chan error, 1)
