@@ -279,7 +279,7 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 
 // teardownOrAudit is stopSandboxOrAudit with the teardown verb given.
 func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, action string, teardown func(context.Context, string) error) bool {
-	serr := teardown(ctx, ref)
+	serr := teardownUnlessLost(ctx, ref, teardown)
 	if serr == nil {
 		return true
 	}

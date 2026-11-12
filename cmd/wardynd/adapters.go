@@ -868,7 +868,7 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelAppro
 	// A "both ways" computer folder's changes come back before the sandbox stops, within this stop's own
 	// deadline (the pass leaves the stop its teardown budget). A cut pass keeps the sandbox for a resume.
 	kept := l.bringBack != nil && run.SandboxRef != "" && l.bringBack(ctx, runID, run.SandboxRef)
-	if l.runner != nil && run.SandboxRef != "" && !kept {
+	if l.runner != nil && run.SandboxRef != "" && !kept && (db.HeldLocks(ctx) == nil || db.LockHeld(ctx) == nil) {
 		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
 			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
 				slog.String("run_id", runID.String()),

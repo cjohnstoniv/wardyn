@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -379,5 +381,105 @@ func TestFolderPassWithin_RunnerGetsTheComposedDeadline(t *testing.T) {
 	hi := after.Add(8*time.Second - computerFolderAccountTime).UnixMilli()
 	if got < lo || got > hi {
 		t.Errorf("the runner was sent deadline %d, want the pass end less one account window: between %d and %d", got, lo, hi)
+	}
+}
+
+// A teardown on a ctx whose run lock the database no longer holds is not called, and the run says nothing
+// is confirmed gone: the runners' stops do not all refuse a ctx that has ended.
+func TestTeardownOrAudit_LostLockDoesNotCall(t *testing.T) {
+	was := lockLost
+	defer func() { lockLost = was }()
+	s := &Server{cfg: Config{Now: time.Now}}
+	var calls int
+	teardown := func(context.Context, string) error { calls++; return nil }
+	lockLost = func(context.Context) bool { return true }
+	if s.teardownOrAudit(context.Background(), uuid.New(), "sbx", "run.complete", teardown) || calls != 0 {
+		t.Errorf("lost lock: teardown called %d times, or reported gone; want 0 calls and not gone", calls)
+	}
+	lockLost = func(context.Context) bool { return false }
+	if !s.teardownOrAudit(context.Background(), uuid.New(), "sbx", "run.complete", teardown) || calls != 1 {
+		t.Errorf("held lock: %d calls; want the teardown made once and the sandbox gone", calls)
+	}
+}
+
+// heldRunLock takes a real run-op lock for run on a throwaway Postgres and returns the ctx that holds it, with
+// the parent it was taken under, and a kill that ends the lock's session on the server.
+func heldRunLock(t *testing.T, pool *pgxpool.Pool, run uuid.UUID) (hctx context.Context, parent context.CancelFunc, kill func()) {
+	t.Helper()
+	old := db.LockWatchInterval
+	db.LockWatchInterval = 20 * time.Millisecond
+	t.Cleanup(func() { db.LockWatchInterval = old })
+	k := db.NewLockKey(db.RunOpLockClass, run.String())
+	pctx, cancel := context.WithCancel(context.Background())
+	hctx, release, err := db.NewPGLocker(pool, 2).Lock(pctx, k, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { release(); cancel() })
+	return hctx, cancel, func() {
+		if _, err := pool.Exec(context.Background(), `SELECT pg_terminate_backend(pid) FROM pg_locks
+			WHERE locktype = 'advisory' AND objsubid = 2 AND classid::bigint = $1 AND objid::bigint = $2
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+			int64(uint32(k.Class)), int64(uint32(k.Obj))); err != nil {
+			t.Fatal(err)
+		}
+		for deadline := time.Now().Add(5 * time.Second); db.LockHeld(hctx) == nil; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("the lock's loss was never seen")
+			}
+		}
+	}
+}
+
+// A finalize whose run lock the database lost does not stop the sandbox, though the runner's stop would act on any
+// ctx: nothing is called, the ref stays, and the caller hears the lock was lost. Also when the lock's parent ctx
+// was cancelled first, which hides a later loss from the ctx's cause.
+func TestFinalize_LostLockDoesNotStop(t *testing.T) {
+	for _, parentFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "lock lost", true: "parent cancelled first"}[parentFirst], func(t *testing.T) {
+			pool, cfg, _, run, _, probe := runnerExitAPIFixture(t)
+			srv := New(cfg)
+			hctx, cancelParent, kill := heldRunLock(t, pool, run.ID)
+			kill()
+			if parentFirst {
+				cancelParent()
+			}
+			ref := "runner:" + run.ID.String()
+			if got, err := cfg.Store.GetRun(t.Context(), run.ID); err == nil {
+				ref = got.SandboxRef
+			}
+			err := srv.finalizeRunEffects(hctx, run.ID, ref, "run.complete", nil, false, false)
+			if !errors.Is(err, db.ErrLockLost) {
+				t.Errorf("finalize = %v, want it to say the lock was lost", err)
+			}
+			if n := probe.calls.Load(); n != 0 {
+				t.Errorf("StopSandbox reached %d times, want 0", n)
+			}
+			if got, _ := cfg.Store.GetRun(t.Context(), run.ID); got.SandboxRef != ref {
+				t.Errorf("sandbox ref %q, want it kept as %q", got.SandboxRef, ref)
+			}
+		})
+	}
+}
+
+// A finalize whose caller's ctx was only cancelled, its lock still held, still stops the sandbox and clears its
+// ref: the guard asks the database, not the ctx.
+func TestFinalize_PlainCancelStillStops(t *testing.T) {
+	pool, cfg, _, run, _, probe := runnerExitAPIFixture(t)
+	srv := New(cfg)
+	hctx, cancelParent, _ := heldRunLock(t, pool, run.ID)
+	got, err := cfg.Store.GetRun(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelParent()
+	if err := srv.finalizeRunEffects(hctx, run.ID, got.SandboxRef, "run.complete", nil, false, false); errors.Is(err, db.ErrLockLost) {
+		t.Errorf("finalize = %v, want a held lock not read as lost", err)
+	}
+	if n := probe.calls.Load(); n != 1 {
+		t.Errorf("StopSandbox reached %d times, want 1", n)
+	}
+	if after, _ := cfg.Store.GetRun(t.Context(), run.ID); after.SandboxRef != "" {
+		t.Errorf("sandbox ref %q after a stop, want it cleared", after.SandboxRef)
 	}
 }
