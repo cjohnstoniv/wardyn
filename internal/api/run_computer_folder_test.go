@@ -194,11 +194,67 @@ type computerFolderStore struct {
 	runner types.Runner
 	smu    sync.Mutex
 	status types.RunLocalFolderStatus
+	// giveUpApplies makes GiveUpRunLocalFolder apply as the statement does for a run that is due: the
+	// Resume dropped, Back set, Gen moved on. giveUpErr fails it. giveUps records each call, and marks
+	// each generation MarkGivenUpAudited was called for (markErr fails it).
+	giveUpApplies bool
+	giveUpErr     error
+	giveUps       []store.GiveUpParams
+	markErr       error
+	marks         []int
+	// seedErr fails the folder and seed read. dataOut is the run's recorded data_out rule, and policyErr fails
+	// the read of it.
+	seedErr   error
+	dataOut   types.TransferRule
+	policyErr error
+	// dbNow is the fake database's clock for the due flags (RunDueFlags); nil is the real one.
+	dbNow func() time.Time
+	// runnerState is the state directory of the folder runner computerFolderFixture connects, which keeps what
+	// each pass saw. A test that connects that runner again passes it, as a runner that reconnects keeps its state.
+	runnerState string
 }
 
-// QueryAuditEvents answers no policy envelope: these runs carry no data_out rule, which reads as allowed.
-func (s *computerFolderStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
-	return nil, nil
+func (s *computerFolderStore) dueNow() time.Time {
+	if s.dbNow != nil {
+		return s.dbNow()
+	}
+	return time.Now()
+}
+
+// sqlDueFlags is store.RunDue as the database answers it (store.ContainmentDueSQL, and the keep after the end) at
+// the fake database's time now, for a run that ended at its EndedAt, or its UpdatedAt when that is unset.
+func sqlDueFlags(run types.AgentRun, keep time.Duration, now time.Time) store.RunDue {
+	end := runEnded(run)
+	return store.RunDue{Due: !end.Add(store.ContainmentLag).After(now), CapPassed: !end.Add(keep).After(now)}
+}
+
+// RunDueFlags implements store.TerminalDue's per-run read over the fixture's run.
+func (s *computerFolderStore) RunDueFlags(ctx context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error) {
+	run, err := s.GetRun(ctx, id)
+	if err != nil {
+		return store.RunDue{}, err
+	}
+	return sqlDueFlags(run, keep, s.dueNow()), nil
+}
+
+// QueryAuditEvents answers no policy envelope unless dataOut is set: these runs carry no data_out rule, which
+// reads as allowed.
+func (s *computerFolderStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	if s.policyErr != nil {
+		return nil, s.policyErr
+	}
+	if s.dataOut == "" {
+		return nil, nil
+	}
+	data, _ := json.Marshal(types.RunPolicySpec{DataOut: s.dataOut})
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
+}
+
+func (s *computerFolderStore) RunLocalFolderSeed(ctx context.Context, id uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if s.seedErr != nil {
+		return nil, store.LocalFolderSeed{}, s.seedErr
+	}
+	return s.localFolderStore.RunLocalFolderSeed(ctx, id)
 }
 
 func (s *computerFolderStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
@@ -243,6 +299,42 @@ func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.
 	}
 	s.status.Gen, s.status.GenAt = s.status.Gen+1, at
 	return s.status, true, nil
+}
+
+func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	s.giveUps = append(s.giveUps, p)
+	if s.giveUpErr != nil {
+		return store.GiveUpOutcome{}, s.giveUpErr
+	}
+	if !s.giveUpApplies || (s.status.Back != nil && s.status.Resume == nil) {
+		return store.GiveUpOutcome{}, nil
+	}
+	back := p.Back
+	s.status.Resume, s.status.Back = nil, &back
+	s.status.Gen++
+	return store.GiveUpOutcome{Applied: true, Gen: s.status.Gen}, nil
+}
+
+func (s *computerFolderStore) MarkGivenUpAudited(_ context.Context, _ uuid.UUID, gen int) (bool, error) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	s.marks = append(s.marks, gen)
+	if s.markErr != nil {
+		return false, s.markErr
+	}
+	if s.status.Gen != gen || s.status.Back == nil || s.status.Back.GivenUpAt == nil {
+		return false, nil
+	}
+	back := *s.status.Back
+	back.GivenUpAudited = true
+	s.status.Back = &back
+	return true, nil
+}
+
+func (s *computerFolderStore) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid.UUID, *uuid.UUID, error) {
+	return nil, nil, nil
 }
 
 // folderSandboxRunner is execCountRunner whose ExecStream runs an in-memory sftp-server, the sandbox's.
@@ -432,12 +524,13 @@ func computerFolderFixture(t *testing.T, direction string) (*Server, *computerFo
 	id := row.ID
 	ls.folder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &id, Path: app, Direction: direction}
 	ls.run.AgentExecID = "agent-exec"
-	cs := &computerFolderStore{localFolderStore: ls, runner: row}
+	cs := &computerFolderStore{localFolderStore: ls, runner: row, runnerState: t.TempDir()}
 	s.cfg.Store = cs
 	s.cfg.ComputerFolders = true
 	s.cfg.LocalFolderSeedWait = 20 * time.Second
 	s.cfg.RunnerOnline = func(uuid.UUID) bool { return true }
-	s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: folderRunnerEndpoint(t, id, true, home)}
+	ep, _ := folderRunnerEndpointWith(t, id, folderRunnerOpts{caps: runnerwire.Caps{Folders: true, FolderPassOnce: true, MachineName: "alice-laptop"}, stateDir: cs.runnerState}, home)
+	s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: ep}
 	return s, cs, audit, run, sb, app
 }
 
@@ -649,7 +742,7 @@ func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *
 		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept", n)
 	}
 	st := cs.folderStatus()
-	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep, about hourly, tries the sync again") {
+	if st.Resume == nil || st.Resume.Stalled != want.Stalled || st.Resume.Unsynced != want.Unsynced || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep, about hourly, tries the sync again") {
 		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
 	}
 	// Kept past the run's end, the sandbox runs only the pass back: no agent, no egress.
@@ -684,7 +777,7 @@ func TestFinalizeRunEffects_TwoCutPassesThatSaveNothingStopTheSandbox(t *testing
 	if _, err := boundedFinalize(t, s, run, 300*time.Millisecond); err != nil {
 		t.Errorf("finalize: %v", err)
 	}
-	assertFolderBackTornDown(t, cs, audit, run, sb, "2 passes in a row brought nothing back, so the sandbox was stopped")
+	assertFolderBackTornDown(t, cs, audit, run, sb, "because 2 passes in a row brought nothing back")
 }
 
 // A pass back cut short after it saved a file keeps the sandbox, and the next pass starts after
@@ -811,19 +904,19 @@ func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testi
 	}{
 		"its proxy is wedged": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.proxyErr = errors.New("the proxy is wedged")
-		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		}, "because its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
 		"its proxy stop fails closed": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.proxyErr, sb.proxyEnds = errors.New("the proxy is wedged"), true
-		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		}, "because its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
 		"its agent is the main process": {func(ls *localFolderStore, _ *folderSandboxRunner) {
 			ls.run.AgentExecID = runner.MainProcessExecID
-		}, "no pass ran; its agent and egress could not be stopped first: its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"},
+		}, "because its agent and egress could not be stopped first: its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"},
 		"its kill cannot reach it": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.killErr = errors.New("exec refused")
-		}, "no pass ran; its agent and egress could not be stopped first: its agent could not be stopped: exec refused"},
+		}, "because its agent and egress could not be stopped first: its agent could not be stopped: exec refused"},
 		"its agent outlives the kill": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.agentLives = true
-		}, "no pass ran; its agent and egress could not be stopped first: its agent still reads as running,"},
+		}, "because its agent and egress could not be stopped first: its agent still reads as running: no pass ran"},
 		// A lease end's EndSandbox stopped it: its proxy stop succeeds, and the kill's exec fails.
 		"it had already stopped": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.ended = true
@@ -911,10 +1004,10 @@ func findAuditData(events []types.AuditEvent, runID uuid.UUID, action, want stri
 }
 
 // The longest pass back text the server writes today, a stopped virtual machine whose pass was cut and could not
-// confirm a change, is past a seed's maxLocalFolderSeedError and is kept whole: its record ends with how the
+// confirm a change, is past a seed's maxLocalFolderSeedError and is kept whole: its record starts with how the
 // sandbox ended and how many changed files it left behind.
 func TestFolderPassRecord_TheLongestBackTextKeepsItsOutcome(t *testing.T) {
-	const tail = ", so the sandbox was stopped with changed files not brought back: 1"
+	const head = "the sandbox was stopped with changed files not brought back: 1, because "
 	text := folderBackGivenUp(
 		folderNotPreservedText(1, "read in the sandbox z.txt: connection lost", "the sync was cut short: context deadline exceeded"),
 		"it cannot be kept with its agent stopped and no egress: a virtual machine is not quiesced from the server's Docker", 1)
@@ -922,15 +1015,15 @@ func TestFolderPassRecord_TheLongestBackTextKeepsItsOutcome(t *testing.T) {
 		t.Fatalf("the text is %d runes, want one past a seed's cap of %d: this pin would prove nothing", n, maxLocalFolderSeedError)
 	}
 	rec := folderPassRecord(time.Now(), runnerwire.FolderPass{}, text, true)
-	if rec.Error != text || !strings.HasSuffix(rec.Error, tail) {
-		t.Errorf("back record = %q, want the whole text, ending %q", rec.Error, tail)
+	if rec.Error != text || !strings.HasPrefix(rec.Error, head) {
+		t.Errorf("back record = %q, want the whole text, starting %q", rec.Error, head)
 	}
 }
 
 // A pass back whose runner reason runs past maxFolderBackError is cut there, with the marker, and a seed's record
 // of the same text is still cut at maxLocalFolderSeedError.
 func TestFolderPassRecord_ABackReasonOverTheCapIsCutAtIt(t *testing.T) {
-	text := folderNotPreservedText(1, strings.Repeat("x", 2*maxFolderBackError), "")
+	text := strings.Repeat("x", 2*maxFolderBackError)
 	for _, tc := range []struct {
 		back  bool
 		limit int

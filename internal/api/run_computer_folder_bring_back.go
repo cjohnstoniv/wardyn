@@ -85,8 +85,13 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, bringBackKey{}, bringBackActor{actorType, principal})
-	// The run's lock is held from the state write through the pass (lockRunEnd's reason).
-	ctx, unlock, err := s.lockRunOp(ctx, id)
+	// The run's lock is held from the state write through the pass (lockRunEnd's reason), as an end hold for the
+	// dedicated budget; every hold taken is a refusal too.
+	b := endHoldDedicated
+	if run.MachineKind.IsMacOSVM() {
+		b += macOSVMTeardownBudget
+	}
+	ctx, unlock, err := s.holdRunEnd(ctx, id, b)
 	if err != nil {
 		writeLockRefused(w, r, err)
 		return

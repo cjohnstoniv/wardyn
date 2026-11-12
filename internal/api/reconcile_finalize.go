@@ -34,7 +34,7 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 // An empty hint is reconcileFinalize exactly.
 func (s *Server) reconcileFinalizeHint(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason, hint string) {
 	// The run's lock is held from the read below through the tail's computer folder pass (lockRunEnd).
-	ctx, unlock, locked := s.lockRunEnd(ctx, runID)
+	ctx, unlock, locked := s.lockRunEnd(ctx, runID, endHoldSweep)
 	if !locked {
 		return
 	}

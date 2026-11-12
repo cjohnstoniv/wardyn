@@ -45,7 +45,7 @@ var errFolderPassUnconfirmed = errors.New("no pass ran; the runner's last pass f
 // run at a time: an older runner, or unknown facts (caps not in, a failed lookup, the runner offline).
 // computerFolderPass checks the same on the endpoint it sends to.
 func (s *Server) lastPassOpen(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, g passGuard) bool {
-	if folder.RunnerID == nil || !s.mayStillRun(g) {
+	if folder.RunnerID == nil || !mayStillRun(g) {
 		return false
 	}
 	sub, refusal := s.folderRunner(ctx, run.CreatedBy, *folder.RunnerID)
@@ -53,33 +53,44 @@ func (s *Server) lastPassOpen(ctx context.Context, run types.AgentRun, folder ty
 }
 
 // passGuard is what a pass back is checked against before it is sent (lastPassOpen): the record before its
-// generation, and whether that could not be read.
+// generation, whether that could not be read, and whether its last pass was sent oldPassBound ago or more (past,
+// from lastPassPast, read before the pass's own bump).
 type passGuard struct {
 	last   types.RunLocalFolderStatus
 	unread bool
+	past   bool
 }
 
-// passGuardFor is run's passGuard. A virtual machine's sandbox cannot be kept with its agent stopped
-// (stopForKeep), so its pass is sent as before this release, unguarded: it can still run beside one that is
-// stuck, which only a runner that runs one pass per run at a time rules out.
-func passGuardFor(run types.AgentRun, prev types.RunLocalFolderStatus, unread bool) passGuard {
+// passGuardFor is run's passGuard, with past as lastPassPast read it before the bump. A virtual machine's sandbox
+// cannot be kept with its agent stopped (stopForKeep), so its pass is sent as before this release, unguarded: it
+// can still run beside one that is stuck, which only a runner that runs one pass per run at a time rules out.
+func passGuardFor(run types.AgentRun, prev types.RunLocalFolderStatus, unread, past bool) passGuard {
 	if run.MachineKind.IsVM() {
 		return passGuard{}
 	}
-	return passGuard{last: prev, unread: unread}
+	return passGuard{last: prev, unread: unread, past: past}
 }
 
 // mayStillRun is a guard whose last pass the runner may still be running (lastPassUnanswered), or whose
 // record could not be read: a read that failed never sends to a runner not known to run one pass per run at
 // a time.
-func (s *Server) mayStillRun(g passGuard) bool {
-	return g.unread || s.lastPassUnanswered(g.last)
+func mayStillRun(g passGuard) bool {
+	return g.unread || lastPassUnanswered(g.last, g.past)
 }
 
-// lastPassUnanswered is a last pass the runner may still be running: unsettled (lastPassUnsettled), and
-// sent less than oldPassBound ago, or at a time not known.
-func (s *Server) lastPassUnanswered(rec types.RunLocalFolderStatus) bool {
-	return lastPassUnsettled(rec) && !s.pastOldPassBound(rec)
+// lastPassUnanswered is a last pass the runner may still be running: unsettled (lastPassUnsettled), and not
+// past its bound (past, lastPassPast's answer), which a send time not known never is.
+func lastPassUnanswered(rec types.RunLocalFolderStatus, past bool) bool {
+	return lastPassUnsettled(rec) && !past
+}
+
+// lastPassPast is whether prev, the record as read before a pass's own bump, holds an unsettled last pass sent
+// oldPassBound ago or more. It is asked once, before the bump (bringComputerFolderBack, seedComputerFolder), and
+// carried in the passGuard and to unansweredStallsPast: the database ages only the generation it holds
+// (store.FolderGenAges), so once the bump has moved the record on, a record read before it is never past. A settled
+// last pass is not asked, since nothing it decides reads the answer.
+func (s *Server) lastPassPast(ctx context.Context, id uuid.UUID, prev types.RunLocalFolderStatus) bool {
+	return lastPassUnsettled(prev) && s.pastOldPassBound(ctx, id, prev)
 }
 
 // lastPassUnsettled is a record whose last pass the runner did not answer for: a generation past the settled
@@ -92,15 +103,26 @@ func lastPassUnsettled(rec types.RunLocalFolderStatus) bool {
 }
 
 // pastOldPassBound is a record whose generation was sent oldPassBound ago or more. One with no send time is
-// not: it is stamped at the visit that finds it (bringComputerFolderBack), and the bound runs from there.
-func (s *Server) pastOldPassBound(rec types.RunLocalFolderStatus) bool {
-	return !rec.GenAt.IsZero() && !s.cfg.Now().Before(rec.GenAt.Add(oldPassBound))
+// not: it is stamped at the visit that finds it (keepForResume), and the bound runs from there. The send time is
+// stamped by the database (BumpRunLocalFolderGen, StampFolderGenAt) and aged by it (store.FolderGenAges), so no
+// server's clock is compared with it; an age that cannot be read is not past, which keeps the last pass open. The
+// database answers only while the record is still at rec.Gen, so it is asked before a bump (lastPassPast). A store
+// with no such read (the tests' fakes) falls back to this server's clock.
+func (s *Server) pastOldPassBound(ctx context.Context, id uuid.UUID, rec types.RunLocalFolderStatus) bool {
+	if rec.GenAt.IsZero() {
+		return false
+	}
+	if ages, ok := s.cfg.Store.(store.FolderGenAges); ok {
+		past, err := ages.FolderGenPastBound(ctx, id, rec.Gen, oldPassBound)
+		return err == nil && past
+	}
+	return !s.cfg.Now().Before(rec.GenAt.Add(oldPassBound))
 }
 
 // keepForOpenPass keeps run's sandbox while its last pass may still run (lastPassOpen), with no pass sent,
-// no generation moved and no stall counted. A record with no send time is stamped now, and the bound runs
-// from it. On a resume visit (prev.Resume set) the sandbox was kept already, its agent stopped and its
-// egress cut, and stays so. On the first, its agent and egress are stopped first, and it is kept with a
+// no generation moved and no stall counted. A record with no send time is stamped now, by the database
+// (keepForResume), and the bound runs from it. On a resume visit (prev.Resume set) the sandbox was kept
+// already, its agent stopped and its egress cut, and stays so. On the first, its agent and egress are stopped first, and it is kept with a
 // resume; one where that fails, or that cannot be quiesced, is stopped with the changes not brought back.
 func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, g passGuard, ref string) bool {
 	prev := g.last
@@ -160,6 +182,33 @@ func (s *Server) keepBusy(ctx context.Context, run types.AgentRun, folder types.
 	return s.recordFolderPassBusy(ctx, run.ID, folder, gen)
 }
 
+// folderPassAwayMsg is the record of a pass back not sent because the computer's runner was offline.
+const folderPassAwayMsg = "Kept: the computer's runner was offline at the end; the copy back is tried again when it is back"
+
+// keepAway keeps the sandbox of a pass back not sent because the computer's runner is offline or not connected
+// here, once it is safe to keep (holdUnquiesced), with a resume and nothing counted, so a later sweep tries
+// again when the runner is back. One not safe to keep (a virtual machine, an agent that cannot be stopped
+// alone, a sandbox on that same offline computer) is stopped with its changes not brought back, as before.
+func (s *Server) keepAway(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
+	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+		return s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the computer's runner was offline at the end", err)
+	}
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	if s.writeComputerFolderStatus(rctx, run.ID, gen, func(st *types.RunLocalFolderStatus) {
+		if st.Resume == nil {
+			st.Resume = &types.FolderResume{}
+		}
+		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, folderPassAwayMsg, true)
+		st.Settled = gen
+	}) {
+		s.auditComputerFolderPass(rctx, run.ID, folder, true, runnerwire.FolderPass{}, folderPassAwayMsg)
+		return true
+	}
+	// A resume that did not land leaves the sweeps nothing to resume: kept only for an owner that moved the record on.
+	return s.folderGenTaken(rctx, run.ID, gen) || s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the computer's runner was offline at the end", errors.New("its record could not be written"))
+}
+
 // keepUnconfirmed keeps the sandbox of a pass back not sent because the runner may still run the last
 // (errFolderPassUnconfirmed), once it is safe to keep (holdUnquiesced), with the last pass's send time
 // (genAt) kept, so the wait does not start again. One not safe to keep is stopped with its changes not
@@ -181,10 +230,12 @@ func (s *Server) stopNotKept(ctx context.Context, id uuid.UUID, folder types.Run
 }
 
 // keepForResume keeps run id's sandbox for a later pass, at gen, with no stall counted and nothing claimed
-// done. The sweeps keep only a sandbox whose record holds a resume (computerFolderKept), so one is written
-// where rec, the record as read, has none. The send time becomes genAt, the last pass's, or, with none,
-// now where rec has none. A resume that cannot be written stops the sandbox with its changes not brought
-// back; a send time that cannot is left as it is.
+// done. The sweeps keep a sandbox whose record holds a resume or owes a pass back not yet run
+// (keepsSandboxForFolder), so a resume is written where rec, the record as read, has none. The send time
+// becomes genAt, the last pass's, or, with none, the database's now where the record has none
+// (StampFolderGenAt), the clock that ages it; only a store that keeps no clock is stamped with this server's. A
+// resume that cannot be written stops the sandbox with its changes not brought back; a send time that cannot is
+// left as it is, and the next visit stamps it.
 func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus, genAt time.Time) bool {
 	want := genAt
 	if want.IsZero() {
@@ -195,17 +246,25 @@ func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.R
 	}
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
-	if s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
+	ages, dbClock := s.cfg.Store.(store.FolderGenAges)
+	wrote := s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
 		if st.Resume == nil {
 			st.Resume = &types.FolderResume{}
 		}
 		switch {
 		case !genAt.IsZero():
 			st.GenAt = genAt
-		case st.GenAt.IsZero():
+		case st.GenAt.IsZero() && !dbClock:
 			st.GenAt = s.cfg.Now()
 		}
-	}) || rec.Resume != nil {
+	})
+	if wrote && genAt.IsZero() && dbClock {
+		if _, err := ages.StampFolderGenAt(rctx, id, gen); err != nil {
+			slog.WarnContext(ctx, "wardynd: stamp a computer folder pass's send time; the next visit stamps it",
+				slog.String("run_id", id.String()), slog.Any("err", err))
+		}
+	}
+	if wrote || rec.Resume != nil {
 		return true
 	}
 	errText := folderBackGivenUp("no pass ran; the runner may still be running its last pass back",
@@ -213,10 +272,10 @@ func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.R
 	return s.recordFolderBackAt(rctx, id, folder, gen, false, nil, runnerwire.FolderPass{}, errText)
 }
 
-// unansweredStallsPast is a last pass, unanswered and past its bound, that was a stall in a row of them:
-// the visit gives the changes up without a pass.
-func (s *Server) unansweredStallsPast(prev types.RunLocalFolderStatus) bool {
-	return lastPassUnsettled(prev) && prev.Resume != nil && prev.Resume.Stalled >= computerFolderStalls && s.pastOldPassBound(prev)
+// unansweredStallsPast is a last pass, unanswered and past its bound (past, lastPassPast's answer before the
+// bump), that was a stall in a row of them: the visit gives the changes up without a pass.
+func unansweredStallsPast(prev types.RunLocalFolderStatus, past bool) bool {
+	return lastPassUnsettled(prev) && prev.Resume != nil && prev.Resume.Stalled >= computerFolderStalls && past
 }
 
 // keptUnanswered is the verdict on a pass the runner did not answer for, given folderBackVerdict's and the
@@ -265,10 +324,15 @@ func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen in
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
 	rec, ok, err := st.BumpRunLocalFolderGen(rctx, id, store.FolderStatusGuard{Gen: gen}, s.cfg.Now())
-	if err != nil || !ok {
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not be moved before its pass",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+		return types.RunLocalFolderStatus{}, false, false
+	}
+	if !ok {
 		slog.WarnContext(ctx, "wardynd: a computer folder's pass record moved before its pass",
-			slog.String("run_id", id.String()), slog.Bool("moved", ok), slog.Any("err", err))
-		return types.RunLocalFolderStatus{}, false, err == nil
+			slog.String("run_id", id.String()), slog.Bool("moved", ok))
+		return types.RunLocalFolderStatus{}, false, true
 	}
 	return rec, true, false
 }
@@ -288,16 +352,31 @@ func (s *Server) folderGenTaken(ctx context.Context, id uuid.UUID, gen int) bool
 
 // recordFolderPassBusy records a pass back the runner refused as busy, at the generation it owned: settled,
 // since the runner answered, and kept for a resume so a later sweep tries again. The sandbox stays up
-// either way: a record that did not land is another owner's to decide.
+// either way, and this always answers true. The runner's busy reply is proof that another pass for this run
+// is live, and stopping the sandbox under it would cut that pass off and lose what it is moving; the 7-day
+// cap bounds the keep. So a store fault here does not stop it: it is logged apart, and the next visit tries
+// the record again. A record that did not land because another owner moved it on is that owner's to decide.
 func (s *Server) recordFolderPassBusy(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int) bool {
+	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
+		return true
+	}
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
-	if s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
-		if st.Resume == nil {
-			st.Resume = &types.FolderResume{}
+	cur, err := st.RunLocalFolderStatus(rctx, id)
+	landed := false
+	if err == nil && cur.Gen == gen {
+		if cur.Resume == nil {
+			cur.Resume = &types.FolderResume{}
 		}
-		st.Settled = gen
-	}) {
+		cur.Settled = gen
+		landed, err = st.SetRunLocalFolderStatusIf(rctx, id, store.FolderStatusGuard{Gen: gen}, cur)
+	}
+	switch {
+	case err != nil:
+		slog.WarnContext(ctx, "wardynd: recording a busy folder pass failed; the sandbox is kept because the runner is still running a pass for it",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+	case landed:
 		s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, folderPassBusyMsg)
 	}
 	return true

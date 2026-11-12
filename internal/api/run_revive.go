@@ -731,6 +731,9 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 		return reviveRefused(http.StatusConflict, reasonReviveNotRunning, "run is not running (state="+string(run.State)+")")
 	case ended && !s.endedFilesKept(run, now):
 		return reviveRefused(http.StatusConflict, reasonReviveEndedFilesGone, "run has ended and its files are no longer kept; start a new run")
+	case pastLifetimeCap(run, now):
+		// Before the end: an extension, which the end's answer asks for, is refused at the cap.
+		return reviveRefused(http.StatusConflict, reasonReviveMaxAge, "this run has reached its maximum age, so it can't be revived; start a new run")
 	case run.EndsAt != nil && !now.Before(*run.EndsAt):
 		return reviveRefused(http.StatusConflict, reasonRevivePastEnd, "run has passed its end; extend it first")
 	case ended && !run.Interactive:

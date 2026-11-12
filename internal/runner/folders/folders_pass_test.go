@@ -172,24 +172,27 @@ func TestSyncFolder_AnOlderServersSeedIsNotCutAtTheBackLimit(t *testing.T) {
 		t.Errorf("skewed runner's seed = %+v, want it complete", skewed)
 	}
 	s.Clock = nil
-	// The cut can end the pass back before its stream is taken, so sync_folder then finds no stream: also a cut.
-	p, err := sub.SyncFolder(context.Background(), runnerwire.SyncFolderArgs{RunID: uuid.New(), Path: app, RemoteDir: "/home/agent/work", Pull: true})
-	if errors.Is(err, runnerwire.ErrNoStream) {
-		return
+	// The back limit has passed before the server takes the pass's stream, or just after: the pass's own
+	// reason is what comes back either way, never a missing stream.
+	var back runnerwire.FolderPass
+	pass, err := sub.SyncFolder(context.Background(), runnerwire.SyncFolderArgs{RunID: uuid.New(), Path: app, RemoteDir: "/home/agent/work", Pull: true})
+	var ended *remote.PassEnded
+	switch {
+	case errors.As(err, &ended):
+		back = ended.Pass
+	case err != nil:
+		t.Fatalf("older server's pass back: %v", err)
+	default:
+		srv := newSandbox(t).serve(pass.Stream, "/home/agent/work")
+		defer srv.Close()
+		waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if back, err = pass.Wait(waitCtx); err != nil {
+			t.Fatalf("older server's pass back: %v", err)
+		}
 	}
-	if err != nil {
-		t.Fatalf("sync_folder: %v", err)
-	}
-	srv := newSandbox(t).serve(p.Stream, "/home/agent/work")
-	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	back, err := p.Wait(ctx)
-	if err != nil {
-		t.Fatalf("sync_folder_wait: %v", err)
-	}
-	if back.Error == "" {
-		t.Errorf("older server's pass back = %+v, want it cut at the back limit", back)
+	if back.Error == "" || strings.Contains(back.Error, "no such stream") {
+		t.Errorf("older server's pass back = %+v, want it cut at the back limit, with its own reason", back)
 	}
 }
 
