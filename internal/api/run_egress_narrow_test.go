@@ -903,6 +903,36 @@ func TestNarrowEdit_InPlaceWording(t *testing.T) {
 	}
 }
 
+// A headless run off the person's own machine is ended, not kept, when its proxy does not confirm: the end
+// records the run's failure hint. After an in-place narrowing that hint says the policy was narrowed and
+// names no proxy image, which answered the narrowing and so cannot be the cause; after a replace it keeps
+// the image cause, since a replaced proxy can be an old image.
+func TestNarrowEdit_UnconfirmedRunHintSaysNarrowed(t *testing.T) {
+	t.Run("in place", func(t *testing.T) {
+		f := newNarrowFixture(t)
+		f.st.run.Interactive = false
+		f.nr.wrongHash = true
+		f.edit(t, `{"deny_hosts":["evil.example"]}`, http.StatusServiceUnavailable, "")
+		got := f.st.FailureHint()
+		if got != unconfirmedNarrowedHint || strings.Contains(got, "proxy image") || strings.Contains(got, "rc.18") {
+			t.Errorf("failure hint = %q, want %q", got, unconfirmedNarrowedHint)
+		}
+	})
+	t.Run("replace", func(t *testing.T) {
+		f := newEgressEditFixture(t)
+		f.st.run.Interactive = false
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- f.editEgress(t, `{"deny_hosts":["evil.example"]}`) }()
+		f.mismatchAfterAnswer(t)
+		if w := <-done; w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("edit: %d %s, want 503", w.Code, w.Body.String())
+		}
+		if got := f.st.FailureHint(); got != unconfirmedPolicyHint {
+			t.Errorf("failure hint = %q, want %q", got, unconfirmedPolicyHint)
+		}
+	})
+}
+
 // A local-mode caller who is not the owner is refused with the revive path's 403 and audit row before
 // any exec.
 func TestNarrowEdit_OwnerCheckBeforeExec(t *testing.T) {

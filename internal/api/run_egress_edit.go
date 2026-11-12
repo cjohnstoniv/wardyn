@@ -260,6 +260,9 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	// The wait outlives a caller who stops waiting: its end decides whether the proxy keeps running.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), egressEditWait)
 	defer cancel()
+	if inPlace != nil {
+		ctx = withNarrowedStart(ctx)
+	}
 	// A revive that failed after its start was recorded is answered by that start: a failed one once
 	// its containment is recorded, an abandoned one (the replace failed) once its stop is confirmed.
 	wait := s.awaitEgressEditReadback(ctx, run.ID, res.generation, rerr == nil || res.stored)

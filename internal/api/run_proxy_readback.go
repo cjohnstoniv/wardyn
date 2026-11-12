@@ -414,7 +414,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		// the end, as before.
 		left := run.RunnerID == nil && s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") == nil
 		ok := left || s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
-		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(ok))
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, runStopHint(ctx, ok))
 		switch {
 		case !ok:
 			return errProxyStopUnconfirmed
@@ -615,6 +615,37 @@ func unconfirmedHint(stopped bool) string {
 		return unconfirmedPolicyHint
 	}
 	return unconfirmedStopPendingHint
+}
+
+// unconfirmedNarrowedHint and unconfirmedNarrowedStopPendingHint are those two hints for a run whose proxy
+// was narrowed in place (a live egress edit's -narrow exec) and did not confirm the narrowed policy.
+// The proxy there is the one the run started with, and it answered the narrowing, so a proxy image that
+// never confirms cannot be the cause: they name none.
+const (
+	unconfirmedNarrowedHint            = "The run's proxy did not confirm the narrowed policy after the edit, so the run was stopped"
+	unconfirmedNarrowedStopPendingHint = "The run's proxy did not confirm the narrowed policy after the edit; stopping it is not confirmed yet and is retried"
+)
+
+// narrowedStartKey marks a context as the one of an in-place narrowing's stop (withNarrowedStart).
+type narrowedStartKey struct{}
+
+// withNarrowedStart marks ctx as an in-place narrowing's: a running run its stop ends there records the
+// narrowed hints (runStopHint), not the image cause. The mark rides the edit's own wait, which
+// contains the failed start itself; a stop a sweep or a report's handler gets to first keeps the
+// replace path's words, since the start's row does not say how it was applied.
+func withNarrowedStart(ctx context.Context) context.Context {
+	return context.WithValue(ctx, narrowedStartKey{}, true)
+}
+
+// runStopHint is unconfirmedHint, or its in-place variant on a context withNarrowedStart marked.
+func runStopHint(ctx context.Context, stopped bool) string {
+	if narrowed, _ := ctx.Value(narrowedStartKey{}).(bool); narrowed {
+		if stopped {
+			return unconfirmedNarrowedHint
+		}
+		return unconfirmedNarrowedStopPendingHint
+	}
+	return unconfirmedHint(stopped)
 }
 
 func (s *Server) auditReadback(ctx context.Context, runID uuid.UUID, action, outcome string, gen int, data map[string]any) {
