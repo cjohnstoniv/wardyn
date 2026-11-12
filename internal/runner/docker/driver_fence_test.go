@@ -248,6 +248,68 @@ func TestReplaceProxyHashedAt_RemovesOnlyTheInspectedID(t *testing.T) {
 	}
 }
 
+// refusingAliasDocker is swapOnRemoveDocker whose next proxy create answers a container id of its own (a
+// daemon's id, not its name), so a removal by name can be told from one by id.
+type refusingAliasDocker struct {
+	*swapOnRemoveDocker
+	alias bool
+}
+
+func (s *refusingAliasDocker) ContainerCreate(ctx context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	res, err := s.fakeDocker.ContainerCreate(ctx, o)
+	if err == nil && s.alias && o.Name == s.name {
+		s.alias = false
+		s.mu.Lock()
+		c := s.containers[o.Name]
+		c.id = s.oldID
+		s.containers[s.oldID] = c
+		s.mu.Unlock()
+		res.ID = s.oldID
+	}
+	return res, err
+}
+
+// The retry after a proxy image refuses allowed_peers removes the container that refused, by its id. A newer
+// generation's proxy that took the name in between is left running.
+func TestStartProxy_AllowedPeersRetryRemovesOnlyTheRefusingID(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	runID := testSpec().RunID
+	name := proxyContainerName(runID)
+	w := &refusingAliasDocker{swapOnRemoveDocker: &swapOnRemoveDocker{fakeDocker: f, oldID: "refusing-id", name: name, newest: "newer-proxy-id"}}
+	d := newWithClient(w, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal", ProxyPeersOnlyByDefault: true})
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	first := f.containers[name]
+	f.mu.Lock()
+	first.id = "first-id"
+	f.containers["first-id"] = first
+	f.olderProxyRefuses = "allowed_peers"
+	f.mu.Unlock()
+	w.newer = &createdContainer{
+		name:  name,
+		id:    w.newest,
+		cfg:   &container.Config{Labels: map[string]string{labelProxyGeneration: "9"}},
+		host:  &container.HostConfig{NetworkMode: container.NetworkMode(internalNetName(runID))},
+		state: &container.State{Status: "running", Running: true},
+	}
+	w.armed, w.alias = true, true
+
+	_, err = d.ReplaceProxyHashedAt(ctx, sb.Ref, renderedTestConfig(t, "fresh"), 7)
+	if !errors.Is(err, runner.ErrProxyGenerationNewer) {
+		t.Fatalf("replace whose compatibility retry finds a proxy for generation 9 under the name = %v; want runner.ErrProxyGenerationNewer", err)
+	}
+	if w.newer.removed {
+		t.Error("the compatibility retry removed the proxy that took the name after the refusal")
+	}
+	if refused := f.containers[w.oldID]; refused == nil || !refused.removed {
+		t.Error("the compatibility retry did not remove the container that refused allowed_peers")
+	}
+}
+
 func TestReplaceProxyHashedAt_StampsTheLabel(t *testing.T) {
 	r := newFencedRun(t)
 	if _, err := r.d.ReplaceProxyHashedAt(context.Background(), r.ref, renderedTestConfig(t, "fresh"), 3); err != nil {

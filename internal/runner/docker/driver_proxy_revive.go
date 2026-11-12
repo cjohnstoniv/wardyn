@@ -212,7 +212,8 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	case !prep.allowedPeers || !d.cfg.ProxyPeersOnlyByDefault || !errors.As(err, &refused) || refused.setting != "allowed_peers":
 		return id, "", err
 	}
-	if err := d.removeProxy(ctx, runID); err != nil {
+	// The container that refused, by its id: a proxy started under the name since is not it.
+	if err := d.removeProxyAt(ctx, runID, id); err != nil {
 		return "", "", fmt.Errorf("docker: remove the proxy that refused allowed_peers: %w", err)
 	}
 	if prep.cfgJSON, err = withoutProxyConfigKey(prep.cfgJSON, "allowed_peers"); err != nil {
@@ -357,7 +358,7 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	//
 	// On a failure the container is deliberately NOT removed here: on the CreateSandbox path the
 	// caller removes it after also rolling back the per-run network; on the ReplaceProxy path it
-	// stays so its logs still name the cause, and the next revive removes it by name.
+	// stays so its logs still name the cause, and the next revive removes it by the id it inspects.
 	var waitErr error
 	if marker {
 		waitErr = d.awaitProxyReady(ctx, resp.ID, att)
@@ -700,7 +701,7 @@ func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []b
 }
 
 // ReplaceProxyHashedAt is ReplaceProxyHashed acting for policy generation gen (runner.ProxyReviverAt). gen 0
-// is none: ReplaceProxyHashed. With gen > 0 the replacement proxy is labelled with it, and a running proxy
+// is none: ReplaceProxyHashed. With gen > 0 the replacement proxy is labelled with it, and a proxy, running or not,
 // labelled gen or newer refuses the replace with runner.ErrProxyGenerationNewer, nothing touched. The proxy
 // removed is the container inspected, never one that took the name since. An agent cut off its run network
 // (FenceProxy) is refused with runner.ErrProxyFenced before anything is removed.
