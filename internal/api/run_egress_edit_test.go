@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -308,6 +311,74 @@ func TestEgressEdit_ReadbackUnsupportedAnswersEgressEditUnsupported(t *testing.T
 	}
 	if d := leaseAuditData(t, ev[0]); d["reason"] != reasonEgressEditUnsupported {
 		t.Errorf("row reason = %v, want %s", d["reason"], reasonEgressEditUnsupported)
+	}
+}
+
+// An edit whose substrate cannot apply it answers what to do, not the runner's own error text.
+// Catches the revive's text leaking back, a change that maps the reason but not the text, and "start a
+// new run" given where updating the runner is the fix. The handler cases run a run with no runner; the
+// runner cases call egressEditRefusal with egressEditRunnerToUpdate, because a check that an older
+// runner can replace a proxy at all may refuse its edit before any replace.
+func TestEgressEdit_UnsupportedSaysWhatToDo(t *testing.T) {
+	for name, rn := range map[string]func(*readbackFixture) runner.Runner{
+		"substrate that cannot replace": func(f *readbackFixture) runner.Runner { return k8sLikeHashedRunner{f.hr} },
+		"readback not confirmable":      func(f *readbackFixture) runner.Runner { return unhashableRunner{f.hr} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newEgressEditFixture(t)
+			f.srv.cfg.Runner = rn(f)
+			w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+			var b errorBody
+			if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusConflict || b.Reason != reasonEgressEditUnsupported {
+				t.Fatalf("edit: %d %s, want 409 %s", w.Code, w.Body.String(), reasonEgressEditUnsupported)
+			}
+			if b.Error != egressEditUnsupportedMsg || b.Error == runner.ErrReviveUnsupported.Error() {
+				t.Errorf("error = %q, want %q", b.Error, egressEditUnsupportedMsg)
+			}
+		})
+	}
+
+	seed := func(srv *Server, id uuid.UUID, caps runnerwire.Caps) {
+		data, err := json.Marshal(caps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sub := remote.New(id.String(), &capsTransport{online: true}, remote.Options{})
+		sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+		srv.runnerStreams.subsMu.Lock()
+		if srv.runnerStreams.subs == nil {
+			srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+		}
+		srv.runnerStreams.subs[id] = runnerEndpoint{sub: sub, link: &remote.Link{}}
+		srv.runnerStreams.subsMu.Unlock()
+	}
+	srv := &Server{}
+	kept, unkept, unnamed := uuid.New(), uuid.New(), uuid.New()
+	seed(srv, kept, runnerwire.Caps{MachineName: "build-mac"})
+	seed(srv, unkept, runnerwire.Caps{MachineName: "build-mac", EndsUnkept: true})
+	seed(srv, unnamed, runnerwire.Caps{})
+	held := uuid.New() // a runner id no caps were seeded for
+	for _, tc := range []struct {
+		name string
+		run  types.AgentRun
+		want string
+	}{
+		{"container run on a runner that can keep a sandbox", types.AgentRun{RunnerID: &kept}, fmt.Sprintf(egressEditUpdateRunnerMsg, "build-mac")},
+		{"the same runner with no name", types.AgentRun{RunnerID: &unnamed}, fmt.Sprintf(egressEditUpdateRunnerMsg, "its computer")},
+		{"runner that ends unkept", types.AgentRun{RunnerID: &unkept}, egressEditUnsupportedMsg},
+		{"a VM run on that runner", types.AgentRun{RunnerID: &kept, MachineKind: types.MachineMacOSVM}, egressEditUnsupportedMsg},
+		{"no runner id", types.AgentRun{}, egressEditUnsupportedMsg},
+		{"runner with no caps held", types.AgentRun{RunnerID: &held}, egressEditUnsupportedMsg},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := egressEditRefusal(reviveUnsupported(), srv.egressEditRunnerToUpdate(tc.run))
+			if got.msg != tc.want || got.reason != reasonEgressEditUnsupported || got.status != http.StatusConflict {
+				t.Errorf("refusal = %d %s %q, want 409 %s %q", got.status, got.reason, got.msg, reasonEgressEditUnsupported, tc.want)
+			}
+		})
 	}
 }
 

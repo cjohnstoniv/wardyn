@@ -15,6 +15,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A live network edit or revive on Docker now fails if the new proxy can't renew its token with the server within 10 seconds: a run that can be kept is lost until revived, and any other run ends. Creates are unchanged.
 - A live edit or revive that loses its database lock while it is replacing the proxy now stops instead of finishing the replace, and a headless run that is not on a laptop runner then ends.
+- A live egress edit that the run's substrate cannot apply now says what to do: "This run's network can't be changed while it runs on this substrate. Start a new run with the narrower policy." On a runner that must be updated first, it says to update the runner.
+- macOS VM windows say that paste from your Mac does not reach the VM, and the edit window says Type code types only the one-time code.
 
 ### Fixed
 

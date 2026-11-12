@@ -37,8 +37,8 @@ var serveScreens func(work func() int) int
 // The line under a run window's title bar. The kept-machine words are a draft until its board is approved;
 // a copy change is an edit to this block.
 const (
-	WindowStrip     = "What you type goes into this run. Sign-ins stay on the run's disk until it ends. Close this window to hand back; the run keeps going."
-	KeptWindowStrip = "What you type goes into this run. Sign-ins stay on this machine while this machine is kept. Close this window to hand back; the run keeps going."
+	WindowStrip     = "What you type goes into this run; paste from this Mac does not. Sign-ins stay on the run's disk until it ends. Close this window to hand back; the run keeps going."
+	KeptWindowStrip = "What you type goes into this run; paste from this Mac does not. Sign-ins stay on this machine while this machine is kept. Close this window to hand back; the run keeps going."
 )
 
 // WindowText is a window's text: its title and the strip under the title bar. A run window has only those.
