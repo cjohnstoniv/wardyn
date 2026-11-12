@@ -282,6 +282,11 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		return fmt.Errorf("sweep orphaned sandboxes: list live image checks: %w", err)
 	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
+	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
+	// hazard); what one sweep leaves, the next takes. The cuts the sweep makes share this bound.
+	sctx, cancel := context.WithTimeout(ctx, orphanSweepBound)
+	defer cancel()
+	sweepEnd, _ := sctx.Deadline()
 	isOrphan := func(runID uuid.UUID) bool {
 		if liveChecks[runID] {
 			return false
@@ -298,14 +303,22 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 			// The run ended; its containers should already be gone, unless its computer folder's
 			// pass back keeps them for the tail owner (folderCleanupLoop), or that pass is still
 			// running under the end's lock (lockRunEnd).
+			if sctx.Err() != nil || !time.Now().Before(sweepEnd) {
+				return false // the sweep's bound is spent: no cut, and the run is left to the terminal sweep
+			}
 			lctx, unlock, free := s.tryLockRunOp(ctx, runID)
 			if !free {
 				return false
 			}
 			defer unlock()
 			// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
-			// owner's give-up at the cap ends the keep.
-			return s.boundedKeepVerdict(lctx, run, "sandbox.orphan.sweep") == folderKeepNone
+			// owner's give-up at the cap ends the keep. The cut runs on the sweep's own bound, not a fresh one per
+			// run, so cuts that never answer hold the sweep for one bound in all. A cut that bound ended decides
+			// nothing: the run keeps its ref and is left to the terminal sweep and the next label sweep.
+			vctx, vcancel := context.WithDeadline(lctx, sweepEnd)
+			defer vcancel()
+			v, _, _ := s.folderKeepVerdict(vctx, run, "sandbox.orphan.sweep")
+			return v == folderKeepNone && vctx.Err() == nil
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -322,10 +335,6 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		return true
 	}
-	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
-	// hazard); what one sweep leaves, the next takes.
-	sctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
-	defer cancel()
 	swept, err := sweeper.SweepOrphanedSandboxes(sctx, undispatchedGrace, isOrphan)
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
@@ -416,12 +425,16 @@ func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
 	}
 }
 
-// reconcileCutBound is the bound of one orphan pass cut; a variable only so a test can shorten it.
+// reconcileCutBound is the bound of one boot orphan pass cut; a variable only so a test can shorten it.
 var reconcileCutBound = reconcileFinalizeTimeout
 
+// orphanSweepBound is the label sweep's bound (sweepOrphanedSandboxes), which every cut it makes shares; a variable
+// only so a test can shorten it.
+var orphanSweepBound = reconcileFinalizeTimeout
+
 // boundedKeepVerdict is folderKeepVerdict on the bound of one boot teardown call (reconcileFinalizeTimeout): the
-// cut it makes is a substrate call, and one that never answers must not hold boot or the label sweep. A cut that
-// timed out is unconfirmed, so the verdict is folderKeepNone and the caller stops the sandbox.
+// cut it makes is a substrate call, and one that never answers must not hold boot. A cut that timed out is
+// unconfirmed, so the verdict is folderKeepNone and the caller stops the sandbox.
 func (s *Server) boundedKeepVerdict(ctx context.Context, run types.AgentRun, action string) folderKeep {
 	ctx, cancel := context.WithTimeout(ctx, reconcileCutBound)
 	defer cancel()

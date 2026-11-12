@@ -135,7 +135,11 @@ func (s *Server) copyBackCut(ctx context.Context, run types.AgentRun, action str
 		}
 		return errProxyAloneUnsupported
 	}
-	ok := s.teardownOrAudit(ctx, run.ID, run.SandboxRef, action, func(context.Context, string) error { return err })
+	// The failure row is written on a context of its own (teardownCtx): a cut that timed out has spent ctx, and a
+	// row on it would be lost where no audit spool holds it.
+	actx, cancel := teardownCtx(ctx)
+	defer cancel()
+	ok := s.teardownOrAudit(actx, run.ID, run.SandboxRef, action, func(context.Context, string) error { return err })
 	switch {
 	case run.RunnerID != nil:
 		return errProxyAloneUnsupported // a runner sandbox whose cut failed is not kept
