@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -25,6 +26,19 @@ func (r *hungRuntime) hang(ctx context.Context) error {
 	r.calls.Add(1)
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// statusHungRuntime is pauseRunner whose thaw answers at once but whose status read never answers: it waits for
+// its context to end.
+type statusHungRuntime struct {
+	*pauseRunner
+	statusCalls atomic.Int32
+}
+
+func (r *statusHungRuntime) Status(ctx context.Context, _ string) (runner.Status, error) {
+	r.statusCalls.Add(1)
+	<-ctx.Done()
+	return runner.Status{}, ctx.Err()
 }
 
 // TestRunPause_AHungRuntimeCallEndsAtItsBound: a pause's freeze, a resume's thaw and a settle's move each run
@@ -107,6 +121,53 @@ func TestRunPause_AHungRuntimeCallEndsAtItsBound(t *testing.T) {
 		_, thawsBefore := f.rn.counts()
 		if err := f.typed(); err != nil {
 			t.Fatalf("the second input's resume: %v; want it to succeed", err)
+		}
+		_, thaws := f.rn.counts()
+		if at, _ := f.st.paused(); at != nil || thaws != thawsBefore+1 {
+			t.Fatalf("paused = %v, thaws = %d (was %d); want the run resumed by one thaw", at != nil, thaws, thawsBefore)
+		}
+	})
+	t.Run("a thaw that lands while its status read is cut is left to the settle", func(t *testing.T) {
+		f, _, now := pausedRunClock(t, 0)
+		rn := &statusHungRuntime{pauseRunner: f.rn}
+		f.srv.cfg.Runner = rn
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel) // ends a call the bound did not, so a red run leaks nothing
+		done := make(chan error, 1)
+		go func() { done <- f.srv.markPresent(ctx, f.run.ID, types.ActorHuman, pauseOwner, "presence") }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("a resume whose status read never answered was reported as a resume")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the resume held the run's lock past its bound: its status read never ended")
+		}
+		if _, thaws := f.rn.counts(); thaws != 1 || rn.statusCalls.Load() == 0 {
+			t.Fatalf("thaws = %d, status reads = %d; want the thaw answered and the status read reached", thaws, rn.statusCalls.Load())
+		}
+		_, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
+		if !ok {
+			t.Fatal("the resume left the run's lock held")
+		}
+		unlock()
+		// The thaw landed, so the agent runs, but the row still reads paused: only a settle record repairs that.
+		if at, _ := f.st.paused(); at == nil || f.st.owing() != 1 {
+			t.Fatalf("paused = %v, settle records = %d; want the row still paused and one settle record", at != nil, f.st.owing())
+		}
+		f.srv.cfg.Runner = f.rn
+		f.st.settleDue()
+		f.sweep(t)
+		freezes, _ := f.rn.counts()
+		if at, _ := f.st.paused(); at == nil || freezes != 1 || f.st.owing() != 0 {
+			t.Fatalf("paused = %v, freezes = %d, settle records = %d; want the running agent frozen back to its paused row and the record cleared",
+				at != nil, freezes, f.st.owing())
+		}
+		// A later input, once the retry backoff has passed and with the runtime answering, resumes the run.
+		*now = now.Add(time.Second)
+		_, thawsBefore := f.rn.counts()
+		if err := f.typed(); err != nil {
+			t.Fatalf("the later input's resume: %v; want it to succeed", err)
 		}
 		_, thaws := f.rn.counts()
 		if at, _ := f.st.paused(); at != nil || thaws != thawsBefore+1 {
