@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -302,6 +303,7 @@ func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 // start never counts, and a run with no stamp, or no row, is false. Proven red by dropping any one of the
 // three from the GREATEST, by a spacing dropped or read in the wrong unit.
 func TestPG_ContainmentStreakDue_DBClock(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -360,6 +362,7 @@ func TestPG_ContainmentStreakDue_DBClock(t *testing.T) {
 // is. Proven red by a due read from a Go time, by the wait dropped or read in the wrong unit, and by a
 // missing state test.
 func TestPG_ContainmentPastDue_DBClock(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -394,6 +397,7 @@ func TestPG_ContainmentPastDue_DBClock(t *testing.T) {
 // TestPG_ClearRunContainmentErrorForRef: a failure is cleared by a stop of the sandbox the run holds, and is
 // kept by a stop of any other sandbox, an empty ref, or a run with nothing recorded.
 func TestPG_ClearRunContainmentErrorForRef(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
