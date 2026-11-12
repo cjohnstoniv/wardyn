@@ -948,7 +948,7 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	s.reconcileWorkspaceRun(revokeCtx, id)
 	s.reconcileRecordRun(revokeCtx, id)
 	// A confirmed kill leaves the ref meaning nothing: clear it, after reconcileRecordRun, which reads the ref
-	// to tell a sandbox that never started from an empty capture (workspace_run.go:444).
+	// to tell a sandbox that never started from an empty capture (reconcileRecordRun in workspace_run.go).
 	if kerr == nil && !queued && s.cfg.Runner != nil && run.SandboxRef != "" {
 		_ = s.clearSandboxRef(revokeCtx, id)
 	}
