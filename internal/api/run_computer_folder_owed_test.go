@@ -238,7 +238,7 @@ func TestFinalizeRunEffects_AResumeWhoseRunnerIsGoneKeepsTheSandboxUncounted(t *
 			t.Fatalf("visit %d: finalize = %v, stops %d; want the sandbox kept", visit, err, f.sb.stopCount())
 		}
 		st := f.cs.folderStatus()
-		if st.Resume == nil || *st.Resume != before || st.Settled != st.Gen ||
+		if st.Resume == nil || !reflect.DeepEqual(*st.Resume, before) || st.Settled != st.Gen ||
 			st.Back == nil || st.Back.Error != folderPassAwayMsg {
 			t.Fatalf("visit %d: record %+v, want the resume as it was, settled, with the runner-offline text", visit, st)
 		}
