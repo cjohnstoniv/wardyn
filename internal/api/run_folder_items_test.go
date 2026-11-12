@@ -441,9 +441,12 @@ func TestFinalize_LostLockDoesNotStop(t *testing.T) {
 			pool, cfg, _, run, _, probe := runnerExitAPIFixture(t)
 			srv := New(cfg)
 			hctx, cancelParent, kill := heldRunLock(t, pool, run.ID)
-			kill()
 			if parentFirst {
 				cancelParent()
+			}
+			kill()
+			if parentFirst && !errors.Is(context.Cause(hctx), context.Canceled) {
+				t.Fatalf("cause after the loss = %v, want the parent's cancel to mask it", context.Cause(hctx))
 			}
 			ref := "runner:" + run.ID.String()
 			if got, err := cfg.Store.GetRun(t.Context(), run.ID); err == nil {
