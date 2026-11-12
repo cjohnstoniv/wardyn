@@ -151,6 +151,10 @@ func TestConformanceK8s(t *testing.T) {
 	t.Run("ClosedOffAfterTeardown", func(t *testing.T) {
 		testClosedOffAfterTeardown(t, r, cs, ns, agentImage)
 	})
+
+	t.Run("LiveProxyNarrow", func(t *testing.T) {
+		liveProxyNarrow(t, r, cs, ns, agentImage)
+	})
 }
 
 // heldScript holds a connection to the proxy and prints held=1 once it has stayed up for 2 s.
