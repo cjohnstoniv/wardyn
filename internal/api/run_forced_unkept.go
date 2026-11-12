@@ -55,3 +55,31 @@ func forcedCutObserved(run types.AgentRun, kind cutKind, err error) bool {
 func (s *Server) auditCutFailure(ctx context.Context, runID uuid.UUID, ref, action string, err error) {
 	s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
 }
+
+// makeUpForcedTail is the retry's make-up for a forced end whose process died between its claim and its tail,
+// which left the run terminal with its approvals pending and no end row. The cancel moves only pending rows, so
+// repeating it on every visit is harmless, and the row is written on the first visit this process makes.
+func (s *Server) makeUpForcedTail(ctx context.Context, run types.AgentRun) {
+	_ = s.cancelRunApprovals(ctx, run.ID)
+	if _, seen := forcedResumeRowWritten.LoadOrStore(forcedResumeKey{s, run.ID}, struct{}{}); seen {
+		return
+	}
+	action := "run.lost"
+	if run.LostReason == types.LostEnded {
+		action = "run.ended"
+	}
+	settleAfterTeardown(ctx, func(sctx context.Context) {
+		s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
+			mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "forced": true, "resumed": true})))
+	})
+}
+
+// forcedRunnerAway reports a run on a runner that is not connected here and can come back (its row is not
+// absent or revoked): the retry settles, stops and queues nothing for it, and the mark waits.
+func (s *Server) forcedRunnerAway(ctx context.Context, run types.AgentRun) bool {
+	if run.RunnerID == nil {
+		return false
+	}
+	_, connected := s.runnerConnected(*run.RunnerID)
+	return !connected && s.runnerGoneReason(ctx, run, runner.ErrRunnerOffline) == ""
+}

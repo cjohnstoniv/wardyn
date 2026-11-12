@@ -321,17 +321,7 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 	// A forced end whose process died between its claim and its tail left the run terminal with its
 	// approvals pending and no end row. The retry makes up both: the cancel moves only pending rows, so
 	// repeating it on every visit is harmless, and the row is written on the first visit this process makes.
-	_ = s.cancelRunApprovals(ctx, run.ID)
-	if _, seen := forcedResumeRowWritten.LoadOrStore(forcedResumeKey{s, run.ID}, struct{}{}); !seen {
-		action := "run.lost"
-		if run.LostReason == types.LostEnded {
-			action = "run.ended"
-		}
-		settleAfterTeardown(ctx, func(sctx context.Context) {
-			s.recordAudit(sctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
-				mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "forced": true, "resumed": true})))
-		})
-	}
+	s.makeUpForcedTail(ctx, run)
 	if run.SandboxRef == "" || s.cfg.Runner == nil {
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, true, nil)
 		return
@@ -339,11 +329,9 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 	// A runner that can come back: nothing is settled, stopped or queued, so a crash between the claim and the
 	// settle keeps the copy back; the mark waits. A runner that is gone (absent or revoked) takes the tail's
 	// runner_gone row below.
-	if run.RunnerID != nil {
-		if _, ok := s.runnerConnected(*run.RunnerID); !ok && s.runnerGoneReason(ctx, run, runner.ErrRunnerOffline) == "" {
-			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
-			return
-		}
+	if s.forcedRunnerAway(ctx, run) {
+		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+		return
 	}
 	if !s.settleUnsettledForcedFolder(ctx, run) {
 		s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
