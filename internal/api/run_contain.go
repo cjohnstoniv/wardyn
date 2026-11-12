@@ -653,26 +653,42 @@ func (s *Server) streakSince(run types.AgentRun) time.Time {
 // (cutUnsupported with no error: a virtual machine, Kubernetes in server mode), or the cut failed and the
 // database holds a failure at least a streak older than now that is not older than the run's due, its last
 // unobserved round or this process's start. An answer that did not observe the sandbox is never a failure.
-// A folder read that fails makes it false for the tick. It reads the clock when it is called, not when the
-// item began.
+// A Kubernetes server-mode run with an owed copy back, whose agent was stopped on this visit, waits for
+// containOptionC past its due; a stop of its agent that failed makes it due at once. A folder read that
+// fails makes it false for the tick. It reads the clock when it is called, not when the item began.
 func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool {
 	due, ok := containmentDue(run)
 	if !ok || s.cfg.Now().Before(due) {
 		return false
 	}
+	failed := err != nil && !notObserved(err)
+	serverMode := s.d1ServerMode(run)
+	// A server-mode run has no cut to fail: a pre-cut that failed or ran out its phase fails closed.
+	stalled := serverMode && (preErr != nil || errors.Is(err, errContainCallAbandoned) || errors.Is(err, context.DeadlineExceeded))
 	switch {
-	case err == nil && kind == cutUnsupported:
-		return s.d1UnsupportedDue(ctx, run)
-	case err != nil && !notObserved(err) && s.d1StreakDue(ctx, run):
+	case stalled, err == nil && kind == cutUnsupported:
+		return s.d1UnsupportedDue(ctx, run, due, serverMode && preErr == nil && err == nil)
+	case failed && s.d1StreakDue(ctx, run):
 		_, _, readable := s.d1FolderOwed(ctx, run)
 		return readable
 	}
 	return false
 }
 
-// containPreCut is the stop path's work in the call phase, before the cut. It has none yet.
+// containPreCut is the stop path's work in the call phase, before the cut. For a Kubernetes server-mode run
+// with an owed copy back it stops the agent on every visit, with no record of having done so, so that the
+// pass has a stopped agent to copy from; it answers that stop's error. Every other run has no work here.
 func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
-	return nil
+	if !s.d1ServerMode(run) {
+		return nil
+	}
+	if _, owed, ok := s.d1FolderOwed(ctx, run); !ok || !owed {
+		return nil
+	}
+	if !s.agentStoppable(ctx, run) {
+		return errAgentNotStoppable
+	}
+	return s.stopAgentForPass(ctx, run.SandboxRef)
 }
 
 // runStopItem is the stop pool's item for one run. A run with a contain call is cut once more first. Each

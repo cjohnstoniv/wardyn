@@ -28,11 +28,24 @@ const (
 	containD1 = containPre + containCall + d1GiveUpPhase + d1StopPhase + containPost
 	// containD1Unsupported is the stop item for a run with no contain call: the last cut is left out.
 	containD1Unsupported = containD1 - containCall
+	// containOptionC is how long past its containment due a Kubernetes server-mode run with an owed copy
+	// back is left to its pass before D1 stops it. The agent is stopped on every visit meanwhile.
+	containOptionC = 5 * time.Minute
 	// containStreakRunner is the gap two failures of a run on a runner need. A dead link is failed by the
 	// keepalive up to (MissedPings+1) pings after the last pong, and a cut is not an observation from then
 	// on, so two failures closer than that may both be the dead link's.
 	containStreakRunner = max(containTick, (runnerwire.MissedPings+1)*runnerwire.PingInterval)
 )
+
+// errAgentNotStoppable is containPreCut's answer for a Kubernetes server-mode run whose agent cannot be
+// stopped from the server: no pass can run for it, so D1 does not wait for one.
+var errAgentNotStoppable = errors.New("the sandbox's agent cannot be stopped from the server")
+
+// d1ServerMode reports a hosted Kubernetes run in server mode: it has no contain call.
+func (s *Server) d1ServerMode(run types.AgentRun) bool {
+	return run.RunnerID == nil && !run.MachineKind.IsVM() && run.SandboxRef != "" &&
+		s.cfg.Runner != nil && s.cfg.Runner.Name() == "k8s"
+}
 
 // d1NoCall reports a run the stop pool's item does not cut again first: its substrate has no contain call.
 func (s *Server) d1NoCall(run types.AgentRun) bool {
@@ -84,10 +97,14 @@ func (s *Server) d1StreakDue(ctx context.Context, run types.AgentRun) bool {
 }
 
 // d1UnsupportedDue is the rule for a run with no contain call: stop it, once its folder record has been
-// read.
-func (s *Server) d1UnsupportedDue(ctx context.Context, run types.AgentRun) bool {
-	_, _, ok := s.d1FolderOwed(ctx, run)
-	return ok
+// read. A Kubernetes server-mode run with an owed copy back, whose agent was stopped on this visit, waits
+// for containOptionC past its due first: its pass may run in between. held says that wait applies.
+func (s *Server) d1UnsupportedDue(ctx context.Context, run types.AgentRun, due time.Time, held bool) bool {
+	_, owed, ok := s.d1FolderOwed(ctx, run)
+	if !ok {
+		return false
+	}
+	return !(owed && held && s.cfg.Now().Before(due.Add(containOptionC)))
 }
 
 // d1Reread is the stop item's pre phase: the run as it stands now. An item for a run that is no longer

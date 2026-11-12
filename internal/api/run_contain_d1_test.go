@@ -194,13 +194,13 @@ func (f *d1Store) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid
 }
 
 // d1Runner is containRunner plus a StopSandbox and an ExecStream the test steers. stopFn answers the nth
-// StopSandbox of a ref; execFn answers the "cat" (agentStoppable) and "script" (stopAgentForPass) execs
-// of a ref, with the output the exec printed; onCall sees every cut and stop call as it begins and
-// returns what to run as it ends. afterStop runs after a StopSandbox that answered nil.
+// StopSandbox of a ref; execFn runs before the "cat" (agentStoppable) and "script" (stopAgentForPass) execs
+// of a ref and fails or delays them; onCall sees every cut and stop call as it begins and returns what to
+// run as it ends. afterStop runs after a StopSandbox that answered nil.
 type d1Runner struct {
 	*containRunner
 	stopFn    func(ctx context.Context, ref string, n int) error
-	execFn    func(ctx context.Context, what, ref string) (string, error)
+	execFn    func(ctx context.Context, what, ref string) error
 	onCall    func(ref, what string) func()
 	afterStop func(ref string)
 	stopAt    map[string][]time.Time
@@ -254,8 +254,7 @@ func (r *d1Runner) ExecStream(ctx context.Context, ref string, spec runner.ExecS
 	fn := r.execFn
 	r.mu.Unlock()
 	if fn != nil {
-		var err error
-		if out, err = fn(ctx, what, ref); err != nil {
+		if err := fn(ctx, what, ref); err != nil {
 			return nil, err
 		}
 	}
@@ -1181,6 +1180,187 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 		l.stop()
 		if n := l.dr.totalStops(); n != 1 {
 			t.Errorf("StopSandbox calls = %d, want exactly one hand-off", n)
+		}
+	})
+}
+
+// rowDue is row with its containment due dueIn from now (negative: already due).
+func (l *d1Lab) rowDue(dueIn time.Duration, runnerID *uuid.UUID, kind types.MachineKind) store.TerminalSandboxRow {
+	r := l.row(runnerID, kind)
+	end := time.Now().Add(dueIn - containmentLag)
+	r.EndedAt, r.UpdatedAt = &end, end
+	l.st.add(r)
+	return r
+}
+
+// d1ServerLab is a lab whose server runs Kubernetes in server mode: a cut is unsupported, and the agent
+// checks and stops each take the given time. The script times are recorded in scripts.
+func d1ServerLab(t *testing.T, cat, script time.Duration) (l *d1Lab, scripts *[]time.Time) {
+	t.Helper()
+	l = newD1Lab(t, false)
+	l.rn.name = "k8s"
+	l.rn.setHook(func(context.Context, string) error { return runner.ErrEndUnsupported })
+	var mu sync.Mutex
+	scripts = &[]time.Time{}
+	l.dr.execFn = func(ctx context.Context, what, _ string) error {
+		if what == "cat" {
+			return d1Sleep(ctx, cat)
+		}
+		mu.Lock()
+		*scripts = append(*scripts, time.Now())
+		mu.Unlock()
+		return d1Sleep(ctx, script)
+	}
+	return l, scripts
+}
+
+// A server-mode run whose record holds a Resume has its agent stopped on every visit, and is given up and
+// stopped at its due + P_C: not before; at the visit that began a second before it, the clock is read when
+// d1Due is asked, so that visit hands it off; StopSandbox returns within 770 s of the run's end. A stop of
+// the agent that fails, or an agent that cannot be stopped, makes it due on that visit.
+func TestContain_HeldKubernetesServerRunStoppedByPC(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, scripts := d1ServerLab(t, 3*time.Second, 5*time.Second)
+		l.dr.stopFn = d1StopTakes(d1StopPhase - time.Millisecond)
+		t0 := time.Now()
+		row := l.rowDue(11*time.Second, nil, "")
+		l.ds.owe(row.ID)
+		duePC := row.EndedAt.Add(containmentLag + containOptionC)
+		l.start()
+		time.Sleep(450 * time.Second)
+		l.stop()
+		began, ended, ok := l.dr.firstStop(row.SandboxRef)
+		if !ok || ended.IsZero() {
+			t.Fatal("the run was never stopped")
+		}
+		if began.Before(duePC) {
+			t.Errorf("stopped %v before due + P_C", duePC.Sub(began))
+		}
+		if late := began.Sub(t0.Add(310 * time.Second)); late > 10*time.Second {
+			t.Errorf("the stop began %v after the visit that started a second before due + P_C, want within 10s", late)
+		}
+		if got := ended.Sub(*row.EndedAt); got > 770*time.Second {
+			t.Errorf("StopSandbox returned %v after the run's end, want within 770s", got)
+		} else {
+			t.Logf("StopSandbox returned %v after the run's end", got)
+		}
+		if n, cats := len(*scripts), l.dr.execCount("cat", row.SandboxRef); n < 25 || n != cats {
+			t.Errorf("agent stops = %d, agent checks = %d; want one of each on every visit", n, cats)
+		}
+		if n := l.ds.giveUpCount(); n != 1 {
+			t.Errorf("give-ups = %d, want 1", n)
+		}
+	})
+	for _, failing := range []string{"cat", "script"} {
+		synctest.Test(t, func(t *testing.T) {
+			l, _ := d1ServerLab(t, time.Second, time.Second)
+			l.dr.stopFn = d1StopTakes(time.Second)
+			inner := l.dr.execFn
+			l.dr.execFn = func(ctx context.Context, what, ref string) error {
+				if what == failing {
+					return errContainBoom
+				}
+				return inner(ctx, what, ref)
+			}
+			t0 := time.Now()
+			row := l.rowDue(-time.Minute, nil, "")
+			l.ds.owe(row.ID)
+			l.start()
+			time.Sleep(containItem)
+			l.stop()
+			if began, _, ok := l.dr.firstStop(row.SandboxRef); !ok || began.Sub(t0) > containItem {
+				t.Errorf("failing %s at due + 1 min: stop called %v at +%v, want on the first visit", failing, ok, began.Sub(t0))
+			}
+		})
+	}
+}
+
+// Ten server-mode runs, owed and with a stoppable agent: the agent is stopped on every visit, with no
+// cache, and each run is stopped no earlier than its due + P_C and within 685 s of the first listing.
+func TestContain_OptionCStopsWithinItsBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, _ := d1ServerLab(t, time.Second, time.Second)
+		l.dr.stopFn = d1StopTakes(d1StopPhase - time.Millisecond)
+		var rows []store.TerminalSandboxRow
+		for range 10 {
+			r := l.rowDue(-time.Minute, nil, "")
+			l.ds.owe(r.ID)
+			rows = append(rows, r)
+		}
+		start := time.Now()
+		l.start()
+		time.Sleep(700 * time.Second)
+		l.stop()
+		for _, r := range rows {
+			began, ended, ok := l.dr.firstStop(r.SandboxRef)
+			if !ok || ended.IsZero() {
+				t.Fatalf("run %s was never stopped", r.ID)
+			}
+			if duePC := r.EndedAt.Add(containmentLag + containOptionC); began.Before(duePC) {
+				t.Errorf("run %s stopped %v before due + P_C", r.ID, duePC.Sub(began))
+			}
+			if got := ended.Sub(start); got > 685*time.Second {
+				t.Errorf("run %s stopped at +%v, want within 685s", r.ID, got)
+			}
+			if n, cats := l.dr.execCount("script", r.SandboxRef), l.dr.execCount("cat", r.SandboxRef); n < 20 || n != cats {
+				t.Errorf("run %s: agent stops %d, agent checks %d; want one of each on every visit, not a cached stop", r.ID, n, cats)
+			}
+		}
+		if n := l.ds.giveUpCount(); n != len(rows) {
+			t.Errorf("give-ups = %d, want %d", n, len(rows))
+		}
+	})
+}
+
+// The agent is stopped on each visit before due + P_C, and the sandbox only after the last of those stops.
+func TestOptionC_AgentStoppedFirstThenStopAtPC(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, scripts := d1ServerLab(t, time.Second, time.Second)
+		row := l.rowDue(-(containOptionC - 30*time.Second), nil, "")
+		l.ds.owe(row.ID)
+		duePC := row.EndedAt.Add(containmentLag + containOptionC)
+		l.start()
+		time.Sleep(containD1)
+		l.stop()
+		began, _, ok := l.dr.firstStop(row.SandboxRef)
+		if !ok || began.Before(duePC) {
+			t.Fatalf("stop called %v at %v, want at or after due + P_C (%v)", ok, began, duePC)
+		}
+		early := 0
+		for _, at := range *scripts {
+			if at.After(began) {
+				t.Errorf("an agent stop ran at %v, after the sandbox's stop began at %v", at, began)
+			}
+			if at.Before(duePC) {
+				early++
+			}
+		}
+		if early < 3 {
+			t.Errorf("agent stops before due + P_C = %d, want one on each of at least 3 visits", early)
+		}
+	})
+}
+
+// A VM is never held for a pass: no agent stop, and it is given up and stopped at the first tick past its due.
+func TestOptionC_VMGoesToRuleA(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, scripts := d1ServerLab(t, time.Second, time.Second)
+		l.dr.stopFn = d1StopTakes(time.Second)
+		t0 := time.Now()
+		row := l.rowDue(-(containOptionC - 30*time.Second), nil, types.MachineLinuxVM)
+		l.ds.owe(row.ID)
+		l.start()
+		time.Sleep(containD1)
+		l.stop()
+		began, _, ok := l.dr.firstStop(row.SandboxRef)
+		if !ok || began.Sub(t0) > containTick {
+			t.Errorf("stop called %v at +%v, want at the first tick", ok, began.Sub(t0))
+		}
+		if n, cats := len(*scripts), l.dr.execCount("cat", row.SandboxRef); n != 0 || cats != 0 {
+			t.Errorf("agent stops %d, agent checks %d for a VM, want none", n, cats)
+		}
+		if n := l.ds.giveUpCount(); n != 1 {
+			t.Errorf("give-ups = %d, want 1", n)
 		}
 	})
 }
