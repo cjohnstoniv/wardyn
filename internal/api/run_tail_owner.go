@@ -260,11 +260,21 @@ func tailSkipped(ctx context.Context, id uuid.UUID, err error) {
 // tailStepOf reads run's record and answers the step it is due for (tailStepFor), with the record and the note
 // its give-up carries (giveUpFolderNoted). A record that cannot be read is an error inside the cap. Past it the
 // step is the give-up, noted folderStatusUnreadable: the statement needs no decoded record, and a record that
-// never reads would otherwise keep its sandbox for ever. A run that is gone (store.ErrNotFound) is only an error.
+// never reads would otherwise keep its sandbox for ever. Before that, the owed checks that need no record are
+// asked as the readable path asks them (folderOwed on the empty record, which owes whatever has not run: a run
+// that ended, was not killed and holds its ref, with a folder copied back both ways, seeded, and a data_out rule
+// that lets it out); a run they say owes nothing takes the readable path's not-owed step, with no give-up. A run
+// that is gone (store.ErrNotFound) is only an error.
 func (s *Server) tailStepOf(ctx context.Context, run types.AgentRun, due store.RunDue) (types.RunLocalFolderStatus, tailStep, string, error) {
 	st, err := s.tailFolderStatus(ctx, run.ID)
 	if err != nil {
 		if due.CapPassed && !errors.Is(err, store.ErrNotFound) {
+			if owed, oerr := s.folderOwed(ctx, run, types.RunLocalFolderStatus{}); oerr == nil && !owed {
+				if due.Due {
+					return types.RunLocalFolderStatus{}, tailHistory, "", nil
+				}
+				return types.RunLocalFolderStatus{}, tailNone, "", nil
+			}
 			slog.WarnContext(ctx, "wardynd: the tail owner could not read an ended run's folder record past its keep; giving its owed changes up",
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 			return types.RunLocalFolderStatus{}, tailGiveUp, folderStatusUnreadable, nil

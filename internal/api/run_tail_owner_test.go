@@ -696,6 +696,39 @@ func TestTailOwner_UnreadableStatusIsGivenUpPastTheCapNotInsideIt(t *testing.T) 
 	}
 }
 
+// A run that owes no copy back whatever its record says (a killed run, a folder copied in only) is not given up when
+// its record cannot be read past the cap: no statement, no given_up row, no "given up" record. It takes the history
+// tail, which stops its sandbox, as the same run does with a record that reads. Catches: the unreadable-record
+// give-up skipping the owed checks that need no record.
+func TestTailOwner_UnreadableStatusOfARunOwingNothingIsNotGivenUp(t *testing.T) {
+	for name, change := range map[string]func(*tailRow){
+		"a killed run":            func(r *tailRow) { r.run.State = types.RunKilled },
+		"a folder copied in only": func(r *tailRow) { r.folder.Direction = types.ComputerFolderIn },
+	} {
+		for _, unreadable := range []bool{false, true} {
+			g := newTailRig(t)
+			g.lab.giveUpOK = true
+			row := g.owedRow(g.clock.now.Add(-g.s.pendingCap() - time.Hour))
+			change(row)
+			if unreadable {
+				g.lab.statusErr = errors.New("the record does not decode")
+			}
+			g.tick()
+			if g.lab.giveUpCount() != 0 || transferAudit(g.audit) != 0 {
+				t.Errorf("%s, record unreadable %v: %d statements, %d given_up rows; want none", name, unreadable,
+					g.lab.giveUpCount(), transferAudit(g.audit))
+			}
+			if st := row.status; st.Back == nil || st.Back.GivenUpAt != nil || st.Resume == nil {
+				t.Errorf("%s, record unreadable %v: record %+v; want it as it was, not given up", name, unreadable, st)
+			}
+			if g.count(tailHistory) != 1 || g.countOf(row.run.ID) != 1 || row.run.SandboxRef != "" {
+				t.Errorf("%s, record unreadable %v: %d history tails, %d tails, ref %q; want the history tail and the sandbox stopped",
+					name, unreadable, g.count(tailHistory), g.countOf(row.run.ID), row.run.SandboxRef)
+			}
+		}
+	}
+}
+
 // Past the cap a row whose data_out rule or seed cannot be read is given up like any other (one statement), with a
 // given_up audit row saying the rule could not be read, and its sandbox is stopped; the reads' failure does not
 // hold it. Inside the cap the same failure gives nothing up. A seed that cannot be read also keeps the audit row

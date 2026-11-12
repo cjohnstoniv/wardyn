@@ -572,6 +572,7 @@ func TestOrphanSweep_HangingCutsShareTheSweepsBoundAndAreLeftOwed(t *testing.T) 
 		t.Errorf("refs cleared %v, %d cut failure rows; want none cleared and the one timed-out cut's row", st.clearedRefs, rows)
 	}
 	rn.hang.Store(false)
+	orphanSweepBound = time.Minute // the hang is off: a long bound, so three cuts and their rows cannot run it out
 	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
 		t.Fatal(err)
 	}
