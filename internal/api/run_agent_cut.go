@@ -113,9 +113,8 @@ func (s *Server) keepable(run types.AgentRun) bool {
 	return ok && caps.ProxyFence
 }
 
-// copyBackCut is stopTerminalSandbox's keep test: nil keeps the sandbox, errProxyAloneUnsupported stops it,
-// errProxyStopUnconfirmed keeps it with its failure row, as stopProxyOrAudit answers
-// (run_proxy_readback.go); errRunnerNotHere leaves a runner run in place this round, with no stop
+// copyBackCut is stopTerminalSandbox's keep test: nil keeps the sandbox; errProxyAloneUnsupported, and
+// errProxyStopUnconfirmed (a hosted proxy stop that failed, its failure row written), stop it; errRunnerNotHere leaves a runner run in place this round, with no stop
 // sent or queued, until its runner is here. It is asked only for a sandbox kept for its copy back or whose
 // record could not be read.
 func (s *Server) copyBackCut(ctx context.Context, run types.AgentRun, action string) error {
@@ -136,7 +135,11 @@ func (s *Server) copyBackCut(ctx context.Context, run types.AgentRun, action str
 		}
 		return errProxyAloneUnsupported
 	}
-	ok := s.teardownOrAudit(ctx, run.ID, run.SandboxRef, action, func(context.Context, string) error { return err })
+	// The failure row is written on a context of its own (teardownCtx): a cut that timed out has spent ctx, and a
+	// row on it would be lost where no audit spool holds it.
+	actx, cancel := teardownCtx(ctx)
+	defer cancel()
+	ok := s.teardownOrAudit(actx, run.ID, run.SandboxRef, action, func(context.Context, string) error { return err })
 	switch {
 	case run.RunnerID != nil:
 		return errProxyAloneUnsupported // a runner sandbox whose cut failed is not kept

@@ -240,7 +240,8 @@ type raceDispatchStore struct {
 	id    uuid.UUID
 	state types.RunState
 	ref   string
-	// When non-nil, SetSandboxRef signals refSet after persisting the ref, then
+	// When non-nil, SetSandboxRef signals refSet after persisting a non-empty ref (dispatch's write, not a
+	// clear), then
 	// blocks on killGate — letting a test land a kill in the exact in-flight
 	// window (STARTING + sandbox created + ref persisted, RUNNING CAS not yet run)
 	// that a real kill hits during a minutes-long image pull.
@@ -273,7 +274,7 @@ func (s *raceDispatchStore) SetSandboxRef(_ context.Context, _ uuid.UUID, ref st
 	s.mu.Unlock()
 	// Block INSIDE the STARTING window (lock released first, or a concurrent
 	// kill's GetRun would deadlock) until the test lands its kill.
-	if s.refSet != nil {
+	if ref != "" && s.refSet != nil {
 		close(s.refSet)
 		<-s.killGate
 	}

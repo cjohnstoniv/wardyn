@@ -421,24 +421,22 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		return nil
 	}
 	if isTerminalRunState(run.State) {
-		// computerFolderKept, with the record's read error apart for its audit row.
-		if kept, ferr := s.computerFolderKeptRead(ctx, run.ID); kept || ferr != nil {
-			// Kept for its computer folder's copy back to resume (bringComputerFolderBack): stopping the
-			// sandbox would lose the changes not yet copied back, so its proxy alone is stopped, and the
-			// sandbox and its ref stay for the resume. A substrate that cannot stop a proxy alone keeps
-			// no such sandbox (quiesceKeptSandbox), so its sandbox is stopped as any other. A record that
-			// cannot be read counts as kept: the containment that keeps the sandbox for it writes one
-			// failure row with folder_record_error, and resumeComputerFolderBacks reads the record again.
-			switch err := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile"); {
-			case err == nil:
-				if ferr != nil {
-					s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.reconcile", run.SandboxRef, "failure",
-						mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
-				}
-				return nil
-			case !errors.Is(err, errProxyAloneUnsupported):
-				return errKeptProxyStopUnconfirmed
+		// A sandbox kept for its computer folder's copy back (folderKeepVerdict) stays only on a confirmed cut,
+		// so its changes not yet copied back are not lost; its ref stays for the tail owner. A runner that is not
+		// here fails this stop for the sweep to retry. A substrate that cannot be cut keeps no such sandbox, and
+		// neither does a hosted one whose proxy stop failed (its failure row written): its sandbox is stopped as
+		// any other. A record that cannot be read keeps the sandbox only on a confirmed cut, with one failure row
+		// carrying folder_record_error; a rule that cannot be read past the cap is given up by the tail owner.
+		v, ferr, cutErr := s.folderKeepVerdict(ctx, run, "run.reconcile")
+		switch v {
+		case folderKeepCut:
+			if ferr != nil {
+				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.reconcile", run.SandboxRef, "failure",
+					mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
 			}
+			return nil
+		case folderKeepAway:
+			return cutErr
 		}
 	}
 	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
@@ -470,36 +468,64 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 	return errProxyStopUnconfirmed
 }
 
-// stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
-// (computerFolderKeptRead); left reports a sandbox left in place. A sandbox kept for its pass back stays
-// with only its proxy stopped: nil once that stop is confirmed, and a stop that failed is action's
-// failure row with teardown_error (stopProxyOrAudit). A record that cannot be read is logged, and the sandbox stays only once its proxy is
-// stopped, as a failure row with folder_record_error that stays unresolved so a later pass reads it again.
-// It fails closed: a sandbox that cannot be kept (one on a runner, a virtual machine, one whose proxy
-// cannot be stopped alone, as quiesceKeptSandbox decides) is stopped whatever its record says, and so is
-// one whose record cannot be read and whose proxy did not stop. Any other sandbox is stopped.
-func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) (left bool, err error) {
-	if run.SandboxRef == "" {
-		return false, nil
-	}
-	kept, ferr := s.computerFolderKeptRead(ctx, run.ID)
+// folderKeep is a sweep's verdict on a terminal run's sandbox against its computer folder (folderKeepVerdict).
+type folderKeep int
+
+const (
+	folderKeepNone folderKeep = iota // not kept: the sandbox is stopped
+	folderKeepCut                    // kept, and the agent's cut is confirmed
+	folderKeepAway                   // a runner run whose runner is not here: left in place, nothing stopped or queued
+)
+
+// folderKeepVerdict is the one rule every destructive sweep decides a kept sandbox by: a sandbox kept for its
+// computer folder's pass back (keepsSandboxForFolder), or whose record cannot be read (ferr), stays only once
+// the agent's cut is confirmed (copyBackCut: hosted, a fenced runner, a connected runner whose proxy stop
+// answered nil). A runner that is not here leaves it in place (folderKeepAway), and cutErr is errRunnerNotHere.
+// Anything else is folderKeepNone: stopped whatever its record says. That covers a sandbox that cannot be cut (a
+// virtual machine, Kubernetes in server mode, a runner sandbox whose cut failed, as quiesceKeptSandbox decides)
+// and a hosted cut whose proxy stop failed, whose failure row copyBackCut has written. cutErr is copyBackCut's
+// answer.
+func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, action string) (v folderKeep, ferr, cutErr error) {
+	kept, ferr := s.keepsSandboxForFolder(ctx, run)
 	if ferr != nil {
 		slog.WarnContext(ctx, "wardynd: a terminal run's computer folder record could not be read",
 			slog.String("run_id", run.ID.String()), slog.String("action", action), slog.Any("err", ferr))
 	}
-	var stopErr error
-	if (kept || ferr != nil) && run.RunnerID == nil && !run.MachineKind.IsVM() {
-		stopErr = s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, action)
-		switch {
-		case stopErr == nil && ferr != nil:
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
-				mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
-			return true, fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept with its proxy stopped: %w", ferr)
-		case stopErr == nil:
-			return true, nil
-		case ferr == nil && !errors.Is(stopErr, errProxyAloneUnsupported):
-			return true, stopErr // kept: its files stay, and the row names the stop that failed
-		}
+	if (!kept && ferr == nil) || run.MachineKind.IsVM() {
+		return folderKeepNone, ferr, nil
+	}
+	cutErr = s.copyBackCut(ctx, run, action)
+	switch {
+	case errors.Is(cutErr, errRunnerNotHere):
+		return folderKeepAway, ferr, cutErr // no row: the runner is not here, and the next pass asks again
+	case cutErr == nil:
+		return folderKeepCut, ferr, nil
+	}
+	return folderKeepNone, ferr, cutErr
+}
+
+// stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
+// (folderKeepVerdict); left reports a sandbox left in place. A sandbox kept for its pass back stays when the
+// agent's cut is confirmed, and a stop that failed is action's failure row with teardown_error. A record that
+// cannot be read is logged, and the sandbox stays only once that cut is confirmed, as a failure row with
+// folder_record_error that stays unresolved so a later pass reads it again. A runner run whose runner is
+// not connected here is left in place with errRunnerNotHere, nothing stopped, queued or written, until its
+// runner is. It fails closed: any other sandbox is stopped, a hosted one whose proxy stop failed among them (its
+// failure row is the cut's, and a sandbox stop that fails too is the failed-stop retry's).
+func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) (left bool, err error) {
+	if run.SandboxRef == "" {
+		return false, nil
+	}
+	v, ferr, cutErr := s.folderKeepVerdict(ctx, run, action)
+	switch {
+	case v == folderKeepAway:
+		return true, cutErr
+	case v == folderKeepCut && ferr != nil:
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
+			mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
+		return true, fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept with its proxy stopped: %w", ferr)
+	case v == folderKeepCut:
+		return true, nil
 	}
 	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, action) {
 		return false, errProxyStopUnconfirmed
@@ -512,18 +538,6 @@ var errProxyAloneUnsupported = errors.New("this substrate cannot stop a proxy al
 
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
 var errProxyStopUnconfirmed = errors.New("the sandbox stop failed")
-
-// errKeptProxyStopUnconfirmed is errProxyStopUnconfirmed for a sandbox kept for its computer
-// folder's copy back, whose proxy alone is stopped.
-var errKeptProxyStopUnconfirmed error = keptProxyStopError{}
-
-type keptProxyStopError struct{}
-
-func (keptProxyStopError) Error() string {
-	return "the proxy stop failed; the sandbox is kept for its computer folder's copy back"
-}
-
-func (keptProxyStopError) Unwrap() error { return errProxyStopUnconfirmed }
 
 // runEndRecorded answers errRunEndUnwritten while the store still holds the run live, neither ended,
 // lost nor kept, or cannot be read: an end whose write failed left its sandbox, and its computer

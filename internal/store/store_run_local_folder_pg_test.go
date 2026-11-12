@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -125,9 +126,19 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = NULL WHERE id = $1`, null); err != nil {
 		t.Fatal(err)
 	}
-	at := time.Now().UTC().Truncate(time.Microsecond)
-	if st, ok, err := pg.BumpRunLocalFolderGen(ctx, null, store.FolderStatusGuard{Gen: 0}, at); !ok || err != nil || st.Gen != 1 || !st.GenAt.Equal(at) || st.Back != nil {
-		t.Fatalf("bump of a NULL record = %+v %v %v, want gen 1 stamped %v and nothing else", st, ok, err, at)
+	// The caller's time is ignored: gen_at is the database's clock, so it lies between two reads of that clock, not
+	// at the caller's (here an hour ahead).
+	at := time.Now().UTC().Truncate(time.Microsecond).Add(time.Hour)
+	var dbBefore, dbAfter time.Time
+	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbBefore); err != nil {
+		t.Fatal(err)
+	}
+	st, ok, err := pg.BumpRunLocalFolderGen(ctx, null, store.FolderStatusGuard{Gen: 0}, at)
+	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !ok || err != nil || st.Gen != 1 || st.Back != nil || st.GenAt.Before(dbBefore) || st.GenAt.After(dbAfter) {
+		t.Fatalf("bump of a NULL record = %+v %v %v, want gen 1 stamped between %v and %v (the database's clock, not %v) and nothing else", st, ok, err, dbBefore, dbAfter, at)
 	}
 
 	legacy := newFolderRun()
@@ -140,7 +151,7 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, legacy, store.FolderStatusGuard{Gen: 1}, types.RunLocalFolderStatus{}); ok || err != nil {
 		t.Fatalf("a write at gen 1 on a gen-less record landed: %v %v", ok, err)
 	}
-	st, ok, err := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at)
+	st, ok, err = pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at)
 	if !ok || err != nil || st.Gen != 1 || st.Back == nil || st.Back.Files != 4 {
 		t.Fatalf("bump of a gen-less record = %+v %v %v, want gen 1 with its back kept", st, ok, err)
 	}
@@ -299,8 +310,8 @@ func TestPG_GiveUpNeverFiresEarly(t *testing.T) {
 	} {
 		id := newGiveUpRun(t, pool, c.o)
 		out, err := pg.GiveUpRunLocalFolder(ctx, id, c.p)
-		if err != nil || out.Applied != c.applied {
-			t.Errorf("%s: give-up = %+v %v, want applied=%v", name, out, err, c.applied)
+		if err != nil || out.Applied != c.applied || out.Done {
+			t.Errorf("%s: give-up = %+v %v, want applied=%v and the record not found final", name, out, err, c.applied)
 		}
 		if !c.applied {
 			if st, _ := pg.RunLocalFolderStatus(ctx, id); st.Gen != 7 || st.Resume == nil {
@@ -364,8 +375,11 @@ func TestPG_GiveUpOnceAcrossReplicas(t *testing.T) {
 	}
 }
 
-// A give-up that applies to nothing says so, and writes nothing: a record already final, an unknown run.
+// A give-up that applies to nothing says so, and writes nothing: a record already final, an unknown run. Done
+// says the record was already final, from the SQL alone, so a final record that does not decode is still found
+// final; it is false for an unknown run.
 func TestPG_GiveUpReportsNotApplied(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -374,8 +388,8 @@ func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 	done := endedLongAgo()
 	done.status = &types.RunLocalFolderStatus{Gen: 4, Settled: 4, Back: &types.FolderPassRecord{At: time.Now().UTC(), Files: 2, Refused: []types.FolderRefusal{}}}
 	id := newGiveUpRun(t, pool, done)
-	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || out.Gen != 0 {
-		t.Errorf("give-up of a record already final = %+v %v, want the zero outcome", out, err)
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || out.Gen != 0 || !out.Done {
+		t.Errorf("give-up of a record already final = %+v %v, want not applied and done", out, err)
 	}
 	if st, _ := pg.RunLocalFolderStatus(ctx, id); st.Gen != 4 || st.Back == nil || st.Back.GivenUpAt != nil || st.Back.Files != 2 {
 		t.Errorf("a record already final was changed: %+v", st)
@@ -384,19 +398,92 @@ func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 	given := endedLongAgo()
 	given.status = &types.RunLocalFolderStatus{Gen: 8, Back: &types.FolderPassRecord{At: time.Now().UTC(), Refused: []types.FolderRefusal{}, GivenUpAt: &done.status.Back.At}}
 	id = newGiveUpRun(t, pool, given)
-	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied {
-		t.Errorf("a second give-up = %+v %v, want not applied", out, err)
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || !out.Done {
+		t.Errorf("a second give-up = %+v %v, want not applied and done", out, err)
 	}
 
-	if out, err := pg.GiveUpRunLocalFolder(ctx, uuid.New(), p); err != nil || out.Applied {
-		t.Errorf("give-up of an unknown run = %+v %v, want not applied and no error", out, err)
+	undecodable := endedLongAgo()
+	id = newGiveUpRun(t, pool, undecodable)
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = '{"gen": 9, "back": {"at": 5}}'::jsonb WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.RunLocalFolderStatus(ctx, id); err == nil {
+		t.Fatal("the planted record decoded; want a record that does not")
+	}
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || !out.Done {
+		t.Errorf("give-up of a final record that does not decode = %+v %v, want not applied and done", out, err)
+	}
+	var same bool
+	if err := pool.QueryRow(ctx, `SELECT local_folder_status = '{"gen": 9, "back": {"at": 5}}'::jsonb FROM agent_runs WHERE id = $1`, id).Scan(&same); err != nil || !same {
+		t.Errorf("the record that does not decode was changed (%v, %v); want it unchanged", same, err)
+	}
+
+	if out, err := pg.GiveUpRunLocalFolder(ctx, uuid.New(), p); err != nil || out.Applied || out.Done {
+		t.Errorf("give-up of an unknown run = %+v %v, want not applied, not done and no error", out, err)
 	}
 
 	never := endedLongAgo()
 	never.status = nil
 	id = newGiveUpRun(t, pool, never)
-	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || !out.Applied || out.Gen != 1 {
-		t.Errorf("give-up of a run with no record = %+v %v, want applied at gen 1", out, err)
+	var isNull bool
+	if err := pool.QueryRow(ctx, `SELECT local_folder_status IS NULL FROM agent_runs WHERE id = $1`, id).Scan(&isNull); err != nil || !isNull {
+		t.Fatalf("the run with no record has a status column (null %v, %v); want SQL NULL", isNull, err)
+	}
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || !out.Applied || out.Gen != 1 || out.Done {
+		t.Errorf("give-up of a run with no record = %+v %v, want applied at gen 1, not done", out, err)
+	}
+}
+
+// Done and the statement's guard decide "final" as the server's folderDone does on the decoded record (a Back and
+// no Resume), JSON null included: a null back is no back, and a null resume is no resume. A record the server
+// reads as not final is given up; one it reads as final is not, and is answered Done. Catches: a SQL "final" that
+// counts a key's presence, which keeps a null back from its give-up for ever.
+func TestPG_GiveUpReadsFinalAsTheDecodedRecordDoes(t *testing.T) {
+	testfloor.Mark(t, "pg")
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	raw, err := json.Marshal(types.FolderPassRecord{At: time.Now().UTC(), Refused: []types.FolderRefusal{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	back := string(raw)
+	for name, c := range map[string]struct {
+		status string
+		done   bool
+	}{
+		"a null back":                   {`{"gen": 7, "back": null}`, false},
+		"a null back and a null resume": {`{"gen": 7, "back": null, "resume": null}`, false},
+		"a null back and a resume":      {`{"gen": 7, "back": null, "resume": {"unsynced": 1}}`, false},
+		"a back and a null resume":      {`{"gen": 7, "back": ` + back + `, "resume": null}`, true},
+		"a back and no resume":          {`{"gen": 7, "back": ` + back + `}`, true},
+	} {
+		id := newGiveUpRun(t, pool, endedLongAgo())
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = $2::jsonb WHERE id = $1`, id, c.status); err != nil {
+			t.Fatal(err)
+		}
+		st, err := pg.RunLocalFolderStatus(ctx, id)
+		if err != nil {
+			t.Fatalf("%s: the planted record does not decode: %v", name, err)
+		}
+		if decoded := st.Back != nil && st.Resume == nil; decoded != c.done {
+			t.Fatalf("%s: the decoded record is final = %v; the case says %v", name, decoded, c.done)
+		}
+		out, err := pg.GiveUpRunLocalFolder(ctx, id, store.GiveUpParams{Back: givenUpBack(3), Cap: giveUpCap})
+		if err != nil || out.Done != c.done || out.Applied == c.done {
+			t.Errorf("%s: give-up = %+v %v; want done %v and applied %v, as the decoded record reads", name, out, err, c.done, !c.done)
+		}
+		if c.done {
+			var same bool
+			if err := pool.QueryRow(ctx, `SELECT local_folder_status = $2::jsonb FROM agent_runs WHERE id = $1`, id, c.status).Scan(&same); err != nil || !same {
+				t.Errorf("%s: a final record was changed (%v, %v); want it unchanged", name, same, err)
+			}
+			continue
+		}
+		got, err := pg.RunLocalFolderStatus(ctx, id)
+		if err != nil || out.Gen != 8 || got.Gen != 8 || got.Resume != nil || got.Back == nil || got.Back.GivenUpAt == nil {
+			t.Errorf("%s: record after the give-up = %+v %v (outcome gen %d); want gen 8, no resume, the given-up back", name, got, err, out.Gen)
+		}
 	}
 }
 
@@ -569,4 +656,109 @@ func idStrings(ids []uuid.UUID) []string {
 // sortUUIDs orders ids as Postgres orders uuids: by bytes.
 func sortUUIDs(ids []uuid.UUID) {
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+}
+
+// FolderGenPastBound is decided on the database's clock: a record at the asked generation whose gen_at plus the bound
+// has passed against now() is true; a fresh stamp, another generation, a record with no gen_at and an unknown run
+// are false. Catches: the age read against a caller's clock, and a NULL gen_at failing the scan.
+func TestPG_FolderGenPastBound(t *testing.T) {
+	testfloor.Mark(t, "pg")
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runner := uuid.New()
+	r := newRun(types.RunRunning)
+	r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
+	if _, err := pg.CreateRun(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+	past := func(gen int, bound time.Duration) bool {
+		t.Helper()
+		got, err := pg.FolderGenPastBound(ctx, r.ID, gen, bound)
+		if err != nil {
+			t.Fatalf("FolderGenPastBound(%d, %v): %v", gen, bound, err)
+		}
+		return got
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = NULL WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if past(0, 0) {
+		t.Error("a record with no gen_at is past a zero bound")
+	}
+	// The caller's time is far in the past, which a Go-clock comparison would call old: the stamp is the database's.
+	if _, ok, err := pg.BumpRunLocalFolderGen(ctx, r.ID, store.FolderStatusGuard{Gen: 0}, time.Now().Add(-24*time.Hour)); !ok || err != nil {
+		t.Fatalf("bump: %v %v", ok, err)
+	}
+	if past(1, time.Hour) {
+		t.Error("a record stamped just now is past a one hour bound")
+	}
+	if past(2, 0) {
+		t.Error("another generation is past the bound")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = jsonb_set(local_folder_status, '{gen_at}', to_jsonb(now() - interval '10 minutes')) WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !past(1, 5*time.Minute) || past(1, 20*time.Minute) {
+		t.Errorf("a stamp 10 minutes old: past 5 minutes %v, past 20 minutes %v; want true and false", past(1, 5*time.Minute), past(1, 20*time.Minute))
+	}
+	if got, err := pg.FolderGenPastBound(ctx, uuid.New(), 1, 0); got || err != nil {
+		t.Errorf("an unknown run = %v, %v; want false, nil", got, err)
+	}
+}
+
+// StampFolderGenAt gives a record with no send time the database's now(), only at the asked generation and only
+// once: a record that has a send time keeps it. Catches: a stamp from the caller's clock, one that moves a send time
+// already there (the wait would start again), and one at another generation.
+func TestPG_StampFolderGenAt(t *testing.T) {
+	testfloor.Mark(t, "pg")
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runner := uuid.New()
+	r := newRun(types.RunRunning)
+	r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
+	if _, err := pg.CreateRun(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, r.ID, store.FolderStatusGuard{}, types.RunLocalFolderStatus{Resume: &types.FolderResume{}}); !ok || err != nil {
+		t.Fatalf("record: %v %v", ok, err)
+	}
+	stamp := func(gen int) bool {
+		t.Helper()
+		ok, err := pg.StampFolderGenAt(ctx, r.ID, gen)
+		if err != nil {
+			t.Fatalf("StampFolderGenAt(%d): %v", gen, err)
+		}
+		return ok
+	}
+	if stamp(1) {
+		t.Error("a record at gen 0 was stamped at gen 1")
+	}
+	if !stamp(0) {
+		t.Fatal("a record with no send time was not stamped")
+	}
+	var fresh bool
+	if err := pool.QueryRow(ctx, `SELECT (local_folder_status->>'gen_at')::timestamptz BETWEEN now() - interval '1 minute' AND now()
+		FROM agent_runs WHERE id = $1`, r.ID).Scan(&fresh); err != nil || !fresh {
+		t.Errorf("gen_at is the database's now: %v, %v; want true", fresh, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = jsonb_set(local_folder_status, '{gen_at}', to_jsonb(now() - interval '10 minutes')) WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if stamp(0) {
+		t.Error("a record with a send time was stamped again")
+	}
+	if past, err := pg.FolderGenPastBound(ctx, r.ID, 0, 5*time.Minute); !past || err != nil {
+		t.Errorf("the send time already there = past %v, %v; want it kept, 10 minutes old", past, err)
+	}
+	st, err := pg.RunLocalFolderStatus(ctx, r.ID)
+	if err != nil || st.Resume == nil || st.GenAt.IsZero() {
+		t.Errorf("record %+v, %v; want the resume kept and a send time", st, err)
+	}
+	if ok, err := pg.StampFolderGenAt(ctx, uuid.New(), 0); ok || err != nil {
+		t.Errorf("an unknown run = %v, %v; want false, nil", ok, err)
+	}
 }
