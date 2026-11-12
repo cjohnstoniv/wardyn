@@ -31,6 +31,6 @@ func TestHostCaps_ProxyFenceFollowsTheSubstrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if caps.ProxyFence {
-		t.Error("a substrate without FenceProxy: ProxyFence = true; want false")
+		t.Error("a substrate without FenceProxy advertised ProxyFence; want it off")
 	}
 }
