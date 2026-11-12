@@ -177,6 +177,16 @@ func (s *stallingSub) ReplaceProxyHashed(ctx context.Context, ref string, cfg []
 	return s.Fake.ReplaceProxyHashed(ctx, ref, cfg)
 }
 
+// ReplaceProxyHashedAt hangs as ReplaceProxy does: a revive that carries the run's policy generation asks the
+// runner for it when the substrate has it, and the embedded Fake's would answer without the stall.
+func (s *stallingSub) ReplaceProxyHashedAt(ctx context.Context, ref string, cfg []byte, gen int) (string, error) {
+	if err := s.hang(ctx, "replace_proxy"); err != nil {
+		return "", err
+	}
+	s.replaced(cfg)
+	return s.Fake.ReplaceProxyHashedAt(ctx, ref, cfg, gen)
+}
+
 func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
