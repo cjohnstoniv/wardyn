@@ -84,7 +84,7 @@ RUN pnpm build
 # ui/dist is un-ignored in .dockerignore ONLY so this COPY can see it; the build
 # fails loudly (empty COPY) if you selected this stage without building the UI
 # first, rather than shipping a stale bundle silently.
-FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS ui-prebuilt
+FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS ui-prebuilt
 WORKDIR /ui
 COPY ui/dist ./dist
 RUN ! grep -rq __wardynTerm ./dist || { echo "UI_STAGE=ui-prebuilt but ui/dist carries the e2e-only __wardynTerm seam — rebuild it with 'make ui' (production mode)"; exit 1; }

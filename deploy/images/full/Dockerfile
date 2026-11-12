@@ -21,7 +21,7 @@
 # `toolchain` line of the repos you build (this digest is go1.27.3; wardyn itself
 # pins toolchain go1.26.11). Bump the pin rather than relaxing GOTOOLCHAIN.
 FROM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS goroot
-FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS rustroot
+FROM rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS rustroot
 
 # Not digest-pinned: this is a locally-built image tag (produced by
 # deploy/images/claude-code/Dockerfile), not a registry image — it has no
