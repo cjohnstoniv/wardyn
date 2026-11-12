@@ -400,3 +400,14 @@ func (s *Server) auditGivenUpAgain(ctx context.Context, ss store.RunLocalFolderS
 func givenUpMarkFailed(err error) bool {
 	return strings.HasPrefix(err.Error(), "mark the record audited")
 }
+
+// revokeOwedSet reports whether run id's revoke is owed to the revoke worker (revoke_owed_at). A store with no
+// mark, or a read that failed, answers false.
+func (s *Server) revokeOwedSet(ctx context.Context, id uuid.UUID) bool {
+	ro, ok := s.cfg.Store.(store.RevokeOwed)
+	if !ok {
+		return false
+	}
+	set, err := ro.RevokeOwedSet(ctx, id)
+	return err == nil && set
+}

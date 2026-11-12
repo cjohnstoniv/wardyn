@@ -224,7 +224,8 @@ func (s *Server) clearForcedMarkIf(ctx context.Context, fs store.ForcedStopper, 
 		if err == nil && !sctx.Value(forcedCtxKey{}).(*revokeResidue).left.Load() {
 			s.forgetTeardownRow(id, "run.revoke") // a clean revoke only: a pending token revoke keeps its one row
 		}
-		if !contained || err != nil || !s.clearForcedStop(sctx, fs, id, stamp) {
+		// a failed revoke whose retry the revoke worker owns (revoke_owed_at) no longer holds the mark
+		if !contained || (err != nil && !s.revokeOwedSet(sctx, id)) || !s.clearForcedStop(sctx, fs, id, stamp) {
 			return
 		}
 		cleared = true

@@ -809,3 +809,39 @@ func (f *forced) shareFoldersFrom(t *testing.T, id uuid.UUID) {
 	defer f.s.runnerStreams.subsMu.Unlock()
 	f.s.runnerStreams.subs[id] = ep
 }
+
+// owedMarkedStore is the forced fixture's store with the revoke-owed mark, whose read answers set.
+type owedMarkedStore struct {
+	markedStore
+	set bool
+}
+
+func (o owedMarkedStore) MarkRevokeOwed(context.Context, uuid.UUID) error  { return nil }
+func (o owedMarkedStore) ClearRevokeOwed(context.Context, uuid.UUID) error { return nil }
+func (o owedMarkedStore) ListRevokeOwedAfter(context.Context, time.Duration, *store.RevokeOwedCursor, int) ([]uuid.UUID, *store.RevokeOwedCursor, error) {
+	return nil, nil, nil
+}
+func (o owedMarkedStore) RevokeOwedSet(context.Context, uuid.UUID) (bool, error) { return o.set, nil }
+
+// A contained forced run whose revoke fails clears its mark when the run's revoke is owed to the revoke worker,
+// and keeps it when it is not. Catches: the mark held forever by a revoke the worker retries.
+func TestForcedMark_ClearsOnContainmentWhenRevokeOwed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set       bool
+		wantMarks int
+	}{
+		"the revoke is owed":     {set: true, wantMarks: 0},
+		"the revoke is not owed": {set: false, wantMarks: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			f.withoutOwedPass()
+			f.failingRevoke()
+			f.s.cfg.Store = owedMarkedStore{markedStore: f.s.cfg.Store.(markedStore), set: tc.set}
+			f.end(f.s)
+			if got := f.leaser.markCount(); got != tc.wantMarks {
+				t.Errorf("%d marks after a stop that succeeded and a revoke that failed; want %d", got, tc.wantMarks)
+			}
+		})
+	}
+}
