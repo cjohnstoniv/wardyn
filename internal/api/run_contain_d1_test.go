@@ -784,8 +784,9 @@ func d1Rows(l *d1Lab, n int, runnerID *uuid.UUID, kindOf func(i int) types.Machi
 }
 
 // d1Bound runs a lab over rows whose cuts take the whole call phase less a millisecond per row and fail,
-// and whose stops take a phase less a millisecond per row, so no two calls end at the same instant, and
-// answers how long after the first listing each ref's stop returned.
+// and whose stops take a phase less a millisecond per row, and answers how long after the first listing the
+// last stop returned. Calls of different rows can still end at the same instant, so only the bound is
+// pinned (d1BoundTwice).
 func d1Bound(t *testing.T, l *d1Lab, rows []store.TerminalSandboxRow, kinds map[string]types.MachineKind, horizon time.Duration) (last time.Duration) {
 	t.Helper()
 	l.st.lag = 4 * time.Second

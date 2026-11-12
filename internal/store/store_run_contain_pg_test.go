@@ -427,6 +427,11 @@ func TestPG_ClearRunContainmentErrorForRef(t *testing.T) {
 			t.Errorf("%s: failure still recorded = %v, want %v", name, still, !tc.want)
 		}
 	}
+	// A second stop of the held sandbox finds nothing recorded: record a failure, clear it once, then again.
+	failed()
+	if got, err := pg.ClearRunContainmentErrorForRef(ctx, r.ID, "sbx-current"); err != nil || !got {
+		t.Fatalf("the held ref: cleared = %v, %v; want true", got, err)
+	}
 	if got, err := pg.ClearRunContainmentErrorForRef(ctx, r.ID, "sbx-current"); err != nil || got {
 		t.Errorf("nothing recorded: cleared = %v, %v; want false", got, err)
 	}
