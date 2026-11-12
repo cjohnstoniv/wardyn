@@ -192,7 +192,7 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun, fence int) (
 		case loseWriteFailed:
 			s.revokeRunBroker(ctx, run.ID)
 			run.LostAt, run.LostReason = &at, reason
-			if err := s.stopLostSandbox(ctx, run, s.cfg.Now()); err != nil {
+			if err := s.stopLostSandboxAt(ctx, run, s.cfg.Now(), fence); err != nil {
 				slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
 					slog.String("run_id", run.ID.String()), slog.Any("err", err))
 				return relostUnwritten, err

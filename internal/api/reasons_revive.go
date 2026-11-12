@@ -61,6 +61,10 @@ const (
 	reasonRunCapacityStoreUnavailable       = "run_capacity_store_unavailable"        // this store cannot report fleet capacity
 )
 
+// reasonReviveRunnerUpdateNeeded: a container run on a connected Docker runner older than 0.10.0-rc.20
+// (no ProxyFence) is not revived or live-edited; the runner is updated first.
+const reasonReviveRunnerUpdateNeeded = "revive_runner_update_needed"
+
 // Image admission at revive (run_revive_image.go).
 const reasonReviveImageNotAdmitted = "revive_image_not_admitted" // the image is held (images.admission enforce, or a profile's required_image_signers) and the run's create pinned no checked digest: started before admission was enforced, or in audit mode
 

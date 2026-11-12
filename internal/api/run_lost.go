@@ -156,8 +156,11 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 // the caller acts for (a revive's, or a failed proxy start's): the lost mark then lands only while it is
 // still the run's newest (store.RunLoserAtGeneration), in the mark's own write, so a caller whose lock
 // was lost does not mark lost a run a newer revive took over. That miss is loseNotApplied and stops
-// nothing. The effects after a mark that landed (approvals, broker, stopLostSandbox) are not fenced: a
-// newer revive that takes the run between the mark and them can have its proxy stopped (fail closed).
+// nothing. The effects after a mark that landed (approvals, broker) are not fenced, and the stop carries
+// fence where generationStopperFor answers a stopper: there it never stops a newer revive's proxy. Elsewhere
+// it is stopLostSandbox's unversioned stop. No newer proxy can exist on a VM or a substrate with no replace
+// path, nor on a connected runner that revive refuses; a runner read as not connected at selection is not
+// refused, so it can hold one, and that stop, sent or queued for its reconnect, can stop it.
 // A mark that errors is loseWriteFailed, as unfenced: the caller's fail-closed stop still runs.
 func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int) (loseOutcome, error) {
 	now := s.cfg.Now()
@@ -184,7 +187,7 @@ func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, lease
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
 	data, outcome := map[string]any{"reason": string(reason)}, "success"
-	stopErr := s.stopLostSandbox(ctx, run, now)
+	stopErr := s.stopLostSandboxAt(ctx, run, now, fence)
 	if err := stopErr; errors.Is(err, runner.ErrPendingOnRunner) {
 		data["containment"] = "pending_runner"
 	} else if err != nil {
