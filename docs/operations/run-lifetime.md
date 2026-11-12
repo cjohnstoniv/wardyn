@@ -151,7 +151,7 @@ Move `WARDYN_PROXY_IMAGE`, and any runner's `--proxy-image` pin, in the same ste
 The edit never adds a host: any other field is a `400`. Adding a host to a running run stays an approval.
 
 1. The edit is refused, nothing changed, when the run is not live (`409 egress_edit_run_not_live`), another edit of it has not answered (`409 egress_edit_in_progress`), or a remove names a host not on the allowlist (`422 egress_edit_host_not_listed`).
-2. It is also refused when the new proxy could not confirm what it loaded: no readback (`409 egress_edit_unsupported`), or a runner or proxy image known to be older than 0.10.0-rc.19 (`409 egress_edit_legacy_proxy`). An unreadable version is not refused.
+2. It is also refused when the new proxy could not confirm what it loaded: no readback (`409 egress_edit_unsupported`), or a runner or proxy image known to be older than 0.10.0-rc.19 (`409 egress_edit_legacy_proxy`). An unreadable version is not refused. On Kubernetes the edit is always refused with `409 egress_edit_unsupported`, since a sandbox's proxy cannot be replaced there.
 3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
 4. Its `via_org` routes go too. The edited config is stored with the edit's policy generation, in one write before the new proxy starts, and the organisation's cached engine for the run is retired. The answer waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
 5. Any other end stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
@@ -180,7 +180,7 @@ The Kubernetes substrate doesn't implement the optional runner capabilities the 
 - Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
 - The row is still written for a k8s run (and deleted with it), unused until k8s can revive.
 
-See [Kubernetes: known gaps](kubernetes-known-gaps.md) for the revive and restart refusals.
+See [Kubernetes: known gaps](kubernetes-known-gaps.md) for the revive, restart and live egress edit refusals.
 
 ## The clocks that end or freeze a run
 
