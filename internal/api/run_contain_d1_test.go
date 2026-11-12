@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -54,6 +55,8 @@ type d1Store struct {
 	cleared      []string      // the refs a confirmed stop cleared a failure for
 	giveUpLag    time.Duration // the give-up statement takes this long, ignoring its ctx
 	postLag      atomic.Int64  // a failure write takes this many nanoseconds more, ignoring its ctx
+	afterSeed    func()        // runs after each seed read that answered, as the run lock is lost in a test
+	afterGiveUp  func()        // runs after each give-up statement has returned
 }
 
 func newD1Store() *d1Store {
@@ -231,6 +234,9 @@ func (f *d1Store) RunLocalFolderSeed(ctx context.Context, id uuid.UUID) (*types.
 	if err := ctx.Err(); err != nil {
 		return nil, store.LocalFolderSeed{}, err
 	}
+	if f.afterSeed != nil {
+		defer f.afterSeed()
+	}
 	f.fmu.Lock()
 	defer f.fmu.Unlock()
 	if f.seedErr != nil {
@@ -277,6 +283,9 @@ func (f *d1Store) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.Folder
 }
 
 func (f *d1Store) GiveUpRunLocalFolder(_ context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	if f.afterGiveUp != nil {
+		defer f.afterGiveUp()
+	}
 	time.Sleep(f.giveUpLag)
 	f.fmu.Lock()
 	defer f.fmu.Unlock()
@@ -2229,4 +2238,130 @@ func TestContain_D1DueReadFailureIsNotDue(t *testing.T) {
 			t.Error("a held server-mode run past its wait: d1Due = true on a failed due read")
 		}
 	})
+}
+
+// d1LostLocker hands out run locks whose context a test can cancel, as the database's does when the lock's
+// connection is lost, and counts the releases. The lock itself stays held until unlock, as another
+// replica's view of a lost lock is not modelled: the test takes the lock again after the item to show it is
+// free.
+type d1LostLocker struct {
+	db.Locker
+	mu       sync.Mutex
+	lose     context.CancelFunc
+	onTake   func(lose context.CancelFunc) // runs as the lock is handed out
+	kept     atomic.Bool                   // set: no lock is lost from here on
+	unlocked int
+}
+
+func (l *d1LostLocker) TryLock(ctx context.Context, k db.LockKey) (context.Context, func(), bool, error) {
+	lctx, unlock, ok, err := l.Locker.TryLock(ctx, k)
+	if err != nil || !ok {
+		return lctx, unlock, ok, err
+	}
+	lctx, cancel := context.WithCancel(lctx)
+	l.mu.Lock()
+	l.lose = cancel
+	l.mu.Unlock()
+	if l.onTake != nil && !l.kept.Load() {
+		l.onTake(cancel)
+	}
+	return lctx, func() {
+		l.mu.Lock()
+		l.unlocked++
+		l.mu.Unlock()
+		cancel()
+		unlock()
+	}, true, nil
+}
+
+// loseNow cancels the lock context handed out last, if any.
+func (l *d1LostLocker) loseNow() {
+	l.mu.Lock()
+	cancel := l.lose
+	l.mu.Unlock()
+	if cancel != nil && !l.kept.Load() {
+		cancel()
+	}
+}
+
+func (l *d1LostLocker) releases() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.unlocked
+}
+
+// The stop item keeps the run lock's context: once the lock is lost, no give-up write and no StopSandbox
+// begins, the claim accounting is left alone (no failure stamp), the item still releases its lock, and
+// another holder can take the run's lock again. The lock is lost on acquisition, after the owed read and
+// before the give-up statement, or after the give-up statement and before the stop. The run is then left
+// owed, its claim released as the held-lock early return leaves it: a second visit on a fresh lock reaches
+// StopSandbox once. A lock that is kept gives up and stops on the first visit.
+func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
+	cases := []struct {
+		name         string
+		lose         func(l *d1Lab, lk *d1LostLocker)
+		firstGiveUps int
+		lost         bool
+		finalGiveUps int
+	}{
+		{"lost on acquisition", func(_ *d1Lab, lk *d1LostLocker) { lk.onTake = func(lose context.CancelFunc) { lose() } }, 0, true, 1},
+		{"lost after the owed read, before the give-up", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterSeed = lk.loseNow }, 0, true, 1},
+		{"lost after the give-up, before the stop", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterGiveUp = lk.loseNow }, 1, true, 1},
+		{"kept", func(*d1Lab, *d1LostLocker) {}, 1, false, 1},
+	}
+	for _, c := range cases {
+		synctest.Test(t, func(t *testing.T) {
+			l := newD1Lab(t, true)
+			lk := &d1LostLocker{Locker: l.srv.locker()}
+			l.srv.locks.override = lk
+			row := l.row(nil, types.MachineLinuxVM)
+			l.ds.owe(row.ID)
+			c.lose(l, lk)
+			l.startStops()
+			l.item(row)
+			time.Sleep(containD1Unsupported)
+			if g := l.ds.giveUpCount(); g != c.firstGiveUps {
+				t.Errorf("%s: give-up statements = %d, want %d", c.name, g, c.firstGiveUps)
+			}
+			wantStops := 0
+			if !c.lost {
+				wantStops = 1
+			}
+			if n := l.dr.totalStops(); n != wantStops {
+				t.Errorf("%s: StopSandbox calls = %d, want %d", c.name, n, wantStops)
+			}
+			if w := l.st.stampWrites(); w != 0 {
+				t.Errorf("%s: %d failure writes, want none: a lost lock is not a failure", c.name, w)
+			}
+			if n := lk.releases(); n != 1 {
+				t.Errorf("%s: the item released its lock %d times, want 1", c.name, n)
+			}
+			if l.busy(row.ID) {
+				t.Errorf("%s: the run is still claimed after its item ended, want it released for the next visit", c.name)
+			}
+			_, unlock, ok, err := l.srv.locker().TryLock(context.Background(), db.NewLockKey(db.RunOpLockClass, row.ID.String()))
+			if err != nil || !ok {
+				t.Fatalf("%s: another holder cannot take the run's lock after the item: ok=%v err=%v", c.name, ok, err)
+			}
+			unlock()
+			if c.lost {
+				// The next visit holds a fresh lock that is not lost: the run is still owed its stop.
+				lk.kept.Store(true)
+				if !l.item(row) {
+					t.Fatalf("%s: the run could not be claimed for a second visit", c.name)
+				}
+				time.Sleep(containD1Unsupported)
+				if n := l.dr.stopCount(row.SandboxRef); n != 1 {
+					t.Errorf("%s: StopSandbox calls after the second visit = %d, want 1", c.name, n)
+				}
+				if g := l.ds.giveUpCount(); g != c.finalGiveUps {
+					t.Errorf("%s: give-up statements after the second visit = %d, want %d", c.name, g, c.finalGiveUps)
+				}
+				if n := lk.releases(); n != 2 {
+					t.Errorf("%s: the two visits released their locks %d times, want 2", c.name, n)
+				}
+			}
+			l.stop()
+		})
+	}
 }

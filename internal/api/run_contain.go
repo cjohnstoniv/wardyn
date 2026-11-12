@@ -768,23 +768,26 @@ func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 // nothing from the next: the item ends within containD1 (containD1Unsupported with no last cut). Nothing is
 // given up or stopped while a pass back holds the run's lock: the lock is taken after the last cut and held
 // across the give-up and the stop, and a lock that is held ends the item with nothing written, to be tried
-// again on the next visit.
+// again on the next visit. The item keeps the lock's own context: base has no deadline, so that context ends
+// only when the lock is lost. A lost lock ends the item before any give-up or stop begins, since another
+// holder may now own the pass. A stop already sent is not recalled; its outcome is accounted on base, under
+// the claim generation it was made under.
 func (s *Server) runStopItem(ctx context.Context, run types.AgentRun, gen uint64) {
 	base := context.WithoutCancel(ctx)
 	run, ok := s.d1Reread(base, run)
 	if !ok || (!s.d1NoCall(run) && !s.d1LastCut(base, run, gen)) {
 		return
 	}
-	_, unlock, locked, _ := s.tryLockRunOpHeld(base, run.ID)
+	lctx, unlock, locked, _ := s.tryLockRunOpHeld(base, run.ID)
 	if !locked {
 		slog.DebugContext(base, "wardynd: an ended run's lock is held; its stop waits for the next visit", slog.String("run_id", run.ID.String()))
 		return
 	}
 	defer unlock()
-	if !s.d1GiveUp(base, run) {
+	if !s.d1GiveUp(lctx, run) {
 		return
 	}
-	s.d1Stop(base, run, gen)
+	s.d1Stop(base, lctx, run, gen)
 }
 
 // containCallPre is the stop path's work at the start of the call phase, before the cut: the acts that

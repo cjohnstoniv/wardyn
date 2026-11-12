@@ -249,6 +249,10 @@ func (s *Server) d1GiveUp(base context.Context, run types.AgentRun) bool {
 	if !owed {
 		return true
 	}
+	if ctx.Err() != nil {
+		slog.DebugContext(base, "wardynd: an ended run's lock was lost; nothing given up", slog.String("run_id", run.ID.String()))
+		return false
+	}
 	final, err := s.giveUpFolder(ctx, run, true, st)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: giving up an ended run's folder copy back failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -260,8 +264,10 @@ func (s *Server) d1GiveUp(base context.Context, run types.AgentRun) bool {
 // d1Stop is the StopSandbox phase, and the post phase after it. A stop still running at the end of its
 // phase is abandoned and counts as failed; its claim is held until the call returns. A confirmed stop
 // clears the run's recorded containment failure for that sandbox; the tail owner clears the ref. The call is
-// made under the stop item's claim, generation gen.
-func (s *Server) d1Stop(base context.Context, run types.AgentRun, gen uint64) {
+// made under the stop item's claim, generation gen, and only while lctx, the run lock's context, is live:
+// the stop's own phase derives from lctx, so a lost lock ends it. What follows the call (the confirmation,
+// the failure stamp) accounts for a call that was made and stays on base, under the same gen.
+func (s *Server) d1Stop(base, lctx context.Context, run types.AgentRun, gen uint64) {
 	if s.cfg.Runner == nil {
 		return
 	}
@@ -269,8 +275,12 @@ func (s *Server) d1Stop(base context.Context, run types.AgentRun, gen uint64) {
 	if run.MachineKind.IsMacOSVM() {
 		budget = d1StopPhaseMac
 	}
-	stopCtx, cancel := context.WithTimeout(base, budget)
+	stopCtx, cancel := context.WithTimeout(lctx, budget)
 	defer cancel()
+	if lctx.Err() != nil {
+		slog.DebugContext(base, "wardynd: an ended run's lock was lost; nothing stopped, the next visit tries again", slog.String("run_id", run.ID.String()))
+		return
+	}
 	ans, _ := s.containCallWithin(stopCtx, run, gen, func() containAnswer {
 		return containAnswer{err: s.cfg.Runner.StopSandbox(stopCtx, run.SandboxRef)}
 	})
