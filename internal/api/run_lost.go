@@ -89,7 +89,7 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 	if !run.Interactive && run.Placement == types.PlacementLocal && run.RunnerID != nil {
 		return true
 	}
-	// F2 (Fable review): a revive already in flight owns this run — a watcher
+	// A revive already in flight owns this run — a watcher
 	// sweep that lands mid-revive (its claim cleared lost_at, but the new proxy
 	// or agent is not up yet) must leave it alone, never lose it again.
 	if _, busy := s.reviving.Load(run.ID); busy {

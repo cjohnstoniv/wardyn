@@ -466,7 +466,7 @@ func evidenceFixture() (*runEvidence, *podEvidence, *corev1.Pod, runner.NodeSamp
 }
 
 // TestRunnerEvaluateTiers pins the terminal arm's tiers, its refusals, and tier 1's post-status
-// list (Fable r12 M2).
+// list.
 func TestRunnerEvaluateTiers(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -705,7 +705,7 @@ func nodeRecordFixture(h *runnerHarness, t *testing.T, att string, approvers ...
 }
 
 // TestRunnerNodeRecordAcceptanceList: the acceptance list is sent at acceptance and latches what it
-// shows, so a name taken by a new Node since approval voids the approvals (Fable r12 M3).
+// shows, so a name taken by a new Node since approval voids the approvals.
 func TestRunnerNodeRecordAcceptanceList(t *testing.T) {
 	ctx := context.Background()
 	t.Run("accepted when the name is empty", func(t *testing.T) {

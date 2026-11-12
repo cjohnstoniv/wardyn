@@ -63,7 +63,7 @@ func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, da
 		// The old proxy was never touched (an image that cannot be pulled, a
 		// failed inspect): a live run keeps it, renewing its own token. Only
 		// the claim's token stamp moved. Its retiring token must stay live
-		// too (F4, Fable review) — revoking it here would strand that kept,
+		// too — revoking it here would strand that kept,
 		// untouched proxy on a token that can neither renew nor decide,
 		// while its allowlisted egress keeps flowing audit-dark for up to
 		// the lapsed-token sweep's ~1h05m window.

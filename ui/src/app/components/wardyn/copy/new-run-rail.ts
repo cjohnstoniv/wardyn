@@ -35,7 +35,7 @@ export const RAIL_PROVIDER = {
   NO_KEY: (name: string) => `No key is available for ${name}.`,
   NOT_SIGNED_IN_CLAUDE: (name: string) => `You're not signed in to Claude for ${name}.`,
   // canon.md's "R5b — granted none": no candidate serves this person for this
-  // harness at all. UNUSED for now (Opus review round 2, #542): the console
+  // harness at all. UNUSED for now (#542): the console
   // has no signal to tell this apart from R9's silent shape —
   // setupModelProviderState's capVisible (internal/api/provider_access.go)
   // already narrows `model_providers` to granted providers before the wire,

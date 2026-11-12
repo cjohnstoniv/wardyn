@@ -913,7 +913,7 @@ type NodeTuplePod struct {
 	ClosingHolderUID string      `json:"closing_holder_uid,omitempty"`
 }
 
-// NodeTuple binds an operator's node record to one run's recorded machine facts (Codex R9-L1). The
+// NodeTuple binds an operator's node record to one run's recorded machine facts. The
 // runner accepts a record only while its own record still equals the tuple both approvers saw.
 type NodeTuple struct {
 	RunID  uuid.UUID      `json:"run_id"`

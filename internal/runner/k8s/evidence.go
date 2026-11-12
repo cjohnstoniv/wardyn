@@ -202,7 +202,7 @@ func (pe *podEvidence) causalUID() string {
 	return pe.anchor().UID
 }
 
-// sameMachine: both machine IDs non-empty and equal. InternalIP is not part of it (Fable r12 M4).
+// sameMachine: both machine IDs non-empty and equal. InternalIP is not part of it.
 func sameMachine(a, b runner.NodeSample) bool {
 	return a.MachineID != "" && a.SystemUUID != "" && a.MachineID == b.MachineID && a.SystemUUID == b.SystemUUID
 }
@@ -273,7 +273,7 @@ func (pe *podEvidence) recordIdentity(pod *corev1.Pod) (newBaseline, changed boo
 
 // anchorBaselines marks every unanchored baseline anchored when h, a name-scoped list sent after the
 // recording read returned, shows the anchor UID still holding the name with its recorded machineID,
-// systemUUID and InternalIP, all non-empty (Fable r10 M1).
+// systemUUID and InternalIP, all non-empty.
 func (pe *podEvidence) anchorBaselines(h *nodeHolder) bool {
 	a := pe.anchor()
 	if a == nil || h == nil || h.None || h.Node.UID != a.UID || !sameAnchorIdentity(h.Node, *a) {
@@ -318,7 +318,7 @@ func (pe *podEvidence) tier2Node(pod *corev1.Pod, post *nodeHolder) bool {
 
 // tier1Pod is tier 1's pod-level part: an association that is causal or (u1), the closing anchor on
 // the anchor UID with its identity, and a post-status list showing the name held by the anchor UID
-// with its recorded machineID and systemUUID, or by no Node (Fable r12 M2).
+// with its recorded machineID and systemUUID, or by no Node.
 func (pe *podEvidence) tier1Pod(post *nodeHolder) bool {
 	a := pe.anchor()
 	if a == nil || (pe.Assoc != assocCausal && pe.Assoc != assocU1) {
@@ -483,7 +483,7 @@ func newWitness(runID uuid.UUID, pe *podEvidence, pod *corev1.Pod, v verdict, po
 	return w
 }
 
-// tuple is the run's current node tuple (Codex R9-L1, R14-L1): what an operator record must name.
+// tuple is the run's current node tuple: what an operator record must name.
 func (ev *runEvidence) tuple(runID uuid.UUID) *runner.NodeTuple {
 	t := &runner.NodeTuple{RunID: runID, Reuses: slices.Clone(ev.Reuse)}
 	for _, comp := range []string{componentProxy, componentAgent} {

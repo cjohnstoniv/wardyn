@@ -409,7 +409,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
 	if d.runnerMode() && d.cfg.IPFenced != nil && d.cfg.IPFenced(proxyIP) {
-		// Contained before it ever opens, rather than running to its deadline (Fable L5).
+		// Contained before it ever opens, rather than running to its deadline.
 		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
 	}
 
