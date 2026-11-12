@@ -424,7 +424,7 @@ func TestPassBack_TheBoundOnTheDatabasesClockIsDecidedBeforeTheBump(t *testing.T
 	if seen.Load() {
 		t.Error("a pass was sent at the give-up")
 	}
-	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back")
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "because 2 passes in a row brought nothing back: the runner did not answer for its last pass back")
 }
 
 // A record with no send time is stamped by the clock that ages it: on a store that keeps its own (the database), the
