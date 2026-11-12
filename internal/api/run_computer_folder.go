@@ -463,8 +463,9 @@ func (s *Server) keepAfterBumpMiss(ctx context.Context, id uuid.UUID, folder typ
 	return false
 }
 
-// recordFolderBumpMissed is what a pass back that stops its sandbox without a pass leaves when its record
-// could not be moved to the pass's generation: one failure row, and one try at the record on gen, the
+// recordFolderBumpMissed is what a pass back that ran no pass leaves when its record
+// could not be moved to the pass's generation (the sandbox is stopped after this, by the caller, and the stop is
+// reported on its own path): one failure row, and one try at the record on gen, the
 // generation it was read at. lost is a clean miss (another owner moved the record); otherwise the store
 // failed, and its error is in bumpComputerFolderGen's log. A write that does not land is logged and changes
 // nothing else.
@@ -474,7 +475,7 @@ func (s *Server) recordFolderBumpMissed(ctx context.Context, id uuid.UUID, folde
 		why = "another owner moved it"
 	}
 	errText := "no pass ran; the folder record could not be moved before its pass: " + boundReason(why) +
-		"; the sandbox was stopped with its changes not brought back yet, uncounted"
+		"; the changes were not copied back by this attempt, uncounted"
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
 	s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, errText)
@@ -803,7 +804,7 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 	}
 	pass, err := sub.SyncFolder(ctx, runnerwire.SyncFolderArgs{
 		RunID: run.ID, Path: folder.Path, RemoteDir: folder.RemoteDir, Pull: pull, Deny: s.cfg.SyncDeny,
-		DeadlineUnixMs: passDeadlineMs(ctx, pull),
+		DeadlineUnixMs: passDeadlineMs(ctx),
 	})
 	if err != nil {
 		// A pass that ended before its stream was taken has its own account: settled, as any pass the runner answered for.
@@ -840,15 +841,12 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 	return res, false, true, nil
 }
 
-// passDeadlineMs is when the runner must end the pass: the pass ctx's deadline, less the account
-// window for a pass back (the runner's account then still arrives in time); 0 without a deadline.
-func passDeadlineMs(ctx context.Context, pull bool) int64 {
+// passDeadlineMs is when the runner must end the pass: the pass ctx's own deadline, unchanged
+// (computerFolderPassWithin already ends that ctx one account window before the pass's end); 0 without one.
+func passDeadlineMs(ctx context.Context) int64 {
 	dl, ok := ctx.Deadline()
 	if !ok {
 		return 0
-	}
-	if pull {
-		dl = dl.Add(-computerFolderAccountTime)
 	}
 	return dl.UnixMilli()
 }

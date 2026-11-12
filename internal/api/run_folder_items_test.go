@@ -96,12 +96,23 @@ func (s *bumpFailStore) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.
 	return types.RunLocalFolderStatus{}, false, s.bumpErr
 }
 
+// SetSandboxRef keeps the ref the tail clears, so a test can tell a confirmed teardown (as refStore).
+func (s *bumpFailStore) SetSandboxRef(_ context.Context, _ uuid.UUID, ref string) error {
+	s.dispatchTestStore.mu.Lock()
+	defer s.dispatchTestStore.mu.Unlock()
+	s.run.SandboxRef = ref
+	return nil
+}
+
 func (s *bumpFailStore) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
 	s.sets.Add(1)
 	return s.computerFolderStore.SetRunLocalFolderStatusIf(ctx, id, guard, st)
 }
 
-// A pass back whose record cannot be moved to the pass's generation stops the sandbox, and says so: one failure
+// bumpMissedText is what a pass back records when its store could not move the folder record before its pass.
+const bumpMissedText = "no pass ran; the folder record could not be moved before its pass: its store could not write it; the changes were not copied back by this attempt, uncounted"
+
+// A pass back whose record cannot be moved to the pass's generation stops the sandbox, and says why: one failure
 // row and one try at the record, at the generation it was read at. A silent stop leaves the run saying nothing.
 func TestFolderBack_BumpStoreErrorRecordsAndAudits(t *testing.T) {
 	f := newPassFixture(t, 2, 2, nil)
@@ -110,8 +121,14 @@ func TestFolderBack_BumpStoreErrorRecordsAndAudits(t *testing.T) {
 	if err := f.finalizeWithin(30 * time.Second); errors.Is(err, errComputerFolderResumes) {
 		t.Errorf("finalize = %v, want the sandbox left to its stop", err)
 	}
-	const want = "no pass ran; the folder record could not be moved before its pass: its store could not write it; the sandbox was stopped with its changes not brought back yet, uncounted"
-	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, want)
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, bumpMissedText)
+	// The text is written before the stop, so it claims none.
+	if st := f.cs.folderStatus(); st.Back == nil || strings.Contains(st.Back.Error, "stopped") {
+		t.Errorf("back record %+v, want the pre-stop text with no stop claim", st.Back)
+	}
+	if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", bumpMissedText); ev == nil || strings.Contains(string(ev.Data), "stopped") {
+		t.Errorf("audit row %v, want the pre-stop text with no stop claim", ev)
+	}
 	if n := f.backRows(); n != 1 {
 		t.Errorf("%d audit rows of passes back, want 1", n)
 	}
@@ -120,6 +137,45 @@ func TestFolderBack_BumpStoreErrorRecordsAndAudits(t *testing.T) {
 	}
 	if st := f.cs.folderStatus(); st.Gen != 2 || st.Settled != 2 {
 		t.Errorf("record %+v, want it at gen 2, settled as before: the pass did not own a generation", st)
+	}
+}
+
+// failingStopRunner is the folder sandbox runner whose stop fails.
+type failingStopRunner struct {
+	*folderSandboxRunner
+	stops atomic.Int32
+}
+
+func (r *failingStopRunner) StopSandbox(context.Context, string) error {
+	r.stops.Add(1)
+	return errors.New("daemon unreachable")
+}
+
+// A bump fault is recorded before the stop, so the record and its audit row cannot claim a stop that then
+// fails: the sandbox is still there, its ref stays, and neither text says it was stopped.
+func TestFolderBack_BumpFaultThenFailedTeardownClaimsNoStop(t *testing.T) {
+	f := newPassFixture(t, 2, 2, nil)
+	bs := &bumpFailStore{computerFolderStore: f.cs, bumpErr: errors.New("the bump failed")}
+	f.s.cfg.Store = bs
+	stopper := &failingStopRunner{folderSandboxRunner: f.sb}
+	f.s.cfg.Runner = stopper
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.SandboxRef = "sbx"
+	ds.mu.Unlock()
+	_ = f.finalizeWithin(30 * time.Second)
+	if n := stopper.stops.Load(); n == 0 {
+		t.Fatal("the stop was never tried")
+	}
+	st := f.cs.folderStatus()
+	if st.Back == nil || !strings.Contains(st.Back.Error, bumpMissedText) || strings.Contains(st.Back.Error, "stopped") {
+		t.Errorf("back record %+v, want the bump text and no stop claim", st.Back)
+	}
+	if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", bumpMissedText); ev == nil || ev.Outcome != "failure" || strings.Contains(string(ev.Data), "stopped") {
+		t.Errorf("audit row %v, want a failure with the bump text and no stop claim", ev)
+	}
+	if got, _ := bs.GetRun(context.Background(), f.run.ID); got.SandboxRef != "sbx" {
+		t.Errorf("sandbox ref %q after a failed stop, want it kept", got.SandboxRef)
 	}
 }
 
@@ -271,9 +327,9 @@ func TestComputerFolderPass_PassEndedIsSettled(t *testing.T) {
 	}
 }
 
-// The server sends each pass its deadline: a pass back's less the window the runner's account needs to arrive
-// in, a seed's as it is, and none without one. A pass back that read the seed's rule would leave the runner no
-// time to answer.
+// The server sends each pass the deadline of the pass ctx it runs on, unchanged, for a seed and a pass back
+// alike, and none without one: computerFolderPassWithin has already ended that ctx one account window before the
+// pass's end, so a second subtraction here would take the window off twice.
 func TestFolderPass_SendsItsDeadline(t *testing.T) {
 	dl := time.Now().Add(time.Hour)
 	for _, tc := range []struct {
@@ -282,7 +338,7 @@ func TestFolderPass_SendsItsDeadline(t *testing.T) {
 		deadline bool
 		want     int64
 	}{
-		{"back", true, true, dl.Add(-computerFolderAccountTime).UnixMilli()},
+		{"back", true, true, dl.UnixMilli()},
 		{"seed", false, true, dl.UnixMilli()},
 		{"back without one", true, false, 0},
 		{"seed without one", false, false, 0},
@@ -303,7 +359,25 @@ func TestFolderPass_SendsItsDeadline(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Through computerFolderPassWithin, an 8 s pass back is sent the pass end less one account window and no less:
+// the window comes off once, in the pass ctx, and not again when the deadline is sent.
+func TestFolderPassWithin_RunnerGetsTheComposedDeadline(t *testing.T) {
 	if computerFolderAccountTime != 5*time.Second {
-		t.Errorf("computerFolderAccountTime = %v: this pin names 5 s", computerFolderAccountTime)
+		t.Fatalf("computerFolderAccountTime = %v: this pin names 5 s", computerFolderAccountTime)
+	}
+	s, cs, run, r := scriptedFolderFixture(t, runnerwire.FolderPass{})
+	before := time.Now()
+	out := s.computerFolderPassWithin(context.Background(), 8*time.Second, run, *cs.folder, true, passGuard{})
+	after := time.Now()
+	if !out.settled || out.errText != "" {
+		t.Fatalf("the pass = settled %v, error %q", out.settled, out.errText)
+	}
+	got := r.args().DeadlineUnixMs
+	lo := before.Add(8*time.Second - computerFolderAccountTime).UnixMilli()
+	hi := after.Add(8*time.Second - computerFolderAccountTime).UnixMilli()
+	if got < lo || got > hi {
+		t.Errorf("the runner was sent deadline %d, want the pass end less one account window: between %d and %d", got, lo, hi)
 	}
 }
