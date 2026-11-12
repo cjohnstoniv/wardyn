@@ -12,9 +12,9 @@ import { isTerminalRunState, type RunComputerFolder, type RunDetail } from "../.
 import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
 
 const count = (n: number) => n.toLocaleString("en");
-// "12 Nov 2026, 14:30 UTC": an absolute date with time and zone, so the deadline reads the same for everyone.
+// "12 Nov 2026, 14:30 UTC": an absolute date with time and zone, always UTC so it reads the same for everyone.
 const deadline = (iso: string) =>
-  new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
+  new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC", timeZoneName: "short" });
 
 export function ComputerFolderRows({ run }: { run: RunDetail }) {
   const f = run.computer_folder;
