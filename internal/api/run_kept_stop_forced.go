@@ -30,7 +30,8 @@ const keptEndHoldOffLimit = 5 * time.Minute
 // does not reach here). Until the run's due end is keptEndHoldOffLimit past, it does nothing, and the next
 // pass retries the end. The due end is read from the run's fresh row, so neither a slow sweep, a chain of
 // lock holders nor a restart moves it; only a change to the stored end does (an extension, or a revive
-// that claimed before expiry). A gone run, or a lost one with no end, is due when it was lost.
+// that claimed before expiry). A gone run, or a lost one with no end, is due when it was lost, and so is an
+// end that cannot be kept (data says kept: false): it is held off from its end, not from its keep grace.
 //
 // Past it, the end is taken without the lock, by the one terminal claim every end competes for: it goes on
 // only when the fresh row still carries the listing row's lost mark and end, and StopKeptRunForcedIf then
@@ -51,7 +52,7 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 		return
 	}
 	until, ok := s.keptUntil(cur)
-	if !ok || cur.LostReason == types.LostGone {
+	if !ok || cur.LostReason == types.LostGone || data["kept"] == false {
 		until = *cur.LostAt
 	}
 	now := s.cfg.Now()
