@@ -57,7 +57,7 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 		// No audit row: another server may own the run now.
 		errs = append(errs, fmt.Errorf("the sandbox was not stopped: %w", db.ErrLockLost))
 	}
-	if stops && !lost {
+	if stops && !lost && !holdPassed(tctx) {
 		if serr := s.cfg.Runner.StopSandbox(tctx, ref); serr != nil {
 			errs = append(errs, serr)
 			td := make(map[string]any, len(data)+1)
@@ -136,25 +136,37 @@ func teardownCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 }
 
 // teardownCtxWithin is teardownCtx with floor in place of runTeardownBudget, and in place of
-// reconcileFinalizeTimeout when floor is the longer.
+// reconcileFinalizeTimeout when floor is the longer. Under an end hold (holdDeadline) it ends at the hold's
+// deadline when that comes first, with errHoldPassed as its cause, floor or not: a deadline already passed
+// gives a ctx that is done.
 func teardownCtxWithin(ctx context.Context, floor time.Duration) (context.Context, context.CancelFunc) {
 	d := max(reconcileFinalizeTimeout, floor)
 	if dl, ok := ctx.Deadline(); ok {
 		d = max(time.Until(dl), floor)
 	}
 	fenced, release := db.WithoutCancelUnlessLost(ctx)
-	tctx, cancel := context.WithTimeout(fenced, d)
+	tctx, cancel := withinHold(fenced, d)
 	return tctx, func() { cancel(); release() }
 }
 
 // settleAfterTeardown runs one write after a run's teardown on a fresh runTeardownBudget of
-// its own, with teardownCtx's fencing and none of the stop's deadline.
+// its own, with teardownCtx's fencing and none of the stop's deadline, ending at an end hold's
+// deadline as teardownCtxWithin does.
 func settleAfterTeardown(ctx context.Context, write func(context.Context)) {
 	fenced, release := db.WithoutCancelUnlessLost(ctx)
 	defer release()
-	sctx, cancel := context.WithTimeout(fenced, runTeardownBudget)
+	sctx, cancel := withinHold(fenced, runTeardownBudget)
 	defer cancel()
 	write(sctx)
+}
+
+// withinHold is context.WithTimeout(ctx, d), ended instead at the deadline of the end hold ctx is under,
+// with errHoldPassed as its cause, when that comes first.
+func withinHold(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if dl, ok := holdDeadline(ctx); ok && time.Until(dl) < d {
+		return context.WithDeadlineCause(ctx, dl, errHoldPassed)
+	}
+	return context.WithTimeout(ctx, d)
 }
 
 // clearSandboxRef clears a terminal run's ref. On Postgres a runner run's

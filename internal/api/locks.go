@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -151,12 +152,13 @@ func (s *Server) tryLockRunOpHeld(ctx context.Context, id uuid.UUID) (context.Co
 // sweep that only tries the lock off a sandbox whose pass is still running. Every writer whose tail
 // reaches finalizeRunEffects takes it; a caller already holding it on ctx re-enters. ok=false is
 // logged; the run is then left as it is for the next pass of whatever ends it. A run proved to have no
-// pass back to run (endMayPass) takes no lock and ends at once, as any run does.
-func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
+// pass back to run (endMayPass) takes no lock and ends at once, as any run does. The lock is an end hold
+// (holdRunEnd) for b, the caller's hold budget, plus a macOS VM's stop (endHoldBudget).
+func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID, b time.Duration) (context.Context, func(), bool) {
 	if !s.endMayPass(ctx, id) {
 		return ctx, func() {}, true
 	}
-	lctx, unlock, err := s.lockRunOp(ctx, id)
+	lctx, unlock, err := s.holdRunEnd(ctx, id, s.endHoldBudget(ctx, id, b))
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not take the run's lock to end it; leaving it for the next pass",
 			slog.String("run_id", id.String()), slog.Any("err", err))
@@ -166,7 +168,8 @@ func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID) (context.Context,
 }
 
 // LockRunEnd is lockRunEnd for cmd/wardynd's idle and max-age stop, the one end of a run outside this
-// package: its guarded transition, pass back and sandbox stop run on the context it returns.
+// package: its guarded transition, pass back and sandbox stop run on the context it returns, under the reaper's
+// hold budget (endHoldReaper).
 func (s *Server) LockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
-	return s.lockRunEnd(ctx, id)
+	return s.lockRunEnd(ctx, id, endHoldReaper)
 }

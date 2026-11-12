@@ -1,0 +1,398 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// takeEndHolds takes n end holds on s for runs of their own, released at the test's end.
+func takeEndHolds(t *testing.T, s *Server, n int) {
+	t.Helper()
+	for range n {
+		_, unlock, err := s.holdRunEnd(context.Background(), uuid.New(), time.Minute)
+		if err != nil {
+			t.Fatalf("end hold refused with %d of %d taken: %v", s.endHolds.n, maxEndHolds, err)
+		}
+		t.Cleanup(unlock)
+	}
+}
+
+// A finalize whose end hold has passed stops nothing and writes nothing: the runner is not called, the run's ref
+// stays and no teardown row is written, and the caller hears the hold ran out. The tail owner's finalize, which
+// holds no end hold, then stops the sandbox and clears the ref. Catches a stop or a write made past the hold.
+func TestEndHold_PastDeadlineNoStopNoRecord(t *testing.T) {
+	pool, cfg, _, run, _, probe := runnerExitAPIFixture(t)
+	srv := New(cfg)
+	got, err := cfg.Store.GetRun(t.Context(), run.ID)
+	if err != nil || got.SandboxRef == "" {
+		t.Fatalf("fixture run %+v, %v: want one with a sandbox", got, err)
+	}
+	ctx := withHoldDeadline(t.Context(), time.Now().Add(-time.Second))
+	if err := srv.finalizeRunEffects(ctx, run.ID, got.SandboxRef, "run.complete", nil, false, false); !errors.Is(err, errHoldPassed) {
+		t.Errorf("finalize past the hold = %v, want it to say the hold ran out", err)
+	}
+	if n := probe.calls.Load(); n != 0 {
+		t.Errorf("StopSandbox reached %d times past the hold, want 0", n)
+	}
+	if after, _ := cfg.Store.GetRun(t.Context(), run.ID); after.SandboxRef != got.SandboxRef {
+		t.Errorf("sandbox ref %q past the hold, want it kept as %q", after.SandboxRef, got.SandboxRef)
+	}
+	var rows int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM audit_events WHERE run_id=$1 AND action='run.complete'`, run.ID).Scan(&rows); err != nil || rows != 0 {
+		t.Errorf("%d teardown rows (%v) past the hold, want 0", rows, err)
+	}
+	srv.tailFinalize(t.Context(), got, tailFolder)
+	if n := probe.calls.Load(); n != 1 {
+		t.Errorf("StopSandbox reached %d times by the tail owner, want 1", n)
+	}
+	if after, _ := cfg.Store.GetRun(t.Context(), run.ID); after.SandboxRef != "" {
+		t.Errorf("sandbox ref %q after the tail owner's stop, want it cleared", after.SandboxRef)
+	}
+	srv.WaitBackground()
+}
+
+// teardownCtxWithin and settleAfterTeardown end at the end hold's deadline when it comes before today's timeout,
+// with errHoldPassed as the cause, whatever the floor; a hold that has passed gives a ctx already done; and a hold
+// after today's timeout, or none, leaves today's. Catches a floor that outlives the hold.
+func TestEndHold_FloorCappedAtDeadline(t *testing.T) {
+	const slack = time.Second
+	for _, tc := range []struct {
+		name  string
+		floor time.Duration
+		hold  time.Duration // from now; 0 is no hold
+		want  time.Duration // the ctx's deadline, from now; 0 is a ctx already done
+	}{
+		{"no hold", runTeardownBudget, 0, reconcileFinalizeTimeout},
+		{"hold before the floor", runTeardownBudget, 5 * time.Second, 5 * time.Second},
+		{"hold at the floor", runTeardownBudget, runTeardownBudget, runTeardownBudget},
+		{"hold after the floor", runTeardownBudget, 30 * time.Second, 30 * time.Second},
+		{"hold after today's timeout", runTeardownBudget, 2 * reconcileFinalizeTimeout, reconcileFinalizeTimeout},
+		{"hold before a macOS VM's floor", macOSVMTeardownBudget, 30 * time.Second, 30 * time.Second},
+		{"no hold, a macOS VM's floor", macOSVMTeardownBudget, 0, macOSVMTeardownBudget},
+		{"hold passed", runTeardownBudget, -time.Second, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.hold != 0 {
+				ctx = withHoldDeadline(ctx, time.Now().Add(tc.hold))
+			}
+			before := time.Now()
+			tctx, cancel := teardownCtxWithin(ctx, tc.floor)
+			defer cancel()
+			after := time.Now()
+			if tc.want == 0 {
+				if tctx.Err() == nil || !errors.Is(context.Cause(tctx), errHoldPassed) {
+					t.Fatalf("teardown ctx err %v cause %v, want done with errHoldPassed", tctx.Err(), context.Cause(tctx))
+				}
+			} else {
+				dl, ok := tctx.Deadline()
+				if !ok || dl.Before(before.Add(tc.want-slack)) || dl.After(after.Add(tc.want+slack)) {
+					t.Errorf("teardown ctx deadline %v from now, want about %v", time.Until(dl), tc.want)
+				}
+			}
+			var sdl time.Time
+			var serr, scause error
+			settleAfterTeardown(ctx, func(sctx context.Context) {
+				sdl, _ = sctx.Deadline()
+				serr, scause = sctx.Err(), context.Cause(sctx)
+			})
+			want := runTeardownBudget
+			if tc.hold != 0 {
+				want = min(want, tc.hold)
+			}
+			switch {
+			case want <= 0:
+				if serr == nil || !errors.Is(scause, errHoldPassed) {
+					t.Errorf("settle ctx err %v cause %v, want done with errHoldPassed", serr, scause)
+				}
+			case sdl.Before(before.Add(want-slack)) || sdl.After(time.Now().Add(want+slack)):
+				t.Errorf("settle ctx deadline %v from now, want about %v", time.Until(sdl), want)
+			}
+		})
+	}
+	// A cap that fires is the hold's, by its cause.
+	tctx, cancel := teardownCtxWithin(withHoldDeadline(context.Background(), time.Now().Add(20*time.Millisecond)), runTeardownBudget)
+	defer cancel()
+	<-tctx.Done()
+	if !errors.Is(context.Cause(tctx), errHoldPassed) {
+		t.Errorf("the capped ctx ended with cause %v, want errHoldPassed", context.Cause(tctx))
+	}
+}
+
+// With maxEndHolds end holds taken, the next is refused as busy: an error wrapping db.ErrLockNoCapacity, which
+// writeLockRefused answers 503 lock_unavailable. Catches a semaphore that does not bound, or a refusal that is
+// answered as a server error.
+func TestEndHold_SemaphoreFullIsBusy(t *testing.T) {
+	if maxEndHolds != 4 {
+		t.Fatalf("maxEndHolds = %d: this pin names 4", maxEndHolds)
+	}
+	s := &Server{}
+	takeEndHolds(t, s, maxEndHolds)
+	_, unlock, err := s.holdRunEnd(context.Background(), uuid.New(), time.Minute)
+	if err == nil {
+		unlock()
+		t.Fatal("a fifth end hold was taken")
+	}
+	if !errors.Is(err, db.ErrLockNoCapacity) || !db.LockRefused(err) {
+		t.Errorf("fifth hold = %v, want a refusal wrapping db.ErrLockNoCapacity", err)
+	}
+	w := httptest.NewRecorder()
+	writeLockRefused(w, httptest.NewRequest(http.MethodPost, "/", nil), err)
+	if w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != reasonLockUnavailable {
+		t.Errorf("answer = %d %q, want 503 %s", w.Code, w.Body.String(), reasonLockUnavailable)
+	}
+}
+
+// An end hold's unlock releases the run's lock and its slot; a lock that cannot be taken gives its slot back; and
+// a ctx already under an end hold re-enters it with no second slot and the earlier deadline. Catches a slot that
+// leaks, or a nested hold that counts twice.
+func TestEndHold_SlotReleasedWithLock(t *testing.T) {
+	s := &Server{}
+	id := uuid.New()
+	hctx, unlock, err := s.holdRunEnd(context.Background(), id, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, _ := holdDeadline(hctx)
+	takeEndHolds(t, s, maxEndHolds-1)
+	nctx, nunlock, err := s.holdRunEnd(hctx, id, time.Hour)
+	if err != nil {
+		t.Fatalf("a nested hold with every slot taken = %v, want it to re-enter", err)
+	}
+	if dl, _ := holdDeadline(nctx); !dl.Equal(outer) {
+		t.Errorf("nested hold deadline %v, want the outer %v", dl, outer)
+	}
+	nunlock()
+	if s.endHolds.n != maxEndHolds {
+		t.Errorf("%d slots taken after the nested unlock, want %d", s.endHolds.n, maxEndHolds)
+	}
+	unlock()
+	if _, u, ok := s.tryLockRunOp(context.Background(), id); !ok {
+		t.Error("the run's lock is still held after the hold's unlock")
+	} else {
+		u()
+	}
+	_, u, err := s.holdRunEnd(context.Background(), uuid.New(), time.Minute)
+	if err != nil {
+		t.Fatalf("no slot after an unlock: %v", err)
+	}
+	u()
+	// A lock that cannot be taken: held elsewhere, and the hold's ctx already cancelled.
+	busy := uuid.New()
+	_, bunlock, err := s.lockRunOp(context.Background(), busy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bunlock()
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := s.holdRunEnd(cctx, busy, time.Minute); err == nil {
+		t.Fatal("a hold on a lock held elsewhere was taken")
+	}
+	if s.endHolds.n != maxEndHolds-1 {
+		t.Errorf("%d slots taken after a refused lock, want %d", s.endHolds.n, maxEndHolds-1)
+	}
+}
+
+// holdPassingAgent is the bring-back's sandbox whose agent stop, before the pass, returns only after dl: the end
+// hold passes while the bring-back runs.
+type holdPassingAgent struct {
+	*agentSandbox
+	dl time.Time
+}
+
+func (r *holdPassingAgent) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if len(spec.Argv) == 3 && spec.Argv[0] == "sh" && spec.Argv[2] == agentStopScript {
+		time.Sleep(time.Until(r.dl) + 50*time.Millisecond)
+	}
+	return r.agentSandbox.ExecStream(ctx, ref, spec)
+}
+
+// lateWriteStore is the bring-back's store with a database's ctx: a folder record or ref write on a done ctx
+// fails, as a Postgres write does, and one that lands at or after dl is counted.
+type lateWriteStore struct {
+	refStore
+	dl   time.Time
+	late atomic.Int32
+}
+
+func (s *lateWriteStore) lands(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !time.Now().Before(s.dl) {
+		s.late.Add(1)
+	}
+	return nil
+}
+
+func (s *lateWriteStore) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
+	if err := s.lands(ctx); err != nil {
+		return false, err
+	}
+	return s.refStore.SetRunLocalFolderStatusIf(ctx, id, guard, st)
+}
+
+func (s *lateWriteStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
+	if err := s.lands(ctx); err != nil {
+		return types.RunLocalFolderStatus{}, false, err
+	}
+	return s.refStore.BumpRunLocalFolderGen(ctx, id, guard, at)
+}
+
+func (s *lateWriteStore) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
+	if err := s.lands(ctx); err != nil {
+		return err
+	}
+	return s.refStore.SetSandboxRef(ctx, id, ref)
+}
+
+// A person's bring-back is an end hold: with every hold taken it is refused 503 lock_unavailable and the run stays
+// RUNNING. A bring-back whose hold passes while it runs (here its agent stop returns after the hold's deadline,
+// which the server's base ctx carries in, so the bring-back's own hold re-enters it) stops no sandbox and writes
+// no folder record or ref after the deadline. Catches the bring-back's own lockRunOp left in place.
+func TestEndHold_BringBackIsAHold(t *testing.T) {
+	t.Run("every hold taken", func(t *testing.T) {
+		s, cs, audit, run, sb, _ := bringBackFixture(t)
+		var stops atomic.Int32
+		sb.stopped = func() { stops.Add(1) }
+		takeEndHolds(t, s, maxEndHolds)
+		res := bringBack(t, s, bringBackOwnerSession(t), run)
+		if res.code != http.StatusServiceUnavailable || res.reason() != reasonLockUnavailable {
+			t.Fatalf("bring-back with every hold taken = %d %s, want 503 %s", res.code, res.body, reasonLockUnavailable)
+		}
+		if cs.State() != types.RunRunning || findAudit(audit.snapshot(), run.ID, "run.folder.finalize", "success") != nil {
+			t.Errorf("state %s after a refused bring-back, want RUNNING with no end written", cs.State())
+		}
+		if n := stops.Load(); n != 0 {
+			t.Errorf("StopSandbox reached %d times by a refused bring-back, want 0", n)
+		}
+	})
+	t.Run("the hold passes during the bring-back", func(t *testing.T) {
+		s, cs, _, run, sb, _ := bringBackFixture(t)
+		dl := time.Now().Add(300 * time.Millisecond)
+		s.cfg.BaseCtx = withHoldDeadline(context.Background(), dl)
+		s.cfg.Runner = &holdPassingAgent{agentSandbox: sb, dl: dl}
+		ws := &lateWriteStore{refStore: refStore{cs}, dl: dl}
+		s.cfg.Store = ws
+		var stops atomic.Int32
+		sb.stopped = func() { stops.Add(1) }
+		_ = bringBack(t, s, bringBackOwnerSession(t), run)
+		if n := stops.Load(); n != 0 {
+			t.Errorf("StopSandbox reached %d times after the hold passed, want 0", n)
+		}
+		if n := ws.late.Load(); n != 0 {
+			t.Errorf("%d folder record or ref writes landed after the hold passed, want 0", n)
+		}
+		if got, _ := ws.GetRun(context.Background(), run.ID); got.SandboxRef == "" {
+			t.Error("the sandbox ref was cleared after the hold passed")
+		}
+	})
+}
+
+// A runner exit is an end hold, always: with every hold taken its receipt is not applied and stays pending, and a
+// later sweep applies it. One whose hold has passed (an outer hold already past, which the exit's own re-enters)
+// is accepted but stops nothing and leaves its tail incomplete for the next sweep. Catches the runner exit's own
+// lockRunOp left in place.
+func TestEndHold_RunnerExitIsAHold(t *testing.T) {
+	stage := func(t *testing.T) (*Server, Config, store.PG, types.Runner, types.AgentRun, runnerwire.AgentExit, *runnerExitTailProbe, func(uuid.UUID) (bool, bool)) {
+		t.Helper()
+		pool, cfg, rn, run, exit, probe := runnerExitAPIFixture(t)
+		st := cfg.Store.(store.PG)
+		srv := New(cfg)
+		t.Cleanup(srv.WaitBackground)
+		event := runnerwire.Event{Kind: runnerwire.EventAgentExit, RunID: &run.ID, Data: mustJSON(exit)}
+		if err := srv.ExitFromRunner(t.Context(), rn.ID, event); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.BindRunnerExecution(t.Context(), rn.ID, run.ID, exit.Generation, exit.ExecID); err != nil {
+			t.Fatal(err)
+		}
+		phase := func(id uuid.UUID) (accepted, done bool) {
+			if err := pool.QueryRow(t.Context(), `SELECT accepted_at IS NOT NULL, tail_complete FROM runner_execution_exits WHERE run_id=$1`, id).Scan(&accepted, &done); err != nil {
+				t.Fatal(err)
+			}
+			return accepted, done
+		}
+		return srv, cfg, st, rn, run, exit, probe, phase
+	}
+	t.Run("every hold taken", func(t *testing.T) {
+		srv, cfg, _, _, run, _, probe, phase := stage(t)
+		takeEndHolds(t, srv, maxEndHolds)
+		if err := srv.SweepRunnerExits(t.Context()); err == nil {
+			t.Fatal("a runner exit applied with every end hold taken")
+		}
+		if accepted, done := phase(run.ID); accepted || done || probe.calls.Load() != 0 {
+			t.Fatalf("receipt accepted %v done %v, %d stops: want it pending and untouched", accepted, done, probe.calls.Load())
+		}
+		later := New(cfg)
+		t.Cleanup(later.WaitBackground)
+		if err := later.SweepRunnerExits(t.Context()); err != nil {
+			t.Fatalf("the retry = %v", err)
+		}
+		if accepted, done := phase(run.ID); !accepted || !done || probe.calls.Load() != 1 {
+			t.Errorf("after the retry: accepted %v done %v, %d stops; want it applied once", accepted, done, probe.calls.Load())
+		}
+	})
+	t.Run("the hold passes", func(t *testing.T) {
+		srv, cfg, st, rn, run, exit, probe, phase := stage(t)
+		before, err := cfg.Store.GetRun(t.Context(), run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := withHoldDeadline(t.Context(), time.Now().Add(-time.Second))
+		if err := srv.applyRunnerExit(ctx, st, store.RunnerExitWork{RunnerID: rn.ID, RunID: run.ID, Exit: exit}); err == nil {
+			t.Error("a runner exit past its hold reported its tail complete")
+		}
+		if n := probe.calls.Load(); n != 0 {
+			t.Errorf("StopSandbox reached %d times past the hold, want 0", n)
+		}
+		if _, done := phase(run.ID); done {
+			t.Error("the tail is recorded complete past the hold, want it left for the next sweep")
+		}
+		if after, _ := cfg.Store.GetRun(t.Context(), run.ID); after.SandboxRef != before.SandboxRef {
+			t.Errorf("sandbox ref %q past the hold, want it kept as %q", after.SandboxRef, before.SandboxRef)
+		}
+	})
+}
+
+// A pass back under an end hold ending 40 s out leaves its record the teardown's 15 s inside the hold: the pass is
+// sent a deadline at most 25 s out, and its record is written. Catches the cap applied only inside
+// computerFolderPassWithin, which would send the pass a deadline 35 s out.
+func TestEndHold_PassBudgetLeavesTheRecordItsTeardown(t *testing.T) {
+	if runTeardownBudget != 15*time.Second {
+		t.Fatalf("runTeardownBudget = %v: this pin names 15 s", runTeardownBudget)
+	}
+	f := newPassFixture(t, 2, 2, nil)
+	r := &scriptedFolderRunner{}
+	id := f.cs.runner.ID
+	f.s.runnerStreams.subsMu.Lock()
+	f.s.runnerStreams.subs[id] = r.endpoint(t, id)
+	f.s.runnerStreams.subsMu.Unlock()
+	before := time.Now()
+	ctx := withHoldDeadline(context.Background(), before.Add(40*time.Second))
+	_ = f.s.bringComputerFolderBack(ctx, f.run.ID, "sbx")
+	got := r.args().DeadlineUnixMs
+	if got == 0 || got > time.Now().Add(25*time.Second).UnixMilli() {
+		t.Errorf("the pass was sent deadline %d, %v from the start; want at most 25 s out", got, time.UnixMilli(got).Sub(before))
+	}
+	if st := f.cs.folderStatus(); st.Back == nil {
+		t.Errorf("record %+v after the pass, want its pass back written inside the hold", st)
+	}
+}

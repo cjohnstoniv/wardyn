@@ -343,7 +343,7 @@ func (s *Server) failInterruptedMacPreps(ctx context.Context, runs []types.Agent
 // audit, revoke cascade, sandbox teardown). reconcileFinalize itself leaves a run its runner holds to the
 // runner, and an interactive macOS VM run has no execution row to receive an exit from, so this ends it here.
 func (s *Server) failInterruptedMacPrep(ctx context.Context, run types.AgentRun) {
-	ctx, unlock, locked := s.lockRunEnd(ctx, run.ID) // through the tail's computer folder pass
+	ctx, unlock, locked := s.lockRunEnd(ctx, run.ID, endHoldSweep) // through the tail's computer folder pass
 	if !locked {
 		return
 	}

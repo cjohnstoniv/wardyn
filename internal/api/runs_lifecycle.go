@@ -116,7 +116,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 				// can tell "the task never ran" from "it ran but its own
 				// completion accounting failed".
 				data := map[string]any{"exec_started": false, "error": werr.Error()}
-				ctx, unlock, locked := s.lockRunEnd(base, runID) // through the tail's computer folder pass
+				ctx, unlock, locked := s.lockRunEnd(base, runID, endHoldDedicated) // through the tail's computer folder pass
 				if !locked {
 					s.finishRunOutput(base, runID)
 					return
@@ -175,7 +175,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// watcher's lease then lapses, and the stale-watcher sweep (sweepRunWatchers) re-derives it
 		// through reconcileFinalize, which reads whether it is kept. Never a finalize that could not tell.
 		// The run's lock is held from this read through the tail's computer folder pass (lockRunEnd).
-		ctx, unlock, locked := s.lockRunEnd(base, runID)
+		ctx, unlock, locked := s.lockRunEnd(base, runID, endHoldDedicated)
 		if !locked {
 			s.finishRunOutput(base, runID) // the agent exited: its tail is this process's either way
 			return

@@ -118,8 +118,9 @@ func (s *Server) runnerExitTimeout(ctx context.Context, runID uuid.UUID) time.Du
 
 func (s *Server) applyRunnerExit(ctx context.Context, st store.PG, row store.RunnerExitWork) error {
 	// The run's lock is held from the exit's terminal write through the tail's computer folder pass
-	// (lockRunEnd); a lock not taken leaves the receipt pending for the next pass.
-	ctx, unlock, err := s.lockRunOp(ctx, row.RunID)
+	// (lockRunEnd), always, as an end hold for runnerExitTimeout; a lock or hold not taken leaves the receipt
+	// pending for the next pass.
+	ctx, unlock, err := s.holdRunEnd(ctx, row.RunID, s.runnerExitTimeout(ctx, row.RunID))
 	if err != nil {
 		return err
 	}
