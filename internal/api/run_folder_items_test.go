@@ -145,3 +145,44 @@ func TestBumpLog_StoreErrorIsNotMoved(t *testing.T) {
 		t.Errorf("a miss logged %q, want it as moved", out)
 	}
 }
+
+// A store fault while recording a busy pass keeps the sandbox: the runner's busy reply proves another pass for
+// the run is live. The fault is logged apart, naming the keep; a record another owner moved on is not a fault.
+func TestBusy_StoreFaultKeepsAndLogs(t *testing.T) {
+	s, cs, audit, run, _, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	rec, ok, _ := s.bumpComputerFolderGen(context.Background(), run.ID, 1)
+	if !ok {
+		t.Fatalf("bump = %+v %v", rec, ok)
+	}
+	var logged lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(prev)
+
+	s.cfg.Store = &folderFaultStore{computerFolderStore: cs, setErr: errors.New("the write failed")}
+	if !s.recordFolderPassBusy(context.Background(), run.ID, *cs.folder, rec.Gen) {
+		t.Error("a store fault stopped the sandbox of a pass the runner still runs")
+	}
+	out := logged.String()
+	if !strings.Contains(out, "recording a busy folder pass failed; the sandbox is kept because the runner is still running a pass for it") || !strings.Contains(out, "the write failed") {
+		t.Errorf("the fault logged %q, want the keep and the error", out)
+	}
+	if st := cs.folderStatus(); st.Resume != nil {
+		t.Errorf("record %+v, want the failed write to leave no resume", st)
+	}
+	if findAudit(audit.snapshot(), run.ID, "run.folder.transfer", "failure") != nil {
+		t.Error("a busy pass whose record did not land was audited")
+	}
+
+	// A record another owner moved on is a miss, not a fault: kept, and not logged as one.
+	s.cfg.Store = cs
+	if !s.recordFolderPassBusy(context.Background(), run.ID, *cs.folder, rec.Gen+5) {
+		t.Error("a record moved by another owner stopped the sandbox")
+	}
+	if more := strings.TrimPrefix(logged.String(), out); strings.Contains(more, "recording a busy folder pass failed") {
+		t.Errorf("a miss logged as a fault: %q", more)
+	}
+}
