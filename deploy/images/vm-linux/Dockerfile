@@ -18,7 +18,7 @@ RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/wardyn-guest-agent ./cmd/wardyn-guest-agent
 
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 # No console login (the serial console is the runner's log). The NIC is addressed as the network relay
 # expects (10-wardyn-link.network, wardyn-resolv.service).
 RUN set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update; \
