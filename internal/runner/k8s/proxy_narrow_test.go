@@ -359,3 +359,97 @@ func TestNarrowProxy_ExecTargetsTheProxyContainer(t *testing.T) {
 		t.Errorf("ProxyNarrowState deadline in %v (set %v), want about %v", probe.deadline.Sub(start), probe.hasDL, narrowProbeTimeout)
 	}
 }
+
+// eofExecutor plays the proxy's own client: it reads stdin to its end and answers only then, as
+// wardyn-proxy -narrow does (it sends the request, half-closes, and waits for the answer). An exec whose
+// stdin never ends gets no answer from it, only the context's end.
+type eofExecutor struct {
+	out string
+
+	sawEOF bool
+	gotIn  string
+}
+
+func (e *eofExecutor) execFactory(string, string, []string, bool, bool) (remotecommand.Executor, error) {
+	return e, nil
+}
+
+func (e *eofExecutor) Stream(opts remotecommand.StreamOptions) error {
+	return e.StreamWithContext(context.Background(), opts)
+}
+
+func (e *eofExecutor) StreamWithContext(ctx context.Context, opts remotecommand.StreamOptions) error {
+	if opts.Stdin == nil {
+		return errors.New("no stdin was passed")
+	}
+	var in []byte
+	done := make(chan struct{})
+	go func() {
+		in, _ = io.ReadAll(opts.Stdin)
+		close(done)
+	}()
+	select {
+	case <-done:
+		e.sawEOF, e.gotIn = true, string(in)
+		_, _ = io.WriteString(opts.Stdout, e.out)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestNarrowProxy_ClosesStdinAfterTheRequest: the exec's stdin ends after the request, so the proxy's
+// client, which reads its stdin to the end before it dials, sends it and answers. The answer must come
+// well inside the call's own bound (narrowProbeTimeout for a probe, narrowExecTimeout for a narrowing),
+// which is itself above the client's own 10 s total.
+func TestNarrowProxy_ClosesStdinAfterTheRequest(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	runID := uuid.New()
+	narrowProxyPod(t, cs, runID, true, true)
+	ref := agentPodName(runID)
+	const within = 2 * time.Second
+
+	t.Run("a narrowing and a probe both reach EOF and get their answer", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			call  func(ctx context.Context) (runner.ProxyNarrowState, error)
+			stdin string
+		}{
+			{"narrow", func(ctx context.Context) (runner.ProxyNarrowState, error) {
+				return d.NarrowProxy(ctx, ref, []string{"a.example"})
+			}, `{"deny":["a.example"]}`},
+			{"probe", func(ctx context.Context) (runner.ProxyNarrowState, error) { return d.ProxyNarrowState(ctx, ref) }, `{"deny":[]}`},
+		} {
+			ex := &eofExecutor{out: narrowJSON(t, proxy.NarrowAnswer{State: "current", ConfigSHA256: "cfg", BaseSHA256: "base"})}
+			d.execFactory = ex.execFactory
+			// A parent bound far below the call's own, so an exec whose stdin never ends fails here at once.
+			ctx, cancel := context.WithTimeout(context.Background(), within)
+			start := time.Now()
+			_, err := tc.call(ctx)
+			cancel()
+			if err != nil || !ex.sawEOF {
+				t.Errorf("%s: err %v, stdin reached EOF %v: the request was never closed off, so the proxy's client would wait for it", tc.name, err, ex.sawEOF)
+			}
+			if ex.gotIn != tc.stdin {
+				t.Errorf("%s: the exec read %q before EOF, want %q", tc.name, ex.gotIn, tc.stdin)
+			}
+			if took := time.Since(start); took >= within {
+				t.Errorf("%s: the answer took %v, want under %v", tc.name, took, within)
+			}
+		}
+	})
+
+	t.Run("a fake exec that never closes stdin fails the check", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		go func() { _, _ = pw.Write([]byte(`{"deny":[]}`)) }() // the request, and no close
+		t.Cleanup(func() { _ = pw.Close() })
+		ex := &eofExecutor{out: narrowJSON(t, proxy.NarrowAnswer{State: "current"})}
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		var out strings.Builder
+		err := ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: pr, Stdout: &out})
+		if !errors.Is(err, context.DeadlineExceeded) || ex.sawEOF || out.Len() != 0 {
+			t.Errorf("an exec whose stdin never ends: err %v, sawEOF %v, answer %q; want the deadline, no EOF and no answer", err, ex.sawEOF, out.String())
+		}
+	})
+}
