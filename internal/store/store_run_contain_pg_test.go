@@ -6,7 +6,6 @@ package store_test
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"slices"
 	"strconv"
 	"testing"
@@ -297,59 +296,97 @@ func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 }
 
 // TestPG_ContainmentStreakDue_DBClock: a recorded failure counts when it is at least tau old on the database's
-// clock and not older than the run's due or than since. A stamp the process clock put ahead of the database's is
-// not old enough, one from before since or before the due never counts, and a run with no stamp, or no row, is false.
+// clock and not older than the streak start: the latest of the run's due, now() minus startedAgo and now()
+// minus unobservedAgo. The run's end and every stamp are seeded as seconds before now() in SQL, so no Go time
+// reaches a comparison. A stamp ahead of the database's clock is not old enough, one from before the streak
+// start never counts, and a run with no stamp, or no row, is false. Proven red by dropping any one of the
+// three from the GREATEST, by a spacing dropped or read in the wrong unit, and by `<=` written as `<`.
 func TestPG_ContainmentStreakDue_DBClock(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	var dbNow time.Time
-	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
-		t.Fatalf("read the database clock: %v", err)
-	}
-	dbNow = dbNow.UTC().Truncate(time.Microsecond)
 	r := persistRun(t, ctx, pool, newRun(types.RunKilled))
-	due := dbNow.Add(-time.Hour)
-	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = $2 WHERE id = $1`, r.ID, due.Add(-store.ContainmentLag)); err != nil {
+	// The run's due is an hour before now().
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = now() - $2::float8 * interval '1 second' WHERE id = $1`,
+		r.ID, (time.Hour + store.ContainmentLag).Seconds()); err != nil {
 		t.Fatalf("place the run: %v", err)
 	}
-	at := func(ts time.Time) *time.Time { return &ts }
-	since, early := dbNow.Add(-time.Minute), dbNow.Add(-2*time.Hour)
+	secs := func(f float64) *float64 { return &f }
+	minute, long := time.Minute, 2*time.Hour
 	for name, tc := range map[string]struct {
-		stamp *time.Time
-		since time.Time
-		want  bool
+		ago        *float64 // the stamp, seconds before now(); nil: no stamp
+		started    time.Duration
+		unobserved *time.Duration
+		want       bool
 	}{
-		"no stamp":                      {nil, since, false},
-		"old enough":                    {at(dbNow.Add(-5 * time.Second)), since, true},
-		"ahead of the database's clock": {at(dbNow.Add(time.Hour)), since, false},
-		"before since":                  {at(since.Add(-time.Second)), since, false},
-		"at since":                      {at(since), since, true},
-		"before the due":                {at(due.Add(-time.Second)), early, false},
-		"at the due":                    {at(due), early, true},
+		"no stamp":                         {nil, long, nil, false},
+		"old enough":                       {secs(5), long, nil, true},
+		"ahead of the database's clock":    {secs(-3600), long, nil, false},
+		"before the due":                   {secs(3610), long, nil, false},
+		"after the due":                    {secs(3590), long, nil, true},
+		"before this process started":      {secs(70), minute, nil, false},
+		"after this process started":       {secs(50), minute, nil, true},
+		"before the last unobserved round": {secs(70), long, &minute, false},
+		"after the last unobserved round":  {secs(50), long, &minute, true},
 	} {
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error_at = $2 WHERE id = $1`, r.ID, tc.stamp); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error_at = now() - $2::float8 * interval '1 second' WHERE id = $1`, r.ID, tc.ago); err != nil {
 			t.Fatalf("%s: set the stamp: %v", name, err)
 		}
-		if got, err := pg.ContainmentStreakDue(ctx, r.ID, time.Second, tc.since); err != nil || got != tc.want {
+		if got, err := pg.ContainmentStreakDue(ctx, r.ID, time.Second, tc.started, tc.unobserved); err != nil || got != tc.want {
 			t.Errorf("%s: ContainmentStreakDue = %v, %v; want %v", name, got, err, tc.want)
 		}
 	}
-	if got, err := pg.ContainmentStreakDue(ctx, uuid.New(), time.Second, since); err != nil || got {
+	if got, err := pg.ContainmentStreakDue(ctx, uuid.New(), time.Second, long, nil); err != nil || got {
 		t.Errorf("no such run: ContainmentStreakDue = %v, %v; want false", got, err)
 	}
-	// With a one-minute spacing the stamp is set from the database's own clock, so the spacing is exercised at
-	// its real scale: 5 s old is too young, 61 s old is old enough. A spacing dropped, or read in the wrong unit,
-	// gets one of the two wrong.
+	// With a one-minute spacing the spacing is exercised at its real scale: 5 s old is too young, 61 s old is
+	// old enough. A spacing dropped, or read in the wrong unit, gets one of the two wrong.
 	for _, tc := range []struct {
-		age  int
+		age  float64
 		want bool
 	}{{5, false}, {61, true}} {
-		if _, err := pool.Exec(ctx, fmt.Sprintf(`UPDATE agent_runs SET containment_error_at = now() - interval '%d seconds' WHERE id = $1`, tc.age), r.ID); err != nil {
-			t.Fatalf("%d s old: set the stamp: %v", tc.age, err)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error_at = now() - $2::float8 * interval '1 second' WHERE id = $1`, r.ID, tc.age); err != nil {
+			t.Fatalf("%v s old: set the stamp: %v", tc.age, err)
 		}
-		if got, err := pg.ContainmentStreakDue(ctx, r.ID, time.Minute, early); err != nil || got != tc.want {
-			t.Errorf("a stamp %d s old with a one-minute spacing: ContainmentStreakDue = %v, %v; want %v", tc.age, got, err, tc.want)
+		if got, err := pg.ContainmentStreakDue(ctx, r.ID, time.Minute, long, nil); err != nil || got != tc.want {
+			t.Errorf("a stamp %v s old with a one-minute spacing: ContainmentStreakDue = %v, %v; want %v", tc.age, got, err, tc.want)
+		}
+	}
+}
+
+// TestPG_ContainmentPastDue_DBClock: an ended run is past its due plus wait only by the database's now(), with
+// its end seeded as seconds before now() in SQL. A run 30 s past its due is past it with no wait and with
+// 20 s, not with 40 s; a run 30 s short of it is not past it; a run that is not terminal, or no row, never
+// is. Proven red by a due read from a Go time, by the wait dropped or read in the wrong unit, and by a
+// missing state test.
+func TestPG_ContainmentPastDue_DBClock(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	lag := store.ContainmentLag.Seconds()
+	add := func(state types.RunState, endedAgo float64) uuid.UUID {
+		t.Helper()
+		r := persistRun(t, ctx, pool, newRun(state))
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = now() - $2::float8 * interval '1 second' WHERE id = $1`, r.ID, endedAgo); err != nil {
+			t.Fatalf("place the run: %v", err)
+		}
+		return r.ID
+	}
+	past, short, running := add(types.RunKilled, lag+30), add(types.RunKilled, lag-30), add(types.RunRunning, lag+3600)
+	for name, tc := range map[string]struct {
+		id   uuid.UUID
+		wait time.Duration
+		want bool
+	}{
+		"30 s past due, no wait":     {past, 0, true},
+		"30 s past due, a 20 s wait": {past, 20 * time.Second, true},
+		"30 s past due, a 40 s wait": {past, 40 * time.Second, false},
+		"30 s short of due":          {short, 0, false},
+		"running, its end long past": {running, 0, false},
+		"no such run":                {uuid.New(), 0, false},
+	} {
+		if got, err := pg.ContainmentPastDue(ctx, tc.id, tc.wait); err != nil || got != tc.want {
+			t.Errorf("%s: ContainmentPastDue = %v, %v; want %v", name, got, err, tc.want)
 		}
 	}
 }

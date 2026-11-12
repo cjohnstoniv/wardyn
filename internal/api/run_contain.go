@@ -473,14 +473,14 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uin
 	preLen, callLen, postLen := s.containPhases()
 	base := context.WithoutCancel(ctx)
 	preCtx, cancelPre := context.WithTimeout(base, preLen)
-	preErr := s.containPreCut(preCtx, run)
-	if preErr == nil {
-		preErr = preCtx.Err()
+	readErr := s.containPreCut(preCtx, run)
+	if readErr == nil {
+		readErr = preCtx.Err()
 	}
 	cancelPre()
-	if preErr != nil {
+	if readErr != nil {
 		slog.Warn("wardynd: the reads before cutting an ended run's agent did not finish; the next round tries again",
-			slog.String("run_id", run.ID.String()), slog.Any("err", preErr))
+			slog.String("run_id", run.ID.String()), slog.Any("err", readErr))
 		return
 	}
 	callCtx, cancelCall := context.WithTimeout(base, callLen)
@@ -718,8 +718,36 @@ func (s *Server) streakAges(id uuid.UUID) (startedAgo time.Duration, unobservedA
 	return startedAgo, unobservedAgo
 }
 
-// d1Due reports whether the cut item should hand run to the stop pool. The stop path decides it.
+// d1Due reports whether the cut item should hand run to the stop pool, in its post phase. It is true only
+// once the database's clock is past the run's containment due, and then in two cases. The run's substrate
+// has no contain call (cutUnsupported with no error: a virtual machine, Kubernetes in server mode), or the
+// cut failed and the database holds a failure at least a streak older than its now() that is not older than
+// the run's due, its last unobserved round or this process's start. An answer that did not observe the
+// sandbox is never a failure, and neither is a visit the stop path skipped. A Kubernetes server-mode run
+// with an owed copy back, whose agent was stopped on this visit or whose pass was running, waits for
+// containServerKeepWait past its due; a stop of its agent that failed (errAgentStopFailed), or a call phase
+// that ran out, makes it due at once. A read that fails makes it false for the tick. Every time it compares
+// is the database's, read when it is called, not when the item began.
 func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, err error) bool {
+	if !s.d1PastDueRead(ctx, run, 0) {
+		return false
+	}
+	serverMode := s.d1ServerMode(run)
+	skipped := errors.Is(err, errContainSkip)
+	failed := err != nil && !notObserved(err) && !skipped
+	// A server-mode run has no cut to fail: a stop of its agent that failed, or a call phase that ran out,
+	// fails closed. A visit skipped for a running pass is neither.
+	stalled := serverMode && failed &&
+		(errors.Is(err, errAgentStopFailed) || errors.Is(err, errContainCallAbandoned) || errors.Is(err, context.DeadlineExceeded))
+	switch {
+	case stalled:
+		return s.d1UnsupportedDue(ctx, run, false)
+	case serverMode && skipped, err == nil && kind == cutUnsupported:
+		return s.d1UnsupportedDue(ctx, run, serverMode)
+	case failed && s.d1StreakDue(ctx, run):
+		_, _, readable := s.d1FolderOwed(ctx, run)
+		return readable
+	}
 	return false
 }
 
@@ -735,8 +763,29 @@ func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 	return nil
 }
 
-// runStopItem is the stop pool's item for one run. The stop path writes it.
-func (s *Server) runStopItem(ctx context.Context, run types.AgentRun, gen uint64) {}
+// runStopItem is the stop pool's item for one run, under the claim of generation gen. A run with a contain
+// call is cut once more first. Each phase runs on a context of its own, so a phase that overruns takes
+// nothing from the next: the item ends within containD1 (containD1Unsupported with no last cut). Nothing is
+// given up or stopped while a pass back holds the run's lock: the lock is taken after the last cut and held
+// across the give-up and the stop, and a lock that is held ends the item with nothing written, to be tried
+// again on the next visit.
+func (s *Server) runStopItem(ctx context.Context, run types.AgentRun, gen uint64) {
+	base := context.WithoutCancel(ctx)
+	run, ok := s.d1Reread(base, run)
+	if !ok || (!s.d1NoCall(run) && !s.d1LastCut(base, run, gen)) {
+		return
+	}
+	_, unlock, locked, _ := s.tryLockRunOpHeld(base, run.ID)
+	if !locked {
+		slog.DebugContext(base, "wardynd: an ended run's lock is held; its stop waits for the next visit", slog.String("run_id", run.ID.String()))
+		return
+	}
+	defer unlock()
+	if !s.d1GiveUp(base, run) {
+		return
+	}
+	s.d1Stop(base, run, gen)
+}
 
 // containCallPre is the stop path's work at the start of the call phase, before the cut: the acts that
 // touch the run's agent. It runs inside containCallWithin on the call ctx and budget, so the worker never
@@ -744,10 +793,39 @@ func (s *Server) runStopItem(ctx context.Context, run types.AgentRun, gen uint64
 // the call's outcome: it is stamped like a failed cut, reaches d1Due, and the cut is not made. The one
 // exception is an error wrapping errRunnerNotHere, runner.ErrRunnerOffline or runner.ErrPendingOnRunner,
 // which is an unobserved round, not a failure: a hook must wrap those only when the runner truly is away.
-// The cut is made only while the call ctx is still live after the hook returns. It has none yet.
+// The cut is made only while the call ctx is still live after the hook returns.
+//
+// For a Kubernetes server-mode run with an owed copy back it stops the agent on every visit, with no record
+// of having done so, so that the pass has a stopped agent to copy from. A visit that cannot take the run's
+// lock (its copy back is running) leaves the agent alone and answers errPassInFlight, a skip; the lock is
+// held across the stop, so no pass starts between the check and the kill. An agent that cannot be stopped,
+// or a stop that failed, answers an error wrapping errAgentStopFailed, a plain failure: the stop's own error
+// is kept as text only, so it never reads as a runner that is away (server mode has no runner). Every other
+// run has no work here.
 func (s *Server) containCallPre(ctx context.Context, run types.AgentRun) error {
 	if f := s.contain.containCallFn; f != nil {
 		return f(ctx, run)
+	}
+	if !s.d1ServerMode(run) {
+		return nil
+	}
+	if _, owed, ok := s.d1FolderOwed(ctx, run); !ok || !owed {
+		return nil
+	}
+	lctx, unlock, locked, _ := s.tryLockRunOpHeld(ctx, run.ID)
+	if !locked {
+		return errPassInFlight
+	}
+	defer unlock()
+	if !s.agentStoppable(lctx, run) {
+		slog.WarnContext(ctx, "wardynd: an ended run's agent cannot be stopped from the server; its sandbox is stopped without waiting",
+			slog.String("run_id", run.ID.String()))
+		return errAgentNotStoppable
+	}
+	if err := s.stopAgentForPass(lctx, run.SandboxRef); err != nil {
+		slog.WarnContext(ctx, "wardynd: stopping an ended run's agent for its copy back failed; its sandbox is stopped without waiting",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return fmt.Errorf("%w: %v", errAgentStopFailed, err)
 	}
 	return nil
 }

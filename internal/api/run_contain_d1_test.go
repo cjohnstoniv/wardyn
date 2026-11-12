@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -45,6 +46,7 @@ type d1Store struct {
 	status       map[uuid.UUID]*types.RunLocalFolderStatus
 	statusErr    error
 	seedErr      error
+	dueErr       error // the due read fails with it
 	giveUps      []uuid.UUID
 	notApplied   bool // the give-up statement applies nothing
 	otherWriter  bool // the statement applies nothing, and the record is final from another writer
@@ -108,9 +110,9 @@ func (f *d1Store) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, err
 }
 
 // SetRunContainmentErrorSince is containStore's, after postLag when a test set one.
-func (f *d1Store) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, now, since time.Time) (bool, error) {
+func (f *d1Store) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error) {
 	time.Sleep(time.Duration(f.postLag.Load()))
-	return f.containStore.SetRunContainmentErrorSince(ctx, id, msg, now, since)
+	return f.containStore.SetRunContainmentErrorSince(ctx, id, msg, startedAgo, unobservedAgo)
 }
 
 // ClearRunContainmentErrorForRef is the store's statement over the rows in memory: the failure is cleared
@@ -172,8 +174,30 @@ func (f *d1Store) idOfRef(ref string) (uuid.UUID, bool) {
 	return uuid.Nil, false
 }
 
-// ContainmentStreakDue is the store's statement over the rows in memory.
-func (f *d1Store) ContainmentStreakDue(ctx context.Context, id uuid.UUID, tau time.Duration, since time.Time) (bool, error) {
+// ContainmentPastDue is the store's due test over the rows in memory, on the store's own clock, as the SQL
+// is on the database's: the server's clock never reaches it.
+func (f *d1Store) ContainmentPastDue(ctx context.Context, id uuid.UUID, wait time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	f.fmu.Lock()
+	err := f.dueErr
+	f.fmu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.rows[id]
+	if r == nil || !r.State.IsTerminal() {
+		return false, nil
+	}
+	return !time.Now().Before(containRowKey(r.TerminalSandboxRow).Add(containmentLag + wait)), nil
+}
+
+// ContainmentStreakDue is the store's statement over the rows in memory, on the store's own clock: the
+// streak start is the latest of the row's due, now minus startedAgo and now minus unobservedAgo.
+func (f *d1Store) ContainmentStreakDue(ctx context.Context, id uuid.UUID, tau, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -185,7 +209,16 @@ func (f *d1Store) ContainmentStreakDue(ctx context.Context, id uuid.UUID, tau ti
 	if r != nil && r.ContainmentErrorAt != nil {
 		at := *r.ContainmentErrorAt
 		stamp = &at
-		got = !at.Before(containRowKey(r.TerminalSandboxRow).Add(containmentLag)) && !at.Before(since) && !at.After(now.Add(-tau))
+		since := containRowKey(r.TerminalSandboxRow).Add(containmentLag)
+		if t := now.Add(-startedAgo); t.After(since) {
+			since = t
+		}
+		if unobservedAgo != nil {
+			if t := now.Add(-*unobservedAgo); t.After(since) {
+				since = t
+			}
+		}
+		got = !at.Before(since) && !at.After(now.Add(-tau))
 	}
 	f.mu.Unlock()
 	f.fmu.Lock()
@@ -476,10 +509,11 @@ func (l *d1Lab) row(runnerID *uuid.UUID, kind types.MachineKind) store.TerminalS
 
 // item runs one cut item for the run, as the containment loop would, in the caller.
 func (l *d1Lab) item(row store.TerminalSandboxRow) bool {
-	if !l.srv.containClaim(row.ID, containPoolCut) {
+	gen, ok := l.srv.containClaim(row.ID, containPoolCut)
+	if !ok {
 		return false
 	}
-	l.srv.containCutItem(context.Background(), containRunOf(row))
+	l.srv.containCutItem(context.Background(), containRunOf(row), gen)
 	return true
 }
 
@@ -580,11 +614,11 @@ func TestContain_UnsupportedStopsOnFirstTickPastDue(t *testing.T) {
 		run := containRunOf(row)
 		l.start()
 		time.Sleep(time.Until(due) - time.Second)
-		if l.srv.d1Due(context.Background(), run, cutUnsupported, nil, nil) || l.dr.totalStops() != 0 {
+		if l.srv.d1Due(context.Background(), run, cutUnsupported, nil) || l.dr.totalStops() != 0 {
 			t.Errorf("due - 1s: d1Due or a stop came early (stops %d)", l.dr.totalStops())
 		}
 		time.Sleep(time.Second)
-		if !l.srv.d1Due(context.Background(), run, cutUnsupported, nil, nil) {
+		if !l.srv.d1Due(context.Background(), run, cutUnsupported, nil) {
 			t.Error("at the due: d1Due = false, want true")
 		}
 		time.Sleep(containTick)
@@ -866,7 +900,7 @@ func TestContain_ContainOnlyNotBehindStops(t *testing.T) {
 		l.st.lag = 4 * time.Second
 		for range 100 {
 			r := l.row(nil, "")
-			if !l.srv.containClaim(r.ID, containPoolStop) {
+			if _, ok := l.srv.containClaim(r.ID, containPoolStop); !ok {
 				t.Fatal("the stop pool could not claim a run")
 			}
 		}
@@ -1290,8 +1324,8 @@ func d1LateLab(t *testing.T, lateAfter time.Duration, lag time.Duration, late fu
 }
 
 // A fence whose deadline error comes 15 s after its phase. The run is on a runner, so a second failure
-// counts only a minute (containStreakRunner) after the first, and the call phase is 20 s. With no pre phase
-// in the cut item, the times are:
+// counts only a minute (containStreakRunner) after the first, and the call phase is 20 s. The cut item's pre
+// phase reads nothing here and takes no time, so the times are:
 //   - round one starts at 0, its call is abandoned at 20 s and the first failure is stamped then; the call
 //     answers at 35 s and the run is released;
 //   - the next visit is at 40 s: round two is abandoned at 60 s, only 40 s after the first stamp, so
@@ -1307,9 +1341,9 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, row, calls := d1LateLab(t, 15*time.Second, 0, deadline)
 		var asked atomic.Int32
-		l.srv.contain.d1DueFn = func(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool {
+		l.srv.contain.d1DueFn = func(ctx context.Context, run types.AgentRun, kind cutKind, err error) bool {
 			asked.Add(1)
-			return l.srv.d1Due(ctx, run, kind, err, preErr)
+			return l.srv.d1Due(ctx, run, kind, err)
 		}
 		var mu sync.Mutex
 		peak, out := 0, 0
@@ -1752,8 +1786,7 @@ func TestContain_RunningPassIsNotKilledByTheHold(t *testing.T) {
 
 // A late answer that lands between d1Due's answer being recorded and the cut item's release leaves one stop
 // item: the release does not end the stop pool's claim, no cut claims the run meanwhile, and no more than two
-// calls are out for it. This test is written against the claim generations of the core change (containClaim
-// answers a generation; containRelease and containCallWithin take it) and builds only after that is merged.
+// calls are out for it.
 func TestContain_LateAnswerBetweenDueKnownAndReleaseKeepsOneStopItem(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newD1Lab(t, true)
@@ -1880,8 +1913,8 @@ func TestContain_StopWaitsForAPassHoldingTheLockPastTheWait(t *testing.T) {
 // containStopOwed over its inputs. A Kubernetes server-mode run with an owed copy back is not owed its stop
 // inside the hold (its due plus the server-mode wait) and is once the hold has expired; one with nothing
 // owed is owed at its due. A run that is not in server mode follows d1Due: no contain call, past due: owed;
-// a failure a streak old: owed; a first failure: not. A read that fails answers owed. A run not yet due is
-// never owed.
+// a failure a streak old: owed; a first failure: not. A read that fails answers owed, the due read included.
+// A run not yet due is never owed.
 func TestContain_StopOwedValueList(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, _ := d1ServerLab(t, time.Second, time.Second)
@@ -1914,6 +1947,16 @@ func TestContain_StopOwedValueList(t *testing.T) {
 			}
 			fail(l.ds, nil)
 		}
+		notYet := owedRow(time.Minute)
+		l.ds.fmu.Lock()
+		l.ds.dueErr = errors.New("database down")
+		l.ds.fmu.Unlock()
+		if !l.srv.containStopOwed(ctx, notYet) {
+			t.Error("the due read failing: containStopOwed = false, want true: a read that fails answers owed")
+		}
+		l.ds.fmu.Lock()
+		l.ds.dueErr = nil
+		l.ds.fmu.Unlock()
 	})
 	// A hosted container: owed only once a failure a streak old is recorded.
 	synctest.Test(t, func(t *testing.T) {
@@ -1973,4 +2016,158 @@ func TestContain_ResumeSweepLeavesARunWhoseStopIsOwed(t *testing.T) {
 			t.Error("a run inside its hold: the sweep did not reach its tail, so the owed case proves nothing")
 		}
 	})
+}
+
+// d1FailExec makes the server lab's agent check ("cat") or agent stop ("script") fail with err.
+func d1FailExec(l *d1Lab, failing string, err error) {
+	inner := l.dr.execFn
+	l.dr.execFn = func(ctx context.Context, what, ref string) error {
+		if what == failing {
+			return err
+		}
+		return inner(ctx, what, ref)
+	}
+}
+
+// A server-mode run inside its hold whose agent check or agent stop fails: the real d1Due takes that failure
+// on the visit and the run is queued for the stop pool at once, with no cut made and no second failure
+// waited for. Caught by: a failed agent stop read as a skip or an unobserved round, d1Due waiting out the
+// hold after a failed agent stop, or the pin run against a stand-in instead of the real d1Due.
+func TestContain_AgentStopFailureQueuesTheStopAtOnce(t *testing.T) {
+	for _, failing := range []string{"cat", "script"} {
+		synctest.Test(t, func(t *testing.T) {
+			l, _ := d1ServerLab(t, time.Second, time.Second)
+			d1FailExec(l, failing, errContainBoom)
+			row := l.rowDue(-time.Minute, nil, "")
+			l.ds.owe(row.ID)
+			if l.srv.contain.d1DueFn != nil || l.srv.contain.containCallFn != nil {
+				t.Fatal("a stand-in is set: this pin needs the real d1Due and the real hook")
+			}
+			l.item(row)
+			if got := l.stopQueue(); got != 1 {
+				t.Errorf("failing %s inside the hold: stop FIFO = %d, want the run queued on that visit", failing, got)
+			}
+			if !l.busy(row.ID) {
+				t.Errorf("failing %s: the run was released instead of handed to the stop pool", failing)
+			}
+			if n := l.rn.callsTo(row.SandboxRef); n != 0 {
+				t.Errorf("failing %s: cut calls = %d, want none after a failed agent stop", failing, n)
+			}
+			if l.st.stamp(row.ID) == nil {
+				t.Errorf("failing %s: no failure stamp", failing)
+			}
+			l.stop()
+		})
+	}
+}
+
+// A server-mode run's failed agent check or agent stop is a failure of the visit, never a runner that is
+// away, even when the error under it names one: errors.Is is false for all three runner sentinels, and the
+// visit stamps the failure with one failure row and leaves the round marked observed. Caught by: wrapping
+// the exec's own error, which reads as an unobserved round (no stamp, no row, and no stop queued).
+func TestContain_ServerModeAgentStopFailureIsAFailureNotUnobserved(t *testing.T) {
+	away := []error{errRunnerNotHere, runner.ErrRunnerOffline, runner.ErrPendingOnRunner}
+	for _, failing := range []string{"cat", "script"} {
+		for _, cause := range away {
+			synctest.Test(t, func(t *testing.T) {
+				l, _ := d1ServerLab(t, time.Second, time.Second)
+				d1FailExec(l, failing, fmt.Errorf("exec: %w", cause))
+				row := l.rowDue(-time.Minute, nil, "")
+				l.ds.owe(row.ID)
+				err := l.srv.containCallPre(context.Background(), containRunOf(row))
+				for _, sentinel := range away {
+					if errors.Is(err, sentinel) {
+						t.Errorf("failing %s with %v: the hook's error wraps %v; server mode has no runner", failing, cause, sentinel)
+					}
+				}
+				if err == nil || notObserved(err) || errors.Is(err, errContainSkip) || !errors.Is(err, errAgentStopFailed) {
+					t.Errorf("failing %s with %v: the hook answered %v, want a plain failure wrapping errAgentStopFailed", failing, cause, err)
+				}
+				l.item(row)
+				if l.st.stamp(row.ID) == nil {
+					t.Errorf("failing %s with %v: no failure stamp", failing, cause)
+				}
+				if failures, _ := failuresAndSuccesses(l.rec); failures != 1 {
+					t.Errorf("failing %s with %v: failure rows = %d, want 1", failing, cause, failures)
+				}
+				if _, ago := l.srv.streakAges(row.ID); ago != nil {
+					t.Errorf("failing %s with %v: the round was marked unobserved", failing, cause)
+				}
+				l.stop()
+			})
+		}
+	}
+}
+
+// A visit that finds the run's lock held by its pass is a skip: the hook answers errPassInFlight, which wraps
+// errContainSkip, and the visit writes no stamp and no audit row, marks nothing unobserved, queues nothing,
+// leaves the agent alone and releases the claim. Caught by: a held lock read as a failed agent stop, which
+// would stop the sandbox under a running pass.
+func TestContain_PassInFlightSkipIsNotAFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, scripts := d1ServerLab(t, time.Second, time.Second)
+		row := l.rowDue(-time.Minute, nil, "")
+		l.ds.owe(row.ID)
+		_, unlock, err := l.srv.lockRunOp(context.Background(), row.ID)
+		if err != nil {
+			t.Fatalf("take the run's lock: %v", err)
+		}
+		if got := l.srv.containCallPre(context.Background(), containRunOf(row)); !errors.Is(got, errPassInFlight) || !errors.Is(got, errContainSkip) {
+			t.Errorf("the hook answered %v, want errPassInFlight as a skip", got)
+		}
+		l.item(row)
+		if n := l.st.stampWrites(); n != 0 {
+			t.Errorf("stamp writes = %d, want none for a skip", n)
+		}
+		if failures, successes := failuresAndSuccesses(l.rec); failures+successes != 0 {
+			t.Errorf("audit rows = %d failures, %d successes, want none", failures, successes)
+		}
+		if _, ago := l.srv.streakAges(row.ID); ago != nil {
+			t.Error("a skip marked the round unobserved")
+		}
+		if got := l.stopQueue(); got != 0 || l.busy(row.ID) {
+			t.Errorf("stop FIFO = %d, busy %v; want nothing queued and the claim released", got, l.busy(row.ID))
+		}
+		if n, cats := len(*scripts), l.dr.execCount("cat", row.SandboxRef); n != 0 || cats != 0 {
+			t.Errorf("agent checks %d, agent stops %d while the pass held the lock, want none", cats, n)
+		}
+		unlock()
+		l.stop()
+	})
+}
+
+// The stop path's due tests are the database's, never the server's clock. With the server's clock two
+// minutes ahead, a virtual machine a minute short of its due is not due, and a held server-mode run a minute
+// inside its hold is not owed its stop; with it two minutes behind, the same runs a minute past are. Caught
+// by: any due or hold judged on the server's clock.
+func TestContain_StopPathReadsTheDatabasesClock(t *testing.T) {
+	for name, tc := range map[string]struct {
+		skew   time.Duration
+		offset time.Duration // past the due (the VM) and past the hold (server mode); negative: short of it
+		want   bool
+	}{
+		"clock ahead, a minute short": {2 * time.Minute, -time.Minute, false},
+		"clock behind, a minute past": {-2 * time.Minute, time.Minute, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l, _ := d1ServerLab(t, time.Second, time.Second)
+				l.srv.cfg.Now = func() time.Time { return time.Now().Add(tc.skew) }
+				ctx := context.Background()
+				vm := containRunOf(l.rowDue(-tc.offset, nil, types.MachineLinuxVM))
+				if got := l.srv.d1Due(ctx, vm, cutUnsupported, nil); got != tc.want {
+					t.Errorf("a virtual machine: d1Due = %v, want %v", got, tc.want)
+				}
+				held := l.rowDue(-(containServerKeepWait + tc.offset), nil, "")
+				l.ds.owe(held.ID)
+				run := containRunOf(held)
+				if got := l.srv.containStopOwed(ctx, run); got != tc.want {
+					t.Errorf("a held server-mode run: containStopOwed = %v, want %v", got, tc.want)
+				}
+				if got := l.srv.d1Due(ctx, run, cutUnsupported, nil); got != tc.want {
+					t.Errorf("a held server-mode run: d1Due = %v, want %v", got, tc.want)
+				}
+			})
+		})
+	}
 }

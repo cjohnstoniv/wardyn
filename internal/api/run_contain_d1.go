@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -37,14 +38,19 @@ const (
 	containStreakRunner = max(containTick, (runnerwire.MissedPings+1)*runnerwire.PingInterval)
 )
 
-// errAgentNotStoppable is containPreCut's answer for a Kubernetes server-mode run whose agent cannot be
-// stopped from the server: no pass can run for it, so the stop does not wait for one.
-var errAgentNotStoppable = errors.New("the sandbox's agent cannot be stopped from the server")
+// errAgentStopFailed is what containCallPre wraps when a Kubernetes server-mode run's agent was not stopped:
+// a plain failure of the visit, stamped and audited like a failed cut, after which d1Due stops the sandbox
+// without waiting for the pass. It never wraps a runner's absence: server mode has no runner.
+var errAgentStopFailed = errors.New("stopping the ended run's agent for its copy back failed")
 
-// errPassInFlight is containPreCut's answer when the run's lock is held, which is when its copy back is
-// running: this visit leaves the agent alone. It is a skipped visit, not a failed cut: d1Due reads it from
-// the pre-cut slot and it is never an error of the cut itself, so nothing is stamped for it.
-var errPassInFlight = errors.New("a pass back is running for the run; the agent is left alone this visit")
+// errAgentNotStoppable is containCallPre's answer for a Kubernetes server-mode run whose agent cannot be
+// stopped from the server: no pass can run for it, so the stop does not wait for one.
+var errAgentNotStoppable = fmt.Errorf("%w: the sandbox's agent cannot be stopped from the server", errAgentStopFailed)
+
+// errPassInFlight is containCallPre's answer when it cannot take the run's lock, which is held while its
+// copy back runs: this visit leaves the agent alone. It wraps errContainSkip, so it is a skipped visit, not
+// a failed cut: nothing is stamped or audited for it, and d1Due treats it as a visit whose agent was held.
+var errPassInFlight = fmt.Errorf("%w: a pass back is running for the run; the agent is left alone this visit", errContainSkip)
 
 // d1ServerMode reports a hosted Kubernetes run in server mode: it has no contain call.
 func (s *Server) d1ServerMode(run types.AgentRun) bool {
@@ -83,7 +89,7 @@ func (s *Server) d1FolderOwed(ctx context.Context, run types.AgentRun) (st types
 }
 
 // d1StreakDue reports a second failure at least a streak after the first, compared by the database on its
-// own clock, since the later of the run's due time, its last unobserved round and this process's start.
+// own clock, since the latest of the run's due time, its last unobserved round and this process's start.
 // A read that fails answers false, for the next round.
 func (s *Server) d1StreakDue(ctx context.Context, run types.AgentRun) bool {
 	streak, err := s.d1Streak(ctx, run)
@@ -94,7 +100,9 @@ func (s *Server) d1StreakDue(ctx context.Context, run types.AgentRun) bool {
 	return streak
 }
 
-// d1Streak is d1StreakDue with its read error apart. A store that cannot answer holds no streak.
+// d1Streak is d1StreakDue with its read error apart. A store that cannot answer holds no streak. The
+// process start and the last unobserved round go to the store as lengths of time on this process's
+// monotonic clock (streakAges), which the store places on the database's clock.
 func (s *Server) d1Streak(ctx context.Context, run types.AgentRun) (bool, error) {
 	st, ok := s.cfg.Store.(store.ContainmentStreaker)
 	if !ok {
@@ -104,29 +112,59 @@ func (s *Server) d1Streak(ctx context.Context, run types.AgentRun) (bool, error)
 	if run.RunnerID != nil {
 		tau = containStreakRunner
 	}
-	return st.ContainmentStreakDue(ctx, run.ID, tau, s.streakSince(run))
+	startedAgo, unobservedAgo := s.streakAges(run.ID)
+	return st.ContainmentStreakDue(ctx, run.ID, tau, startedAgo, unobservedAgo)
+}
+
+// d1PastDue reports whether the database's now() is at least wait past run's containment due, with the
+// read's error apart. A run that is not terminal is never past it, and a store that cannot answer has no
+// run past it.
+func (s *Server) d1PastDue(ctx context.Context, run types.AgentRun, wait time.Duration) (bool, error) {
+	st, ok := s.cfg.Store.(store.ContainmentStreaker)
+	if !ok {
+		return false, nil
+	}
+	return st.ContainmentPastDue(ctx, run.ID, wait)
+}
+
+// d1PastDueRead is d1PastDue for d1Due: a read that fails answers false, logged, for the next round.
+func (s *Server) d1PastDueRead(ctx context.Context, run types.AgentRun, wait time.Duration) bool {
+	past, err := s.d1PastDue(ctx, run, wait)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: checking an ended run's containment due failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return false
+	}
+	return past
 }
 
 // d1UnsupportedDue is the rule for a run with no contain call: stop it, once its folder record has been
-// read. A Kubernetes server-mode run with an owed copy back, whose agent was stopped on this visit, waits
-// for containServerKeepWait past its due first: its pass may run in between. held says that wait applies.
-func (s *Server) d1UnsupportedDue(ctx context.Context, run types.AgentRun, due time.Time, held bool) bool {
+// read. A Kubernetes server-mode run with an owed copy back, whose agent was stopped on this visit or whose
+// pass was running, waits for containServerKeepWait past its due first, on the database's clock: its pass
+// may run in between. held says that wait applies.
+func (s *Server) d1UnsupportedDue(ctx context.Context, run types.AgentRun, held bool) bool {
 	_, owed, ok := s.d1FolderOwed(ctx, run)
 	if !ok {
 		return false
 	}
-	return !(owed && held && s.cfg.Now().Before(due.Add(containServerKeepWait)))
+	if !owed || !held {
+		return true
+	}
+	return s.d1PastDueRead(ctx, run, containServerKeepWait)
 }
 
 // containStopOwed reports whether run's stop is owed: it is past its containment due, and either its
 // substrate has no contain call and its stop is not being held back for its pass (a Kubernetes server-mode
 // run with an owed copy back is held until its due plus containServerKeepWait), or a failure the database
-// holds is a streak old. These are the reads d1Due makes, with no rule of their own. A read that fails
-// answers true: the run is then stopped, never given another attempt at a copy back. A run whose stop is
-// owed gets no new pass back; stopping it wins over another attempt.
+// holds is a streak old. These are the reads d1Due makes, with no rule of their own, and every time they
+// compare is the database's. A read that fails answers true, the due read included: the run is then
+// stopped, never given another attempt at a copy back. A run whose stop is owed gets no new pass back;
+// stopping it wins over another attempt.
 func (s *Server) containStopOwed(ctx context.Context, run types.AgentRun) bool {
-	due, ok := containmentDue(run)
-	if !ok || s.cfg.Now().Before(due) {
+	past, err := s.d1PastDue(ctx, run, 0)
+	if err != nil {
+		return true
+	}
+	if !past {
 		return false
 	}
 	_, owed, readable := s.d1FolderOwed(ctx, run)
@@ -135,7 +173,11 @@ func (s *Server) containStopOwed(ctx context.Context, run types.AgentRun) bool {
 	}
 	switch {
 	case s.d1ServerMode(run):
-		return !owed || !s.cfg.Now().Before(due.Add(containServerKeepWait))
+		if !owed {
+			return true
+		}
+		waited, err := s.d1PastDue(ctx, run, containServerKeepWait)
+		return err != nil || waited
 	case s.d1NoCall(run):
 		return true
 	}
@@ -162,11 +204,11 @@ func (s *Server) d1Reread(base context.Context, run types.AgentRun) (types.Agent
 // d1LastCut is the continuation's last cut, in its own phase. It answers whether the item goes on to the
 // give-up and the stop. A cut that held clears the failure and ends the item; an answer that did not
 // observe the sandbox ends it too, and restarts the streak; a panic ends it. A cut that failed, or was
-// abandoned at the end of its phase, goes on.
-func (s *Server) d1LastCut(base context.Context, run types.AgentRun) bool {
+// abandoned at the end of its phase, goes on. The call is made under the stop item's claim, generation gen.
+func (s *Server) d1LastCut(base context.Context, run types.AgentRun, gen uint64) bool {
 	callCtx, cancel := context.WithTimeout(base, containCall)
 	defer cancel()
-	ans, _ := s.containCallWithin(callCtx, run, func() containAnswer {
+	ans, _ := s.containCallWithin(callCtx, run, gen, func() containAnswer {
 		kind, err := s.cutAgent(callCtx, run)
 		return containAnswer{kind: kind, err: err}
 	})
@@ -217,8 +259,9 @@ func (s *Server) d1GiveUp(base context.Context, run types.AgentRun) bool {
 
 // d1Stop is the StopSandbox phase, and the post phase after it. A stop still running at the end of its
 // phase is abandoned and counts as failed; its claim is held until the call returns. A confirmed stop
-// clears the run's recorded containment failure for that sandbox; the tail owner clears the ref.
-func (s *Server) d1Stop(base context.Context, run types.AgentRun) {
+// clears the run's recorded containment failure for that sandbox; the tail owner clears the ref. The call is
+// made under the stop item's claim, generation gen.
+func (s *Server) d1Stop(base context.Context, run types.AgentRun, gen uint64) {
 	if s.cfg.Runner == nil {
 		return
 	}
@@ -228,7 +271,7 @@ func (s *Server) d1Stop(base context.Context, run types.AgentRun) {
 	}
 	stopCtx, cancel := context.WithTimeout(base, budget)
 	defer cancel()
-	ans, _ := s.containCallWithin(stopCtx, run, func() containAnswer {
+	ans, _ := s.containCallWithin(stopCtx, run, gen, func() containAnswer {
 		return containAnswer{err: s.cfg.Runner.StopSandbox(stopCtx, run.SandboxRef)}
 	})
 	switch {
