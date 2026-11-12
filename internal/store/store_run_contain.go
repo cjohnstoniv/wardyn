@@ -64,6 +64,26 @@ type ContainmentStreaker interface {
 
 var _ ContainmentStreaker = PG{}
 
+// ContainmentClearer clears a run's recorded containment failure for the sandbox that was stopped.
+type ContainmentClearer interface {
+	ClearRunContainmentErrorForRef(ctx context.Context, id uuid.UUID, ref string) (bool, error)
+}
+
+var _ ContainmentClearer = PG{}
+
+// ClearRunContainmentErrorForRef clears run id's containment failure only while the run still holds sandbox
+// ref: a confirmed stop of one sandbox never clears the failure recorded for another. It answers whether a
+// failure was cleared.
+func (s PG) ClearRunContainmentErrorForRef(ctx context.Context, id uuid.UUID, ref string) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE agent_runs SET containment_error=NULL, containment_error_at=NULL
+		WHERE id=$1 AND sandbox_ref=$2 AND $2 <> '' AND containment_error IS NOT NULL`, id, ref)
+	if err != nil {
+		return false, fmt.Errorf("store: clear run containment error for a sandbox: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // ListTerminalSandboxPage lists ended runs that hold a sandbox, newest end first, ties by id, one keyset
 // page of at most limit rows (never more than 500) after the cursor, or from the newest when after is nil.
 // The cursor answered is nil on the last page. With unfencedOnly it skips runs whose agent was already cut

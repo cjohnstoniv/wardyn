@@ -28,9 +28,9 @@ const (
 	containD1 = containPre + containCall + d1GiveUpPhase + d1StopPhase + containPost
 	// containD1Unsupported is the stop item for a run with no contain call: the last cut is left out.
 	containD1Unsupported = containD1 - containCall
-	// containOptionC is how long past its containment due a Kubernetes server-mode run with an owed copy
-	// back is left to its pass before D1 stops it. The agent is stopped on every visit meanwhile.
-	containOptionC = 5 * time.Minute
+	// containServerKeepWait is how long past its containment due a Kubernetes server-mode run with an owed copy
+	// back is left to its pass before it is stopped. Its agent is stopped on every visit meanwhile.
+	containServerKeepWait = 5 * time.Minute
 	// containStreakRunner is the gap two failures of a run on a runner need. A dead link is failed by the
 	// keepalive up to (MissedPings+1) pings after the last pong, and a cut is not an observation from then
 	// on, so two failures closer than that may both be the dead link's.
@@ -38,8 +38,13 @@ const (
 )
 
 // errAgentNotStoppable is containPreCut's answer for a Kubernetes server-mode run whose agent cannot be
-// stopped from the server: no pass can run for it, so D1 does not wait for one.
+// stopped from the server: no pass can run for it, so the stop does not wait for one.
 var errAgentNotStoppable = errors.New("the sandbox's agent cannot be stopped from the server")
+
+// errPassInFlight is containPreCut's answer when the run's lock is held, which is when its copy back is
+// running: this visit leaves the agent alone. It is a skipped visit, not a failed cut: d1Due reads it from
+// the pre-cut slot and it is never an error of the cut itself, so nothing is stamped for it.
+var errPassInFlight = errors.New("a pass back is running for the run; the agent is left alone this visit")
 
 // d1ServerMode reports a hosted Kubernetes run in server mode: it has no contain call.
 func (s *Server) d1ServerMode(run types.AgentRun) bool {
@@ -98,13 +103,13 @@ func (s *Server) d1StreakDue(ctx context.Context, run types.AgentRun) bool {
 
 // d1UnsupportedDue is the rule for a run with no contain call: stop it, once its folder record has been
 // read. A Kubernetes server-mode run with an owed copy back, whose agent was stopped on this visit, waits
-// for containOptionC past its due first: its pass may run in between. held says that wait applies.
+// for containServerKeepWait past its due first: its pass may run in between. held says that wait applies.
 func (s *Server) d1UnsupportedDue(ctx context.Context, run types.AgentRun, due time.Time, held bool) bool {
 	_, owed, ok := s.d1FolderOwed(ctx, run)
 	if !ok {
 		return false
 	}
-	return !(owed && held && s.cfg.Now().Before(due.Add(containOptionC)))
+	return !(owed && held && s.cfg.Now().Before(due.Add(containServerKeepWait)))
 }
 
 // d1Reread is the stop item's pre phase: the run as it stands now. An item for a run that is no longer
@@ -181,7 +186,7 @@ func (s *Server) d1GiveUp(base context.Context, run types.AgentRun) bool {
 
 // d1Stop is the StopSandbox phase, and the post phase after it. A stop still running at the end of its
 // phase is abandoned and counts as failed; its claim is held until the call returns. A confirmed stop
-// writes nothing: the tail owner clears the ref.
+// clears the run's recorded containment failure for that sandbox; the tail owner clears the ref.
 func (s *Server) d1Stop(base context.Context, run types.AgentRun) {
 	if s.cfg.Runner == nil {
 		return
@@ -196,7 +201,10 @@ func (s *Server) d1Stop(base context.Context, run types.AgentRun) {
 		return containAnswer{err: s.cfg.Runner.StopSandbox(stopCtx, run.SandboxRef)}
 	})
 	switch {
-	case ans.err == nil, errors.Is(ans.err, errContainCallPanicked):
+	case errors.Is(ans.err, errContainCallPanicked):
+		return
+	case ans.err == nil:
+		s.d1StopConfirmed(base, run)
 		return
 	case notObserved(ans.err):
 		s.containNoteUnobserved(run.ID)
@@ -209,4 +217,26 @@ func (s *Server) d1Stop(base context.Context, run types.AgentRun) {
 	postCtx, cancelPost := context.WithTimeout(base, containPost)
 	defer cancelPost()
 	s.containFailed(postCtx, st, run, ans.err)
+}
+
+// d1StopConfirmed is a StopSandbox that answered nil: the containment failure the run recorded is resolved.
+// It is cleared only while the run still holds the sandbox that was stopped (matched on its ref), so a stop
+// that comes late cannot clear the failure recorded for a newer sandbox of the same run.
+func (s *Server) d1StopConfirmed(base context.Context, run types.AgentRun) {
+	st, ok := s.cfg.Store.(store.ContainmentClearer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(base, containPost)
+	defer cancel()
+	cleared, err := st.ClearRunContainmentErrorForRef(ctx, run.ID, run.SandboxRef)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: clearing an ended run's containment failure after its confirmed stop failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return
+	}
+	if cleared {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.containment.reassert", run.ID.String(), "success",
+			mustJSON(map[string]any{"reason": "ended", "containment": "resolved", "by": "stop"})))
+	}
 }

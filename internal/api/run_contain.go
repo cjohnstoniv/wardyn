@@ -653,9 +653,10 @@ func (s *Server) streakSince(run types.AgentRun) time.Time {
 // (cutUnsupported with no error: a virtual machine, Kubernetes in server mode), or the cut failed and the
 // database holds a failure at least a streak older than now that is not older than the run's due, its last
 // unobserved round or this process's start. An answer that did not observe the sandbox is never a failure.
-// A Kubernetes server-mode run with an owed copy back, whose agent was stopped on this visit, waits for
-// containOptionC past its due; a stop of its agent that failed makes it due at once. A folder read that
-// fails makes it false for the tick. It reads the clock when it is called, not when the item began.
+// A Kubernetes server-mode run with an owed copy back, whose agent was stopped on this visit or whose pass
+// was running, waits for containServerKeepWait past its due; a stop of its agent that failed makes it due at
+// once. A folder read that fails makes it false for the tick. It reads the clock when it is called, not
+// when the item began.
 func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool {
 	due, ok := containmentDue(run)
 	if !ok || s.cfg.Now().Before(due) {
@@ -663,11 +664,13 @@ func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, er
 	}
 	failed := err != nil && !notObserved(err)
 	serverMode := s.d1ServerMode(run)
-	// A server-mode run has no cut to fail: a pre-cut that failed or ran out its phase fails closed.
-	stalled := serverMode && (preErr != nil || errors.Is(err, errContainCallAbandoned) || errors.Is(err, context.DeadlineExceeded))
+	skipped := errors.Is(preErr, errPassInFlight)
+	// A server-mode run has no cut to fail: a pre-cut that failed or ran out its phase fails closed. A visit
+	// skipped for a running pass is neither.
+	stalled := serverMode && ((preErr != nil && !skipped) || errors.Is(err, errContainCallAbandoned) || errors.Is(err, context.DeadlineExceeded))
 	switch {
 	case stalled, err == nil && kind == cutUnsupported:
-		return s.d1UnsupportedDue(ctx, run, due, serverMode && preErr == nil && err == nil)
+		return s.d1UnsupportedDue(ctx, run, due, serverMode && (preErr == nil || skipped) && err == nil)
 	case failed && s.d1StreakDue(ctx, run):
 		_, _, readable := s.d1FolderOwed(ctx, run)
 		return readable
@@ -677,7 +680,9 @@ func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, er
 
 // containPreCut is the stop path's work in the call phase, before the cut. For a Kubernetes server-mode run
 // with an owed copy back it stops the agent on every visit, with no record of having done so, so that the
-// pass has a stopped agent to copy from; it answers that stop's error. Every other run has no work here.
+// pass has a stopped agent to copy from; it answers that stop's error. A visit finds the run's lock held
+// while its pass runs, and then leaves the agent alone and answers errPassInFlight; the lock is held across
+// the stop, so no pass starts between the check and the kill. Every other run has no work here.
 func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 	if !s.d1ServerMode(run) {
 		return nil
@@ -685,10 +690,22 @@ func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 	if _, owed, ok := s.d1FolderOwed(ctx, run); !ok || !owed {
 		return nil
 	}
-	if !s.agentStoppable(ctx, run) {
+	lctx, unlock, locked, _ := s.tryLockRunOpHeld(ctx, run.ID)
+	if !locked {
+		return errPassInFlight
+	}
+	defer unlock()
+	if !s.agentStoppable(lctx, run) {
+		slog.WarnContext(ctx, "wardynd: an ended run's agent cannot be stopped from the server; its sandbox is stopped without waiting",
+			slog.String("run_id", run.ID.String()), slog.Any("reason", errAgentNotStoppable))
 		return errAgentNotStoppable
 	}
-	return s.stopAgentForPass(ctx, run.SandboxRef)
+	err := s.stopAgentForPass(lctx, run.SandboxRef)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: stopping an ended run's agent for its copy back failed; its sandbox is stopped without waiting",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
+	return err
 }
 
 // runStopItem is the stop pool's item for one run. A run with a contain call is cut once more first. Each

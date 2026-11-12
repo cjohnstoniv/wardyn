@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,7 +36,8 @@ type d1Streak struct {
 // store's own clock, as the SQL does) and the folder record of the runs a test makes owe a copy back.
 type d1Store struct {
 	*containStore
-	getLag time.Duration // each GetRun takes this long on the clock
+	getLag time.Duration      // each GetRun takes this long on the clock
+	onGet  func(id uuid.UUID) // runs in each GetRun after its lag, before the read
 
 	fmu          sync.Mutex
 	folderRunner uuid.UUID
@@ -47,6 +49,7 @@ type d1Store struct {
 	notApplied   bool // the give-up statement applies nothing
 	otherWriter  bool // the statement applies nothing, and the record is final from another writer
 	streaks      []d1Streak
+	cleared      []string // the refs a confirmed stop cleared a failure for
 }
 
 func newD1Store() *d1Store {
@@ -90,6 +93,9 @@ func (f *d1Store) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, err
 	if err := ctx.Err(); err != nil {
 		return types.AgentRun{}, err
 	}
+	if f.onGet != nil {
+		f.onGet(id)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := f.rows[id]
@@ -97,6 +103,65 @@ func (f *d1Store) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, err
 		return types.AgentRun{}, errors.New("no such run")
 	}
 	return containRunOf(r.TerminalSandboxRow), nil
+}
+
+// ClearRunContainmentErrorForRef is the store's statement over the rows in memory: the failure is cleared
+// only while the row holds ref.
+func (f *d1Store) ClearRunContainmentErrorForRef(_ context.Context, id uuid.UUID, ref string) (bool, error) {
+	f.mu.Lock()
+	r := f.rows[id]
+	ok := r != nil && ref != "" && r.SandboxRef == ref && r.msg != ""
+	if ok {
+		r.msg, r.ContainmentErrorAt = "", nil
+	}
+	f.mu.Unlock()
+	if ok {
+		f.fmu.Lock()
+		f.cleared = append(f.cleared, ref)
+		f.fmu.Unlock()
+	}
+	return ok, nil
+}
+
+// setRef gives run id the sandbox ref ref, as a newer sandbox of the run would.
+func (f *d1Store) setRef(id uuid.UUID, ref string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r := f.rows[id]; r != nil {
+		r.SandboxRef = ref
+	}
+}
+
+// failure is run id's recorded containment failure message.
+func (f *d1Store) failure(id uuid.UUID) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r := f.rows[id]; r != nil {
+		return r.msg
+	}
+	return ""
+}
+
+// arrive is a pass back that completed: the record holds its Back with nothing left to run.
+func (f *d1Store) arrive(id uuid.UUID) {
+	f.fmu.Lock()
+	defer f.fmu.Unlock()
+	if st := f.status[id]; st != nil {
+		st.Resume = nil
+		st.Back = &types.FolderPassRecord{At: time.Now().UTC(), Files: 3, Refused: []types.FolderRefusal{}}
+	}
+}
+
+// idOfRef is the run that holds ref.
+func (f *d1Store) idOfRef(ref string) (uuid.UUID, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id, r := range f.rows {
+		if r.SandboxRef == ref {
+			return id, true
+		}
+	}
+	return uuid.Nil, false
 }
 
 // ContainmentStreakDue is the store's statement over the rows in memory.
@@ -206,6 +271,7 @@ type d1Runner struct {
 	stopAt    map[string][]time.Time
 	stopEnd   map[string][]time.Time // returns that answered nil
 	execN     map[string]int
+	claimed   func(ref, what string) // checks the run's claim as a cut or stop call begins
 }
 
 func newD1Runner(rn *containRunner) *d1Runner {
@@ -215,8 +281,11 @@ func newD1Runner(rn *containRunner) *d1Runner {
 
 func (r *d1Runner) enter(ref, what string) func() {
 	r.mu.Lock()
-	f := r.onCall
+	f, check := r.onCall, r.claimed
 	r.mu.Unlock()
+	if check != nil {
+		check(ref, what)
+	}
 	if f == nil {
 		return func() {}
 	}
@@ -311,8 +380,33 @@ func (r d1Fencer) FenceProxy(ctx context.Context, ref string) error {
 // d1Lab is a containLab whose server runs the real stop path over a d1Store and a d1Runner.
 type d1Lab struct {
 	*containLab
-	ds *d1Store
-	dr *d1Runner
+	ds   *d1Store
+	dr   *d1Runner
+	srvs *d1Servers
+}
+
+// d1Servers are the servers that share one runner, for the check that every cut and stop call is made under
+// the run's claim.
+type d1Servers struct {
+	mu   sync.Mutex
+	list []*Server
+}
+
+// claim reports whether any server holds id, and whether one holds it for the stop pool.
+func (d *d1Servers) claim(id uuid.UUID) (busy, stopPool bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, srv := range d.list {
+		c := &srv.contain
+		c.mu.Lock()
+		e := c.inFlight[id]
+		c.mu.Unlock()
+		if e != nil {
+			busy = true
+			stopPool = stopPool || e.pool == containPoolStop
+		}
+	}
+	return busy, stopPool
 }
 
 func newD1Lab(t *testing.T, fencer bool) *d1Lab {
@@ -327,7 +421,28 @@ func newD1Lab(t *testing.T, fencer bool) *d1Lab {
 	}
 	l.srv.cfg.Store, l.srv.cfg.Runner = ds, rn
 	l.srv.contain.d1DueFn = nil
-	return &d1Lab{containLab: l, ds: ds, dr: dr}
+	srvs := &d1Servers{list: []*Server{l.srv}}
+	// The stop item re-reads its run under the stop pool's claim.
+	ds.onGet = func(id uuid.UUID) {
+		if busy, stopPool := srvs.claim(id); !busy || !stopPool {
+			t.Errorf("the stop item re-read run %s while the stop pool did not hold it", id)
+		}
+	}
+	// Every cut and stop call is made while its run is claimed, and a StopSandbox only by the stop pool.
+	dr.claimed = func(ref, what string) {
+		id, ok := ds.idOfRef(ref)
+		if !ok {
+			return
+		}
+		busy, stopPool := srvs.claim(id)
+		if !busy {
+			t.Errorf("a %s call for run %s was made with no claim on it", what, id)
+		}
+		if what == "stop" && !stopPool {
+			t.Errorf("a stop call for run %s was made while the stop pool did not hold it", id)
+		}
+	}
+	return &d1Lab{containLab: l, ds: ds, dr: dr, srvs: srvs}
 }
 
 // sharing is a second server over the same store and runner, as another replica.
@@ -336,7 +451,10 @@ func (l *d1Lab) sharing(t *testing.T) *d1Lab {
 	other := newContainLabOn(t, true, l.ds.containStore, &seamRecorder{})
 	other.srv.cfg.Store, other.srv.cfg.Runner = l.srv.cfg.Store, l.srv.cfg.Runner
 	other.srv.contain.d1DueFn = nil
-	return &d1Lab{containLab: other, ds: l.ds, dr: l.dr}
+	l.srvs.mu.Lock()
+	l.srvs.list = append(l.srvs.list, other.srv)
+	l.srvs.mu.Unlock()
+	return &d1Lab{containLab: other, ds: l.ds, dr: l.dr, srvs: l.srvs}
 }
 
 // row adds an ended STOPPED run, due a minute ago, of the machine kind on runnerID.
@@ -590,19 +708,44 @@ func TestContain_MacStopUsesItsBudget(t *testing.T) {
 	}
 }
 
-// d1Bound runs a lab over rows whose cuts take the whole call phase and fail, and whose stops take a phase
-// less a millisecond, and answers how long after the first listing each ref's stop returned.
+// d1Rows adds n ended runs, due a minute ago and one millisecond apart so no two share an end time, and the
+// order the loop lists them in is fixed. kindOf says each one's machine kind. The kinds are returned by ref.
+func d1Rows(l *d1Lab, n int, runnerID *uuid.UUID, kindOf func(i int) types.MachineKind) (rows []store.TerminalSandboxRow, kinds map[string]types.MachineKind) {
+	kinds = map[string]types.MachineKind{}
+	for i := range n {
+		kind := types.MachineKind("")
+		if kindOf != nil {
+			kind = kindOf(i)
+		}
+		r := l.rowDue(-time.Minute-time.Duration(i)*time.Millisecond, runnerID, kind)
+		rows, kinds[r.SandboxRef] = append(rows, r), kind
+	}
+	return rows, kinds
+}
+
+// d1Bound runs a lab over rows whose cuts take the whole call phase less a millisecond per row and fail,
+// and whose stops take a phase less a millisecond per row, so no two calls end at the same instant, and
+// answers how long after the first listing each ref's stop returned.
 func d1Bound(t *testing.T, l *d1Lab, rows []store.TerminalSandboxRow, kinds map[string]types.MachineKind, horizon time.Duration) (last time.Duration) {
 	t.Helper()
 	l.st.lag = 4 * time.Second
 	l.ds.getLag = 4 * time.Second
-	l.rn.setHook(d1CutHangs)
-	l.dr.stopFn = func(ctx context.Context, ref string, _ int) error {
-		d := d1StopPhase - time.Millisecond
-		if kinds[ref].IsMacOSVM() {
-			d = d1StopPhaseMac - time.Millisecond
+	index := map[string]int{}
+	for i, r := range rows {
+		index[r.SandboxRef] = i
+	}
+	l.rn.setHook(func(ctx context.Context, ref string) error {
+		if err := d1Sleep(ctx, containCall-time.Duration(index[ref]+1)*time.Millisecond); err != nil {
+			return err
 		}
-		return d1Sleep(ctx, d)
+		return errContainBoom
+	})
+	l.dr.stopFn = func(ctx context.Context, ref string, _ int) error {
+		d := d1StopPhase
+		if kinds[ref].IsMacOSVM() {
+			d = d1StopPhaseMac
+		}
+		return d1Sleep(ctx, d-time.Duration(index[ref]+1)*time.Millisecond)
 	}
 	start := time.Now()
 	l.start()
@@ -618,65 +761,60 @@ func d1Bound(t *testing.T, l *d1Lab, rows []store.TerminalSandboxRow, kinds map[
 	return last
 }
 
+// d1BoundTwice runs one bound scenario in two separate fake-clock bubbles. Its calls end at distinct
+// instants, so the schedule does not depend on which goroutine runs first, and both runs must end at the same
+// time, inside [lo, hi].
+func d1BoundTwice(t *testing.T, lo, hi time.Duration, scenario func(t *testing.T) time.Duration) {
+	t.Helper()
+	var got [2]time.Duration
+	for i := range got {
+		synctest.Test(t, func(t *testing.T) { got[i] = scenario(t) })
+	}
+	if got[0] != got[1] {
+		t.Errorf("the same scenario ended at +%v and at +%v: the schedule depends on goroutine order", got[0], got[1])
+	}
+	if got[0] < lo || got[0] > hi {
+		t.Errorf("the last stop returned at +%v, want in [%v, %v]", got[0], lo, hi)
+	}
+	t.Logf("last stop at +%v", got[0])
+}
+
 // 100 containers whose cuts fail at full length in two rounds: the last stop lands within 3895 s of the
 // first listing, because stops run on their own workers.
 func TestContain_HundredFailedFencesBound(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
+	d1BoundTwice(t, 2000*time.Second, 3895*time.Second, func(t *testing.T) time.Duration {
 		l := newD1Lab(t, true)
-		var rows []store.TerminalSandboxRow
-		for range 100 {
-			rows = append(rows, l.row(nil, ""))
-		}
-		last := d1Bound(t, l, rows, nil, 4000*time.Second)
-		if bound := 3895 * time.Second; last > bound || last < 2000*time.Second {
-			t.Errorf("the last stop returned at +%v, want in [2000s, %v]", last, bound)
-		}
-		t.Logf("last stop at +%v", last)
+		rows, kinds := d1Rows(l, 100, nil, nil)
+		return d1Bound(t, l, rows, kinds, 4000*time.Second)
 	})
 }
 
 // 3 macOS VMs (90 s stops) among 97 containers: the VMs queue behind no container.
 func TestContain_MixedStopKindsBound(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
+	d1BoundTwice(t, 2000*time.Second, 3895*time.Second, func(t *testing.T) time.Duration {
 		l := newD1Lab(t, true)
-		var rows []store.TerminalSandboxRow
-		kinds := map[string]types.MachineKind{}
-		for i := range 100 {
-			kind := types.MachineKind("")
+		rows, kinds := d1Rows(l, 100, nil, func(i int) types.MachineKind {
 			if i < 3 {
-				kind = types.MachineMacOSVM
+				return types.MachineMacOSVM
 			}
-			r := l.row(nil, kind)
-			rows, kinds[r.SandboxRef] = append(rows, r), kind
-		}
-		last := d1Bound(t, l, rows, kinds, 4000*time.Second)
-		if bound := 3895 * time.Second; last > bound || last < 2000*time.Second {
-			t.Errorf("the last stop returned at +%v, want in [2000s, %v]", last, bound)
-		}
-		t.Logf("last stop at +%v", last)
+			return ""
+		})
+		return d1Bound(t, l, rows, kinds, 4000*time.Second)
 	})
 }
 
 // 50 macOS VMs and 50 containers: every VM takes its cut round first, and no stop worker idles while a
 // container waits.
 func TestContain_HalfVMHalfContainersBound(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
+	d1BoundTwice(t, 2000*time.Second, 3000*time.Second, func(t *testing.T) time.Duration {
 		l := newD1Lab(t, true)
-		var rows []store.TerminalSandboxRow
-		kinds := map[string]types.MachineKind{}
-		for i := range 100 {
-			kind := types.MachineKind("")
+		rows, kinds := d1Rows(l, 100, nil, func(i int) types.MachineKind {
 			if i%2 == 0 {
-				kind = types.MachineMacOSVM
+				return types.MachineMacOSVM
 			}
-			r := l.row(nil, kind)
-			rows, kinds[r.SandboxRef] = append(rows, r), kind
-		}
-		last := d1Bound(t, l, rows, kinds, 3200*time.Second)
-		if bound := 3000 * time.Second; last > bound || last < 2000*time.Second {
-			t.Errorf("the last stop returned at +%v, want in [2000s, %v]", last, bound)
-		}
-		t.Logf("last stop at +%v", last)
+			return ""
+		})
+		return d1Bound(t, l, rows, kinds, 3200*time.Second)
 	})
 }
 
@@ -687,11 +825,8 @@ func TestContain_TenRunnerContainersBound(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			l := newD1Lab(t, true)
 			runnerID := l.connect(true)
-			var rows []store.TerminalSandboxRow
-			for range n {
-				rows = append(rows, l.row(&runnerID, ""))
-			}
-			last := d1Bound(t, l, rows, nil, 600*time.Second)
+			rows, kinds := d1Rows(l, n, &runnerID, nil)
+			last := d1Bound(t, l, rows, kinds, 600*time.Second)
 			if last > bound {
 				t.Errorf("%d runner runs: the last stop returned at +%v, want within %v", n, last, bound)
 			}
@@ -824,39 +959,87 @@ func TestContain_RunnerStreakWaitsOutTheMissedPongWindow(t *testing.T) {
 	})
 }
 
+// d1ReadFails are the two ways reading a run's folder record can fail: the status read, and the seed read
+// that deciding whether a copy back is owed makes. Each sets the failure to err, or clears it with nil.
+var d1ReadFails = map[string]func(f *d1Store, err error){
+	"status": func(f *d1Store, err error) {
+		f.fmu.Lock()
+		defer f.fmu.Unlock()
+		f.statusErr = err
+	},
+	"seed": func(f *d1Store, err error) {
+		f.fmu.Lock()
+		defer f.fmu.Unlock()
+		f.seedErr = err
+	},
+}
+
 // A folder record that cannot be read stops nothing and gives nothing up, for a streaked run and for a
 // run with no contain call; the next tick with a good read stops them.
 func TestContain_StatusReadErrorSkipsD1(t *testing.T) {
 	logs := d1CaptureLogs(t)
-	synctest.Test(t, func(t *testing.T) {
-		l := newD1Lab(t, true)
-		l.rn.setHook(func(context.Context, string) error { return errContainBoom })
-		streaked := l.row(nil, "")
-		vm := l.row(nil, types.MachineLinuxVM)
-		l.ds.fmu.Lock()
-		l.ds.statusErr = errors.New("database down")
-		l.ds.fmu.Unlock()
-		l.item(streaked)
-		time.Sleep(containTick)
-		l.item(streaked)
-		l.item(vm)
-		if got := l.stopQueue(); got != 0 || l.ds.giveUpCount() != 0 {
-			t.Errorf("status read failing: stop queue %d, give-ups %d; want none", got, l.ds.giveUpCount())
-		}
-		if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, streaked.ID.String()) || !strings.Contains(out, vm.ID.String()) {
-			t.Errorf("the skipped rows were not logged at warn with their run ids:\n%s", out)
-		}
-		l.ds.fmu.Lock()
-		l.ds.statusErr = nil
-		l.ds.fmu.Unlock()
-		time.Sleep(containTick)
-		l.item(streaked)
-		l.item(vm)
-		if got := l.stopQueue(); got != 2 {
-			t.Errorf("status read good again: stop queue %d, want 2", got)
-		}
-		l.stop()
-	})
+	for name, fail := range d1ReadFails {
+		synctest.Test(t, func(t *testing.T) {
+			l := newD1Lab(t, true)
+			l.rn.setHook(func(context.Context, string) error { return errContainBoom })
+			streaked := l.row(nil, "")
+			vm := l.row(nil, types.MachineLinuxVM)
+			fail(l.ds, errors.New("database down"))
+			l.item(streaked)
+			time.Sleep(containTick)
+			l.item(streaked)
+			l.item(vm)
+			if got := l.stopQueue(); got != 0 || l.ds.giveUpCount() != 0 {
+				t.Errorf("%s read failing: stop queue %d, give-ups %d; want none", name, got, l.ds.giveUpCount())
+			}
+			if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, streaked.ID.String()) || !strings.Contains(out, vm.ID.String()) {
+				t.Errorf("%s read failing: the skipped rows were not logged at warn with their run ids:\n%s", name, out)
+			}
+			fail(l.ds, nil)
+			time.Sleep(containTick)
+			l.item(streaked)
+			l.item(vm)
+			if got := l.stopQueue(); got != 2 {
+				t.Errorf("%s read good again: stop queue %d, want 2", name, got)
+			}
+			l.stop()
+		})
+	}
+}
+
+// A folder record that cannot be read in the stop item's give-up phase, after the hand-off, gives nothing up
+// and stops nothing: a read that fails is not a record that is final. The run is left claimed by no one.
+func TestContain_GiveUpPhaseReadErrorStopsNothing(t *testing.T) {
+	logs := d1CaptureLogs(t)
+	for name, fail := range d1ReadFails {
+		synctest.Test(t, func(t *testing.T) {
+			l := newD1Lab(t, true)
+			l.rn.setHook(func(context.Context, string) error { return errContainBoom })
+			row := l.row(nil, "")
+			l.ds.owe(row.ID)
+			// The reads fail from the stop item's own re-read on: the hand-off was decided with good reads.
+			held := l.ds.onGet
+			l.ds.onGet = func(id uuid.UUID) {
+				held(id)
+				fail(l.ds, errors.New("database down"))
+			}
+			l.startStops()
+			l.item(row)
+			time.Sleep(containTick)
+			l.item(row)
+			time.Sleep(containD1)
+			l.stop()
+			if n, g := l.dr.totalStops(), l.ds.giveUpCount(); n != 0 || g != 0 {
+				t.Errorf("%s read failing in the give-up phase: stops %d, give-ups %d; want none", name, n, g)
+			}
+			if !strings.Contains(logs.String(), row.ID.String()) {
+				t.Errorf("%s: the failed read was not logged with the run id", name)
+			}
+			if l.busy(row.ID) {
+				t.Errorf("%s: the run is still claimed after the item ended", name)
+			}
+		})
+	}
 }
 
 // A run handed to the stop pool is never claimed for a cut meanwhile: it is cut three times in all.
@@ -1004,8 +1187,9 @@ func TestContain_StopPastItsPhaseFreesTheStopWorker(t *testing.T) {
 	})
 }
 
-// A call that stalls for a minute past its phase: the stop pool never has more than K_s * 5 calls out, both
-// pools together never more than 40, and no run more than two, and two only inside its stop item.
+// A call that stalls for a minute past its phase: the stop pool never has more than five calls out for each
+// stop worker, both pools together never more than 40, and no run more than two, and two only inside its
+// stop item.
 func TestContain_HungStopCallsInFlightBounded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newD1Lab(t, true)
@@ -1096,9 +1280,19 @@ func d1LateLab(t *testing.T, lateAfter time.Duration, lag time.Duration, late fu
 	return l, row, &calls
 }
 
-// A fence whose deadline error comes 15 s after its phase: d1Due runs at every abandonment, the stop is
-// handed off only when a call answers, and StopSandbox returns within 225 + 2L = 255 s of the first
-// listing, with never more than two calls out for the run.
+// A fence whose deadline error comes 15 s after its phase. The run is on a runner, so a second failure
+// counts only a minute (containStreakRunner) after the first, and the call phase is 20 s. With no pre phase
+// in the cut item, the times are:
+//   - round one starts at 0, its call is abandoned at 20 s and the first failure is stamped then; the call
+//     answers at 35 s and the run is released;
+//   - the next visit is at 40 s: round two is abandoned at 60 s, only 40 s after the first stamp, so
+//     d1Due is false; its call answers at 75 s;
+//   - round three starts at 80 s and is abandoned at 100 s, 80 s after the stamp, so d1Due is true; its call
+//     answers at 115 s and that answer is the hand-off;
+//   - the stop item cuts once more from 115 s (abandoned at 135 s), has nothing to give up, and calls
+//     StopSandbox at 135 s, which takes 10 s and returns at 145 s.
+//
+// So d1Due is asked 3 times, there are 4 fence calls in all, and never more than two calls are out for the run.
 func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 	deadline := func(int) error { return context.DeadlineExceeded }
 	synctest.Test(t, func(t *testing.T) {
@@ -1129,16 +1323,14 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 		if !ok || ended.IsZero() {
 			t.Fatal("StopSandbox never returned")
 		}
-		if got := ended.Sub(start); got > 255*time.Second {
-			t.Errorf("StopSandbox returned at +%v, want within 255s (225 + 2L, L = 15s)", got)
-		} else {
-			t.Logf("StopSandbox returned at +%v", got)
+		if got := began.Sub(start); got != 135*time.Second {
+			t.Errorf("StopSandbox began at +%v, want +135s", got)
 		}
-		if int(asked.Load()) < 3 || int(calls.Load()) < 4 {
-			t.Errorf("d1Due asked %d times over %d fences, want it asked at each of three abandoned cuts and a last cut after", asked.Load(), calls.Load())
+		if got := ended.Sub(start); got != 145*time.Second {
+			t.Errorf("StopSandbox returned at +%v, want +145s", got)
 		}
-		if began.Sub(start) < 100*time.Second {
-			t.Errorf("the stop began at +%v: handed off before the third cut answered", began.Sub(start))
+		if asked.Load() != 3 || calls.Load() != 4 {
+			t.Errorf("d1Due asked %d times over %d fences, want 3 times over 4 fences", asked.Load(), calls.Load())
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -1146,20 +1338,47 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 			t.Errorf("calls in flight peaked at %d for one run, want at most 2", peak)
 		}
 	})
-	// The second late answer is not observed: that round hands nothing off, and no stamp before it counts.
+	// The same run with a StopSandbox that hangs to the end of its 60 s phase. The chain is the same up to
+	// the stop's start at 135 s; the stop is then abandoned at 195 s, and that failure is stamped at once.
+	// (The give-up and post phases, 5 s each, are not driven here: nothing is owed and the write is quick.)
+	synctest.Test(t, func(t *testing.T) {
+		l, row, _ := d1LateLab(t, 15*time.Second, 0, deadline)
+		l.dr.stopFn = func(ctx context.Context, _ string, _ int) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		start := time.Now()
+		l.start()
+		time.Sleep(300 * time.Second)
+		l.stop()
+		began, _, ok := l.dr.firstStop(row.SandboxRef)
+		if !ok || began.Sub(start) != 135*time.Second {
+			t.Errorf("StopSandbox called %v at +%v, want +135s", ok, began.Sub(start))
+		}
+		l.st.mu.Lock()
+		stamps := slices.Clone(l.st.stamps)
+		l.st.mu.Unlock()
+		if n := len(stamps); n != 4 || stamps[3].Sub(start) != 195*time.Second {
+			t.Errorf("failure stamps %v, want three cut failures and the abandoned stop's at +195s", stamps)
+		}
+	})
+	// The late answer of the round whose d1Due was true (the third) is not observed: nothing is handed off
+	// at 115 s, and no stamp before it counts. The streak starts again, and the next round past a minute is
+	// the sixth, so the hand-off comes with its answer at 235 s and the stop is called at 255 s.
 	synctest.Test(t, func(t *testing.T) {
 		l, row, calls := d1LateLab(t, 15*time.Second, 0, func(n int) error {
-			if n == 2 {
+			if n == 3 {
 				return runner.ErrRunnerOffline
 			}
 			return context.DeadlineExceeded
 		})
+		start := time.Now()
 		l.start()
 		time.Sleep(400 * time.Second)
 		l.stop()
-		_, _, ok := l.dr.firstStop(row.SandboxRef)
-		if !ok || calls.Load() < 6 {
-			t.Errorf("stop called %v after %d fences, want a stop only after the streak restarted (6 fences)", ok, calls.Load())
+		began, _, ok := l.dr.firstStop(row.SandboxRef)
+		if !ok || began.Sub(start) < 235*time.Second || calls.Load() < 7 {
+			t.Errorf("stop called %v at +%v after %d fences, want it no earlier than +235s (the sixth round's answer) after 7", ok, began.Sub(start), calls.Load())
 		}
 	})
 	// Every late answer is a cut that held: no stop.
@@ -1215,8 +1434,8 @@ func d1ServerLab(t *testing.T, cat, script time.Duration) (l *d1Lab, scripts *[]
 }
 
 // A server-mode run whose record holds a Resume has its agent stopped on every visit, and is given up and
-// stopped at its due + P_C: not before; at the visit that began a second before it, the clock is read when
-// d1Due is asked, so that visit hands it off; StopSandbox returns within 770 s of the run's end. A stop of
+// stopped at its due plus the server-mode wait: not before. At the visit that began a second before it, the
+// clock is read when d1Due is asked, so that visit hands it off; StopSandbox returns within 770 s of the run's end. A stop of
 // the agent that fails, or an agent that cannot be stopped, makes it due on that visit.
 func TestContain_HeldKubernetesServerRunStoppedByPC(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -1225,7 +1444,7 @@ func TestContain_HeldKubernetesServerRunStoppedByPC(t *testing.T) {
 		t0 := time.Now()
 		row := l.rowDue(11*time.Second, nil, "")
 		l.ds.owe(row.ID)
-		duePC := row.EndedAt.Add(containmentLag + containOptionC)
+		keepEnd := row.EndedAt.Add(containmentLag + containServerKeepWait)
 		l.start()
 		time.Sleep(450 * time.Second)
 		l.stop()
@@ -1233,11 +1452,11 @@ func TestContain_HeldKubernetesServerRunStoppedByPC(t *testing.T) {
 		if !ok || ended.IsZero() {
 			t.Fatal("the run was never stopped")
 		}
-		if began.Before(duePC) {
-			t.Errorf("stopped %v before due + P_C", duePC.Sub(began))
+		if began.Before(keepEnd) {
+			t.Errorf("stopped %v before its due plus the server-mode wait", keepEnd.Sub(began))
 		}
 		if late := began.Sub(t0.Add(310 * time.Second)); late > 10*time.Second {
-			t.Errorf("the stop began %v after the visit that started a second before due + P_C, want within 10s", late)
+			t.Errorf("the stop began %v after the visit that started a second before its due plus the server-mode wait, want within 10s", late)
 		}
 		if got := ended.Sub(*row.EndedAt); got > 770*time.Second {
 			t.Errorf("StopSandbox returned %v after the run's end, want within 770s", got)
@@ -1276,7 +1495,8 @@ func TestContain_HeldKubernetesServerRunStoppedByPC(t *testing.T) {
 }
 
 // Ten server-mode runs, owed and with a stoppable agent: the agent is stopped on every visit, with no
-// cache, and each run is stopped no earlier than its due + P_C and within 685 s of the first listing.
+// cache, and each run is stopped no earlier than its due plus the server-mode wait and within 685 s of the
+// first listing.
 func TestContain_OptionCStopsWithinItsBound(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, _ := d1ServerLab(t, time.Second, time.Second)
@@ -1296,8 +1516,8 @@ func TestContain_OptionCStopsWithinItsBound(t *testing.T) {
 			if !ok || ended.IsZero() {
 				t.Fatalf("run %s was never stopped", r.ID)
 			}
-			if duePC := r.EndedAt.Add(containmentLag + containOptionC); began.Before(duePC) {
-				t.Errorf("run %s stopped %v before due + P_C", r.ID, duePC.Sub(began))
+			if keepEnd := r.EndedAt.Add(containmentLag + containServerKeepWait); began.Before(keepEnd) {
+				t.Errorf("run %s stopped %v before its due plus the server-mode wait", r.ID, keepEnd.Sub(began))
 			}
 			if got := ended.Sub(start); got > 685*time.Second {
 				t.Errorf("run %s stopped at +%v, want within 685s", r.ID, got)
@@ -1312,31 +1532,31 @@ func TestContain_OptionCStopsWithinItsBound(t *testing.T) {
 	})
 }
 
-// The agent is stopped on each visit before due + P_C, and the sandbox only after the last of those stops.
+// The agent is stopped on each visit before its due plus the server-mode wait, and the sandbox only after the last of those stops.
 func TestOptionC_AgentStoppedFirstThenStopAtPC(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, scripts := d1ServerLab(t, time.Second, time.Second)
-		row := l.rowDue(-(containOptionC - 30*time.Second), nil, "")
+		row := l.rowDue(-(containServerKeepWait - 30*time.Second), nil, "")
 		l.ds.owe(row.ID)
-		duePC := row.EndedAt.Add(containmentLag + containOptionC)
+		keepEnd := row.EndedAt.Add(containmentLag + containServerKeepWait)
 		l.start()
 		time.Sleep(containD1)
 		l.stop()
 		began, _, ok := l.dr.firstStop(row.SandboxRef)
-		if !ok || began.Before(duePC) {
-			t.Fatalf("stop called %v at %v, want at or after due + P_C (%v)", ok, began, duePC)
+		if !ok || began.Before(keepEnd) {
+			t.Fatalf("stop called %v at %v, want at or after its due plus the server-mode wait (%v)", ok, began, keepEnd)
 		}
 		early := 0
 		for _, at := range *scripts {
 			if at.After(began) {
 				t.Errorf("an agent stop ran at %v, after the sandbox's stop began at %v", at, began)
 			}
-			if at.Before(duePC) {
+			if at.Before(keepEnd) {
 				early++
 			}
 		}
 		if early < 3 {
-			t.Errorf("agent stops before due + P_C = %d, want one on each of at least 3 visits", early)
+			t.Errorf("agent stops before its due plus the server-mode wait = %d, want one on each of at least 3 visits", early)
 		}
 	})
 }
@@ -1347,7 +1567,7 @@ func TestOptionC_VMGoesToRuleA(t *testing.T) {
 		l, scripts := d1ServerLab(t, time.Second, time.Second)
 		l.dr.stopFn = d1StopTakes(time.Second)
 		t0 := time.Now()
-		row := l.rowDue(-(containOptionC - 30*time.Second), nil, types.MachineLinuxVM)
+		row := l.rowDue(-(containServerKeepWait - 30*time.Second), nil, types.MachineLinuxVM)
 		l.ds.owe(row.ID)
 		l.start()
 		time.Sleep(containD1)
@@ -1361,6 +1581,203 @@ func TestOptionC_VMGoesToRuleA(t *testing.T) {
 		}
 		if n := l.ds.giveUpCount(); n != 1 {
 			t.Errorf("give-ups = %d, want 1", n)
+		}
+	})
+}
+
+// The stop item's re-read of its run is a phase of its own, 5 s long: one that overruns it ends the item with
+// no stop, no failure written and no give-up, and releases the claim, so the run is cut and stopped again
+// on a later visit.
+func TestContain_SlowPreReadStopsNothingAndIsRetried(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newD1Lab(t, true)
+		row := l.row(nil, types.MachineLinuxVM)
+		l.ds.getLag = containPre + time.Second
+		l.startStops()
+		l.item(row)
+		time.Sleep(containD1Unsupported + containPre)
+		if n, w, g := l.dr.totalStops(), l.st.stampWrites(), l.ds.giveUpCount(); n != 0 || w != 0 || g != 0 {
+			t.Errorf("a slow re-read: stops %d, failure writes %d, give-ups %d; want none", n, w, g)
+		}
+		if l.busy(row.ID) {
+			t.Error("the run is still claimed after the item whose re-read overran ended")
+		}
+		l.ds.getLag = 0
+		l.item(row)
+		time.Sleep(containD1Unsupported)
+		l.stop()
+		if n := l.dr.stopCount(row.SandboxRef); n != 1 {
+			t.Errorf("StopSandbox calls after a visit with a good re-read = %d, want 1", n)
+		}
+	})
+}
+
+// A confirmed StopSandbox clears the failure the run recorded, when the run still holds the sandbox that was
+// stopped; a stop of a sandbox the run no longer holds clears nothing.
+func TestContain_ConfirmedStopClearsTheFailureOfItsOwnRef(t *testing.T) {
+	for name, tc := range map[string]struct {
+		newerRef  bool
+		wantClear bool
+	}{"the same ref": {false, true}, "a different ref": {true, false}} {
+		synctest.Test(t, func(t *testing.T) {
+			l := newD1Lab(t, true)
+			row := l.row(nil, types.MachineLinuxVM)
+			l.dr.afterStop = func(string) {
+				if tc.newerRef {
+					l.ds.setRef(row.ID, "sbx-newer")
+				}
+			}
+			l.dr.stopFn = func(_ context.Context, _ string, n int) error {
+				if n == 1 {
+					return errContainBoom
+				}
+				return nil
+			}
+			l.startStops()
+			l.item(row)
+			time.Sleep(containD1Unsupported)
+			if l.ds.failure(row.ID) == "" {
+				t.Fatalf("%s: the first stop's failure was not recorded", name)
+			}
+			l.item(row)
+			time.Sleep(containD1Unsupported)
+			l.stop()
+			if n := l.dr.stopCount(row.SandboxRef); n != 2 {
+				t.Fatalf("%s: StopSandbox calls = %d, want 2", name, n)
+			}
+			if cleared := l.ds.failure(row.ID) == ""; cleared != tc.wantClear {
+				t.Errorf("%s: failure cleared = %v after the confirmed stop, want %v", name, cleared, tc.wantClear)
+			}
+		})
+	}
+}
+
+// A copy back that spans several visits is not killed by the hold's agent stop: while the run's lock is held
+// the visits leave the agent alone, write no failure, and do not stop the sandbox. After the pass the changes
+// are where it left them, and the sandbox is stopped; a pass that ended with changes still owed gets its
+// agent stopped on the next visit.
+func TestContain_RunningPassIsNotKilledByTheHold(t *testing.T) {
+	for name, arrives := range map[string]bool{"the changes arrive": true, "the changes are still owed": false} {
+		synctest.Test(t, func(t *testing.T) {
+			l, scripts := d1ServerLab(t, time.Second, time.Second)
+			l.dr.stopFn = d1StopTakes(time.Second)
+			row := l.rowDue(-time.Minute, nil, "")
+			l.ds.owe(row.ID)
+			keepEnd := row.EndedAt.Add(containmentLag + containServerKeepWait)
+			_, unlock, err := l.srv.lockRunOp(context.Background(), row.ID)
+			if err != nil {
+				t.Fatalf("%s: take the run's lock: %v", name, err)
+			}
+			start := time.Now()
+			l.start()
+			time.Sleep(45 * time.Second)
+			if n, cats := len(*scripts), l.dr.execCount("cat", row.SandboxRef); n != 0 || cats != 0 {
+				t.Errorf("%s: the agent was checked %d and stopped %d times while the pass held the lock, want none", name, cats, n)
+			}
+			if n, w := l.dr.totalStops(), l.st.stampWrites(); n != 0 || w != 0 {
+				t.Errorf("%s: stops %d, failure writes %d during the pass, want none: a skipped visit is not a failed cut", name, n, w)
+			}
+			passEnds := time.Now()
+			if arrives {
+				l.ds.arrive(row.ID)
+			}
+			unlock()
+			time.Sleep(300 * time.Second)
+			l.stop()
+			if g := l.ds.giveUpCount(); arrives && g != 0 {
+				t.Errorf("%s: %d give-ups, want none: the changes had arrived", name, g)
+			}
+			l.ds.fmu.Lock()
+			st := l.ds.status[row.ID]
+			arrived := st.Back != nil && st.Back.GivenUpAt == nil && st.Back.Files == 3
+			l.ds.fmu.Unlock()
+			if arrives && !arrived {
+				t.Errorf("%s: the arrived changes' record was overwritten", name)
+			}
+			began, _, ok := l.dr.firstStop(row.SandboxRef)
+			switch {
+			case !ok:
+				t.Errorf("%s: the sandbox was never stopped", name)
+			case arrives && (began.Before(passEnds) || began.Sub(passEnds) > 2*containTick):
+				t.Errorf("%s: StopSandbox began at +%v, want within a visit or two of the pass ending at +%v", name, began.Sub(start), passEnds.Sub(start))
+			case !arrives && began.Before(keepEnd):
+				t.Errorf("%s: StopSandbox began at +%v, before its due plus the server-mode wait", name, began.Sub(start))
+			}
+			if n := len(*scripts); !arrives && n == 0 {
+				t.Errorf("%s: the agent was not stopped on the visits after the pass", name)
+			}
+		})
+	}
+}
+
+// A late answer that lands between d1Due's answer being recorded and the cut item's release leaves one stop
+// item: the release does not end the stop pool's claim, no cut claims the run meanwhile, and no more than two
+// calls are out for it. This test is written against the claim generations of the core change (containClaim
+// answers a generation; containRelease and containCallWithin take it) and builds only after that is merged.
+func TestContain_LateAnswerBetweenDueKnownAndReleaseKeepsOneStopItem(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newD1Lab(t, true)
+		row := l.row(nil, "")
+		run := containRunOf(row)
+		l.rn.setHook(func(ctx context.Context, _ string) error {
+			if err := d1Sleep(ctx, 5*time.Second); err != nil {
+				return err
+			}
+			return errContainBoom
+		})
+		var mu sync.Mutex
+		peak, out := 0, 0
+		l.dr.onCall = func(string, string) func() {
+			mu.Lock()
+			defer mu.Unlock()
+			out++
+			peak = max(peak, out)
+			return func() {
+				mu.Lock()
+				defer mu.Unlock()
+				out--
+			}
+		}
+		l.startStops()
+		gen, ok := l.srv.containClaim(row.ID, containPoolCut)
+		if !ok {
+			t.Fatal("the cut pool could not claim the run")
+		}
+		answer := make(chan struct{})
+		callCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, flight := l.srv.containCallWithin(callCtx, run, gen, func() containAnswer {
+			<-answer
+			return containAnswer{err: errContainBoom}
+		})
+		if flight == nil {
+			t.Fatal("the call was not abandoned at the end of its phase")
+		}
+		if l.srv.containDueKnown(flight, true) {
+			t.Fatal("handed off before the call answered")
+		}
+		// The late answer lands now, after d1Due's answer was recorded and before the item releases.
+		close(answer)
+		synctest.Wait()
+		if !l.busy(row.ID) || l.stopQueue() != 0 {
+			t.Fatalf("after the late answer the run is busy = %v with %d queued; want the stop item holding it", l.busy(row.ID), l.stopQueue())
+		}
+		l.srv.containRelease(row.ID, containPoolCut, gen)
+		if !l.busy(row.ID) {
+			t.Error("the cut item's release ended the stop pool's claim")
+		}
+		if _, got := l.srv.containClaim(row.ID, containPoolCut); got {
+			t.Error("a cut claimed the run while the stop item held it")
+		}
+		time.Sleep(containD1)
+		l.stop()
+		if n := l.dr.stopCount(row.SandboxRef); n != 1 {
+			t.Errorf("StopSandbox calls = %d, want exactly one stop item", n)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if peak > 2 {
+			t.Errorf("calls in flight peaked at %d for one run, want at most 2", peak)
 		}
 	})
 }

@@ -6,6 +6,7 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -242,5 +243,52 @@ func TestPG_ContainmentStreakDue_DBClock(t *testing.T) {
 	}
 	if got, err := pg.ContainmentStreakDue(ctx, uuid.New(), time.Second, since); err != nil || got {
 		t.Errorf("no such run: ContainmentStreakDue = %v, %v; want false", got, err)
+	}
+	// With a one-minute spacing the stamp is set from the database's own clock, so the spacing is exercised at
+	// its real scale: 5 s old is too young, 61 s old is old enough. A spacing dropped, or read in the wrong unit,
+	// gets one of the two wrong.
+	for _, tc := range []struct {
+		age  int
+		want bool
+	}{{5, false}, {61, true}} {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`UPDATE agent_runs SET containment_error_at = now() - interval '%d seconds' WHERE id = $1`, tc.age), r.ID); err != nil {
+			t.Fatalf("%d s old: set the stamp: %v", tc.age, err)
+		}
+		if got, err := pg.ContainmentStreakDue(ctx, r.ID, time.Minute, early); err != nil || got != tc.want {
+			t.Errorf("a stamp %d s old with a one-minute spacing: ContainmentStreakDue = %v, %v; want %v", tc.age, got, err, tc.want)
+		}
+	}
+}
+
+// TestPG_ClearRunContainmentErrorForRef: a failure is cleared by a stop of the sandbox the run holds, and is
+// kept by a stop of any other sandbox, an empty ref, or a run with nothing recorded.
+func TestPG_ClearRunContainmentErrorForRef(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunKilled)
+	run.SandboxRef = "sbx-current"
+	r := persistRun(t, ctx, pool, run)
+	failed := func() {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error = 'boom', containment_error_at = now() WHERE id = $1`, r.ID); err != nil {
+			t.Fatalf("record a failure: %v", err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		ref  string
+		want bool
+	}{"another sandbox's ref": {"sbx-older", false}, "an empty ref": {"", false}, "the held ref": {"sbx-current", true}} {
+		failed()
+		got, err := pg.ClearRunContainmentErrorForRef(ctx, r.ID, tc.ref)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: cleared = %v, %v; want %v", name, got, err, tc.want)
+		}
+		if still := containErrAt(t, ctx, pg, r.ID) != nil; still == tc.want {
+			t.Errorf("%s: failure still recorded = %v, want %v", name, still, !tc.want)
+		}
+	}
+	if got, err := pg.ClearRunContainmentErrorForRef(ctx, r.ID, "sbx-current"); err != nil || got {
+		t.Errorf("nothing recorded: cleared = %v, %v; want false", got, err)
 	}
 }
