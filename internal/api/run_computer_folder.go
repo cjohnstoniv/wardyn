@@ -618,7 +618,8 @@ func (s *Server) computerFolderKeptRead(ctx context.Context, id uuid.UUID) (bool
 // a terminal run that was not killed, a ref, nothing given up). The second half is the crash window between a
 // run's terminal commit and its tail, which leaves a seeded record with neither a Back nor a Resume. Time plays no
 // part: at and past the cap the sandbox is still the tail owner's, whose give-up writes its durable record before
-// anything is stopped. An error is a record or rule that could not be read, which is no answer; callers keep.
+// anything is stopped (for a runner away too: tailGiveUpAway). An error is a record or rule that could not be read,
+// which is no answer: the sweeps decide it through folderKeepVerdict, which keeps it only on a confirmed cut.
 // reloseEnded does not use it: there a keep is proof that a stop was already observed, which an owed pass back
 // that has not run is not.
 func (s *Server) keepsSandboxForFolder(ctx context.Context, run types.AgentRun) (bool, error) {
@@ -636,13 +637,6 @@ func (s *Server) keepsSandboxForFolder(ctx context.Context, run types.AgentRun) 
 		return true, nil
 	}
 	return s.folderOwed(ctx, run, rec)
-}
-
-// sweepKeepsSandbox is keepsSandboxForFolder for a sweep that has no use for the error: a record that cannot
-// be read counts as kept, as computerFolderKept always has.
-func (s *Server) sweepKeepsSandbox(ctx context.Context, run types.AgentRun) bool {
-	kept, err := s.keepsSandboxForFolder(ctx, run)
-	return err != nil || kept
 }
 
 // computerFolderAccountTime is the end of a pass back kept for the runner's account of a pass

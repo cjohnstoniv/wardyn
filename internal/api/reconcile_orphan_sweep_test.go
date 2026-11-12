@@ -378,6 +378,10 @@ type orphanVerdictRunner struct {
 	verdicts map[uuid.UUID]bool
 }
 
+// StopProxy makes the runner a substrate that can cut a kept sandbox's agent off, which the orphan passes now ask
+// for before they keep a sandbox (folderKeepVerdict).
+func (r *orphanVerdictRunner) StopProxy(context.Context, string) error { return nil }
+
 func (r *orphanVerdictRunner) SweepOrphanedSandboxes(_ context.Context, _ time.Duration, isOrphan func(uuid.UUID) bool) (int, error) {
 	for id := range r.verdicts {
 		r.verdicts[id] = isOrphan(id)

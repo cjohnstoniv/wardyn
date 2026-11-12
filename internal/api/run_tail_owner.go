@@ -167,6 +167,9 @@ func (s *Server) tailHistoryTails(ctx context.Context, rows []store.TerminalSand
 				break
 			}
 		}
+		if start == len(rows) { // no row follows the position: wrap to the newest in this same tick
+			start = 0
+		}
 	}
 	taken := 0
 	var last *store.TerminalSandboxCursor
@@ -200,17 +203,19 @@ func tailRowAfter(row store.TerminalSandboxRow, cur *store.TerminalSandboxCursor
 
 // tailVisit decides one listed row, and runs its give-up or folder step at once. It reports a row that owes
 // nothing and is past its containment due, for the history tails (tailHistoryTails). A forced-marked row is
-// sweepForcedStops'. A runner run whose runner is not connected here (a live session, never last-known caps) is
-// not touched: no read, no lock, no tail, no row. A record or rule that cannot be read skips the row for the
-// tick: an unreadable answer is never "not owed", which would stop a sandbox that owes its changes.
+// sweepForcedStops'. A runner run whose runner is not connected here (a live session, never last-known caps) gets
+// no runner call, no folder pass and no tail; the one step it takes is the give-up at the cap, which needs no
+// runner (tailGiveUpAway): the record is read, and an owed pass whose keep ran out is given up, with its audit
+// row. Inside the cap it takes no lock and writes no row. A record or rule that cannot be read skips the row for
+// the tick: an unreadable answer is never "not owed", which would stop a sandbox that owes its changes.
 func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, now time.Time) (history bool) {
 	if row.ForcedStopAt != nil {
 		return false
 	}
+	away := false
 	if row.RunnerID != nil {
-		if _, connected := s.runnerConnected(*row.RunnerID); !connected {
-			return false
-		}
+		_, connected := s.runnerConnected(*row.RunnerID)
+		away = !connected
 	}
 	run := containRunOf(row)
 	st, err := s.tailFolderStatus(ctx, run.ID)
@@ -221,6 +226,12 @@ func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, no
 	step, err := s.tailStepFor(ctx, run, st, now)
 	if err != nil {
 		tailSkipped(ctx, run.ID, err)
+		return false
+	}
+	if away {
+		if step == tailGiveUp {
+			s.tailGiveUpAway(ctx, run.ID)
+		}
 		return false
 	}
 	switch step {
@@ -319,6 +330,50 @@ func (s *Server) tailFolderVisitable(ctx context.Context, run types.AgentRun) bo
 	return false
 }
 
+// tailGiveUpAway is the give-up of a run whose runner is not connected here, and only that: under the run's lock,
+// with the run and its record read again, the owed pass whose keep ran out is given up (the statement and its
+// audit row). No runner is called and no tail runs, so the sandbox stays; the record is then final, the sweeps no
+// longer keep the sandbox, and the queued kill or the history tail ends it once the runner is back. A runner that
+// never comes back therefore cannot keep a sandbox for ever.
+func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID) {
+	lctx, unlock, ok := s.tryLockRunOp(ctx, id)
+	if !ok {
+		return
+	}
+	defer unlock()
+	run, st, again, ok := s.tailReread(lctx, id, tailGiveUp)
+	if !ok || !again {
+		return
+	}
+	if _, err := s.giveUpFolder(lctx, run, false, st); err != nil {
+		slog.WarnContext(lctx, "wardynd: giving up an owed folder copy back failed; the next tick tries again",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+	}
+}
+
+// tailReread reads run id and its record again under its lock, and reports whether the run is still ended with its
+// ref and step is still its due step. ok false is a read that failed or a run with nothing to tail.
+func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (run types.AgentRun, st types.RunLocalFolderStatus, again, ok bool) {
+	run, err := s.cfg.Store.GetRun(ctx, id)
+	if err != nil {
+		tailSkipped(ctx, id, err)
+		return run, st, false, false
+	}
+	if !isTerminalRunState(run.State) || run.SandboxRef == "" {
+		return run, st, false, false
+	}
+	if st, err = s.tailFolderStatus(ctx, id); err != nil {
+		tailSkipped(ctx, id, err)
+		return run, st, false, false
+	}
+	due, err := s.tailStepFor(ctx, run, st, s.cfg.Now())
+	if err != nil {
+		tailSkipped(ctx, id, err)
+		return run, st, false, false
+	}
+	return run, st, due == step, true
+}
+
 // tailRun takes run id's lock, reads the run and its record again, and runs step's tail if the same step is
 // still due. A lock held elsewhere leaves the run for the next tick.
 func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran bool) {
@@ -327,28 +382,11 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran 
 		return false
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(lctx, id)
-	if err != nil {
-		tailSkipped(lctx, id, err)
-		return false
-	}
-	if !isTerminalRunState(run.State) || run.SandboxRef == "" {
-		return false
-	}
-	st, err := s.tailFolderStatus(lctx, id)
-	if err != nil {
-		tailSkipped(lctx, id, err)
+	run, st, again, ok := s.tailReread(lctx, id, step)
+	if !ok || !again {
 		return false
 	}
 	now := s.cfg.Now()
-	again, err := s.tailStepFor(lctx, run, st, now)
-	if err != nil {
-		tailSkipped(lctx, id, err)
-		return false
-	}
-	if again != step {
-		return false
-	}
 	switch step {
 	case tailGiveUp:
 		// Only a final record continues: the sandbox is stopped for a record the give-up made final, or one

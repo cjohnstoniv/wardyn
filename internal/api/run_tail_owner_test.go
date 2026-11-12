@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -51,6 +53,11 @@ type tailLab struct {
 	giveUps   int
 	markFails func(id uuid.UUID) bool
 	markCalls map[uuid.UUID]int
+	// getRunnerErr fails GetRunner (a lookup that failed, not a runner that is gone). dataOut is the runs' recorded
+	// data_out rule, and policyErr fails the read of it.
+	getRunnerErr error
+	dataOut      types.TransferRule
+	policyErr    error
 }
 
 func (l *tailLab) add(r *tailRow) {
@@ -76,14 +83,25 @@ func (l *tailLab) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error
 }
 
 func (l *tailLab) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	if l.getRunnerErr != nil {
+		return types.Runner{}, l.getRunnerErr
+	}
 	if id != l.runner.ID {
 		return types.Runner{}, store.ErrNotFound
 	}
 	return l.runner, nil
 }
 
-func (l *tailLab) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
-	return nil, nil
+// QueryAuditEvents answers no policy envelope unless dataOut is set, which reads as allowed.
+func (l *tailLab) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	if l.policyErr != nil {
+		return nil, l.policyErr
+	}
+	if l.dataOut == "" {
+		return nil, nil
+	}
+	data, _ := json.Marshal(types.RunPolicySpec{DataOut: l.dataOut})
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
 }
 
 func (l *tailLab) ListTerminalSandboxPage(ctx context.Context, after *store.TerminalSandboxCursor, limit int, unfencedOnly bool) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
@@ -457,12 +475,13 @@ func TestTailOwner_GiveUpNotFinalDoesNotStop(t *testing.T) {
 	}
 }
 
-// A runner run whose runner is not connected here is not touched: no lock, no tail, no row, over 20 ticks.
+// A runner run whose runner is not connected here is not touched inside the cap: no lock, no tail, no row, over 20
+// ticks. (Past the cap its owed pass is given up with no runner call: the away-runner pin below.)
 func TestCleanup_OfflineRunnerTakesNoLockAndNoTail(t *testing.T) {
 	g := newTailRig(t)
 	away := uuid.New()
 	for _, mk := range []func(time.Time) *tailRow{g.historyRow, g.owedRow} {
-		mk(g.clock.now.Add(-9 * 24 * time.Hour)).run.RunnerID = &away
+		mk(g.clock.now.Add(-time.Hour)).run.RunnerID = &away
 	}
 	for range 20 {
 		g.clock.now = g.clock.now.Add(time.Minute)
@@ -485,8 +504,9 @@ func TestTailOwner_RunnerElsewhereSkipped(t *testing.T) {
 	}
 }
 
-// The runner's caps were seen once and it is no longer online: every step skips its runs before any lock or call,
-// and takes them again when it is back. Catches: reading runnerLastCaps alone.
+// The runner's caps were seen once and it is no longer online: its runs take no runner call, no folder pass and no
+// tail, and take them again when it is back; the expired row is given up meanwhile, with no runner call. Catches:
+// reading runnerLastCaps alone.
 func TestTailOwner_StaleCapsOfAnOfflineRunnerTakeNoLock(t *testing.T) {
 	g := newTailRig(t)
 	g.lab.giveUpOK = true
@@ -504,14 +524,15 @@ func TestTailOwner_StaleCapsOfAnOfflineRunnerTakeNoLock(t *testing.T) {
 	for range 3 {
 		g.tick()
 	}
-	if g.locks.n.Load() != 0 || g.total() != 0 || g.lab.giveUpCount() != 0 || len(g.audit.snapshot()) != 0 {
-		t.Fatalf("%d lock attempts, %d tails, %d give-ups, %d rows with the runner offline; want none",
-			g.locks.n.Load(), g.total(), g.lab.giveUpCount(), len(g.audit.snapshot()))
+	// Offline, the one step a runner run takes is the expired row's give-up, with no tail and no runner call.
+	if g.locks.n.Load() != 1 || g.total() != 0 || g.lab.giveUpCount() != 1 || transferAudit(g.audit) != 1 {
+		t.Fatalf("%d lock attempts, %d tails, %d give-ups, %d given_up rows with the runner offline; want 1, 0, 1, 1",
+			g.locks.n.Load(), g.total(), g.lab.giveUpCount(), transferAudit(g.audit))
 	}
 	g.online.Store(true)
 	g.tick()
-	if g.count(tailGiveUp) != 1 || g.count(tailHistory) != 1 || g.count(tailFolder) != 1 {
-		t.Errorf("back online: %d give-up, %d history, %d folder tails; want one each",
+	if g.count(tailGiveUp) != 0 || g.count(tailHistory) != 2 || g.count(tailFolder) != 1 {
+		t.Errorf("back online: %d give-up, %d history, %d folder tails; want 0, 2 (the given-up row and the history row), 1",
 			g.count(tailGiveUp), g.count(tailHistory), g.count(tailFolder))
 	}
 }
@@ -1191,6 +1212,17 @@ func TestKeepsSandboxForFolder_ValueList(t *testing.T) {
 		{"a folder never seeded", func(_ *tailRig, r *tailRow) { r.seeded = false }, false, false},
 		{"no folder", func(_ *tailRig, r *tailRow) { r.folder = nil }, false, false},
 		{"no record row", func(g *tailRig, r *tailRow) { delete(g.lab.rows, r.run.ID) }, false, false},
+		{"a resume on a killed run (the resume arm keeps it)", func(_ *tailRig, r *tailRow) {
+			r.run.State = types.RunKilled
+			r.status.Resume = &types.FolderResume{Unsynced: 1}
+		}, true, false},
+		{"data out not allowed", func(g *tailRig, _ *tailRow) { g.lab.dataOut = types.TransferBlocked }, false, false},
+		{"a data out rule that cannot be read", func(g *tailRig, _ *tailRow) { g.lab.policyErr = errors.New("policy down") }, false, true},
+		{"a runner run (the verdict, not the predicate, tells runners apart)", func(_ *tailRig, r *tailRow) {
+			id := uuid.New()
+			r.run.RunnerID = &id
+		}, true, false},
+		{"a virtual machine (likewise)", func(_ *tailRig, r *tailRow) { r.run.MachineKind = types.MachineLinuxVM }, true, false},
 		{"a record that cannot be read", func(g *tailRig, _ *tailRow) { g.lab.statusErr = errors.New("status down") }, false, true},
 		{"a seed that cannot be read", func(g *tailRig, _ *tailRow) { g.lab.seedErr = errors.New("seed down") }, false, true},
 	} {
@@ -1203,8 +1235,194 @@ func TestKeepsSandboxForFolder_ValueList(t *testing.T) {
 			if kept != tc.wantKeep || (err != nil) != tc.wantErr {
 				t.Errorf("keep = %v, err = %v; want keep %v, error %v", kept, err, tc.wantKeep, tc.wantErr)
 			}
-			if tc.wantErr && !g.s.sweepKeepsSandbox(context.Background(), row.run) {
-				t.Error("a sweep stops a sandbox whose record it could not read")
+		})
+	}
+}
+
+// A runner away for good: its owed pass is given up at the cap with no runner call and no tail, so the record is
+// final and no sweep keeps the sandbox for it; the sandbox stays until the runner is back, when the history tail
+// ends it. Inside the cap nothing is taken (TestCleanup_OfflineRunnerTakesNoLockAndNoTail). Catches: a give-up that
+// waits for the runner, which keeps the sandbox for ever.
+func TestTailOwner_AwayRunnerOwedPassIsGivenUpAtTheCapWithNoRunnerCall(t *testing.T) {
+	g := newTailRig(t)
+	g.lab.giveUpOK = true
+	id := g.lab.runner.ID
+	row := g.owedRow(g.clock.now.Add(-g.s.pendingCap() - time.Hour))
+	row.run.RunnerID = &id
+	g.online.Store(false)
+	g.tick()
+	g.tick()
+	if g.lab.giveUpCount() != 1 || g.total() != 0 || g.locks.n.Load() != 1 || transferAudit(g.audit) != 1 {
+		t.Fatalf("%d give-ups, %d tails, %d lock attempts, %d given_up rows over two ticks; want 1, 0, 1, 1",
+			g.lab.giveUpCount(), g.total(), g.locks.n.Load(), transferAudit(g.audit))
+	}
+	st, _ := g.lab.RunLocalFolderStatus(context.Background(), row.run.ID)
+	if st.Resume != nil || st.Back == nil || st.Back.GivenUpAt == nil || row.run.SandboxRef == "" {
+		t.Errorf("record %+v, ref %q; want given up and the sandbox still there", st, row.run.SandboxRef)
+	}
+	if kept, err := g.s.keepsSandboxForFolder(context.Background(), row.run); kept || err != nil {
+		t.Errorf("keep = %v, %v after the give-up; want false", kept, err)
+	}
+	g.online.Store(true)
+	g.tick()
+	if g.count(tailHistory) != 1 || g.lab.rows[row.run.ID].run.SandboxRef != "" {
+		t.Errorf("runner back: %d history tails, ref %q; want the history tail to end the sandbox", g.count(tailHistory), g.lab.rows[row.run.ID].run.SandboxRef)
+	}
+}
+
+// A lookup of the folder runner that fails (not one that answers "gone") is transient: the row is not visited, and
+// is visited when the lookup works. Catches: treating every reasonRunnerNotFound as a runner gone for good.
+func TestTailOwner_ATransientRunnerLookupErrorIsNotVisited(t *testing.T) {
+	g := newTailRig(t)
+	g.owedRow(g.clock.now.Add(-time.Hour))
+	g.lab.getRunnerErr = errors.New("the runner table did not answer")
+	for range 3 {
+		g.clock.now = g.clock.now.Add(time.Second)
+		g.tick()
+	}
+	if g.total() != 0 || g.locks.n.Load() != 0 {
+		t.Fatalf("%d tails, %d lock attempts while the runner lookup fails; want none", g.total(), g.locks.n.Load())
+	}
+	g.lab.getRunnerErr = nil
+	g.tick()
+	if g.count(tailFolder) != 1 {
+		t.Errorf("lookup healthy: %d folder passes, want 1", g.count(tailFolder))
+	}
+}
+
+// noCutRunner is the fixture's runner on a substrate that can neither fence nor stop a proxy alone (Kubernetes in
+// server mode): nothing it keeps can be cut.
+type noCutRunner struct{ *passWindowSandbox }
+
+func (*noCutRunner) StopProxy(context.Context, string) error { return runner.ErrEndUnsupported }
+
+// orphanSeen is the label orphan sweep's last verdict on the fixture's run, whichever runner wraps the sandbox.
+func (f *forced) orphanSeen() bool {
+	switch r := f.s.cfg.Runner.(type) {
+	case *proxyCounted:
+		return r.orphan
+	case *fencingRunner:
+		return r.orphan
+	case *noCutRunner:
+		return r.orphan
+	}
+	return f.s.cfg.Runner.(*passWindowSandbox).orphan
+}
+
+// A crashed seeded run (no Back, no Resume) is decided by the same rule at every kept-sandbox site: the boot orphan
+// pass, the label orphan sweep and the failed-proxy-start containment (stopUnconfirmedProxy). Docker and a connected
+// fenced runner keep it on a confirmed cut (Docker's cut is made here, at boot); a runner that is away is left, with
+// nothing stopped; a virtual machine and Kubernetes server mode cannot be cut and are stopped. Catches: a site that
+// keeps without a cut (the pre-fix reconcile paths), one that stops a cuttable sandbox, and a site still deciding by
+// Resume alone (the failed-start containment's old predicate).
+func TestKeptSandboxSites_DecideByTheConfirmedCut(t *testing.T) {
+	type kind struct {
+		name  string
+		setup func(*testing.T, *forced)
+		kept  bool
+		away  bool
+	}
+	kinds := []kind{
+		{"the server's Docker", func(_ *testing.T, f *forced) {
+			f.s.cfg.Runner = &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+		}, true, false},
+		{"a connected runner with a confirmed cut", func(t *testing.T, f *forced) { f.onFencedRunner(t) }, true, false},
+		{"a runner that is away", func(t *testing.T, f *forced) {
+			_, online := f.onFencedRunner(t)
+			online.Store(false)
+		}, true, true},
+		{"a virtual machine", func(_ *testing.T, f *forced) {
+			f.cs.dispatchTestStore.mu.Lock()
+			f.cs.run.MachineKind = types.MachineLinuxVM
+			f.cs.dispatchTestStore.mu.Unlock()
+		}, false, false},
+		{"Kubernetes in server mode", func(_ *testing.T, f *forced) {
+			f.s.cfg.Runner = &noCutRunner{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+		}, false, false},
+	}
+	sites := map[string]func(*testing.T, *forced, types.AgentRun, kind){
+		"the boot orphan pass": func(t *testing.T, f *forced, _ types.AgentRun, k kind) {
+			before := f.sb.stopCount()
+			if err := f.s.reconcileOrphanedSandbox(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if stopped := f.sb.stopCount() > before; stopped == k.kept {
+				t.Errorf("stopped = %v; want %v", stopped, !k.kept)
+			}
+		},
+		"the label orphan sweep": func(t *testing.T, f *forced, _ types.AgentRun, k kind) {
+			if err := f.s.sweepOrphanedSandboxes(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if reaped := f.orphanSeen(); reaped == k.kept {
+				t.Errorf("reaped = %v; want %v", reaped, !k.kept)
+			}
+		},
+		"the failed-start containment": func(t *testing.T, f *forced, run types.AgentRun, k kind) {
+			before := f.sb.stopCount()
+			err := f.s.stopUnconfirmedProxy(context.Background(), run)
+			if stopped := f.sb.stopCount() > before; stopped == k.kept {
+				t.Errorf("stopped = %v; want %v", stopped, !k.kept)
+			}
+			if k.away != errors.Is(err, errRunnerNotHere) || (!k.away && err != nil) {
+				t.Errorf("error = %v; want errRunnerNotHere %v and no other error", err, k.away)
+			}
+		},
+	}
+	for _, k := range kinds {
+		for site, check := range sites {
+			t.Run(k.name+"/"+site, func(t *testing.T) {
+				f := newForced(t)
+				k.setup(t, f)
+				run := f.crashedBeforeItsTail(t, types.RunStopped)
+				check(t, f, run, k)
+				if k.kept {
+					if cur := f.terminalRun(t); cur.SandboxRef == "" {
+						t.Error("the ref was cleared on a kept sandbox")
+					}
+				}
+			})
+		}
+	}
+	t.Run("the server's Docker/the boot orphan pass makes the cut", func(t *testing.T) {
+		f := newForced(t)
+		counted := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+		f.s.cfg.Runner = counted
+		f.crashedBeforeItsTail(t, types.RunStopped)
+		if err := f.s.reconcileOrphanedSandbox(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if counted.proxyStops.Load() == 0 {
+			t.Error("the boot pass kept the sandbox without cutting its proxy")
+		}
+	})
+}
+
+// The forced retry keeps a never-passed owed row only on a confirmed cut, and stops it when the cut is not
+// confirmed (a substrate that cannot cut). Catches: a retry that keeps without a cut, and one that stops a cut
+// sandbox.
+func TestSweepForcedStops_AnOwedPassIsKeptOnlyOnAConfirmedCut(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cut   bool
+		stops int
+	}{
+		"the cut is confirmed":     {true, 0},
+		"the cut is not confirmed": {false, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			if !tc.cut {
+				f.s.cfg.Runner = &noCutRunner{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+			}
+			f.claimOnly(t)
+			f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+			f.release()
+			f.tick(t, f.s)
+			if f.sb.stopCount() != tc.stops || f.leaser.markCount() != 0 {
+				t.Errorf("%d stops, %d marks; want %d and 0", f.sb.stopCount(), f.leaser.markCount(), tc.stops)
+			}
+			if kept := f.sb.proxyStopped.Load(); kept != tc.cut {
+				t.Errorf("proxy stopped %v; want %v", kept, tc.cut)
 			}
 		})
 	}

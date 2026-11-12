@@ -85,7 +85,10 @@ func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, 
 	}
 	if out.Applied {
 		given := types.RunLocalFolderStatus{Gen: out.Gen, Back: &back}
-		if err := s.auditGivenUp(ctx, run, given); err != nil {
+		if err := s.auditGivenUp(ctx, run, given); errors.Is(err, errGivenUpMarkFailed) {
+			slog.WarnContext(ctx, "wardynd: the given-up row was accepted and its mark failed; the tail owner retries the mark",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		} else if err != nil {
 			slog.WarnContext(ctx, "wardynd: record a given-up folder copy back", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 		return true, nil

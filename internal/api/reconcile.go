@@ -303,7 +303,10 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 				return false
 			}
 			defer unlock()
-			return !s.sweepKeepsSandbox(lctx, run)
+			// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
+			// owner's give-up at the cap ends the keep.
+			v, _, _ := s.folderKeepVerdict(lctx, run, "sandbox.orphan.sweep")
+			return v == folderKeepNone
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -381,8 +384,10 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 
 // reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
 func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
-	if s.sweepKeepsSandbox(ctx, run) {
-		return // kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) resumes
+	if v, _, _ := s.folderKeepVerdict(ctx, run, "sandbox.orphan.sweep"); v != folderKeepNone {
+		// Kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) runs, on a confirmed
+		// cut; or a runner that is not here, left until it is, or until the tail owner gives the pass up.
+		return
 	}
 	kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 	torn := false

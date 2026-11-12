@@ -842,14 +842,19 @@ func TestForceKeptStop_AnUnsettledRecordOffTheServerStopsTheSandbox(t *testing.T
 // resume is left with only its proxy stopped, and any other is stopped; either clears the mark.
 func TestForceKeptStop_AFreeLockHandsAMarkedRunToTheLockedPath(t *testing.T) {
 	for name, tc := range map[string]struct {
-		rec   types.RunLocalFolderStatus
-		stops int
+		rec    types.RunLocalFolderStatus
+		oneWay bool
+		stops  int
 	}{
-		"a resume is kept":     {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}}, 0},
-		"no resume is stopped": {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, 1},
+		"a resume is kept":                           {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}}, false, 0},
+		"a pass owed and never run is kept":          {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, false, 0},
+		"no pass owed (a one way folder) is stopped": {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, true, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			if tc.oneWay {
+				f.withoutOwedPass()
+			}
 			f.claimOnly(t)
 			f.setRecord(tc.rec)
 			f.release()
@@ -944,6 +949,7 @@ func (r *statusErrStop) StopSandbox(ctx context.Context, ref string) error {
 // that confirms clears it.
 func TestSweepForcedStops_AProbeErrorKeepsTheMarkAndRetriesTheStop(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	w := &statusErrStop{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
@@ -1077,6 +1083,7 @@ func TestSweepForcedStops_AnExitedButPresentSandboxKeepsTheMarkUntilAStopSucceed
 // on every tick after the mark cleared, or never.
 func TestSweepForcedStops_AFailingStopWritesOneFailureRowAndOneSuccessRow(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	for i := 1; i <= 3; i++ {
@@ -1102,6 +1109,7 @@ func TestSweepForcedStops_AFailingStopWritesOneFailureRowAndOneSuccessRow(t *tes
 // per process, where it used to be written on every pass. Catches: the dedupe keyed on the retry alone.
 func TestSweepTerminalSandboxRun_AFailedTeardownIsWrittenOncePerRun(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	f.sb.stopErr = errors.New("the daemon did not answer the stop")
@@ -1263,6 +1271,7 @@ func (tickStore) RunWatcherFresh(context.Context, uuid.UUID, time.Duration) (boo
 // removing the pass("forced stop retry", ...) line from runWatcherTick (reconcile.go).
 func TestRunWatcherTick_RetriesAMarkedRunsStop(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	f.s.cfg.Store = tickStore{f.s.cfg.Store.(markedStore)}
@@ -1351,6 +1360,7 @@ func TestSweepForcedStops_AFailedRevokeKeepsTheMarkOnBothPaths(t *testing.T) {
 	for name, free := range map[string]bool{"lock free": true, "lock held": false} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			f.withoutOwedPass() // no pass back owed: the force reaches the stop
 			f.claimOnly(t)
 			if free {
 				f.release()
@@ -1439,6 +1449,7 @@ func TestSweepForcedStops_AnEmptyRefWithAFailedRevokeKeepsTheMark(t *testing.T) 
 // as a failure.
 func TestSweepForcedStops_ARetryOnAnAlreadyStoppedSandboxIsHarmless(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	if err := f.s.cfg.Runner.StopSandbox(context.Background(), f.run.SandboxRef); err != nil { // stopped earlier, ref still set
