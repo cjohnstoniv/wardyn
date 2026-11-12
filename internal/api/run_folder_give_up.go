@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -66,15 +67,24 @@ func (s *Server) folderGivenUpRecord(st types.RunLocalFolderStatus) types.Folder
 // moves the record's generation on, so a pass still running for it writes nothing. final says the record is
 // final and the sandbox may be stopped: true after this call applied it (the audit row is written and marked
 // after, and a failure of either is logged, never waited on), and true when the statement applied nothing
-// and a re-read shows the record final from another writer. Zero rows alone are never final: the run may
-// not be due yet, or the record may still be open. d1 is a caller whose containment decision is made (the
-// statement then only re-checks that the run's containment due has passed).
+// and found the record already final (the store's Done, read without decoding it, so a record that does not
+// decode is still found final), or a re-read shows it final from another writer. Zero rows alone are never
+// final: the run may not be due yet, or the record may still be open. d1 is a caller whose containment
+// decision is made (the statement then only re-checks that the run's containment due has passed).
 func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, st types.RunLocalFolderStatus) (final bool, err error) {
+	return s.giveUpFolderNoted(ctx, run, d1, st, "")
+}
+
+// giveUpFolderNoted is giveUpFolder whose final record's error ends with note: folderRuleUnreadable or
+// folderStatusUnreadable when the read that decided the give-up failed (tailStepOf), so the give-up says it did not
+// wait on that read, and its given_up row names it; "" for a give-up decided on reads that all answered.
+func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 bool, st types.RunLocalFolderStatus, note string) (final bool, err error) {
 	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
 		return false, errors.New("this server's store cannot keep a folder record")
 	}
 	back := s.folderGivenUpRecord(st)
+	back.Error += note
 	p := store.GiveUpParams{Back: back, Cap: s.pendingCap()}
 	if d1 {
 		p.D1, p.Lag, p.Unsupported = true, containmentLag, true
@@ -85,9 +95,15 @@ func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, 
 	}
 	if out.Applied {
 		given := types.RunLocalFolderStatus{Gen: out.Gen, Back: &back}
-		if err := s.auditGivenUp(ctx, run, given); err != nil {
+		if err := s.auditGivenUp(ctx, run, given); errors.Is(err, errGivenUpMarkFailed) {
+			slog.WarnContext(ctx, "wardynd: the given-up row was accepted and its mark failed; the tail owner retries the mark",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		} else if err != nil {
 			slog.WarnContext(ctx, "wardynd: record a given-up folder copy back", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
+		return true, nil
+	}
+	if out.Done {
 		return true, nil
 	}
 	cur, err := ss.RunLocalFolderStatus(ctx, run.ID)
@@ -118,12 +134,32 @@ func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.
 	}
 	data := map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "direction": "back",
 		"files": st.Back.Files, "bytes": st.Back.Bytes, "error": st.Back.Error}
+	switch {
+	case strings.HasSuffix(st.Back.Error, folderRuleUnreadable):
+		data["rule_unreadable"] = true
+	case strings.HasSuffix(st.Back.Error, folderStatusUnreadable):
+		data["status_unreadable"] = true
+	}
 	ev := s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.folder.transfer", run.ID.String(), "failure", mustJSON(data))
 	if !s.recordAuditDurably(ctx, ev) {
 		return errors.New("the audit log did not take the row")
 	}
 	if _, err := ss.MarkGivenUpAudited(ctx, run.ID, st.Gen); err != nil {
-		return fmt.Errorf("mark the record audited: %w", err)
+		// The row is accepted: only its mark is tried again (the tail owner), so the row is never written twice.
+		s.tail.accepted.Store(givenUpKey{id: run.ID, gen: st.Gen}, struct{}{})
+		return fmt.Errorf("%w: %w", errGivenUpMarkFailed, err)
 	}
+	s.tail.accepted.Delete(givenUpKey{id: run.ID, gen: st.Gen})
 	return nil
 }
+
+// folderRuleUnreadable ends the error of a give-up made while the folder's seed or data_out rule could not be read
+// (giveUpFolderNoted); the given_up row carries it as rule_unreadable.
+const folderRuleUnreadable = "; its folder seed or data_out rule could not be read"
+
+// folderStatusUnreadable ends the error of a give-up made while the folder's record could not be read
+// (giveUpFolderNoted); the given_up row carries it as status_unreadable.
+const folderStatusUnreadable = "; its folder status could not be read"
+
+// errGivenUpMarkFailed is auditGivenUp's answer for a row the audit log accepted whose mark failed.
+var errGivenUpMarkFailed = errors.New("mark the record audited")

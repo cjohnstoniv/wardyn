@@ -125,6 +125,63 @@ func (s PG) ClearSandboxRefRetaining(ctx context.Context, runID uuid.UUID) error
 	return tx.Commit(ctx)
 }
 
+// ClearSandboxRefRetainingIf is ClearSandboxRefRetaining that clears only a run whose ref is still ref, and
+// reports whether this call cleared it. Of two callers racing to clear the same ref, only one answers true.
+// A run whose ref is another, or already empty, is left as it is and answers false. A runner run takes its locks
+// in the order lockRunnerActionRun fixes (runner, then run); any other run's row is locked FOR UPDATE for the
+// comparison.
+func (s PG) ClearSandboxRefRetainingIf(ctx context.Context, runID uuid.UUID, ref string) (bool, error) {
+	tx, err := beginRunnerActionTx(ctx, s)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	var runnerID *uuid.UUID
+	var cur string
+	err = tx.QueryRow(ctx, `SELECT runner_id, sandbox_ref FROM agent_runs WHERE id = $1`, runID).Scan(&runnerID, &cur)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: read run ref: %w", err)
+	}
+	locked := false
+	if runnerID != nil && cur != "" {
+		_, run, _, err := lockRunnerActionRun(ctx, tx, *runnerID, runID)
+		switch {
+		case err == nil:
+			locked = true
+			if run.SandboxRef != ref {
+				return false, nil
+			}
+			if _, err := openRetirementTx(ctx, tx, run); err != nil && !errors.Is(err, ErrNotFound) {
+				return false, err
+			}
+		case !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrRunnerActionRefused):
+			return false, err
+		}
+	}
+	if !locked {
+		err := tx.QueryRow(ctx, `SELECT sandbox_ref FROM agent_runs WHERE id = $1 FOR UPDATE`, runID).Scan(&cur)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrNotFound
+		}
+		if err != nil {
+			return false, fmt.Errorf("store: lock run ref: %w", err)
+		}
+		if cur != ref {
+			return false, nil
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = '', updated_at = now() WHERE id = $1 AND sandbox_ref = $2`, runID, ref); err != nil {
+		return false, fmt.Errorf("store: clear sandbox ref: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // openRetirementTx inserts run's snapshot in state kill from its live ref, or
 // finds the one already there. The caller holds lockRunnerActionRun. A run
 // with no ref or no watermark row is ErrNotFound: it is never retired.

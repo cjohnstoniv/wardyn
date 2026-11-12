@@ -75,7 +75,8 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// "the sandbox never started" from "capture was empty". Success-only because
 	// the boot orphan sweep keys on a terminal run STILL carrying a ref — after
 	// this line that means exactly "teardown failed", the case it exists for.
-	// Kill/idle-stop tear down on their own paths and never clear; the evidence
+	// The kill tail clears the ref after a confirmed kill (killTeardownTail); the
+	// idle stop tears down on its own path and does not, and the evidence
 	// endpoints' terminal-state guard covers those runs. A failed clear is
 	// deliberately ignored: it degrades to the pre-clear behavior the boot
 	// sweep already retries.

@@ -115,6 +115,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// instant between a revive's mark and its lock.
 		ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
 		if !ok {
+			s.forceUnkeptHeld(ctx, leaser, run)
 			return
 		}
 		defer unlock()

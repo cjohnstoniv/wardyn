@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A hosted run whose network could not be cut off when it ended is now stopped, instead of kept for its folder's copy back; changes not yet copied back are lost.
 - On a runner, a sandbox whose copy back was cut short after its agent was stopped and its network cut is now kept, so the copy back can resume.
 
 ## [0.10.0-rc.19] — 2026-11-11

@@ -207,6 +207,34 @@ type computerFolderStore struct {
 	seedErr   error
 	dataOut   types.TransferRule
 	policyErr error
+	// dbNow is the fake database's clock for the due flags (RunDueFlags); nil is the real one.
+	dbNow func() time.Time
+	// runnerState is the state directory of the folder runner computerFolderFixture connects, which keeps what
+	// each pass saw. A test that connects that runner again passes it, as a runner that reconnects keeps its state.
+	runnerState string
+}
+
+func (s *computerFolderStore) dueNow() time.Time {
+	if s.dbNow != nil {
+		return s.dbNow()
+	}
+	return time.Now()
+}
+
+// sqlDueFlags is store.RunDue as the database answers it (store.ContainmentDueSQL, and the keep after the end) at
+// the fake database's time now, for a run that ended at its EndedAt, or its UpdatedAt when that is unset.
+func sqlDueFlags(run types.AgentRun, keep time.Duration, now time.Time) store.RunDue {
+	end := runEnded(run)
+	return store.RunDue{Due: !end.Add(store.ContainmentLag).After(now), CapPassed: !end.Add(keep).After(now)}
+}
+
+// RunDueFlags implements store.TerminalDue's per-run read over the fixture's run.
+func (s *computerFolderStore) RunDueFlags(ctx context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error) {
+	run, err := s.GetRun(ctx, id)
+	if err != nil {
+		return store.RunDue{}, err
+	}
+	return sqlDueFlags(run, keep, s.dueNow()), nil
 }
 
 // QueryAuditEvents answers no policy envelope unless dataOut is set: these runs carry no data_out rule, which
@@ -496,12 +524,13 @@ func computerFolderFixture(t *testing.T, direction string) (*Server, *computerFo
 	id := row.ID
 	ls.folder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &id, Path: app, Direction: direction}
 	ls.run.AgentExecID = "agent-exec"
-	cs := &computerFolderStore{localFolderStore: ls, runner: row}
+	cs := &computerFolderStore{localFolderStore: ls, runner: row, runnerState: t.TempDir()}
 	s.cfg.Store = cs
 	s.cfg.ComputerFolders = true
 	s.cfg.LocalFolderSeedWait = 20 * time.Second
 	s.cfg.RunnerOnline = func(uuid.UUID) bool { return true }
-	s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: folderRunnerEndpoint(t, id, true, home)}
+	ep, _ := folderRunnerEndpointWith(t, id, folderRunnerOpts{caps: runnerwire.Caps{Folders: true, FolderPassOnce: true, MachineName: "alice-laptop"}, stateDir: cs.runnerState}, home)
+	s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: ep}
 	return s, cs, audit, run, sb, app
 }
 
