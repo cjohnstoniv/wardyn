@@ -908,6 +908,7 @@ func TestSweepForcedStops_AWedgedRunnerIsCutAtTheRowBoundAndTheNextRowStillRuns(
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
+	f.withoutOwedPass()
 	second := store.ForcedStop{RunID: uuid.New(), At: time.Now()}
 	f.leaser.marksMu.Lock()
 	f.leaser.marked = append(f.leaser.marked, second)
@@ -1208,6 +1209,7 @@ func TestSweepForcedStops_ARefTheOrchestratorCannotResolveKeepsTheMark(t *testin
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
+	f.withoutOwedPass()
 	f.sb.stopErr = unowned
 	f.tick(t, f.s)
 	f.tick(t, f.s)
@@ -1413,6 +1415,7 @@ func TestSweepForcedStops_APendingTokenRevokeWritesOneRowAcrossTicks(t *testing.
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
+	f.withoutOwedPass()
 	f.s.cfg.Store = pendingPATStore{f.s.cfg.Store.(markedStore)}
 	f.sb.stopErr = errors.New("the daemon did not answer the stop")
 	for range 3 {
@@ -1479,7 +1482,7 @@ func TestForceKeptStop_ARevokeRepeatedAfterASuccessIsHarmless(t *testing.T) {
 	}
 }
 
-// A kept sandbox whose proxy stop fails with an ordinary error is not kept (the cut is unconfirmed, Q10): the tick
+// A kept sandbox whose proxy stop fails with an ordinary error is not kept (the cut is unconfirmed): the tick
 // stops the sandbox instead. When that stop fails too the mark stays and the next tick asks again, the failed-stop
 // retry; once StopSandbox lands the sandbox is gone and the mark clears. Catches: keeping the sandbox on a
 // failed proxy stop, and clearing the mark on a sandbox stop that did not land.

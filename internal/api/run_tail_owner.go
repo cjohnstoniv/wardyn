@@ -19,8 +19,8 @@ import (
 
 // The tail owner gives every ended run that still holds a sandbox its tail, from one owner, under the run's
 // lock: the revoke, approvals, output, the computer folder's pass back and the sandbox stop. A forced-marked
-// run stays with sweepForcedStops until its mark clears; a runner run whose runner is not connected here is
-// not touched at all.
+// run stays with sweepForcedStops until its mark clears, except for the give-up at the cap on a runner that is
+// not connected here; a runner run whose runner is not connected here is otherwise not touched.
 const (
 	// folderCleanupEvery is the tail owner's period.
 	folderCleanupEvery = 60 * time.Second
@@ -203,19 +203,21 @@ func tailRowAfter(row store.TerminalSandboxRow, cur *store.TerminalSandboxCursor
 
 // tailVisit decides one listed row, and runs its give-up or folder step at once. It reports a row that owes
 // nothing and is past its containment due, for the history tails (tailHistoryTails). A forced-marked row is
-// sweepForcedStops'. A runner run whose runner is not connected here (a live session, never last-known caps) gets
+// sweepForcedStops', except that a marked row on a runner that is not connected here and past the cap is decided
+// like any other away row, so a runner that never returns cannot keep an owed pass for ever. A runner run whose
+// runner is not connected here (a live session, never last-known caps) gets
 // no runner call, no folder pass and no tail; the one step it takes is the give-up at the cap, which needs no
 // runner (tailGiveUpAway): the record is read, and an owed pass whose keep ran out is given up, with its audit
 // row. Inside the cap it takes no lock and writes no row. A record or rule that cannot be read skips the row for
 // the tick: an unreadable answer is never "not owed", which would stop a sandbox that owes its changes.
 func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, now time.Time) (history bool) {
-	if row.ForcedStopAt != nil {
-		return false
-	}
 	away := false
 	if row.RunnerID != nil {
 		_, connected := s.runnerConnected(*row.RunnerID)
 		away = !connected
+	}
+	if row.ForcedStopAt != nil && !(away && row.CapPassed) {
+		return false
 	}
 	run := containRunOf(row)
 	st, err := s.tailFolderStatus(ctx, run.ID)

@@ -403,7 +403,7 @@ func TestStopTerminalSandbox_RunnerNotHereLeavesTheOwedSandbox(t *testing.T) {
 	})
 }
 
-// A hosted sandbox whose proxy stop fails is stopped, not kept (Q10), with the cut's one failure row.
+// A hosted sandbox whose proxy stop fails is stopped, not kept, with the cut's one failure row.
 func TestStopTerminalSandbox_HostedProxyStopErrorStopsTheSandboxWithRow(t *testing.T) {
 	f := newForced(t)
 	f.sb.proxyErr = errors.New("the daemon did not answer the proxy stop")

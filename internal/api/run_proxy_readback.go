@@ -425,8 +425,8 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		// so its changes not yet copied back are not lost; its ref stays for the tail owner. A runner that is not
 		// here fails this stop for the sweep to retry. A substrate that cannot be cut keeps no such sandbox, and
 		// neither does a hosted one whose proxy stop failed (its failure row written): its sandbox is stopped as
-		// any other. A record that cannot be read counts as kept: the containment that keeps the sandbox for it
-		// writes one failure row with folder_record_error.
+		// any other. A record that cannot be read keeps the sandbox only on a confirmed cut, with one failure row
+		// carrying folder_record_error; a rule that cannot be read past the cap is given up by the tail owner.
 		v, ferr, cutErr := s.folderKeepVerdict(ctx, run, "run.reconcile")
 		switch v {
 		case folderKeepCut:

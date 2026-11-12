@@ -1145,7 +1145,7 @@ func TestTailOwner_FirstGiveUpWithAFailedMarkWritesOneRow(t *testing.T) {
 
 // crashedBeforeItsTail is the forced fixture's run at the crash boundary of an ordinary end: the folder was seeded
 // for real (holdForLocalFolder), and the run is committed terminal by the lease's own transition (StopKeptRunIf, the
-// first half of stopKeptRun, run_lease.go:461), with the tail never called (:473) and the run's lock free.
+// first half of stopKeptRun), with the tail (finalizeRunTailOrdered) never called and the run's lock free.
 func (f *forced) crashedBeforeItsTail(t *testing.T, to types.RunState) types.AgentRun {
 	t.Helper()
 	f.release()
@@ -1387,6 +1387,47 @@ func TestTailOwner_AwayRunnerOwedPassIsGivenUpAtTheCapWithNoRunnerCall(t *testin
 	if g.count(tailHistory) != 1 || g.lab.rows[row.run.ID].run.SandboxRef != "" {
 		t.Errorf("runner back: %d history tails, ref %q; want the history tail to end the sandbox", g.count(tailHistory), g.lab.rows[row.run.ID].run.SandboxRef)
 	}
+}
+
+// A forced-marked row is the forced sweep's, except on a runner that is away: there, past the cap, its owed pass is
+// given up with its row like any other away row (a runner that never returns would keep it for ever, the mark
+// waiting on it). Inside the cap it is skipped, and so is a marked row on a runner that is here. Catches: the
+// marked-row skip coming before the away give-up, and a give-up for a marked row inside the cap.
+func TestTailOwner_AForcedMarkedRowOnAnAwayRunnerIsGivenUpPastTheCapOnly(t *testing.T) {
+	setup := func(t *testing.T, ended time.Duration, online bool) (*tailRig, *tailRow) {
+		g := newTailRig(t)
+		g.lab.giveUpOK = true
+		id := g.lab.runner.ID
+		row := g.owedRow(g.clock.now.Add(-ended))
+		row.run.RunnerID = &id
+		at := g.clock.now
+		row.forced = &at
+		g.online.Store(online)
+		return g, row
+	}
+	t.Run("an away runner, past the cap", func(t *testing.T) {
+		g, row := setup(t, pendingCapMin+time.Hour, false)
+		g.tick()
+		g.tick()
+		st, _ := g.lab.RunLocalFolderStatus(context.Background(), row.run.ID)
+		if g.lab.giveUpCount() != 1 || transferAudit(g.audit) != 1 || g.total() != 0 || st.Resume != nil || st.Back == nil || st.Back.GivenUpAt == nil {
+			t.Errorf("%d give-ups, %d given_up rows, %d tails, record %+v over two ticks; want 1, 1, 0 and a given-up record", g.lab.giveUpCount(), transferAudit(g.audit), g.total(), st)
+		}
+	})
+	t.Run("an away runner, inside the cap", func(t *testing.T) {
+		g, _ := setup(t, time.Hour, false)
+		g.tick()
+		if g.lab.giveUpCount() != 0 || g.locks.n.Load() != 0 || g.total() != 0 {
+			t.Errorf("%d give-ups, %d lock attempts, %d tails; want none", g.lab.giveUpCount(), g.locks.n.Load(), g.total())
+		}
+	})
+	t.Run("a runner that is here, past the cap", func(t *testing.T) {
+		g, _ := setup(t, pendingCapMin+time.Hour, true)
+		g.tick()
+		if g.lab.giveUpCount() != 0 || g.locks.n.Load() != 0 || g.total() != 0 {
+			t.Errorf("%d give-ups, %d lock attempts, %d tails; want none: the forced sweep owns it", g.lab.giveUpCount(), g.locks.n.Load(), g.total())
+		}
+	})
 }
 
 // A lookup of the folder runner that fails (not one that answers "gone") is transient: the row is not visited, and

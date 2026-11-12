@@ -305,8 +305,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 			defer unlock()
 			// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
 			// owner's give-up at the cap ends the keep.
-			v, _, _ := s.folderKeepVerdict(lctx, run, "sandbox.orphan.sweep")
-			return v == folderKeepNone
+			return s.boundedKeepVerdict(lctx, run, "sandbox.orphan.sweep") == folderKeepNone
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -384,7 +383,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 
 // reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
 func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
-	if v, _, _ := s.folderKeepVerdict(ctx, run, "sandbox.orphan.sweep"); v != folderKeepNone {
+	if s.boundedKeepVerdict(ctx, run, "sandbox.orphan.sweep") != folderKeepNone {
 		// Kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) runs, on a confirmed
 		// cut; or a runner that is not here, left until it is, or until the tail owner gives the pass up.
 		return
@@ -415,6 +414,19 @@ func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
 		slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
 			slog.String("run_id", run.ID.String()), slog.Any("err", serr))
 	}
+}
+
+// reconcileCutBound is the bound of one orphan pass cut; a variable only so a test can shorten it.
+var reconcileCutBound = reconcileFinalizeTimeout
+
+// boundedKeepVerdict is folderKeepVerdict on the bound of one boot teardown call (reconcileFinalizeTimeout): the
+// cut it makes is a substrate call, and one that never answers must not hold boot or the label sweep. A cut that
+// timed out is unconfirmed, so the verdict is folderKeepNone and the caller stops the sandbox.
+func (s *Server) boundedKeepVerdict(ctx context.Context, run types.AgentRun, action string) folderKeep {
+	ctx, cancel := context.WithTimeout(ctx, reconcileCutBound)
+	defer cancel()
+	v, _, _ := s.folderKeepVerdict(ctx, run, action)
+	return v
 }
 
 // boundedTeardown bounds one teardown call of the boot orphan pass like a finalize

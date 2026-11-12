@@ -389,6 +389,49 @@ func (r *orphanVerdictRunner) SweepOrphanedSandboxes(_ context.Context, _ time.D
 	return 0, nil
 }
 
+// hangingCutRunner is a substrate whose proxy stop never answers until its context ends.
+type hangingCutRunner struct{ *orphanVerdictRunner }
+
+func (hangingCutRunner) StopProxy(ctx context.Context, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A cut that never answers is bounded on both orphan passes and counts as unconfirmed: the sandbox kept for its
+// computer folder is stopped, and neither pass is held. Catches: an unbounded cut in the boot pass or the label
+// sweep, and a timed-out cut read as a keep.
+func TestOrphanPasses_AHangingCutTimesOutAndTheSandboxIsStopped(t *testing.T) {
+	old := reconcileCutBound
+	reconcileCutBound = 50 * time.Millisecond
+	t.Cleanup(func() { reconcileCutBound = old })
+	h := newHarness(t)
+	now := time.Now().UTC()
+	kept := uuid.New()
+	run := types.AgentRun{ID: kept, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunCompleted, RunnerTarget: "docker", SandboxRef: "kept"}
+	st := &keptFolderStore{orphanSweepStore: &orphanSweepStore{runs: []types.AgentRun{run}}, kept: map[uuid.UUID]bool{kept: true}}
+	rn := &orphanVerdictRunner{orphanSweepRunner: &orphanSweepRunner{fakeRunner: &fakeRunner{}}, verdicts: map[uuid.UUID]bool{kept: false}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = hangingCutRunner{rn}
+	srv := testServer(t, cfg)
+	start := time.Now()
+	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := rn.stopCount("kept"); n != 1 {
+		t.Errorf("boot orphan pass stopped the sandbox %d times; want 1: its cut timed out", n)
+	}
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !rn.verdicts[kept] {
+		t.Error("the label sweep kept a sandbox whose cut timed out; want it called an orphan")
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("both passes took %v; a cut must end at its bound", took)
+	}
+}
+
 // Neither orphan pass tears down a sandbox that its computer folder's pass back keeps for
 // the tail owner; another terminal run's sandbox still goes (#3466).
 func TestOrphanPasses_LeaveASandboxKeptForAComputerFolderResume(t *testing.T) {
