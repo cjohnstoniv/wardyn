@@ -197,6 +197,25 @@ while :; do
 done
 wait`
 
+// teardownHeldScript holds a connection to the proxy for closedOffAfter. Before held=1 it proves once,
+// as heldScript does, that the connection is up: the one ESTABLISHED socket to port 3128 in the agent's
+// own table. After held=1 it only waits. The sleep pipeline keeps it up, so its stream ends only when the
+// pod's processes die, and an nc that dies first during the pod's deletion is no verdict either way.
+const teardownHeldScript = `sleep 3600 | nc -v wardyn-proxy 3128 2>&1 &
+pid=$!
+sleep 2
+kill -0 "$pid" || { echo "observer-error=nc exited before 2 s"; exit 1; }
+net=${HELD_PROC_NET:-/proc/net}
+for f in "$net/tcp" "$net/tcp6"; do
+	[ -r "$f" ] || { echo "observer-error=cannot read $f"; exit 1; }
+done
+out=$(awk '$3 ~ /:0C38$/ && $4 == "01" { n++; split($2, a, ":"); p = a[2] } END { print n + 0, p }' "$net/tcp" "$net/tcp6") || { echo "observer-error=awk exited $?"; exit 1; }
+set -- $out
+[ "$1" = 1 ] || { echo "observer-error=held connection not identified: $1 ESTABLISHED sockets to port 3128"; exit 1; }
+echo "held-port=$2"
+echo held=1
+wait`
+
 // closedOffBound is how long a held connection may outlive a teardown that has returned. A driver that
 // waits for the pods to be gone has the kubelet's word that every container stopped, so this is only the
 // beat the exec stream takes to notice.
@@ -280,7 +299,7 @@ func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, 
 	})
 	runPods := metav1.ListOptions{LabelSelector: "wardyn.run-id=" + spec.RunID.String()}
 
-	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", heldScript}})
+	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", teardownHeldScript}})
 	if err != nil {
 		t.Fatalf("ExecStream (hold a connection to the proxy): %v", err)
 	}
@@ -288,8 +307,8 @@ func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, 
 	if sess.Stdin != nil {
 		_ = sess.Stdin.Close()
 	}
-	// closed is the end of the stream, which a pod's death brings. failed is an observer-error= line: the
-	// script stopped on its own, so the stream's end after it would prove nothing.
+	// closed is the end of the stream, which only a pod's death brings once held=1 is out. failed is an
+	// observer-error= line, which the script prints only before held=1 and then stops on its own.
 	var mu sync.Mutex
 	var lines []string
 	held, closed, failed := make(chan struct{}), make(chan struct{}), make(chan struct{})
