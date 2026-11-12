@@ -179,7 +179,7 @@ func revokeOwedServer(t *testing.T, st store.Store, brk *flakyBroker) (*Server, 
 	return testServer(t, cfg), h.audit
 }
 
-func countAudit(events []types.AuditEvent, runID uuid.UUID, action, outcome string) int {
+func countRevokeAudit(events []types.AuditEvent, runID uuid.UUID, action, outcome string) int {
 	n := 0
 	for _, ev := range events {
 		if ev.Action == action && ev.Outcome == outcome && ev.RunID != nil && *ev.RunID == runID {
@@ -289,7 +289,7 @@ func TestRevoke_FailureRowOncePerProcess(t *testing.T) {
 	if brk.callsFor(id) != 3 {
 		t.Fatalf("broker calls = %d, want one per tick (3)", brk.callsFor(id))
 	}
-	if n := countAudit(audit.snapshot(), id, "run.revoke", "failure"); n != 1 {
+	if n := countRevokeAudit(audit.snapshot(), id, "run.revoke", "failure"); n != 1 {
 		t.Fatalf("%d run.revoke failure rows after 3 ticks, want 1", n)
 	}
 }
