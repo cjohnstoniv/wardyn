@@ -84,21 +84,27 @@ func (s *Server) d1FolderOwed(ctx context.Context, run types.AgentRun) (st types
 
 // d1StreakDue reports a second failure at least a streak after the first, compared by the database on its
 // own clock, since the later of the run's due time, its last unobserved round and this process's start.
+// A read that fails answers false, for the next round.
 func (s *Server) d1StreakDue(ctx context.Context, run types.AgentRun) bool {
-	st, ok := s.cfg.Store.(store.ContainmentStreaker)
-	if !ok {
-		return false
-	}
-	tau := containTick
-	if run.RunnerID != nil {
-		tau = containStreakRunner
-	}
-	streak, err := st.ContainmentStreakDue(ctx, run.ID, tau, s.streakSince(run))
+	streak, err := s.d1Streak(ctx, run)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: checking an ended run's failure streak failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return false
 	}
 	return streak
+}
+
+// d1Streak is d1StreakDue with its read error apart. A store that cannot answer holds no streak.
+func (s *Server) d1Streak(ctx context.Context, run types.AgentRun) (bool, error) {
+	st, ok := s.cfg.Store.(store.ContainmentStreaker)
+	if !ok {
+		return false, nil
+	}
+	tau := containTick
+	if run.RunnerID != nil {
+		tau = containStreakRunner
+	}
+	return st.ContainmentStreakDue(ctx, run.ID, tau, s.streakSince(run))
 }
 
 // d1UnsupportedDue is the rule for a run with no contain call: stop it, once its folder record has been
@@ -110,6 +116,31 @@ func (s *Server) d1UnsupportedDue(ctx context.Context, run types.AgentRun, due t
 		return false
 	}
 	return !(owed && held && s.cfg.Now().Before(due.Add(containServerKeepWait)))
+}
+
+// containStopOwed reports whether run's stop is owed: it is past its containment due, and either its
+// substrate has no contain call and its stop is not being held back for its pass (a Kubernetes server-mode
+// run with an owed copy back is held until its due plus containServerKeepWait), or a failure the database
+// holds is a streak old. These are the reads d1Due makes, with no rule of their own. A read that fails
+// answers true: the run is then stopped, never given another attempt at a copy back. A run whose stop is
+// owed gets no new pass back; stopping it wins over another attempt.
+func (s *Server) containStopOwed(ctx context.Context, run types.AgentRun) bool {
+	due, ok := containmentDue(run)
+	if !ok || s.cfg.Now().Before(due) {
+		return false
+	}
+	_, owed, readable := s.d1FolderOwed(ctx, run)
+	if !readable {
+		return true
+	}
+	switch {
+	case s.d1ServerMode(run):
+		return !owed || !s.cfg.Now().Before(due.Add(containServerKeepWait))
+	case s.d1NoCall(run):
+		return true
+	}
+	streak, err := s.d1Streak(ctx, run)
+	return err != nil || streak
 }
 
 // d1Reread is the stop item's pre phase: the run as it stands now. An item for a run that is no longer

@@ -649,6 +649,11 @@ func (s *Server) resumeComputerFolderBack(ctx context.Context, id uuid.UUID) {
 	if err != nil || !isTerminalRunState(run.State) || run.SandboxRef == "" || !s.computerFolderKept(lctx, id) {
 		return
 	}
+	// A run whose stop is owed gets no new pass: the containment loop stops it, and a pass begun now would
+	// be cut by that stop.
+	if s.containStopOwed(lctx, run) {
+		return
+	}
 	fctx, cancel := context.WithTimeout(lctx, reconcileFinalizeTimeout)
 	defer cancel()
 	_ = s.finalizeRunEffects(fctx, id, run.SandboxRef, "sandbox.orphan.sweep", map[string]any{"sandbox_ref": run.SandboxRef}, false, false)

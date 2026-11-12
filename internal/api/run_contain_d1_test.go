@@ -1876,3 +1876,101 @@ func TestContain_StopWaitsForAPassHoldingTheLockPastTheWait(t *testing.T) {
 		})
 	}
 }
+
+// containStopOwed over its inputs. A Kubernetes server-mode run with an owed copy back is not owed its stop
+// inside the hold (its due plus the server-mode wait) and is once the hold has expired; one with nothing
+// owed is owed at its due. A run that is not in server mode follows d1Due: no contain call, past due: owed;
+// a failure a streak old: owed; a first failure: not. A read that fails answers owed. A run not yet due is
+// never owed.
+func TestContain_StopOwedValueList(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, _ := d1ServerLab(t, time.Second, time.Second)
+		ctx := context.Background()
+		owedRow := func(dueIn time.Duration) types.AgentRun {
+			r := l.rowDue(dueIn, nil, "")
+			l.ds.owe(r.ID)
+			return containRunOf(r)
+		}
+		for name, tc := range map[string]struct {
+			run  types.AgentRun
+			want bool
+		}{
+			"server mode, the hold expired":        {owedRow(-(containServerKeepWait + time.Second)), true},
+			"server mode, the hold ends right now": {owedRow(-containServerKeepWait), true},
+			"server mode, inside the hold":         {owedRow(-(containServerKeepWait - time.Second)), false},
+			"server mode, not yet due":             {owedRow(time.Minute), false},
+			"server mode, nothing owed":            {containRunOf(l.rowDue(-time.Second, nil, "")), true},
+			"a virtual machine, past due":          {containRunOf(l.rowDue(-time.Second, nil, types.MachineLinuxVM)), true},
+		} {
+			if got := l.srv.containStopOwed(ctx, tc.run); got != tc.want {
+				t.Errorf("%s: containStopOwed = %v, want %v", name, got, tc.want)
+			}
+		}
+		for readName, fail := range d1ReadFails {
+			inside := owedRow(-(containServerKeepWait - time.Second))
+			fail(l.ds, errors.New("database down"))
+			if !l.srv.containStopOwed(ctx, inside) {
+				t.Errorf("%s read failing inside the hold: containStopOwed = false, want true: a read that fails answers owed", readName)
+			}
+			fail(l.ds, nil)
+		}
+	})
+	// A hosted container: owed only once a failure a streak old is recorded.
+	synctest.Test(t, func(t *testing.T) {
+		l := newD1Lab(t, true)
+		l.rn.setHook(func(context.Context, string) error { return errContainBoom })
+		row := l.row(nil, "")
+		run := containRunOf(row)
+		ctx := context.Background()
+		if l.srv.containStopOwed(ctx, run) {
+			t.Error("a container with no failure recorded: containStopOwed = true, want false")
+		}
+		l.item(row)
+		if l.srv.containStopOwed(ctx, run) {
+			t.Error("a container with a first failure: containStopOwed = true, want false")
+		}
+		time.Sleep(containTick)
+		if !l.srv.containStopOwed(ctx, run) {
+			t.Error("a container whose failure is a streak old: containStopOwed = false, want true")
+		}
+		l.ds.fmu.Lock()
+		l.ds.statusErr = errors.New("database down")
+		l.ds.fmu.Unlock()
+		if !l.srv.containStopOwed(ctx, run) {
+			t.Error("a container whose folder record cannot be read: containStopOwed = false, want true")
+		}
+	})
+}
+
+// A run whose stop is owed gets no pass from the resume sweep, on either of two servers that share the
+// store and whose sweeps both fire in the window: nothing is stopped, nothing revoked by a tail, no agent
+// touched. A run inside its hold is resumed as before (its tail stops the sandbox when the pass keeps
+// nothing), which shows the sweep does reach a run when its stop is not owed.
+func TestContain_ResumeSweepLeavesARunWhoseStopIsOwed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, scripts := d1ServerLab(t, time.Second, time.Second)
+		b := a.sharing(t)
+		a.dr.claimed = nil // the sweep's tail stops sandboxes outside the stop pool
+		owed := a.rowDue(-(containServerKeepWait + time.Second), nil, "")
+		a.ds.owe(owed.ID)
+		var wg sync.WaitGroup
+		for _, l := range []*d1Lab{a, b} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				l.srv.resumeComputerFolderBack(context.Background(), owed.ID)
+			}()
+		}
+		wg.Wait()
+		if n := a.dr.stopCount(owed.SandboxRef); n != 0 || len(*scripts) != 0 || a.dr.execCount("cat", owed.SandboxRef) != 0 {
+			t.Errorf("a run whose stop is owed: stops %d, agent stops %d, agent checks %d on the two servers; want none",
+				n, len(*scripts), a.dr.execCount("cat", owed.SandboxRef))
+		}
+		inside := a.rowDue(-(containServerKeepWait - time.Minute), nil, "")
+		a.ds.owe(inside.ID)
+		a.srv.resumeComputerFolderBack(context.Background(), inside.ID)
+		if n := a.dr.stopCount(inside.SandboxRef); n == 0 {
+			t.Error("a run inside its hold: the sweep did not reach its tail, so the owed case proves nothing")
+		}
+	})
+}
