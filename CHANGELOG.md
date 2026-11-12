@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A request through the organisation-credential route that arrived after a quiet period could be cut off, or answered 503, while the route was being set up again. This no longer happens.
+
 ## [0.10.0-rc.19] — 2026-11-11
 
 ### Changed
