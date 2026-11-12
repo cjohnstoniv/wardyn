@@ -174,14 +174,15 @@ func (s PG) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard F
 }
 
 // BumpRunLocalFolderGen implements RunLocalFolderStatuses. Only gen and gen_at change, so a write that
-// landed between the caller's read and this bump is kept.
-func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
-	pred, args := guard.sql(4)
+// landed between the caller's read and this bump is kept. gen_at is the database's now(), whatever the caller's
+// at says: the one clock that FolderGenPastBound later reads it against. (at is for stores that keep no clock.)
+func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, _ time.Time) (types.RunLocalFolderStatus, bool, error) {
+	pred, args := guard.sql(3)
 	var raw []byte
 	err := s.Pool.QueryRow(ctx, `UPDATE agent_runs
-		SET local_folder_status = COALESCE(local_folder_status, '{}'::jsonb) || jsonb_build_object('gen', $2::int, 'gen_at', $3::timestamptz)
+		SET local_folder_status = COALESCE(local_folder_status, '{}'::jsonb) || jsonb_build_object('gen', $2::int, 'gen_at', now())
 		WHERE id = $1 AND local_folder IS NOT NULL AND `+pred+`
-		RETURNING local_folder_status`, append([]any{id, guard.Gen + 1, at}, args...)...).Scan(&raw)
+		RETURNING local_folder_status`, append([]any{id, guard.Gen + 1}, args...)...).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunLocalFolderStatus{}, false, nil
 	}
@@ -190,6 +191,30 @@ func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard Folde
 	}
 	st, err := unmarshalFolderStatus(raw)
 	return st, err == nil, err
+}
+
+// FolderGenAges answers, on the database's clock, whether a folder record's generation was sent bound ago or more.
+type FolderGenAges interface {
+	// FolderGenPastBound is true when the record is at generation gen, has a send time (gen_at), and that time plus
+	// bound has passed against now(). A record at another generation, or with no send time, is false.
+	FolderGenPastBound(ctx context.Context, id uuid.UUID, gen int, bound time.Duration) (bool, error)
+}
+
+var _ FolderGenAges = PG{}
+
+// FolderGenPastBound implements FolderGenAges.
+func (s PG) FolderGenPastBound(ctx context.Context, id uuid.UUID, gen int, bound time.Duration) (bool, error) {
+	var past bool
+	err := s.Pool.QueryRow(ctx, `SELECT COALESCE(COALESCE((local_folder_status->>'gen')::int, 0) = $2
+		   AND (local_folder_status->>'gen_at')::timestamptz + make_interval(secs => $3) <= now(), false)
+		FROM agent_runs WHERE id = $1`, id, gen, bound.Seconds()).Scan(&past)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: read folder generation age: %w", err)
+	}
+	return past, nil
 }
 
 // terminalStateNames is the states RunState.IsTerminal names, as the text[] a `state = ANY($n)` argument takes.

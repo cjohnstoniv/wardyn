@@ -125,9 +125,19 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = NULL WHERE id = $1`, null); err != nil {
 		t.Fatal(err)
 	}
-	at := time.Now().UTC().Truncate(time.Microsecond)
-	if st, ok, err := pg.BumpRunLocalFolderGen(ctx, null, store.FolderStatusGuard{Gen: 0}, at); !ok || err != nil || st.Gen != 1 || !st.GenAt.Equal(at) || st.Back != nil {
-		t.Fatalf("bump of a NULL record = %+v %v %v, want gen 1 stamped %v and nothing else", st, ok, err, at)
+	// The caller's time is ignored: gen_at is the database's clock, so it lies between two reads of that clock, not
+	// at the caller's (here an hour ahead).
+	at := time.Now().UTC().Truncate(time.Microsecond).Add(time.Hour)
+	var dbBefore, dbAfter time.Time
+	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbBefore); err != nil {
+		t.Fatal(err)
+	}
+	st, ok, err := pg.BumpRunLocalFolderGen(ctx, null, store.FolderStatusGuard{Gen: 0}, at)
+	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !ok || err != nil || st.Gen != 1 || st.Back != nil || st.GenAt.Before(dbBefore) || st.GenAt.After(dbAfter) {
+		t.Fatalf("bump of a NULL record = %+v %v %v, want gen 1 stamped between %v and %v (the database's clock, not %v) and nothing else", st, ok, err, dbBefore, dbAfter, at)
 	}
 
 	legacy := newFolderRun()
@@ -140,7 +150,7 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, legacy, store.FolderStatusGuard{Gen: 1}, types.RunLocalFolderStatus{}); ok || err != nil {
 		t.Fatalf("a write at gen 1 on a gen-less record landed: %v %v", ok, err)
 	}
-	st, ok, err := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at)
+	st, ok, err = pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at)
 	if !ok || err != nil || st.Gen != 1 || st.Back == nil || st.Back.Files != 4 {
 		t.Fatalf("bump of a gen-less record = %+v %v %v, want gen 1 with its back kept", st, ok, err)
 	}
@@ -569,4 +579,53 @@ func idStrings(ids []uuid.UUID) []string {
 // sortUUIDs orders ids as Postgres orders uuids: by bytes.
 func sortUUIDs(ids []uuid.UUID) {
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+}
+
+// FolderGenPastBound is decided on the database's clock: a record at the asked generation whose gen_at plus the bound
+// has passed against now() is true; a fresh stamp, another generation, a record with no gen_at and an unknown run
+// are false. Catches: the age read against a caller's clock, and a NULL gen_at failing the scan.
+func TestPG_FolderGenPastBound(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runner := uuid.New()
+	r := newRun(types.RunRunning)
+	r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
+	if _, err := pg.CreateRun(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+	past := func(gen int, bound time.Duration) bool {
+		t.Helper()
+		got, err := pg.FolderGenPastBound(ctx, r.ID, gen, bound)
+		if err != nil {
+			t.Fatalf("FolderGenPastBound(%d, %v): %v", gen, bound, err)
+		}
+		return got
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = NULL WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if past(0, 0) {
+		t.Error("a record with no gen_at is past a zero bound")
+	}
+	// The caller's time is far in the past, which a Go-clock comparison would call old: the stamp is the database's.
+	if _, ok, err := pg.BumpRunLocalFolderGen(ctx, r.ID, store.FolderStatusGuard{Gen: 0}, time.Now().Add(-24*time.Hour)); !ok || err != nil {
+		t.Fatalf("bump: %v %v", ok, err)
+	}
+	if past(1, time.Hour) {
+		t.Error("a record stamped just now is past a one hour bound")
+	}
+	if past(2, 0) {
+		t.Error("another generation is past the bound")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = jsonb_set(local_folder_status, '{gen_at}', to_jsonb(now() - interval '10 minutes')) WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !past(1, 5*time.Minute) || past(1, 20*time.Minute) {
+		t.Errorf("a stamp 10 minutes old: past 5 minutes %v, past 20 minutes %v; want true and false", past(1, 5*time.Minute), past(1, 20*time.Minute))
+	}
+	if got, err := pg.FolderGenPastBound(ctx, uuid.New(), 1, 0); got || err != nil {
+		t.Errorf("an unknown run = %v, %v; want false, nil", got, err)
+	}
 }

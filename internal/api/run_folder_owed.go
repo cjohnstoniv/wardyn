@@ -75,17 +75,19 @@ func (s *Server) folderOwed(ctx context.Context, run types.AgentRun, st types.Ru
 	return s.folderBackEligible(ctx, run.ID)
 }
 
-// folderExpiredOwed is folderOwed for a run whose keep has run out at now: its end plus pendingCap has passed.
-func (s *Server) folderExpiredOwed(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, now time.Time) (bool, error) {
-	if runEnded(run).Add(s.pendingCap()).After(now) {
+// folderExpiredOwed is folderOwed for a run whose keep has run out: its end plus pendingCap has passed, which
+// is the database's answer (store.RunDue.CapPassed, against its now()) and never a comparison with a server's clock.
+func (s *Server) folderExpiredOwed(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, due store.RunDue) (bool, error) {
+	if !due.CapPassed {
 		return false, nil
 	}
 	return s.folderOwed(ctx, run, st)
 }
 
-// folderKeepPermitted is folderOwed for a run whose keep has not run out at now.
-func (s *Server) folderKeepPermitted(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, now time.Time) (bool, error) {
-	if !runEnded(run).Add(s.pendingCap()).After(now) {
+// folderKeepPermitted is folderOwed for a run whose keep has not run out (the database's answer, as for
+// folderExpiredOwed).
+func (s *Server) folderKeepPermitted(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, due store.RunDue) (bool, error) {
+	if due.CapPassed {
 		return false, nil
 	}
 	return s.folderOwed(ctx, run, st)

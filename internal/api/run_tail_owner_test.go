@@ -58,6 +58,32 @@ type tailLab struct {
 	getRunnerErr error
 	dataOut      types.TransferRule
 	policyErr    error
+	// dbNow is the fake database's clock, the only one the due flags read; the server's own clock is Config.Now.
+	dbNow func() time.Time
+}
+
+// rowDueFlags is store.RunDue for a listing row at the fake database's time now, as the SQL answers it.
+func rowDueFlags(r store.TerminalSandboxRow, keep time.Duration, now time.Time) store.RunDue {
+	return dueFlagsAt(types.AgentRun{State: r.State, EndedAt: r.EndedAt, UpdatedAt: r.UpdatedAt}, keep, now)
+}
+
+func (l *tailLab) ListTerminalSandboxPageDue(ctx context.Context, after *store.TerminalSandboxCursor, limit int, unfencedOnly bool, keep time.Duration) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
+	rows, next, err := l.ListTerminalSandboxPage(ctx, after, limit, unfencedOnly)
+	for i := range rows {
+		d := rowDueFlags(rows[i], keep, l.dbNow())
+		rows[i].Due, rows[i].CapPassed = d.Due, d.CapPassed
+	}
+	return rows, next, err
+}
+
+func (l *tailLab) RunDueFlags(_ context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r, ok := l.rows[id]
+	if !ok {
+		return store.RunDue{}, store.ErrNotFound
+	}
+	return dueFlagsAt(r.run, keep, l.dbNow()), nil
 }
 
 func (l *tailLab) add(r *tailRow) {
@@ -264,7 +290,12 @@ type tailRig struct {
 	calls  []tailCall
 	during func(run types.AgentRun, step tailStep)
 	stuck  map[uuid.UUID]bool // runs whose stop keeps failing: their tail runs and the ref stays
+	// skew is how far the server's Go clock runs from the database's (clock): every stored time is the database's.
+	skew time.Duration
 }
+
+// serverNow is the server's own clock: the database's plus skew. Only the Go-held backoff reads it.
+func (g *tailRig) serverNow() time.Time { return g.clock.now.Add(g.skew) }
 
 func newTailRig(t *testing.T) *tailRig {
 	t.Helper()
@@ -273,7 +304,8 @@ func newTailRig(t *testing.T) *tailRig {
 	g.online.Store(true)
 	g.lab = &tailLab{rows: map[uuid.UUID]*tailRow{}, markCalls: map[uuid.UUID]int{},
 		runner: types.Runner{ID: uuid.New(), Owner: "alice@example.com", Name: "laptop", State: types.RunnerClaimed}}
-	g.s = New(Config{Store: g.lab, Audit: g.audit, Runner: containBare{}, ComputerFolders: true, Now: g.clock.Now,
+	g.lab.dbNow = g.clock.Now
+	g.s = New(Config{Store: g.lab, Audit: g.audit, Runner: containBare{}, ComputerFolders: true, Now: g.serverNow,
 		RunnerOnline: func(uuid.UUID) bool { return g.online.Load() }})
 	g.s.locks.override = g.locks
 	seamConnect(t, g.s, g.lab.runner.ID, runnerwire.Caps{Folders: true, FolderPassOnce: true})
@@ -555,9 +587,10 @@ func TestTailOwner_FencedOwedRunIsStillVisited(t *testing.T) {
 	}
 }
 
-// A folder record or seed that cannot be read skips the row for the tick: no lock, no give-up, no stop, a warn
-// log; the next tick with good reads runs the step. Catches: a read error read as "not owed", which stops the
-// sandbox at once.
+// A folder record that cannot be read skips every row for the tick, and a seed that cannot be read skips the rows
+// inside the cap: no lock, no give-up, no stop, a warn log naming the row; the next tick with good reads runs the
+// step. Past the cap the seed's failure does not hold the row: it is given up (the next pin). Catches: a read
+// error read as "not owed", which stops the sandbox at once.
 func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 	g := newTailRig(t)
 	g.lab.giveUpOK = true
@@ -566,19 +599,26 @@ func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 	past.status = types.RunLocalFolderStatus{} // no pass has run: owed unless no folder says otherwise
 	logs := tailTestLogs(t)
 	for _, tc := range []struct {
-		name string
-		set  func()
+		name     string
+		set      func()
+		warns    *tailRow // the row the warn names
+		giveUps  int      // the expired row's give-up, which a seed read failure no longer holds back
+		wantLogs bool
 	}{
-		{"the status read fails", func() { g.lab.statusErr = errors.New("status down") }},
-		{"the seed read fails", func() { g.lab.statusErr, g.lab.seedErr = nil, errors.New("seed down") }},
+		{"the status read fails", func() { g.lab.statusErr = errors.New("status down") }, expired, 0, true},
+		{"the seed read fails", func() { g.lab.statusErr, g.lab.seedErr = nil, errors.New("seed down") }, past, 1, true},
 	} {
 		logs.Reset() // each case must warn by itself, not on the one before's line
 		tc.set()
 		g.tick()
-		if g.locks.n.Load() != 0 || g.total() != 0 || g.lab.giveUpCount() != 0 {
+		if tc.giveUps == 0 && (g.locks.n.Load() != 0 || g.total() != 0 || g.lab.giveUpCount() != 0) {
 			t.Fatalf("%s: %d lock attempts, %d tails, %d give-ups; want none", tc.name, g.locks.n.Load(), g.total(), g.lab.giveUpCount())
 		}
-		if !strings.Contains(logs.String(), "could not read") || !strings.Contains(logs.String(), expired.run.ID.String()) {
+		if tc.giveUps == 1 && (g.count(tailGiveUp) != 1 || g.count(tailHistory) != 0 || g.lab.giveUpCount() != 1) {
+			t.Fatalf("%s: %d give-up tails, %d history tails, %d give-ups; want the expired row's give-up alone",
+				tc.name, g.count(tailGiveUp), g.count(tailHistory), g.lab.giveUpCount())
+		}
+		if !strings.Contains(logs.String(), "could not read") || !strings.Contains(logs.String(), tc.warns.run.ID.String()) {
 			t.Errorf("%s: no warn names the run: %q", tc.name, logs.String())
 		}
 	}
@@ -587,6 +627,80 @@ func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 	if g.count(tailGiveUp) != 1 || g.count(tailHistory) != 1 || g.lab.giveUpCount() != 1 {
 		t.Errorf("good reads: %d give-up tails, %d history tails, %d give-ups; want 1, 1, 1",
 			g.count(tailGiveUp), g.count(tailHistory), g.lab.giveUpCount())
+	}
+}
+
+// Past the cap a row whose data_out rule or seed cannot be read is given up like any other (one statement), with a
+// given_up audit row saying the rule could not be read, and its sandbox is stopped; the reads' failure does not
+// hold it. Inside the cap the same failure gives nothing up. A seed that cannot be read also keeps the audit row
+// from being written (it names the folder), so the row follows once the seed reads, with the same field.
+// Catches: a read error past the cap returning tailNone (the row waits for ever), a give-up that drops the
+// field, and the cap read as the server's clock.
+func TestTailOwner_UnreadableRuleIsGivenUpPastTheCapNotInsideIt(t *testing.T) {
+	for name, set := range map[string]func(*tailLab, bool){
+		"the data_out rule": func(l *tailLab, on bool) {
+			l.policyErr = nil
+			if on {
+				l.policyErr = errors.New("audit down")
+			}
+		},
+		"the seed": func(l *tailLab, on bool) {
+			l.seedErr = nil
+			if on {
+				l.seedErr = errors.New("seed down")
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newTailRig(t)
+			g.lab.giveUpOK = true
+			past := g.owedRow(g.clock.now.Add(-g.s.pendingCap() - time.Hour))
+			inside := g.owedRow(g.clock.now.Add(-time.Hour))
+			set(g.lab, true)
+			g.tick()
+			if g.count(tailGiveUp) != 1 || g.countOf(past.run.ID) != 1 || g.countOf(inside.run.ID) != 0 || g.lab.giveUpCount() != 1 {
+				t.Fatalf("%d give-up tails (past %d, inside %d), %d statements; want exactly the past row's give-up",
+					g.count(tailGiveUp), g.countOf(past.run.ID), g.countOf(inside.run.ID), g.lab.giveUpCount())
+			}
+			if run, _ := g.lab.GetRun(context.Background(), past.run.ID); run.SandboxRef != "" {
+				t.Errorf("the given-up run keeps its ref %q; want its sandbox stopped", run.SandboxRef)
+			}
+			set(g.lab, false)
+			g.tick()
+			var rows []types.AuditEvent
+			for _, ev := range g.audit.snapshot() {
+				if ev.Action == "run.folder.transfer" && ev.RunID != nil && *ev.RunID == past.run.ID {
+					rows = append(rows, ev)
+				}
+			}
+			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"rule_unreadable":true`) || g.lab.giveUpCount() != 1 {
+				t.Errorf("rows %+v, %d statements; want one given_up row with rule_unreadable and no second give-up", rows, g.lab.giveUpCount())
+			}
+		})
+	}
+}
+
+// The server's Go clock may be minutes either side of the database's: neither changes when a row's history tail or
+// give-up runs, and nothing runs before the database says it is due. The rows sit a minute either side of the
+// containment due and of the cap, on the database's clock. Catches: a stored time compared with the server's clock.
+func TestTailOwner_ServerClockSkewChangesNothing(t *testing.T) {
+	for _, skew := range []time.Duration{-2 * time.Minute, 0, 2 * time.Minute} {
+		t.Run(skew.String(), func(t *testing.T) {
+			g := newTailRig(t)
+			g.skew = skew
+			g.lab.giveUpOK = true
+			now := g.clock.now
+			notDue := g.historyRow(now.Add(-containmentLag + time.Minute))
+			due := g.historyRow(now.Add(-containmentLag - time.Minute))
+			insideCap := g.owedRow(now.Add(-g.s.pendingCap() + time.Minute))
+			pastCap := g.owedRow(now.Add(-g.s.pendingCap() - time.Minute))
+			g.tick()
+			got := [4]int{g.countOf(notDue.run.ID), g.countOf(due.run.ID), g.countOf(insideCap.run.ID), g.countOf(pastCap.run.ID)}
+			if got != [4]int{0, 1, 1, 1} || g.count(tailHistory) != 1 || g.count(tailGiveUp) != 1 || g.count(tailFolder) != 1 || g.lab.giveUpCount() != 1 {
+				t.Errorf("skew %v: tails per row %v (not due, due, inside the cap, past it), %d history, %d give-up, %d folder, %d statements; want [0 1 1 1], 1, 1, 1, 1",
+					skew, got, g.count(tailHistory), g.count(tailGiveUp), g.count(tailFolder), g.lab.giveUpCount())
+			}
+		})
 	}
 }
 
@@ -718,20 +832,25 @@ type tailOneStore struct {
 	id uuid.UUID
 }
 
-func (o *tailOneStore) ListTerminalSandboxPage(ctx context.Context, after *store.TerminalSandboxCursor, _ int, _ bool) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
-	return onePage(ctx, o.computerFolderStore, o.id, after)
+func (o *tailOneStore) ListTerminalSandboxPageDue(ctx context.Context, after *store.TerminalSandboxCursor, _ int, _ bool, keep time.Duration) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
+	return onePage(ctx, o.computerFolderStore, o.id, after, keep)
 }
 
 // onePage lists the one run of a fixture store when it is terminal and holds a ref.
 func onePage(ctx context.Context, st interface {
 	GetRun(context.Context, uuid.UUID) (types.AgentRun, error)
-}, id uuid.UUID, after *store.TerminalSandboxCursor) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
+	RunDueFlags(context.Context, uuid.UUID, time.Duration) (store.RunDue, error)
+}, id uuid.UUID, after *store.TerminalSandboxCursor, keep time.Duration) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
 	run, err := st.GetRun(ctx, id)
 	if err != nil || after != nil || !run.State.IsTerminal() || run.SandboxRef == "" {
 		return nil, nil, err
 	}
+	d, err := st.RunDueFlags(ctx, id, keep)
+	if err != nil {
+		return nil, nil, err
+	}
 	return []store.TerminalSandboxRow{{ID: run.ID, State: run.State, SandboxRef: run.SandboxRef, RunnerID: run.RunnerID,
-		MachineKind: run.MachineKind, EndedAt: run.EndedAt, UpdatedAt: run.UpdatedAt}}, nil, nil
+		MachineKind: run.MachineKind, EndedAt: run.EndedAt, UpdatedAt: run.UpdatedAt, Due: d.Due, CapPassed: d.CapPassed}}, nil, nil
 }
 
 // An owed record past the cap is given up, with no pass, and the sandbox stopped.
@@ -767,8 +886,8 @@ func (w *tailForcedStore) RunLocalFolderStatus(ctx context.Context, id uuid.UUID
 	return w.markedStore.RunLocalFolderStatus(ctx, id)
 }
 
-func (w *tailForcedStore) ListTerminalSandboxPage(ctx context.Context, after *store.TerminalSandboxCursor, _ int, _ bool) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
-	return onePage(ctx, w.markedStore, w.id, after)
+func (w *tailForcedStore) ListTerminalSandboxPageDue(ctx context.Context, after *store.TerminalSandboxCursor, _ int, _ bool, keep time.Duration) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
+	return onePage(ctx, w.markedStore, w.id, after, keep)
 }
 
 // tailOwnedForced is f with its store listing the run for the tail owner.

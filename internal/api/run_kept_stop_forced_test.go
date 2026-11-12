@@ -297,6 +297,7 @@ func newForced(t *testing.T) *forced {
 	t.Cleanup(f.release)
 	f.clock = &keptEndClock{now: f.due.Add(6 * time.Minute)}
 	s.cfg.Now = f.clock.Now
+	cs.dbNow = f.clock.Now
 	dueAt(cs, &f.run, f.due)
 	return f
 }
@@ -1478,10 +1479,11 @@ func TestForceKeptStop_ARevokeRepeatedAfterASuccessIsHarmless(t *testing.T) {
 	}
 }
 
-// A kept sandbox whose proxy stop fails with an ordinary error is not contained: with a settled resume record and
-// the lock free the mark stays, the next tick asks for the proxy stop again, and a stop that then succeeds keeps
-// the sandbox for its resume and clears the mark. Catches: clearing on "left in place" alone.
-func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsKeepsTheMark(t *testing.T) {
+// A kept sandbox whose proxy stop fails with an ordinary error is not kept (the cut is unconfirmed, Q10): the tick
+// stops the sandbox instead. When that stop fails too the mark stays and the next tick asks again, the failed-stop
+// retry; once StopSandbox lands the sandbox is gone and the mark clears. Catches: keeping the sandbox on a
+// failed proxy stop, and clearing the mark on a sandbox stop that did not land.
+func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsIsStoppedNotKept(t *testing.T) {
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
@@ -1489,15 +1491,16 @@ func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsKeepsTheMark(t *testing
 	rn := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
 	f.s.cfg.Runner = rn
 	f.sb.proxyErr = errors.New("daemon unavailable")
+	f.sb.stopErr = errors.New("daemon unavailable")
 	f.tick(t, f.s)
 	f.tick(t, f.s)
 	if f.leaser.markCount() != 1 || rn.proxyStops.Load() != 2 || f.sb.stopCount() != 0 {
-		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
+		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0: both stops failed, so the retry waits", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
 	}
-	f.sb.proxyErr = nil
+	f.sb.stopErr = nil
 	f.tick(t, f.s)
-	if f.leaser.markCount() != 0 || !f.sb.proxyStopped.Load() || f.sb.stopCount() != 0 {
-		t.Errorf("%d marks, proxy stopped %v, %d sandbox stops; want 0, true and 0", f.leaser.markCount(), f.sb.proxyStopped.Load(), f.sb.stopCount())
+	if f.leaser.markCount() != 0 || f.sb.stopCount() != 1 {
+		t.Errorf("%d marks, %d sandbox stops; want 0 and 1: the proxy stop still fails, so the sandbox is stopped, not kept", f.leaser.markCount(), f.sb.stopCount())
 	}
 }
 

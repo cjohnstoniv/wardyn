@@ -113,9 +113,8 @@ func (s *Server) keepable(run types.AgentRun) bool {
 	return ok && caps.ProxyFence
 }
 
-// copyBackCut is stopTerminalSandbox's keep test: nil keeps the sandbox, errProxyAloneUnsupported stops it,
-// errProxyStopUnconfirmed keeps it with its failure row, as stopProxyOrAudit answers
-// (run_proxy_readback.go); errRunnerNotHere leaves a runner run in place this round, with no stop
+// copyBackCut is stopTerminalSandbox's keep test: nil keeps the sandbox; errProxyAloneUnsupported, and
+// errProxyStopUnconfirmed (a hosted proxy stop that failed, its failure row written), stop it; errRunnerNotHere leaves a runner run in place this round, with no stop
 // sent or queued, until its runner is here. It is asked only for a sandbox kept for its copy back or whose
 // record could not be read.
 func (s *Server) copyBackCut(ctx context.Context, run types.AgentRun, action string) error {

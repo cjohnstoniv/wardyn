@@ -66,6 +66,7 @@ func newPassFixture(t *testing.T, gen, settled int, resume *types.FolderResume) 
 	f := &passFixture{s: s, cs: cs, audit: audit, run: run, sb: sb, home: filepath.Dir(filepath.Dir(app))}
 	f.now.Store(time.Now().UnixNano())
 	s.cfg.Now = func() time.Time { return time.Unix(0, f.now.Load()) }
+	cs.dbNow = s.cfg.Now
 	f.set(func(st *types.RunLocalFolderStatus) {
 		st.Gen, st.Settled, st.GenAt, st.Resume = gen, settled, s.cfg.Now(), resume
 	})

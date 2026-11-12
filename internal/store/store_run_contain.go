@@ -37,7 +37,29 @@ type TerminalSandboxRow struct {
 	ContainmentErrorAt *time.Time
 	ForcedStopAt       *time.Time
 	FencedAt           *time.Time
+	// Due and CapPassed are the database's own answers, set only by ListTerminalSandboxPageDue: the run is past
+	// ContainmentDueSQL, and its end plus the keep it was asked about has passed, both against now().
+	Due       bool
+	CapPassed bool
 }
+
+// RunDue is the database clock's answer for one ended run (TerminalDue.RunDueFlags), as the listing rows carry it.
+type RunDue struct {
+	Due       bool
+	CapPassed bool
+}
+
+// TerminalDue is the ended-run reads that decide "due" and "past the keep" on the database's clock, never on a
+// server's own: a stored time is compared with now() in SQL, and the caller gets booleans.
+type TerminalDue interface {
+	// ListTerminalSandboxPageDue is ListTerminalSandboxPage with Due and CapPassed filled in; keep is the time after
+	// a run's end at which CapPassed turns true.
+	ListTerminalSandboxPageDue(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool, keep time.Duration) ([]TerminalSandboxRow, *TerminalSandboxCursor, error)
+	// RunDueFlags is the same two answers for one run. An unknown run is store.ErrNotFound.
+	RunDueFlags(ctx context.Context, id uuid.UUID, keep time.Duration) (RunDue, error)
+}
+
+var _ TerminalDue = PG{}
 
 // TerminalSandboxCursor is the keyset position after a page: the last row's end (EndedAt, or UpdatedAt
 // when unset) and id.
@@ -62,24 +84,57 @@ var _ RunContainer = PG{}
 // off (fenced_at set) and reads agent_runs_unfenced_sandbox_idx; without it the page reads
 // agent_runs_terminal_sandbox_idx. No running run is ever listed.
 func (s PG) ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool) ([]TerminalSandboxRow, *TerminalSandboxCursor, error) {
+	rows, next, err := s.listTerminalSandboxPage(ctx, after, limit, unfencedOnly, 0)
+	for i := range rows {
+		rows[i].Due, rows[i].CapPassed = false, false // not asked for
+	}
+	return rows, next, err
+}
+
+// ListTerminalSandboxPageDue implements TerminalDue.
+func (s PG) ListTerminalSandboxPageDue(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool, keep time.Duration) ([]TerminalSandboxRow, *TerminalSandboxCursor, error) {
+	return s.listTerminalSandboxPage(ctx, after, limit, unfencedOnly, keep)
+}
+
+// dueFlagsSQL is the two booleans of RunDue over agent_runs' own columns, $n being the keep in seconds.
+func dueFlagsSQL(n int) string {
+	return fmt.Sprintf(`%s <= now() AS due, COALESCE(ended_at, updated_at) + make_interval(secs => $%d) <= now() AS cap_passed`,
+		ContainmentDueSQL, n)
+}
+
+// RunDueFlags implements TerminalDue.
+func (s PG) RunDueFlags(ctx context.Context, id uuid.UUID, keep time.Duration) (RunDue, error) {
+	var d RunDue
+	err := s.Pool.QueryRow(ctx, `SELECT `+dueFlagsSQL(2)+` FROM agent_runs WHERE id = $1`, id, keep.Seconds()).Scan(&d.Due, &d.CapPassed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RunDue{}, ErrNotFound
+	}
+	if err != nil {
+		return RunDue{}, fmt.Errorf("store: read run due flags: %w", err)
+	}
+	return d, nil
+}
+
+func (s PG) listTerminalSandboxPage(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool, keep time.Duration) ([]TerminalSandboxRow, *TerminalSandboxCursor, error) {
 	if limit <= 0 || limit > terminalSandboxPageMax {
 		limit = terminalSandboxPageMax
 	}
-	q := `SELECT id, state, sandbox_ref, runner_id, machine_kind, ended_at, updated_at, containment_error_at, forced_stop_at, fenced_at
+	q := `SELECT id, state, sandbox_ref, runner_id, machine_kind, ended_at, updated_at, containment_error_at, forced_stop_at, fenced_at, ` +
+		dueFlagsSQL(2) + `
 		FROM agent_runs WHERE sandbox_ref <> '' AND state = ANY($1)`
-	args := []any{terminalRunStates}
+	args := []any{terminalRunStates, keep.Seconds()}
 	if unfencedOnly {
 		q += ` AND fenced_at IS NULL`
 	}
 	if after != nil {
-		q += ` AND (COALESCE(ended_at, updated_at), id) < ($2, $3)`
+		q += ` AND (COALESCE(ended_at, updated_at), id) < ($3, $4)`
 		args = append(args, pgTime(after.At), after.ID)
 	}
 	q += fmt.Sprintf(` ORDER BY COALESCE(ended_at, updated_at) DESC, id DESC LIMIT %d`, limit)
 	rows, err := collect(ctx, s.Pool, "list", "terminal sandbox runs", q, args, func(row pgx.Row) (TerminalSandboxRow, error) {
 		var r TerminalSandboxRow
 		var state, kind string
-		err := row.Scan(&r.ID, &state, &r.SandboxRef, &r.RunnerID, &kind, &r.EndedAt, &r.UpdatedAt, &r.ContainmentErrorAt, &r.ForcedStopAt, &r.FencedAt)
+		err := row.Scan(&r.ID, &state, &r.SandboxRef, &r.RunnerID, &kind, &r.EndedAt, &r.UpdatedAt, &r.ContainmentErrorAt, &r.ForcedStopAt, &r.FencedAt, &r.Due, &r.CapPassed)
 		r.State, r.MachineKind = types.RunState(state), types.MachineKind(kind)
 		return r, err
 	})

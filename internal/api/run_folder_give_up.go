@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -75,6 +76,9 @@ func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, 
 		return false, errors.New("this server's store cannot keep a folder record")
 	}
 	back := s.folderGivenUpRecord(st)
+	if _, eerr := s.folderBackEligible(ctx, run.ID); eerr != nil {
+		back.Error += folderRuleUnreadable // the give-up does not wait on the seed or the rule, and says so
+	}
 	p := store.GiveUpParams{Back: back, Cap: s.pendingCap()}
 	if d1 {
 		p.D1, p.Lag, p.Unsupported = true, containmentLag, true
@@ -121,6 +125,9 @@ func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.
 	}
 	data := map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "direction": "back",
 		"files": st.Back.Files, "bytes": st.Back.Bytes, "error": st.Back.Error}
+	if strings.HasSuffix(st.Back.Error, folderRuleUnreadable) {
+		data["rule_unreadable"] = true
+	}
 	ev := s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.folder.transfer", run.ID.String(), "failure", mustJSON(data))
 	if !s.recordAuditDurably(ctx, ev) {
 		return errors.New("the audit log did not take the row")
@@ -133,6 +140,10 @@ func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.
 	s.tail.accepted.Delete(givenUpKey{id: run.ID, gen: st.Gen})
 	return nil
 }
+
+// folderRuleUnreadable ends the error of a give-up made while the folder's seed or data_out rule could not be read
+// (giveUpFolder); the given_up row carries it as rule_unreadable.
+const folderRuleUnreadable = "; its folder seed or data_out rule could not be read"
 
 // errGivenUpMarkFailed is auditGivenUp's answer for a row the audit log accepted whose mark failed.
 var errGivenUpMarkFailed = errors.New("mark the record audited")

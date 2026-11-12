@@ -46,10 +46,10 @@ const (
 	tailFolder           // an owed pass back that may still keep: the folder path
 )
 
-// terminalSandboxLister is the listing of ended runs that still hold a sandbox (the first method of
-// store.RunContainer), which the tail owner reads with fenced runs included.
+// terminalSandboxLister is the listing of ended runs that still hold a sandbox, with fenced runs included, and
+// the database's due and past-the-cap answers for each (store.TerminalDue).
 type terminalSandboxLister interface {
-	ListTerminalSandboxPage(ctx context.Context, after *store.TerminalSandboxCursor, limit int, unfencedOnly bool) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error)
+	store.TerminalDue
 }
 
 // tailOwnerState is the tail owner's process state. Zero value is ready to use; none of it survives a restart.
@@ -124,7 +124,7 @@ func (s *Server) folderCleanupTick(ctx context.Context) {
 	seen := map[uuid.UUID]struct{}{}
 	var cur *store.TerminalSandboxCursor
 	for {
-		rows, next, err := lister.ListTerminalSandboxPage(ctx, cur, tailPage, false)
+		rows, next, err := lister.ListTerminalSandboxPageDue(ctx, cur, tailPage, false, s.pendingCap())
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: the tail owner could not list the ended runs; the next tick tries again", slog.Any("err", err))
 			return
@@ -223,7 +223,7 @@ func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, no
 		tailSkipped(ctx, run.ID, err)
 		return false
 	}
-	step, err := s.tailStepFor(ctx, run, st, now)
+	step, err := s.tailStepFor(ctx, run, st, store.RunDue{Due: row.Due, CapPassed: row.CapPassed})
 	if err != nil {
 		tailSkipped(ctx, run.ID, err)
 		return false
@@ -262,25 +262,33 @@ func (s *Server) tailFolderStatus(ctx context.Context, id uuid.UUID) (types.RunL
 	return ss.RunLocalFolderStatus(ctx, id)
 }
 
-// tailStepFor is the step run is due for at now, given its record st: give up an owed pass whose keep ran out;
-// bring back an owed pass whose keep has not; otherwise the full tail once the run is past its containment
-// due, which is also the age gate that leaves a fresh end to the ordinary tail. An error is a read that failed.
-func (s *Server) tailStepFor(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, now time.Time) (tailStep, error) {
-	expired, err := s.folderExpiredOwed(ctx, run, st, now)
+// tailStepFor is the step run is due for, given its record st and the database's own answers due (whether the
+// run is past its containment due, and past the keep: store.RunDue, from the listing or a re-read, never a
+// server's clock): give up an owed pass whose keep ran out; bring back an owed pass whose keep has not; otherwise
+// the full tail once the run is past its containment due, which is also the age gate that leaves a fresh end to
+// the ordinary tail. An error is a read that failed, except past the cap, where an owed pass is given up
+// whatever its seed or rule reads.
+func (s *Server) tailStepFor(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, due store.RunDue) (tailStep, error) {
+	expired, err := s.folderExpiredOwed(ctx, run, st, due)
 	if err != nil {
+		// The cap does not wait on the rest of the record. Past it, an owed pass whose folder or data_out rule
+		// cannot be read is given up like any other. Inside the cap the row is skipped for the tick.
+		if folderOwedRecord(run, st) && due.CapPassed {
+			return tailGiveUp, nil
+		}
 		return tailNone, err
 	}
 	if expired {
 		return tailGiveUp, nil
 	}
-	keep, err := s.folderKeepPermitted(ctx, run, st, now)
+	keep, err := s.folderKeepPermitted(ctx, run, st, due)
 	if err != nil {
 		return tailNone, err
 	}
 	if keep {
 		return tailFolder, nil
 	}
-	if due, ok := containmentDue(run); ok && !due.After(now) {
+	if due.Due {
 		return tailHistory, nil
 	}
 	return tailNone, nil
@@ -366,12 +374,21 @@ func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (r
 		tailSkipped(ctx, id, err)
 		return run, st, false, false
 	}
-	due, err := s.tailStepFor(ctx, run, st, s.cfg.Now())
+	flags, ok := s.cfg.Store.(store.TerminalDue)
+	if !ok {
+		return run, st, false, false
+	}
+	due, err := flags.RunDueFlags(ctx, id, s.pendingCap())
 	if err != nil {
 		tailSkipped(ctx, id, err)
 		return run, st, false, false
 	}
-	return run, st, due == step, true
+	next, err := s.tailStepFor(ctx, run, st, due)
+	if err != nil {
+		tailSkipped(ctx, id, err)
+		return run, st, false, false
+	}
+	return run, st, next == step, true
 }
 
 // tailRun takes run id's lock, reads the run and its record again, and runs step's tail if the same step is

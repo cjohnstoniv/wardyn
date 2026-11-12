@@ -142,31 +142,28 @@ func TestReadbackContainment_AnEndedRunNotKeptForItsFolderHasItsSandboxStopped(t
 	}
 }
 
-// A kept sandbox's proxy stop that fails leaves the containment unresolved, recorded on the start
-// and audited, with nothing claimed stopped and the sandbox not stopped in its place; the retry
-// that stops it resolves it.
-func TestReadbackContainment_AKeptFolderSandboxsFailedProxyStopStaysUnresolved(t *testing.T) {
-	f, gen, ref := endedWithFailedStart(t, readbackKeptResume, nil)
-	proxyStops, sandboxStops := f.lr.proxyStopCount(), f.lr.stopCount()
+// A hosted kept sandbox whose proxy stop fails is not kept: the cut is unconfirmed, so its sandbox is stopped (the
+// agent can still reach the network until then), with the cut's one failure row naming the proxy stop as
+// teardown_error. The sandbox stop landed, so the containment is resolved.
+func TestReadbackContainment_AKeptFolderSandboxsFailedProxyStopStopsTheSandbox(t *testing.T) {
+	f, gen, _ := endedWithFailedStart(t, readbackKeptResume, nil)
+	sandboxStops := f.lr.stopCount()
 	rows := len(f.audit.eventsFor(f.run.ID, "run.reconcile"))
 	c := f.srv.containProxyStart(context.Background(), f.run.ID, gen)
-	if c.Contained || !errors.Is(c.Err, errProxyStopUnconfirmed) {
-		t.Fatalf("containment = %+v, want unresolved with errProxyStopUnconfirmed", c)
+	if !c.Contained || c.Err != nil {
+		t.Fatalf("containment = %+v, want contained once the sandbox stop landed", c)
 	}
-	assertSandboxKept(t, f, ref, proxyStops, sandboxStops, 1)
-	if p := f.active(t); p.ContainedAt != nil || !strings.Contains(p.ContainmentError, "proxy stop failed") {
-		t.Errorf("start contained %v, error %q; want unresolved, naming the proxy stop", p.ContainedAt, p.ContainmentError)
+	if n := f.lr.stopCount() - sandboxStops; n != 1 {
+		t.Errorf("StopSandbox +%d, want 1: a proxy stop that failed does not keep the sandbox", n)
+	}
+	if p := f.active(t); p.ContainedAt == nil {
+		t.Error("the start is not contained after the sandbox stop")
 	}
 	evs := f.audit.eventsFor(f.run.ID, "run.reconcile")
 	if len(evs) != rows+1 || evs[len(evs)-1].Outcome != "failure" || !strings.Contains(string(evs[len(evs)-1].Data), "daemon down") ||
 		!strings.Contains(string(evs[len(evs)-1].Data), `"teardown_error"`) || strings.Contains(string(evs[len(evs)-1].Data), "proxy_stop_error") {
 		t.Errorf("run.reconcile rows = %v, want one failure naming the stop's error as teardown_error", evs[rows:])
 	}
-	f.setProxyStopErr(nil)
-	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Contained || c.Err != nil {
-		t.Fatalf("the retry's containment = %+v, want contained", c)
-	}
-	assertSandboxKept(t, f, ref, proxyStops, sandboxStops, 2)
 }
 
 // A running run that cannot be kept has its proxy stopped first and is then ended: a cut copy
@@ -615,7 +612,8 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordKeepsTheSandbox(t *testing
 	}
 }
 
-// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row with teardown_error, never silent.
+// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row with teardown_error, never silent,
+// and its sandbox is stopped in place of being kept.
 func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T) {
 	kept := sweepRun(types.RunFailed, "sbx-kept")
 	srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept}}, kept: kept.ID})
@@ -625,23 +623,24 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 	}
 	rows := keptSweepRows(h.audit.snapshot(), kept.ID)
 	if len(rows) != 1 || rows[0].Action != "sandbox.sweep" || rows[0].Outcome != "failure" ||
-		!strings.Contains(string(rows[0].Data), `"teardown_error"`) || strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
-		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with teardown_error alone and no sandbox stop", rows, rr.stopped)
+		!strings.Contains(string(rows[0].Data), `"teardown_error"`) || strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 1 {
+		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with teardown_error alone and one sandbox stop", rows, rr.stopped)
 	}
 }
 
-// A kept sandbox whose proxy stop fails stays unresolved, as one run.reconcile failure row naming that stop as
-// teardown_error (the key stopProxyOrAudit writes); the sandbox, and the files it is kept for, are not stopped.
-func TestReadback_KeptFolderProxyStopFailureIsAuditedAndUnresolved(t *testing.T) {
+// A kept sandbox whose proxy stop fails is stopped, with one run.reconcile failure row naming that stop as
+// teardown_error (the key stopProxyOrAudit writes): the files it was kept for are lost, as the owner ruled, rather than
+// left with a network the agent can still reach.
+func TestReadback_KeptFolderProxyStopFailureIsAuditedAndTheSandboxStopped(t *testing.T) {
 	f := newReadbackFixture(t)
 	_, gen := f.keptFolderFailedStart(t, "kept")
 	sandboxStops := f.lr.stopCount()
 	f.setProxyStopErr(errors.New("daemon down"))
-	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); c.Contained || c.Err == nil {
-		t.Fatalf("containment = %+v, want unresolved while the proxy stop fails", c)
+	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Contained || c.Err != nil {
+		t.Fatalf("containment = %+v, want contained once the sandbox stop landed", c)
 	}
-	if n := f.lr.stopCount() - sandboxStops; n != 0 {
-		t.Errorf("sandbox stops +%d, want none: the sandbox is kept for its folder's pass back", n)
+	if n := f.lr.stopCount() - sandboxStops; n != 1 {
+		t.Errorf("sandbox stops +%d, want 1: a proxy stop that failed does not keep the sandbox", n)
 	}
 	var rows int
 	for _, ev := range f.audit.eventsFor(f.run.ID, "run.reconcile") {

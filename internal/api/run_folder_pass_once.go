@@ -57,6 +57,7 @@ func (s *Server) lastPassOpen(ctx context.Context, run types.AgentRun, folder ty
 type passGuard struct {
 	last   types.RunLocalFolderStatus
 	unread bool
+	id     uuid.UUID // the run, for the age of the last pass on the database's clock
 }
 
 // passGuardFor is run's passGuard. A virtual machine's sandbox cannot be kept with its agent stopped
@@ -66,20 +67,20 @@ func passGuardFor(run types.AgentRun, prev types.RunLocalFolderStatus, unread bo
 	if run.MachineKind.IsVM() {
 		return passGuard{}
 	}
-	return passGuard{last: prev, unread: unread}
+	return passGuard{last: prev, unread: unread, id: run.ID}
 }
 
 // mayStillRun is a guard whose last pass the runner may still be running (lastPassUnanswered), or whose
 // record could not be read: a read that failed never sends to a runner not known to run one pass per run at
 // a time.
-func (s *Server) mayStillRun(g passGuard) bool {
-	return g.unread || s.lastPassUnanswered(g.last)
+func (s *Server) mayStillRun(ctx context.Context, g passGuard) bool {
+	return g.unread || s.lastPassUnanswered(ctx, g.id, g.last)
 }
 
 // lastPassUnanswered is a last pass the runner may still be running: unsettled (lastPassUnsettled), and
 // sent less than oldPassBound ago, or at a time not known.
-func (s *Server) lastPassUnanswered(rec types.RunLocalFolderStatus) bool {
-	return lastPassUnsettled(rec) && !s.pastOldPassBound(rec)
+func (s *Server) lastPassUnanswered(ctx context.Context, id uuid.UUID, rec types.RunLocalFolderStatus) bool {
+	return lastPassUnsettled(rec) && !s.pastOldPassBound(ctx, id, rec)
 }
 
 // lastPassUnsettled is a record whose last pass the runner did not answer for: a generation past the settled
@@ -92,9 +93,19 @@ func lastPassUnsettled(rec types.RunLocalFolderStatus) bool {
 }
 
 // pastOldPassBound is a record whose generation was sent oldPassBound ago or more. One with no send time is
-// not: it is stamped at the visit that finds it (bringComputerFolderBack), and the bound runs from there.
-func (s *Server) pastOldPassBound(rec types.RunLocalFolderStatus) bool {
-	return !rec.GenAt.IsZero() && !s.cfg.Now().Before(rec.GenAt.Add(oldPassBound))
+// not: it is stamped at the visit that finds it (bringComputerFolderBack), and the bound runs from there. The
+// send time is stamped by the database (BumpRunLocalFolderGen) and aged by it (store.FolderGenAges), so no server's
+// clock is compared with it; an age that cannot be read is not past, which keeps the last pass open. A store with
+// no such read (the tests' fakes) falls back to this server's clock.
+func (s *Server) pastOldPassBound(ctx context.Context, id uuid.UUID, rec types.RunLocalFolderStatus) bool {
+	if rec.GenAt.IsZero() {
+		return false
+	}
+	if ages, ok := s.cfg.Store.(store.FolderGenAges); ok {
+		past, err := ages.FolderGenPastBound(ctx, id, rec.Gen, oldPassBound)
+		return err == nil && past
+	}
+	return !s.cfg.Now().Before(rec.GenAt.Add(oldPassBound))
 }
 
 // keepForOpenPass keeps run's sandbox while its last pass may still run (lastPassOpen), with no pass sent,
@@ -215,8 +226,8 @@ func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.R
 
 // unansweredStallsPast is a last pass, unanswered and past its bound, that was a stall in a row of them:
 // the visit gives the changes up without a pass.
-func (s *Server) unansweredStallsPast(prev types.RunLocalFolderStatus) bool {
-	return lastPassUnsettled(prev) && prev.Resume != nil && prev.Resume.Stalled >= computerFolderStalls && s.pastOldPassBound(prev)
+func (s *Server) unansweredStallsPast(ctx context.Context, id uuid.UUID, prev types.RunLocalFolderStatus) bool {
+	return lastPassUnsettled(prev) && prev.Resume != nil && prev.Resume.Stalled >= computerFolderStalls && s.pastOldPassBound(ctx, id, prev)
 }
 
 // keptUnanswered is the verdict on a pass the runner did not answer for, given folderBackVerdict's and the

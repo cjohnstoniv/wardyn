@@ -184,7 +184,7 @@ func (s *Server) seedComputerFolder(ctx context.Context, run types.AgentRun, fol
 		return
 	}
 	gen := rec.Gen
-	out := s.computerFolderPassWithin(ctx, wait, run, folder, false, passGuard{last: prev})
+	out := s.computerFolderPassWithin(ctx, wait, run, folder, false, passGuard{last: prev, id: run.ID})
 	res, errText := out.FolderPass, out.errText
 	// Recorded on ctx, not the pass's own deadline: a pass that timed out still leaves its record.
 	recorded := s.writeComputerFolderStatus(ctx, run.ID, gen, func(st *types.RunLocalFolderStatus) {
@@ -283,7 +283,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	gen := rec.Gen
 	rctx, cancel = teardownCtx(ctx)
 	defer cancel()
-	if s.unansweredStallsPast(prev) {
+	if s.unansweredStallsPast(ctx, runID, prev) {
 		errText := folderBackGivenUp("the runner did not answer for its last pass back",
 			fmt.Sprintf("%d passes in a row brought nothing back", prev.Resume.Stalled), prev.Resume.Unsynced)
 		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
@@ -773,7 +773,7 @@ func (s *Server) writeComputerFolderStatus(ctx context.Context, id uuid.UUID, ge
 // checked again here on the endpoint the pass is sent to), nothing is sent and nothing is settled.
 func (s *Server) computerFolderPass(ctx, account context.Context, run types.AgentRun, folder types.RunLocalFolder, pull bool, last passGuard) (_ runnerwire.FolderPass, cut, settled bool, _ error) {
 	sub, refusal := s.folderRunner(ctx, run.CreatedBy, *folder.RunnerID)
-	if s.mayStillRun(last) && passMayRunBeside(sub, refusal) {
+	if s.mayStillRun(ctx, last) && passMayRunBeside(sub, refusal) {
 		if refusal != nil {
 			return runnerwire.FolderPass{}, false, false, fmt.Errorf("%s; %w", refusal.body.Error, errFolderPassUnconfirmed)
 		}

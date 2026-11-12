@@ -403,15 +403,15 @@ func TestStopTerminalSandbox_RunnerNotHereLeavesTheOwedSandbox(t *testing.T) {
 	})
 }
 
-// A hosted sandbox whose proxy stop fails stays kept with the stop's error and one failure row.
-func TestStopTerminalSandbox_HostedProxyStopErrorKeepsWithRow(t *testing.T) {
+// A hosted sandbox whose proxy stop fails is stopped, not kept (Q10), with the cut's one failure row.
+func TestStopTerminalSandbox_HostedProxyStopErrorStopsTheSandboxWithRow(t *testing.T) {
 	f := newForced(t)
 	f.sb.proxyErr = errors.New("the daemon did not answer the proxy stop")
 	f.claimOnly(t)
 	f.setRecord(owedRecord)
 	left, err := f.s.stopTerminalSandbox(context.Background(), f.terminalRun(t), sandboxSweepAction)
-	if !left || !errors.Is(err, errProxyStopUnconfirmed) || f.sb.stopCount() != 0 {
-		t.Errorf("left %v, err %v, %d sandbox stops; want kept with the stop's error and no sandbox stop", left, err, f.sb.stopCount())
+	if left || err != nil || f.sb.stopCount() != 1 {
+		t.Errorf("left %v, err %v, %d sandbox stops; want not left, no error and one sandbox stop", left, err, f.sb.stopCount())
 	}
 	if rows := sweepRows(f.audit, "failure", "teardown_error"); len(rows) != 1 {
 		t.Errorf("%d failure rows, want 1", len(rows))

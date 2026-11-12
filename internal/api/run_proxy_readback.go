@@ -423,9 +423,10 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 	if isTerminalRunState(run.State) {
 		// A sandbox kept for its computer folder's copy back (folderKeepVerdict) stays only on a confirmed cut,
 		// so its changes not yet copied back are not lost; its ref stays for the tail owner. A runner that is not
-		// here fails this stop for the sweep to retry. A substrate that cannot be cut keeps no such sandbox, so
-		// its sandbox is stopped as any other. A record that cannot be read counts as kept: the containment that
-		// keeps the sandbox for it writes one failure row with folder_record_error.
+		// here fails this stop for the sweep to retry. A substrate that cannot be cut keeps no such sandbox, and
+		// neither does a hosted one whose proxy stop failed (its failure row written): its sandbox is stopped as
+		// any other. A record that cannot be read counts as kept: the containment that keeps the sandbox for it
+		// writes one failure row with folder_record_error.
 		v, ferr, cutErr := s.folderKeepVerdict(ctx, run, "run.reconcile")
 		switch v {
 		case folderKeepCut:
@@ -436,8 +437,6 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 			return nil
 		case folderKeepAway:
 			return cutErr
-		case folderKeepUncut:
-			return errKeptProxyStopUnconfirmed
 		}
 	}
 	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
@@ -473,19 +472,19 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 type folderKeep int
 
 const (
-	folderKeepNone  folderKeep = iota // not kept: the sandbox is stopped
-	folderKeepCut                     // kept, and the agent's cut is confirmed
-	folderKeepAway                    // a runner run whose runner is not here: left in place, nothing stopped or queued
-	folderKeepUncut                   // kept, but the cut's stop failed (its failure row is written); a later pass asks again
+	folderKeepNone folderKeep = iota // not kept: the sandbox is stopped
+	folderKeepCut                    // kept, and the agent's cut is confirmed
+	folderKeepAway                   // a runner run whose runner is not here: left in place, nothing stopped or queued
 )
 
 // folderKeepVerdict is the one rule every destructive sweep decides a kept sandbox by: a sandbox kept for its
 // computer folder's pass back (keepsSandboxForFolder), or whose record cannot be read (ferr), stays only once
 // the agent's cut is confirmed (copyBackCut: hosted, a fenced runner, a connected runner whose proxy stop
 // answered nil). A runner that is not here leaves it in place (folderKeepAway), and cutErr is errRunnerNotHere.
-// A sandbox that cannot be cut (a virtual machine, Kubernetes in server mode, a runner sandbox whose cut failed,
-// as quiesceKeptSandbox decides) is folderKeepNone: stopped whatever its record says, and so is one whose
-// record cannot be read and whose cut did not hold. cutErr is copyBackCut's answer.
+// Anything else is folderKeepNone: stopped whatever its record says. That covers a sandbox that cannot be cut (a
+// virtual machine, Kubernetes in server mode, a runner sandbox whose cut failed, as quiesceKeptSandbox decides)
+// and a hosted cut whose proxy stop failed, whose failure row copyBackCut has written. cutErr is copyBackCut's
+// answer.
 func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, action string) (v folderKeep, ferr, cutErr error) {
 	kept, ferr := s.keepsSandboxForFolder(ctx, run)
 	if ferr != nil {
@@ -501,8 +500,6 @@ func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, acti
 		return folderKeepAway, ferr, cutErr // no row: the runner is not here, and the next pass asks again
 	case cutErr == nil:
 		return folderKeepCut, ferr, nil
-	case ferr == nil && !errors.Is(cutErr, errProxyAloneUnsupported):
-		return folderKeepUncut, ferr, cutErr // kept: its files stay, and the row names the stop that failed
 	}
 	return folderKeepNone, ferr, cutErr
 }
@@ -513,14 +510,15 @@ func (s *Server) folderKeepVerdict(ctx context.Context, run types.AgentRun, acti
 // cannot be read is logged, and the sandbox stays only once that cut is confirmed, as a failure row with
 // folder_record_error that stays unresolved so a later pass reads it again. A runner run whose runner is
 // not connected here is left in place with errRunnerNotHere, nothing stopped, queued or written, until its
-// runner is. It fails closed: any other sandbox is stopped.
+// runner is. It fails closed: any other sandbox is stopped, a hosted one whose proxy stop failed among them (its
+// failure row is the cut's, and a sandbox stop that fails too is the failed-stop retry's).
 func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) (left bool, err error) {
 	if run.SandboxRef == "" {
 		return false, nil
 	}
 	v, ferr, cutErr := s.folderKeepVerdict(ctx, run, action)
 	switch {
-	case v == folderKeepAway || v == folderKeepUncut:
+	case v == folderKeepAway:
 		return true, cutErr
 	case v == folderKeepCut && ferr != nil:
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
@@ -540,18 +538,6 @@ var errProxyAloneUnsupported = errors.New("this substrate cannot stop a proxy al
 
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
 var errProxyStopUnconfirmed = errors.New("the sandbox stop failed")
-
-// errKeptProxyStopUnconfirmed is errProxyStopUnconfirmed for a sandbox kept for its computer
-// folder's copy back, whose proxy alone is stopped.
-var errKeptProxyStopUnconfirmed error = keptProxyStopError{}
-
-type keptProxyStopError struct{}
-
-func (keptProxyStopError) Error() string {
-	return "the proxy stop failed; the sandbox is kept for its computer folder's copy back"
-}
-
-func (keptProxyStopError) Unwrap() error { return errProxyStopUnconfirmed }
 
 // runEndRecorded answers errRunEndUnwritten while the store still holds the run live, neither ended,
 // lost nor kept, or cannot be read: an end whose write failed left its sandbox, and its computer

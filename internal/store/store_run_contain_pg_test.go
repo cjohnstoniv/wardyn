@@ -6,6 +6,7 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -198,5 +199,83 @@ func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 		if want = want.Add(store.ContainmentLag); !got.Equal(want) {
 			t.Errorf("%s: SQL due = %v, Go due = %v", name, got, want)
 		}
+	}
+}
+
+// TestPG_TerminalDueFlags: ListTerminalSandboxPageDue and RunDueFlags answer Due (the containment due has passed)
+// and CapPassed (the end plus keep has passed) against the database's now(), the same for the page and the single
+// read; a run with no ended_at is timed from updated_at; the plain listing leaves both false; an unknown run is
+// ErrNotFound. Catches: either flag decided from a caller's clock, and the two reads disagreeing.
+func TestPG_TerminalDueFlags(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	keep := time.Hour
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	place := func(endedAt *time.Time, updated time.Time) uuid.UUID {
+		t.Helper()
+		r := newRun(types.RunFailed)
+		r.SandboxRef = "sbx-" + r.ID.String()
+		r = persistRun(t, ctx, pool, r)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = $2, ended_at = $3, updated_at = $4 WHERE id = $1`, r.ID, r.SandboxRef, endedAt, updated); err != nil {
+			t.Fatalf("place run: %v", err)
+		}
+		return r.ID
+	}
+	ended := func(ago time.Duration) *time.Time { at := now.Add(-ago); return &at }
+	cases := map[string]struct {
+		id        uuid.UUID
+		due, past bool
+	}{
+		"ended a minute ago":                  {place(ended(time.Minute), now), false, false},
+		"ended past the containment due":      {place(ended(store.ContainmentLag+time.Minute), now), true, false},
+		"ended past the keep":                 {place(ended(keep+time.Minute), now), true, true},
+		"no ended_at, updated past the keep":  {place(nil, now.Add(-keep-time.Minute)), true, true},
+		"no ended_at, updated a minute ago":   {place(nil, now.Add(-time.Minute)), false, false},
+		"no ended_at, updated past the due":   {place(nil, now.Add(-store.ContainmentLag-time.Minute)), true, false},
+		"ended long ago, updated just before": {place(ended(keep+time.Minute), now.Add(-time.Second)), true, true},
+	}
+	rows := map[uuid.UUID]store.TerminalSandboxRow{}
+	plain := map[uuid.UUID]store.TerminalSandboxRow{}
+	for _, walk := range []struct {
+		into map[uuid.UUID]store.TerminalSandboxRow
+		page func(*store.TerminalSandboxCursor) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error)
+	}{
+		{rows, func(c *store.TerminalSandboxCursor) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
+			return pg.ListTerminalSandboxPageDue(ctx, c, 500, false, keep)
+		}},
+		{plain, func(c *store.TerminalSandboxCursor) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
+			return pg.ListTerminalSandboxPage(ctx, c, 500, false)
+		}},
+	} {
+		var cur *store.TerminalSandboxCursor
+		for {
+			page, next, err := walk.page(cur)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range page {
+				walk.into[r.ID] = r
+			}
+			if next == nil {
+				break
+			}
+			cur = next
+		}
+	}
+	for name, c := range cases {
+		if got := rows[c.id]; got.ID != c.id || got.Due != c.due || got.CapPassed != c.past {
+			t.Errorf("%s: listing says due %v, cap passed %v; want %v and %v", name, got.Due, got.CapPassed, c.due, c.past)
+		}
+		one, err := pg.RunDueFlags(ctx, c.id, keep)
+		if err != nil || one.Due != c.due || one.CapPassed != c.past {
+			t.Errorf("%s: RunDueFlags = %+v, %v; want due %v, cap passed %v", name, one, err, c.due, c.past)
+		}
+		if got := plain[c.id]; got.ID != c.id || got.Due || got.CapPassed {
+			t.Errorf("%s: the plain listing answers due %v, cap passed %v; want the flags left false", name, got.Due, got.CapPassed)
+		}
+	}
+	if _, err := pg.RunDueFlags(ctx, uuid.New(), keep); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("an unknown run: %v; want store.ErrNotFound", err)
 	}
 }

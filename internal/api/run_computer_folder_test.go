@@ -207,6 +207,31 @@ type computerFolderStore struct {
 	seedErr   error
 	dataOut   types.TransferRule
 	policyErr error
+	// dbNow is the fake database's clock for the due flags (RunDueFlags); nil is the real one.
+	dbNow func() time.Time
+}
+
+func (s *computerFolderStore) dueNow() time.Time {
+	if s.dbNow != nil {
+		return s.dbNow()
+	}
+	return time.Now()
+}
+
+// dueFlagsAt is store.RunDue for run at the fake database's time now: past its containment due, and past keep
+// after its end.
+func dueFlagsAt(run types.AgentRun, keep time.Duration, now time.Time) store.RunDue {
+	due, ok := containmentDue(run)
+	return store.RunDue{Due: ok && !due.After(now), CapPassed: !runEnded(run).Add(keep).After(now)}
+}
+
+// RunDueFlags implements store.TerminalDue's per-run read over the fixture's run.
+func (s *computerFolderStore) RunDueFlags(ctx context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error) {
+	run, err := s.GetRun(ctx, id)
+	if err != nil {
+		return store.RunDue{}, err
+	}
+	return dueFlagsAt(run, keep, s.dueNow()), nil
 }
 
 // QueryAuditEvents answers no policy envelope unless dataOut is set: these runs carry no data_out rule, which
