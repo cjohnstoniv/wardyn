@@ -912,8 +912,8 @@ func (a ctxBoundAudit) Record(ctx context.Context, ev types.AuditEvent) error {
 }
 
 // A containment give-up (d1GiveUp) whose lock is lost right after its statement applies leaves a final record with
-// no accepted audit row (given_up_at set, given_up_audited false: what ListGivenUpUnaudited lists). A tail owner on
-// another server, with no lock and no ref, then writes the row and marks the record. Catches: a tail owner that
+// no accepted audit row (given_up_at set, given_up_audited false: what ListGivenUpUnaudited lists). A later
+// tail-owner tick, with no lock and no ref, then writes the row and marks the record. Catches: a tail owner that
 // does not re-audit the given-up records the containment loop's give-up left.
 func TestTailOwner_AContainmentGiveUpWhoseAuditFailedIsAuditedByTheTailOwner(t *testing.T) {
 	g := newTailRig(t)
