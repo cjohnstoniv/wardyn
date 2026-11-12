@@ -45,7 +45,7 @@ var errFolderPassUnconfirmed = errors.New("no pass ran; the runner's last pass f
 // run at a time: an older runner, or unknown facts (caps not in, a failed lookup, the runner offline).
 // computerFolderPass checks the same on the endpoint it sends to.
 func (s *Server) lastPassOpen(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, g passGuard) bool {
-	if folder.RunnerID == nil || !s.mayStillRun(g) {
+	if folder.RunnerID == nil || !s.mayStillRun(ctx, g) {
 		return false
 	}
 	sub, refusal := s.folderRunner(ctx, run.CreatedBy, *folder.RunnerID)
