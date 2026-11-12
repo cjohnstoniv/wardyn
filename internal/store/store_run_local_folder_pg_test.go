@@ -440,7 +440,11 @@ func TestPG_GiveUpReadsFinalAsTheDecodedRecordDoes(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	const back = `{"at": "2026-01-01T00:00:00Z", "files": 0, "bytes": 0, "refused": []}`
+	raw, err := json.Marshal(types.FolderPassRecord{At: time.Now().UTC(), Refused: []types.FolderRefusal{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	back := string(raw)
 	for name, c := range map[string]struct {
 		status string
 		done   bool
