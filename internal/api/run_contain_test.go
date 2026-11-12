@@ -607,7 +607,7 @@ func TestContain_StopPoolRunIsNotDispatched(t *testing.T) {
 			t.Fatal("the stop pool could not claim the run")
 		}
 		l.start()
-		time.Sleep(3 * containTick)
+		time.Sleep(3*containTick + containTick/2) // off the tick instants: the release and a visit never coincide
 		if fences, _, _ := l.rn.counts(); fences != 0 {
 			t.Errorf("fences = %d while the stop pool held the run, want 0", fences)
 		}
