@@ -158,7 +158,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 6. While that stop is unconfirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
 8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config, which the edit stored before its replace.
-9. On Kubernetes, for a run of wardynd's own cluster, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks. The proxy refuses them at once and closes every open connection through it; its DNS listener answers locally and forwards nothing, so it is not closed, and the answer waits for its readback as above.
+9. On Kubernetes, for a run of wardynd's own cluster, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks. The proxy refuses them at once and closes proxied connections, not its DNS listener; the answer waits for its readback.
 10. wardynd gives the proxy 15 seconds to apply the edit and 60 seconds more to confirm it. Past either, or on an answer it cannot read, the run is ended, since a proxy there cannot be stopped alone.
 11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). Send the edit again.
 12. It is refused with `409 egress_edit_unsupported`, and nothing changes, when:
@@ -173,7 +173,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 
 An edit whose config cannot be stored changes nothing and keeps the run's current proxy (`502 revive_proxy_kept_current`). So does one that finds the run changed after its claim, or lost its lock before the replace and undid its record. If that undo fails, recovery tries to mark the run lost and stop its proxy. One that finds the run changed before its claim gets `409 revive_run_changed`. Its claim and lost marks are fenced on its generation; later stops are not.
 
-Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced. When it is narrowed in place, every connection through it drops; its local DNS listener does not.
+Each edit past the body check writes one `run.egress.edit` row. Proxied connections drop when the proxy is replaced or narrowed in place.
 
 ## Rename
 
