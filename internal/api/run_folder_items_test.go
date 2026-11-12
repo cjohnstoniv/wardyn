@@ -4,11 +4,19 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // A pass back's record puts its outcome first and cuts only the reason: a 2000-rune runner reason cannot push
@@ -71,5 +79,69 @@ func TestBoundReason_Boundaries(t *testing.T) {
 		if got := boundReason(strings.Repeat("x", tc.n)); got != tc.want {
 			t.Errorf("%d runes: got %d runes %q, want %q", tc.n, len([]rune(got)), got, tc.want)
 		}
+	}
+}
+
+// bumpFailStore is computerFolderStore whose bump fails without landing (bumpErr), counting the record writes.
+type bumpFailStore struct {
+	*computerFolderStore
+	bumpErr error
+	sets    atomic.Int32
+}
+
+func (s *bumpFailStore) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.FolderStatusGuard, time.Time) (types.RunLocalFolderStatus, bool, error) {
+	return types.RunLocalFolderStatus{}, false, s.bumpErr
+}
+
+func (s *bumpFailStore) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
+	s.sets.Add(1)
+	return s.computerFolderStore.SetRunLocalFolderStatusIf(ctx, id, guard, st)
+}
+
+// A pass back whose record cannot be moved to the pass's generation stops the sandbox, and says so: one failure
+// row and one try at the record, at the generation it was read at. A silent stop leaves the run saying nothing.
+func TestFolderBack_BumpStoreErrorRecordsAndAudits(t *testing.T) {
+	f := newPassFixture(t, 2, 2, nil)
+	bs := &bumpFailStore{computerFolderStore: f.cs, bumpErr: errors.New("the bump failed")}
+	f.s.cfg.Store = bs
+	if err := f.finalizeWithin(30 * time.Second); errors.Is(err, errComputerFolderResumes) {
+		t.Errorf("finalize = %v, want the sandbox left to its stop", err)
+	}
+	const want = "no pass ran; the folder record could not be moved before its pass: its store could not write it; the sandbox was stopped with its changes not brought back yet, uncounted"
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, want)
+	if n := f.backRows(); n != 1 {
+		t.Errorf("%d audit rows of passes back, want 1", n)
+	}
+	if n := bs.sets.Load(); n != 1 {
+		t.Errorf("%d record writes, want 1", n)
+	}
+	if st := f.cs.folderStatus(); st.Gen != 2 || st.Settled != 2 {
+		t.Errorf("record %+v, want it at gen 2, settled as before: the pass did not own a generation", st)
+	}
+}
+
+// bumpComputerFolderGen's log tells a store error from a clean miss: only the miss "moved" before its pass.
+func TestBumpLog_StoreErrorIsNotMoved(t *testing.T) {
+	f := newPassFixture(t, 2, 2, nil)
+	var logged lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(prev)
+
+	f.s.cfg.Store = &bumpFailStore{computerFolderStore: f.cs, bumpErr: errors.New("the bump failed")}
+	if _, ok, lost := f.s.bumpComputerFolderGen(context.Background(), f.run.ID, 2); ok || lost {
+		t.Errorf("a store error answered ok %v lost %v, want neither", ok, lost)
+	}
+	out := logged.String()
+	if !strings.Contains(out, "could not be moved before its pass") || !strings.Contains(out, "the bump failed") || strings.Contains(out, "pass record moved before its pass") {
+		t.Errorf("a store error logged %q, want it as not moved, with the error", out)
+	}
+
+	f.s.cfg.Store = f.cs
+	if _, ok, lost := f.s.bumpComputerFolderGen(context.Background(), f.run.ID, 5); ok || !lost {
+		t.Errorf("a miss answered ok %v lost %v, want a clean miss", ok, lost)
+	}
+	if out := logged.String(); !strings.Contains(out[strings.LastIndex(out, "level=WARN"):], "pass record moved before its pass") {
+		t.Errorf("a miss logged %q, want it as moved", out)
 	}
 }

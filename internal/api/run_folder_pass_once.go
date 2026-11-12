@@ -265,10 +265,15 @@ func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen in
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
 	rec, ok, err := st.BumpRunLocalFolderGen(rctx, id, store.FolderStatusGuard{Gen: gen}, s.cfg.Now())
-	if err != nil || !ok {
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not be moved before its pass",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+		return types.RunLocalFolderStatus{}, false, false
+	}
+	if !ok {
 		slog.WarnContext(ctx, "wardynd: a computer folder's pass record moved before its pass",
-			slog.String("run_id", id.String()), slog.Bool("moved", ok), slog.Any("err", err))
-		return types.RunLocalFolderStatus{}, false, err == nil
+			slog.String("run_id", id.String()), slog.Bool("moved", ok))
+		return types.RunLocalFolderStatus{}, false, true
 	}
 	return rec, true, false
 }
