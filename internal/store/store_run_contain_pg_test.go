@@ -300,7 +300,7 @@ func TestPG_ContainmentDueMatchesGo(t *testing.T) {
 // minus unobservedAgo. The run's end and every stamp are seeded as seconds before now() in SQL, so no Go time
 // reaches a comparison. A stamp ahead of the database's clock is not old enough, one from before the streak
 // start never counts, and a run with no stamp, or no row, is false. Proven red by dropping any one of the
-// three from the GREATEST, by a spacing dropped or read in the wrong unit, and by `<=` written as `<`.
+// three from the GREATEST, by a spacing dropped or read in the wrong unit.
 func TestPG_ContainmentStreakDue_DBClock(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
