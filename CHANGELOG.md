@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- On Kubernetes, a live egress edit now narrows the running proxy in place: the edit's hosts join its deny list, open connections drop, and the answer waits for its policy readback. An edit that is not confirmed ends the run. Older runs, runs on a registered runner and edits that need a new proxy are refused as before (`409 egress_edit_unsupported`).
+
+### Known issues
+
+- On Kubernetes, a narrowed proxy restarts on its launch policy if its deny list is lost: a node's disk wiped under the pod, or someone with exec rights deleting it. It allows the denied hosts until the next edit. One restarted over about 30 minutes in cannot renew, so its run ends within 65 minutes of its last renewal.
+
 ## [0.10.0-rc.19] — 2026-11-11
 
 ### Changed

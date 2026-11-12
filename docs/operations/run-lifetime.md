@@ -151,17 +151,29 @@ Move `WARDYN_PROXY_IMAGE`, and any runner's `--proxy-image` pin, in the same ste
 The edit never adds a host: any other field is a `400`. Adding a host to a running run stays an approval.
 
 1. The edit is refused, nothing changed, when the run is not live (`409 egress_edit_run_not_live`), another edit of it has not answered (`409 egress_edit_in_progress`), or a remove names a host not on the allowlist (`422 egress_edit_host_not_listed`).
-2. It is also refused when the new proxy could not confirm what it loaded: no readback (`409 egress_edit_unsupported`), or a runner or proxy image known to be older than 0.10.0-rc.19 (`409 egress_edit_legacy_proxy`). An unreadable version is not refused. On Kubernetes the edit is always refused with `409 egress_edit_unsupported`, since a sandbox's proxy cannot be replaced there.
+2. It is also refused when the new proxy could not confirm what it loaded: no readback (`409 egress_edit_unsupported`), or a runner or proxy image known to be older than 0.10.0-rc.19 (`409 egress_edit_legacy_proxy`). An unreadable version is not refused. On Kubernetes, see item 9.
 3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
 4. Its `via_org` routes go too. The edited config is stored with the edit's policy generation, in one write before the new proxy starts, and the organisation's cached engine for the run is retired. The answer waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
 5. Any other end stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
 6. While that stop is unconfirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
 8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config, which the edit stored before its replace.
+9. On Kubernetes, for a run of wardynd's own cluster, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks. The proxy refuses them at once and drops every open connection, and the answer waits for its readback as above.
+10. wardynd gives the proxy 15 seconds to apply the edit and 60 seconds more to confirm it. Past either, or on an answer it cannot read, the run is ended, since a proxy there cannot be stopped alone.
+11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). Send the edit again.
+12. It is refused with `409 egress_edit_unsupported`, and nothing changes, when:
+    - the run started before 0.10.0-rc.20, or its proxy image is older;
+    - the run is on a registered runner;
+    - its proxy does not hold the config Wardyn stored;
+    - the edit would take away a credential lane, a `via_org` route, an MCP server or an intercepted host, which need a new proxy;
+    - the run's deny list would hold more than 1,024 hosts.
+13. An edit there applies only its own hosts, not governance changes made since the run started. A remove of a host an earlier edit removed is accepted, since that host is already denied.
+14. The deny list is kept in the proxy pod's own volume, so a proxy container restart keeps it. It can be lost if that volume is wiped while the pod lives on, or if someone who can exec into the proxy pod deletes it. The proxy then restarts on the policy the run was launched with.
+15. That proxy allows the hosts the edits denied until the next edit, which applies the whole list again and whose `run.egress.edit` row says `proxy_was_behind`, or until the run ends. A proxy restarted more than about 30 minutes into the run cannot renew its launch token, so that run ends at most 65 minutes after its last renewal.
 
 An edit whose config cannot be stored changes nothing and keeps the run's current proxy (`502 revive_proxy_kept_current`). So does one that finds the run changed after its claim, or lost its lock before the replace and undid its record. If that undo fails, recovery tries to mark the run lost and stop its proxy. One that finds the run changed before its claim gets `409 revive_run_changed`. Its claim and lost marks are fenced on its generation; later stops are not.
 
-Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced.
+Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced, or narrowed in place.
 
 ## Rename
 
@@ -178,9 +190,9 @@ The Kubernetes substrate doesn't implement the optional runner capabilities the 
 - A Kubernetes run's end and limits still fire on schedule.
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
 - Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
-- The row is still written for a k8s run (and deleted with it), unused until k8s can revive.
+- The row is still written for a k8s run (and deleted with it). A live egress edit reads it and stores its denies there.
 
-See [Kubernetes: known gaps](kubernetes-known-gaps.md) for the revive, restart and live egress edit refusals.
+See [Kubernetes: known gaps](kubernetes-known-gaps.md) for the revive and restart refusals and the limits of a live egress edit.
 
 ## The clocks that end or freeze a run
 
