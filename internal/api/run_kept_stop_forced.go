@@ -381,14 +381,12 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 	if stopped {
 		// One success row per confirmed stop across replicas: only the clear that changed the row writes it,
 		// whatever the revoke does (the empty-ref clear that follows a failed revoke writes none). A store that
-		// is not Postgres has one writer, and counts as the one that cleared; so does a clear that failed, which
-		// keeps the row rather than losing it.
+		// is not Postgres has one writer, and counts as the one that cleared. A clear that errored writes none.
 		cleared := true
 		settleAfterTeardown(ctx, func(sctx context.Context) {
 			if pg, ok := s.cfg.Store.(store.PG); ok {
-				if changed, cerr := pg.ClearSandboxRefRetainingIf(sctx, run.ID, ref); cerr == nil {
-					cleared = changed
-				}
+				changed, cerr := pg.ClearSandboxRefRetainingIf(sctx, run.ID, ref)
+				cleared = cerr == nil && changed
 				return
 			}
 			_ = s.clearSandboxRef(sctx, run.ID)
