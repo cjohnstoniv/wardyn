@@ -423,8 +423,12 @@ func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 	never := endedLongAgo()
 	never.status = nil
 	id = newGiveUpRun(t, pool, never)
-	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || !out.Applied || out.Gen != 1 {
-		t.Errorf("give-up of a run with no record = %+v %v, want applied at gen 1", out, err)
+	var isNull bool
+	if err := pool.QueryRow(ctx, `SELECT local_folder_status IS NULL FROM agent_runs WHERE id = $1`, id).Scan(&isNull); err != nil || !isNull {
+		t.Fatalf("the run with no record has a status column (null %v, %v); want SQL NULL", isNull, err)
+	}
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || !out.Applied || out.Gen != 1 || out.Done {
+		t.Errorf("give-up of a run with no record = %+v %v, want applied at gen 1, not done", out, err)
 	}
 }
 
@@ -461,6 +465,17 @@ func TestPG_GiveUpReadsFinalAsTheDecodedRecordDoes(t *testing.T) {
 		out, err := pg.GiveUpRunLocalFolder(ctx, id, store.GiveUpParams{Back: givenUpBack(3), Cap: giveUpCap})
 		if err != nil || out.Done != c.done || out.Applied == c.done {
 			t.Errorf("%s: give-up = %+v %v; want done %v and applied %v, as the decoded record reads", name, out, err, c.done, !c.done)
+		}
+		if c.done {
+			var same bool
+			if err := pool.QueryRow(ctx, `SELECT local_folder_status = $2::jsonb FROM agent_runs WHERE id = $1`, id, c.status).Scan(&same); err != nil || !same {
+				t.Errorf("%s: a final record was changed (%v, %v); want it unchanged", name, same, err)
+			}
+			continue
+		}
+		got, err := pg.RunLocalFolderStatus(ctx, id)
+		if err != nil || out.Gen != 8 || got.Gen != 8 || got.Resume != nil || got.Back == nil || got.Back.GivenUpAt == nil {
+			t.Errorf("%s: record after the give-up = %+v %v (outcome gen %d); want gen 8, no resume, the given-up back", name, got, err, out.Gen)
 		}
 	}
 }
