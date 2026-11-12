@@ -186,7 +186,8 @@ func (l *tailLab) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.Folder
 }
 
 // GiveUpRunLocalFolder applies as the statement does for a run that is due when giveUpOK, and applies to nothing
-// otherwise; giveUpErr fails it.
+// otherwise; giveUpErr fails it. A record already final is never applied to and is answered Done, as the statement
+// reads it from the stored keys, whatever statusErr says of the record's decode.
 func (l *tailLab) GiveUpRunLocalFolder(_ context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -195,6 +196,9 @@ func (l *tailLab) GiveUpRunLocalFolder(_ context.Context, id uuid.UUID, p store.
 		return store.GiveUpOutcome{}, l.giveUpErr
 	}
 	r := l.rows[id]
+	if r != nil && folderDone(r.status) {
+		return store.GiveUpOutcome{Done: true}, nil
+	}
 	if !l.giveUpOK || r == nil {
 		return store.GiveUpOutcome{}, nil
 	}
@@ -629,11 +633,16 @@ func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 // A folder record that never reads follows the cap as an unreadable seed or rule does: inside the cap its row is
 // skipped (no lock, no statement); past it the owed pass is given up by the server alone, needing no decoded record:
 // one statement and one given_up row with status_unreadable. The sandbox is then stopped where the runner is here,
-// and left for the runner's return where it is away. A record that reads again is not given up twice. Catches: a
-// record that never reads kept for ever, one given up inside the cap, and a given_up row that does not say why.
+// and left for the runner's return where it is away. A record that still does not read on the next tick is found
+// final by the statement alone: a runner back, or a stop that failed, gets its stop then, once, and no second row.
+// Catches: a record that never reads kept for ever (before or after its give-up), one given up inside the cap, a
+// given_up row that does not say why, and a give-up written twice.
 func TestTailOwner_UnreadableStatusIsGivenUpPastTheCapNotInsideIt(t *testing.T) {
-	for name, away := range map[string]bool{"the runner here": false, "the runner away": true} {
+	for name, c := range map[string]struct{ away, stuck bool }{
+		"the runner here": {}, "the runner away": {away: true}, "the stop fails": {stuck: true},
+	} {
 		t.Run(name, func(t *testing.T) {
+			away := c.away
 			g := newTailRig(t)
 			g.lab.giveUpOK = true
 			pastCap := g.owedRow(g.clock.now.Add(-g.s.pendingCap() - time.Hour))
@@ -643,6 +652,7 @@ func TestTailOwner_UnreadableStatusIsGivenUpPastTheCapNotInsideIt(t *testing.T) 
 				pastCap.run.RunnerID, inside.run.RunnerID = &id, &id
 				g.online.Store(false)
 			}
+			g.stuck[pastCap.run.ID] = c.stuck
 			g.lab.statusErr = errors.New("the record does not decode")
 			g.tick()
 			if g.lab.giveUpCount() != 1 || g.countOf(inside.run.ID) != 0 || g.locks.n.Load() != 1 {
@@ -661,14 +671,26 @@ func TestTailOwner_UnreadableStatusIsGivenUpPastTheCapNotInsideIt(t *testing.T) 
 			if st := g.lab.rows[pastCap.run.ID].status; st.Resume != nil || st.Back == nil || st.Back.GivenUpAt == nil || !strings.HasSuffix(st.Back.Error, folderStatusUnreadable) {
 				t.Errorf("record %+v; want given up, its error saying the record could not be read", st)
 			}
-			if stopped := g.countOf(pastCap.run.ID) == 1 && pastCap.run.SandboxRef == ""; stopped == away {
-				t.Errorf("%d tails, ref %q; want the sandbox stopped only where the runner is here", g.countOf(pastCap.run.ID), pastCap.run.SandboxRef)
+			if stopped := g.countOf(pastCap.run.ID) == 1 && pastCap.run.SandboxRef == ""; stopped != (!away && !c.stuck) {
+				t.Errorf("%d tails, ref %q; want the sandbox stopped only where the runner is here and the stop works",
+					g.countOf(pastCap.run.ID), pastCap.run.SandboxRef)
 			}
-			g.lab.statusErr = nil
+			// The record still does not read; the runner is back and the stop works.
+			before := g.countOf(pastCap.run.ID)
+			g.online.Store(true)
+			g.mu.Lock()
+			g.stuck[pastCap.run.ID] = false
+			g.mu.Unlock()
 			g.tick()
-			if g.lab.giveUpCount() != 1 || transferAudit(g.audit) != 1 || g.count(tailGiveUp) > 1 {
-				t.Errorf("the record reads again: %d statements, %d given_up rows, %d give-up tails; want no second give-up",
-					g.lab.giveUpCount(), transferAudit(g.audit), g.count(tailGiveUp))
+			want := 0
+			if away || c.stuck {
+				want = 1
+			}
+			if n := g.countOf(pastCap.run.ID) - before; n != want || pastCap.run.SandboxRef != "" {
+				t.Errorf("the record still does not read: %d tails this tick, ref %q; want %d and the sandbox stopped", n, pastCap.run.SandboxRef, want)
+			}
+			if transferAudit(g.audit) != 1 || g.countOf(inside.run.ID) != 0 {
+				t.Errorf("%d given_up rows, %d tails inside the cap; want the first give-up's one row and none", transferAudit(g.audit), g.countOf(inside.run.ID))
 			}
 		})
 	}

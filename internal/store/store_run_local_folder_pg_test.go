@@ -309,8 +309,8 @@ func TestPG_GiveUpNeverFiresEarly(t *testing.T) {
 	} {
 		id := newGiveUpRun(t, pool, c.o)
 		out, err := pg.GiveUpRunLocalFolder(ctx, id, c.p)
-		if err != nil || out.Applied != c.applied {
-			t.Errorf("%s: give-up = %+v %v, want applied=%v", name, out, err, c.applied)
+		if err != nil || out.Applied != c.applied || out.Done {
+			t.Errorf("%s: give-up = %+v %v, want applied=%v and the record not found final", name, out, err, c.applied)
 		}
 		if !c.applied {
 			if st, _ := pg.RunLocalFolderStatus(ctx, id); st.Gen != 7 || st.Resume == nil {
@@ -374,7 +374,9 @@ func TestPG_GiveUpOnceAcrossReplicas(t *testing.T) {
 	}
 }
 
-// A give-up that applies to nothing says so, and writes nothing: a record already final, an unknown run.
+// A give-up that applies to nothing says so, and writes nothing: a record already final, an unknown run. Done
+// says the record was already final, from the SQL alone, so a final record that does not decode is still found
+// final; it is false for an unknown run.
 func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -384,8 +386,8 @@ func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 	done := endedLongAgo()
 	done.status = &types.RunLocalFolderStatus{Gen: 4, Settled: 4, Back: &types.FolderPassRecord{At: time.Now().UTC(), Files: 2, Refused: []types.FolderRefusal{}}}
 	id := newGiveUpRun(t, pool, done)
-	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || out.Gen != 0 {
-		t.Errorf("give-up of a record already final = %+v %v, want the zero outcome", out, err)
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || out.Gen != 0 || !out.Done {
+		t.Errorf("give-up of a record already final = %+v %v, want not applied and done", out, err)
 	}
 	if st, _ := pg.RunLocalFolderStatus(ctx, id); st.Gen != 4 || st.Back == nil || st.Back.GivenUpAt != nil || st.Back.Files != 2 {
 		t.Errorf("a record already final was changed: %+v", st)
@@ -394,12 +396,28 @@ func TestPG_GiveUpReportsNotApplied(t *testing.T) {
 	given := endedLongAgo()
 	given.status = &types.RunLocalFolderStatus{Gen: 8, Back: &types.FolderPassRecord{At: time.Now().UTC(), Refused: []types.FolderRefusal{}, GivenUpAt: &done.status.Back.At}}
 	id = newGiveUpRun(t, pool, given)
-	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied {
-		t.Errorf("a second give-up = %+v %v, want not applied", out, err)
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || !out.Done {
+		t.Errorf("a second give-up = %+v %v, want not applied and done", out, err)
 	}
 
-	if out, err := pg.GiveUpRunLocalFolder(ctx, uuid.New(), p); err != nil || out.Applied {
-		t.Errorf("give-up of an unknown run = %+v %v, want not applied and no error", out, err)
+	undecodable := endedLongAgo()
+	id = newGiveUpRun(t, pool, undecodable)
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = '{"gen": 9, "back": {"at": 5}}'::jsonb WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.RunLocalFolderStatus(ctx, id); err == nil {
+		t.Fatal("the planted record decoded; want a record that does not")
+	}
+	if out, err := pg.GiveUpRunLocalFolder(ctx, id, p); err != nil || out.Applied || !out.Done {
+		t.Errorf("give-up of a final record that does not decode = %+v %v, want not applied and done", out, err)
+	}
+	var same bool
+	if err := pool.QueryRow(ctx, `SELECT local_folder_status = '{"gen": 9, "back": {"at": 5}}'::jsonb FROM agent_runs WHERE id = $1`, id).Scan(&same); err != nil || !same {
+		t.Errorf("the record that does not decode was changed (%v, %v); want it unchanged", same, err)
+	}
+
+	if out, err := pg.GiveUpRunLocalFolder(ctx, uuid.New(), p); err != nil || out.Applied || out.Done {
+		t.Errorf("give-up of an unknown run = %+v %v, want not applied, not done and no error", out, err)
 	}
 
 	never := endedLongAgo()

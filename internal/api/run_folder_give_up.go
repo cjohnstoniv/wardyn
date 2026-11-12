@@ -67,9 +67,10 @@ func (s *Server) folderGivenUpRecord(st types.RunLocalFolderStatus) types.Folder
 // moves the record's generation on, so a pass still running for it writes nothing. final says the record is
 // final and the sandbox may be stopped: true after this call applied it (the audit row is written and marked
 // after, and a failure of either is logged, never waited on), and true when the statement applied nothing
-// and a re-read shows the record final from another writer. Zero rows alone are never final: the run may
-// not be due yet, or the record may still be open. d1 is a caller whose containment decision is made (the
-// statement then only re-checks that the run's containment due has passed).
+// and found the record already final (the store's Done, read without decoding it, so a record that does not
+// decode is still found final), or a re-read shows it final from another writer. Zero rows alone are never
+// final: the run may not be due yet, or the record may still be open. d1 is a caller whose containment
+// decision is made (the statement then only re-checks that the run's containment due has passed).
 func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, st types.RunLocalFolderStatus) (final bool, err error) {
 	return s.giveUpFolderNoted(ctx, run, d1, st, "")
 }
@@ -100,6 +101,9 @@ func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 b
 		} else if err != nil {
 			slog.WarnContext(ctx, "wardynd: record a given-up folder copy back", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
+		return true, nil
+	}
+	if out.Done {
 		return true, nil
 	}
 	cur, err := ss.RunLocalFolderStatus(ctx, run.ID)

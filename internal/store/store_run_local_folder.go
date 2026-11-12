@@ -92,7 +92,7 @@ type RunLocalFolderStatuses interface {
 	// containment is due (GiveUpParams): it drops the Resume, sets Back to p.Back and moves Gen on, so
 	// every later write from an owner of the older generation fails. Applied is false, with nothing
 	// written, when the run is not due, is not terminal, holds no sandbox, has no folder, or its
-	// record is already final; the caller reads the record to tell which.
+	// record is already final; Done then says the last, and the caller reads the record for the rest.
 	GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p GiveUpParams) (GiveUpOutcome, error)
 	// MarkGivenUpAudited records that a record's given_up audit row was accepted, at generation gen
 	// only. False when the record is at another generation or not given up.
@@ -116,10 +116,13 @@ type GiveUpParams struct {
 	Tau         time.Duration
 }
 
-// GiveUpOutcome is whether the statement applied, and the generation it moved the record to.
+// GiveUpOutcome is whether the statement applied, and the generation it moved the record to. Done, when it did
+// not apply, is whether the record was already final as the statement read it (a back and no resume), answered
+// in SQL without decoding the record, so a record that does not decode can still be found final.
 type GiveUpOutcome struct {
 	Applied bool
 	Gen     int
+	Done    bool
 }
 
 // FolderStatusGuard is what a write of a run's folder record requires of the stored one: the
@@ -239,14 +242,21 @@ func terminalStateNames() []string {
 	return stateNames([]types.RunState{types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived})
 }
 
+// folderDoneSQL is a stored folder record that is final (types: a Back and no Resume), read from its JSON keys
+// alone, so it answers for a record that does not decode.
+const folderDoneSQL = `(COALESCE(local_folder_status, '{}'::jsonb) ? 'back'
+		           AND NOT (COALESCE(local_folder_status, '{}'::jsonb) ? 'resume'))`
+
 // GiveUpRunLocalFolder implements RunLocalFolderStatuses. A run's lifetime cap and max age bound a live
-// run and so are not terms here: nothing that already ended is ended again by them.
+// run and so are not terms here: nothing that already ended is ended again by them. The same statement reads
+// whether the record was already final (Done), from the snapshot the update started on.
 func (s PG) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p GiveUpParams) (GiveUpOutcome, error) {
 	back, err := json.Marshal(p.Back)
 	if err != nil {
 		return GiveUpOutcome{}, fmt.Errorf("store: marshal given-up folder record: %w", err)
 	}
 	const q = `
+		WITH upd AS (
 		UPDATE agent_runs
 		SET local_folder_status = (COALESCE(local_folder_status, '{}'::jsonb) - 'resume')
 		    || jsonb_build_object('gen', COALESCE((local_folder_status->>'gen')::int, 0) + 1, 'back', $2::jsonb)
@@ -254,24 +264,26 @@ func (s PG) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p GiveUpPara
 		  AND local_folder IS NOT NULL
 		  AND sandbox_ref <> ''
 		  AND state = ANY($3)
-		  AND NOT (COALESCE(local_folder_status, '{}'::jsonb) ? 'back'
-		           AND NOT (COALESCE(local_folder_status, '{}'::jsonb) ? 'resume'))
+		  AND NOT ` + folderDoneSQL + `
 		  AND ( COALESCE(ended_at, updated_at) + make_interval(secs => $4) <= now()
 		     OR ( $5::boolean
 		          AND COALESCE(ended_at, updated_at) + make_interval(secs => $6) <= now()
 		          AND ( $7::boolean
 		             OR (containment_error_at IS NOT NULL
 		                 AND containment_error_at <= now() - make_interval(secs => $8)) ) ) )
-		RETURNING (local_folder_status->>'gen')::int`
-	var gen int
-	err = s.Pool.QueryRow(ctx, q, id, back, terminalStateNames(), p.Cap.Seconds(), p.D1, p.Lag.Seconds(), p.Unsupported, p.Tau.Seconds()).Scan(&gen)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return GiveUpOutcome{}, nil
-	}
+		RETURNING (local_folder_status->>'gen')::int AS gen)
+		SELECT (SELECT gen FROM upd),
+		       COALESCE((SELECT ` + folderDoneSQL + ` FROM agent_runs WHERE id = $1), false)`
+	var gen *int
+	var done bool
+	err = s.Pool.QueryRow(ctx, q, id, back, terminalStateNames(), p.Cap.Seconds(), p.D1, p.Lag.Seconds(), p.Unsupported, p.Tau.Seconds()).Scan(&gen, &done)
 	if err != nil {
 		return GiveUpOutcome{}, fmt.Errorf("store: give up run local folder: %w", err)
 	}
-	return GiveUpOutcome{Applied: true, Gen: gen}, nil
+	if gen == nil {
+		return GiveUpOutcome{Done: done}, nil
+	}
+	return GiveUpOutcome{Applied: true, Gen: *gen}, nil
 }
 
 // MarkGivenUpAudited implements RunLocalFolderStatuses. It is a guarded write like SetRunLocalFolderStatusIf,
