@@ -668,13 +668,14 @@ func (l *ctxWaitingLocker) TryLock(ctx context.Context, _ db.LockKey) (context.C
 	return ctx, nil, false, ctx.Err()
 }
 
-// The run's lock is taken inside the label sweep's bound: a lock whose acquisition never answers holds the sweep no
-// longer than that bound, and the run is left owed (no cut sent, not called an orphan, its ref kept) for the next
-// sweep. Catches: the lock taken on the caller's context, which holds the sweep past its bound for as long as that
-// context lasts.
+// The run's lock wait is inside the label sweep's bound: a lock whose acquisition never answers is given up at that
+// bound (the sweep call returns within it plus slack; its other reads are a fake's here), and the run is left owed:
+// no cut sent, no failure row, not called an orphan, its ref kept. The next sweep, with the lock free, decides it.
+// The caller's context carries a long deadline, so a wait outside the bound fails by assertion, not by the test
+// timeout. Catches: the lock taken on the caller's context, which waits past the bound for as long as that lasts.
 func TestOrphanSweep_ALockThatNeverAnswersEndsAtTheSweepsBound(t *testing.T) {
 	const bound, slack = 100 * time.Millisecond, time.Second
-	srv, st, rn, _ := keptSweepRig(t, 1, bound)
+	srv, st, rn, audit := keptSweepRig(t, 1, bound)
 	lk := &ctxWaitingLocker{Locker: db.NewLocalLocker()}
 	srv.locks.override = lk
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // only a lock taken outside the bound waits this out
@@ -695,12 +696,20 @@ func TestOrphanSweep_ALockThatNeverAnswersEndsAtTheSweepsBound(t *testing.T) {
 		t.Errorf("lock attempts with deadlines %v (sweep began %v); want one, ending within the bound %v", dls, start, bound)
 	}
 	r := st.runs[0]
-	if rn.cuts() != 0 || rn.verdicts[r.ID] || r.SandboxRef == "" || len(st.clearedRefs) != 0 {
-		t.Errorf("%d cuts, verdict %v, ref %q, refs cleared %v; want no cut, not an orphan, its ref kept", rn.cuts(), rn.verdicts[r.ID],
-			r.SandboxRef, st.clearedRefs)
+	if rn.cuts() != 0 || rn.verdicts[r.ID] || r.SandboxRef == "" || len(st.clearedRefs) != 0 || cutFailureRows(audit, r.ID) != 0 {
+		t.Errorf("%d cuts, verdict %v, ref %q, refs cleared %v, %d cut failure rows; want no cut, not an orphan, its ref "+
+			"kept, no row", rn.cuts(), rn.verdicts[r.ID], r.SandboxRef, st.clearedRefs, cutFailureRows(audit, r.ID))
 	}
 	if kept, err := srv.keepsSandboxForFolder(context.Background(), r); !kept || err != nil {
 		t.Errorf("still kept for its folder = %v, %v; want it owed", kept, err)
+	}
+	srv.locks.override = nil       // the lock is free again
+	orphanSweepBound = time.Minute // a long bound for the deciding sweep; the rig restores it
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rn.cuts() != 1 || !rn.verdicts[r.ID] {
+		t.Errorf("the next sweep: %d cuts, verdict %v; want its cut sent and the run decided", rn.cuts(), rn.verdicts[r.ID])
 	}
 }
 
