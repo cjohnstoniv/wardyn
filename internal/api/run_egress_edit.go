@@ -63,7 +63,8 @@ type egressEditRequest struct {
 
 // egressEditResult is the 200 answer: the policy generation the confirmed proxy enforces.
 type egressEditResult struct {
-	PolicyGeneration int `json:"policy_generation"`
+	PolicyGeneration int                `json:"policy_generation"`
+	inPlace          *egressEditInPlace // set when the edit narrowed the proxy in place; never serialised
 }
 
 // liveEgressEdit is a validated edit: lower-case entries, each list without duplicates.
@@ -202,7 +203,11 @@ func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
 func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	res, rerr := s.editRunEgressOnce(r, run, edit)
-	rerr = s.withRunFate(r.Context(), run, rerr)
+	if res.inPlace != nil {
+		rerr = s.withNarrowFate(r.Context(), run, rerr)
+	} else {
+		rerr = s.withRunFate(r.Context(), run, rerr)
+	}
 	data := map[string]any{"subject": run.CreatedBy, "removed_hosts": nonNilStrings(edit.remove), "denied_hosts": nonNilStrings(edit.deny)}
 	outcome := "success"
 	if rerr != nil {
@@ -213,12 +218,18 @@ func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgr
 		data["reason"] = rerr.reason
 	} else {
 		data["policy_generation"] = res.PolicyGeneration
+		if res.inPlace != nil {
+			data["applied"] = "in_place"
+			if res.inPlace.proxyWasBehind {
+				data["proxy_was_behind"] = true
+			}
+		}
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.egress.edit", run.ID.String(), outcome, mustJSON(data)))
 	return res, rerr
 }
 
-func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
+func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liveEgressEdit) (out egressEditResult, rerr *reviveError) {
 	if run.State != types.RunRunning || run.SandboxRef == "" || run.LostAt != nil {
 		return egressEditResult{}, reviveRefused(http.StatusConflict, reasonEgressEditRunNotLive,
 			"the run is not live (state="+string(run.State)+"), so its egress cannot be edited; revive it first")
@@ -231,7 +242,11 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 			"an egress edit of this run is already in progress; try again when it answers")
 	}
 	defer s.reviving.Delete(egressEditMark(run.ID))
-	res, rerr := s.reviveFromRequest(r, run, false, edit)
+	res, rerr, inPlace := s.narrowRunEgress(r, run, edit)
+	defer func() { out.inPlace = inPlace }()
+	if inPlace == nil {
+		res, rerr = s.reviveFromRequest(r, run, false, edit)
+	}
 	// A revive that put the run back to lost words its own stop from a lost mark that may only have
 	// logged a failed stop; an edit answers from the stop's confirmation instead.
 	lost := rerr != nil && (rerr.lost || rerr.reason == reasonReviveRecoveryUnresolved)
