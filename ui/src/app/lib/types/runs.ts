@@ -17,6 +17,7 @@ import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
 import type { RunService, RunServiceStatus } from "./run-service";
+import type { RunComputerFolder } from "./runs-folder";
 import type { ImageAdmissionVerdict } from "./image-admission";
 import type { RunnerPoolSelection } from "./runner-pools";
 import type { RunMachine } from "./kept-machine";
@@ -85,6 +86,7 @@ export type RunState =
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
 
+export type { RunComputerFolder, RunFolderPass, ComputerFolderFate, ComputerFolderSandboxCopy, ComputerFolderLastReport } from "./runs-folder";
 export type { RunService, RunServiceProbe, RunServiceStatus, ServiceHealth, ServiceHealthState } from "./run-service";
 
 /** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
@@ -622,40 +624,6 @@ export interface RunMacOSDisk {
 export interface RunDetailAgent {
   agent: string;
   task?: string;
-}
-
-// GET /runs/{id}'s computer_folder (internal/api/run_computer_folder.go computerFolderRunView): the run's
-// folder held by the person's own runner. The path on that computer is never sent, only its name.
-export interface RunComputerFolder {
-  name: string;
-  runner: string;
-  remote_dir: string;
-  direction: "both" | "in";
-  // The first sync's: waiting, synced or failed (error says why).
-  state: "waiting" | "synced" | "failed";
-  error?: string;
-  seed?: RunFolderPass;
-  back?: RunFolderPass;
-  // The fate of the changes not yet back; each is absent while the run is live or when the server cannot tell.
-  fate?: "retained" | "given_up" | "complete";
-  sandbox_copy?: "kept" | "deleted";
-  last_report?: { unsynced: number | null; paths?: string[]; paths_more?: number; at: string };
-  give_up_at?: string;
-}
-
-// One pass as the runner counted it (types.FolderPassRecord).
-export interface RunFolderPass {
-  at: string;
-  files: number;
-  bytes: number;
-  refused: { path: string; reason: string }[];
-  error?: string;
-  // Set once the sandbox's keep ended with changes not yet back; given_up_audited is internal bookkeeping, sent as is.
-  given_up_at?: string;
-  given_up_count?: number;
-  given_up_paths?: string[];
-  given_up_paths_more?: number;
-  given_up_audited?: boolean;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
