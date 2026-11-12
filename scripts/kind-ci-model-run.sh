@@ -77,8 +77,8 @@ FAKE_BEDROCK_HOST="${FAKE_SVC}-bedrock.${NAMESPACE}.svc.cluster.local"
 PROVIDER_ID="ci-model-fake"
 MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 CURL_MAX_TIME=15
-# A live egress edit answers only once its proxy has confirmed the narrowed policy: up to 200 s.
-PATCH_MAX_TIME=210
+# A live egress edit answers only once its proxy has confirmed the narrowed policy: up to 236 s.
+PATCH_MAX_TIME=250
 RUNS_NAMESPACE="wardyn-runs"
 EVIDENCE_DIR="${WARDYN_KIND_CI_MODEL_EVIDENCE:-${ROOT}/local/evidence/kind-ci-model-run}"
 mkdir -p "${EVIDENCE_DIR}"

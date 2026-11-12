@@ -104,12 +104,16 @@ func secretVersion(t *testing.T, cs kubernetes.Interface, ns string, runID uuid.
 	return s.ResourceVersion
 }
 
-// proxyAnswer is what the agent gets back from the proxy for an https CONNECT to host.
+// probeDone is the line proxyAnswer's script prints after nc returns, whatever nc did.
+const probeDone = "probe-done"
+
+// proxyAnswer is what the agent gets back from the proxy for an https CONNECT to host, lower-cased,
+// followed by probeDone.
 func proxyAnswer(t *testing.T, r runner.Runner, ref, host string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	script := fmt.Sprintf(`printf 'CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n' | nc -w 5 wardyn-proxy 3128`, host, host)
+	script := fmt.Sprintf(`printf 'CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n' | nc -w 5 wardyn-proxy 3128; echo %s`, host, host, probeDone)
 	sess, err := r.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", script}})
 	if err != nil {
 		t.Fatalf("ExecStream (ask the proxy for %s): %v", host, err)
@@ -214,15 +218,16 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 		t.Fatalf("NarrowProxy = %+v; want hash %s, list [%s], changed", after, proxy.ConfigSHA256(narrowed), narrowedHost)
 	}
 
-	// 5. The agent is refused the narrowed host and not the other.
-	assertNarrowed(t, r, s.sb.Ref)
-
-	// 6. The held connection is gone within 2 s.
+	// 5. The held connection is gone within 2 s. This is checked first: the proxy drops a silent
+	// connection on its own after 30 s, so a later check could pass with the narrowing closing nothing.
 	select {
 	case <-closed:
 	case <-time.After(2 * time.Second):
 		t.Error("the connection the agent held to its proxy was still up 2 s after the narrowing")
 	}
+
+	// 6. The agent is refused the narrowed host and not the other.
+	assertNarrowed(t, r, s.sb.Ref)
 
 	// 7. The pod, its address and its config Secret are as they were.
 	pod, err := cs.CoreV1().Pods(ns).Get(ctx, s.pod.Name, metav1.GetOptions{})
@@ -373,15 +378,18 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 	if proxyImage == "" || agentImage == "" {
 		t.Fatal("WARDYN_PROXY_IMAGE and WARDYN_TEST_K8S_AGENT_IMAGE must name the proxy and conformance agent images")
 	}
-	build := func() (runner.Runner, kubernetes.Interface, string) {
+	build := func() (runner.Runner, kubernetes.Interface, string, error) {
 		sub, err := k8s.New(k8sSuiteConfig(k8s.Config{Namespaces: []string{os.Getenv("WARDYN_K8S_NAMESPACE")}, ProxyImage: proxyImage, Record: true}))
 		if err != nil {
-			t.Fatalf("k8s.New: %v", err)
+			return nil, nil, "", fmt.Errorf("k8s.New: %w", err)
 		}
 		cs, ns := conformanceClientset(t)
-		return orchestrator.New(sub), cs, ns
+		return orchestrator.New(sub), cs, ns, nil
 	}
-	r, cs, ns := build()
+	r, cs, ns, err := build()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// 1. A narrowed sandbox. H is the hash it enforces, L the one it was launched with.
 	s := newNarrowSandbox(t, r, cs, ns, agentImage)
@@ -404,13 +412,27 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 		t.Fatalf("docker restart %s: %v\n%s", node, err, out)
 	}
 
-	// 3. The node may come back on another address: point the client and the driver at it.
+	// 3. The node may come back on another address: point the client and the driver at it. The driver is
+	// rebuilt inside the wait, since k8s.New runs its boot canary against an API that may not be up yet.
+	rebuild := false
 	if newIP := dockerNodeIP(t, node); newIP != oldNodeIP {
 		t.Logf("node %s moved from %s to %s; rewriting the kubeconfig", node, oldNodeIP, newIP)
 		pointKubeconfigAt(t, newIP, node)
-		r, cs, ns = build()
+		rebuild = true
 	}
+	lastBuildErr := ""
 	waitFor(t, 5*time.Minute, "the API, the node and the proxy pod to be ready", func() bool {
+		if rebuild {
+			nr, ncs, nns, err := build()
+			if err != nil {
+				if err.Error() != lastBuildErr {
+					lastBuildErr = err.Error()
+					t.Logf("rebuild the driver after the restart: %v (retrying)", err)
+				}
+				return false
+			}
+			r, cs, ns, rebuild = nr, ncs, nns, false
+		}
 		n, err := cs.CoreV1().Nodes().Get(ctx, node, metav1.GetOptions{})
 		if err != nil || !nodeReady(n) {
 			return false
@@ -437,26 +459,44 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 		t.Fatalf("base hash = %s after the restart, was %s", st.BaseSHA256, wantBase)
 	}
 
-	// 5 and 6. Exactly one of two cases passes.
+	// 5 and 6. Exactly one of two cases passes, and the proxy's probe alone decides which.
 	switch {
 	case slices.Equal(st.LiveDenies, []string{narrowedHost}) && st.ConfigSHA256 == h:
-		if pod.Status.PodIP == ip {
-			assertNarrowed(t, r, s.sb.Ref)
-		} else {
-			// The agent's pinned address reaches no proxy now: neither host may get through.
-			for _, host := range []string{narrowedHost, otherHost} {
-				if got := proxyAnswer(t, r, s.sb.Ref, host); strings.Contains(got, "http/1.") {
-					t.Errorf("the agent reached a proxy for %s at the old address: %s", host, got)
-				}
-			}
-			t.Log("the proxy pod came back on a new address; the agent reaches none, which is narrower")
-		}
 		t.Log("node-restart: list kept")
 	case len(st.LiveDenies) == 0 && st.ConfigSHA256 == l:
 		t.Log("node-restart: list lost, proxy on its launch policy")
+		return
 	default:
 		t.Fatalf("after a node restart the proxy holds %+v; want the list %v at hash %s, or no list at the launch hash %s", st, []string{narrowedHost}, h, l)
 	}
+
+	// 7. The agent-side check needs a live agent to exec into. The agent pod has RestartPolicy Never, so a
+	// node reboot usually leaves it dead; the verdict above stands without it.
+	agent, err := cs.CoreV1().Pods(ns).Get(ctx, "wardyn-agent-"+s.spec.RunID.String(), metav1.GetOptions{})
+	if err != nil {
+		t.Logf("agent-side check skipped: read the agent pod: %v", err)
+		return
+	}
+	if agent.Status.Phase != corev1.PodRunning {
+		t.Logf("agent-side check skipped: the agent pod is %s, not Running, after the node restart", agent.Status.Phase)
+		return
+	}
+	if pod.Status.PodIP == ip {
+		assertNarrowed(t, r, s.sb.Ref)
+		return
+	}
+	// The agent's pinned address reaches no proxy now: neither host may get through. Each probe must
+	// show it ran, so an exec that printed nothing does not pass.
+	for _, host := range []string{narrowedHost, otherHost} {
+		got := proxyAnswer(t, r, s.sb.Ref, host)
+		switch {
+		case !strings.Contains(got, probeDone):
+			t.Errorf("the agent's probe for %s at the old address printed no end marker, so it proves nothing:\n%s", host, got)
+		case strings.Contains(got, "http/1."):
+			t.Errorf("the agent reached a proxy for %s at the old address: %s", host, got)
+		}
+	}
+	t.Log("the proxy pod came back on a new address; the agent reaches none, which is narrower")
 }
 
 func waitFor(t *testing.T, bound time.Duration, what string, ok func() bool) {
