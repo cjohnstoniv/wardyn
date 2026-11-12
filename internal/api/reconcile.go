@@ -303,7 +303,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 				return false
 			}
 			defer unlock()
-			return !s.computerFolderKept(lctx, runID)
+			return !s.sweepKeepsSandbox(lctx, run)
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -381,7 +381,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 
 // reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
 func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
-	if s.computerFolderKept(ctx, run.ID) {
+	if s.sweepKeepsSandbox(ctx, run) {
 		return // kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) resumes
 	}
 	kind, outcome, answered := s.lastRunnerTeardown(ctx, run)

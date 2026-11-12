@@ -593,17 +593,10 @@ func (s *Server) killKeptAgent(ctx context.Context, run types.AgentRun, ref stri
 	}
 }
 
-// computerFolderKept reports whether run id's sandbox is kept for its computer folder's pass back
-// to resume. A record that cannot be read counts as kept: a sweep never tears down what it cannot
-// check, and the next sweep reads it again.
-func (s *Server) computerFolderKept(ctx context.Context, id uuid.UUID) bool {
-	kept, err := s.computerFolderKeptRead(ctx, id)
-	return err != nil || kept
-}
-
-// computerFolderKeptRead is computerFolderKept with the record's read error apart, for a caller that logs or
-// audits that error (the terminal-sandbox sweep, and a failed proxy start's containment, which still counts the
-// record as kept).
+// computerFolderKeptRead reports whether run id's record holds a resume: its sandbox is kept for its computer
+// folder's pass back to resume. A record that cannot be read is the error, no answer (a caller that treats it
+// as kept says so). The sweeps ask keepsSandboxForFolder, which also keeps a pass back owed and not yet run;
+// reloseEnded asks this, since its keep is proof that a stop was observed.
 func (s *Server) computerFolderKeptRead(ctx context.Context, id uuid.UUID) (bool, error) {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
@@ -617,6 +610,39 @@ func (s *Server) computerFolderKeptRead(ctx context.Context, id uuid.UUID) (bool
 		return false, err
 	}
 	return rec.Resume != nil, nil
+}
+
+// keepsSandboxForFolder reports whether a destructive sweep must keep terminal run's sandbox for its computer
+// folder's pass back, which the tail owner (folderCleanupLoop) runs: a record holding a resume (the keep
+// computerFolderKeptRead answers), or a pass back still owed with none yet run (folderOwed: an eligible folder,
+// a terminal run that was not killed, a ref, nothing given up). The second half is the crash window between a
+// run's terminal commit and its tail, which leaves a seeded record with neither a Back nor a Resume. Time plays no
+// part: at and past the cap the sandbox is still the tail owner's, whose give-up writes its durable record before
+// anything is stopped. An error is a record or rule that could not be read, which is no answer; callers keep.
+// reloseEnded does not use it: there a keep is proof that a stop was already observed, which an owed pass back
+// that has not run is not.
+func (s *Server) keepsSandboxForFolder(ctx context.Context, run types.AgentRun) (bool, error) {
+	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
+		return false, nil
+	}
+	rec, err := st.RunLocalFolderStatus(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	case rec.Resume != nil:
+		return true, nil
+	}
+	return s.folderOwed(ctx, run, rec)
+}
+
+// sweepKeepsSandbox is keepsSandboxForFolder for a sweep that has no use for the error: a record that cannot
+// be read counts as kept, as computerFolderKept always has.
+func (s *Server) sweepKeepsSandbox(ctx context.Context, run types.AgentRun) bool {
+	kept, err := s.keepsSandboxForFolder(ctx, run)
+	return err != nil || kept
 }
 
 // computerFolderAccountTime is the end of a pass back kept for the runner's account of a pass

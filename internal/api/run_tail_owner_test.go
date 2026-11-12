@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -244,11 +245,13 @@ type tailRig struct {
 	mu     sync.Mutex
 	calls  []tailCall
 	during func(run types.AgentRun, step tailStep)
+	stuck  map[uuid.UUID]bool // runs whose stop keeps failing: their tail runs and the ref stays
 }
 
 func newTailRig(t *testing.T) *tailRig {
 	t.Helper()
-	g := &tailRig{audit: &recRecorder{}, clock: &keptEndClock{now: time.Now()}, locks: &countingLocker{next: db.NewLocalLocker()}}
+	g := &tailRig{audit: &recRecorder{}, clock: &keptEndClock{now: time.Now()}, locks: &countingLocker{next: db.NewLocalLocker()},
+		stuck: map[uuid.UUID]bool{}}
 	g.online.Store(true)
 	g.lab = &tailLab{rows: map[uuid.UUID]*tailRow{}, markCalls: map[uuid.UUID]int{},
 		runner: types.Runner{ID: uuid.New(), Owner: "alice@example.com", Name: "laptop", State: types.RunnerClaimed}}
@@ -259,12 +262,12 @@ func newTailRig(t *testing.T) *tailRig {
 	g.s.tail.finalizeFn = func(_ context.Context, run types.AgentRun, step tailStep) {
 		g.mu.Lock()
 		g.calls = append(g.calls, tailCall{id: run.ID, step: step})
-		during := g.during
+		during, stuck := g.during, g.stuck[run.ID]
 		g.mu.Unlock()
 		if during != nil {
 			during(run, step)
 		}
-		if step != tailFolder { // a pass back keeps the sandbox; every other tail ends in a stop
+		if step != tailFolder && !stuck { // a pass back keeps the sandbox; every other tail ends in a stop
 			g.lab.clearRef(run.ID)
 		}
 	}
@@ -280,6 +283,19 @@ func (g *tailRig) count(step tailStep) int {
 	n := 0
 	for _, c := range g.calls {
 		if c.step == step {
+			n++
+		}
+	}
+	return n
+}
+
+// countOf is how many tails run id was given.
+func (g *tailRig) countOf(id uuid.UUID) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := 0
+	for _, c := range g.calls {
+		if c.id == id {
 			n++
 		}
 	}
@@ -364,21 +380,21 @@ func TestTailOwner_SkipsForcedMarkedRows(t *testing.T) {
 	}
 }
 
-// A run that ended less than containmentLag ago is the ordinary tail's: no lock, no tail. One a second past it is
-// taken. Catches: dropping the age gate, which races the ordinary tail.
+// A run that ended less than containmentLag ago is the ordinary tail's: no lock, no tail. One whose due is exactly
+// now, and one a second past it, are taken. Catches: dropping the age gate, which races the ordinary tail, and an
+// inclusive gate turned exclusive.
 func TestTailOwner_AgeGateSkipsAFreshEnd(t *testing.T) {
 	g := newTailRig(t)
 	fresh := g.historyRow(g.clock.now.Add(-containmentLag + time.Second))
+	exact := g.historyRow(g.clock.now.Add(-containmentLag)) // due == now: taken
 	due := g.historyRow(g.clock.now.Add(-containmentLag - time.Second))
 	g.tick()
-	g.mu.Lock()
-	calls := slices.Clone(g.calls)
-	g.mu.Unlock()
-	if len(calls) != 1 || calls[0].id != due.run.ID || calls[0].step != tailHistory {
-		t.Fatalf("tails %+v; want one history tail, of the run past its due (fresh run %s)", calls, fresh.run.ID)
+	if g.countOf(fresh.run.ID) != 0 || g.countOf(exact.run.ID) != 1 || g.countOf(due.run.ID) != 1 || g.total() != 2 {
+		t.Fatalf("tails: fresh %d, due exactly now %d, past due %d, total %d; want 0, 1, 1, 2",
+			g.countOf(fresh.run.ID), g.countOf(exact.run.ID), g.countOf(due.run.ID), g.total())
 	}
-	if n := g.locks.n.Load(); n != 1 {
-		t.Errorf("%d lock attempts, want 1: the fresh end takes none", n)
+	if n := g.locks.n.Load(); n != 2 {
+		t.Errorf("%d lock attempts, want 2: the fresh end takes none", n)
 	}
 }
 
@@ -535,6 +551,7 @@ func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 		{"the status read fails", func() { g.lab.statusErr = errors.New("status down") }},
 		{"the seed read fails", func() { g.lab.statusErr, g.lab.seedErr = nil, errors.New("seed down") }},
 	} {
+		logs.Reset() // each case must warn by itself, not on the one before's line
 		tc.set()
 		g.tick()
 		if g.locks.n.Load() != 0 || g.total() != 0 || g.lab.giveUpCount() != 0 {
@@ -790,10 +807,30 @@ func TestForcedEnd_OwedPassKeptThenBroughtBackByTheTailOwner(t *testing.T) {
 			}
 			locks := &countingLocker{next: db.NewLocalLocker()}
 			f.s.locks.override = locks
+			var passes, lockFree, attemptsAtPass atomic.Int32
+			f.sb.onPass = func() { // the runner's side of the pass: the run's lock must be held while it runs
+				if passes.Add(1) == 1 {
+					attemptsAtPass.Store(locks.n.Load())
+				}
+				if _, unlock, free := f.s.tryLockRunOp(context.Background(), f.run.ID); free {
+					unlock()
+					lockFree.Add(1)
+				}
+			}
 			f.s.folderCleanupTick(context.Background())
 			rec := f.cs.folderStatus()
-			if f.sb.stopCount() != 1 || rec.Resume != nil || rec.Back == nil || locks.n.Load() == 0 {
-				t.Errorf("tail owner tick: %d stops, record %+v, %d lock attempts; want the pass run under the lock, then one stop", f.sb.stopCount(), rec, locks.n.Load())
+			if f.sb.stopCount() != 1 || rec.Resume != nil || rec.Back == nil {
+				t.Fatalf("tail owner tick: %d stops, record %+v; want the pass run, then one stop", f.sb.stopCount(), rec)
+			}
+			if passes.Load() == 0 || lockFree.Load() != 0 || attemptsAtPass.Load() == 0 {
+				t.Errorf("the runner saw %d passes, %d with the run's lock free, %d lock attempts before the first; want a pass under a lock the tail owner took",
+					passes.Load(), lockFree.Load(), attemptsAtPass.Load())
+			}
+			if rec.Back.Error != "" || rec.Back.Files == 0 || rec.Back.GivenUpAt != nil {
+				t.Errorf("Back = %+v; want a pass with files and no error, not given up", rec.Back)
+			}
+			if got, _ := os.ReadFile(filepath.Join(f.cs.folder.Path, "README.md")); string(got) != "edited by the agent" {
+				t.Errorf("README.md on the computer = %q; want the agent's edit brought back", got)
 			}
 		})
 	}
@@ -841,6 +878,333 @@ func TestForcedMark_ClearsOnContainmentWhenRevokeOwed(t *testing.T) {
 			f.end(f.s)
 			if got := f.leaser.markCount(); got != tc.wantMarks {
 				t.Errorf("%d marks after a stop that succeeded and a revoke that failed; want %d", got, tc.wantMarks)
+			}
+		})
+	}
+}
+
+// A hosted run whose folder runner is offline is not visited: over 20 ticks no lock, no tail, no row; the tick the
+// runner is online again runs exactly one pass. Catches: a visitable check that is always true (a lock and a tail
+// every tick against a runner that cannot answer), and one that is never true.
+func TestTailOwner_OfflineFolderRunnerOfAHostedRunIsNotVisited(t *testing.T) {
+	g := newTailRig(t)
+	g.owedRow(g.clock.now.Add(-time.Hour)) // RunnerID nil: a hosted sandbox, owed to the laptop's folder runner
+	g.online.Store(false)
+	for range 20 {
+		g.clock.now = g.clock.now.Add(time.Second)
+		g.tick()
+	}
+	if g.locks.n.Load() != 0 || g.total() != 0 || len(g.audit.snapshot()) != 0 {
+		t.Fatalf("%d lock attempts, %d tails, %d rows with the folder runner offline; want none", g.locks.n.Load(), g.total(), len(g.audit.snapshot()))
+	}
+	g.online.Store(true)
+	g.tick()
+	if g.count(tailFolder) != 1 || g.total() != 1 {
+		t.Errorf("online again: %d folder passes of %d tails; want exactly one", g.count(tailFolder), g.total())
+	}
+}
+
+// A folder runner refused for good (folders switched off, the runner gone, the runner no longer the run's
+// creator's) is visited, so the pass records a stall and gives up after computerFolderStalls visits (rc.19's path:
+// computerFolderPass's refusal, folderBackResume). One that is only away is not (the pin above). Catches: a
+// visitable check that treats every refusal as away, which waits out the whole cap.
+func TestTailOwner_PermanentFolderRunnerRefusalIsVisited(t *testing.T) {
+	for name, refuse := range map[string]func(*tailRig, *tailRow){
+		"folders switched off": func(g *tailRig, _ *tailRow) { g.s.cfg.ComputerFolders = false },
+		"the runner is gone": func(_ *tailRig, row *tailRow) {
+			gone := uuid.New()
+			row.folder.RunnerID = &gone
+		},
+		"the runner is another person's": func(g *tailRig, _ *tailRow) { g.lab.runner.Owner = "mallory@example.com" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newTailRig(t)
+			row := g.owedRow(g.clock.now.Add(-time.Hour))
+			refuse(g, row)
+			g.tick()
+			if g.count(tailFolder) != 1 {
+				t.Errorf("%d folder passes for a runner refused for good; want 1", g.count(tailFolder))
+			}
+		})
+	}
+}
+
+// 50 runs whose stop keeps failing, newest ended, and one older run that is healthy: the older run gets its tail on
+// tick 2 (tick 1 takes the 50, the position moves past them), and not before. Catches: a history walk that starts
+// from the newest row every tick, which gives the stuck 50 the whole quota for ever.
+func TestTailOwner_FailingStopsDoNotStarveAnOlderRow(t *testing.T) {
+	g := newTailRig(t)
+	for i := range tailHistoryPerTick {
+		g.stuck[g.historyRow(g.clock.now.Add(-time.Hour-time.Duration(i)*time.Second)).run.ID] = true
+	}
+	healthy := g.historyRow(g.clock.now.Add(-2 * time.Hour))
+	g.tick()
+	if g.count(tailHistory) != tailHistoryPerTick || g.countOf(healthy.run.ID) != 0 {
+		t.Fatalf("tick 1: %d history tails, %d for the healthy run; want %d and 0", g.count(tailHistory), g.countOf(healthy.run.ID), tailHistoryPerTick)
+	}
+	g.tick()
+	if g.countOf(healthy.run.ID) != 1 || g.lab.rows[healthy.run.ID].run.SandboxRef != "" {
+		t.Errorf("tick 2: %d tails for the healthy run, ref %q; want 1 and its ref cleared", g.countOf(healthy.run.ID), g.lab.rows[healthy.run.ID].run.SandboxRef)
+	}
+	g.tick() // the position wrapped to the newest: the stuck 50 are tried again, the healthy run is done
+	if g.countOf(healthy.run.ID) != 1 || g.count(tailHistory) != 2*tailHistoryPerTick+1 {
+		t.Errorf("tick 3: %d tails for the healthy run, %d history tails; want 1 and %d", g.countOf(healthy.run.ID), g.count(tailHistory), 2*tailHistoryPerTick+1)
+	}
+}
+
+// A pass counts as moved data only when it is a new pass record: a stale Back that held files, with the generation
+// moved on and no new record, is not, and the wait keeps doubling. Catches: a predicate that reads Files > 0 on the
+// old Back, which resets the wait to a minute for ever.
+func TestCleanup_StaleBackWithFilesDoesNotResetTheBackoff(t *testing.T) {
+	g := newTailRig(t)
+	row := g.owedRow(g.clock.now.Add(-time.Hour))
+	row.status.Back.Files = 5
+	g.during = func(types.AgentRun, tailStep) {
+		g.lab.mu.Lock()
+		defer g.lab.mu.Unlock()
+		row.status.Gen++ // the generation moved, the record (its At) did not
+	}
+	now := g.clock.now
+	attempts := 0
+	for _, wait := range []time.Duration{tailBackoffMin, 2 * tailBackoffMin, 4 * tailBackoffMin} {
+		g.clock.now = now
+		g.tick()
+		attempts++
+		if got := g.count(tailFolder); got != attempts {
+			t.Fatalf("at the end of a %v wait: %d passes, want %d", wait, got, attempts)
+		}
+		g.clock.now = now.Add(wait - time.Second)
+		g.tick()
+		if got := g.count(tailFolder); got != attempts {
+			t.Fatalf("a second before a %v wait ends: %d passes, want %d: a stale Back reset the wait", wait, got, attempts)
+		}
+		now = now.Add(wait)
+	}
+}
+
+// An expired owed run whose first give-up is accepted by the audit log but whose mark fails writes one given_up
+// row across later ticks: only the mark is retried. Catches: the accepted set filled only by the later retry, which
+// writes the row again at the second tick.
+func TestTailOwner_FirstGiveUpWithAFailedMarkWritesOneRow(t *testing.T) {
+	g := newTailRig(t)
+	g.lab.giveUpOK = true
+	g.lab.markFails = func(uuid.UUID) bool { return true }
+	row := g.owedRow(g.clock.now.Add(-g.s.pendingCap() - time.Hour))
+	for range 3 {
+		g.tick()
+	}
+	if n := transferAudit(g.audit); n != 1 || g.lab.markTotal() < 3 {
+		t.Fatalf("three ticks: %d given_up rows, %d mark calls; want 1 row and the mark retried", n, g.lab.markTotal())
+	}
+	g.lab.markFails = nil
+	g.tick()
+	if n := transferAudit(g.audit); n != 1 || !g.lab.audited(row.run.ID) {
+		t.Errorf("mark healthy: %d rows, audited %v; want 1 and true", n, g.lab.audited(row.run.ID))
+	}
+}
+
+// crashedBeforeItsTail is the forced fixture's run at the crash boundary of an ordinary end: the folder was seeded
+// for real (holdForLocalFolder), and the run is committed terminal by the lease's own transition (StopKeptRunIf, the
+// first half of stopKeptRun, run_lease.go:461), with the tail never called (:473) and the run's lock free.
+func (f *forced) crashedBeforeItsTail(t *testing.T, to types.RunState) types.AgentRun {
+	t.Helper()
+	f.release()
+	if applied, err := f.leaser.StopKeptRunIf(context.Background(), f.run.ID, to, f.run.LostAt, f.run.LostReason, f.run.EndsAt); err != nil || !applied {
+		t.Fatalf("terminal transition = %v, %v; want applied", applied, err)
+	}
+	run, rec := f.terminalRun(t), f.cs.folderStatus()
+	if run.State != to || run.SandboxRef == "" || rec.Seed == nil || rec.Back != nil || rec.Resume != nil {
+		t.Fatalf("after the crash: state %s, ref %q, record %+v; want a terminal run with its ref and a seeded record with no Back and no Resume", run.State, run.SandboxRef, rec)
+	}
+	return run
+}
+
+// sweepPaths are the three destructive sweeps, each run on its own against run: the boot orphan pass
+// (reconcileOrphanedRun), the label orphan sweep (reconcile.go isOrphan) and the terminal-sandbox sweep
+// (stopTerminalSandbox). A sweep reports whether it tore the sandbox down.
+var sweepPaths = map[string]func(*testing.T, *forced, types.AgentRun) bool{
+	"the boot orphan pass": func(t *testing.T, f *forced, _ types.AgentRun) bool {
+		before := f.sb.stopCount()
+		if err := f.s.reconcileOrphanedSandbox(context.Background()); err != nil {
+			t.Error(err)
+		}
+		return f.sb.stopCount() > before
+	},
+	"the label orphan sweep": func(t *testing.T, f *forced, _ types.AgentRun) bool {
+		if err := f.s.sweepOrphanedSandboxes(context.Background()); err != nil {
+			t.Error(err)
+		}
+		return f.s.cfg.Runner.(*proxyCounted).orphan
+	},
+	"the terminal-sandbox sweep": func(_ *testing.T, f *forced, run types.AgentRun) bool {
+		before := f.sb.stopCount()
+		f.s.sweepTerminalSandboxRun(context.Background(), run)
+		return f.sb.stopCount() > before
+	},
+}
+
+func newCrashed(t *testing.T) *forced {
+	t.Helper()
+	f := newForced(t)
+	tailOwnedForced(f)
+	f.s.cfg.Runner = &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+	return f
+}
+
+// A seeded run committed terminal whose process died before its tail has no Back and no Resume. Each sweep that wins
+// the free lock before the tail owner keeps its sandbox: no stop, no ref clear, and the terminal-sandbox sweep
+// still cuts the proxy. The tail owner then brings the folder back: a pass the runner saw under the run's lock, a
+// Back with files and no error, the agent's edit on the computer, then one stop. Catches: a sweep keep decided
+// on Resume alone, which stops the sandbox before any copy back and loses the agent's changes.
+func TestSweeps_KeepASeededRunThatCrashedBeforeItsTail(t *testing.T) {
+	for name, sweep := range sweepPaths {
+		t.Run(name, func(t *testing.T) {
+			f := newCrashed(t)
+			run := f.crashedBeforeItsTail(t, types.RunStopped)
+			if sweep(t, f, run) {
+				t.Fatalf("%s tore the sandbox down", name)
+			}
+			cur := f.terminalRun(t)
+			if f.sb.stopCount() != 0 || cur.SandboxRef == "" {
+				t.Fatalf("after %s: %d stops, ref %q; want no stop and the ref kept", name, f.sb.stopCount(), cur.SandboxRef)
+			}
+			if rn := f.s.cfg.Runner.(*proxyCounted); name == "the terminal-sandbox sweep" && rn.proxyStops.Load() == 0 {
+				t.Error("the terminal-sandbox sweep kept the sandbox without cutting its proxy")
+			}
+			f.tailPassAfterCrash(t)
+		})
+	}
+	t.Run("all three before the tail owner", func(t *testing.T) {
+		f := newCrashed(t)
+		run := f.crashedBeforeItsTail(t, types.RunStopped)
+		for name, sweep := range sweepPaths {
+			if sweep(t, f, run) {
+				t.Fatalf("%s tore the sandbox down", name)
+			}
+		}
+		if cur := f.terminalRun(t); f.sb.stopCount() != 0 || cur.SandboxRef == "" {
+			t.Fatalf("after all three: %d stops, ref %q; want no stop and the ref kept", f.sb.stopCount(), cur.SandboxRef)
+		}
+		f.tailPassAfterCrash(t)
+	})
+}
+
+// tailPassAfterCrash is the tail owner's tick over the crashed run: it brings the folder back under the run's lock
+// and then stops the sandbox.
+func (f *forced) tailPassAfterCrash(t *testing.T) {
+	t.Helper()
+	var passes, lockFree atomic.Int32
+	f.sb.onPass = func() {
+		passes.Add(1)
+		if _, unlock, free := f.s.tryLockRunOp(context.Background(), f.run.ID); free {
+			unlock()
+			lockFree.Add(1)
+		}
+	}
+	f.s.folderCleanupTick(context.Background())
+	rec := f.cs.folderStatus()
+	if f.sb.stopCount() != 1 || rec.Resume != nil || rec.Back == nil || rec.Back.Error != "" || rec.Back.Files == 0 {
+		t.Fatalf("tail owner: %d stops, record %+v; want one pass back with files and no error, then one stop", f.sb.stopCount(), rec)
+	}
+	if passes.Load() == 0 || lockFree.Load() != 0 {
+		t.Errorf("the runner saw %d passes, %d with the run's lock free; want a pass under the tail owner's lock", passes.Load(), lockFree.Load())
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.cs.folder.Path, "README.md")); string(got) != "edited by the agent" {
+		t.Errorf("README.md on the computer = %q; want the agent's edit brought back", got)
+	}
+	if run := f.terminalRun(t); run.SandboxRef != "" {
+		t.Errorf("ref %q after the stop; want it cleared", run.SandboxRef)
+	}
+}
+
+// The same crashed shape that owes nothing is still stopped by every sweep: a run with no pass back to make (its
+// folder is one way), a killed run (never copied back) and a record given up. Catches: a keep broadened to every
+// seeded row with no Back.
+func TestSweeps_StillStopWhatOwesNoPassBack(t *testing.T) {
+	givenUp := time.Now()
+	for name, tc := range map[string]struct {
+		to    types.RunState
+		setup func(*forced)
+	}{
+		"a folder that is not copied back": {types.RunStopped, (*forced).withoutOwedPass},
+		"a killed run":                     {types.RunKilled, func(*forced) {}},
+		"a record given up": {types.RunStopped, func(f *forced) {
+			f.setRecord(types.RunLocalFolderStatus{Gen: 4, Settled: 4, Seed: &types.FolderPassRecord{},
+				Back: &types.FolderPassRecord{GivenUpAt: &givenUp, Error: "given up"}})
+		}},
+	} {
+		for path, sweep := range sweepPaths {
+			if tc.to == types.RunKilled && path == "the terminal-sandbox sweep" {
+				continue // a killed run is first recovered by its own kill-tail check (recoverAbandonedKillTail)
+			}
+			t.Run(name+"/"+path, func(t *testing.T) {
+				f := newCrashed(t)
+				run := f.crashedBeforeItsTail(t, tc.to)
+				tc.setup(f)
+				if !sweep(t, f, run) {
+					t.Errorf("%s left the sandbox of %s", path, name)
+				}
+			})
+		}
+	}
+}
+
+// reloseEnded reads a kept sandbox as proof that its stop was observed: a crashed seeded run with no Back and no
+// Resume is not one, so it stays "ended, stop not confirmed"; one holding a resume is. Catches: reloseEnded moved to
+// the sweeps' keep, which would claim a stop nobody saw.
+func TestReloseEnded_ProofIsUnchangedForANoBackNoResumeRow(t *testing.T) {
+	f := newCrashed(t)
+	f.crashedBeforeItsTail(t, types.RunStopped)
+	if fate, err := f.s.reloseEnded(context.Background(), f.run.ID); fate != relostEnded || err == nil {
+		t.Fatalf("no Back, no Resume: fate %v, err %v; want ended with the stop not confirmed", fate, err)
+	}
+	f.setRecord(owedRecord)
+	if fate, err := f.s.reloseEnded(context.Background(), f.run.ID); fate != relostEnded || err != nil {
+		t.Errorf("a resume: fate %v, err %v; want ended with the stop confirmed", fate, err)
+	}
+}
+
+// keepsSandboxForFolder's value list: what keeps a terminal run's sandbox from a sweep, what stops it, and what
+// is no answer (an error, which every caller keeps on).
+func TestKeepsSandboxForFolder_ValueList(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		change   func(*tailRig, *tailRow)
+		wantKeep bool
+		wantErr  bool
+	}{
+		{"a pass back owed, nothing recorded yet", func(*tailRig, *tailRow) {}, true, false},
+		{"a resume", func(_ *tailRig, r *tailRow) { r.status.Resume = &types.FolderResume{Unsynced: 1} }, true, false},
+		{"owed past the cap (the tail owner gives up)", func(g *tailRig, r *tailRow) {
+			end := g.clock.now.Add(-g.s.pendingCap() - time.Hour)
+			r.run.EndedAt = &end
+		}, true, false},
+		{"a killed run", func(_ *tailRig, r *tailRow) { r.run.State = types.RunKilled }, false, false},
+		{"a run still running", func(_ *tailRig, r *tailRow) { r.run.State = types.RunRunning }, false, false},
+		{"no sandbox ref", func(_ *tailRig, r *tailRow) { r.run.SandboxRef = "" }, false, false},
+		{"a record given up", func(g *tailRig, r *tailRow) {
+			at := g.clock.now
+			r.status.Back = &types.FolderPassRecord{GivenUpAt: &at}
+		}, false, false},
+		{"a pass back already made", func(_ *tailRig, r *tailRow) { r.status.Back = &types.FolderPassRecord{} }, false, false},
+		{"a folder not copied back", func(_ *tailRig, r *tailRow) { r.folder.Direction = types.ComputerFolderIn }, false, false},
+		{"a folder never seeded", func(_ *tailRig, r *tailRow) { r.seeded = false }, false, false},
+		{"no folder", func(_ *tailRig, r *tailRow) { r.folder = nil }, false, false},
+		{"no record row", func(g *tailRig, r *tailRow) { delete(g.lab.rows, r.run.ID) }, false, false},
+		{"a record that cannot be read", func(g *tailRig, _ *tailRow) { g.lab.statusErr = errors.New("status down") }, false, true},
+		{"a seed that cannot be read", func(g *tailRig, _ *tailRow) { g.lab.seedErr = errors.New("seed down") }, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newTailRig(t)
+			row := g.owedRow(g.clock.now.Add(-time.Hour))
+			row.status = types.RunLocalFolderStatus{Gen: 2, Settled: 2, Seed: &types.FolderPassRecord{At: row.run.UpdatedAt}}
+			tc.change(g, row)
+			kept, err := g.s.keepsSandboxForFolder(context.Background(), row.run)
+			if kept != tc.wantKeep || (err != nil) != tc.wantErr {
+				t.Errorf("keep = %v, err = %v; want keep %v, error %v", kept, err, tc.wantKeep, tc.wantErr)
+			}
+			if tc.wantErr && !g.s.sweepKeepsSandbox(context.Background(), row.run) {
+				t.Error("a sweep stops a sandbox whose record it could not read")
 			}
 		})
 	}

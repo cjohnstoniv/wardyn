@@ -123,7 +123,13 @@ func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.
 		return errors.New("the audit log did not take the row")
 	}
 	if _, err := ss.MarkGivenUpAudited(ctx, run.ID, st.Gen); err != nil {
-		return fmt.Errorf("mark the record audited: %w", err)
+		// The row is accepted: only its mark is tried again (the tail owner), so the row is never written twice.
+		s.tail.accepted.Store(givenUpKey{id: run.ID, gen: st.Gen}, struct{}{})
+		return fmt.Errorf("%w: %w", errGivenUpMarkFailed, err)
 	}
+	s.tail.accepted.Delete(givenUpKey{id: run.ID, gen: st.Gen})
 	return nil
 }
+
+// errGivenUpMarkFailed is auditGivenUp's answer for a row the audit log accepted whose mark failed.
+var errGivenUpMarkFailed = errors.New("mark the record audited")

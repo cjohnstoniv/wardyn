@@ -181,10 +181,10 @@ func (s *Server) stopNotKept(ctx context.Context, id uuid.UUID, folder types.Run
 }
 
 // keepForResume keeps run id's sandbox for a later pass, at gen, with no stall counted and nothing claimed
-// done. The sweeps keep only a sandbox whose record holds a resume (computerFolderKept), so one is written
-// where rec, the record as read, has none. The send time becomes genAt, the last pass's, or, with none,
-// now where rec has none. A resume that cannot be written stops the sandbox with its changes not brought
-// back; a send time that cannot is left as it is.
+// done. The sweeps keep a sandbox whose record holds a resume or owes a pass back not yet run
+// (keepsSandboxForFolder), so a resume is written where rec, the record as read, has none. The send time
+// becomes genAt, the last pass's, or, with none, now where rec has none. A resume that cannot be written
+// stops the sandbox with its changes not brought back; a send time that cannot is left as it is.
 func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus, genAt time.Time) bool {
 	want := genAt
 	if want.IsZero() {

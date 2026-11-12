@@ -200,7 +200,8 @@ func (s *Server) forcedRecordInFlight(ctx context.Context, id uuid.UUID) bool {
 
 // forcedStopConfirmed reports whether the forced end's sandbox is confirmed stopped, which the tail records
 // by clearing the run's ref only after its own StopSandbox succeeded, and clears the mark when the revoke also
-// succeeds (clearForcedMarkIf). A failed revoke leaves the mark for the retry, whatever the sandbox did.
+// succeeds or is owed to the revoke worker (clearForcedMarkIf). A failed revoke the worker does not own leaves
+// the mark for the retry, whatever the sandbox did.
 func (s *Server) forcedStopConfirmed(ctx context.Context, fs store.ForcedStopper, id uuid.UUID, stamp time.Time) bool {
 	cur, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil || cur.SandboxRef != "" {
@@ -212,9 +213,10 @@ func (s *Server) forcedStopConfirmed(ctx context.Context, fs store.ForcedStopper
 
 // clearForcedMarkIf is the one place the forced mark clears, for the initial force and every path of the retry. It
 // clears only when both hold: contained (the sandbox stop succeeded, a kept sandbox's proxy stop returned nil, the
-// run's ref was already empty, or its runner is gone), and the run's revoke cascade succeeded. The cascade runs
-// whatever contained says, and is idempotent, so a retry after a success is harmless; a failed one is written
-// once per process per run (revokeRowDue) and keeps the mark until a later tick succeeds. onCleared runs only
+// run's ref was already empty, or its runner is gone), and the run's revoke cascade succeeded or is owed to the
+// revoke worker (revoke_owed_at), which retries it. The cascade runs whatever contained says, and is idempotent,
+// so a retry after a success is harmless; a failed one is written once per process per run (revokeRowDue) and
+// keeps the mark until a later tick succeeds, unless the worker owns the retry. onCleared runs only
 // when this call was the one that cleared the mark, so the row it writes is written once across replicas.
 func (s *Server) clearForcedMarkIf(ctx context.Context, fs store.ForcedStopper, id uuid.UUID, stamp time.Time, contained bool, onCleared func(context.Context)) bool {
 	cleared := false
@@ -299,15 +301,15 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 // Docker agent that was only ended is exited and still present, and still holds the run's files and its network.
 // The stop itself is the check for a sandbox that is gone, because Docker and Kubernetes answer a stop of a
 // missing sandbox with success. The mark clears (clearForcedMarkIf) only once the run's revoke has also
-// succeeded, and then in exactly these cases:
+// succeeded or is owed to the revoke worker, and then in exactly these cases:
 //   - the sandbox stop is confirmed (a success row, once);
 //   - the sandbox is kept with its proxy stopped for its computer folder's resume (the locked path, the lock
 //     free; a held lock with a record that may be in flight keeps the mark until the lock is free);
 //   - the run's ref is already empty;
 //   - the run's runner is gone (runnerGoneReason): nothing can confirm the stop, and the failure row says so.
 //
-// Every other failure, a failed revoke included, keeps the mark, and its first row is the only one this process
-// writes. A proxy stop that failed on a kept sandbox leaves a cause (withStopCause) and so keeps it too.
+// Every other failure, a failed revoke the worker does not own included, keeps the mark, and its first row is
+// the only one this process writes. A proxy stop that failed on a kept sandbox leaves a cause (withStopCause) and so keeps it too.
 // A record the forced end left unsettled is settled before anything is stopped: owed (a resume) when the cut
 // is observed and the sandbox keepable, otherwise as not brought back. A run on a runner that is not here, and
 // can come back, has nothing settled, stopped or queued, and the mark waits for it.

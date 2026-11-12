@@ -421,8 +421,8 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		return nil
 	}
 	if isTerminalRunState(run.State) {
-		// computerFolderKept, with the record's read error apart for its audit row.
-		if kept, ferr := s.computerFolderKeptRead(ctx, run.ID); kept || ferr != nil {
+		// keepsSandboxForFolder, with the record's read error apart for its audit row.
+		if kept, ferr := s.keepsSandboxForFolder(ctx, run); kept || ferr != nil {
 			// Kept for its computer folder's copy back to resume (bringComputerFolderBack): stopping the
 			// sandbox would lose the changes not yet copied back, so its proxy alone is stopped, and the
 			// sandbox and its ref stay for the resume. A substrate that cannot stop a proxy alone keeps
@@ -471,7 +471,7 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 }
 
 // stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
-// (computerFolderKeptRead); left reports a sandbox left in place. A sandbox kept for its pass back stays
+// (keepsSandboxForFolder); left reports a sandbox left in place. A sandbox kept for its pass back stays
 // when the agent's cut is confirmed (copyBackCut: hosted, a fenced runner, a connected runner whose proxy
 // stop answered nil), and a stop that failed is action's failure row with teardown_error. A record that
 // cannot be read is logged, and the sandbox stays only once that cut is confirmed, as a failure row with
@@ -484,7 +484,7 @@ func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, ac
 	if run.SandboxRef == "" {
 		return false, nil
 	}
-	kept, ferr := s.computerFolderKeptRead(ctx, run.ID)
+	kept, ferr := s.keepsSandboxForFolder(ctx, run)
 	if ferr != nil {
 		slog.WarnContext(ctx, "wardynd: a terminal run's computer folder record could not be read",
 			slog.String("run_id", run.ID.String()), slog.String("action", action), slog.Any("err", ferr))

@@ -4,9 +4,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +62,10 @@ type tailOwnerState struct {
 	accepted sync.Map
 	// backoff holds, per run, when its folder pass may be tried again (tailBackoff).
 	backoff sync.Map
+	// historyAfter is where the next tick's history tails start in the listing's order (newest end first): the
+	// last row a tick took, nil after a tick that reached the end of the candidates, so the next one starts
+	// again from the newest. A row whose tail failed is passed over like any other.
+	historyAfter *store.TerminalSandboxCursor
 	// finalizeFn replaces finalizeRunEffects, for a test that counts the tails given.
 	finalizeFn func(ctx context.Context, run types.AgentRun, step tailStep)
 }
@@ -115,7 +120,7 @@ func (s *Server) folderCleanupTick(ctx context.Context) {
 		return
 	}
 	now := s.cfg.Now()
-	history := 0
+	var history []store.TerminalSandboxRow
 	seen := map[uuid.UUID]struct{}{}
 	var cur *store.TerminalSandboxCursor
 	for {
@@ -129,13 +134,16 @@ func (s *Server) folderCleanupTick(ctx context.Context) {
 				return
 			}
 			seen[row.ID] = struct{}{}
-			s.tailVisit(ctx, row, now, &history)
+			if s.tailVisit(ctx, row, now) {
+				history = append(history, row)
+			}
 		}
 		if next == nil {
 			break
 		}
 		cur = next
 	}
+	s.tailHistoryTails(ctx, history)
 	s.tail.backoff.Range(func(k, _ any) bool {
 		if _, listed := seen[k.(uuid.UUID)]; !listed {
 			s.tail.backoff.Delete(k)
@@ -144,43 +152,88 @@ func (s *Server) folderCleanupTick(ctx context.Context) {
 	})
 }
 
-// tailVisit decides one listed row. A forced-marked row is sweepForcedStops'. A runner run whose runner is not
-// connected here (a live session, never last-known caps) is not touched: no read, no lock, no tail, no row.
-// A record or rule that cannot be read skips the row for the tick: an unreadable answer is never "not owed",
-// which would stop a sandbox that owes its changes.
-func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, now time.Time, history *int) {
+// tailHistoryTails gives the full tail to at most tailHistoryPerTick of the rows that owe nothing (listing
+// order, newest end first), from the row after the last one the previous tick took. The position moves past
+// every row taken, whether its tail worked or not, so rows whose stop keeps failing cannot hold the quota and
+// starve older ones; a tick that reaches the end of the rows starts again from the newest (the cursor shape of
+// ListGivenUpUnaudited). Rows are taken in order, so M rows are all reached within ceil(M/tailHistoryPerTick) ticks.
+func (s *Server) tailHistoryTails(ctx context.Context, rows []store.TerminalSandboxRow) {
+	start := 0
+	if cur := s.tail.historyAfter; cur != nil {
+		start = len(rows)
+		for i, row := range rows {
+			if tailRowAfter(row, cur) {
+				start = i
+				break
+			}
+		}
+	}
+	taken := 0
+	var last *store.TerminalSandboxCursor
+	for _, row := range rows[start:] {
+		if taken >= tailHistoryPerTick || ctx.Err() != nil {
+			s.tail.historyAfter = last
+			return
+		}
+		last = &store.TerminalSandboxCursor{At: tailRowEnd(row), ID: row.ID}
+		if s.tailRun(ctx, row.ID, tailHistory) {
+			taken++
+		}
+	}
+	s.tail.historyAfter = nil
+}
+
+// tailRowEnd is when row's run ended: ended_at, else its last update (the listing's key).
+func tailRowEnd(row store.TerminalSandboxRow) time.Time {
+	if row.EndedAt != nil {
+		return *row.EndedAt
+	}
+	return row.UpdatedAt
+}
+
+// tailRowAfter reports whether row comes after cur in the listing's order: ended earlier, or at the same time
+// with a smaller id.
+func tailRowAfter(row store.TerminalSandboxRow, cur *store.TerminalSandboxCursor) bool {
+	at := tailRowEnd(row)
+	return at.Before(cur.At) || (at.Equal(cur.At) && bytes.Compare(row.ID[:], cur.ID[:]) < 0)
+}
+
+// tailVisit decides one listed row, and runs its give-up or folder step at once. It reports a row that owes
+// nothing and is past its containment due, for the history tails (tailHistoryTails). A forced-marked row is
+// sweepForcedStops'. A runner run whose runner is not connected here (a live session, never last-known caps) is
+// not touched: no read, no lock, no tail, no row. A record or rule that cannot be read skips the row for the
+// tick: an unreadable answer is never "not owed", which would stop a sandbox that owes its changes.
+func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, now time.Time) (history bool) {
 	if row.ForcedStopAt != nil {
-		return
+		return false
 	}
 	if row.RunnerID != nil {
 		if _, connected := s.runnerConnected(*row.RunnerID); !connected {
-			return
+			return false
 		}
 	}
 	run := containRunOf(row)
 	st, err := s.tailFolderStatus(ctx, run.ID)
 	if err != nil {
 		tailSkipped(ctx, run.ID, err)
-		return
+		return false
 	}
 	step, err := s.tailStepFor(ctx, run, st, now)
 	if err != nil {
 		tailSkipped(ctx, run.ID, err)
-		return
+		return false
 	}
 	switch step {
-	case tailNone:
-		return
 	case tailHistory:
-		if *history >= tailHistoryPerTick {
-			return
-		}
+		return true
+	case tailGiveUp:
+		s.tailRun(ctx, run.ID, step)
 	case tailFolder:
-		if s.tailBackedOff(run.ID, now) || !s.tailFolderReady(ctx, run) {
-			return
+		if !s.tailBackedOff(run.ID, now) && s.tailFolderVisitable(ctx, run) {
+			s.tailRun(ctx, run.ID, step)
 		}
 	}
-	s.tailRun(ctx, run.ID, step, history)
+	return false
 }
 
 // tailSkipped logs a row left for the next tick because a read of it failed.
@@ -222,9 +275,13 @@ func (s *Server) tailStepFor(ctx context.Context, run types.AgentRun, st types.R
 	return tailNone, nil
 }
 
-// tailFolderReady reports whether run's folder runner is connected here, online and sharing folders: the checks
-// computerFolderPass makes (folderRunner), with no HTTP answer. Otherwise the run takes no lock and no tail.
-func (s *Server) tailFolderReady(ctx context.Context, run types.AgentRun) bool {
+// tailFolderVisitable reports whether run's owed folder pass is visited now. Its runner is connected here,
+// online and sharing folders (the checks computerFolderPass makes, via folderRunner, with no HTTP answer); or
+// the runner is refused for good (folders switched off, the runner gone or no longer the creator's), which the
+// visit records as a stalled pass, so the owed copy back gives up after computerFolderStalls visits
+// (folderBackResume) instead of waiting out the whole cap. A runner that is only away (not connected, offline,
+// not yet sharing folders) is not visited: no lock and no tail, and the cap stands.
+func (s *Server) tailFolderVisitable(ctx context.Context, run types.AgentRun) bool {
 	fst, ok := s.cfg.Store.(store.RunLocalFolders)
 	if !ok {
 		return false
@@ -243,38 +300,54 @@ func (s *Server) tailFolderReady(ctx context.Context, run types.AgentRun) bool {
 		return false
 	}
 	_, refusal := s.folderRunner(ctx, full.CreatedBy, *folder.RunnerID)
-	return refusal == nil
+	if refusal == nil {
+		return true
+	}
+	switch refusal.body.Reason {
+	case reasonComputerFoldersOff:
+		return true
+	case reasonRunnerNotFound:
+		// folderRunner answers this for a failed lookup as well as a missing, revoked or foreign runner: only
+		// the lookup's own failure is transient.
+		rs, ok := s.cfg.Store.(runnerGetter)
+		if !ok {
+			return false
+		}
+		_, err := rs.GetRunner(ctx, *folder.RunnerID)
+		return err == nil || errors.Is(err, store.ErrNotFound)
+	}
+	return false
 }
 
 // tailRun takes run id's lock, reads the run and its record again, and runs step's tail if the same step is
 // still due. A lock held elsewhere leaves the run for the next tick.
-func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep, history *int) {
+func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran bool) {
 	lctx, unlock, ok := s.tryLockRunOp(ctx, id)
 	if !ok {
-		return
+		return false
 	}
 	defer unlock()
 	run, err := s.cfg.Store.GetRun(lctx, id)
 	if err != nil {
 		tailSkipped(lctx, id, err)
-		return
+		return false
 	}
 	if !isTerminalRunState(run.State) || run.SandboxRef == "" {
-		return
+		return false
 	}
 	st, err := s.tailFolderStatus(lctx, id)
 	if err != nil {
 		tailSkipped(lctx, id, err)
-		return
+		return false
 	}
 	now := s.cfg.Now()
 	again, err := s.tailStepFor(lctx, run, st, now)
 	if err != nil {
 		tailSkipped(lctx, id, err)
-		return
+		return false
 	}
 	if again != step {
-		return
+		return false
 	}
 	switch step {
 	case tailGiveUp:
@@ -286,16 +359,16 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep, histo
 				slog.String("run_id", id.String()), slog.Any("err", err))
 		}
 		if !final {
-			return
+			return false
 		}
 		s.tailFinalize(lctx, run, step)
 	case tailHistory:
-		*history++
 		s.tailFinalize(lctx, run, step)
 	case tailFolder:
 		s.tailFinalize(lctx, run, step)
 		s.tailNotePass(lctx, id, st, now)
 	}
+	return true
 }
 
 // tailFinalize runs the run's tail on a bound of reconcileFinalizeTimeout, as the sweeps give a whole tail.
@@ -313,7 +386,10 @@ func (s *Server) tailFinalize(ctx context.Context, run types.AgentRun, step tail
 // moved on and counted files) clears it; anything else, including no attempt, doubles it.
 func (s *Server) tailNotePass(ctx context.Context, id uuid.UUID, before types.RunLocalFolderStatus, now time.Time) {
 	cur, err := s.tailFolderStatus(ctx, id)
-	moved := err == nil && cur.Gen != before.Gen && cur.Back != nil && cur.Back.Files > 0
+	// A new pass record: the generation moved on and the record is not the one before, which a visit that sent
+	// nothing leaves as it was.
+	moved := err == nil && cur.Gen != before.Gen && cur.Back != nil && cur.Back.Files > 0 &&
+		(before.Back == nil || !cur.Back.At.Equal(before.Back.At))
 	s.tailBackoffNote(id, now, moved)
 }
 
@@ -388,17 +464,9 @@ func (s *Server) auditGivenUpAgain(ctx context.Context, ss store.RunLocalFolderS
 		return
 	}
 	if err := s.auditGivenUp(ctx, run, st); err != nil {
-		if givenUpMarkFailed(err) {
-			s.tail.accepted.Store(key, struct{}{})
-		}
 		slog.WarnContext(ctx, "wardynd: recording a given-up folder copy back failed; the next pass tries again",
 			slog.String("run_id", id.String()), slog.Any("err", err))
 	}
-}
-
-// givenUpMarkFailed reports whether auditGivenUp failed at the mark, after the audit log had accepted the row.
-func givenUpMarkFailed(err error) bool {
-	return strings.HasPrefix(err.Error(), "mark the record audited")
 }
 
 // revokeOwedSet reports whether run id's revoke is owed to the revoke worker (revoke_owed_at). A store with no

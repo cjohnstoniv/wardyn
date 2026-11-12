@@ -405,12 +405,12 @@ func TestPassBack_ARunnerThatTurnsOlderBeforeTheSendKeepsTheSandboxForTheSweeps(
 		t.Fatal(err)
 	}
 	f.s.reconcileOrphanedRun(context.Background(), run)
-	f.s.tailRun(context.Background(), run.ID, tailFolder, new(int))
+	f.s.tailRun(context.Background(), run.ID, tailFolder)
 	if seen.Load() || f.sb.stopCount() != 0 || turns.cleared.Load() != 0 {
 		t.Fatalf("pass %v, stops %d, refs cleared %d; want the owed sandbox left as it is", seen.Load(), f.sb.stopCount(), turns.cleared.Load())
 	}
 	f.runnerAs(t, &onePerRunnerCaps)
-	f.s.tailRun(context.Background(), run.ID, tailFolder, new(int))
+	f.s.tailRun(context.Background(), run.ID, tailFolder)
 	if st := f.cs.folderStatus(); !seen.Load() || f.sb.stopCount() != 1 || st.Back == nil || st.Back.Error != "" {
 		t.Errorf("pass %v, stops %d, record %+v; want the completed pass, then the stop", seen.Load(), f.sb.stopCount(), st)
 	}
