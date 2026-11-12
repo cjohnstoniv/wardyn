@@ -88,6 +88,38 @@ type RunLocalFolderStatuses interface {
 	// (GenAt), changing nothing else, and answers the record as it then stands. False when the stored
 	// record does not meet guard, or the run has no local folder.
 	BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error)
+	// GiveUpRunLocalFolder gives up run id's owed copy back in one statement, once the run's keep or its
+	// containment is due (GiveUpParams): it drops the Resume, sets Back to p.Back and moves Gen on, so
+	// every later write from an owner of the older generation fails. Applied is false, with nothing
+	// written, when the run is not due, is not terminal, holds no sandbox, has no folder, or its
+	// record is already final; the caller reads the record to tell which.
+	GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p GiveUpParams) (GiveUpOutcome, error)
+	// MarkGivenUpAudited records that a record's given_up audit row was accepted, at generation gen
+	// only. False when the record is at another generation or not given up.
+	MarkGivenUpAudited(ctx context.Context, id uuid.UUID, gen int) (bool, error)
+	// ListGivenUpUnaudited pages, by id, the terminal runs whose given-up record has no accepted audit
+	// row, limit at a time after the cursor. The cursor returned is the last id of a full page, and nil
+	// after a short one, when the caller starts again from the lowest id.
+	ListGivenUpUnaudited(ctx context.Context, after *uuid.UUID, limit int) ([]uuid.UUID, *uuid.UUID, error)
+}
+
+// GiveUpParams is one give-up. Back is the final record to write. Every due runs from the run's end,
+// COALESCE(ended_at, updated_at): the owed pass's keep ends Cap after it; when D1, a run also
+// gives up Lag after it (ContainmentDueSQL with Lag = ContainmentLag), and when its containment failed
+// durably Tau ago or Unsupported (no cut is possible for it).
+type GiveUpParams struct {
+	Back        types.FolderPassRecord
+	Cap         time.Duration
+	D1          bool
+	Lag         time.Duration
+	Unsupported bool
+	Tau         time.Duration
+}
+
+// GiveUpOutcome is whether the statement applied, and the generation it moved the record to.
+type GiveUpOutcome struct {
+	Applied bool
+	Gen     int
 }
 
 // FolderStatusGuard is what a write of a run's folder record requires of the stored one: the
@@ -158,4 +190,93 @@ func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard Folde
 	}
 	st, err := unmarshalFolderStatus(raw)
 	return st, err == nil, err
+}
+
+// terminalStateNames is the states RunState.IsTerminal names, as the text[] a `state = ANY($n)` argument takes.
+func terminalStateNames() []string {
+	return stateNames([]types.RunState{types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived})
+}
+
+// GiveUpRunLocalFolder implements RunLocalFolderStatuses. A run's lifetime cap and max age bound a live
+// run and so are not terms here: nothing that already ended is ended again by them.
+func (s PG) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p GiveUpParams) (GiveUpOutcome, error) {
+	back, err := json.Marshal(p.Back)
+	if err != nil {
+		return GiveUpOutcome{}, fmt.Errorf("store: marshal given-up folder record: %w", err)
+	}
+	const q = `
+		UPDATE agent_runs
+		SET local_folder_status = (COALESCE(local_folder_status, '{}'::jsonb) - 'resume')
+		    || jsonb_build_object('gen', COALESCE((local_folder_status->>'gen')::int, 0) + 1, 'back', $2::jsonb)
+		WHERE id = $1
+		  AND local_folder IS NOT NULL
+		  AND sandbox_ref <> ''
+		  AND state = ANY($3)
+		  AND NOT (COALESCE(local_folder_status, '{}'::jsonb) ? 'back'
+		           AND NOT (COALESCE(local_folder_status, '{}'::jsonb) ? 'resume'))
+		  AND ( COALESCE(ended_at, updated_at) + make_interval(secs => $4) <= now()
+		     OR ( $5::boolean
+		          AND COALESCE(ended_at, updated_at) + make_interval(secs => $6) <= now()
+		          AND ( $7::boolean
+		             OR (containment_error_at IS NOT NULL
+		                 AND containment_error_at <= now() - make_interval(secs => $8)) ) ) )
+		RETURNING (local_folder_status->>'gen')::int`
+	var gen int
+	err = s.Pool.QueryRow(ctx, q, id, back, terminalStateNames(), p.Cap.Seconds(), p.D1, p.Lag.Seconds(), p.Unsupported, p.Tau.Seconds()).Scan(&gen)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GiveUpOutcome{}, nil
+	}
+	if err != nil {
+		return GiveUpOutcome{}, fmt.Errorf("store: give up run local folder: %w", err)
+	}
+	return GiveUpOutcome{Applied: true, Gen: gen}, nil
+}
+
+// MarkGivenUpAudited implements RunLocalFolderStatuses. It is a guarded write like SetRunLocalFolderStatusIf,
+// and changes nothing but the one field.
+func (s PG) MarkGivenUpAudited(ctx context.Context, id uuid.UUID, gen int) (bool, error) {
+	pred, args := FolderStatusGuard{Gen: gen}.sql(2)
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs
+		SET local_folder_status = jsonb_set(local_folder_status, '{back,given_up_audited}', 'true'::jsonb)
+		WHERE id = $1 AND local_folder IS NOT NULL
+		  AND (local_folder_status->'back'->>'given_up_at') IS NOT NULL AND `+pred, append([]any{id}, args...)...)
+	if err != nil {
+		return false, fmt.Errorf("store: mark given-up folder record audited: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ListGivenUpUnaudited implements RunLocalFolderStatuses. Its predicate on the record is
+// agent_runs_given_up_unaudited_idx's, spelled the same so the index serves it, in id order.
+func (s PG) ListGivenUpUnaudited(ctx context.Context, after *uuid.UUID, limit int) ([]uuid.UUID, *uuid.UUID, error) {
+	q := `SELECT id FROM agent_runs
+		WHERE state = ANY($1)
+		  AND (local_folder_status->'back'->>'given_up_at') IS NOT NULL
+		  AND COALESCE((local_folder_status->'back'->>'given_up_audited')::boolean, false) = false`
+	args := []any{terminalStateNames()}
+	if after != nil {
+		q += ` AND id > $2`
+		args = append(args, *after)
+	}
+	q += fmt.Sprintf(` ORDER BY id LIMIT $%d`, len(args)+1)
+	rows, err := s.Pool.Query(ctx, q, append(args, limit)...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: list given-up folder records without an audit row: %w", err)
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, nil, fmt.Errorf("store: scan given-up folder record: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: list given-up folder records without an audit row: %w", err)
+	}
+	if len(ids) < limit || limit <= 0 {
+		return ids, nil, nil
+	}
+	return ids, &ids[len(ids)-1], nil
 }

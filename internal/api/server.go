@@ -931,12 +931,12 @@ type Server struct {
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
-	deviceRouteState     // the device routes' process state (server_devices.go)
-	cliSignInState       // CLI sign-in's rate limiters (cli_sign_in.go)
-	scimState            // the SCIM routes' rate limiters (scim_auth.go)
-	runLeaseState        // the run lease sweep's process state (run_lease_server.go)
-	// pause is the pause sweep's process-local state (run_pause.go).
-	pause pauseClocks
+	deviceRouteState                 // the device routes' process state (server_devices.go)
+	cliSignInState                   // CLI sign-in's rate limiters (cli_sign_in.go)
+	scimState                        // the SCIM routes' rate limiters (scim_auth.go)
+	runLeaseState                    // the run lease sweep's process state (run_lease_server.go)
+	runEndState                      // the end loops' process state (run_end_loops.go)
+	pause                pauseClocks // the pause sweep's process-local state (run_pause.go)
 	// activity is the CPU signal's last read, for the idle detection row (run_activity.go).
 	activity activitySignal
 	// ssoRefreshMu guards ssoRefreshSpent, which the control-plane AWS SSO
