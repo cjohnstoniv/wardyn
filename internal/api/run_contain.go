@@ -50,6 +50,11 @@ const (
 // errContainCallAbandoned is a cut call still running when its phase ended: the worker moved on.
 var errContainCallAbandoned = errors.New("the cut did not answer within its phase")
 
+// errContainSkip is what the stop path's call-phase work (containCallPre) wraps to say it skipped: another
+// holder has the run's agent, say. A skip is not a failure: no stamp and no failure row, no mark that the
+// round was unobserved. The visit still asks d1Due with it, and releases the claim as usual.
+var errContainSkip = errors.New("the stop path skipped this visit")
+
 // errContainCallPanicked is a cut call that panicked. It is not an observation of the sandbox.
 var errContainCallPanicked = errors.New("the cut panicked")
 
@@ -57,11 +62,6 @@ var errContainCallPanicked = errors.New("the cut panicked")
 type containAnswer struct {
 	kind cutKind
 	err  error
-}
-
-// lateErr is the answer's error for the late rule.
-func (a containAnswer) lateErr() error {
-	return a.err
 }
 
 // containEntry is one run in the in-flight set: the pool that has it, whether an item holds it, and how
@@ -111,7 +111,8 @@ type containState struct {
 	// Tests only: zero means the constants; d1DueFn stands in for d1Due.
 	prePhase, callPhase, postPhase time.Duration
 	preCutFn                       func(ctx context.Context, run types.AgentRun) error // stands in for containPreCut
-	d1DueFn                        func(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool
+	containCallFn                  func(ctx context.Context, run types.AgentRun) error // stands in for containCallPre
+	d1DueFn                        func(ctx context.Context, run types.AgentRun, kind cutKind, err error) bool
 }
 
 func (c *containState) init() {
@@ -211,7 +212,6 @@ func (s *Server) containTickOnce(ctx context.Context) {
 // runner is not connected here (not counted, no call), and one not yet due.
 func (s *Server) containVisit(rows []store.TerminalSandboxRow) {
 	c := &s.contain
-	now := s.cfg.Now()
 	c.mu.Lock()
 	for _, row := range rows {
 		c.seen[row.ID] = struct{}{}
@@ -228,7 +228,7 @@ func (s *Server) containVisit(rows []store.TerminalSandboxRow) {
 				continue
 			}
 		}
-		if due, ok := containmentDue(run); !ok || due.After(now) {
+		if !row.Due { // the database decided it: the server's clock never gates a visit
 			continue
 		}
 		gen, ok := s.containClaim(row.ID, containPoolCut)
@@ -454,8 +454,8 @@ func (s *Server) containPhases() (pre, call, post time.Duration) {
 	return pre, call, post
 }
 
-// containCutItem cuts one ended run's agent in three phases: the stop path's reads (pre), the cut (call)
-// and the writes (post). The call and the writes never share a deadline: a hung cut must still stamp its
+// containCutItem cuts one ended run's agent in three phases: the stop path's reads (pre), the call (the
+// stop path's acts, then the cut) and the writes (post). The call and the writes never share a deadline: a hung cut must still stamp its
 // failure, or the stop path never sees a streak. Each phase runs on its own ctx, made when the phase starts
 // from the parent without its cancel, so a shutdown does not cut a phase short. A pre phase that fails or
 // outlasts its budget did not try the cut, so it records no failure and asks nothing of the stop path: the
@@ -484,6 +484,9 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uin
 	callCtx, cancelCall := context.WithTimeout(base, callLen)
 	defer cancelCall()
 	ans, flight := s.containCallWithin(callCtx, run, gen, func() containAnswer {
+		if err := s.containCallPre(callCtx, run); err != nil {
+			return containAnswer{err: err}
+		}
 		kind, err := s.cutAgent(callCtx, run)
 		return containAnswer{kind: kind, err: err}
 	})
@@ -505,9 +508,9 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uin
 // containD1Due asks d1Due, through the test stand-in when one is set.
 func (s *Server) containD1Due(ctx context.Context, run types.AgentRun, ans containAnswer) bool {
 	if f := s.contain.d1DueFn; f != nil {
-		return f(ctx, run, ans.kind, ans.err, nil)
+		return f(ctx, run, ans.kind, ans.err)
 	}
-	return s.d1Due(ctx, run, ans.kind, ans.err, nil)
+	return s.d1Due(ctx, run, ans.kind, ans.err)
 }
 
 // containCallWithin runs the call phase's work on its own goroutine and waits for its answer or for
@@ -564,7 +567,7 @@ func (s *Server) containCallDone(f *containFlight, ans containAnswer) {
 	f.done, f.ans = true, ans
 	push := false
 	if f.abandoned {
-		if notObserved(ans.lateErr()) {
+		if notObserved(ans.err) {
 			c.unobserved[f.run.ID] = time.Now()
 		}
 		push = c.containLateStopLocked(f)
@@ -605,9 +608,9 @@ func (c *containState) containLateStopLocked(f *containFlight) bool {
 	if !f.done || !f.dueKnown || !f.due {
 		return false
 	}
-	err := f.ans.lateErr()
+	err := f.ans.err
 	switch {
-	case errors.Is(err, errContainCallPanicked), notObserved(err):
+	case errors.Is(err, errContainCallPanicked), errors.Is(err, errContainSkip), notObserved(err):
 		return false
 	case err == nil && (f.ans.kind == cutFenced || f.ans.kind == cutProxyStopped):
 		return false
@@ -625,6 +628,7 @@ func (s *Server) containOutcome(ctx context.Context, run types.AgentRun, ans con
 	}
 	switch {
 	case ans.err == nil && ans.kind == cutUnsupported:
+	case errors.Is(ans.err, errContainSkip):
 	case ans.err == nil:
 		s.containHeld(ctx, st, run, ans.kind)
 	case notObserved(ans.err):
@@ -681,7 +685,9 @@ func (s *Server) containFailed(ctx context.Context, st store.RunContainer, run t
 }
 
 // containNoteUnobserved marks that this round did not observe the run's sandbox. A failure stamped before
-// the mark never counts toward a streak. Nothing is written to the database: a replica that never sees
+// the mark never counts toward a streak. A late answer that lands while a stamp is still being written
+// leaves the stamp later than the mark, so that stamp can count: it is kept up to containPost (5 s) past
+// the mark, an accepted bound. Nothing is written to the database: a replica that never sees
 // the runner would otherwise reset the streak of the one that does.
 func (s *Server) containNoteUnobserved(id uuid.UUID) {
 	c := &s.contain
@@ -708,11 +714,15 @@ func (s *Server) streakAges(id uuid.UUID) (startedAgo time.Duration, unobservedA
 }
 
 // d1Due reports whether the cut item should hand run to the stop pool. The stop path decides it.
-func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool {
+func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, err error) bool {
 	return false
 }
 
-// containPreCut is the stop path's work in the pre phase, before the cut. It has none yet.
+// containPreCut is the stop path's work in the pre phase, before the call. It is READS ONLY: no runner,
+// agent or exec call, only lock and database reads. It must honour its ctx, because the pre phase runs on
+// the cut worker itself and nothing abandons it: a read that outlives the pre budget holds the worker. An
+// error or an expired budget is not a cut failure: no stamp, no d1Due, the claim is released and the next
+// round tries again. Work that acts on the run belongs in containCallPre. It has none yet.
 func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 	if f := s.contain.preCutFn; f != nil {
 		return f(ctx, run)
@@ -722,3 +732,14 @@ func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
 
 // runStopItem is the stop pool's item for one run. The stop path writes it.
 func (s *Server) runStopItem(ctx context.Context, run types.AgentRun, gen uint64) {}
+
+// containCallPre is the stop path's work at the start of the call phase, before the cut: the acts that
+// touch the run's agent. It runs inside containCallWithin on the call ctx and budget, so the worker never
+// waits past the phase on it. An error wrapping errContainSkip is a skip, not a failure. Any other error is
+// the call's outcome: it is stamped like a failed cut, reaches d1Due, and the cut is not made. It has none yet.
+func (s *Server) containCallPre(ctx context.Context, run types.AgentRun) error {
+	if f := s.contain.containCallFn; f != nil {
+		return f(ctx, run)
+	}
+	return nil
+}

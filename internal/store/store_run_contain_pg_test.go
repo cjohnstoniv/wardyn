@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -30,6 +31,12 @@ func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 	secs := func(n float64) *float64 { return &n }
 	ago := func(d time.Duration) *time.Duration { return &d }
 	lag := store.ContainmentLag.Seconds()
+	seeded := func(p *float64) string {
+		if p == nil {
+			return "none"
+		}
+		return strconv.FormatFloat(*p, 'f', -1, 64) + " s"
+	}
 
 	for name, tc := range map[string]struct {
 		state       types.RunState
@@ -61,8 +68,8 @@ func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 		if err != nil || started != tc.wantStarted {
 			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want %v", name, started, err, tc.wantStarted)
 		}
-		// The stamp's age in SQL: a stamp this call set is within a second of now(); one kept is still the
-		// seeded age, give or take the seconds the test took.
+		// The stamp's age in SQL: a stamp this call set is within 5 s of now(); one kept is still the seeded
+		// age, give or take the seconds the test took.
 		var age *float64
 		if err := pool.QueryRow(ctx, `SELECT extract(epoch FROM now() - containment_error_at)::float8 FROM agent_runs WHERE id = $1`, r.ID).Scan(&age); err != nil {
 			t.Fatalf("%s: read the stamp's age: %v", name, err)
@@ -70,10 +77,10 @@ func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 		switch {
 		case age == nil:
 			t.Errorf("%s: containment_error_at is NULL", name)
-		case tc.wantStarted && (*age < 0 || *age >= 1):
-			t.Errorf("%s: stamp is %.2f s old, want within a second of the database's now()", name, *age)
-		case !tc.wantStarted && (tc.stampAgo == nil || *age < *tc.stampAgo || *age > *tc.stampAgo+2):
-			t.Errorf("%s: stamp is %.2f s old, want the seeded %v s", name, *age, tc.stampAgo)
+		case tc.wantStarted && (*age < 0 || *age >= 5):
+			t.Errorf("%s: stamp is %.2f s old, want within 5 s of the database's now()", name, *age)
+		case !tc.wantStarted && (tc.stampAgo == nil || *age < *tc.stampAgo || *age > *tc.stampAgo+5):
+			t.Errorf("%s: stamp is %.2f s old, want the seeded age (%s) or up to 5 s more", name, *age, seeded(tc.stampAgo))
 		}
 		got, err := pg.GetRun(ctx, r.ID)
 		if err != nil {

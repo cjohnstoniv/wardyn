@@ -78,7 +78,9 @@ func (f *containStore) ListTerminalSandboxPage(_ context.Context, after *store.T
 				continue
 			}
 		}
-		all = append(all, r.TerminalSandboxRow)
+		row := r.TerminalSandboxRow
+		row.Due = !time.Now().Before(containRowKey(row).Add(store.ContainmentLag))
+		all = append(all, row)
 	}
 	slices.SortFunc(all, func(a, b store.TerminalSandboxRow) int {
 		if ka, kb := containRowKey(a), containRowKey(b); !ka.Equal(kb) {
@@ -300,12 +302,11 @@ func (r containFenceRunner) FenceProxy(ctx context.Context, ref string) error {
 
 // containD1Call is one call of the stand-in for d1Due, with the stamp as the store held it then.
 type containD1Call struct {
-	run    types.AgentRun
-	kind   cutKind
-	err    error
-	preErr error
-	at     time.Time
-	stamp  *time.Time
+	run   types.AgentRun
+	kind  cutKind
+	err   error
+	at    time.Time
+	stamp *time.Time
 }
 
 // containLab is a Server running the containment loop over a fake store and a fake runner.
@@ -341,8 +342,8 @@ func newContainLabOn(t *testing.T, fencer bool, st *containStore, rec *seamRecor
 	return l
 }
 
-func (l *containLab) d1Due(_ context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool {
-	call := containD1Call{run: run, kind: kind, err: err, preErr: preErr, at: time.Now(), stamp: l.st.stamp(run.ID)}
+func (l *containLab) d1Due(_ context.Context, run types.AgentRun, kind cutKind, err error) bool {
+	call := containD1Call{run: run, kind: kind, err: err, at: time.Now(), stamp: l.st.stamp(run.ID)}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.d1 = append(l.d1, call)
@@ -1859,6 +1860,98 @@ func TestContain_PrePhaseFailureIsNotACutFailure(t *testing.T) {
 				}
 				if n := l.rn.callsTo(row.SandboxRef); n != 0 {
 					t.Errorf("cut calls = %d, want none: the cut waits for its pre phase", n)
+				}
+			})
+		})
+	}
+}
+
+// The stop path's call-phase work: an error that is not a skip is the call's outcome. It is stamped like a
+// failed cut, one failure row is audited, and d1Due is asked with it. Caught by: treating any hook error as
+// a skip, or dropping it before the stamp.
+func TestContain_CallHookErrorIsAFailedCut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newContainLab(t, true)
+		row := dueRow(nil, time.Minute)
+		id := l.st.add(row)
+		l.srv.contain.containCallFn = func(context.Context, types.AgentRun) error { return errContainBoom }
+		l.start()
+		time.Sleep(time.Second)
+		l.stop()
+		if l.st.stamp(id) == nil {
+			t.Error("a hook error left no failure stamp")
+		}
+		if failures, _ := failuresAndSuccesses(l.rec); failures != 1 {
+			t.Errorf("failure rows = %d, want 1", failures)
+		}
+		calls := l.d1Calls()
+		if len(calls) != 1 || !errors.Is(calls[0].err, errContainBoom) {
+			t.Fatalf("d1Due calls = %+v, want one with the hook's error", calls)
+		}
+		if l.busy(id) {
+			t.Error("the run stayed claimed")
+		}
+	})
+}
+
+// A hook error that wraps errContainSkip is not a failure: no stamp, no failure row, no unobserved mark.
+// d1Due is still asked, with the skip, and the claim is released. Caught by: stamping or auditing a skip,
+// not asking d1Due, or keeping the claim.
+func TestContain_CallHookSkipIsNotAFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newContainLab(t, true)
+		row := dueRow(nil, time.Minute)
+		id := l.st.add(row)
+		l.srv.contain.containCallFn = func(context.Context, types.AgentRun) error {
+			return fmt.Errorf("%w: a pass holds the agent", errContainSkip)
+		}
+		l.start()
+		time.Sleep(time.Second)
+		l.stop()
+		if n := l.st.stampWrites(); n != 0 || l.st.stamp(id) != nil {
+			t.Errorf("stamp writes = %d (stamp %v), want none for a skip", n, l.st.stamp(id))
+		}
+		if failures, successes := failuresAndSuccesses(l.rec); failures+successes != 0 {
+			t.Errorf("audit rows = %d failures, %d successes, want none", failures, successes)
+		}
+		calls := l.d1Calls()
+		if len(calls) != 1 || !errors.Is(calls[0].err, errContainSkip) {
+			t.Fatalf("d1Due calls = %+v, want one with the skip", calls)
+		}
+		if l.busy(id) {
+			t.Error("the run stayed claimed after a skip")
+		}
+		if _, ago := l.srv.streakAges(id); ago != nil {
+			t.Errorf("a skip marked the round unobserved (%v ago)", *ago)
+		}
+	})
+}
+
+// Whether a run is due is the database's answer, never the server's clock: a run a minute short of due is
+// not visited with the server's clock two minutes ahead, and one a minute past due is visited with it two
+// minutes behind. Caught by: deciding due from the server's clock.
+func TestContain_DueIsTheDatabasesNotTheServers(t *testing.T) {
+	for name, tc := range map[string]struct {
+		skew      time.Duration
+		untilDue  time.Duration // negative: past due
+		wantVisit bool
+	}{
+		"clock ahead, a minute short of due": {2 * time.Minute, time.Minute, false},
+		"clock behind, a minute past due":    {-2 * time.Minute, -time.Minute, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newContainLab(t, true)
+				l.srv.cfg.Now = func() time.Time { return time.Now().Add(tc.skew) }
+				end := time.Now().Add(tc.untilDue - containmentLag)
+				id := uuid.New()
+				row := store.TerminalSandboxRow{ID: id, State: types.RunKilled, SandboxRef: "sbx-" + id.String(), EndedAt: &end, UpdatedAt: end}
+				l.st.add(row)
+				l.start()
+				time.Sleep(30 * time.Second)
+				l.stop()
+				if got := l.rn.callsTo(row.SandboxRef) > 0; got != tc.wantVisit {
+					t.Errorf("visited = %v, want %v", got, tc.wantVisit)
 				}
 			})
 		})

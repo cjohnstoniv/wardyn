@@ -37,6 +37,7 @@ type TerminalSandboxRow struct {
 	ContainmentErrorAt *time.Time
 	ForcedStopAt       *time.Time
 	FencedAt           *time.Time
+	Due                bool // the database's now() is at or past the run's due time (ContainmentDueSQL)
 }
 
 // TerminalSandboxCursor is the keyset position after a page: the last row's end (EndedAt, or UpdatedAt
@@ -60,12 +61,14 @@ var _ RunContainer = PG{}
 // page of at most limit rows (never more than 500) after the cursor, or from the newest when after is nil.
 // The cursor answered is nil on the last page. With unfencedOnly it skips runs whose agent was already cut
 // off (fenced_at set) and reads agent_runs_unfenced_sandbox_idx; without it the page reads
-// agent_runs_terminal_sandbox_idx. No running run is ever listed.
+// agent_runs_terminal_sandbox_idx. No running run is ever listed. Each row says whether it is due, decided by
+// the database's now(), so the caller's clock never gates a visit.
 func (s PG) ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxCursor, limit int, unfencedOnly bool) ([]TerminalSandboxRow, *TerminalSandboxCursor, error) {
 	if limit <= 0 || limit > terminalSandboxPageMax {
 		limit = terminalSandboxPageMax
 	}
-	q := `SELECT id, state, sandbox_ref, runner_id, machine_kind, ended_at, updated_at, containment_error_at, forced_stop_at, fenced_at
+	q := `SELECT id, state, sandbox_ref, runner_id, machine_kind, ended_at, updated_at, containment_error_at, forced_stop_at, fenced_at,
+		       (` + ContainmentDueSQL + ` <= now())
 		FROM agent_runs WHERE sandbox_ref <> '' AND state = ANY($1)`
 	args := []any{terminalRunStates}
 	if unfencedOnly {
@@ -79,7 +82,7 @@ func (s PG) ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxC
 	rows, err := collect(ctx, s.Pool, "list", "terminal sandbox runs", q, args, func(row pgx.Row) (TerminalSandboxRow, error) {
 		var r TerminalSandboxRow
 		var state, kind string
-		err := row.Scan(&r.ID, &state, &r.SandboxRef, &r.RunnerID, &kind, &r.EndedAt, &r.UpdatedAt, &r.ContainmentErrorAt, &r.ForcedStopAt, &r.FencedAt)
+		err := row.Scan(&r.ID, &state, &r.SandboxRef, &r.RunnerID, &kind, &r.EndedAt, &r.UpdatedAt, &r.ContainmentErrorAt, &r.ForcedStopAt, &r.FencedAt, &r.Due)
 		r.State, r.MachineKind = types.RunState(state), types.MachineKind(kind)
 		return r, err
 	})
