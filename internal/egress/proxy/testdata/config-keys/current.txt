@@ -106,6 +106,7 @@ kube_api.port
 kube_api.restart
 kube_api.write
 listen
+live_denies
 llm_channel_hosts
 llm_headers
 llm_unavailable_detail

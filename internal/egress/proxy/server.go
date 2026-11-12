@@ -55,6 +55,8 @@ type Server struct {
 	onListening func()
 	// stopped closes when the HTTP server is shut down, whenever ListenAndServe gets to look.
 	stopped chan struct{}
+	// live holds what a live egress edit needs: the client connections to drop and the report loop to replace.
+	live liveState
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -183,6 +185,7 @@ func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*ups
 
 func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
+	pol.live.set(cfg.LiveDenies)
 	// Beside the compile, not inside it: CompilePolicy is a pure function with
 	// several callers, and this is a once-per-boot report about the policy
 	// this sidecar was actually dispatched.
@@ -471,10 +474,13 @@ func (s *Server) OnListening(fn func()) { s.onListening = fn }
 // listen opens addr, serving only AllowedPeers when they are set.
 func (s *Server) listen(addr string) (net.Listener, error) {
 	ln, err := net.Listen("tcp", addr)
-	if err != nil || len(s.allowedPeers) == 0 {
+	if err != nil {
 		return ln, err
 	}
-	return &peerListener{Listener: ln, allowed: s.allowedPeers}, nil
+	if len(s.allowedPeers) > 0 {
+		ln = &peerListener{Listener: ln, allowed: s.allowedPeers}
+	}
+	return &trackedListener{Listener: ln, set: &s.live}, nil
 }
 
 // awaitOpen holds a proxy with a first-renewal gate (a self-lapsing one on the k8s runner, or a replacement
