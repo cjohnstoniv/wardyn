@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -195,8 +196,9 @@ func TestFinalizeRunEffects_AConflictCopyThatCannotBeKeptGivesUpAfterTwoStalls(t
 	f := newOwedFixture(t, nil)
 	f.holdWithNoFreeCopy(t)
 	head := "the pass back could not confirm 1 changed files kept on the laptop, so they count as not copied back: keep the sandbox copy of README.md: not kept"
-	if r := f.assertKeptOwing(t, f.finalize(t), head); r.Stalled != 1 || r.Unsynced != 1 {
-		t.Errorf("resume %+v, want one stall with one change left", r)
+	want := types.FolderResume{Stalled: 1, Unsynced: 1, Counted: true, Paths: []string{"README.md"}}
+	if r := f.assertKeptOwing(t, f.finalize(t), head); !reflect.DeepEqual(r, want) {
+		t.Errorf("resume %+v, want %+v: one stall, one counted change left, named README.md", r, want)
 	}
 	if err := f.finalize(t); err != nil {
 		t.Errorf("finalize: %v", err)
@@ -295,8 +297,9 @@ func TestFinalizeRunEffects_AnErrorThatLeftAChangeAndMovedNothingIsAStall(t *tes
 	})
 	f.hold(t)
 	agentWrites(t, f.sb, "a.txt")
-	if r := f.assertKeptOwing(t, f.finalize(t), "unexpected EOF"); r.Stalled != 1 || r.Unsynced != 1 {
-		t.Errorf("resume %+v, want one stall with one change left", r)
+	want := types.FolderResume{Stalled: 1, Unsynced: 1, Counted: true}
+	if r := f.assertKeptOwing(t, f.finalize(t), "unexpected EOF"); !reflect.DeepEqual(r, want) {
+		t.Errorf("resume %+v, want %+v: one stall, one counted change left, no names", r, want)
 	}
 	if err := f.finalize(t); err != nil {
 		t.Errorf("finalize: %v", err)
