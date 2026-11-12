@@ -217,7 +217,7 @@ const computerFolderStalls = 2
 // the rest up, and so does a pass that left changes behind or could not prove them kept
 // (folderBackVerdict). A pass that completes with nothing owed, fails on its first visit or does not
 // start does not, nor does a sandbox that cannot be quiesced. The runner's state file holds what each pass saved, so the next pass, from
-// resumeComputerFolderBacks, starts after it (#3466).
+// the tail owner (folderCleanupLoop), starts after it (#3466).
 func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolders)
 	if !ok || ref == "" {
@@ -357,7 +357,7 @@ func (s *Server) recordFolderBackAt(ctx context.Context, id uuid.UUID, folder ty
 
 // BringComputerFolderBack is bringComputerFolderBack for cmd/wardynd's idle and max-age stop, under the
 // run's lock (LockRunEnd), after its transition to STOPPED and before its StopSandbox. true keeps the
-// sandbox for a resume (resumeComputerFolderBacks), its agent stopped and its egress cut.
+// sandbox for the tail owner's pass (folderCleanupLoop), its agent stopped and its egress cut.
 func (s *Server) BringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) bool {
 	return s.bringComputerFolderBack(ctx, runID, ref)
 }
@@ -617,41 +617,6 @@ func (s *Server) computerFolderKeptRead(ctx context.Context, id uuid.UUID) (bool
 		return false, err
 	}
 	return rec.Resume != nil, nil
-}
-
-// resumeComputerFolderBacks resumes, on the orphan sweep's cadence and before it, each terminal
-// run's pass back that kept its sandbox, through finalizeRunEffects: the path that kept it, which
-// stops the sandbox once the pass completes or gives up. A run whose lock is held is left to a
-// later sweep.
-func (s *Server) resumeComputerFolderBacks(ctx context.Context) error {
-	if _, ok := s.cfg.Store.(store.RunLocalFolderStatuses); !ok {
-		return nil
-	}
-	runs, err := s.terminalRunsWithSandbox(ctx)
-	if err != nil {
-		return fmt.Errorf("resume computer folders: list runs: %w", err)
-	}
-	for _, run := range runs {
-		if s.computerFolderKept(ctx, run.ID) {
-			s.resumeComputerFolderBack(ctx, run.ID)
-		}
-	}
-	return nil
-}
-
-func (s *Server) resumeComputerFolderBack(ctx context.Context, id uuid.UUID) {
-	lctx, unlock, ok := s.tryLockRunOp(ctx, id)
-	if !ok {
-		return
-	}
-	defer unlock()
-	run, err := s.cfg.Store.GetRun(lctx, id)
-	if err != nil || !isTerminalRunState(run.State) || run.SandboxRef == "" || !s.computerFolderKept(lctx, id) {
-		return
-	}
-	fctx, cancel := context.WithTimeout(lctx, reconcileFinalizeTimeout)
-	defer cancel()
-	_ = s.finalizeRunEffects(fctx, id, run.SandboxRef, "sandbox.orphan.sweep", map[string]any{"sandbox_ref": run.SandboxRef}, false, false)
 }
 
 // computerFolderAccountTime is the end of a pass back kept for the runner's account of a pass

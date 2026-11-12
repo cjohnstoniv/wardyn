@@ -296,8 +296,8 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		if isTerminalRunState(run.State) {
 			// The run ended; its containers should already be gone, unless its computer folder's
-			// pass back keeps them for resumeComputerFolderBacks, which runs before this sweep, or
-			// that pass is still running under the end's lock (lockRunEnd).
+			// pass back keeps them for the tail owner (folderCleanupLoop), or that pass is still
+			// running under the end's lock (lockRunEnd).
 			lctx, unlock, free := s.tryLockRunOp(ctx, runID)
 			if !free {
 				return false
@@ -382,7 +382,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 // reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
 func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
 	if s.computerFolderKept(ctx, run.ID) {
-		return // kept for its computer folder's pass back, which resumeComputerFolderBacks resumes
+		return // kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) resumes
 	}
 	kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 	torn := false

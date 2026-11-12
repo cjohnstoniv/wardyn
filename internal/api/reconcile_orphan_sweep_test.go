@@ -386,7 +386,7 @@ func (r *orphanVerdictRunner) SweepOrphanedSandboxes(_ context.Context, _ time.D
 }
 
 // Neither orphan pass tears down a sandbox that its computer folder's pass back keeps for
-// resumeComputerFolderBacks; another terminal run's sandbox still goes (#3466).
+// the tail owner; another terminal run's sandbox still goes (#3466).
 func TestOrphanPasses_LeaveASandboxKeptForAComputerFolderResume(t *testing.T) {
 	h := newHarness(t)
 	now := time.Now().UTC()

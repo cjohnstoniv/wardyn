@@ -428,7 +428,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 			// sandbox and its ref stay for the resume. A substrate that cannot stop a proxy alone keeps
 			// no such sandbox (quiesceKeptSandbox), so its sandbox is stopped as any other. A record that
 			// cannot be read counts as kept: the containment that keeps the sandbox for it writes one
-			// failure row with folder_record_error, and resumeComputerFolderBacks reads the record again.
+			// failure row with folder_record_error, and the tail owner reads the record again.
 			switch err := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile"); {
 			case err == nil:
 				if ferr != nil {

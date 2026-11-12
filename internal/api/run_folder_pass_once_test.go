@@ -381,7 +381,7 @@ func (s *runnerTurnsAfterBump) SetSandboxRef(ctx context.Context, id uuid.UUID, 
 }
 
 // A first visit whose runner turns into an older one between the check and the send keeps the sandbox with
-// a resume written, so neither the resume sweep nor the orphan sweep stops it or clears its ref while the
+// a resume written, so neither the tail owner nor the orphan sweep stops it or clears its ref while the
 // pass is still owed; the first pass the runner answers then tears it down.
 func TestPassBack_ARunnerThatTurnsOlderBeforeTheSendKeepsTheSandboxForTheSweeps(t *testing.T) {
 	f := newPassFixture(t, 0, 0, nil)
@@ -405,12 +405,12 @@ func TestPassBack_ARunnerThatTurnsOlderBeforeTheSendKeepsTheSandboxForTheSweeps(
 		t.Fatal(err)
 	}
 	f.s.reconcileOrphanedRun(context.Background(), run)
-	f.s.resumeComputerFolderBack(context.Background(), run.ID)
+	f.s.tailRun(context.Background(), run.ID, tailFolder, new(int))
 	if seen.Load() || f.sb.stopCount() != 0 || turns.cleared.Load() != 0 {
 		t.Fatalf("pass %v, stops %d, refs cleared %d; want the owed sandbox left as it is", seen.Load(), f.sb.stopCount(), turns.cleared.Load())
 	}
 	f.runnerAs(t, &onePerRunnerCaps)
-	f.s.resumeComputerFolderBack(context.Background(), run.ID)
+	f.s.tailRun(context.Background(), run.ID, tailFolder, new(int))
 	if st := f.cs.folderStatus(); !seen.Load() || f.sb.stopCount() != 1 || st.Back == nil || st.Back.Error != "" {
 		t.Errorf("pass %v, stops %d, record %+v; want the completed pass, then the stop", seen.Load(), f.sb.stopCount(), st)
 	}

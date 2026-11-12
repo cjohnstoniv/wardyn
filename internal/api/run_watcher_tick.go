@@ -76,7 +76,6 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 		// ref-empty run's leaked containers are swept the same tick.
 		// ponytail: no separate ticker — piggy-backing this cadence keeps
 		// one ContainerList per grace period, free next to what it reclaims.
-		pass("computer folder resume", s.resumeComputerFolderBacks(ctx))
 		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
 		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
 		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))
