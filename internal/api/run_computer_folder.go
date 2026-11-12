@@ -240,7 +240,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(rctx, runID); err == nil {
 			// A record given up is final: no pass runs again, and the sandbox is stopped.
-			if folderBroughtBack(rec) || (rec.Back != nil && rec.Back.GivenUpAt != nil) {
+			if folderFinal(rec) {
 				cancel()
 				return false
 			}

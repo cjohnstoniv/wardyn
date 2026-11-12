@@ -51,6 +51,12 @@ func folderGivenUp(st types.RunLocalFolderStatus) bool {
 	return st.Back != nil && st.Back.GivenUpAt != nil
 }
 
+// folderFinal is a record no pass runs for again: its pass back completed with nothing owed, or its owed changes
+// were given up.
+func folderFinal(st types.RunLocalFolderStatus) bool {
+	return folderBroughtBack(st) || folderGivenUp(st)
+}
+
 // folderOwedRecord is the part of "a pass back is owed" that the run and its record answer: the run ended
 // (a killed run is never copied back), still holds its sandbox, has a Resume or has had no pass, and is not
 // given up.
