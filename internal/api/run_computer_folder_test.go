@@ -823,7 +823,7 @@ func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testi
 		}, "because its agent and egress could not be stopped first: its agent could not be stopped: exec refused"},
 		"its agent outlives the kill": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.agentLives = true
-		}, "because its agent and egress could not be stopped first: its agent still reads as running,"},
+		}, "because its agent and egress could not be stopped first: its agent still reads as running: no pass ran"},
 		// A lease end's EndSandbox stopped it: its proxy stop succeeds, and the kill's exec fails.
 		"it had already stopped": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.ended = true

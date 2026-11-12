@@ -47,7 +47,7 @@ func (s *Substrate) SyncFolder(ctx context.Context, args runnerwire.SyncFolderAr
 		// A pass that ended before the server took its stream has no stream left to take: the runner's
 		// account of it is still there to ask for, and is its own reason.
 		var out runnerwire.FolderPass
-		if werr := sess.Call(ctx, runnerwire.MethodSyncFolderWait, runnerwire.SyncFolderWaitArgs{Stream: res.Stream}, &out); werr != nil {
+		if werr := sess.Call(ctx, runnerwire.MethodSyncFolderWait, runnerwire.SyncFolderWaitArgs(res), &out); werr != nil {
 			return FolderPass{}, fmt.Errorf("%w (asking for the pass's outcome failed: %v)", err, werr)
 		}
 		return FolderPass{}, &PassEnded{Pass: out}
