@@ -131,12 +131,37 @@ func proxyAnswer(t *testing.T, r runner.Runner, ref, host string) string {
 	return strings.ToLower(string(out))
 }
 
-// holdConnection holds a connection from the agent to its proxy. gone closes on heldScript's first gone=
-// line, and failed on its first observer-error= line. The end of the stream closes neither, so it never
-// passes for a close. heldAt is when held=1 was read. Every line the script printed is logged at cleanup.
-func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-chan struct{}, heldAt time.Time) {
+// heldAgeLimit bounds the held connection's age, counted from heldConn.anchor, when the narrowing returns
+// and when its close is seen. The agent-facing http.Server that proxy.newServer builds has
+// ReadHeaderTimeout: 30 * time.Second, which closes the silent held connection on its own 30 s after the
+// accept. The anchor is taken before the exec that opens the connection, so the accept is later and the
+// real age is never more than the counted one. A close seen under 25 s is never that timeout's, and one at
+// 30 s or later, as with no narrowing close at all, fails as inconclusive, never passes.
+const heldAgeLimit = 25 * time.Second
+
+// heldConn is the agent's held connection to its proxy, as heldScript reports it. gone closes on the
+// script's first gone= line and failed on its first observer-error= line. The end of the stream closes
+// neither, so it never passes for a close. heldAt and goneAt are when those lines were read; read each
+// only after its channel is closed.
+type heldConn struct {
+	anchor, heldAt, goneAt time.Time
+	gone, failed           chan struct{}
+}
+
+// inTime fails t as inconclusive when the held connection is heldAgeLimit old or more at at.
+func (h *heldConn) inTime(t *testing.T, at time.Time, what string) {
+	t.Helper()
+	if age := at.Sub(h.anchor); age >= heldAgeLimit {
+		t.Fatalf("inconclusive: held connection reached the proxy's 30 s ReadHeaderTimeout window before the narrowing's close was observed (%s at anchor+%s, limit %s)", what, age, heldAgeLimit)
+	}
+}
+
+// holdConnection holds a connection from the agent to its proxy. Every line the script printed is logged
+// at cleanup.
+func holdConnection(t *testing.T, r runner.Runner, ref string) *heldConn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	h := &heldConn{anchor: time.Now(), gone: make(chan struct{}), failed: make(chan struct{})}
 	sess, err := r.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", heldScript}})
 	if err != nil {
 		cancel()
@@ -148,7 +173,7 @@ func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-c
 	}
 	var mu sync.Mutex
 	var lines []string
-	held, goneCh, failedCh, ended := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	held, goneCh, failedCh, ended := make(chan struct{}), h.gone, h.failed, make(chan struct{})
 	go func() {
 		defer close(ended)
 		var sawHeld, sawGone, sawFailed bool
@@ -161,10 +186,11 @@ func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-c
 			switch {
 			case line == "held=1" && !sawHeld:
 				sawHeld = true
-				heldAt = time.Now()
+				h.heldAt = time.Now()
 				close(held)
 			case strings.HasPrefix(line, "gone=") && !sawGone:
 				sawGone = true
+				h.goneAt = time.Now()
 				close(goneCh)
 			case strings.HasPrefix(line, "observer-error=") && !sawFailed:
 				sawFailed = true
@@ -198,7 +224,8 @@ func holdConnection(t *testing.T, r runner.Runner, ref string) (gone, failed <-c
 	case <-time.After(time.Minute):
 		t.Fatal("the held-connection script never reported: an environment problem, not a verdict")
 	}
-	return goneCh, failedCh, heldAt
+	t.Logf("held connection: anchor (before the exec) %s, held=1 at anchor+%s", h.anchor.Format(time.RFC3339Nano), h.heldAt.Sub(h.anchor))
+	return h
 }
 
 func narrower(t *testing.T, r runner.Runner) runner.ProxyNarrower {
@@ -224,7 +251,8 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 	uid, ip, version := s.pod.UID, s.pod.Status.PodIP, secretVersion(t, cs, ns, s.spec.RunID)
 
 	// 2. A connection from the agent to the proxy, held open.
-	closed, observerFailed, heldAt := holdConnection(t, r, s.sb.Ref)
+	h := holdConnection(t, r, s.sb.Ref)
+	closed, observerFailed := h.gone, h.failed
 
 	// 3. The proxy's state: the config it enforces is the one the driver handed it, with no list.
 	st, err := n.ProxyNarrowState(ctx, s.sb.Ref)
@@ -253,13 +281,14 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 	// The agent-facing http.Server that proxy.newServer builds has ReadHeaderTimeout: 30 * time.Second. It
 	// closes a connection that has sent no request on its own, as the held one has not, and that close would
 	// look like a narrowing's. So the narrowing must be sent well inside that window, or the check says nothing.
-	sentAfter := time.Since(heldAt)
+	sentAfter := time.Since(h.heldAt)
 	t.Logf("narrow sent %s after hold", sentAfter)
 	if sentAfter >= 20*time.Second {
 		t.Fatalf("inconclusive: narrow sent %s after hold, inside the 30 s ReadHeaderTimeout window", sentAfter)
 	}
 	after, err := n.NarrowProxy(ctx, s.sb.Ref, []string{narrowedHost})
-	t.Logf("narrow exec: answer=%+v err=%v", after, err)
+	t.Logf("narrow exec: answer=%+v err=%v, returned at anchor+%s", after, err, time.Since(h.anchor))
+	h.inTime(t, time.Now(), "the narrowing returned")
 	if err != nil {
 		t.Fatalf("NarrowProxy: %v", err)
 	}
@@ -275,6 +304,8 @@ func liveProxyNarrow(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns,
 	// connection on its own after 30 s, so a later check could pass with the narrowing closing nothing.
 	select {
 	case <-closed:
+		t.Logf("held connection: gone at anchor+%s", h.goneAt.Sub(h.anchor))
+		h.inTime(t, h.goneAt, "its close was seen")
 	case <-time.After(2 * time.Second):
 		t.Error("the connection the agent held to its proxy was still up 2 s after the narrowing")
 	}
