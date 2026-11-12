@@ -890,12 +890,16 @@ func TestContain_PanicAfterAbandonReleasesItsClaim(t *testing.T) {
 		l.d1Ask = func(n int) bool { return n == 1 }
 		row := dueRow(nil, time.Minute)
 		l.st.add(row)
+		// The panic lands past the item's end and half a containTick after a tick (35s with the 10s tick,
+		// between the ticks at 30s and 40s), so the check at that instant never meets the tick that claims
+		// the run again.
+		late := (containCall + containPost).Truncate(containTick) + containTick + containTick/2
 		var n atomic.Int32
 		l.rn.setHook(func(context.Context, string) error {
 			if n.Add(1) > 1 {
 				return nil
 			}
-			time.Sleep(containCall + 15*time.Second)
+			time.Sleep(late)
 			panic("late fence exploded")
 		})
 		l.startCutOnly()
@@ -903,7 +907,8 @@ func TestContain_PanicAfterAbandonReleasesItsClaim(t *testing.T) {
 		if !l.busy(row.ID) || l.st.stampWrites() != 1 || len(l.d1Calls()) != 1 {
 			t.Errorf("busy = %v, stamps = %d, d1Due calls = %d at the end of the item; want true, 1, 1", l.busy(row.ID), l.st.stampWrites(), len(l.d1Calls()))
 		}
-		time.Sleep(15 * time.Second)
+		time.Sleep(late - (containCall + containPost))
+		synctest.Wait() // the panic and its release run at this instant
 		if l.busy(row.ID) || l.stopQueue() != 0 {
 			t.Errorf("busy = %v, stop queue = %d after the late panic; want false, 0", l.busy(row.ID), l.stopQueue())
 		}
