@@ -78,9 +78,10 @@ PROVIDER_ID="ci-model-fake"
 MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 CURL_MAX_TIME=15
 # A live egress edit answers once its proxy has confirmed the narrowed policy, or after a failed edit's
-# stop and run-fate read. Worst branch: the undo of a refused delivery fails, the 75 s readback wait
-# runs out, then the abandoned start's stop and the fate read: 366 s. 366 s plus 10%, rounded up to 10.
-PATCH_MAX_TIME=410
+# stop and run-fate read. Worst branch, for a run with no computer folder (this run has none): a refused
+# delivery whose undo fails, the 75 s readback wait runs out, then the abandoned start's stop with its
+# finalize tail and the fate read: 425 s. 425 s plus 10%, rounded up to a multiple of 10.
+PATCH_MAX_TIME=470
 RUNS_NAMESPACE="wardyn-runs"
 EVIDENCE_DIR="${WARDYN_KIND_CI_MODEL_EVIDENCE:-${ROOT}/local/evidence/kind-ci-model-run}"
 mkdir -p "${EVIDENCE_DIR}"

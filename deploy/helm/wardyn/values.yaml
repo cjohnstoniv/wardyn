@@ -119,6 +119,9 @@ ingress:
   # /api/v1/admin/runs/restart) answers once, after it has restarted every run it
   # was sent, one at a time, up to 3.5 minutes each: a batch slower than 60 s
   # gets the same 504, so give it a timeout that covers your largest batch.
+  # The egress edit request (PATCH /api/v1/runs/{id}/egress) can take up to
+  # 540s; a proxy read timeout below that returns 504 to the caller while the
+  # edit continues.
   annotations: {}
   hosts: []
   # hosts:
