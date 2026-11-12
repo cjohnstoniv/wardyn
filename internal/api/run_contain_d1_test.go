@@ -206,6 +206,19 @@ func (f *d1Store) ContainmentPastDue(ctx context.Context, id uuid.UUID, wait tim
 	return !time.Now().Before(containRowKey(r.TerminalSandboxRow).Add(containmentLag + wait)), nil
 }
 
+// RunDueFlags is the store's per-run due read (store.TerminalDue) over the rows in memory, on the store's own
+// clock: Due once the run's due has passed, CapPassed once its end plus keep has.
+func (f *d1Store) RunDueFlags(_ context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.rows[id]
+	if r == nil {
+		return store.RunDue{}, store.ErrNotFound
+	}
+	end, now := containRowKey(r.TerminalSandboxRow), time.Now()
+	return store.RunDue{Due: !now.Before(end.Add(containmentLag)), CapPassed: !now.Before(end.Add(keep))}, nil
+}
+
 // ContainmentStreakDue is the store's statement over the rows in memory, on the store's own clock: the
 // streak start is the latest of the row's due, now minus startedAgo and now minus unobservedAgo.
 func (f *d1Store) ContainmentStreakDue(ctx context.Context, id uuid.UUID, tau, startedAgo time.Duration, unobservedAgo *time.Duration) (bool, error) {
@@ -2008,16 +2021,16 @@ func TestContain_StopOwedValueList(t *testing.T) {
 	})
 }
 
-// A run whose stop is owed gets no pass from the resume sweep, on either of two servers that share the
-// store and whose sweeps both fire in the window: nothing is stopped, nothing revoked by a tail, no agent
-// touched. A run inside its hold is resumed as before (its tail stops the sandbox when the pass keeps
-// nothing), which shows the sweep does reach a run when its stop is not owed.
-func TestContain_ResumeSweepLeavesARunWhoseStopIsOwed(t *testing.T) {
+// A run whose stop is owed gets no pass from the tail owner, on either of two servers that share the
+// store and whose tail owners both fire in the window: nothing is stopped, nothing revoked by a tail, no agent
+// touched. A run inside its hold is taken as before (its tail stops the sandbox when the pass keeps
+// nothing), which shows the tail owner does reach a run when its stop is not owed.
+func TestContain_TailOwnerLeavesARunWhoseStopIsOwed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		a, scripts := d1ServerLab(t, time.Second, time.Second)
 		b := a.sharing(t)
-		a.dr.claimed = nil // the sweep's tail stops sandboxes outside the stop pool
-		a.ds.onGet = nil   // the sweep's tail re-reads the run outside the stop pool
+		a.dr.claimed = nil // the tail owner's tail stops sandboxes outside the stop pool
+		a.ds.onGet = nil   // the tail owner's re-read of the run is outside the stop pool
 		owed := a.rowDue(-(containServerKeepWait + time.Second), nil, "")
 		a.ds.owe(owed.ID)
 		var wg sync.WaitGroup
@@ -2025,7 +2038,7 @@ func TestContain_ResumeSweepLeavesARunWhoseStopIsOwed(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				l.srv.resumeComputerFolderBack(context.Background(), owed.ID)
+				l.srv.tailRun(context.Background(), owed.ID, tailFolder)
 			}()
 		}
 		wg.Wait()
@@ -2035,9 +2048,9 @@ func TestContain_ResumeSweepLeavesARunWhoseStopIsOwed(t *testing.T) {
 		}
 		inside := a.rowDue(-(containServerKeepWait - time.Minute), nil, "")
 		a.ds.owe(inside.ID)
-		a.srv.resumeComputerFolderBack(context.Background(), inside.ID)
+		a.srv.tailRun(context.Background(), inside.ID, tailFolder)
 		if n := a.dr.stopCount(inside.SandboxRef); n == 0 {
-			t.Error("a run inside its hold: the sweep did not reach its tail, so the owed case proves nothing")
+			t.Error("a run inside its hold: the tail owner did not reach its tail, so the owed case proves nothing")
 		}
 	})
 }

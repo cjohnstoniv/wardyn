@@ -184,7 +184,8 @@ func (r *fencingRunner) sb() *agentSandbox { return r.passWindowSandbox.agentSan
 // owedRecord is a computer folder record with a pass back owed (a resume), its generation settled.
 var owedRecord = types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}}
 
-// unsettledOwedRecord is owedRecord left unsettled: a forced end died between its claim and the settle.
+// unsettledOwedRecord is owedRecord left unsettled: a forced end that died after its settle's bump and before the
+// record write. A crash before the bump leaves the record as it was, settled.
 var unsettledOwedRecord = types.RunLocalFolderStatus{Gen: 3, Settled: 2, Resume: &types.FolderResume{Unsynced: 1}}
 
 // onFencedRunner puts the forced fixture's run on its runner, connected here with the fence capability, and

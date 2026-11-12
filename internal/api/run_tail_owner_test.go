@@ -1358,6 +1358,32 @@ func (f *forced) tailPassAfterCrash(t *testing.T) {
 	}
 }
 
+// A forced end whose process died after its claim and before its settle's bump leaves the seeded record as it was:
+// settled, with no Back and no Resume. While the run's lock is still held, the retry keeps the sandbox with its proxy
+// cut and the mark waiting; with the lock free the locked path keeps it and clears the mark, and the tail owner
+// brings the folder back and then stops the sandbox. Catches: rule R reading a pass back owed and never run as
+// clear, which stops the sandbox and loses the agent's changes with no record.
+func TestForcedRetry_CrashBeforeTheBumpWithTheLockHeldKeepsTheCopyBack(t *testing.T) {
+	f := newCrashed(t)
+	f.claimOnly(t)
+	if rec := f.cs.folderStatus(); rec.Seed == nil || rec.Back != nil || rec.Resume != nil || rec.Gen != rec.Settled {
+		t.Fatalf("record %+v after the claim; want the seeded record, settled, with no Back and no Resume", rec)
+	}
+	f.tick(t, f.s) // the lock is held
+	if run := f.terminalRun(t); f.sb.stopCount() != 0 || run.SandboxRef == "" || f.leaser.markCount() != 1 {
+		t.Fatalf("lock held: %d stops, ref %q, %d marks; want the sandbox kept with its ref and the mark waiting", f.sb.stopCount(), run.SandboxRef, f.leaser.markCount())
+	}
+	if f.s.cfg.Runner.(*proxyCounted).proxyStops.Load() == 0 {
+		t.Error("the sandbox was kept without cutting its proxy")
+	}
+	f.release()
+	f.tick(t, f.s)
+	if f.sb.stopCount() != 0 || f.leaser.markCount() != 0 {
+		t.Fatalf("lock free: %d stops, %d marks; want the sandbox kept and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+	}
+	f.tailPassAfterCrash(t)
+}
+
 // The same crashed shape that owes nothing is still stopped by every sweep: a run with no pass back to make (its
 // folder is one way), a killed run (never copied back) and a record given up. Catches: a keep broadened to every
 // seeded row with no Back.
