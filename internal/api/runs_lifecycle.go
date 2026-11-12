@@ -299,13 +299,16 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 // It is shared by handleKillRun and the completion watcher so EVERY terminal
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
+	marked := s.markRevokeOwed(ctx, runID)
 	data := s.revokeRunSteps(ctx, runID)
 	if len(data) > 0 && s.revokeRowDue(ctx, runID) {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(data))))
 	}
 	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
+		s.settleRevokeOwed(ctx, runID, marked, ctx.Err() != nil)
 		return ctx.Err()
 	}
+	s.settleRevokeOwed(ctx, runID, marked, true)
 	return fmt.Errorf("run revoke incomplete: %v", data)
 }
 
@@ -315,10 +318,12 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 // run.revoke row is, without auditing it: the reaper writes that row itself
 // from the map it is handed. An empty map is a clean revoke.
 func (s *Server) RevokeStoppedRun(ctx context.Context, runID uuid.UUID) map[string]string {
+	marked := s.markRevokeOwed(ctx, runID)
 	out := map[string]string{}
 	for k, v := range s.revokeRunSteps(ctx, runID) {
 		out[k] = fmt.Sprint(v)
 	}
+	s.settleRevokeOwed(ctx, runID, marked, len(out) > 0 || ctx.Err() != nil)
 	return out
 }
 
@@ -864,8 +869,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	killData := map[string]any{}
 	queued := false
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
+	var kerr error
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
-		if kerr := s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
+		if kerr = s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
 			if queuedOK && errors.Is(kerr, runner.ErrPendingOnRunner) {
 				queued = true
 			} else {
@@ -877,6 +883,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// use the whole kill deadline, and the revokes must not inherit what is left of it.
 	revokeCtx, revokeCancel := context.WithTimeout(context.WithoutCancel(ctx), killRevokeTimeout)
 	defer revokeCancel()
+	// The revoke is owed from here until step (4) leaves neither error behind; a worker on every replica
+	// retries it meanwhile, whether or not the run still holds a sandbox.
+	marked := s.markRevokeOwed(revokeCtx, id)
 	// (3) Identity revocation: deny every (current+future) token for the run. A
 	// bounded retry guards against a transient store error leaving the run's
 	// JWT-SVID valid (until its <=1h TTL) while the kill is reported as success.
@@ -894,6 +903,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 			killData["broker_error"] = berr.Error()
 		}
 	}
+	_, identityFailed := killData["identity_error"]
+	_, brokerFailed := killData["broker_error"]
+	s.settleRevokeOwed(revokeCtx, id, marked, identityFailed || brokerFailed)
 	// (5) The run's stored proxy config (#1176) has nothing left to rebuild.
 	if perr := s.dropRunProxyConfig(revokeCtx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
@@ -935,6 +947,11 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// for interactive mode (which has no completion watcher), so capture here.
 	s.reconcileWorkspaceRun(revokeCtx, id)
 	s.reconcileRecordRun(revokeCtx, id)
+	// A confirmed kill leaves the ref meaning nothing: clear it, after reconcileRecordRun, which reads the ref
+	// to tell a sandbox that never started from an empty capture (workspace_run.go:444).
+	if kerr == nil && !queued && s.cfg.Runner != nil && run.SandboxRef != "" {
+		_ = s.clearSandboxRef(revokeCtx, id)
+	}
 
 	return killData
 }
