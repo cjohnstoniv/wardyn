@@ -73,7 +73,7 @@ services:
   postgres:
     # Digest-pinned (tag kept for readability). postgres:17 is a FLOATING major,
     # so the digest freezes the exact image; bump both together on a version move.
-    image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+    image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
     container_name: ${WARDYN_NS:-wardyn}-postgres
     # No raw sockets: local mode trusts the published port's source address on this network.
     cap_drop: [NET_RAW]
@@ -701,7 +701,7 @@ services:
   # ───────────────────────────────────────────────────────────────────────────
   tetragon:
     # Digest-pinned (tag kept for readability); bump both together on a version move.
-    image: quay.io/cilium/tetragon:v1.7.1@sha256:afc9458ba4bc3f2795da3df6b03d88ce50e175ac3903027de8036e2046b84a02
+    image: quay.io/cilium/tetragon:v1.8.0@sha256:5ed9088a1582131d71b06c98e0d549a37a71ae63ab13aabefc7a47553c822a9d
     container_name: ${WARDYN_NS:-wardyn}-tetragon
     profiles: ["groundtruth"]
     # Host eBPF sensor: needs privileged + host PID/cgroup + kernel mounts.
