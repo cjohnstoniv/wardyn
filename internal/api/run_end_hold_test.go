@@ -548,9 +548,9 @@ func TestEndHold_KeptRunEndIsAHold(t *testing.T) {
 			t.Errorf("state %s, %d stops with every end hold taken; want RUNNING and none", f.st.State(), len(seen.calls()))
 		}
 	})
-	// A lost run (as heldEndFixture loses one, run_forced_end_test.go:28-31) with every hold taken: the full
+	// A lost run (as heldEndFixture loses one) with every hold taken: the full
 	// semaphore is a busy answer, so stopKeptRun hands the run to forceKeptStop, which waits out
-	// keptEndHoldOffLimit from the loss (data kept: false counts it from the loss, run_kept_stop_forced.go:55-58).
+	// keptEndHoldOffLimit from the loss (data kept: false counts it from the loss, in forceKeptStop).
 	lost := func(t *testing.T) (*leaseFixture, *holdSeen, types.AgentRun) {
 		t.Helper()
 		f, seen := setup(t)
@@ -606,7 +606,7 @@ func TestEndHold_KeptRunEndIsAHold(t *testing.T) {
 // The tail owner's run (tailRun) is an end hold for the dedicated budget: the stop after its pass back carries a
 // deadline 3 minutes from the call; with every hold taken it runs nothing; and past its hold (an outer hold
 // already passed, which it re-enters) no pass is sent and nothing is stopped. No pass is sent because the first
-// read on a teardown ctx already done stops it (folderBackEligible, run_computer_folder.go:230-233); the pass
+// read on a teardown ctx already done stops it (folderBackEligible, in bringComputerFolderBack); the pass
 // budget does not read the hold (TestEndHold_PassBackKeepsItsBudgetUnderAShortHold), and the terminal-effects
 // guard stops the stop. Catches tailRun's own tryLockRunOp left in place. The deadline
 // is injected as an outer hold on the ctx, so the passed case proves the caps downstream, not that tailRun's own B
