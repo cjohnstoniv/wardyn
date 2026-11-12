@@ -773,7 +773,12 @@ func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
 	select {
 	case <-pr.sampleStarted:
 	case err := <-sweepDone:
-		t.Fatalf("the sweep ended before its sample opened: %v", err)
+		select {
+		case <-pr.sampleStarted: // the sample opened, and the sweep finished before this wait
+			sweepDone <- err
+		default:
+			t.Fatalf("the sweep ended before its sample opened: %v", err)
+		}
 	}
 	for _, c := range []chan int{poll1, poll2} {
 		if code := <-c; code != http.StatusOK {
