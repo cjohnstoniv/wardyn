@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -615,6 +616,11 @@ func TestPG_WorkloadSweep_RetriesALapsedLaunch(t *testing.T) {
 	swept := make(chan struct{})
 	go func() {
 		defer close(swept)
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+			}
+		}()
 		e.h.srv.workloadStatusSweeper(sweep, 250*time.Millisecond)
 	}()
 	defer func() { stop(); <-swept }()

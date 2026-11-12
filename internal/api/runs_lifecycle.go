@@ -950,11 +950,23 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// A confirmed kill leaves the ref meaning nothing: clear it, after reconcileRecordRun, which reads the ref
 	// to tell a sandbox that never started from an empty capture (reconcileRecordRun in workspace_run.go).
 	if kerr == nil && !queued && s.cfg.Runner != nil && run.SandboxRef != "" {
-		_ = s.clearSandboxRef(revokeCtx, id)
+		if c, ok := s.cfg.Store.(sandboxRefRetainingClearer); ok {
+			_ = c.ClearSandboxRefRetaining(revokeCtx, id)
+		}
 	}
 
 	return killData
 }
+
+// sandboxRefRetainingClearer is the one store method the kill tail's ref clear needs, asked for on its own
+// as store.RevokeOwed is. store.PG satisfies it, so the clear in production is the retaining clear
+// clearSandboxRef also takes there. store.Store does not carry it, so a test fake that embeds a nil
+// store.Store does not satisfy it and its kill skips the clear instead of calling through a nil interface.
+type sandboxRefRetainingClearer interface {
+	ClearSandboxRefRetaining(ctx context.Context, runID uuid.UUID) error
+}
+
+var _ sandboxRefRetainingClearer = store.PG{}
 
 // killCascadeTimeout bounds a detached kill cascade. The teardown and both
 // revocations are a handful of store/runner calls; 30s is the generous bound the

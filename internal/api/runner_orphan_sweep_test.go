@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -144,8 +145,13 @@ func TestReadySweepRetryEndsWithTheSession(t *testing.T) {
 	}}
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("panic: %v\n%s", r, debug.Stack())
+			}
+		}()
 		srv.sweepRunnerOrphansOnReady(ctx, uuid.New(), sw, onSession, []time.Duration{time.Hour})
-		close(done)
 	}()
 	select {
 	case <-done:
