@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- macOS VM bases: an opt-in switch, `/Library/Wardyn/setup-assistant-carry`, copies the agent user's per-host settings into each run's new machine identity at boot, when the guest agent starts, so a Setup Assistant pane finished once in `edit-base` may stay closed in runs. Off by default; not yet tried on a real Mac.
+
 ### Changed
 
 - A live network edit or revive on Docker now fails if the new proxy can't renew its token with the server within 10 seconds: a run that can be kept is lost until revived, and any other run ends. Creates are unchanged.
@@ -34,10 +38,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A replacement network proxy (started when a run's proxy is revived or its egress is edited) now waits for its first token renewal before it serves, so a proxy started late, after its token was retired or revoked, never serves a byte; it exits if that renewal is refused or does not land. A renewal made while the run is busy, such as during a live edit, is answered at once, and the runner's updated lease is retried once a minute until the run is free, while the token is valid. This needs both the runner and the proxy image to be at 0.10.0-rc.19 or later; with either one older, a replacement proxy serves at once as before. A live network edit is refused, with a hint to update, when the runner or the proxy image is known to be older than 0.10.0-rc.19; a version that cannot be read is not checked.
 - Two revives or live egress edits of one run on two servers, after one lost the run's lock, could let the slower one start the run's proxy again from the config before the faster one's edit, reopening a host the edit had removed. A revive now stores its config in the same write as its policy generation, before the new proxy starts, and that write lands only while the generation it read before its config is still the newest. A revive that loses that race, or that lost the lock before its replace, replaces nothing. When its policy record is undone the run keeps its current proxy. When that undo fails, recovery attempts to mark the run lost and stop its proxy. An edit whose config cannot be stored now changes nothing, where it used to stop the new proxy and lose the run. Affects 0.10.0 prereleases only.
 - A revive, live egress edit or failed proxy start's containment whose run lock was lost could mark the run lost and stop the proxy of a newer revive that had taken the run over on another server. That lost mark now lands only while the attempt's policy generation is still the run's newest, and a miss stops nothing; a store error still triggers an attempt to stop the proxy. A revive of a lost or ended run whose lock was lost before its replace now gives the run back its lost mark, instead of leaving it looking live with its agent stopped. A policy generation write that answered an error is read back, and the revive tries to abandon one it wrote all the same.
+- macOS VM runs: the guest agent no longer asks Setup Assistant to quit at run start. On macOS 26.6.2 that signed the agent user out and left the run at the login window. The setup-assistant-quit switch is no longer read; remove it from your base.
 
 ### Known issues
 
-- macOS VM: the setup-assistant-quit switch signs the agent user out on macOS 26.6.2, and the run stops at the login window; leave it off.
 - A forced stop of an ended run, after its lock was held 5 minutes past the end, normally stops the sandbox. Changes not yet copied back to the laptop are lost and the run records "not brought back". The exception is a Docker sandbox hosted on the server. If its folder record could not be read, or its copy back may still be in flight, it is kept with its network proxy stopped, and "not brought back" may not be recorded. A failed stop is retried on the next watcher tick, normally within a minute. The same applies on runners, virtual machines and Kubernetes in server mode, which cannot stop the proxy alone.
 - A copy back that finds the folder busy on a sandbox that cannot be held (a virtual machine, or an agent that cannot be stopped alone) stops the sandbox at that visit and records "not brought back". The same happens to such a sandbox whose last pass may still be running on an older runner. Changes the running pass had not finished copying are lost.
 - Changes not yet copied back are lost when the laptop's runner is offline at the end of the run.

@@ -44,6 +44,9 @@ func main() {
 		stop()
 		os.Exit(code)
 	}
+	if len(os.Args) > 1 && os.Args[1] == guestagent.HostPrefsCarryVerb {
+		os.Exit(guestagent.HostPrefsCarryMain(os.Args[2:], os.Stdout))
+	}
 	out := flag.String("out", "/var/run/wardyn-guest", "directory for detached execs' output (cleared at boot)")
 	plist := flag.String("plist", guestagent.MacAgentPlistPath, "this agent's LaunchDaemon plist, which tools mode may replace")
 	flag.Parse()
@@ -92,6 +95,8 @@ func run(out, plist string) error {
 	}
 	srv.ScreenLockOff = guestagent.ScreenLock{Run: runner, Stdin: runner, Console: guestagent.ConsoleOwner{}}.Off
 	srv.Scrub, srv.RecordMCPTables = scrub.Scrub, scrub.RecordMCPTables
+	hostPrefs := guestagent.HostPrefsCarry{Run: runner, Console: guestagent.ConsoleOwner{}, MarkerDir: srv.MarkerDir, Cred: cred, Self: self}.Carry(ctx)
+	slog.Info("wardyn-guest-agent host prefs", "status", hostPrefs)
 	// Before the agent serves, so before any Init: what a past run wrote is gone, whether it stopped
 	// gracefully or not. A restart of this service after Init skips it (BootScrubDue).
 	if guestagent.BootScrubDue(srv.MarkerDir) {
@@ -100,6 +105,9 @@ func run(out, plist string) error {
 		cancel()
 		srv.BootScrub = &r
 		slog.Info("wardyn-guest-agent boot scrub", "outcome", r.Outcome, "removed", r.Removed, "ca_sha256", r.CAs)
+		if err := guestagent.WriteHostPrefsStatus(guestagent.MacHostPrefsStatusPath, hostPrefs); err != nil {
+			slog.Warn("wardyn-guest-agent host prefs status", "err", err)
+		}
 	}
 	h, err := srv.Handler()
 	if err != nil {
