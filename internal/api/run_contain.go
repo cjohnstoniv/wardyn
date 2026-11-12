@@ -115,6 +115,7 @@ type containState struct {
 	preCutFn                       func(ctx context.Context, run types.AgentRun) error // stands in for containPreCut
 	containCallFn                  func(ctx context.Context, run types.AgentRun) error // stands in for containCallPre
 	d1DueFn                        func(ctx context.Context, run types.AgentRun, kind cutKind, err error) bool
+	callStartFn                    func() // runs on a call's goroutine just before its work; nil in production
 }
 
 func (c *containState) init() {
@@ -547,6 +548,9 @@ func (s *Server) containCallWithin(ctx context.Context, run types.AgentRun, gen 
 				ans = containAnswer{err: fmt.Errorf("%w: %v", errContainCallPanicked, r)}
 			}
 		}()
+		if h := c.callStartFn; h != nil {
+			h()
+		}
 		ans = work()
 	})
 	select {

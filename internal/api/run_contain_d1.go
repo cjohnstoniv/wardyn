@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -261,12 +262,19 @@ func (s *Server) d1GiveUp(base context.Context, run types.AgentRun) bool {
 	return final
 }
 
+// errStopNotBegunLockLost is a stop withheld because the run lock was lost before StopSandbox began. It is
+// no stop attempt: no confirmation, no unobserved mark, no failure stamp; the next visit tries again.
+var errStopNotBegunLockLost = errors.New("the run lock was lost before the stop began")
+
 // d1Stop is the StopSandbox phase, and the post phase after it. A stop still running at the end of its
 // phase is abandoned and counts as failed; its claim is held until the call returns. A confirmed stop
 // clears the run's recorded containment failure for that sandbox; the tail owner clears the ref. The call is
 // made under the stop item's claim, generation gen, and only while lctx, the run lock's context, is live:
-// the stop's own phase derives from lctx, so a lost lock ends it. What follows the call (the confirmation,
-// the failure stamp) accounts for a call that was made and stays on base, under the same gen.
+// the stop's own phase derives from lctx, so a lost lock ends it. The lock is checked twice, before the
+// phase and inside the call just before StopSandbox, so a lock lost while the call waits to start begins no
+// stop; a call abandoned on a lost lock before it began is withheld from beginning. Either is no stop
+// attempt (errStopNotBegunLockLost). A stop already sent is not recalled. What follows a call that was made
+// (the confirmation, the failure stamp) stays on base, under the same gen.
 func (s *Server) d1Stop(base, lctx context.Context, run types.AgentRun, gen uint64) {
 	if s.cfg.Runner == nil {
 		return
@@ -281,10 +289,24 @@ func (s *Server) d1Stop(base, lctx context.Context, run types.AgentRun, gen uint
 		slog.DebugContext(base, "wardynd: an ended run's lock was lost; nothing stopped, the next visit tries again", slog.String("run_id", run.ID.String()))
 		return
 	}
+	// begun is 0 until the call begins StopSandbox (1) or the item withholds it after abandoning it (2).
+	var begun atomic.Int32
+	notBegun := func() containAnswer {
+		return containAnswer{err: fmt.Errorf("%w: %w", errStopNotBegunLockLost, context.Cause(lctx))}
+	}
 	ans, _ := s.containCallWithin(stopCtx, run, gen, func() containAnswer {
+		if lctx.Err() != nil || !begun.CompareAndSwap(0, 1) {
+			return notBegun()
+		}
 		return containAnswer{err: s.cfg.Runner.StopSandbox(stopCtx, run.SandboxRef)}
 	})
+	if errors.Is(ans.err, errContainCallAbandoned) && lctx.Err() != nil && begun.CompareAndSwap(0, 2) {
+		ans = notBegun()
+	}
 	switch {
+	case errors.Is(ans.err, errStopNotBegunLockLost):
+		slog.DebugContext(base, "wardynd: an ended run's lock was lost before its stop began; nothing stopped, the next visit tries again", slog.String("run_id", run.ID.String()))
+		return
 	case errors.Is(ans.err, errContainCallPanicked):
 		return
 	case ans.err == nil:

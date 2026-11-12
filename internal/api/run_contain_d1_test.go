@@ -53,6 +53,7 @@ type d1Store struct {
 	otherWriter  bool // the statement applies nothing, and the record is final from another writer
 	streaks      []d1Streak
 	cleared      []string      // the refs a confirmed stop cleared a failure for
+	clearCalls   atomic.Int32  // ClearRunContainmentErrorForRef calls, whether or not they cleared
 	giveUpLag    time.Duration // the give-up statement takes this long, ignoring its ctx
 	postLag      atomic.Int64  // a failure write takes this many nanoseconds more, ignoring its ctx
 	afterSeed    func()        // runs after each seed read that answered, as the run lock is lost in a test
@@ -121,6 +122,7 @@ func (f *d1Store) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID,
 // ClearRunContainmentErrorForRef is the store's statement over the rows in memory: the failure is cleared
 // only while the row holds ref.
 func (f *d1Store) ClearRunContainmentErrorForRef(_ context.Context, id uuid.UUID, ref string) (bool, error) {
+	f.clearCalls.Add(1)
 	f.mu.Lock()
 	r := f.rows[id]
 	ok := r != nil && ref != "" && r.SandboxRef == ref && r.msg != ""
@@ -2293,9 +2295,11 @@ func (l *d1LostLocker) releases() int {
 // The stop item keeps the run lock's context: once the lock is lost, no give-up write and no StopSandbox
 // begins, the claim accounting is left alone (no failure stamp), the item still releases its lock, and
 // another holder can take the run's lock again. The lock is lost on acquisition, after the owed read and
-// before the give-up statement, or after the give-up statement and before the stop. The run is then left
-// owed, its claim released as the held-lock early return leaves it: a second visit on a fresh lock reaches
-// StopSandbox once. A lock that is kept gives up and stops on the first visit.
+// before the give-up statement, after the give-up statement and before the stop, or after the stop item has
+// handed its call to the call's goroutine and is waiting for it, before the call runs: that stop is no attempt
+// (no confirmation, no unobserved mark, no failure stamp or streak, d1Due's verdict unchanged). The run is
+// then left owed, its claim released as the held-lock early return leaves it: a second visit on a fresh lock
+// reaches StopSandbox once. A lock that is kept gives up and stops on the first visit.
 func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -2307,6 +2311,15 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 		{"lost on acquisition", func(_ *d1Lab, lk *d1LostLocker) { lk.onTake = func(lose context.CancelFunc) { lose() } }, 0, true, 1},
 		{"lost after the owed read, before the give-up", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterSeed = lk.loseNow }, 0, true, 1},
 		{"lost after the give-up, before the stop", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterGiveUp = lk.loseNow }, 1, true, 1},
+		// The loss lands once every other goroutine is parked, the stop item in its wait for the call's answer.
+		{"lost while the stop waits for its call to run", func(l *d1Lab, lk *d1LostLocker) {
+			l.srv.contain.callStartFn = func() {
+				if !lk.kept.Load() {
+					synctest.Wait()
+					lk.loseNow()
+				}
+			}
+		}, 1, true, 1},
 		{"kept", func(*d1Lab, *d1LostLocker) {}, 1, false, 1},
 	}
 	for _, c := range cases {
@@ -2317,6 +2330,8 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 			row := l.row(nil, types.MachineLinuxVM)
 			l.ds.owe(row.ID)
 			c.lose(l, lk)
+			ctx, run := context.Background(), containRunOf(row)
+			dueBefore := [2]bool{l.srv.d1Due(ctx, run, cutUnsupported, nil), l.srv.d1Due(ctx, run, cutFenced, errContainBoom)}
 			l.startStops()
 			l.item(row)
 			time.Sleep(containD1Unsupported)
@@ -2333,6 +2348,15 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 			if w := l.st.stampWrites(); w != 0 {
 				t.Errorf("%s: %d failure writes, want none: a lost lock is not a failure", c.name, w)
 			}
+			if n := l.ds.clearCalls.Load(); n != int32(wantStops) {
+				t.Errorf("%s: %d confirmed-stop clears, want %d", c.name, n, wantStops)
+			}
+			l.srv.contain.mu.Lock()
+			_, unobserved := l.srv.contain.unobserved[row.ID]
+			l.srv.contain.mu.Unlock()
+			if unobserved {
+				t.Errorf("%s: the run was marked unobserved, want no mark", c.name)
+			}
 			if n := lk.releases(); n != 1 {
 				t.Errorf("%s: the item released its lock %d times, want 1", c.name, n)
 			}
@@ -2348,6 +2372,10 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 			if c.lost {
 				// The next visit holds a fresh lock that is not lost: the run is still owed its stop.
 				lk.kept.Store(true)
+				dueAfter := [2]bool{l.srv.d1Due(ctx, run, cutUnsupported, nil), l.srv.d1Due(ctx, run, cutFenced, errContainBoom)}
+				if dueAfter != dueBefore {
+					t.Errorf("%s: d1Due (no call, failed cut) = %v after the lost visit, want %v as before it", c.name, dueAfter, dueBefore)
+				}
 				if !l.item(row) {
 					t.Fatalf("%s: the run could not be claimed for a second visit", c.name)
 				}
