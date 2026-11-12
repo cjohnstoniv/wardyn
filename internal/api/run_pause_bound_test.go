@@ -86,7 +86,7 @@ func TestRunPause_AHungRuntimeCallEndsAtItsBound(t *testing.T) {
 		}
 	})
 	t.Run("a thaw cut at its bound is left to the settle", func(t *testing.T) {
-		f, _, _ := pausedRunClock(t, 0)
+		f, _, now := pausedRunClock(t, 0)
 		returns(t, f, "the resume", func(ctx context.Context) {
 			_ = f.srv.markPresent(ctx, f.run.ID, types.ActorHuman, pauseOwner, "presence")
 		})
@@ -101,6 +101,16 @@ func TestRunPause_AHungRuntimeCallEndsAtItsBound(t *testing.T) {
 		if at, _ := f.st.paused(); at == nil || freezes != 1 || f.st.owing() != 0 {
 			t.Fatalf("paused = %v, freezes = %d, settle records = %d; want the paused run frozen again and its record cleared",
 				at != nil, freezes, f.st.owing())
+		}
+		// A second person's input, once the retry backoff has passed and with the runtime answering, resumes the run.
+		*now = now.Add(time.Second)
+		_, thawsBefore := f.rn.counts()
+		if err := f.typed(); err != nil {
+			t.Fatalf("the second input's resume: %v; want it to succeed", err)
+		}
+		_, thaws := f.rn.counts()
+		if at, _ := f.st.paused(); at != nil || thaws != thawsBefore+1 {
+			t.Fatalf("paused = %v, thaws = %d (was %d); want the run resumed by one thaw", at != nil, thaws, thawsBefore)
 		}
 	})
 	t.Run("the settle's move", func(t *testing.T) {
