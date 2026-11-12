@@ -15,19 +15,21 @@ import (
 type Code string
 
 const (
-	CodeRunnerOffline      Code = "runner_offline"
-	CodePendingOnRunner    Code = "pending_on_runner"
-	CodeSandboxGone        Code = "sandbox_gone"
-	CodeExecUnsupported    Code = "exec_unsupported"
-	CodeEndUnsupported     Code = "end_unsupported"
-	CodeReviveUnsupported  Code = "revive_unsupported"
-	CodeNeverStarted       Code = "never_started"
-	CodeImageArch          Code = "image_arch"
-	CodeRelayIPFenced      Code = "relay_ip_fenced"
-	CodeObserveUnsupported Code = "observe_unsupported"
-	CodeFolderPassBusy     Code = "folder_pass_busy"
-	CodeRefused            Code = "refused"
-	CodeInternal           Code = "internal"
+	CodeRunnerOffline        Code = "runner_offline"
+	CodePendingOnRunner      Code = "pending_on_runner"
+	CodeSandboxGone          Code = "sandbox_gone"
+	CodeExecUnsupported      Code = "exec_unsupported"
+	CodeEndUnsupported       Code = "end_unsupported"
+	CodeReviveUnsupported    Code = "revive_unsupported"
+	CodeNeverStarted         Code = "never_started"
+	CodeImageArch            Code = "image_arch"
+	CodeRelayIPFenced        Code = "relay_ip_fenced"
+	CodeObserveUnsupported   Code = "observe_unsupported"
+	CodeFolderPassBusy       Code = "folder_pass_busy"
+	CodeProxyFenced          Code = "proxy_fenced"
+	CodeProxyGenerationNewer Code = "proxy_generation_newer"
+	CodeRefused              Code = "refused"
+	CodeInternal             Code = "internal"
 )
 
 var codeSentinels = []struct {
@@ -45,6 +47,8 @@ var codeSentinels = []struct {
 	{CodeRelayIPFenced, runner.ErrRelayIPFenced},
 	{CodeObserveUnsupported, runner.ErrObserveUnsupported},
 	{CodeFolderPassBusy, runner.ErrFolderPassBusy},
+	{CodeProxyFenced, runner.ErrProxyFenced},
+	{CodeProxyGenerationNewer, runner.ErrProxyGenerationNewer},
 }
 
 // Valid reports whether c is in the closed list.
