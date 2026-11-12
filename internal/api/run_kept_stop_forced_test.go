@@ -1643,3 +1643,63 @@ func TestSweepForcedStops_NothingOwedStopsWithTheLockHeld(t *testing.T) {
 		})
 	}
 }
+
+// Rule R, an unreadable data_out rule: a forced end, or a held-lock retry, that cannot read the run's rule has no
+// answer on whether its computer folder owes a pass back. It keeps the sandbox that owes one, as the lock-free path
+// does, and the mark waits. Catches: the unreadable rule read as a folder that owes nothing, which stops the
+// sandbox with its changes owed and nothing recorded.
+func TestForceKeptStop_AnUnreadableDataOutRuleKeepsTheOwedSandbox(t *testing.T) {
+	t.Run("at the forced end", func(t *testing.T) {
+		f := newForced(t)
+		f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+		f.cs.policyErr = errors.New("the audit read failed")
+		f.end(f.s)
+		if f.sb.stopCount() != 0 || !f.sb.proxyStopped.Load() || f.leaser.markCount() != 1 {
+			t.Fatalf("%d sandbox stops, proxy stopped %v, %d marks; want the sandbox kept with its proxy stopped and the mark waiting", f.sb.stopCount(), f.sb.proxyStopped.Load(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Back != nil || rec.Resume != nil || rec.Gen != 3 {
+			t.Fatalf("record %+v; want it as it was: a forced end that cannot read the rule writes nothing", rec)
+		}
+	})
+	t.Run("a rule that reads as blocked stops as before", func(t *testing.T) {
+		f := newForced(t)
+		f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+		f.cs.dataOut = types.TransferBlocked
+		f.end(f.s)
+		if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+			t.Fatalf("%d sandbox stops, %d marks; want the sandbox stopped and the mark cleared: a blocked rule owes no pass back", f.sb.stopCount(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Back != nil || rec.Resume != nil || rec.Gen != 3 {
+			t.Fatalf("record %+v; want it as it was: nothing is owed, so nothing is written", rec)
+		}
+	})
+	t.Run("at the held-lock retry", func(t *testing.T) {
+		f := newForced(t)
+		f.claimOnly(t)
+		f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+		f.cs.policyErr = errors.New("the audit read failed")
+		f.tick(t, f.s) // the lock is held
+		if run := f.terminalRun(t); f.sb.stopCount() != 0 || f.leaser.markCount() != 1 || run.SandboxRef == "" {
+			t.Errorf("%d sandbox stops, %d marks, ref %q; want the sandbox kept, the mark waiting and the ref kept", f.sb.stopCount(), f.leaser.markCount(), run.SandboxRef)
+		}
+	})
+}
+
+// Rule R, lock held, a runner that dropped after the gate: the cut is not observed, and a never-run record (settled,
+// no Back, no Resume) is still a pass back owed. The retry queues no stop for the runner that is away and the mark
+// waits. Catches: that record read as not in flight, which stops the sandbox through a queued stop that would replay
+// on reconnect and lose the copy back.
+// This is a regression pin for the earlier change that keeps an owed record. It is red only at the older rule
+// (rec.Resume != nil || rec.Gen != rec.Settled), and green before and after the change that reads an unreadable
+// data_out rule as unreadable.
+func TestForceKeptStop_AnUnobservedCutOnANeverRunRecordQueuesNoStop(t *testing.T) {
+	f := newForced(t)
+	fr, _ := f.onFencedRunner(t)
+	f.claimOnly(t)
+	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+	fr.fenceErr = fmt.Errorf("%w: the link dropped", runner.ErrRunnerOffline)
+	f.tick(t, f.s) // the lock is held
+	if fr.fences.Load() != 1 || f.sb.stopCount() != 0 || fr.proxyStops.Load() != 0 || f.leaser.markCount() != 1 {
+		t.Errorf("fences %d, %d sandbox stops, %d proxy stops, %d marks; want one fence, no stop queued and the mark kept", fr.fences.Load(), f.sb.stopCount(), fr.proxyStops.Load(), f.leaser.markCount())
+	}
+}

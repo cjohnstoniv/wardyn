@@ -116,7 +116,7 @@ func sameKeptMark(a, b types.AgentRun) bool {
 
 // forcedFolder is run id's computer folder when its pass back would have run (bringComputerFolderBack's own
 // preconditions: both ways, seeded, on a runner, and the run's content allowed out), and nil otherwise.
-// unreadable is a read that failed.
+// unreadable is a read that failed: the folder and seed, or the run's data_out rule.
 func (s *Server) forcedFolder(ctx context.Context, id uuid.UUID) (folder *types.RunLocalFolder, unreadable bool) {
 	st, ok := s.cfg.Store.(store.RunLocalFolders)
 	if !ok {
@@ -128,7 +128,12 @@ func (s *Server) forcedFolder(ctx context.Context, id uuid.UUID) (folder *types.
 		return nil, true
 	case folder == nil || folder.RunnerID == nil || folder.Direction != types.ComputerFolderBoth || seed.SeededAt == nil:
 		return nil, false
-	case !s.runDataOutAllowed(ctx, id):
+	}
+	rule, _, err := s.runDataOutRule(ctx, id)
+	switch {
+	case err != nil:
+		return nil, true
+	case rule != types.TransferAllowed:
 		return nil, false
 	}
 	return folder, false
@@ -169,8 +174,8 @@ func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID, keep bool
 // forcedKeepsSandbox is rule R: the forced end's sandbox decision without the run's lock. A sandbox is kept,
 // its agent cut off every network, only when that cut was observed (observed: cutAgent fenced it, or stopped
 // the proxy of a server-hosted one), the sandbox is keepable (never a virtual machine; hosted, or on a
-// connected runner that fences), and its computer folder's record may be in flight. Every other sandbox is
-// stopped, as the locked path stops it.
+// connected runner that fences), and its computer folder still owes its copy back, or its record may belong to a
+// pass in flight, or one of those reads failed. Every other sandbox is stopped, as the locked path stops it.
 func (s *Server) forcedKeepsSandbox(ctx context.Context, run types.AgentRun, observed bool) bool {
 	return observed && s.keepable(run) && s.forcedRecordInFlight(ctx, run)
 }
@@ -306,15 +311,17 @@ func (s *Server) sweepForcedStops(ctx context.Context) error {
 // succeeded or is owed to the revoke worker, and then in exactly these cases:
 //   - the sandbox stop is confirmed (a success row, once);
 //   - the sandbox is kept with its proxy stopped for its computer folder's resume (the locked path, the lock
-//     free; a held lock with a record that may be in flight keeps the mark until the lock is free);
+//     free; a held lock with a folder that still owes its copy back, or a record that may belong to a pass in
+//     flight, keeps the mark until the lock is free);
 //   - the run's ref is already empty;
 //   - the run's runner is gone (runnerGoneReason): nothing can confirm the stop, and the failure row says so.
 //
 // Every other failure, a failed revoke the worker does not own included, keeps the mark, and its first row is
 // the only one this process writes. A proxy stop that failed on a kept sandbox leaves a cause (withStopCause) and so keeps it too.
 // A record the forced end left unsettled is settled before anything is stopped: owed (a resume) when the cut
-// is observed and the sandbox keepable, otherwise as not brought back. A run on a runner that is not here, and
-// can come back, has nothing settled, stopped or queued, and the mark waits for it.
+// is observed and the sandbox keepable, otherwise as not brought back. A final record (brought back or given
+// up) is left as it is (folderFinal). A run on a runner that is not here, and can come back, has nothing
+// settled, stopped or queued, and the mark waits for it.
 func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m store.ForcedStop) {
 	ctx = forcedCtx(ctx)
 	run, err := s.cfg.Store.GetRun(ctx, m.RunID)
