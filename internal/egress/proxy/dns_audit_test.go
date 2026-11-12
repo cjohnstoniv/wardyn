@@ -246,9 +246,13 @@ func TestDNSListenerRefusesAndRecords(t *testing.T) {
 	for len(log.get()) < len(want) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
+	// Each listener notes its row after its own reply, the UDP and the TCP one on goroutines of their own, so the
+	// two rows may land either way round.
 	got := log.get()
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("rows %+v, want %+v", got, want)
+	inOrder := len(got) == 2 && got[0] == want[0] && got[1] == want[1]
+	swapped := len(got) == 2 && got[0] == want[1] && got[1] == want[0]
+	if !inOrder && !swapped {
+		t.Fatalf("rows %+v, want %+v in any order", got, want)
 	}
 	mu.Lock()
 	defer mu.Unlock()
