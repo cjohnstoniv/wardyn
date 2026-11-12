@@ -43,30 +43,50 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 	if !ok {
 		return s.stopLostSandbox(ctx, run)
 	}
-	proxyOnly := s.outageProxyOnly(ctx, run)
-	var err error
-	if proxyOnly {
-		if _, ok := s.cfg.Runner.(runner.ProxyStopper); !ok {
-			return runner.ErrEndUnsupported
+	newer := func(err error) bool {
+		if !errors.Is(err, runner.ErrProxyGenerationNewer) {
+			return false
 		}
-		err = gs.StopProxyAt(ctx, run.SandboxRef, gen)
-	} else {
-		err = gs.EndSandboxAt(ctx, run.SandboxRef, gen)
-		if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
-			err = nil
-		}
-	}
-	if errors.Is(err, runner.ErrProxyGenerationNewer) {
 		slog.InfoContext(ctx, "wardynd: a newer revive owns the run's proxy; this attempt's stop is not needed",
 			slog.String("run_id", run.ID.String()), slog.Int("generation", gen), slog.Any("err", err))
+		return true
+	}
+	end, readErr := s.outageEnd(ctx, run)
+	var cutErr error
+	if end != lostEndPast {
+		_, canCut := s.cfg.Runner.(runner.ProxyStopper)
+		if !canCut && end == lostEndOpen {
+			return runner.ErrEndUnsupported
+		}
+		if canCut {
+			cutErr = gs.StopProxyAt(ctx, run.SandboxRef, gen)
+		}
+		if newer(cutErr) {
+			return nil // a newer revive owns the run: no end call, no stop mark
+		}
+		switch end {
+		case lostEndOpen:
+			return cutErr
+		case lostEndReadFailed:
+			return lostReadFailure(readErr, cutErr)
+		}
+	}
+	err := gs.EndSandboxAt(ctx, run.SandboxRef, gen)
+	if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+		err = nil
+	}
+	if newer(err) {
 		return nil
 	}
-	if leaser, ok := s.cfg.Store.(store.RunLeaser); ok && err == nil && !proxyOnly && run.LostReason == types.LostOutage && run.LostAt != nil {
+	if leaser, ok := s.cfg.Store.(store.RunLeaser); ok && err == nil && run.LostReason == types.LostOutage && run.LostAt != nil {
 		// A failed write only leaves the run counted; the lease sweep re-asserts this stop every pass.
 		if merr := leaser.MarkRunAgentStopped(ctx, run.ID, *run.LostAt); merr != nil {
 			slog.WarnContext(ctx, "wardynd: recording a kept run's stopped agent failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", merr))
 		}
+	}
+	if errors.Is(err, runner.ErrEndUnsupported) && cutErr != nil {
+		return cutErr // the cut failed too: containment unresolved, retried by the lease sweep
 	}
 	return err
 }

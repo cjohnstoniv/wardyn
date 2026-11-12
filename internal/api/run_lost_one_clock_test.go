@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -110,19 +111,16 @@ func TestLostRunKeepable_TheGraceIsTheDatabasesClock(t *testing.T) {
 	}
 }
 
-// With no answer from the database the outage stop is the stronger one: a store without RunEndsOpen, and a
-// read that fails, both end the agent of a run inside its end (nothing keeps running on an unknown end). The
-// keep decision (lostRunKeepable) is the other way: it keeps the run on no answer, so the stop that follows
-// contains it and the files are not torn down on a failed read.
+// An outage run whose end cannot be had from the database. A store without RunEndsOpen has its proxy cut and
+// then its agent ended (a read will never succeed there). A read that fails has its proxy cut and nothing else
+// stopped: the read's error comes back, so the run stays kept and the lease sweep reads again. The keep
+// decision (lostRunKeepable) keeps the run on no answer either way, so the stop that follows can contain it.
+// This changes the pin T2 first wrote, which wanted the agent ended with no proxy stop in both cases: an end the
+// substrate cannot do sends nothing, so the proxy is cut before any end is tried.
 func TestStopLostSandbox_NoAnswerFromTheDatabase(t *testing.T) {
-	check := func(t *testing.T, f *lostFixture, run types.AgentRun) {
+	errRead := errors.New("database down")
+	keepsOnNoAnswer := func(t *testing.T, f *lostFixture, run types.AgentRun) {
 		t.Helper()
-		if err := f.srv.stopLostSandbox(context.Background(), run); err != nil {
-			t.Fatal(err)
-		}
-		if f.lr.endCount() != 1 || f.lr.proxyStopCount() != 0 {
-			t.Errorf("ends %d, proxy stops %d; want the agent ended (1, 0)", f.lr.endCount(), f.lr.proxyStopCount())
-		}
 		f.srv.cfg.EndedRunGrace = time.Minute
 		past, ended := run, f.now.Add(-time.Hour)
 		past.EndsAt, past.LostAt, past.LostReason = &ended, nil, ""
@@ -130,19 +128,148 @@ func TestStopLostSandbox_NoAnswerFromTheDatabase(t *testing.T) {
 			t.Error("lostRunKeepable = false with no answer from the database; want the run kept")
 		}
 	}
-	t.Run("a store without the read", func(t *testing.T) {
+	t.Run("a store without the read: cut, then end", func(t *testing.T) {
 		f := newLostFixture(t)
 		run := oneClockRun(f, f.now.Add(time.Minute))
 		f.srv.cfg.Store = noEndsStore{f.ls}
 		if _, ok := f.srv.cfg.Store.(store.RunEndsReader); ok {
 			t.Fatal("fixture: the wrapped store still has RunEndsOpen")
 		}
-		check(t, f, run)
+		if err := f.srv.stopLostSandbox(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		if f.lr.endCount() != 1 || f.lr.proxyStopCount() != 1 {
+			t.Errorf("ends %d, proxy stops %d; want the proxy cut and the agent ended (1, 1)", f.lr.endCount(), f.lr.proxyStopCount())
+		}
+		keepsOnNoAnswer(t, f, run)
 	})
-	t.Run("a read that fails", func(t *testing.T) {
+	t.Run("a read that fails: cut, no end, the read's error", func(t *testing.T) {
 		f := newLostFixture(t)
 		run := oneClockRun(f, f.now.Add(time.Minute))
-		f.st.endsErr = errors.New("database down")
-		check(t, f, run)
+		f.st.endsErr = errRead
+		err := f.srv.stopLostSandbox(context.Background(), run)
+		if !errors.Is(err, errRead) || errors.Is(err, runner.ErrEndUnsupported) || errors.Is(err, runner.ErrPendingOnRunner) {
+			t.Errorf("err = %v; want the read's error and neither ErrEndUnsupported nor ErrPendingOnRunner", err)
+		}
+		if f.lr.endCount() != 0 || f.lr.proxyStopCount() != 1 {
+			t.Errorf("ends %d, proxy stops %d; want the proxy cut and no end (0, 1)", f.lr.endCount(), f.lr.proxyStopCount())
+		}
+		keepsOnNoAnswer(t, f, run)
 	})
+}
+
+// A cut that fails answers with its own error when the read failed, and an unsupported or queued cut is not let
+// through as such (it would send the run to stopKeptRun); the read's error is the answer then.
+func TestStopLostSandbox_AReadErrorAndACutThatFails(t *testing.T) {
+	errRead, errCut := errors.New("database down"), errors.New("runner refused the cut")
+	for _, c := range []struct {
+		name    string
+		cut     error
+		wantCut bool // the cut's own error is the answer
+	}{{"cut fails", errCut, true}, {"cut unsupported", runner.ErrEndUnsupported, false}, {"cut queued", runner.ErrPendingOnRunner, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newLostFixture(t)
+			run := oneClockRun(f, f.now.Add(time.Minute))
+			f.st.endsErr, f.lr.proxyErr = errRead, c.cut
+			err := f.srv.stopLostSandbox(context.Background(), run)
+			if c.wantCut && !errors.Is(err, errCut) {
+				t.Errorf("err = %v; want the cut's error", err)
+			}
+			if !c.wantCut && (!errors.Is(err, errRead) || errors.Is(err, runner.ErrEndUnsupported) || errors.Is(err, runner.ErrPendingOnRunner)) {
+				t.Errorf("err = %v; want the read's error alone", err)
+			}
+			if f.lr.endCount() != 0 || f.lr.proxyStopCount() != 1 {
+				t.Errorf("ends %d, proxy stops %d; want (0, 1)", f.lr.endCount(), f.lr.proxyStopCount())
+			}
+		})
+	}
+}
+
+// The generation path cuts first as well. A read that fails: "stop@3" and no "end@3", the read's error. No
+// reader: "stop@3", then "end@3". RED before, where an unknown end called only "end@3".
+func TestStopLostSandboxAt_AnUnknownEndCutsTheProxyFirst(t *testing.T) {
+	errRead := errors.New("database down")
+	t.Run("a read that fails", func(t *testing.T) {
+		f, gr, _ := newGenStopFixture(t, 3)
+		run := oneClockRun(f, f.now.Add(time.Minute))
+		f.st.endsErr = errRead
+		err := f.srv.stopLostSandboxAt(context.Background(), run, 3)
+		if !errors.Is(err, errRead) {
+			t.Errorf("err = %v; want the read's error", err)
+		}
+		if got := gr.atCalls(); len(got) != 1 || got[0] != "stop@3" {
+			t.Errorf("generation stops = %v, want [stop@3]", got)
+		}
+	})
+	t.Run("a store without the read", func(t *testing.T) {
+		f, gr, gs := newGenStopFixture(t, 3)
+		run := oneClockRun(f, f.now.Add(time.Minute))
+		f.srv.cfg.Store = noEndsStore{gs}
+		if err := f.srv.stopLostSandboxAt(context.Background(), run, 3); err != nil {
+			t.Fatal(err)
+		}
+		if got := gr.atCalls(); len(got) != 2 || got[0] != "stop@3" || got[1] != "end@3" {
+			t.Errorf("generation stops = %v, want [stop@3 end@3]", got)
+		}
+	})
+	t.Run("a newer revive owns the run: no end call", func(t *testing.T) {
+		f, gr, _ := newGenStopFixture(t, 4)
+		run := oneClockRun(f, f.now.Add(time.Minute))
+		f.st.endsErr = errRead
+		if err := f.srv.stopLostSandboxAt(context.Background(), run, 3); err != nil {
+			t.Fatal(err)
+		}
+		if got := gr.atCalls(); len(got) != 1 || got[0] != "stop@3" {
+			t.Errorf("generation stops = %v, want [stop@3] and no end", got)
+		}
+	})
+}
+
+// An outage run on a runner that can stop a proxy but whose end is unsupported (a Kubernetes runner), with every
+// end-hold slot taken, loses its proxy on the visit that finds it lost, as at the base. RED before: with the
+// read failing the stop made one end call, got ErrEndUnsupported and went to stopKeptRun, whose forceKeptStop
+// is held off at a fresh lost mark, so the proxy stops were 0. After: a failed read cuts the proxy (1), makes no
+// end call and returns the read's error, so the run stays RUNNING and lost (kept); with no reader the proxy is
+// cut (1), the end is tried, and the held-off stopKeptRun leaves the run as it is.
+func TestLoseRunStopped_AnUnknownEndStillCutsTheProxyWithEveryEndHoldTaken(t *testing.T) {
+	errRead := errors.New("database down")
+	for _, noReader := range []bool{false, true} {
+		name := "a read that fails"
+		if noReader {
+			name = "a store without the read"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newLostFixture(t)
+			run := oneClockRun(f, f.now.Add(time.Minute))
+			run.LostAt, run.LostReason = nil, ""
+			f.lr.endErr = runner.ErrEndUnsupported
+			takeEndHolds(t, f.srv, maxEndHolds)
+			if noReader {
+				f.srv.cfg.Store = noEndsStore{f.ls}
+			} else {
+				f.st.endsErr = errRead
+			}
+			o, err := f.srv.loseRunStopped(context.Background(), f.ls, f.ls, run, types.LostOutage, types.RunFailed, time.Hour, f.now, 0)
+			if o != loseApplied {
+				t.Fatalf("outcome = %v, want loseApplied", o)
+			}
+			if f.lr.proxyStopCount() != 1 {
+				t.Errorf("proxy stops = %d, want 1 on this visit", f.lr.proxyStopCount())
+			}
+			wantEnds := 0
+			if noReader {
+				wantEnds = 1
+			}
+			if f.lr.endCount() != wantEnds {
+				t.Errorf("ends = %d, want %d", f.lr.endCount(), wantEnds)
+			}
+			if !noReader && (!errors.Is(err, errRead) || errors.Is(err, runner.ErrEndUnsupported)) {
+				t.Errorf("err = %v; want the read's error", err)
+			}
+			cur, _ := f.ls.GetRun(context.Background(), run.ID)
+			if lostAt, reason := f.ls.lost(); cur.State != types.RunRunning || lostAt == nil || reason != types.LostOutage {
+				t.Errorf("run is %s, lost %v %q; want RUNNING with its outage mark (kept, revivable)", cur.State, lostAt, reason)
+			}
+		})
+	}
 }

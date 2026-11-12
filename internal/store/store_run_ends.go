@@ -15,7 +15,7 @@ import (
 
 // RunEndsReader is a lost run's end, decided on the database's clock, never on a server's own: the stored
 // ends_at is compared with now() in SQL and the caller gets booleans. It is optional; the api layer
-// type-asserts it, and a store without it answers the stronger stop (see api's outageProxyOnly).
+// type-asserts it, and a store without it has its lost run's proxy cut and then its agent stopped (see api's outageEnd).
 type RunEndsReader interface {
 	// RunEndsOpen answers, for one run, endsOpen (it has no end, or its end is after now()) and keepable (it
 	// has no end, or its end plus grace is after now(): the files grace of an ended run has not run out).
