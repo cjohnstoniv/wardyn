@@ -421,7 +421,8 @@ func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (r
 }
 
 // tailRun takes run id's lock, reads the run and its record again, and runs step's tail if the same step is
-// still due. A lock held elsewhere leaves the run for the next tick.
+// still due. A lock held elsewhere leaves the run for the next tick. A run whose stop is owed (containStopOwed)
+// gets no folder pass.
 func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran bool) {
 	lctx, unlock, ok := s.tryLockRunOp(ctx, id)
 	if !ok {
@@ -449,6 +450,11 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran 
 	case tailHistory:
 		s.tailFinalize(lctx, run, step)
 	case tailFolder:
+		// A run whose stop is owed gets no new pass: the containment loop stops it, and a pass begun now would
+		// be cut by that stop. A read that fails answers owed (containStopOwed).
+		if s.containStopOwed(lctx, run) {
+			return false
+		}
 		s.tailFinalize(lctx, run, step)
 		s.tailNotePass(lctx, id, st, now)
 	}
