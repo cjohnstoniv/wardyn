@@ -157,8 +157,10 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 // still the run's newest (store.RunLoserAtGeneration), in the mark's own write, so a caller whose lock
 // was lost does not mark lost a run a newer revive took over. That miss is loseNotApplied and stops
 // nothing. The effects after a mark that landed (approvals, broker) are not fenced, and the stop carries
-// fence: on a runner that honours generations it never stops a newer revive's proxy; elsewhere no newer
-// proxy can exist (no replace path, or revive refused to the runner).
+// fence where generationStopperFor answers a stopper: there it never stops a newer revive's proxy. Elsewhere
+// it is stopLostSandbox's unversioned stop. No newer proxy can exist on a VM or a substrate with no replace
+// path, nor on a connected runner that revive refuses; a runner read as not connected at selection is not
+// refused, so it can hold one, and that stop, sent or queued for its reconnect, can stop it.
 // A mark that errors is loseWriteFailed, as unfenced: the caller's fail-closed stop still runs.
 func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int) (loseOutcome, error) {
 	now := s.cfg.Now()

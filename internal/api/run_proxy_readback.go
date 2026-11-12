@@ -387,8 +387,10 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 // stopUnconfirmedProxyAt is stopUnconfirmedProxy for the failed start of policy generation gen: a running
 // run's lost mark lands only while gen is still the run's newest (loseRunStopped's fence), so a
 // containment whose lock was lost after its generation read does not mark lost a newer revive's run.
-// A kept run's stop below carries gen: on a runner that honours generations it never stops a newer
-// revive's proxy; elsewhere no newer proxy can exist (no replace path, or revive refused to the runner).
+// A kept run's stop below carries gen where generationStopperFor answers a stopper, which then never stops a
+// newer revive's proxy. Elsewhere it stops the plain way (stopLostSandboxAt): no newer proxy can exist on a
+// VM, a substrate with no replace path or a connected runner that revive refuses, but one can on a runner
+// read as not connected at selection, and that plain stop can stop it once the runner is back.
 // 0 fences nothing.
 func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun, gen int) error {
 	switch {
