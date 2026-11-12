@@ -177,6 +177,18 @@ func (s *stallingSub) ReplaceProxyHashed(ctx context.Context, ref string, cfg []
 	return s.Fake.ReplaceProxyHashed(ctx, ref, cfg)
 }
 
+// ReplaceProxyHashedAt hangs as ReplaceProxy does: a revive that carries the run's policy generation asks the
+// runner for it when the substrate has it, and the embedded Fake's would answer without the stall. It records
+// the replace as ReplaceProxyHashed does, config included, because these tests read the config the runner was
+// handed; the generation's own route is pinned by runneragent's TestDispatch_GenerationRoutesToAt.
+func (s *stallingSub) ReplaceProxyHashedAt(ctx context.Context, ref string, cfg []byte, _ int) (string, error) {
+	if err := s.hang(ctx, "replace_proxy"); err != nil {
+		return "", err
+	}
+	s.replaced(cfg)
+	return s.Fake.ReplaceProxyHashed(ctx, ref, cfg)
+}
+
 func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
@@ -280,7 +292,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load(), Retire: !f.oldCaps.Load()})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load(), Retire: !f.oldCaps.Load(), ProxyFence: true})
 			if err != nil {
 				return err
 			}
@@ -610,7 +622,7 @@ func TestPG_RunnerLease_OldEndIsNotEnforcedAfterAnEndChange(t *testing.T) {
 	}
 }
 
-// fix-r1 Fable M1: a lease the runner would refuse is never sent, since a refused LEASE ends the runner's
+// A lease the runner would refuse is never sent, since a refused LEASE ends the runner's
 // whole session. The run is refused alone; nothing is persisted for it, and the session carries on.
 func TestPG_RunnerLease_RefusesALeaseTheRunnerWouldRefuse(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
@@ -643,7 +655,7 @@ func TestPG_RunnerLease_RefusesALeaseTheRunnerWouldRefuse(t *testing.T) {
 	}
 }
 
-// fix-r1 Fable M2: a new runner session is leased again once READY. A renewal that could not reach the
+// A new runner session is leased again once READY. A renewal that could not reach the
 // runner while its session was down is carried by the new session, so the run keeps its proxy past the
 // window it was first leased for.
 func TestPG_RunnerLease_NewSessionReLeasesLiveRuns(t *testing.T) {
@@ -672,7 +684,7 @@ func TestPG_RunnerLease_NewSessionReLeasesLiveRuns(t *testing.T) {
 	}
 }
 
-// fix-r1 Opus F3: the organisation refuses a spent generation itself, before any frame reaches the runner.
+// The organisation refuses a spent generation itself, before any frame reaches the runner.
 func TestPG_RunnerLease_OrgRefusesASpentGeneration(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
 	run := f.localRun(t, 0)
@@ -686,7 +698,7 @@ func TestPG_RunnerLease_OrgRefusesASpentGeneration(t *testing.T) {
 	}
 }
 
-// fix-r1 Opus I2, fix-r2 N1: a renewal never waits for the run's lock. While a holder (here a revive) has
+// A renewal never waits for the run's lock. While a holder (here a revive) has
 // it, the renewal yields at once and sends nothing, so it neither lands between the revive's newer lease and
 // its Start nor holds a lock connection waiting. Once the lock is free, a renewal goes through.
 func TestPG_RunnerLease_ConcurrentRenewalYieldsToTheRunLock(t *testing.T) {
@@ -834,7 +846,7 @@ func TestPG_RunnerLease_ReviveKeepsTheOrgInspectionCorpus(t *testing.T) {
 	}
 }
 
-// fix-r1 Fable M3 and Opus I1: a run on a runner revives through the door (reviveRunProxy) on the real
+// A run on a runner revives through the door (reviveRunProxy) on the real
 // runner side: re-leased on the claim's stamp, its proxy replaced, its stopped agent started under a fresh
 // generation. Once the owner's profile denies its placement, the next revive is refused placement_denied.
 func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {

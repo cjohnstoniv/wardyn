@@ -122,6 +122,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
 	s.goBackground(func() { s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval) })
+	s.startRunEndLoops()
 	s.startWorkloadStatusSweeper() // custom-resource workloads' statuses, on their own faster cadence
 	// sweepOrphanedSandboxes runs LAST: finalizeUndispatchedRuns above has by now
 	// flipped every ref-empty abandoned run terminal, so those runs' leaked
@@ -281,6 +282,17 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		return fmt.Errorf("sweep orphaned sandboxes: list live image checks: %w", err)
 	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
+	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
+	// hazard); what one sweep leaves, the next takes. The run-op lock waits and the cuts the sweep makes run inside
+	// this bound, orphanSweepBound. One cut's failure row may then take up to one runTeardownBudget past it:
+	// copyBackCut writes the row on a teardownCtx of its own, so the row of a cut the bound ended, or of one that
+	// failed just before it, gets that budget (TestOrphanSweep_ASlowFailureRowTakesOneTeardownBudgetPastTheBound
+	// pins this allowance). The sum covers the lock waits, the cuts and that one row, not the whole sweep: each
+	// lock's release (its connection closes on a budget of its own) and the sweep's own reads (runsByID,
+	// LiveImageCheckAttempts, RunWatcherFresh) run on ctx, outside it.
+	sctx, cancel := context.WithTimeout(ctx, orphanSweepBound)
+	defer cancel()
+	sweepEnd, _ := sctx.Deadline()
 	isOrphan := func(runID uuid.UUID) bool {
 		if liveChecks[runID] {
 			return false
@@ -295,14 +307,25 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		if isTerminalRunState(run.State) {
 			// The run ended; its containers should already be gone, unless its computer folder's
-			// pass back keeps them for resumeComputerFolderBacks, which runs before this sweep, or
-			// that pass is still running under the end's lock (lockRunEnd).
-			lctx, unlock, free := s.tryLockRunOp(ctx, runID)
+			// pass back keeps them for the tail owner (folderCleanupLoop), or that pass is still
+			// running under the end's lock (lockRunEnd).
+			if sctx.Err() != nil || !time.Now().Before(sweepEnd) {
+				return false // the sweep's bound is spent: no cut, and the run is left to the terminal sweep
+			}
+			lctx, unlock, free := s.tryLockRunOp(sctx, runID)
 			if !free {
 				return false
 			}
 			defer unlock()
-			return !s.computerFolderKept(lctx, runID)
+			// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
+			// owner's give-up at the cap ends the keep. The cut runs on the sweep's own bound, not a fresh one per
+			// run, so cuts that never answer take one bound in all, and one failure row up to one runTeardownBudget
+			// past it (the allowance at sctx above; the lock's release is outside both). A cut that bound ended
+			// decides nothing: the run keeps its ref and is left to the terminal sweep and the next label sweep.
+			vctx, vcancel := context.WithDeadline(lctx, sweepEnd)
+			defer vcancel()
+			v, _, _ := s.folderKeepVerdict(vctx, run, "sandbox.orphan.sweep")
+			return v == folderKeepNone && vctx.Err() == nil
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -319,10 +342,6 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		return true
 	}
-	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
-	// hazard); what one sweep leaves, the next takes.
-	sctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
-	defer cancel()
 	swept, err := sweeper.SweepOrphanedSandboxes(sctx, undispatchedGrace, isOrphan)
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
@@ -380,8 +399,10 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 
 // reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
 func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
-	if s.computerFolderKept(ctx, run.ID) {
-		return // kept for its computer folder's pass back, which resumeComputerFolderBacks resumes
+	if s.boundedKeepVerdict(ctx, run, "sandbox.orphan.sweep") != folderKeepNone {
+		// Kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) runs, on a confirmed
+		// cut; or a runner that is not here, left until it is, or until the tail owner gives the pass up.
+		return
 	}
 	kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 	torn := false
@@ -409,6 +430,25 @@ func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
 		slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
 			slog.String("run_id", run.ID.String()), slog.Any("err", serr))
 	}
+}
+
+// reconcileCutBound is the bound of one boot orphan pass cut; a variable only so a test can shorten it.
+var reconcileCutBound = reconcileFinalizeTimeout
+
+// orphanSweepBound is the label sweep's bound (sweepOrphanedSandboxes) on its run-op lock waits and the cuts it
+// makes, which all share it; one cut's failure row may take up to one runTeardownBudget past it. It does not bound
+// the whole sweep: the locks' release and the sweep's own reads are outside it. A variable only so a test can
+// shorten it.
+var orphanSweepBound = reconcileFinalizeTimeout
+
+// boundedKeepVerdict is folderKeepVerdict on the bound of one boot teardown call (reconcileFinalizeTimeout): the
+// cut it makes is a substrate call, and one that never answers must not hold boot. A cut that timed out is
+// unconfirmed, so the verdict is folderKeepNone and the caller stops the sandbox.
+func (s *Server) boundedKeepVerdict(ctx context.Context, run types.AgentRun, action string) folderKeep {
+	ctx, cancel := context.WithTimeout(ctx, reconcileCutBound)
+	defer cancel()
+	v, _, _ := s.folderKeepVerdict(ctx, run, action)
+	return v
 }
 
 // boundedTeardown bounds one teardown call of the boot orphan pass like a finalize
@@ -675,116 +715,6 @@ func (s *Server) probeAgent(ctx context.Context, ref, agentExecID string) (runne
 	pctx, cancel := context.WithTimeout(ctx, watcherProbeTimeout)
 	defer cancel()
 	return s.cfg.Runner.AgentStatus(pctx, ref, agentExecID)
-}
-
-// runWatcherSweeper re-runs the sweep every `every` until ctx ends (daemon
-// shutdown). Panic-safe like the watchers it starts; a contained panic ends the
-// sweeper, so it is logged at ERROR — adoption is degraded to boot-only until the
-// process restarts. The interval is a parameter only so tests can drive it fast.
-func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
-	tick := time.NewTicker(every)
-	defer tick.Stop()
-	// Zero, so the FIRST tick runs the undispatched pass: it costs one extra
-	// ListRuns per process and it retries a boot pass that failed on a transient
-	// store error. After that the pass is rate-limited to its own slow cadence —
-	// it is an unbounded full-table read whose eligibility only changes on the
-	// undispatchedGrace timescale, so running it every sweep tick would be pure
-	// waste.
-	var lastUndispatched time.Time
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			// Recover PER TICK, not once around the whole loop: a
-			// store-driver edge that panics on ONE claimed row must not permanently
-			// degrade adoption to boot-only for the process lifetime on the strength
-			// of a single log line — the next tick simply tries again.
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.ErrorContext(ctx, "wardynd: PANIC in run watcher sweep tick (contained; adoption continues next tick)",
-							slog.Any("panic", r))
-					}
-				}()
-				// One tick, recorded as the run_watcher sweep: the first sub-pass
-				// error is the tick's, so an attempt that failed has no success.
-				_ = s.cfg.SweepHealth.Tick(ctx, sweephealth.RunWatcher, func(ctx context.Context) error {
-					return s.runWatcherTick(ctx, &lastUndispatched)
-				})
-			}()
-		}
-	}
-}
-
-// runWatcherTick is one pass of the run watcher sweep: the undispatched-run
-// reconcile on its slow cadence, then every sub-pass that rides this tick. Each
-// sub-pass runs whatever the others returned, and each error is logged as it
-// happens; the first is returned, so one failing sub-pass keeps the tick from
-// counting as a success.
-func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time) error {
-	var first error
-	pass := func(what string, err error) {
-		if err == nil {
-			return
-		}
-		slog.WarnContext(ctx, "wardynd: "+what, slog.Any("err", err))
-		if first == nil {
-			first = err
-		}
-	}
-	if now := s.cfg.Now(); now.Sub(*lastUndispatched) >= undispatchedGrace {
-		*lastUndispatched = now
-		pass("undispatched run reconcile", s.finalizeUndispatchedRuns(ctx))
-		// Same slow cadence as the undispatched pass (both are unbounded
-		// full-table reads whose eligibility only changes on the
-		// undispatchedGrace timescale), and AFTER it, so a just-finalized
-		// ref-empty run's leaked containers are swept the same tick.
-		// ponytail: no separate ticker — piggy-backing this cadence keeps
-		// one ContainerList per grace period, free next to what it reclaims.
-		pass("computer folder resume", s.resumeComputerFolderBacks(ctx))
-		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
-		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
-		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))
-	}
-	pass("run watcher sweep", s.sweepRunWatchers(ctx))
-	// A tightened profile reaches its live runs on this cadence,
-	// before the lease reads their ends.
-	pass("run limits re-clamp", s.sweepRunLimits(ctx))
-	// The lease rides this cadence too (an end is a minute late at worst); a forced end's unconfirmed stop is retried after it.
-	pass("run lease sweep", s.sweepRunLeases(ctx))
-	pass("forced stop retry", s.sweepForcedStops(ctx))
-	// An elevation past its end already counts for nothing; the sweep deletes its row and audits the end.
-	pass("elevation expiry", s.sweepExpiredElevations(ctx))
-	// And the pause, after the lease so a run ending this tick is
-	// not frozen first; its backstop resumes a run whose request
-	// closed without a writer calling approvalClosed.
-	pass("run pause sweep", s.sweepRunPauses(ctx))
-	// A service's health, read from the state file its supervisor keeps. The read is
-	// never presence, so it does not hold a run past an idle wall.
-	pass("service health sweep", s.sweepServiceHealth(ctx))
-	// A sign-in whose run ended, whose window passed, or whose end failed.
-	pass("desktop sign-in sweep", s.sweepDesktopSignins(ctx))
-	// A VM's pause whose run ended with the agent still paused writes its row here.
-	pass("ended desktop pause sweep", s.sweepEndedDesktopVMPauses(ctx))
-	// And the recording hold of a pause whose run ended with no desktop connection left, on every
-	// replica: each holds its own.
-	pass("ended desktop recording pause sweep", s.sweepEndedDesktopRecordingPauses(ctx))
-	// A run whose token lapsed loses its proxy within a tick.
-	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
-	// A proxy start whose report did not arrive by its deadline loses its proxy within a tick.
-	pass("proxy start deadline sweep", s.sweepOverdueProxyStarts(ctx))
-	// Azure DevOps personal access tokens, on their own slower clock.
-	pass("run personal access token sweep", s.sweepRunPATs(ctx))
-	// Unclaimed runners that outlived their 24h wait.
-	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
-	// Ended runs' runner_resident values, erased by the runners this replica
-	// holds; on every replica, after the passes above that end runs.
-	pass("runner resident erase sweep", s.sweepResidentErase(ctx))
-	// Ended runner runs' retirements, one step each; on every replica, as
-	// each step is one transaction under the run lock.
-	pass("runner retirement producer", s.produceRunnerRetirements(ctx))
-	return first
 }
 
 // holdRunWatcherLease marks this process as the live watcher for runID and keeps

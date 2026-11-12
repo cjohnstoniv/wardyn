@@ -75,6 +75,9 @@ type ForcedStopper interface {
 	// StopKeptRunForcedIf is StopKeptRunIf, and in the same statement stamps forced_stop_at. It answers the
 	// stamp the row now carries, for ClearForcedStop. applied is false when the mark or state changed.
 	StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (stamp time.Time, applied bool, err error)
+	// KeptHoldOffPassed answers, on the database's clock, whether run id's lost_at (fromLostAt) or ends_at
+	// plus after is at or before now(). False for a run that does not exist or has no such time.
+	KeptHoldOffPassed(ctx context.Context, id uuid.UUID, fromLostAt bool, after time.Duration) (bool, error)
 	// ListForcedStops lists the runs whose forced stop is not yet confirmed.
 	ListForcedStops(ctx context.Context) ([]ForcedStop, error)
 	// ClearForcedStop clears run id's mark, only while it still carries stamp (the one the caller read).
@@ -229,6 +232,21 @@ func (s PG) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunS
 		return time.Time{}, false, fmt.Errorf("store: stop kept run forced if: %w", err)
 	}
 	return stamp, true, nil
+}
+
+// KeptHoldOffPassed — see ForcedStopper. The time is the database's own, so no replica's clock decides it.
+func (s PG) KeptHoldOffPassed(ctx context.Context, id uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
+	var past bool
+	err := s.Pool.QueryRow(ctx, `
+		SELECT COALESCE((CASE WHEN $2 THEN lost_at ELSE ends_at END) + make_interval(secs => $3::float8) <= now(), false)
+		FROM agent_runs WHERE id=$1`, id, fromLostAt, after.Seconds()).Scan(&past)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: kept hold-off passed: %w", err)
+	}
+	return past, nil
 }
 
 // ListForcedStops — see ForcedStopper.

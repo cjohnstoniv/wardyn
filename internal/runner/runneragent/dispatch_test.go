@@ -6,6 +6,7 @@ package runneragent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
@@ -184,5 +186,89 @@ func TestDispatcherSweepListsCandidatesDespiteASeedError(t *testing.T) {
 	}
 	if got := res.(runnerwire.SweepResult).Candidates; len(got) != 1 || got[0] != orphan {
 		t.Fatalf("candidates = %v, want [%s]", got, orphan)
+	}
+}
+
+// callRefArgs sends a ref verb to a dispatcher over a loopback peer.
+func callRefArgs(t *testing.T, d *Dispatcher, method string, args any) (any, error) {
+	t.Helper()
+	a, b := runnerwire.Loopback()
+	defer b.Close()
+	peer := runnerwire.NewPeer(a, runnerwire.PeerConfig{})
+	defer peer.Close()
+	data, _ := runnerwire.Marshal(args)
+	return d.Call(context.Background(), peer, 1, method, data)
+}
+
+func TestDispatch_FenceProxyRoutes(t *testing.T) {
+	id := uuid.NewString()
+	ref := placement.RunnerRefPrefix(id) + "fake-ref"
+	fake := runnertest.NewFake()
+	d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake,
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callRefArgs(t, d, runnerwire.MethodFenceProxy, runnerwire.RefArgs{Ref: ref}); err != nil {
+		t.Fatalf("fence_proxy = %v; want nil", err)
+	}
+	if !fake.Called("fence_proxy", "fake-ref") {
+		t.Errorf("fence_proxy did not reach the substrate's FenceProxy: %v", fake.Calls)
+	}
+
+	// A substrate that cannot cut the agent off says so with the code a runner that cannot end answers.
+	bare, err := newTestDispatcher(Config{RunnerID: id, Substrate: struct{ substrate.Substrate }{fake},
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callRefArgs(t, bare, runnerwire.MethodFenceProxy, runnerwire.RefArgs{Ref: ref}); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("fence_proxy on a substrate without a fence = %v; want runner.ErrEndUnsupported", err)
+	}
+}
+
+func TestDispatch_GenerationRoutesToAt(t *testing.T) {
+	id := uuid.NewString()
+	ref := placement.RunnerRefPrefix(id) + "fake-ref"
+	cfg := []byte(`{"run_id":"` + uuid.NewString() + `"}`)
+	for _, tc := range []struct {
+		name, method string
+		args         func(gen int) any
+		plain, at    string
+	}{
+		{"stop_proxy", runnerwire.MethodStopProxy, func(g int) any { return runnerwire.RefArgs{Ref: ref, PolicyGeneration: g} }, "stop_proxy", "stop_proxy_at"},
+		{"end", runnerwire.MethodEnd, func(g int) any { return runnerwire.RefArgs{Ref: ref, PolicyGeneration: g} }, "end", "end_at"},
+		{"replace_proxy", runnerwire.MethodReplaceProxy, func(g int) any {
+			return runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfg, PolicyGeneration: g}
+		}, "replace_proxy " + string(cfg), "replace_proxy_at"},
+	} {
+		for _, gen := range []int{0, 7} {
+			t.Run(fmt.Sprintf("%s/gen%d", tc.name, gen), func(t *testing.T) {
+				fake := runnertest.NewFake()
+				d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake,
+					BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+					Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := callRefArgs(t, d, tc.method, tc.args(gen)); err != nil {
+					t.Fatalf("%s at generation %d = %v", tc.method, gen, err)
+				}
+				wantAt := gen > 0
+				if got := fake.Called(tc.at, "fake-ref"); got != wantAt {
+					t.Errorf("at-method called = %v; want %v (calls %v)", got, wantAt, fake.Calls)
+				}
+				if got := fake.Called(tc.plain, "fake-ref"); got == wantAt {
+					t.Errorf("plain method called = %v; want %v (calls %v)", got, !wantAt, fake.Calls)
+				}
+				if wantAt {
+					if len(fake.PolicyGens) != 1 || fake.PolicyGens[0].Gen != gen {
+						t.Errorf("the substrate saw generations %v; want one call at %d", fake.PolicyGens, gen)
+					}
+				}
+			})
+		}
 	}
 }

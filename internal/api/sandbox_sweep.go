@@ -131,7 +131,7 @@ func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun
 		return false // already gone (or unprobeable) — the normal, settled case
 	}
 	// A sandbox kept for its computer folder's pass back (or whose record cannot be read) is left for
-	// resumeComputerFolderBacks with only its proxy stopped, and is not counted as swept. The revoke,
+	// the tail owner (folderCleanupLoop) with only its proxy stopped, and is not counted as swept. The revoke,
 	// idempotent, runs either way.
 	left, _ := s.stopTerminalSandbox(ctx, run, "sandbox.sweep")
 	s.revokeRunCascade(ctx, run.ID)

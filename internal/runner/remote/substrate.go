@@ -116,17 +116,20 @@ func New(runnerID string, t Transport, opts Options) *Substrate {
 }
 
 var (
-	_ substrate.Substrate       = (*Substrate)(nil)
-	_ runner.SandboxEnder       = (*Substrate)(nil)
-	_ runner.ProxyStopper       = (*Substrate)(nil)
-	_ runner.ProxyReviver       = (*Substrate)(nil)
-	_ runner.ProxyReviverHashed = (*Substrate)(nil)
-	_ runner.SandboxStarter     = (*Substrate)(nil)
-	_ runner.Selftester         = (*Substrate)(nil)
-	_ runner.LocalAttacher      = (*Substrate)(nil)
-	_ runner.SubstrateProber    = (*Substrate)(nil)
-	_ runner.DriveProber        = (*Substrate)(nil)
-	_ runner.OutputRecoverer    = (*Substrate)(nil)
+	_ substrate.Substrate           = (*Substrate)(nil)
+	_ runner.SandboxEnder           = (*Substrate)(nil)
+	_ runner.ProxyStopper           = (*Substrate)(nil)
+	_ runner.ProxyReviver           = (*Substrate)(nil)
+	_ runner.ProxyReviverHashed     = (*Substrate)(nil)
+	_ runner.ProxyReviverAt         = (*Substrate)(nil)
+	_ runner.ProxyFencer            = (*Substrate)(nil)
+	_ runner.ProxyGenerationStopper = (*Substrate)(nil)
+	_ runner.SandboxStarter         = (*Substrate)(nil)
+	_ runner.Selftester             = (*Substrate)(nil)
+	_ runner.LocalAttacher          = (*Substrate)(nil)
+	_ runner.SubstrateProber        = (*Substrate)(nil)
+	_ runner.DriveProber            = (*Substrate)(nil)
+	_ runner.OutputRecoverer        = (*Substrate)(nil)
 )
 
 // Name is "runner:<id>".
@@ -201,10 +204,16 @@ func (s *Substrate) own(ref string) error {
 }
 
 func (s *Substrate) refCall(ctx context.Context, method, ref string, result any) error {
+	return s.refCallAt(ctx, method, ref, 0, result)
+}
+
+// refCallAt is refCall naming the policy generation the call acts for (0 names none, and the wire omits it).
+// Callers send a generation only to a runner whose caps carry ProxyFence (fenceAware).
+func (s *Substrate) refCallAt(ctx context.Context, method, ref string, gen int, result any) error {
 	if err := s.own(ref); err != nil {
 		return err
 	}
-	return s.call(ctx, method, runnerwire.RefArgs{Ref: ref}, result)
+	return s.call(ctx, method, runnerwire.RefArgs{Ref: ref, PolicyGeneration: gen}, result)
 }
 
 // checkVMCaps refuses a VM spec for a runner whose last caps do not offer that kind. A VM is asked of
@@ -447,8 +456,14 @@ func (s *Substrate) AgentStatus(ctx context.Context, ref, agentExecID string) (r
 // teardown calls a verb that keeps working while the runner is away: offline,
 // it is queued as a pending action and answers runner.ErrPendingOnRunner.
 func (s *Substrate) teardown(ctx context.Context, method string, kind types.RunnerActionKind, ref string) error {
+	return s.teardownAt(ctx, method, kind, ref, 0)
+}
+
+// teardownAt is teardown naming the policy generation the call acts for. A call queued for an offline runner
+// carries none: the runner replays it as the plain verb.
+func (s *Substrate) teardownAt(ctx context.Context, method string, kind types.RunnerActionKind, ref string, gen int) error {
 	var res runnerwire.TeardownResult
-	err := s.refCall(ctx, method, ref, &res)
+	err := s.refCallAt(ctx, method, ref, gen, &res)
 	// A kill or an end is the last this substrate does for the sandbox, so its machine kind goes when the
 	// runner answered it (even with a failure, and a local deadline counts as one), and when it was queued
 	// for the runner to replay on its own side, which never comes back through here. The kind stays only for
@@ -507,13 +522,48 @@ func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 // EndSandbox answers runner.ErrEndUnsupported for a runner that said it cannot keep an ended sandbox,
 // online or not, so no end is queued that the runner can only refuse.
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
+	return s.endAt(ctx, ref, 0)
+}
+
+func (s *Substrate) endAt(ctx context.Context, ref string, gen int) error {
 	if s.endsUnkept() {
 		if err := s.own(ref); err != nil {
 			return err
 		}
 		return runner.ErrEndUnsupported
 	}
-	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+	return s.teardownAt(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref, gen)
+}
+
+// fenceAware is whether the runner's last caps carry ProxyFence: it serves fence_proxy and reads the policy
+// generation on stop_proxy, end and replace_proxy. A runner without it is sent the plain verbs.
+func (s *Substrate) fenceAware() bool {
+	c, ok := s.Caps()
+	return ok && c.ProxyFence
+}
+
+// FenceProxy cuts the run's agent off every network it is attached to (runner.ProxyFencer). It is an
+// observation of the runner's state, not an action to replay, so an offline runner answers
+// runner.ErrRunnerOffline and nothing is queued.
+func (s *Substrate) FenceProxy(ctx context.Context, ref string) error {
+	return s.refCall(ctx, runnerwire.MethodFenceProxy, ref, nil)
+}
+
+// StopProxyAt is StopProxy acting for policy generation gen (runner.ProxyGenerationStopper). The generation
+// goes only to a runner that advertised ProxyFence; any other gets the plain StopProxy, queue included.
+func (s *Substrate) StopProxyAt(ctx context.Context, ref string, gen int) error {
+	if gen == 0 || !s.fenceAware() {
+		return s.StopProxy(ctx, ref)
+	}
+	return s.teardownAt(ctx, runnerwire.MethodStopProxy, types.RunnerActionStopProxy, ref, gen)
+}
+
+// EndSandboxAt is EndSandbox acting for policy generation gen, sent as StopProxyAt sends it.
+func (s *Substrate) EndSandboxAt(ctx context.Context, ref string, gen int) error {
+	if gen == 0 || !s.fenceAware() {
+		return s.EndSandbox(ctx, ref)
+	}
+	return s.endAt(ctx, ref, gen)
 }
 
 // endsUnkept is whether the runner's last caps, kept across a link drop, said its substrate cannot keep
@@ -559,6 +609,19 @@ func (s *Substrate) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte
 // ReplaceProxyHashed is ReplaceProxy, answering the runner's hash of the bytes its new proxy was
 // handed (runner.ProxyReviverHashed); empty from a runner that predates it.
 func (s *Substrate) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
+	return s.replaceProxyAt(ctx, ref, cfgJSON, 0)
+}
+
+// ReplaceProxyHashedAt is ReplaceProxyHashed acting for policy generation gen (runner.ProxyReviverAt),
+// sent only to a runner that advertised ProxyFence.
+func (s *Substrate) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
+	if gen == 0 || !s.fenceAware() {
+		return s.ReplaceProxyHashed(ctx, ref, cfgJSON)
+	}
+	return s.replaceProxyAt(ctx, ref, cfgJSON, gen)
+}
+
+func (s *Substrate) replaceProxyAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
 	if err := s.own(ref); err != nil {
 		return "", err
 	}
@@ -566,7 +629,7 @@ func (s *Substrate) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON 
 		return "", err
 	}
 	var res runnerwire.ReplaceProxyResult
-	err := s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, &res)
+	err := s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON, PolicyGeneration: gen}, &res)
 	return res.ConfigSHA256, err
 }
 

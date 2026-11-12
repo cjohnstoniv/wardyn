@@ -85,6 +85,14 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 func (s *Server) lockRevive(ctx context.Context, run types.AgentRun) (context.Context, func(), *reviveError) {
 	busy := reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 	releaseSlot := func() {}
+	if caps, stale := s.runnerNeedsUpdateToRevive(run); stale {
+		machine := caps.MachineName
+		if machine == "" {
+			machine = "its computer"
+		}
+		return ctx, nil, reviveRefused(http.StatusConflict, reasonReviveRunnerUpdateNeeded,
+			fmt.Sprintf("update the runner on %s to revive this run", machine))
+	}
 	if run.RunnerID != nil {
 		release, ok := s.runnerOwnerSlots(run.CreatedBy).acquireRevive(ctx, leaseWait)
 		if !ok {

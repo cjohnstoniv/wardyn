@@ -809,6 +809,11 @@ type RunLocalFolderStatus struct {
 type FolderResume struct {
 	Stalled  int `json:"stalled"`
 	Unsynced int `json:"unsynced,omitempty"`
+	// Counted is set when Unsynced came from a runner's counting cut: a count of zero that is not
+	// set is a count nobody made. Paths names those files (at most 50, as the runner sent them);
+	// a count with no names keeps its count and has no list.
+	Counted bool     `json:"counted,omitempty"`
+	Paths   []string `json:"paths,omitempty"`
 }
 
 // FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.
@@ -818,6 +823,15 @@ type FolderPassRecord struct {
 	Bytes   int64           `json:"bytes"`
 	Refused []FolderRefusal `json:"refused"`
 	Error   string          `json:"error,omitempty"`
+	// GivenUpAt is when the sandbox's keep ended with changes not yet back: the record is final from
+	// then, and no pass runs again. GivenUpCount is the count of those changes, nil when nobody
+	// counted them; GivenUpPaths names up to 50 of them and GivenUpPathsMore says how many more the
+	// count has. GivenUpAudited is set once the run.folder.transfer given_up row was written.
+	GivenUpAt        *time.Time `json:"given_up_at,omitempty"`
+	GivenUpCount     *int       `json:"given_up_count,omitempty"`
+	GivenUpPaths     []string   `json:"given_up_paths,omitempty"`
+	GivenUpPathsMore int        `json:"given_up_paths_more,omitempty"`
+	GivenUpAudited   bool       `json:"given_up_audited,omitempty"`
 }
 
 // FolderRefusal is one path a pass refused and why.

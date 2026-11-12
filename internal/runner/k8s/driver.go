@@ -131,6 +131,11 @@ type Config struct {
 	// RunnerdPeer is runnerd's own pods, the proxy NetworkPolicy's explicit egress peer on the relay
 	// and sink ports.
 	RunnerdPeer *RunnerdPeer
+	// ControlPlanePeer is wardynd's own pods, a No network run's proxy pod's only egress peer (server mode).
+	ControlPlanePeer *ControlPlanePeer
+	// LookupHost resolves Wardyn's internal address for a No network run's proxy pod's pin; nil is
+	// net.DefaultResolver.LookupHost.
+	LookupHost func(ctx context.Context, host string) ([]string, error)
 	// TrustedCAPEM is runnerd's corporate CA bundle, applied to the proxy config and the sandbox
 	// before pod construction (design K1 §5.2).
 	TrustedCAPEM string
@@ -148,7 +153,7 @@ type Config struct {
 	// Unfence releases a fenced run's proxy IP once the proxy's witness is persisted: its termination
 	// is known, and CNIs hand freed pod IPs to new pods.
 	Unfence func(runID uuid.UUID, proxyIP string)
-	// IPFenced reports a proxy IP another run's fence refuses (Fable L5).
+	// IPFenced reports a proxy IP another run's fence refuses.
 	IPFenced func(ip string) bool
 	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
 	// refuses to create a sandbox while it is nil (the sink did not start).
@@ -163,6 +168,12 @@ type RunnerdPeer struct {
 	PodLabels map[string]string
 	RelayPort int32
 	SinkPort  int32
+}
+
+// ControlPlanePeer names wardynd's own pods for a No network run's proxy NetworkPolicy.
+type ControlPlanePeer struct {
+	Namespace string
+	PodLabels map[string]string
 }
 
 // DecisionSink is the part of runnerd's decision sink the driver drives: a per-run key whose hash

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -63,7 +64,8 @@ type egressEditRequest struct {
 
 // egressEditResult is the 200 answer: the policy generation the confirmed proxy enforces.
 type egressEditResult struct {
-	PolicyGeneration int `json:"policy_generation"`
+	PolicyGeneration int                `json:"policy_generation"`
+	inPlace          *egressEditInPlace // set when the edit narrowed the proxy in place; never serialised
 }
 
 // liveEgressEdit is a validated edit: lower-case entries, each list without duplicates.
@@ -202,7 +204,11 @@ func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
 func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	res, rerr := s.editRunEgressOnce(r, run, edit)
-	rerr = s.withRunFate(r.Context(), run, rerr)
+	if res.inPlace != nil {
+		rerr = s.withNarrowFate(r.Context(), run, rerr)
+	} else {
+		rerr = s.withRunFate(r.Context(), run, rerr)
+	}
 	data := map[string]any{"subject": run.CreatedBy, "removed_hosts": nonNilStrings(edit.remove), "denied_hosts": nonNilStrings(edit.deny)}
 	outcome := "success"
 	if rerr != nil {
@@ -213,15 +219,25 @@ func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgr
 		data["reason"] = rerr.reason
 	} else {
 		data["policy_generation"] = res.PolicyGeneration
+		if res.inPlace != nil {
+			data["applied"] = "in_place"
+			if res.inPlace.proxyWasBehind {
+				data["proxy_was_behind"] = true
+			}
+		}
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.egress.edit", run.ID.String(), outcome, mustJSON(data)))
 	return res, rerr
 }
 
-func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
+func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liveEgressEdit) (out egressEditResult, rerr *reviveError) {
 	if run.State != types.RunRunning || run.SandboxRef == "" || run.LostAt != nil {
 		return egressEditResult{}, reviveRefused(http.StatusConflict, reasonEgressEditRunNotLive,
 			"the run is not live (state="+string(run.State)+"), so its egress cannot be edited; revive it first")
+	}
+	if noNetworkPreset(run.WallPreset) {
+		return egressEditResult{}, reviveRefused(http.StatusConflict, reasonEgressEditNoNetwork,
+			"This run has no network, so an edit has nothing to change. Start a new run with the policy you want.")
 	}
 	if rerr := s.egressEditSupported(r.Context(), run); rerr != nil {
 		return egressEditResult{}, rerr
@@ -231,19 +247,26 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 			"an egress edit of this run is already in progress; try again when it answers")
 	}
 	defer s.reviving.Delete(egressEditMark(run.ID))
-	res, rerr := s.reviveFromRequest(r, run, false, edit)
+	res, rerr, inPlace := s.narrowRunEgress(r, run, edit)
+	defer func() { out.inPlace = inPlace }()
+	if inPlace == nil {
+		res, rerr = s.reviveFromRequest(r, run, false, edit)
+	}
 	// A revive that put the run back to lost words its own stop from a lost mark that may only have
 	// logged a failed stop; an edit answers from the stop's confirmation instead.
 	lost := rerr != nil && (rerr.lost || rerr.reason == reasonReviveRecoveryUnresolved)
 	switch {
 	case rerr != nil && !lost:
-		return egressEditResult{}, egressEditRefusal(rerr)
+		return egressEditResult{}, egressEditRefusal(rerr, s.egressEditRunnerToUpdate(run))
 	case lost && res.generation < 1: // lost before a start was recorded: no start to fence a stop on
 		return egressEditResult{}, egressEditUnresolved(rerr.reason, nil)
 	}
 	// The wait outlives a caller who stops waiting: its end decides whether the proxy keeps running.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), egressEditWait)
 	defer cancel()
+	if inPlace != nil {
+		ctx = withNarrowedStart(ctx)
+	}
 	// A revive that failed after its start was recorded is answered by that start: a failed one once
 	// its containment is recorded, an abandoned one (the replace failed) once its stop is confirmed.
 	wait := s.awaitEgressEditReadback(ctx, run.ID, res.generation, rerr == nil || res.stored)
@@ -271,7 +294,7 @@ func (s *Server) withRunFate(ctx context.Context, run types.AgentRun, rerr *revi
 	case fate != "":
 		out.msg += fate
 	case !read, rerr.reason != reasonEgressEditContainmentUnresolved: // an unread run is promised nothing
-	case s.lostRunKeepable(run, s.cfg.Now()):
+	case s.lostRunKeepable(ctx, run):
 		out.msg += "; once that is done, the run will be lost until revived"
 	default:
 		out.msg += "; once that is done, the run will be ended, since a headless run off your own machine cannot be kept"
@@ -472,16 +495,40 @@ func egressEditUnresolved(why string, err error) *reviveError {
 	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditContainmentUnresolved, lost: true, msg: msg}
 }
 
+// egressEditUnsupportedMsg is the 409 egress_edit_unsupported of an edit whose substrate cannot replace the run's proxy or confirm a new one's policy: what to do, not the runner's error.
+const egressEditUnsupportedMsg = "This run's network can't be changed while it runs on this substrate. Start a new run with the narrower policy."
+
+// egressEditUpdateRunnerMsg is egressEditUnsupportedMsg for a runner that must be updated first (egressEditRunnerToUpdate).
+const egressEditUpdateRunnerMsg = "This run's network can't be changed while it runs: the runner on %s must be updated first. Update it, or start a new run with the narrower policy."
+
+// egressEditRunnerToUpdate names the computer of a container run on a runner whose last caps say it
+// can keep a sandbox (not Kubernetes). Such a runner can replace a container's proxy, so an unsupported
+// answer from it means the runner is older; "" for any other run. It picks the text only, never a refusal.
+func (s *Server) egressEditRunnerToUpdate(run types.AgentRun) string {
+	if run.RunnerID == nil || run.MachineKind.IsVM() {
+		return ""
+	}
+	caps, ok := s.runnerLastCaps(*run.RunnerID)
+	if !ok || caps.EndsUnkept {
+		return ""
+	}
+	return cmp.Or(caps.MachineName, "its computer")
+}
+
 // egressEditRefusal is a revive refusal as an edit answers it: a new proxy that did not confirm its
 // policy is egress_edit_unconfirmed, a substrate that cannot replace a sandbox's proxy at all
 // (Kubernetes) or cannot confirm a new proxy's policy (revive_readback_unsupported) is
 // egress_edit_unsupported, not the revive's own reason, and where the revive's own
 // words name only the owner's profile they also name the edit, whose denies are checked as that
 // profile's are.
-func egressEditRefusal(rerr *reviveError) *reviveError {
+func egressEditRefusal(rerr *reviveError, updateOn string) *reviveError {
 	if rerr.reason == reasonReviveUnsupported || rerr.reason == reasonReviveReadbackUnsupported {
 		out := *rerr
 		out.reason = reasonEgressEditUnsupported
+		out.msg = egressEditUnsupportedMsg
+		if updateOn != "" {
+			out.msg = fmt.Sprintf(egressEditUpdateRunnerMsg, updateOn)
+		}
 		return &out
 	}
 	door := map[string]string{

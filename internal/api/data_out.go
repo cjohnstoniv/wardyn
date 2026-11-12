@@ -52,23 +52,6 @@ func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule type
 	return envelope.DataOut.DataOut(), true, nil
 }
 
-// dataOutHolds is the rule that keeps the run's content in, and whether it does. A rule that cannot be read
-// holds as blocked.
-func (s *Server) dataOutHolds(ctx context.Context, runID uuid.UUID) (types.TransferRule, bool) {
-	rule, _, err := s.runDataOutRule(ctx, runID)
-	if err != nil {
-		return types.TransferBlocked, true
-	}
-	return rule, rule != types.TransferAllowed
-}
-
-// runDataOutAllowed reports whether the run's content may leave by its own doors: its rule is allowed (or it
-// has none), and a rule that cannot be read is not allowed.
-func (s *Server) runDataOutAllowed(ctx context.Context, runID uuid.UUID) bool {
-	_, held := s.dataOutHolds(ctx, runID)
-	return !held
-}
-
 // auditDataOutDenied records one path a run's data_out rule kept content in on.
 func (s *Server) auditDataOutDenied(ctx context.Context, runID uuid.UUID, actorType types.ActorType, actor, path string, rule types.TransferRule) {
 	s.recordAudit(ctx, s.auditEvent(&runID, actorType, actor, "run.data_out.deny", runID.String(), "denied",

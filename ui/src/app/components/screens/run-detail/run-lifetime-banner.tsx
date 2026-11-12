@@ -462,6 +462,7 @@ export function RunLifetimeBanner({
         title={run.title?.trim() || run.task}
         onOpenChange={(o) => !o && setConfirmEnd(false)}
         onConfirm={() => void endRun()}
+        bothWaysFolder={run.computer_folder?.direction === "both"}
       />
       {run.end_tightened_at && run.ends_at && (
         <p data-testid="run-lifetime-tightened" className="mx-4 mt-2 shrink-0 rounded-md border border-warning/30 bg-warning-subtle px-2.5 py-2 text-xs text-warning">

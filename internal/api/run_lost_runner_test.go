@@ -4,6 +4,8 @@
 package api
 
 import (
+	"context"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"testing"
@@ -36,7 +38,7 @@ func TestLostHeadlessClusterStillUsesExistingTeardownPolicy(t *testing.T) {
 	f := newLostFixture(t)
 	f.run.Interactive = false
 	f.run.Placement = types.PlacementRemote
-	if f.srv.lostRunKeepable(f.run, f.srv.cfg.Now()) {
+	if f.srv.lostRunKeepable(context.Background(), f.run) {
 		t.Fatal("cluster headless run became keepable")
 	}
 }

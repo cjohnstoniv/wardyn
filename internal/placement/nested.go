@@ -24,7 +24,8 @@ var nestedFields = map[reflect.Type][]string{
 		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMHeaders LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir " +
 		"PushRuleSets PushRuleBase ForgeHosts ActivityIgnoreHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach DisableModelUsage " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
-		"VM PortRule SigninListen NoNetwork"),
+		// LiveDenies is the hosts a live egress edit denied: it only narrows egress and carries no credential.
+		"VM PortRule SigninListen NoNetwork LiveDenies"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),

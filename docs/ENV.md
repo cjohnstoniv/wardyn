@@ -205,6 +205,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_NAMESPACE` | string | the pod's own namespace (read from `/var/run/secrets/kubernetes.io/serviceaccount/namespace`), else `default` | Kubernetes namespace the `k8s` substrate (`-tags k8s`) creates every sandbox's Secret/NetworkPolicies/pods in |
 | `WARDYN_K8S_IMAGE_PULL_SECRET` | string | (unset) | optional pre-existing Secret name threaded onto `imagePullSecrets` for every pod the `k8s` substrate creates (agent, proxy, and the boot-time egress canary) (`-tags k8s`) |
 | `WARDYN_K8S_READ_NODES` | bool | off | list the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`); boot measures the cluster from them. Needs `list` on `nodes`. [Details](#wardyn_k8s_read_nodes) |
+| `WARDYN_K8S_CONTROL_PLANE_NAMESPACE` | string | (unset) | the namespace of wardynd's own pods: with the labels below, the only peer a No network run's proxy pod may reach (`-tags k8s`). The chart sets it. [Details](#wardyn_k8s_control_plane_namespace) |
+| `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` | `k=v,k=v` | (unset) | wardynd's pod labels for that peer. The chart sets its selector labels and `app.kubernetes.io/component=control-plane`. Set both or neither. |
 | `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
 | `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE` | string | empty | experimental: a `SandboxTemplate` in each runs namespace whose `sandbox-template.wardyn.dev/` annotations the agent pod takes; needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.template`. [Details](#wardyn_k8s_agent_sandbox_template) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
@@ -818,6 +820,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - Leave the flag off for such a cluster, or its runs fail at the start timeout instead of waiting for the new node.
 - The runs namespace's ResourceQuota read needs no flag and no env.
 - Boot measures the cluster from that quota, else from the nodes this reads, and proposes the cluster runner's limits; with neither it sets none.
+
+### `WARDYN_K8S_CONTROL_PLANE_NAMESPACE`
+
+- The namespace of wardynd's own pods, set with `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` (`-tags k8s`, server mode). Together they name the one peer a No network run's proxy pod may reach. The chart sets both.
+- Set both or neither. A half-set pair, or a label that is not `key=value`, refuses boot.
+- A server without both refuses a No network run before anything is created.
+- Wardyn's internal address must resolve to exactly one IP from wardynd's pod: it is pinned in the proxy pod's hosts file. A dual-stack Service with two addresses is refused.
+- A runner does not read them. Its peer is its own pods.
 
 ### `WARDYN_K8S_AGENT_SANDBOX`
 
@@ -2318,6 +2328,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_MODEL_USAGE` | enum | `on` | counts model tokens per call. `off` stops it: wardynd stores no count and passes `off` to its proxies. Set it on a remote or hybrid laptop runner too; wardynd drops their records meanwhile. Other values stop startup. |
 | `WARDYN_PROXY_DNS_LISTEN` | host:port | (unset) | the proxy's DNS listener, UDP and TCP. It answers every query `REFUSED` and writes a `run.dns.query` row, except `AAAA` for its own name, `wardyn-proxy`: empty answer, no row. Kubernetes and Docker set `:53`; the proxy exits if it cannot bind.
 | `WARDYN_PROXY_FIRST_RENEW_GATE` | `1` | (unset) | Set by the runner when it replaces a run's proxy, never by an operator. The proxy serves only after its first token renewal lands, and exits if that renewal fails. |
+| `WARDYN_PROXY_LIVE_DENY_DIR` | path | (unset) | Set by wardynd on a Kubernetes proxy pod, never by an operator. The proxy keeps live egress edit denies in `live-denies.json` here, applies them at every start and takes new ones on `narrow.sock`. An invalid list stops the proxy. |
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
 | `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits on a `wait_for_review` git-mint approval before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |

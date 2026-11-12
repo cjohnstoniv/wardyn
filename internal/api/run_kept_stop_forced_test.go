@@ -51,6 +51,24 @@ func (m *forcedMarks) StopKeptRunForcedIf(_ context.Context, id uuid.UUID, to ty
 	return stamp, true, nil
 }
 
+// keptHoldOffPassedAt is store.PG's KeptHoldOffPassed over a row as the fake database holds it, at the fake
+// database's time now.
+func keptHoldOffPassedAt(run types.AgentRun, fromLostAt bool, after time.Duration, now time.Time) bool {
+	from := run.EndsAt
+	if fromLostAt {
+		from = run.LostAt
+	}
+	return from != nil && !from.Add(after).After(now)
+}
+
+// KeptHoldOffPassed answers from the fixture's fake database clock (dueNow), not the server's.
+func (m *forcedMarks) KeptHoldOffPassed(_ context.Context, _ uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
+	m.cs.dispatchTestStore.mu.Lock()
+	run := m.cs.run
+	m.cs.dispatchTestStore.mu.Unlock()
+	return keptHoldOffPassedAt(run, fromLostAt, after, m.cs.dueNow()), nil
+}
+
 func (m *forcedMarks) ListForcedStops(context.Context) ([]store.ForcedStop, error) {
 	m.marksMu.Lock()
 	defer m.marksMu.Unlock()
@@ -297,6 +315,7 @@ func newForced(t *testing.T) *forced {
 	t.Cleanup(f.release)
 	f.clock = &keptEndClock{now: f.due.Add(6 * time.Minute)}
 	s.cfg.Now = f.clock.Now
+	cs.dbNow = f.clock.Now
 	dueAt(cs, &f.run, f.due)
 	return f
 }
@@ -372,8 +391,11 @@ func (bumpRefusedStore) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.
 // run's fresh row: the proxy first, then the sandbox, the run's terminal state published, one failure row, and
 // no pass back. The visits at +1m and +7m leave a gap longer than the limit; the stop still comes at the first
 // visit past the anchor, with the true past_due_sec. A later visit adds nothing.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestStopKeptRun_AnEndPastDueWithTheLockHeldStopsTheSandbox(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	f.sb.proxyStopped.Store(false)
 	var proxyFirst, passed bool
 	f.sb.stopped = func() { proxyFirst = f.sb.proxyStopped.Load() }
@@ -403,8 +425,11 @@ func TestStopKeptRun_AnEndPastDueWithTheLockHeldStopsTheSandbox(t *testing.T) {
 }
 
 // A restart loses nothing: a new Server whose lock is still held stops the sandbox at 5m01s past due.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestStopKeptRun_ARestartedServerStopsAtTheSameAnchor(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	f.clock.now = f.due.Add(time.Minute)
 	f.end(f.s)
 	if f.sb.stopCount() != 0 {
@@ -424,8 +449,11 @@ func TestStopKeptRun_ARestartedServerStopsAtTheSameAnchor(t *testing.T) {
 }
 
 // Moving the stored end later moves the anchor. The end here comes from the lost run's EndsAt.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestStopKeptRun_AnExtensionMovesTheAnchor(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	setEnd := func(at time.Time) {
 		lost := at.Add(-time.Hour)
 		f.cs.dispatchTestStore.mu.Lock()
@@ -474,8 +502,11 @@ func TestStopKeptRun_TheFreshRowDecides(t *testing.T) {
 
 // Successive holders do not stretch the window: A holds until 3m past due and B from then on, with visits at
 // 3m30s and 5m30s both finding it held. The stop comes at 5m30s.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestStopKeptRun_SuccessiveHoldersDoNotStretchTheWindow(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	at := func(after time.Duration) {
 		f.clock.now = f.due.Add(after)
 		f.end(f.s)
@@ -500,10 +531,13 @@ func TestStopKeptRun_SuccessiveHoldersDoNotStretchTheWindow(t *testing.T) {
 
 // A gone run has no end to be past: it is due when it was lost, so a lock held for good is cut 5 minutes
 // after that, with or without an end on the row; it ends FAILED.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestStopKeptRun_AGoneRunIsDueWhenItWasLost(t *testing.T) {
 	for name, endsAt := range map[string]*time.Time{"no end": nil, "an end days away": ptrTime(time.Now().Add(72 * time.Hour))} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			f.withoutOwedPass()
 			lost := time.Now()
 			f.cs.dispatchTestStore.mu.Lock()
 			f.cs.run.LostAt, f.cs.run.LostReason, f.cs.run.EndsAt = &lost, types.LostGone, endsAt
@@ -528,8 +562,11 @@ func TestStopKeptRun_AGoneRunIsDueWhenItWasLost(t *testing.T) {
 
 // Only a lock found held counts: a try the locker refuses, past the anchor, stops nothing; the same visit
 // with the lock held does.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestStopKeptRun_ARefusedTryIsNotAHeldLock(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	f.clock.now = f.due.Add(10 * time.Minute)
 	f.s.locks.override = exhaustedPool()
 	f.end(f.s)
@@ -558,8 +595,11 @@ func TestStopKeptRun_ARowNoLongerLostIsNotForced(t *testing.T) {
 }
 
 // A run the force ended is terminal: a later visit, with the end moved or not, forces nothing more.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestStopKeptRun_AForcedRunIsNotForcedAgain(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	f.end(f.s)
 	if f.sb.stopCount() != 1 || f.leaser.claimCount() != 1 {
 		t.Fatalf("%d stops, %d claims after the first force, want 1 and 1", f.sb.stopCount(), f.leaser.claimCount())
@@ -621,8 +661,11 @@ func TestForceKeptStop_LosesToATerminalPassThatStartedAfterItsRead(t *testing.T)
 // The force that wins the claim ends the run itself and runs no pass back: the holder, finding the run
 // terminal when it gets to its own end, starts none either. The record is settled at the force's generation
 // with no resume and says the changes were not brought back.
+// Forced contain-only: with the cut observed and the pass owed the force keeps the sandbox instead, so this fixture is
+// Kubernetes in server mode.
 func TestForceKeptStop_WinsTheClaimAndTheHolderStartsNoPass(t *testing.T) {
 	f := newForced(t)
+	f.sb.proxyErr = runner.ErrEndUnsupported // Kubernetes in server mode: the cut is not observed, so the force settles as not brought back and stops
 	var passed bool
 	f.sb.onPass = func() { passed = true }
 	before := f.cs.folderStatus().Gen
@@ -686,8 +729,11 @@ func TestForceKeptStop_AReviveBlockedBeforeItsClaimIsRefusedAfterTheForcedEnd(t 
 // H1: a forced stop whose sandbox stop fails is retried on the next watcher tick while the lock is still held:
 // the mark stays, the retry is the proxy stop and then the sandbox stop (the record is settled, so rule R stops
 // it), and the mark clears once the stop is confirmed. A tick after that does nothing.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestForceKeptStop_AFailedStopIsRetriedOnTheNextTickWhileTheLockIsHeld(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	f.sb.stopErr = errors.New("the runner did not answer the stop")
 	f.end(f.s)
 	if rows := forcedRows(t, f.audit, "run.ended.expired"); len(rows) != 1 || rows[0].Stopped || f.sb.stopCount() != 0 {
@@ -711,6 +757,7 @@ func TestForceKeptStop_AFailedStopIsRetriedOnTheNextTickWhileTheLockIsHeld(t *te
 // its sandbox.
 func TestForceKeptStop_ACrashAfterTheClaimIsStoppedOnTheNextTick(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the retry reaches the stop
 	f.claimOnly(t)
 	if f.sb.stopCount() != 0 || f.leaser.markCount() != 1 {
 		t.Fatalf("%d stops, %d marks after the claim alone; want 0 and 1", f.sb.stopCount(), f.leaser.markCount())
@@ -724,8 +771,11 @@ func TestForceKeptStop_ACrashAfterTheClaimIsStoppedOnTheNextTick(t *testing.T) {
 
 // N2: containment_error is another column with another writer. The re-assert that clears it under the lock
 // (settleContainment) while the force's stops fail leaves forced_stop_at set, and the next tick retries.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestForceKeptStop_AReassertClearDuringTheForcedEndKeepsTheMark(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	if err := f.leaser.SetRunContainmentError(context.Background(), f.run.ID, "the stop was queued", f.due); err != nil {
 		t.Fatal(err)
 	}
@@ -812,14 +862,19 @@ func TestForceKeptStop_AnUnsettledRecordOffTheServerStopsTheSandbox(t *testing.T
 // resume is left with only its proxy stopped, and any other is stopped; either clears the mark.
 func TestForceKeptStop_AFreeLockHandsAMarkedRunToTheLockedPath(t *testing.T) {
 	for name, tc := range map[string]struct {
-		rec   types.RunLocalFolderStatus
-		stops int
+		rec    types.RunLocalFolderStatus
+		oneWay bool
+		stops  int
 	}{
-		"a resume is kept":     {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}}, 0},
-		"no resume is stopped": {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, 1},
+		"a resume is kept":                           {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 1}}, false, 0},
+		"a pass owed and never run is kept":          {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, false, 0},
+		"no pass owed (a one way folder) is stopped": {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, true, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			if tc.oneWay {
+				f.withoutOwedPass()
+			}
 			f.claimOnly(t)
 			f.setRecord(tc.rec)
 			f.release()
@@ -872,6 +927,7 @@ func TestSweepForcedStops_AWedgedRunnerIsCutAtTheRowBoundAndTheNextRowStillRuns(
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
+	f.withoutOwedPass()
 	second := store.ForcedStop{RunID: uuid.New(), At: time.Now()}
 	f.leaser.marksMu.Lock()
 	f.leaser.marked = append(f.leaser.marked, second)
@@ -914,6 +970,7 @@ func (r *statusErrStop) StopSandbox(ctx context.Context, ref string) error {
 // that confirms clears it.
 func TestSweepForcedStops_AProbeErrorKeepsTheMarkAndRetriesTheStop(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	w := &statusErrStop{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
@@ -1011,8 +1068,11 @@ func (f *forced) exitedButPresent() { f.sb.ended = true }
 // nothing about its removal. A forced end whose tail stop failed keeps its mark through every tick the stop
 // fails, and clears it only when a stop succeeds, with one success row. Catches: a retry that clears the mark
 // on a Status probe answering a state other than RUNNING.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestSweepForcedStops_AnExitedButPresentSandboxKeepsTheMarkUntilAStopSucceeds(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	f.exitedButPresent()
 	f.sb.stopErr = errors.New("the daemon did not answer the stop")
 	f.end(f.s)
@@ -1044,6 +1104,7 @@ func TestSweepForcedStops_AnExitedButPresentSandboxKeepsTheMarkUntilAStopSucceed
 // on every tick after the mark cleared, or never.
 func TestSweepForcedStops_AFailingStopWritesOneFailureRowAndOneSuccessRow(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	for i := 1; i <= 3; i++ {
@@ -1069,6 +1130,7 @@ func TestSweepForcedStops_AFailingStopWritesOneFailureRowAndOneSuccessRow(t *tes
 // per process, where it used to be written on every pass. Catches: the dedupe keyed on the retry alone.
 func TestSweepTerminalSandboxRun_AFailedTeardownIsWrittenOncePerRun(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	f.sb.stopErr = errors.New("the daemon did not answer the stop")
@@ -1101,6 +1163,7 @@ func TestSweepForcedStops_AnOfflineRunnerWithARowKeepsTheMark(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			f.withoutOwedPass() // no pass back owed: the retry reaches the stop
 			f.claimOnly(t)
 			f.release()
 			f.onRunner(f.cs.runner.ID)
@@ -1128,6 +1191,7 @@ func TestSweepForcedStops_AGoneRunnerClearsTheMarkWithOneFailureRow(t *testing.T
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			f.withoutOwedPass() // no pass back owed: the retry reaches the stop
 			f.claimOnly(t)
 			if tc.free {
 				f.release()
@@ -1166,6 +1230,7 @@ func TestSweepForcedStops_ARefTheOrchestratorCannotResolveKeepsTheMark(t *testin
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
+	f.withoutOwedPass()
 	f.sb.stopErr = unowned
 	f.tick(t, f.s)
 	f.tick(t, f.s)
@@ -1184,8 +1249,11 @@ func TestSweepForcedStops_ARefTheOrchestratorCannotResolveKeepsTheMark(t *testin
 // pass back the forced end gave up. A record already settled is left as it is (no new generation a tick).
 // Catches: a retry that stops with the record unsettled (the sandbox kept, the record untouched); a retry that
 // settles a settled record again.
+// Forced contain-only: where the cut is observed and the sandbox keepable the retry settles the record as owed and keeps
+// it (TestForcedRetry_KeepsWhatTheForcedEndKept); the first half here is Kubernetes in server mode, which stops.
 func TestSweepForcedStops_AnUnsettledRecordIsSettledOnceBeforeTheStop(t *testing.T) {
 	f := newForced(t)
+	f.sb.proxyErr = runner.ErrEndUnsupported // Kubernetes in server mode: an unobserved cut settles as not brought back and stops
 	f.claimOnly(t)
 	f.release()
 	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 2, Resume: &types.FolderResume{Unsynced: 1}})
@@ -1227,6 +1295,7 @@ func (tickStore) RunWatcherFresh(context.Context, uuid.UUID, time.Duration) (boo
 // removing the pass("forced stop retry", ...) line from runWatcherTick (reconcile.go).
 func TestRunWatcherTick_RetriesAMarkedRunsStop(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	f.s.cfg.Store = tickStore{f.s.cfg.Store.(markedStore)}
@@ -1277,8 +1346,11 @@ func revokeFailures(audit *recRecorder) int {
 // whose revoke fails keeps the mark; the retry revokes again every tick, writes one failure row for it, and clears
 // the mark on the tick the revoke succeeds, after which nothing more runs. Catches: forcedStopConfirmed clearing on
 // an empty ref alone; a failed revoke writing a row a tick.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestForceKeptStop_AFailedRevokeKeepsTheMarkUntilItSucceeds(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	b := f.failingRevoke()
 	f.end(f.s)
 	if rows := forcedRows(t, f.audit, "run.ended.expired"); len(rows) != 1 || !rows[0].Stopped {
@@ -1312,6 +1384,7 @@ func TestSweepForcedStops_AFailedRevokeKeepsTheMarkOnBothPaths(t *testing.T) {
 	for name, free := range map[string]bool{"lock free": true, "lock held": false} {
 		t.Run(name, func(t *testing.T) {
 			f := newForced(t)
+			f.withoutOwedPass() // no pass back owed: the force reaches the stop
 			f.claimOnly(t)
 			if free {
 				f.release()
@@ -1363,6 +1436,7 @@ func TestSweepForcedStops_APendingTokenRevokeWritesOneRowAcrossTicks(t *testing.
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
+	f.withoutOwedPass()
 	f.s.cfg.Store = pendingPATStore{f.s.cfg.Store.(markedStore)}
 	f.sb.stopErr = errors.New("the daemon did not answer the stop")
 	for range 3 {
@@ -1400,6 +1474,7 @@ func TestSweepForcedStops_AnEmptyRefWithAFailedRevokeKeepsTheMark(t *testing.T) 
 // as a failure.
 func TestSweepForcedStops_ARetryOnAnAlreadyStoppedSandboxIsHarmless(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass() // no pass back owed: the force reaches the stop
 	f.claimOnly(t)
 	f.release()
 	if err := f.s.cfg.Runner.StopSandbox(context.Background(), f.run.SandboxRef); err != nil { // stopped earlier, ref still set
@@ -1414,8 +1489,11 @@ func TestSweepForcedStops_ARetryOnAnAlreadyStoppedSandboxIsHarmless(t *testing.T
 
 // A clean forced end revokes a second time to confirm it, and that is harmless: no failure row, the mark cleared.
 // Catches: a verification revoke that fails or writes a row when the first revoke succeeded.
+// Forced contain-only: an observed cut keeps a sandbox whose pass back is owed, so this fixture has no both-ways
+// computer folder and the force reaches the stop.
 func TestForceKeptStop_ARevokeRepeatedAfterASuccessIsHarmless(t *testing.T) {
 	f := newForced(t)
+	f.withoutOwedPass()
 	b := &togglingRevokeBroker{}
 	f.s.cfg.Broker = b
 	f.end(f.s)
@@ -1425,10 +1503,11 @@ func TestForceKeptStop_ARevokeRepeatedAfterASuccessIsHarmless(t *testing.T) {
 	}
 }
 
-// A kept sandbox whose proxy stop fails with an ordinary error is not contained: with a settled resume record and
-// the lock free the mark stays, the next tick asks for the proxy stop again, and a stop that then succeeds keeps
-// the sandbox for its resume and clears the mark. Catches: clearing on "left in place" alone.
-func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsKeepsTheMark(t *testing.T) {
+// A kept sandbox whose proxy stop fails with an ordinary error is not kept (the cut is unconfirmed): the tick
+// stops the sandbox instead. When that stop fails too the mark stays and the next tick asks again, the failed-stop
+// retry; once StopSandbox lands the sandbox is gone and the mark clears. Catches: keeping the sandbox on a
+// failed proxy stop, and clearing the mark on a sandbox stop that did not land.
+func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsIsStoppedNotKept(t *testing.T) {
 	f := newForced(t)
 	f.claimOnly(t)
 	f.release()
@@ -1436,15 +1515,16 @@ func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsKeepsTheMark(t *testing
 	rn := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
 	f.s.cfg.Runner = rn
 	f.sb.proxyErr = errors.New("daemon unavailable")
+	f.sb.stopErr = errors.New("daemon unavailable")
 	f.tick(t, f.s)
 	f.tick(t, f.s)
 	if f.leaser.markCount() != 1 || rn.proxyStops.Load() != 2 || f.sb.stopCount() != 0 {
-		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
+		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0: both stops failed, so the retry waits", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
 	}
-	f.sb.proxyErr = nil
+	f.sb.stopErr = nil
 	f.tick(t, f.s)
-	if f.leaser.markCount() != 0 || !f.sb.proxyStopped.Load() || f.sb.stopCount() != 0 {
-		t.Errorf("%d marks, proxy stopped %v, %d sandbox stops; want 0, true and 0", f.leaser.markCount(), f.sb.proxyStopped.Load(), f.sb.stopCount())
+	if f.leaser.markCount() != 0 || f.sb.stopCount() != 1 {
+		t.Errorf("%d marks, %d sandbox stops; want 0 and 1: the proxy stop still fails, so the sandbox is stopped, not kept", f.leaser.markCount(), f.sb.stopCount())
 	}
 }
 
@@ -1495,5 +1575,149 @@ func TestSweepForcedStops_AFailedProxyStopWithTheLockHeldKeepsTheMark(t *testing
 	f.tick(t, f.s)
 	if f.leaser.markCount() != 0 {
 		t.Errorf("%d marks with the lock free; want 0", f.leaser.markCount())
+	}
+}
+
+// bumpFailsStore answers the folder record's bump with a store error: nothing moved.
+type bumpFailsStore struct{ markedStore }
+
+func (bumpFailsStore) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.FolderStatusGuard, time.Time) (types.RunLocalFolderStatus, bool, error) {
+	return types.RunLocalFolderStatus{}, false, errors.New("the database did not answer")
+}
+
+// Rule R, lock held: a forced end whose settle's bump fails leaves the record settled with no Back and no Resume, a
+// pass back owed and never run. Its observed cut keeps the sandbox with its proxy stopped and the mark waiting; with
+// the lock free the locked path keeps it and clears the mark. Catches: rule R reading that record as clear, which
+// stops the sandbox with its changes owed and nothing recorded.
+func TestForceKeptStop_AFailedBumpKeepsTheOwedSandbox(t *testing.T) {
+	f := newForced(t)
+	f.s.cfg.Store = bumpFailsStore{f.s.cfg.Store.(markedStore)}
+	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+	f.end(f.s)
+	if f.sb.stopCount() != 0 || !f.sb.proxyStopped.Load() || f.leaser.markCount() != 1 {
+		t.Fatalf("%d sandbox stops, proxy stopped %v, %d marks; want the sandbox kept with its proxy stopped and the mark waiting", f.sb.stopCount(), f.sb.proxyStopped.Load(), f.leaser.markCount())
+	}
+	if rec := f.cs.folderStatus(); rec.Back != nil || rec.Resume != nil || rec.Gen != 3 {
+		t.Fatalf("record %+v; want it as it was, since the bump failed", rec)
+	}
+	f.release()
+	f.tick(t, f.s)
+	if f.sb.stopCount() != 0 || f.leaser.markCount() != 0 {
+		t.Errorf("with the lock free: %d stops, %d marks; want the sandbox kept and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+	}
+}
+
+// A given-up record is final to the forced retry, with the run's lock held or free: rule R does not read its
+// unsettled generation (a give-up moves the generation on and does not settle it) as a pass in flight, and the
+// retry's settle does not write over it. The sandbox is stopped, the mark cleared, and the record stays given up.
+// Catches: rule R keeping a sandbox nothing will copy back, and the settle turning a give-up back into an owed
+// resume or a "not brought back" record.
+func TestSweepForcedStops_AGivenUpRecordIsStoppedAndStaysGivenUp(t *testing.T) {
+	for name, held := range map[string]bool{"the lock held": true, "the lock free": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			f.claimOnly(t)
+			at := time.Now()
+			f.setRecord(types.RunLocalFolderStatus{Gen: 4, Settled: 3, Back: &types.FolderPassRecord{At: at, Error: "given up", GivenUpAt: &at}})
+			if !held {
+				f.release()
+			}
+			f.tick(t, f.s)
+			if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+				t.Errorf("%d stops, %d marks; want the sandbox stopped and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+			}
+			if rec := f.cs.folderStatus(); rec.Gen != 4 || rec.Resume != nil || !folderGivenUp(rec) {
+				t.Errorf("record %+v; want it as it was, given up at generation 4", rec)
+			}
+		})
+	}
+}
+
+// Rule R's control, lock held: a forced retry stops the sandbox when nothing is owed: a one way folder, or a final
+// record, settled or not (a pass back that found the record already brought back leaves its own generation
+// unsettled). Catches: a rule R widened to keep a sandbox that owes no copy back.
+func TestSweepForcedStops_NothingOwedStopsWithTheLockHeld(t *testing.T) {
+	at := time.Now()
+	for name, tc := range map[string]struct {
+		rec    types.RunLocalFolderStatus
+		oneWay bool
+	}{
+		"a one way folder":                                {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, true},
+		"a record brought back":                           {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Back: &types.FolderPassRecord{At: at, Files: 1}}, false},
+		"a record brought back, its generation unsettled": {types.RunLocalFolderStatus{Gen: 4, Settled: 3, Back: &types.FolderPassRecord{At: at, Files: 1}}, false},
+		"a record not brought back":                       {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Back: &types.FolderPassRecord{At: at, Error: forcedNotBroughtBack}}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			if tc.oneWay {
+				f.withoutOwedPass()
+			}
+			f.claimOnly(t)
+			f.setRecord(tc.rec)
+			f.tick(t, f.s) // the lock is held
+			if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+				t.Errorf("%d stops, %d marks; want the sandbox stopped and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+			}
+		})
+	}
+}
+
+// Rule R, an unreadable data_out rule: a forced end, or a held-lock retry, that cannot read the run's rule has no
+// answer on whether its computer folder owes a pass back. It keeps the sandbox that owes one, as the lock-free path
+// does, and the mark waits. Catches: the unreadable rule read as a folder that owes nothing, which stops the
+// sandbox with its changes owed and nothing recorded.
+func TestForceKeptStop_AnUnreadableDataOutRuleKeepsTheOwedSandbox(t *testing.T) {
+	t.Run("at the forced end", func(t *testing.T) {
+		f := newForced(t)
+		f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+		f.cs.policyErr = errors.New("the audit read failed")
+		f.end(f.s)
+		if f.sb.stopCount() != 0 || !f.sb.proxyStopped.Load() || f.leaser.markCount() != 1 {
+			t.Fatalf("%d sandbox stops, proxy stopped %v, %d marks; want the sandbox kept with its proxy stopped and the mark waiting", f.sb.stopCount(), f.sb.proxyStopped.Load(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Back != nil || rec.Resume != nil || rec.Gen != 3 {
+			t.Fatalf("record %+v; want it as it was: a forced end that cannot read the rule writes nothing", rec)
+		}
+	})
+	t.Run("a rule that reads as blocked stops as before", func(t *testing.T) {
+		f := newForced(t)
+		f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+		f.cs.dataOut = types.TransferBlocked
+		f.end(f.s)
+		if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+			t.Fatalf("%d sandbox stops, %d marks; want the sandbox stopped and the mark cleared: a blocked rule owes no pass back", f.sb.stopCount(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Back != nil || rec.Resume != nil || rec.Gen != 3 {
+			t.Fatalf("record %+v; want it as it was: nothing is owed, so nothing is written", rec)
+		}
+	})
+	t.Run("at the held-lock retry", func(t *testing.T) {
+		f := newForced(t)
+		f.claimOnly(t)
+		f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+		f.cs.policyErr = errors.New("the audit read failed")
+		f.tick(t, f.s) // the lock is held
+		if run := f.terminalRun(t); f.sb.stopCount() != 0 || f.leaser.markCount() != 1 || run.SandboxRef == "" {
+			t.Errorf("%d sandbox stops, %d marks, ref %q; want the sandbox kept, the mark waiting and the ref kept", f.sb.stopCount(), f.leaser.markCount(), run.SandboxRef)
+		}
+	})
+}
+
+// Rule R, lock held, a runner that dropped after the gate: the cut is not observed, and a never-run record (settled,
+// no Back, no Resume) is still a pass back owed. The retry queues no stop for the runner that is away and the mark
+// waits. Catches: that record read as not in flight, which stops the sandbox through a queued stop that would replay
+// on reconnect and lose the copy back.
+// This is a regression pin for the earlier change that keeps an owed record. It is red only at the older rule
+// (rec.Resume != nil || rec.Gen != rec.Settled), and green before and after the change that reads an unreadable
+// data_out rule as unreadable.
+func TestForceKeptStop_AnUnobservedCutOnANeverRunRecordQueuesNoStop(t *testing.T) {
+	f := newForced(t)
+	fr, _ := f.onFencedRunner(t)
+	f.claimOnly(t)
+	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+	fr.fenceErr = fmt.Errorf("%w: the link dropped", runner.ErrRunnerOffline)
+	f.tick(t, f.s) // the lock is held
+	if fr.fences.Load() != 1 || f.sb.stopCount() != 0 || fr.proxyStops.Load() != 0 || f.leaser.markCount() != 1 {
+		t.Errorf("fences %d, %d sandbox stops, %d proxy stops, %d marks; want one fence, no stop queued and the mark kept", fr.fences.Load(), f.sb.stopCount(), fr.proxyStops.Load(), f.leaser.markCount())
 	}
 }

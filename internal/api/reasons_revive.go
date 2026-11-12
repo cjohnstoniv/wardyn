@@ -45,6 +45,7 @@ const (
 	reasonReviveNotRunning                  = "revive_not_running"                    // the run is not in the RUNNING state, or has no sandbox
 	reasonReviveEndedFilesGone              = "revive_ended_files_gone"               // the run ended and its files are no longer kept
 	reasonRevivePastEnd                     = "revive_past_end"                       // the run has passed its scheduled end; extend it first
+	reasonReviveMaxAge                      = "revive_max_age"                        // the run has reached its maximum age, which no extension moves; start a new run
 	reasonReviveEndedTaskRun                = "revive_ended_task_run"                 // a task run's agent cannot be started again once it has ended
 	reasonReviveRebootAgentStopped          = "revive_reboot_agent_stopped"           // the run was lost to a reboot; only its own page can start its agent again
 	reasonReviveEndedAgentStopped           = "revive_ended_agent_stopped"            // the run has ended and its agent is stopped; only its own page can start it again
@@ -60,6 +61,10 @@ const (
 	reasonRunCapacityStoreUnavailable       = "run_capacity_store_unavailable"        // this store cannot report fleet capacity
 )
 
+// reasonReviveRunnerUpdateNeeded: a container run on a connected Docker runner older than 0.10.0-rc.20
+// (no ProxyFence) is not revived or live-edited; the runner is updated first.
+const reasonReviveRunnerUpdateNeeded = "revive_runner_update_needed"
+
 // Image admission at revive (run_revive_image.go).
 const reasonReviveImageNotAdmitted = "revive_image_not_admitted" // the image is held (images.admission enforce, or a profile's required_image_signers) and the run's create pinned no checked digest: started before admission was enforced, or in audit mode
 
@@ -70,10 +75,11 @@ const (
 	reasonEgressEditRunNotLive    = "egress_edit_run_not_live"    // the run is not running, has no sandbox, or is lost
 	reasonEgressEditInProgress    = "egress_edit_in_progress"     // another egress edit of this run has not answered yet
 	reasonEgressEditHostNotListed = "egress_edit_host_not_listed" // a remove_hosts entry is not an entry on the run's allowlist
-	reasonEgressEditUnsupported   = "egress_edit_unsupported"     // no readback in the store, or a substrate that cannot hash what it hands a proxy or replace the proxy at all (Kubernetes)
+	reasonEgressEditUnsupported   = "egress_edit_unsupported"     // no readback in the store, a substrate that cannot hash what it hands a proxy, or a Kubernetes edit the running proxy cannot take in place
 	reasonEgressEditLegacyProxy   = "egress_edit_legacy_proxy"    // the run's runner or proxy image is known to be older than firstRenewGateRelease
 	reasonEgressEditUnconfirmed   = "egress_edit_unconfirmed"     // the new proxy did not confirm the edit; its stop is confirmed
 	reasonEgressEditSuperseded    = "egress_edit_superseded"      // another revive replaced the edit's proxy start before it confirmed
 	// reasonEgressEditContainmentUnresolved: the new proxy did not confirm the edit, and its stop is not confirmed yet.
 	reasonEgressEditContainmentUnresolved = "egress_edit_containment_unresolved"
+	reasonEgressEditNoNetwork             = "egress_edit_no_network" // 409: a No network run's edit; it has nothing to narrow
 )

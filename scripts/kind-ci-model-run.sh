@@ -77,11 +77,18 @@ FAKE_BEDROCK_HOST="${FAKE_SVC}-bedrock.${NAMESPACE}.svc.cluster.local"
 PROVIDER_ID="ci-model-fake"
 MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 CURL_MAX_TIME=15
+# A live egress edit answers once its proxy has confirmed the narrowed policy, or after a failed edit's
+# stop and run-fate read. Worst branch, for a run with no computer folder (this run has none): a refused
+# delivery whose undo fails, the 75 s readback wait runs out, then the abandoned start's stop with its
+# finalize tail and the fate read: 425 s. 425 s plus 10%, rounded up to a multiple of 10.
+PATCH_MAX_TIME=470
+RUNS_NAMESPACE="wardyn-runs"
 EVIDENCE_DIR="${WARDYN_KIND_CI_MODEL_EVIDENCE:-${ROOT}/local/evidence/kind-ci-model-run}"
 mkdir -p "${EVIDENCE_DIR}"
 TMPDIR="$(mktemp -d /tmp/wardyn-kind-ci-model-run.XXXXXX)"
 PF_PID=""
-trap '[[ -n "${PF_PID}" ]] && kill "${PF_PID}" 2>/dev/null; rm -rf "${TMPDIR}"' EXIT
+NARROW_RUN=""
+trap '[[ -n "${PF_PID}" ]] && kill "${PF_PID}" 2>/dev/null; [[ -n "${NARROW_RUN}" ]] && curl -sS --max-time "${CURL_MAX_TIME}" -X POST "${BASE_URL}/api/v1/runs/${NARROW_RUN}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1; rm -rf "${TMPDIR}"' EXIT
 
 step "checking the cluster is up (never created or deleted here)"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${RELEASE}" >/dev/null 2>&1 \
@@ -230,4 +237,66 @@ seen_rc=$?
 check "the fake received a model call for ${MODEL} with a Bearer header ($(jq -c '{bedrock_calls, bedrock_models}' <<<"${seen}"))" "${seen_rc}"
 
 [[ "${fail}" -eq 0 ]] || die "the model-provider path was not proven — see the FAIL lines above and ${EVIDENCE_DIR}"
+
+# ── 7. a live egress edit narrows the run's proxy in place ──────────────────
+# One live run, one PATCH /runs/{id}/egress, then both sides read back: the audit rows wardynd wrote
+# for the stored config, and the list the run's proxy holds, asked through the proxy's own -narrow.
+# A 200 alone proves nothing. The two hashes must be equal, and every value read goes to the evidence
+# directory.
+NARROW_HOST="narrow-check.example"
+step "launching one live run, then narrowing its proxy in place (${NARROW_HOST})"
+code="$(api POST /runs '{"agent":"claude-code","repo":"local:kind-ci-model","interactive":true,
+  "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","auto_stop_after_sec":-1,
+  "resources":{"cpu_millis":250,"memory_mib":256}}}')"
+[[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${TMPDIR}/resp.json" >&2; die "POST /runs for the narrowing run answered ${code}"; }
+NARROW_RUN="$(jq -r '.id' "${TMPDIR}/resp.json")"
+[[ -n "${NARROW_RUN}" && "${NARROW_RUN}" != "null" ]] || die "the narrowing run's create response carried no id"
+# RUNNING, and its first generation enforced, so the edit meets a settled run and not one still starting.
+gen1_hash=""
+state=""
+for _ in $(seq 1 60); do
+  api GET "/runs/${NARROW_RUN}" >/dev/null && state="$(jq -r '.state // ""' "${TMPDIR}/resp.json")"
+  if [[ "${state}" == "RUNNING" ]]; then
+    api GET "/audit?run_id=${NARROW_RUN}" >/dev/null
+    gen1_hash="$(jq -r '[.[] | select(.action == "run.policy.enforced" and .data.generation == 1)][0].data.config_sha256 // ""' "${TMPDIR}/resp.json")"
+    [[ -n "${gen1_hash}" ]] && break
+  fi
+  sleep 2
+done
+[[ "${state}" == "RUNNING" && -n "${gen1_hash}" ]] || die "the narrowing run ${NARROW_RUN} did not reach RUNNING with generation 1 enforced (state '${state}', generation 1 hash '${gen1_hash}')"
+echo "  generation 1 enforced: ${gen1_hash}"
+
+patch_code="$(curl -sS --max-time "${PATCH_MAX_TIME}" -o "${EVIDENCE_DIR}/narrow-patch.json" -w '%{http_code}' -X PATCH "${BASE_URL}/api/v1/runs/${NARROW_RUN}/egress" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" -H 'Content-Type: application/json' -d "{\"deny_hosts\":[\"${NARROW_HOST}\"]}")"
+patch_rc=$?
+[[ "${patch_rc}" -eq 0 && "${patch_code}" == "200" ]] || { cat "${EVIDENCE_DIR}/narrow-patch.json" >&2; die "PATCH /runs/${NARROW_RUN}/egress answered '${patch_code}' (curl exit ${patch_rc}), want 200"; }
+patch_gen="$(jq -r '.policy_generation // ""' "${EVIDENCE_DIR}/narrow-patch.json")"
+[[ "${patch_gen}" == "2" ]] || die "the edit's answer carried policy_generation '${patch_gen}', want 2 ($(cat "${EVIDENCE_DIR}/narrow-patch.json"))"
+
+# The stored side. The config itself is sealed in the database, so the audit rows carry what wardynd
+# stored and checked.
+api GET "/audit?run_id=${NARROW_RUN}" >/dev/null
+cp "${TMPDIR}/resp.json" "${EVIDENCE_DIR}/narrow-audit.json"
+jq -e --arg h "${NARROW_HOST}" 'any(.[]; .action == "run.egress.edit" and .outcome == "success" and .data.applied == "in_place" and .data.policy_generation == 2 and (.data.denied_hosts | index($h)) != null)' "${EVIDENCE_DIR}/narrow-audit.json" >/dev/null \
+  || die "no successful in-place run.egress.edit row at generation 2 naming ${NARROW_HOST}: $(jq -c '[.[] | select(.action == "run.egress.edit") | .data]' "${EVIDENCE_DIR}/narrow-audit.json")"
+jq -e --arg h "${NARROW_HOST}" 'any(.[]; .action == "run.policy.generation" and .data.generation == 2 and (.data.policy.denied_domains | index($h)) != null)' "${EVIDENCE_DIR}/narrow-audit.json" >/dev/null \
+  || die "no run.policy.generation row at generation 2 whose denied_domains holds ${NARROW_HOST}: $(jq -c '[.[] | select(.action == "run.policy.generation") | .data]' "${EVIDENCE_DIR}/narrow-audit.json")"
+gen2_hash="$(jq -r '[.[] | select(.action == "run.policy.enforced" and .data.generation == 2)][0].data.config_sha256 // ""' "${EVIDENCE_DIR}/narrow-audit.json")"
+[[ -n "${gen2_hash}" ]] || die "no run.policy.enforced row at generation 2: $(jq -c '[.[] | select(.action == "run.policy.enforced") | .data]' "${EVIDENCE_DIR}/narrow-audit.json")"
+[[ "${gen2_hash}" != "${gen1_hash}" ]] || die "generation 2 enforced the same config hash as generation 1 (${gen1_hash})"
+echo "  stored side: generation 2 enforced ${gen2_hash} (generation 1 was ${gen1_hash})"
+
+# The proxy's side: its own -narrow with an empty list changes nothing and reports what it holds.
+proxy_answer="$(printf '{"deny":[]}' | kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" exec -i "wardyn-proxy-${NARROW_RUN}" -c wardyn-proxy -- /usr/local/bin/wardyn-proxy -narrow 2>"${EVIDENCE_DIR}/narrow-exec.stderr")"
+narrow_rc=$?
+printf '%s\n' "${proxy_answer}" >"${EVIDENCE_DIR}/narrow-proxy.json"
+[[ "${narrow_rc}" -eq 0 ]] || die "wardyn-proxy -narrow exited ${narrow_rc}: stdout '${proxy_answer}' stderr '$(cat "${EVIDENCE_DIR}/narrow-exec.stderr")'"
+proxy_state="$(jq -r '.state // ""' <<<"${proxy_answer}")"
+proxy_list="$(jq -c '.live_denies // []' <<<"${proxy_answer}")"
+proxy_hash="$(jq -r '.config_sha256 // ""' <<<"${proxy_answer}")"
+[[ "${proxy_state}" == "current" ]] || die "the proxy answered state '${proxy_state}', want current: ${proxy_answer}"
+[[ "${proxy_list}" == "[\"${NARROW_HOST}\"]" ]] || die "the proxy holds ${proxy_list}, want exactly [\"${NARROW_HOST}\"]"
+[[ "${proxy_hash}" == "${gen2_hash}" ]] || die "the proxy's config hash ${proxy_hash} is not the stored generation 2's ${gen2_hash}"
+echo "  proxy side: state ${proxy_state}, list ${proxy_list}, config ${proxy_hash}: equal to the stored generation 2 hash"
+
 echo "kind-ci-model-run: PASS"

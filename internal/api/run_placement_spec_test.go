@@ -280,7 +280,7 @@ func TestLocalStoredSpecNeverCarriesTheDecisionSpoolDir(t *testing.T) {
 	}
 }
 
-// fix-r1 Opus F2: a stored scope matches the policy copy only when a typed decode reads both alike. jsonb
+// A stored scope matches the policy copy only when a typed decode reads both alike. jsonb
 // reorders keys, so two keys that differ only in case decode by order and must not match; integers past
 // 2^53 compare exactly. Spacing and key order alone do not matter.
 func TestSameScopeComparesTheTypedDecode(t *testing.T) {

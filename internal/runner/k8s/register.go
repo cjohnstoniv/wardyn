@@ -8,6 +8,9 @@ package k8s
 import (
 	"errors"
 	"os"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -79,10 +82,40 @@ func init() {
 		if err := checkAgentSandboxTemplate(cfg); err != nil {
 			return nil, err
 		}
+		peer, err := controlPlanePeerFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		cfg.ControlPlanePeer = peer
 		s, err := New(cfg)
 		if err != nil {
 			return nil, err
 		}
 		return s, nil // avoid the typed-nil interface trap
 	})
+}
+
+// errControlPlanePeerEnv refuses a half-set or malformed control-plane peer at boot.
+var errControlPlanePeerEnv = errors.New("k8s: WARDYN_K8S_CONTROL_PLANE_NAMESPACE and WARDYN_K8S_CONTROL_PLANE_POD_LABELS are set together or not at all, and each label is key=value")
+
+// controlPlanePeerFromEnv reads wardynd's own pods, the one peer a No network run's proxy pod may reach
+// (WARDYN_K8S_CONTROL_PLANE_NAMESPACE, and WARDYN_K8S_CONTROL_PLANE_POD_LABELS as k=v,k=v). Neither set
+// is nil: a No network create is then refused. A runner does not read them (its peer is RunnerdPeer).
+func controlPlanePeerFromEnv() (*ControlPlanePeer, error) {
+	ns, raw := os.Getenv("WARDYN_K8S_CONTROL_PLANE_NAMESPACE"), os.Getenv("WARDYN_K8S_CONTROL_PLANE_POD_LABELS")
+	if ns == "" && raw == "" {
+		return nil, nil
+	}
+	if ns == "" || raw == "" {
+		return nil, errControlPlanePeerEnv
+	}
+	labels := map[string]string{}
+	for _, kv := range strings.Split(raw, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || len(validation.IsQualifiedName(k)) > 0 || len(validation.IsValidLabelValue(v)) > 0 {
+			return nil, errControlPlanePeerEnv
+		}
+		labels[k] = v
+	}
+	return &ControlPlanePeer{Namespace: ns, PodLabels: labels}, nil
 }

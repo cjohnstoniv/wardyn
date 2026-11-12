@@ -173,8 +173,8 @@ type reviveRunner struct {
 	// whose end passed has its agent stopped too (run_lost.go), which revive
 	// detects by probing this, never by trusting lost_reason alone.
 	status types.RunState
-	// statusErr makes Status fail, as a wedged daemon would (Minor, Fable
-	// review): the probe could not observe the agent at all.
+	// statusErr makes Status fail, as a wedged daemon would: the probe could
+	// not observe the agent at all.
 	statusErr error
 	onEnsure  func()
 	// onReplace runs inside ReplaceProxy with the new proxy's config, as that proxy's startup renewal does.
@@ -690,8 +690,7 @@ func TestReviveRun_RevokesTheRetiringToken(t *testing.T) {
 	}
 }
 
-// TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive is F4 (Fable
-// review of O2's placement): a LIVE run's restart whose ReplaceProxy fails
+// TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive pins this: a LIVE run's restart whose ReplaceProxy fails
 // before the old proxy is touched (a plain inspect error, not
 // ErrProxyReplaceFailed) keeps that proxy running — it renews its own token
 // and stays that way. The retiring token must therefore still verify
@@ -829,8 +828,7 @@ func TestReviveRun_RevokesTheTokensTheReplacedProxyRenewed(t *testing.T) {
 	})
 }
 
-// TestReviveRun_AgentStatusProbeErrorRefuses is the Minor fix (Fable
-// review): reviveNeedsAgentStart must not read "the probe failed" as "the
+// TestReviveRun_AgentStatusProbeErrorRefuses pins that reviveNeedsAgentStart must not read "the probe failed" as "the
 // agent is running". An outage run whose Status cannot be observed (a wedged
 // daemon) is refused with 503, never proxy-only-revived and reported success
 // while its agent might really be stopped.

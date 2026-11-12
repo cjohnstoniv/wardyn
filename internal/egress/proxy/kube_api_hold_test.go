@@ -179,6 +179,8 @@ func wantWaiting(t *testing.T, label string, rec *httptest.ResponseRecorder) {
 // canonical body the person was shown and the minted token.
 func TestKubeApproveEachHoldsThenForwardsOnce(t *testing.T) {
 	h, cp := holdHarness(t, kubeOpts{write: true})
+	// A wider second than the helper's, so the approval is raised well inside the window on a slow runner.
+	kubeCallSecond = 50 * time.Millisecond
 	wantWaiting(t, "before a yes", h.tunnelBody(t, http.MethodPatch, holdTarget, holdBody, holdCT))
 	if seen, n := h.upstreamSaw(), h.minted.Load(); len(seen) != 0 || n != 0 {
 		t.Fatalf("a held write reached the API server %q or minted %d tokens", seen, n)

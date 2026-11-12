@@ -184,6 +184,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	// A No network run's proxy pod reaches only Wardyn: the plan that says how is made before anything
+	// exists (a PVC included), so a refusal is returned bare, with nothing to tear down.
+	proxyEgress, cpPin, err := d.proxyEgressPlan(ctx, spec)
+	if err != nil {
+		return runner.Sandbox{}, err
+	}
+	proxyOnly := d.noNetworkProxyOnly(spec, ns)
 	d.noteNamespace(spec.RunID, ns)
 	defer d.brackets.Delete(proxyPodName(spec.RunID))
 	defer d.brackets.Delete(agentPodName(spec.RunID))
@@ -247,24 +254,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: agentLabels}}},
 			}},
-			// SECURITY: both rules share the metadata-excluding peer — a
-			// peer-less DNS rule would permit port 53 to the metadata address,
-			// voiding the Except on the rule beside it. The DNS rule adds the
-			// cluster DNS pods as a second peer (peers are OR'd, so the
-			// ipBlock and its Except are unchanged): a CNI that selects pods by
-			// identity does not match a pod IP against an ipBlock.
-			Egress: append([]networkingv1.NetworkPolicyEgressRule{
-				{ // DNS
-					Ports: []networkingv1.NetworkPolicyPort{
-						{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
-						{Protocol: protoPtr(corev1.ProtocolUDP), Port: intOrStrPtr(intstr.FromInt32(53))},
-					},
-					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}, clusterDNSPeer()},
-				},
-				{ // everything except the cloud-metadata address
-					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}},
-				},
-			}, d.runnerdPeerRules()...),
+			Egress: proxyEgress, // see proxyEgressPlan
 		},
 	}
 	if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, proxyNetPol, metav1.CreateOptions{}); err != nil {
@@ -391,12 +381,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		proxyPod.Spec.Containers[0].Env = append(proxyPod.Spec.Containers[0].Env,
 			corev1.EnvVar{Name: kv[0], Value: kv[1]})
 	}
+	if !d.runnerMode() {
+		withLiveDenyDir(proxyPod)
+	}
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
 	d.placement.apply(proxyPod, spec.RunID, componentProxy, spec.Labels)
 	if err := d.runnerPodSpec(proxyPod, componentProxy, spec.ProxyConfig.ControlPlaneURL); err != nil {
 		return fail(err)
+	}
+	if cpPin != nil { // a No network run on a server: Wardyn's one address, with no DNS rule to find it
+		proxyPod.Spec.HostAliases = append(proxyPod.Spec.HostAliases, *cpPin)
 	}
 	createdProxy, err := d.createPod(ctx, spec.RunID, componentProxy, proxyPod)
 	if err != nil {
@@ -409,7 +405,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
 	if d.runnerMode() && d.cfg.IPFenced != nil && d.cfg.IPFenced(proxyIP) {
-		// Contained before it ever opens, rather than running to its deadline (Fable L5).
+		// Contained before it ever opens, rather than running to its deadline.
 		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
 	}
 
@@ -507,7 +503,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
-	return podSandbox(spec, enforced, runtimeHandler, proxy.ConfigSHA256(proxyJSON), proxyIP), nil
+	sb := podSandbox(spec, enforced, runtimeHandler, proxy.ConfigSHA256(proxyJSON), proxyIP)
+	if spec.ProxyConfig.NoNetwork {
+		sb.NoNetworkProxyOnly = cmp.Or(proxyOnly, noNetworkPodEnforced)
+	}
+	return sb, nil
 }
 
 // ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API

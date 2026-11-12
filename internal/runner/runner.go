@@ -425,6 +425,11 @@ type Sandbox struct {
 	// ProxyAddr is the proxy address the agent is pinned to (its wardyn-proxy hosts entry); empty
 	// from a driver or runner that predates it.
 	ProxyAddr string `json:",omitempty"`
+	// NoNetworkProxyOnly says, for a No network sandbox, whether it has the proxy layer only: "pod_enforced"
+	// when its namespace's NetworkPolicy is proven enforced; otherwise why not ("netpol_not_enforced" and
+	// "netpol_ambient_acknowledged", which only an override admits, or "netpol_not_proven").
+	// Empty for any other run, and from a driver or runner that predates it.
+	NoNetworkProxyOnly string `json:",omitempty"`
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
@@ -913,7 +918,7 @@ type NodeTuplePod struct {
 	ClosingHolderUID string      `json:"closing_holder_uid,omitempty"`
 }
 
-// NodeTuple binds an operator's node record to one run's recorded machine facts (Codex R9-L1). The
+// NodeTuple binds an operator's node record to one run's recorded machine facts. The
 // runner accepts a record only while its own record still equals the tuple both approvers saw.
 type NodeTuple struct {
 	RunID  uuid.UUID      `json:"run_id"`

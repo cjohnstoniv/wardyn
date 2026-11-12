@@ -27,7 +27,7 @@ The equivalent API body (POST `/api/v1/runs`):
 - To build a workspace's image ahead of a run, use `wardyn workspace build <workspace-id>`; `--refresh` rebuilds it ([The build record](#the-build-record)).
 
 > [!WARNING]
-> **With NO builder wired the run does not fail — it silently falls back to the convention image.**
+> **With NO builder wired the run does not fail: it falls back to the convention image, and the create answer carries a warning that the CLI prints.**
 > Check the `image:` line the CLI prints on create: a real build is tagged `wardyn-devcontainer/<run-id>:latest`.
 
 - **A third refusal, since 0.7.2: provider admission.**

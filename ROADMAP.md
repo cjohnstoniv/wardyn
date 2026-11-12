@@ -24,6 +24,7 @@
 | **v0.10.0-rc.16** | rc.16: unit deciders for held approvals, platform envelopes, file download approvals, kubectl restart and per-write approval, model gateway and detector pages. | **Shipped (pre-alpha)** — `v0.10.0-rc.16`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.17** | rc.17: macOS VM idle and Setup Assistant fixes, working edit-base buttons, `update-tools`, and credentials withheld unless a policy names their host exactly. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.17`, 2026-11-09 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.18** | rc.18: the rc.17 macOS VM login fix, per-host method and path rules, the IP-address switch, a No network preset, proxy policy confirmation and DNS audit rows. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.18`, 2026-11-10 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.19** | rc.19: computer folders kept until their copy back finishes, Docker network edits and revives gated on the new proxy's first renewal, Kubernetes refusing live network edits, clearer exec and No network answers, and Go 1.26.11. | **Shipped (pre-alpha)** — `v0.10.0-rc.19`, 2026-11-11 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
@@ -78,7 +79,7 @@ Not built:
 | High-availability completion | Open blockers a second replica still hits, chiefly that a registered runner holds its session with one replica; see [High availability](docs/operations/high-availability.md) |
 | Kubernetes parity with Docker | Open gaps listed in [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md) "Known gaps" |
 | CC3/Vault (Kata) packaged and GA | Experimental |
-| Signed action receipts | Not built; the audit hash chain ships (migration `0047`) |
+| Signed action receipts | Shipped in `v0.10.0-rc.14`: checkpoints and receipts signed with the Ed25519 boot key `wardyn-audit-receipt-key`, checked offline with `wardyn audit verify` against keys pinned off the control plane ([OPERATIONS.md](docs/OPERATIONS.md#signed-checkpoints-and-receipts)). The key is held by the control plane. |
 | Separation of duty on the control plane (super-admin tier) | Not built; `security_admin` separates governance authority ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
 
 ### Git-token ref confinement

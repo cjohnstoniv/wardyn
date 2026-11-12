@@ -14,12 +14,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -210,7 +212,8 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	case !prep.allowedPeers || !d.cfg.ProxyPeersOnlyByDefault || !errors.As(err, &refused) || refused.setting != "allowed_peers":
 		return id, "", err
 	}
-	if err := d.removeProxy(ctx, runID); err != nil {
+	// The container that refused, by its id: a proxy started under the name since is not it.
+	if err := d.removeProxyAt(ctx, runID, id); err != nil {
 		return "", "", fmt.Errorf("docker: remove the proxy that refused allowed_peers: %w", err)
 	}
 	if prep.cfgJSON, err = withoutProxyConfigKey(prep.cfgJSON, "allowed_peers"); err != nil {
@@ -355,7 +358,7 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	//
 	// On a failure the container is deliberately NOT removed here: on the CreateSandbox path the
 	// caller removes it after also rolling back the per-run network; on the ReplaceProxy path it
-	// stays so its logs still name the cause, and the next revive removes it by name.
+	// stays so its logs still name the cause, and the next revive removes it by the id it inspects.
 	var waitErr error
 	if marker {
 		waitErr = d.awaitProxyReady(ctx, resp.ID, att)
@@ -684,7 +687,7 @@ func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
 //
 // If the NEW proxy then exits at config load, startProxy's watch reports that
 // (wrapped in ErrProxyReplaceFailed below) and leaves the exited container in
-// place, so its logs still name the cause; the next revive removes it by name
+// place, so its logs still name the cause; the next revive removes it (the container it inspects)
 // before starting another.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
 	_, err := d.ReplaceProxyHashed(ctx, ref, cfgJSON)
@@ -694,6 +697,15 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 // ReplaceProxyHashed is ReplaceProxy, answering proxy.ConfigSHA256 of the bytes written to the new
 // proxy (runner.ProxyReviverHashed). The address stays the one the agent pins, so none is answered.
 func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
+	return d.ReplaceProxyHashedAt(ctx, ref, cfgJSON, 0)
+}
+
+// ReplaceProxyHashedAt is ReplaceProxyHashed acting for policy generation gen (runner.ProxyReviverAt). gen 0
+// is none: ReplaceProxyHashed. With gen > 0 the replacement proxy is labelled with it, and a proxy, running or not,
+// labelled gen or newer refuses the replace with runner.ErrProxyGenerationNewer, nothing touched. The proxy
+// removed is the container inspected, never one that took the name since. An agent cut off its run network
+// (FenceProxy) is refused with runner.ErrProxyFenced before anything is removed.
+func (d *Driver) ReplaceProxyHashedAt(ctx context.Context, ref string, cfgJSON []byte, gen int) (string, error) {
 	if v, err := d.vmLookup(ctx, ref); err != nil {
 		return "", err
 	} else if v != nil {
@@ -723,6 +735,9 @@ func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []b
 	if err != nil {
 		return "", fmt.Errorf("docker: inspect agent for its proxy address: %w", err)
 	}
+	if ns := agent.Container.NetworkSettings; ns == nil || ns.Networks[internalNetName(id)] == nil {
+		return "", fmt.Errorf("docker: agent %s has no endpoint on its run network: %w", ref, runner.ErrProxyFenced)
+	}
 	ip := pinnedProxyIP(agent.Container.HostConfig)
 	if !ip.IsValid() {
 		return "", fmt.Errorf("docker: agent %s pins no proxy address", ref)
@@ -739,10 +754,8 @@ func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []b
 	if err != nil {
 		return "", fmt.Errorf("docker: replace proxy: %w", err)
 	}
-	d.drainSink(ctx, id)
-	// A failed remove may still have removed it.
-	if err := d.removeProxy(ctx, id); err != nil {
-		return "", fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
+	if err := d.removeProxyForReplace(ctx, id, gen); err != nil {
+		return "", err
 	}
 	// The listener only where this agent's resolver is mounted to point at the proxy, as at create.
 	env := proxyEnvFromJSON(id, cp.ControlPlaneURL)
@@ -752,8 +765,22 @@ func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []b
 	// A replacement serves only after a token renewal under its own token has landed, so a proxy
 	// started late by a superseded revive never serves. A create does not set it.
 	env = withFirstRenewGate(env)
-	_, sum, err := d.startProxy(ctx, id, d.labels(id, componentProxy, agentLabels),
-		env, prep, ip)
+	proxyLabels := agentLabels
+	if gen > 0 {
+		proxyLabels = maps.Clone(agentLabels)
+		if proxyLabels == nil {
+			proxyLabels = map[string]string{}
+		}
+		proxyLabels[labelProxyGeneration] = strconv.Itoa(gen)
+	}
+	_, sum, err := d.startProxy(ctx, id, d.labels(id, componentProxy, proxyLabels), env, prep, ip)
+	if isNameConflict(err) {
+		// A proxy took the name between the inspect and the create: look again, once, and apply the same rule.
+		if rerr := d.removeProxyForReplace(ctx, id, gen); rerr != nil {
+			return "", rerr
+		}
+		_, sum, err = d.startProxy(ctx, id, d.labels(id, componentProxy, proxyLabels), env, prep, ip)
+	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}

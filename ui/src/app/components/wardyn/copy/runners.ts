@@ -230,6 +230,19 @@ export const RUN_COMPUTER_FOLDER = {
   MAY_BE_GONE: "The run has ended. Its sandbox copy may no longer be available.",
   REFUSED: (n: string) => `${n} paths were not copied.`,
   BACK_FAILED: (text: string) => `The changes could not come back: ${text}`,
+  NOT_BACK: "Not back to you yet",
+  NOT_COUNTED: "Not counted",
+  GIVEN_UP: "Given up",
+  KEPT_LIST: "The run has ended. Its sandbox is kept for now. These files were last reported as not copied back:",
+  KEPT_NO_LIST: "The run has ended. Its sandbox is kept for now.",
+  KEPT_DEADLINE: (time: string) => `Wardyn may give up these changes and stop the sandbox after ${time}, or sooner if needed to cut its network access.`,
+  KEEP_RUNNER_ONLINE: (computer: string) => `Keep the Wardyn runner on ${computer} up to date and online so it can copy the changes back.`,
+  MORE: (n: string) => `and ${n} more`,
+  GAVE_UP_LIST: "The sandbox was stopped. Wardyn gave up recovery. These files were last reported as not copied back:",
+  GAVE_UP_NO_LIST: "The sandbox was stopped. Wardyn gave up recovery, but has no file list to show.",
+  DELETED: "Wardyn confirmed that the sandbox was stopped and its copy deleted.",
+  STOP_UNCONFIRMED: "The run has ended. Wardyn has not confirmed that the sandbox was stopped, so it cannot say whether a copy remains.",
+  PATHS_LABEL: "Files last reported as not copied back",
 };
 
 export const RUN_SYNC = {
