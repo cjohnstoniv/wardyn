@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.20] — 2026-11-12
+
 ### Added
 
 - macOS VM bases: an opt-in switch, `/Library/Wardyn/setup-assistant-carry`, copies the agent user's per-host settings into each run's new machine identity at boot, when the guest agent starts, so a Setup Assistant pane finished once in `edit-base` may stay closed in runs. Off by default; not yet tried on a real Mac.
