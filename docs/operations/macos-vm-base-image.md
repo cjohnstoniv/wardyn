@@ -94,7 +94,7 @@
 1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
 2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The code goes to `setup-code.json`, readable by you only. The window types it or shows it on a click.
 3. The command's first line says it edits a copy of the VM base, not this Mac. It then prints that the copy takes about 2 minutes to start, and the copy boots in a window.
-   - It says the code is `wardyn-admin`'s password. Click Type code in the window to type it at a prompt, or Show code to read it.
+   - It says the code is `wardyn-admin`'s password. Click Type code in the window to type it at a prompt, or Show code to read it. Paste does not reach the VM: type other commands by hand. Type code types only the code.
    - The copy is meant to have no internet during the session.
    - **Who you are signed in as.** The base turns on auto-login for `agent`, so the copy may open at `agent`'s desktop, not at a login window. As `agent` you have no `sudo` and cannot read `/Library/Wardyn/stage`.
    - **Administrator steps.** Click Open admin Terminal in the window. It opens Terminal in the guest at `su - wardyn-admin`: click Type code, then press Return.

@@ -49,6 +49,7 @@ type ScreenText struct {
 var editScreen = WindowText{
 	Title: "Wardyn: edit this macOS VM base",
 	Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window: the VM shuts down (if macOS asks, click Shut Down). Wardyn checks the base before runs use it.\n" +
+		"Paste from this Mac does not reach the VM, so type commands by hand. Type code types only the one-time code.\n" +
 		"The first time, macOS may ask setup questions. Finish them without adding an Apple account. What you click stays for every run.\n" +
 		"The VM signs in as agent by itself; stay signed in. For administrator steps click Open admin Terminal and type the code when it asks for wardyn-admin's password. If a login window shows instead, sign in there as wardyn-admin with the code.\n" +
 		"Full Disk Access, for folder shares: click Full Disk Access, then drag the guest agent (" + guestagent.MacAgentBinaryPath + ") from Finder into the list. Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +

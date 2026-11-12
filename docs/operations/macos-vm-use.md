@@ -198,7 +198,7 @@ A saved cast says how complete it is, on its row and in its header. A row carrie
 
 A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your own Mac. The run's own helper (`wardyn-macvm run`) draws it with Apple's virtual machine view. Wardyn's server decides each open and tells the run's runner to draw it. Nothing rests on the Mac between opens.
 
-- The window shows the VM's screen and takes your keys and pointer.
+- The window shows the VM's screen and takes your keys and pointer. Paste from your Mac does not reach the VM.
 - Only what goes through the run's proxy settings counts as activity: Terminal, the harness, and tools that honour `HTTPS_PROXY`. The window, a terminal and SSH count too.
 - Requests the guest makes on its own never count, allowed or refused: macOS's services, and tools that ignore the proxy settings (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls still count, as do requests to a host with a `via_org` credential (a known issue). A Mac runner needs upgrading first.
 - Setup Assistant's Apple Account pane can show in the window. [What Wardyn sets in the base](macos-vm-base-image.md#what-wardyn-sets-in-the-base) has an opt-in that may keep it closed, not yet tried on a real Mac.

@@ -280,6 +280,7 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	wantText := macvm.WindowText{
 		Title: "Wardyn: edit this macOS VM base",
 		Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window: the VM shuts down (if macOS asks, click Shut Down). Wardyn checks the base before runs use it.\n" +
+			"Paste from this Mac does not reach the VM, so type commands by hand. Type code types only the one-time code.\n" +
 			"The first time, macOS may ask setup questions. Finish them without adding an Apple account. What you click stays for every run.\n" +
 			"The VM signs in as agent by itself; stay signed in. For administrator steps click Open admin Terminal and type the code when it asks for wardyn-admin's password. If a login window shows instead, sign in there as wardyn-admin with the code.\n" +
 			"Full Disk Access, for folder shares: click Full Disk Access, then drag the guest agent (/usr/local/libexec/wardyn-guest-agent) from Finder into the list. Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
@@ -290,6 +291,28 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	}
 	if got := e.scr.texts[0]; got.Title != wantText.Title || got.Strip != wantText.Strip || got.CodeFile != wantText.CodeFile {
 		t.Errorf("the edit window's text:\n%+v\nwant\n%+v", got, wantText)
+	}
+}
+
+// Every window that takes keys says paste from this Mac does not pass in, and the edit window says Type
+// code types only the code. Catches the note dropped from one of the three windows.
+func TestWindowStripsSayPasteDoesNotPassIn(t *testing.T) {
+	for name, strip := range map[string]string{"run window": macvm.WindowStrip, "kept window": macvm.KeptWindowStrip} {
+		if !strings.Contains(strip, "paste from this Mac does not") {
+			t.Errorf("the %s strip does not say paste does not pass in: %q", name, strip)
+		}
+	}
+	e := newEdit(t)
+	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.scr.texts) != 1 {
+		t.Fatalf("the edit opened %d windows", len(e.scr.texts))
+	}
+	for _, want := range []string{"Paste from this Mac does not reach the VM", "Type code types only the one-time code"} {
+		if !strings.Contains(e.scr.texts[0].Strip, want) {
+			t.Errorf("the edit window's strip does not say %q", want)
+		}
 	}
 }
 

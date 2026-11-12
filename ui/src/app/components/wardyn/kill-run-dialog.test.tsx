@@ -31,6 +31,20 @@ describe("KillRunDialog", () => {
     expect(dialog).not.toHaveTextContent("1697570d?");
   });
 
+  it("says a Both ways folder does not come back, only when the run has one and it has started", () => {
+    const { rerender } = render(<KillRunDialog runId={ID} title="t" onOpenChange={() => {}} onConfirm={() => {}} bothWaysFolder />);
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("does not come back");
+    expect(dialog).toHaveTextContent("wardyn folder bring-back <run> first.");
+    expect(dialog).not.toHaveTextContent("`");
+    rerender(<KillRunDialog runId={ID} title="t" onOpenChange={() => {}} onConfirm={() => {}} />);
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("does not come back");
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("wardyn folder bring-back");
+    rerender(<KillRunDialog runId={ID} title="t" onOpenChange={() => {}} onConfirm={() => {}} bothWaysFolder notStarted />);
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("does not come back");
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("wardyn folder bring-back");
+  });
+
   it("names a run by the first line of a long task, bounded", () => {
     const task = `${"a".repeat(120)}\nsecond line`;
     render(<KillRunDialog runId={ID} title={task} onOpenChange={() => {}} onConfirm={() => {}} />);

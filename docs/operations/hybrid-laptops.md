@@ -359,10 +359,14 @@ What happens:
   network for up to about 2 minutes after the run ends, while the first pass back runs (its timeout).
 - `wardyn folder bring-back <run>` ends a **Both ways** run early: the agent is stopped, then its changes come
   back. Only you can do it.
-- A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, use Bring
-  back (or `wardyn folder bring-back <run>`) before you end the run.
-- If the agent can't be stopped, no pass runs, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
-- If the sandbox's proxy can't be stopped, the sandbox is stopped and its folder changes are not brought back.
+
+> [!WARNING]
+> **When folder changes are lost.**
+>
+> - A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, run `wardyn folder bring-back <run>` before you end the run; the console has no Bring back control yet.
+> - If the agent can't be stopped, no pass runs, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
+> - If the sandbox's proxy can't be stopped, the sandbox is stopped and its folder changes are not brought back.
+
 - A run stopped for being idle or for its maximum age brings its changes back the same way, so the stop can take up to 2 more minutes while they come back.
 - A run kept after its end is torn down on the first pass that can take its lock, and brings its changes back the same way. If that lock is held 5 minutes after the end was due, the sandbox is stopped without its changes: about 6 to 7 minutes after, on a sweep running on time.
 - A runner on a different Wardyn release can refuse a bring-back until it is upgraded.

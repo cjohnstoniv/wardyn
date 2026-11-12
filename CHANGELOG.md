@@ -22,6 +22,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A hosted run whose network could not be cut off when it ended is now stopped, instead of kept for its folder's copy back; changes not yet copied back are lost.
 - On a runner, a sandbox whose copy back was cut short after its agent was stopped and its network cut is now kept, so the copy back can resume.
 - Docs: corrected the default end of Interactive runs, the main-drive limit on some drivers, the status of signed checkpoints and receipts, the image-builder fallback warning, and the gateway presets.
+- A live egress edit that the run's substrate cannot apply now says what to do: "This run's network can't be changed while it runs on this substrate. Start a new run with the narrower policy." On a runner that must be updated first, it says to update the runner.
+- macOS VM windows say that paste from your Mac does not reach the VM, and the edit window says Type code types only the one-time code.
+- Ending a run with a Both ways folder now says that the folder does not come back, and names `wardyn folder bring-back`. The folder docs no longer point at a Bring back control the console does not have.
 
 ### Fixed
 
