@@ -46,8 +46,15 @@ func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.Agen
 	}
 	start, err := s.beginProxyStart(ctx, run, gen, fresh)
 	if err != nil {
-		if aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source); aerr != nil {
+		noop, aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
+		switch {
+		case aerr != nil:
 			err = fmt.Errorf("%w; undoing its generation failed: %v: %w", err, aerr, errPolicyNotAbandoned)
+		case noop != nil && noop.Current == gen:
+			// A newer edit came after this one and was itself undone, which left this one current again: the
+			// undo changed nothing. The caller's lost mark is fenced on the newest slot.
+			gen = noop.Newest
+			err = fmt.Errorf("%w; its generation could not be undone because another edit came after it: %w", err, errPolicyNotAbandoned)
 		}
 		return gen, proxyStartRec{}, err
 	}

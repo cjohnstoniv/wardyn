@@ -38,6 +38,10 @@ type generationStore struct {
 	// runs once before that failure answers, outside the store's lock (a newer revive landing first).
 	abandonErr   error
 	onAbandonErr func()
+	// beforeAbandon and afterAbandon each run once, outside the store's lock, around the first Noted
+	// abandon: before it reads the generations (a newer revive landing first), and after it has (a newer
+	// revive landing before the caller acts on the answer).
+	beforeAbandon, afterAbandon func()
 	// recorded is the run's audit log as the recorded-policy read sees it (the dispatch envelope); readErr fails that read.
 	recorded []types.AuditEvent
 	readErr  error
@@ -110,6 +114,31 @@ func (s *generationStore) AbandonRunPolicyGeneration(ctx context.Context, id uui
 	}
 	s.state = s.state.Abandon(gen)
 	return nil
+}
+
+var _ store.RunPolicyAbandonNoted = (*generationStore)(nil)
+
+// AbandonRunPolicyGenerationNoted is AbandonRunPolicyGeneration that also reports a no-op for a gen with a
+// newer slot after it: the generation then current and the newest number, as the PG write reads them.
+func (s *generationStore) AbandonRunPolicyGenerationNoted(ctx context.Context, id uuid.UUID, gen int, restore []byte) (*store.PolicyAbandonNoop, error) {
+	s.gmu.Lock()
+	before, after := s.beforeAbandon, s.afterAbandon
+	s.beforeAbandon, s.afterAbandon = nil, nil
+	s.gmu.Unlock()
+	if before != nil {
+		before()
+	}
+	s.gmu.Lock()
+	var noop *store.PolicyAbandonNoop
+	if n := len(s.state.Generations); n > 0 && s.state.Generations[n-1].Generation > gen {
+		noop = &store.PolicyAbandonNoop{Current: s.state.CurrentGeneration(), Newest: s.state.Generations[n-1].Generation}
+	}
+	s.gmu.Unlock()
+	err := s.AbandonRunPolicyGeneration(ctx, id, gen, restore)
+	if after != nil {
+		after()
+	}
+	return noop, err
 }
 
 // MarkRunLostAtGeneration marks the run lost only while gen is its newest generation, as the PG write's
@@ -483,4 +512,223 @@ func TestRevive_AnUndoThatFailsNeverAnswersKeptCurrent(t *testing.T) {
 			t.Error("the run is not lost: the containment ran on the claim's expired bound")
 		}
 	})
+}
+
+// TestReviveKept_UndoNoopContainsFencedOnNewest: A advances policy 2 and loses its lock; B advances policy 3,
+// fails before touching the proxy and abandons it, so policy 2 is current again over the untouched proxy that
+// never enforced it, and A's own undo changes nothing (a newer slot exists). A must not answer kept-current: it
+// loses the run, fenced on the newest slot. When B's policy 3 is the current one instead, A's undo changes
+// nothing and stops nothing, as before.
+func TestReviveKept_UndoNoopContainsFencedOnNewest(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		bFails      bool
+		wantLost    bool
+		wantKeptCur bool
+	}{
+		{"the newer edit was undone too", true, true, false},
+		{"the newer edit is current", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFenceFixture(t)
+			var b *httptest.ResponseRecorder
+			f.is.afterAdvance = func(int) {
+				loseLock(f.srv)
+				if tc.bFails {
+					f.rr.mu.Lock()
+					f.rr.replaceErr = errors.New("inspect the proxy: daemon busy")
+					f.rr.mu.Unlock()
+				}
+				b = f.editOnB(t)
+			}
+			stops := f.lr.proxyStopCount()
+			a := f.reviveOnA(t)
+			if b == nil {
+				t.Fatal("B never ran")
+			}
+			if kept := errorReason(a) == reasonReviveProxyKeptCurrent; kept != tc.wantKeptCur {
+				t.Errorf("A: %d %s, kept-current = %v, want %v", a.Code, a.Body.String(), kept, tc.wantKeptCur)
+			}
+			if lostAt, _ := f.st.lost(); (lostAt != nil) != tc.wantLost {
+				t.Errorf("lost = %v, want lost %v", lostAt, tc.wantLost)
+			}
+			wantStops := 0
+			if tc.wantLost {
+				wantStops = 1
+			}
+			if n := f.lr.proxyStopCount() - stops; n != wantStops {
+				t.Errorf("StopProxy calls = %d, want %d", n, wantStops)
+			}
+		})
+	}
+}
+
+// containedNotKept fails unless B's generation 3 stands abandoned over A's 2, A's answer is a refusal that
+// is not kept-current, the run is lost with its proxy stopped once since stops, and A's generation 2 is the
+// current one (nothing undid it).
+func (f *fenceFixture) containedNotKept(t *testing.T, a *httptest.ResponseRecorder, stops int) {
+	t.Helper()
+	if st := f.policyState(t); len(st.Generations) != 3 || !st.Generations[2].Abandoned || st.Generations[1].Abandoned {
+		t.Fatalf("generations %+v, want B's 3 abandoned over A's 2 (the arrangement)", st.Generations)
+	}
+	if errorReason(a) == reasonReviveProxyKeptCurrent || a.Code < 400 {
+		t.Errorf("A: %d %s, want a refusal that is not kept-current", a.Code, a.Body.String())
+	}
+	if lostAt, _ := f.st.lost(); lostAt == nil {
+		t.Error("the run is not lost: A's lost mark did not land on the newest slot")
+	}
+	if n := f.lr.proxyStopCount() - stops; n != 1 {
+		t.Errorf("StopProxy calls = %d, want 1", n)
+	}
+	if st := f.policyState(t); st.CurrentGeneration() != 2 {
+		t.Errorf("current generation = %d, want A's 2: nothing undid it", st.CurrentGeneration())
+	}
+}
+
+// proxyBusy is the error B's replace fails with in the tests below: before it touches the proxy, so B undoes
+// its generation and the run keeps its proxy.
+const proxyBusy = "inspect the proxy: daemon busy"
+
+// A's proxy start cannot be recorded after B advanced policy 3 and undid it: A's own undo changes nothing
+// and generation 2 is current again, so A's answer carries errPolicyNotAbandoned and its lost mark is fenced
+// on 3, the newest slot. A wrapper that drops the no-op answers kept-current instead.
+func TestFailedStart_UndoNoopContains(t *testing.T) {
+	f := newFenceFixture(t)
+	f.rr.replaceErr = errors.New(proxyBusy)
+	var b *httptest.ResponseRecorder
+	f.is.afterAdvance = func(int) {
+		b = f.editOnB(t)
+		f.is.failBegin = true // B's start was recorded; A's cannot be
+	}
+	stops := f.lr.proxyStopCount()
+	a := f.reviveOnA(t)
+	if b == nil {
+		t.Fatal("B never ran")
+	}
+	f.containedNotKept(t, a, stops)
+}
+
+// The same through reconcileLostAdvance: A's advance commits and answers an error, and B advances policy 3
+// and undoes it after A read generation 2 back and before A's undo runs.
+func TestLostAck_UndoNoopContains(t *testing.T) {
+	f := newFenceFixture(t)
+	f.rr.replaceErr = errors.New(proxyBusy)
+	f.is.dropAck = true
+	var b *httptest.ResponseRecorder
+	f.rb.beforeAbandon = func() { b = f.editOnB(t) }
+	stops := f.lr.proxyStopCount()
+	a := f.reviveOnA(t)
+	if b == nil {
+		t.Fatal("B never ran")
+	}
+	f.containedNotKept(t, a, stops)
+}
+
+// B's whole advance and undo at policy 3 finishes before A reads its lost-ack advance back, so A's
+// generation 2 is not the last entry: A must still find it and contain on its undo that changed nothing. A
+// check on the last entry alone finds B's, takes the advance for someone else's and answers kept-current.
+func TestLostAck_BCycleBeforeReadStillUndoes(t *testing.T) {
+	f := newFenceFixture(t)
+	f.rr.replaceErr = errors.New(proxyBusy)
+	f.is.dropAck = true
+	var b *httptest.ResponseRecorder
+	f.is.afterDroppedAck = func(int) { b = f.editOnB(t) }
+	stops := f.lr.proxyStopCount()
+	a := f.reviveOnA(t)
+	if b == nil {
+		t.Fatal("B never ran")
+	}
+	f.containedNotKept(t, a, stops)
+}
+
+// A's undo changed nothing and its lost mark is fenced on the newest slot; a newer revive (4) took the run
+// over between the undo and the mark, so the mark misses and nothing is stopped: no proxy, no sandbox
+// stop, no end, and the run is not lost.
+func TestUndoNoop_FencedMissDoesNotStop(t *testing.T) {
+	f := newFenceFixture(t)
+	f.rr.replaceErr = errors.New(proxyBusy)
+	var c int
+	f.is.afterAdvance = func(int) {
+		loseLock(f.srv)
+		f.editOnB(t)
+		// Armed once B has run, so that it fires on A's undo and not on B's.
+		f.rb.afterAbandon = func() {
+			var err error
+			c, err = f.rb.AdvanceRunPolicyGeneration(context.Background(), f.run.ID, store.NewestPolicySlot(f.policyState(t)), "d-c", nil, "jti-c", nil)
+			if err != nil {
+				t.Errorf("the newer revive's advance: %v", err)
+			}
+		}
+	}
+	stops, sandboxStops, ends := f.lr.proxyStopCount(), f.rn.stopCount(), f.rn.endCount()
+	a := f.reviveOnA(t)
+	if c != 4 {
+		t.Fatalf("the newer revive's generation = %d, want 4 (the arrangement)", c)
+	}
+	if errorReason(a) == reasonReviveProxyKeptCurrent || a.Code < 400 {
+		t.Errorf("A: %d %s, want a refusal that is not kept-current", a.Code, a.Body.String())
+	}
+	if lostAt, _ := f.st.lost(); lostAt != nil {
+		t.Errorf("lost at %v: A's mark landed over the newer revive's generation", lostAt)
+	}
+	if n, s, e := f.lr.proxyStopCount()-stops, f.rn.stopCount()-sandboxStops, f.rn.endCount()-ends; n != 0 || s != 0 || e != 0 {
+		t.Errorf("StopProxy %d, StopSandbox %d, EndSandbox %d; want none: the fenced mark missed", n, s, e)
+	}
+}
+
+// A lost run whose revive loses its lock after its advance gets its lost mark back (reviveLostHoldRestore);
+// when its undo changed nothing because a newer edit was undone first, nothing changes in what it does, and
+// the failure row records that.
+func TestReviveLostHoldRestore_RecordsTheNoop(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		newerEdit  bool
+		wantRecord bool
+	}{
+		{"a newer edit came and was undone", true, true},
+		{"no newer edit", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFenceFixture(t)
+			sr := &startingHashedRunner{hashedReviveRunner: f.hr}
+			f.srv.cfg.Runner = sr
+			lostAt := f.now.Add(-time.Minute)
+			f.st.mu.Lock()
+			f.st.run.LostAt, f.st.run.LostReason = &lostAt, types.LostReboot
+			f.st.run.Interactive = true
+			f.st.agentStopped = true
+			f.st.mu.Unlock()
+			f.rb.generationStore.agentStoppedAt = lostAt.Add(time.Second)
+			f.run = f.st.run
+			f.is.afterAdvance = func(gen int) {
+				loseLock(f.srv)
+				if !tc.newerEdit {
+					return
+				}
+				ctx := context.Background()
+				g, err := f.rb.AdvanceRunPolicyGeneration(ctx, f.run.ID, store.PolicySlot{Generation: gen}, "d-b", nil, "jti-b", nil)
+				if err == nil {
+					err = f.rb.AbandonRunPolicyGeneration(ctx, f.run.ID, g, nil)
+				}
+				if err != nil {
+					t.Errorf("the newer edit and its undo: %v", err)
+				}
+			}
+			stops := f.lr.proxyStopCount()
+			a := f.reviveOnA(t)
+			if a.Code != http.StatusConflict || errorReason(a) != reasonReviveRunChanged {
+				t.Fatalf("A: %d %s, want 409 %s", a.Code, a.Body.String(), reasonReviveRunChanged)
+			}
+			if len(f.rr.replaced) != 0 || sr.started() != 0 || f.lr.proxyStopCount() != stops {
+				t.Errorf("replaces %d, agent starts %d, proxy stops %d (was %d): want none", len(f.rr.replaced), sr.started(), f.lr.proxyStopCount(), stops)
+			}
+			ev := f.audit.eventsFor(f.run.ID, "run.revive")
+			if len(ev) != 1 || ev[0].Outcome != "failure" {
+				t.Fatalf("run.revive rows = %+v, want one failure", ev)
+			}
+			if got := leaseAuditData(t, ev[0])["abandon_noop"] == true; got != tc.wantRecord {
+				t.Errorf("abandon_noop recorded = %v, want %v", got, tc.wantRecord)
+			}
+		})
+	}
 }
