@@ -41,6 +41,18 @@ func (s *readbackFolderStore) BumpRunLocalFolderGen(context.Context, uuid.UUID, 
 	return types.RunLocalFolderStatus{}, false, errors.New("this store records no pass")
 }
 
+func (s *readbackFolderStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.GiveUpParams) (store.GiveUpOutcome, error) {
+	return store.GiveUpOutcome{}, nil
+}
+
+func (s *readbackFolderStore) MarkGivenUpAudited(context.Context, uuid.UUID, int) (bool, error) {
+	return false, nil
+}
+
+func (s *readbackFolderStore) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid.UUID, *uuid.UUID, error) {
+	return nil, nil, nil
+}
+
 // endedWithFailedStart is a run whose revived proxy failed its readback with that proxy's stop
 // unresolved, then ended with its sandbox ref kept, its computer folder's record read as rec or
 // failing with err. It answers the failed start's generation and the run's ref.
@@ -178,7 +190,7 @@ func TestReadbackContainment_ARunningRunsEndDecidesItsSandboxAfterTheProxyStop(t
 	if n := sb.stopCount(); n != 0 {
 		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept for its copy back", n)
 	}
-	if st := cs.folderStatus(); st.Resume == nil || *st.Resume != (types.FolderResume{Stalled: 1}) {
+	if st := cs.folderStatus(); st.Resume == nil || st.Resume.Stalled != 1 || st.Resume.Unsynced != 0 {
 		t.Errorf("resume = %+v, want the cut pass's", st.Resume)
 	}
 	if got := cs.State(); got != types.RunFailed {
@@ -270,6 +282,18 @@ func (s *folderStatusStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.U
 	st, err := s.RunLocalFolderStatus(ctx, id)
 	st.Gen, st.GenAt = st.Gen+1, at
 	return st, err == nil, err
+}
+
+func (s *folderStatusStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.GiveUpParams) (store.GiveUpOutcome, error) {
+	return store.GiveUpOutcome{}, nil
+}
+
+func (s *folderStatusStore) MarkGivenUpAudited(context.Context, uuid.UUID, int) (bool, error) {
+	return false, nil
+}
+
+func (s *folderStatusStore) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid.UUID, *uuid.UUID, error) {
+	return nil, nil, nil
 }
 
 // keptFolderFailedStart revives the fixture's run and has its new proxy report other bytes while another operation
@@ -501,6 +525,18 @@ func (s *keptSweepStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID
 	st, err := s.RunLocalFolderStatus(ctx, id)
 	st.Gen, st.GenAt = st.Gen+1, at
 	return st, err == nil, err
+}
+
+func (s *keptSweepStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.GiveUpParams) (store.GiveUpOutcome, error) {
+	return store.GiveUpOutcome{}, nil
+}
+
+func (s *keptSweepStore) MarkGivenUpAudited(context.Context, uuid.UUID, int) (bool, error) {
+	return false, nil
+}
+
+func (s *keptSweepStore) ListGivenUpUnaudited(context.Context, *uuid.UUID, int) ([]uuid.UUID, *uuid.UUID, error) {
+	return nil, nil, nil
 }
 
 // newKeptSweep is a terminal-sandbox sweep over runs, every sandbox probed live, with the folder records fake answers.
