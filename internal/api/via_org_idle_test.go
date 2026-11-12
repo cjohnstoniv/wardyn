@@ -119,7 +119,9 @@ func TestViaOrg_WatcherReleasesAnIdleEngineAndKeepsTheRun(t *testing.T) {
 		return run.engine == nil && gen.engine.Closed()
 	}
 	deadline := time.After(30 * time.Second)
-	for poll := time.NewTicker(2 * time.Millisecond); !released(); {
+	poll := time.NewTicker(2 * time.Millisecond)
+	defer poll.Stop()
+	for !released() {
 		select {
 		case <-poll.C:
 		case <-deadline:
