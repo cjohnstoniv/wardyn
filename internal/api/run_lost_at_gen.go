@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -36,15 +35,15 @@ func (s *Server) generationStopperFor(run types.AgentRun) (runner.ProxyGeneratio
 // its lock was lost: where the runner honours generations it never stops the proxy or sandbox of a newer
 // revive (runner.ErrProxyGenerationNewer is not a failure: that revive owns the run now). gen 0, a VM, or a
 // runner that is not connected with ProxyFence stops the plain way.
-func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, now time.Time, gen int) error {
+func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen int) error {
 	if gen <= 0 {
-		return s.stopLostSandbox(ctx, run, now)
+		return s.stopLostSandbox(ctx, run)
 	}
 	gs, ok := s.generationStopperFor(run)
 	if !ok {
-		return s.stopLostSandbox(ctx, run, now)
+		return s.stopLostSandbox(ctx, run)
 	}
-	proxyOnly := run.LostReason == types.LostOutage && (run.EndsAt == nil || now.Before(*run.EndsAt))
+	proxyOnly := s.outageProxyOnly(ctx, run)
 	var err error
 	if proxyOnly {
 		if _, ok := s.cfg.Runner.(runner.ProxyStopper); !ok {

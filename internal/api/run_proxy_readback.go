@@ -402,7 +402,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		}
 		return nil
 	case runIsKept(run) && !isTerminalRunState(run.State):
-		return s.stopLostSandboxAt(ctx, run, s.cfg.Now(), gen)
+		return s.stopLostSandboxAt(ctx, run, gen)
 	case run.State == types.RunRunning:
 		if handled, err := s.loseUnconfirmedRun(ctx, run, gen); handled {
 			return err
@@ -589,7 +589,7 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun, gen
 	case loseWriteFailed:
 		s.revokeRunBroker(ctx, run.ID)
 		run.LostAt, run.LostReason = &now, types.LostOutage
-		if err := s.stopLostSandboxAt(ctx, run, now, gen); err != nil {
+		if err := s.stopLostSandboxAt(ctx, run, gen); err != nil {
 			return true, err
 		}
 		return true, errLostMarkUnwritten

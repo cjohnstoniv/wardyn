@@ -202,7 +202,7 @@ func TestStopLostSandboxAt_NewerIsNil(t *testing.T) {
 				past := now.Add(-time.Minute)
 				run.EndsAt = &past
 			}
-			if err := f.srv.stopLostSandboxAt(context.Background(), run, now, 3); err != nil {
+			if err := f.srv.stopLostSandboxAt(context.Background(), run, 3); err != nil {
 				t.Fatalf("stopLostSandboxAt = %v, want nil: a newer revive owns the proxy", err)
 			}
 			if got := gr.atCalls(); len(got) != 1 || got[0] != c.want {
@@ -222,12 +222,12 @@ func TestStopLostSandboxAt_ZeroIsUnchanged(t *testing.T) {
 	run := f.run
 	now := f.srv.cfg.Now()
 	run.LostAt, run.LostReason = &now, types.LostOutage
-	if err := f.srv.stopLostSandboxAt(context.Background(), run, now, 0); err != nil {
+	if err := f.srv.stopLostSandboxAt(context.Background(), run, 0); err != nil {
 		t.Fatal(err)
 	}
 	past := now.Add(-time.Minute)
 	run.EndsAt, run.LostReason = &past, types.LostEnded
-	if err := f.srv.stopLostSandboxAt(context.Background(), run, now, 0); err != nil {
+	if err := f.srv.stopLostSandboxAt(context.Background(), run, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := gr.atCalls(); len(got) != 0 {
@@ -252,7 +252,7 @@ func TestStopLostSandboxAt_UnconnectedRunnerUsesPlainStop(t *testing.T) {
 	run.LostAt, run.LostReason = &now, types.LostOutage
 	stop := func() {
 		t.Helper()
-		if err := f.srv.stopLostSandboxAt(context.Background(), run, now, 3); err != nil {
+		if err := f.srv.stopLostSandboxAt(context.Background(), run, 3); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -274,7 +274,7 @@ func TestStopLostSandboxAt_UnconnectedRunnerUsesPlainStop(t *testing.T) {
 	vm := run
 	vm.MachineKind = types.MachineLinuxVM
 	seamConnect(t, f.srv, rid, runnerwire.Caps{ProxyFence: true})
-	if err := f.srv.stopLostSandboxAt(context.Background(), vm, now, 3); err != nil {
+	if err := f.srv.stopLostSandboxAt(context.Background(), vm, 3); err != nil {
 		t.Fatal(err)
 	}
 	if got := gr.atCalls(); len(got) != 1 || f.lr.proxyStopCount() != 3 {

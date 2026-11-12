@@ -272,7 +272,7 @@ func (s *Server) withRunFate(ctx context.Context, run types.AgentRun, rerr *revi
 	case fate != "":
 		out.msg += fate
 	case !read, rerr.reason != reasonEgressEditContainmentUnresolved: // an unread run is promised nothing
-	case s.lostRunKeepable(run, s.cfg.Now()):
+	case s.lostRunKeepable(ctx, run):
 		out.msg += "; once that is done, the run will be lost until revived"
 	default:
 		out.msg += "; once that is done, the run will be ended, since a headless run off your own machine cannot be kept"

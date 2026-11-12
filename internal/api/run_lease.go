@@ -137,7 +137,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		if ended {
 			_, err = s.endSandbox(ctx, run)
 		} else {
-			err = s.stopLostSandbox(ctx, run, now)
+			err = s.stopLostSandbox(ctx, run)
 		}
 		if errors.Is(err, runner.ErrEndUnsupported) {
 			// The substrate cannot keep a sandbox, for good: tear the run down

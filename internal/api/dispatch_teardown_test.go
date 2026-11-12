@@ -40,6 +40,25 @@ type dispatchTestStore struct {
 	failureHint string
 	grants      []types.CredentialGrant // what ListGrantsByRun returns
 	grantsErr   error                   // when set, ListGrantsByRun fails with it
+	// endsNow is the fake database's clock for RunEndsOpen; nil is the real one. endsErr, when set, fails it.
+	endsNow func() time.Time
+	endsErr error
+}
+
+// RunEndsOpen implements store.RunEndsReader over the fixture's run, as the database does: the run's end
+// and its end plus grace against the fake database's clock (endsNow), never the server's.
+func (s *dispatchTestStore) RunEndsOpen(_ context.Context, _ uuid.UUID, grace time.Duration) (bool, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.endsErr != nil {
+		return false, false, s.endsErr
+	}
+	now := time.Now()
+	if s.endsNow != nil {
+		now = s.endsNow()
+	}
+	end := s.run.EndsAt
+	return end == nil || end.After(now), end == nil || end.Add(grace).After(now), nil
 }
 
 func (s *dispatchTestStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {

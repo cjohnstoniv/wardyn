@@ -377,7 +377,8 @@ func newLeaseFixture(t *testing.T, endsIn time.Duration) *leaseFixture {
 	f.srv.cfg.Approvals = f.fa
 	f.srv.cfg.EndedRunGrace = 7 * 24 * time.Hour
 	f.srv.cfg.Now = func() time.Time { return f.now }
-	f.st.dbNow = func() time.Time { return f.now } // the fake database keeps the time the fixture sets
+	f.st.dbNow = func() time.Time { return f.now }   // the fake database keeps the time the fixture sets
+	f.st.endsNow = func() time.Time { return f.now } // the fake database agrees with the fixture's clock unless a test skews it
 	f.idp = &countingIdentity{Provider: f.srv.cfg.Identity}
 	f.srv.cfg.Identity = f.idp
 	seedPendingApproval(t, f.fa, run.ID)

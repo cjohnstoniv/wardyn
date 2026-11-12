@@ -221,6 +221,16 @@ func (s *computerFolderStore) dueNow() time.Time {
 	return time.Now()
 }
 
+// RunEndsOpen implements store.RunEndsReader on the same fake database clock as RunDueFlags (dbNow).
+func (s *computerFolderStore) RunEndsOpen(ctx context.Context, id uuid.UUID, grace time.Duration) (bool, bool, error) {
+	run, err := s.GetRun(ctx, id)
+	if err != nil {
+		return false, false, err
+	}
+	now := s.dueNow()
+	return run.EndsAt == nil || run.EndsAt.After(now), run.EndsAt == nil || run.EndsAt.Add(grace).After(now), nil
+}
+
 // sqlDueFlags is store.RunDue as the database answers it (store.ContainmentDueSQL, and the keep after the end) at
 // the fake database's time now, for a run that ended at its EndedAt, or its UpdatedAt when that is unset.
 func sqlDueFlags(run types.AgentRun, keep time.Duration, now time.Time) store.RunDue {

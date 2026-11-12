@@ -850,7 +850,7 @@ func TestStartOwedLiveRunReadsLiveToEveryOtherReader(t *testing.T) {
 	if srv.desktopPauseOver(ctx, run) {
 		t.Error("desktopPauseOver: the run's desktop pause reads over")
 	}
-	if !srv.lostRunKeepable(run, time.Now()) {
+	if !srv.lostRunKeepable(ctx, run) {
 		t.Error("lostRunKeepable: the live run is not one the lease may lose")
 	}
 }
