@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A run's Folders from your computer card now says what became of the sandbox's copy after the run ends: kept for now, given up, or stopped and deleted.
+
 ## [0.10.0-rc.19] — 2026-11-11
 
 ### Changed
@@ -20,7 +24,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A run's Folders from your computer card now says what became of the sandbox's copy after the run ends: kept for now, given up, or stopped and deleted.
 - **Go 1.26.11.** The toolchain pin moves from go1.26.10, fixing a `net/http` advisory (GO-2026-6859).
 - New Run: a main drive size typed over the pool's cap now shows "{size} is over the {cap} cap. The run gets {cap}." under the Size field as you type, and the Files summary shows the size the run gets, as Review does.
 - `POST /api/v1/runs/{id}/exec` on a background run answered "no SSH access". A background run (`experience: background`) still answers `409 run_exec_unavailable`, and the message now says to create the run with `experience: interactive` to use exec.
