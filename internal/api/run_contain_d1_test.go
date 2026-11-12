@@ -2315,11 +2315,21 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 		{"lost after the owed read, before the give-up", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterSeed = lk.loseNow }, 0, true, 1, 0},
 		{"lost after the give-up, before the stop", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterGiveUp = lk.loseNow }, 1, true, 1, 0},
 		// The loss lands once every other goroutine is parked, the stop item in its wait for the call's answer.
+		// The work then waits until every other goroutine is parked again: the item has taken the abandoned
+		// answer, withheld the stop and released its lock before the work runs.
 		{"lost while the stop waits for its call to run", func(l *d1Lab, lk *d1LostLocker) {
 			l.srv.contain.callStartFn = func() {
-				if !lk.kept.Load() {
-					synctest.Wait()
-					lk.loseNow()
+				if lk.kept.Load() {
+					return
+				}
+				synctest.Wait()
+				lk.loseNow()
+				synctest.Wait()
+				lk.mu.Lock()
+				taken := lk.lose != nil
+				lk.mu.Unlock()
+				if n := lk.releases(); taken && n != 1 {
+					l.t.Errorf("the item released its lock %d times before its abandoned call ran, want 1", n)
 				}
 			}
 		}, 1, true, 1, 0},
