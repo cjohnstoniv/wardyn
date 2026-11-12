@@ -308,7 +308,7 @@ func TestFolderKeepAndExpiry(t *testing.T) {
 	s, cs, _, run := giveUpFixture(t)
 	st := cs.folderStatus()
 	end := *run.EndedAt
-	// The cap is the database's answer (store.RunDue.CapPassed, dueFlagsAt standing for it here), never this server's
+	// The cap is the database's answer (store.RunDue.CapPassed, sqlDueFlags standing for it here), never this server's
 	// clock: the same run at the same server time reads the same either side of the database's cap.
 	for name, c := range map[string]struct {
 		now           time.Time
@@ -318,7 +318,7 @@ func TestFolderKeepAndExpiry(t *testing.T) {
 		"at the cap":              {end.Add(s.pendingCap()), true, false},
 		"a second past":           {end.Add(s.pendingCap() + time.Second), true, false},
 	} {
-		due := dueFlagsAt(run, s.pendingCap(), c.now)
+		due := sqlDueFlags(run, s.pendingCap(), c.now)
 		expired, err1 := s.folderExpiredOwed(context.Background(), run, st, due)
 		kept, err2 := s.folderKeepPermitted(context.Background(), run, st, due)
 		if err1 != nil || err2 != nil || expired != c.expired || kept != c.kept {
@@ -326,7 +326,7 @@ func TestFolderKeepAndExpiry(t *testing.T) {
 		}
 	}
 	run.UpdatedAt, run.EndedAt = end, nil
-	if expired, _ := s.folderExpiredOwed(context.Background(), run, st, dueFlagsAt(run, s.pendingCap(), end.Add(s.pendingCap()))); !expired {
+	if expired, _ := s.folderExpiredOwed(context.Background(), run, st, sqlDueFlags(run, s.pendingCap(), end.Add(s.pendingCap()))); !expired {
 		t.Error("a run with no ended_at is not timed from its last update")
 	}
 }

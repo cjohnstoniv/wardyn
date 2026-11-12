@@ -218,11 +218,11 @@ func (s *computerFolderStore) dueNow() time.Time {
 	return time.Now()
 }
 
-// dueFlagsAt is store.RunDue for run at the fake database's time now: past its containment due, and past keep
-// after its end.
-func dueFlagsAt(run types.AgentRun, keep time.Duration, now time.Time) store.RunDue {
-	due, ok := containmentDue(run)
-	return store.RunDue{Due: ok && !due.After(now), CapPassed: !runEnded(run).Add(keep).After(now)}
+// sqlDueFlags is store.RunDue as the database answers it (store.ContainmentDueSQL, and the keep after the end) at
+// the fake database's time now, for a run that ended at its EndedAt, or its UpdatedAt when that is unset.
+func sqlDueFlags(run types.AgentRun, keep time.Duration, now time.Time) store.RunDue {
+	end := runEnded(run)
+	return store.RunDue{Due: !end.Add(store.ContainmentLag).After(now), CapPassed: !end.Add(keep).After(now)}
 }
 
 // RunDueFlags implements store.TerminalDue's per-run read over the fixture's run.
@@ -231,7 +231,7 @@ func (s *computerFolderStore) RunDueFlags(ctx context.Context, id uuid.UUID, kee
 	if err != nil {
 		return store.RunDue{}, err
 	}
-	return dueFlagsAt(run, keep, s.dueNow()), nil
+	return sqlDueFlags(run, keep, s.dueNow()), nil
 }
 
 // QueryAuditEvents answers no policy envelope unless dataOut is set: these runs carry no data_out rule, which

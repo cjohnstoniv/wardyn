@@ -52,6 +52,12 @@ type terminalSandboxLister interface {
 	store.TerminalDue
 }
 
+// runDueReader is the one read of store.TerminalDue that a re-read under the run's lock needs (tailReread): one
+// run's due and past-the-cap answers, not the listing.
+type runDueReader interface {
+	RunDueFlags(ctx context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error)
+}
+
 // tailOwnerState is the tail owner's process state. Zero value is ready to use; none of it survives a restart.
 type tailOwnerState struct {
 	// auditAfter is where the next listing of given-up records without an accepted audit row starts: nil is the
@@ -208,8 +214,9 @@ func tailRowAfter(row store.TerminalSandboxRow, cur *store.TerminalSandboxCursor
 // runner is not connected here (a live session, never last-known caps) gets
 // no runner call, no folder pass and no tail; the one step it takes is the give-up at the cap, which needs no
 // runner (tailGiveUpAway): the record is read, and an owed pass whose keep ran out is given up, with its audit
-// row. Inside the cap it takes no lock and writes no row. A record or rule that cannot be read skips the row for
-// the tick: an unreadable answer is never "not owed", which would stop a sandbox that owes its changes.
+// row; inside the cap it takes no lock and writes no row. A record, seed or rule that cannot be read skips the row
+// for the tick inside the cap: an unreadable answer is never "not owed", which would stop a sandbox that owes its
+// changes. Past the cap the same row is given up (tailStepOf), and its audit row names the read that failed.
 func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, now time.Time) (history bool) {
 	away := false
 	if row.RunnerID != nil {
@@ -220,12 +227,7 @@ func (s *Server) tailVisit(ctx context.Context, row store.TerminalSandboxRow, no
 		return false
 	}
 	run := containRunOf(row)
-	st, err := s.tailFolderStatus(ctx, run.ID)
-	if err != nil {
-		tailSkipped(ctx, run.ID, err)
-		return false
-	}
-	step, err := s.tailStepFor(ctx, run, st, store.RunDue{Due: row.Due, CapPassed: row.CapPassed})
+	_, step, _, err := s.tailStepOf(ctx, run, store.RunDue{Due: row.Due, CapPassed: row.CapPassed})
 	if err != nil {
 		tailSkipped(ctx, run.ID, err)
 		return false
@@ -255,6 +257,24 @@ func tailSkipped(ctx context.Context, id uuid.UUID, err error) {
 		slog.String("run_id", id.String()), slog.Any("err", err))
 }
 
+// tailStepOf reads run's record and answers the step it is due for (tailStepFor), with the record and the note
+// its give-up carries (giveUpFolderNoted). A record that cannot be read is an error inside the cap. Past it the
+// step is the give-up, noted folderStatusUnreadable: the statement needs no decoded record, and a record that
+// never reads would otherwise keep its sandbox for ever. A run that is gone (store.ErrNotFound) is only an error.
+func (s *Server) tailStepOf(ctx context.Context, run types.AgentRun, due store.RunDue) (types.RunLocalFolderStatus, tailStep, string, error) {
+	st, err := s.tailFolderStatus(ctx, run.ID)
+	if err != nil {
+		if due.CapPassed && !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "wardynd: the tail owner could not read an ended run's folder record past its keep; giving its owed changes up",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			return types.RunLocalFolderStatus{}, tailGiveUp, folderStatusUnreadable, nil
+		}
+		return st, tailNone, "", err
+	}
+	step, note, err := s.tailStepFor(ctx, run, st, due)
+	return st, step, note, err
+}
+
 // tailFolderStatus is run id's folder record. A store that keeps none answers the empty record.
 func (s *Server) tailFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
 	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
@@ -269,31 +289,31 @@ func (s *Server) tailFolderStatus(ctx context.Context, id uuid.UUID) (types.RunL
 // server's clock): give up an owed pass whose keep ran out; bring back an owed pass whose keep has not; otherwise
 // the full tail once the run is past its containment due, which is also the age gate that leaves a fresh end to
 // the ordinary tail. An error is a read that failed, except past the cap, where an owed pass is given up
-// whatever its seed or rule reads.
-func (s *Server) tailStepFor(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, due store.RunDue) (tailStep, error) {
+// whatever its seed or rule reads, noted folderRuleUnreadable (the read that failed is this one).
+func (s *Server) tailStepFor(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, due store.RunDue) (tailStep, string, error) {
 	expired, err := s.folderExpiredOwed(ctx, run, st, due)
 	if err != nil {
 		// The cap does not wait on the rest of the record. Past it, an owed pass whose folder or data_out rule
 		// cannot be read is given up like any other. Inside the cap the row is skipped for the tick.
 		if folderOwedRecord(run, st) && due.CapPassed {
-			return tailGiveUp, nil
+			return tailGiveUp, folderRuleUnreadable, nil
 		}
-		return tailNone, err
+		return tailNone, "", err
 	}
 	if expired {
-		return tailGiveUp, nil
+		return tailGiveUp, "", nil
 	}
 	keep, err := s.folderKeepPermitted(ctx, run, st, due)
 	if err != nil {
-		return tailNone, err
+		return tailNone, "", err
 	}
 	if keep {
-		return tailFolder, nil
+		return tailFolder, "", nil
 	}
 	if due.Due {
-		return tailHistory, nil
+		return tailHistory, "", nil
 	}
-	return tailNone, nil
+	return tailNone, "", nil
 }
 
 // tailFolderVisitable reports whether run's owed folder pass is visited now. Its runner is connected here,
@@ -351,46 +371,43 @@ func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID) {
 		return
 	}
 	defer unlock()
-	run, st, again, ok := s.tailReread(lctx, id, tailGiveUp)
+	run, st, note, again, ok := s.tailReread(lctx, id, tailGiveUp)
 	if !ok || !again {
 		return
 	}
-	if _, err := s.giveUpFolder(lctx, run, false, st); err != nil {
+	if _, err := s.giveUpFolderNoted(lctx, run, false, st, note); err != nil {
 		slog.WarnContext(lctx, "wardynd: giving up an owed folder copy back failed; the next tick tries again",
 			slog.String("run_id", id.String()), slog.Any("err", err))
 	}
 }
 
 // tailReread reads run id and its record again under its lock, and reports whether the run is still ended with its
-// ref and step is still its due step. ok false is a read that failed or a run with nothing to tail.
-func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (run types.AgentRun, st types.RunLocalFolderStatus, again, ok bool) {
+// ref and step is still its due step, with the note a give-up carries: the reads here decide it (tailStepOf). ok
+// false is a read that failed or a run with nothing to tail.
+func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (run types.AgentRun, st types.RunLocalFolderStatus, note string, again, ok bool) {
 	run, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil {
 		tailSkipped(ctx, id, err)
-		return run, st, false, false
+		return run, st, "", false, false
 	}
 	if !isTerminalRunState(run.State) || run.SandboxRef == "" {
-		return run, st, false, false
+		return run, st, "", false, false
 	}
-	if st, err = s.tailFolderStatus(ctx, id); err != nil {
-		tailSkipped(ctx, id, err)
-		return run, st, false, false
-	}
-	flags, ok := s.cfg.Store.(store.TerminalDue)
+	flags, ok := s.cfg.Store.(runDueReader)
 	if !ok {
-		return run, st, false, false
+		return run, st, "", false, false
 	}
 	due, err := flags.RunDueFlags(ctx, id, s.pendingCap())
 	if err != nil {
 		tailSkipped(ctx, id, err)
-		return run, st, false, false
+		return run, st, "", false, false
 	}
-	next, err := s.tailStepFor(ctx, run, st, due)
-	if err != nil {
+	var next tailStep
+	if st, next, note, err = s.tailStepOf(ctx, run, due); err != nil {
 		tailSkipped(ctx, id, err)
-		return run, st, false, false
+		return run, st, "", false, false
 	}
-	return run, st, next == step, true
+	return run, st, note, next == step, true
 }
 
 // tailRun takes run id's lock, reads the run and its record again, and runs step's tail if the same step is
@@ -401,7 +418,7 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran 
 		return false
 	}
 	defer unlock()
-	run, st, again, ok := s.tailReread(lctx, id, step)
+	run, st, note, again, ok := s.tailReread(lctx, id, step)
 	if !ok || !again {
 		return false
 	}
@@ -410,7 +427,7 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran 
 	case tailGiveUp:
 		// Only a final record continues: the sandbox is stopped for a record the give-up made final, or one
 		// another writer did, and never for a statement that applied to nothing.
-		final, err := s.giveUpFolder(lctx, run, false, st)
+		final, err := s.giveUpFolderNoted(lctx, run, false, st, note)
 		if err != nil {
 			slog.WarnContext(lctx, "wardynd: giving up an owed folder copy back failed; the next tick tries again",
 				slog.String("run_id", id.String()), slog.Any("err", err))

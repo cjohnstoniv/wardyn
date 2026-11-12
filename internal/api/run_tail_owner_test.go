@@ -64,7 +64,7 @@ type tailLab struct {
 
 // rowDueFlags is store.RunDue for a listing row at the fake database's time now, as the SQL answers it.
 func rowDueFlags(r store.TerminalSandboxRow, keep time.Duration, now time.Time) store.RunDue {
-	return dueFlagsAt(types.AgentRun{State: r.State, EndedAt: r.EndedAt, UpdatedAt: r.UpdatedAt}, keep, now)
+	return sqlDueFlags(types.AgentRun{State: r.State, EndedAt: r.EndedAt, UpdatedAt: r.UpdatedAt}, keep, now)
 }
 
 func (l *tailLab) ListTerminalSandboxPageDue(ctx context.Context, after *store.TerminalSandboxCursor, limit int, unfencedOnly bool, keep time.Duration) ([]store.TerminalSandboxRow, *store.TerminalSandboxCursor, error) {
@@ -83,7 +83,7 @@ func (l *tailLab) RunDueFlags(_ context.Context, id uuid.UUID, keep time.Duratio
 	if !ok {
 		return store.RunDue{}, store.ErrNotFound
 	}
-	return dueFlagsAt(r.run, keep, l.dbNow()), nil
+	return sqlDueFlags(r.run, keep, l.dbNow()), nil
 }
 
 func (l *tailLab) add(r *tailRow) {
@@ -587,10 +587,10 @@ func TestTailOwner_FencedOwedRunIsStillVisited(t *testing.T) {
 	}
 }
 
-// A folder record that cannot be read skips every row for the tick, and a seed that cannot be read skips the rows
-// inside the cap: no lock, no give-up, no stop, a warn log naming the row; the next tick with good reads runs the
-// step. Past the cap the seed's failure does not hold the row: it is given up (the next pin). Catches: a read
-// error read as "not owed", which stops the sandbox at once.
+// A folder record that cannot be read, and a seed that cannot be read, skip the rows inside the cap: no lock, no
+// give-up, no stop, a warn log naming the row; the next tick with good reads runs the step. Past the cap neither
+// read holds the row: it is given up, once (the two pins after this one). Catches: a read error read as "not owed",
+// which stops the sandbox at once.
 func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 	g := newTailRig(t)
 	g.lab.giveUpOK = true
@@ -599,26 +599,22 @@ func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 	past.status = types.RunLocalFolderStatus{} // no pass has run: owed unless no folder says otherwise
 	logs := tailTestLogs(t)
 	for _, tc := range []struct {
-		name     string
-		set      func()
-		warns    *tailRow // the row the warn names
-		giveUps  int      // the expired row's give-up, which a seed read failure no longer holds back
-		wantLogs bool
+		name string
+		set  func()
 	}{
-		{"the status read fails", func() { g.lab.statusErr = errors.New("status down") }, expired, 0, true},
-		{"the seed read fails", func() { g.lab.statusErr, g.lab.seedErr = nil, errors.New("seed down") }, past, 1, true},
+		{"the status read fails", func() { g.lab.statusErr = errors.New("status down") }},
+		{"the seed read fails", func() { g.lab.statusErr, g.lab.seedErr = nil, errors.New("seed down") }},
 	} {
 		logs.Reset() // each case must warn by itself, not on the one before's line
 		tc.set()
 		g.tick()
-		if tc.giveUps == 0 && (g.locks.n.Load() != 0 || g.total() != 0 || g.lab.giveUpCount() != 0) {
-			t.Fatalf("%s: %d lock attempts, %d tails, %d give-ups; want none", tc.name, g.locks.n.Load(), g.total(), g.lab.giveUpCount())
+		// The expired row is past the cap, so the first failing read gives it up and its stop ends it; the row
+		// inside the cap is never locked, tailed or given up.
+		if g.countOf(past.run.ID) != 0 || g.count(tailGiveUp) != 1 || g.countOf(expired.run.ID) != 1 || g.lab.giveUpCount() != 1 || g.locks.n.Load() != 1 {
+			t.Fatalf("%s: %d tails inside the cap, %d give-up tails (%d of the expired row), %d give-ups, %d lock attempts; want 0, 1 (1), 1, 1",
+				tc.name, g.countOf(past.run.ID), g.count(tailGiveUp), g.countOf(expired.run.ID), g.lab.giveUpCount(), g.locks.n.Load())
 		}
-		if tc.giveUps == 1 && (g.count(tailGiveUp) != 1 || g.count(tailHistory) != 0 || g.lab.giveUpCount() != 1) {
-			t.Fatalf("%s: %d give-up tails, %d history tails, %d give-ups; want the expired row's give-up alone",
-				tc.name, g.count(tailGiveUp), g.count(tailHistory), g.lab.giveUpCount())
-		}
-		if !strings.Contains(logs.String(), "could not read") || !strings.Contains(logs.String(), tc.warns.run.ID.String()) {
+		if !strings.Contains(logs.String(), "could not read") || !strings.Contains(logs.String(), past.run.ID.String()) {
 			t.Errorf("%s: no warn names the run: %q", tc.name, logs.String())
 		}
 	}
@@ -627,6 +623,54 @@ func TestTailOwner_StatusReadErrorSkipsTheRow(t *testing.T) {
 	if g.count(tailGiveUp) != 1 || g.count(tailHistory) != 1 || g.lab.giveUpCount() != 1 {
 		t.Errorf("good reads: %d give-up tails, %d history tails, %d give-ups; want 1, 1, 1",
 			g.count(tailGiveUp), g.count(tailHistory), g.lab.giveUpCount())
+	}
+}
+
+// A folder record that never reads follows the cap as an unreadable seed or rule does: inside the cap its row is
+// skipped (no lock, no statement); past it the owed pass is given up by the server alone, needing no decoded record:
+// one statement and one given_up row with status_unreadable. The sandbox is then stopped where the runner is here,
+// and left for the runner's return where it is away. A record that reads again is not given up twice. Catches: a
+// record that never reads kept for ever, one given up inside the cap, and a given_up row that does not say why.
+func TestTailOwner_UnreadableStatusIsGivenUpPastTheCapNotInsideIt(t *testing.T) {
+	for name, away := range map[string]bool{"the runner here": false, "the runner away": true} {
+		t.Run(name, func(t *testing.T) {
+			g := newTailRig(t)
+			g.lab.giveUpOK = true
+			pastCap := g.owedRow(g.clock.now.Add(-g.s.pendingCap() - time.Hour))
+			inside := g.owedRow(g.clock.now.Add(-time.Hour))
+			if away {
+				id := g.lab.runner.ID
+				pastCap.run.RunnerID, inside.run.RunnerID = &id, &id
+				g.online.Store(false)
+			}
+			g.lab.statusErr = errors.New("the record does not decode")
+			g.tick()
+			if g.lab.giveUpCount() != 1 || g.countOf(inside.run.ID) != 0 || g.locks.n.Load() != 1 {
+				t.Fatalf("%d statements, %d tails inside the cap, %d lock attempts; want 1, 0, 1: the row past the cap alone",
+					g.lab.giveUpCount(), g.countOf(inside.run.ID), g.locks.n.Load())
+			}
+			var rows []types.AuditEvent
+			for _, ev := range g.audit.snapshot() {
+				if ev.Action == "run.folder.transfer" && ev.RunID != nil && *ev.RunID == pastCap.run.ID {
+					rows = append(rows, ev)
+				}
+			}
+			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"status_unreadable":true`) || strings.Contains(string(rows[0].Data), "rule_unreadable") {
+				t.Errorf("rows %+v; want one given_up row with status_unreadable alone", rows)
+			}
+			if st := g.lab.rows[pastCap.run.ID].status; st.Resume != nil || st.Back == nil || st.Back.GivenUpAt == nil || !strings.HasSuffix(st.Back.Error, folderStatusUnreadable) {
+				t.Errorf("record %+v; want given up, its error saying the record could not be read", st)
+			}
+			if stopped := g.countOf(pastCap.run.ID) == 1 && pastCap.run.SandboxRef == ""; stopped == away {
+				t.Errorf("%d tails, ref %q; want the sandbox stopped only where the runner is here", g.countOf(pastCap.run.ID), pastCap.run.SandboxRef)
+			}
+			g.lab.statusErr = nil
+			g.tick()
+			if g.lab.giveUpCount() != 1 || transferAudit(g.audit) != 1 || g.count(tailGiveUp) > 1 {
+				t.Errorf("the record reads again: %d statements, %d given_up rows, %d give-up tails; want no second give-up",
+					g.lab.giveUpCount(), transferAudit(g.audit), g.count(tailGiveUp))
+			}
+		})
 	}
 }
 

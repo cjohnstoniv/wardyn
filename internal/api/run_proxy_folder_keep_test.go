@@ -629,8 +629,8 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 }
 
 // A kept sandbox whose proxy stop fails is stopped, with one run.reconcile failure row naming that stop as
-// teardown_error (the key stopProxyOrAudit writes): the files it was kept for are lost, as the owner ruled, rather than
-// left with a network the agent can still reach.
+// teardown_error (the key stopProxyOrAudit writes): the files it was kept for are lost rather than left with a network
+// the agent can still reach.
 func TestReadback_KeptFolderProxyStopFailureIsAuditedAndTheSandboxStopped(t *testing.T) {
 	f := newReadbackFixture(t)
 	_, gen := f.keptFolderFailedStart(t, "kept")

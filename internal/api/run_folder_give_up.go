@@ -71,14 +71,19 @@ func (s *Server) folderGivenUpRecord(st types.RunLocalFolderStatus) types.Folder
 // not be due yet, or the record may still be open. d1 is a caller whose containment decision is made (the
 // statement then only re-checks that the run's containment due has passed).
 func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, st types.RunLocalFolderStatus) (final bool, err error) {
+	return s.giveUpFolderNoted(ctx, run, d1, st, "")
+}
+
+// giveUpFolderNoted is giveUpFolder whose final record's error ends with note: folderRuleUnreadable or
+// folderStatusUnreadable when the read that decided the give-up failed (tailStepOf), so the give-up says it did not
+// wait on that read, and its given_up row names it; "" for a give-up decided on reads that all answered.
+func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 bool, st types.RunLocalFolderStatus, note string) (final bool, err error) {
 	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
 		return false, errors.New("this server's store cannot keep a folder record")
 	}
 	back := s.folderGivenUpRecord(st)
-	if _, eerr := s.folderBackEligible(ctx, run.ID); eerr != nil {
-		back.Error += folderRuleUnreadable // the give-up does not wait on the seed or the rule, and says so
-	}
+	back.Error += note
 	p := store.GiveUpParams{Back: back, Cap: s.pendingCap()}
 	if d1 {
 		p.D1, p.Lag, p.Unsupported = true, containmentLag, true
@@ -125,8 +130,11 @@ func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.
 	}
 	data := map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "direction": "back",
 		"files": st.Back.Files, "bytes": st.Back.Bytes, "error": st.Back.Error}
-	if strings.HasSuffix(st.Back.Error, folderRuleUnreadable) {
+	switch {
+	case strings.HasSuffix(st.Back.Error, folderRuleUnreadable):
 		data["rule_unreadable"] = true
+	case strings.HasSuffix(st.Back.Error, folderStatusUnreadable):
+		data["status_unreadable"] = true
 	}
 	ev := s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.folder.transfer", run.ID.String(), "failure", mustJSON(data))
 	if !s.recordAuditDurably(ctx, ev) {
@@ -142,8 +150,12 @@ func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.
 }
 
 // folderRuleUnreadable ends the error of a give-up made while the folder's seed or data_out rule could not be read
-// (giveUpFolder); the given_up row carries it as rule_unreadable.
+// (giveUpFolderNoted); the given_up row carries it as rule_unreadable.
 const folderRuleUnreadable = "; its folder seed or data_out rule could not be read"
+
+// folderStatusUnreadable ends the error of a give-up made while the folder's record could not be read
+// (giveUpFolderNoted); the given_up row carries it as status_unreadable.
+const folderStatusUnreadable = "; its folder status could not be read"
 
 // errGivenUpMarkFailed is auditGivenUp's answer for a row the audit log accepted whose mark failed.
 var errGivenUpMarkFailed = errors.New("mark the record audited")
