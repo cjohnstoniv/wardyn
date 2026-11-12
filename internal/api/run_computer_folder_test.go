@@ -684,7 +684,7 @@ func TestFinalizeRunEffects_TwoCutPassesThatSaveNothingStopTheSandbox(t *testing
 	if _, err := boundedFinalize(t, s, run, 300*time.Millisecond); err != nil {
 		t.Errorf("finalize: %v", err)
 	}
-	assertFolderBackTornDown(t, cs, audit, run, sb, "2 passes in a row brought nothing back, so the sandbox was stopped")
+	assertFolderBackTornDown(t, cs, audit, run, sb, "because 2 passes in a row brought nothing back")
 }
 
 // A pass back cut short after it saved a file keeps the sandbox, and the next pass starts after
@@ -811,19 +811,19 @@ func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testi
 	}{
 		"its proxy is wedged": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.proxyErr = errors.New("the proxy is wedged")
-		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		}, "because its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
 		"its proxy stop fails closed": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.proxyErr, sb.proxyEnds = errors.New("the proxy is wedged"), true
-		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		}, "because its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
 		"its agent is the main process": {func(ls *localFolderStore, _ *folderSandboxRunner) {
 			ls.run.AgentExecID = runner.MainProcessExecID
-		}, "no pass ran; its agent and egress could not be stopped first: its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"},
+		}, "because its agent and egress could not be stopped first: its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"},
 		"its kill cannot reach it": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.killErr = errors.New("exec refused")
-		}, "no pass ran; its agent and egress could not be stopped first: its agent could not be stopped: exec refused"},
+		}, "because its agent and egress could not be stopped first: its agent could not be stopped: exec refused"},
 		"its agent outlives the kill": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.agentLives = true
-		}, "no pass ran; its agent and egress could not be stopped first: its agent still reads as running,"},
+		}, "because its agent and egress could not be stopped first: its agent still reads as running: no pass ran"},
 		// A lease end's EndSandbox stopped it: its proxy stop succeeds, and the kill's exec fails.
 		"it had already stopped": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.ended = true
@@ -911,10 +911,10 @@ func findAuditData(events []types.AuditEvent, runID uuid.UUID, action, want stri
 }
 
 // The longest pass back text the server writes today, a stopped virtual machine whose pass was cut and could not
-// confirm a change, is past a seed's maxLocalFolderSeedError and is kept whole: its record ends with how the
+// confirm a change, is past a seed's maxLocalFolderSeedError and is kept whole: its record starts with how the
 // sandbox ended and how many changed files it left behind.
 func TestFolderPassRecord_TheLongestBackTextKeepsItsOutcome(t *testing.T) {
-	const tail = ", so the sandbox was stopped with changed files not brought back: 1"
+	const head = "the sandbox was stopped with changed files not brought back: 1, because "
 	text := folderBackGivenUp(
 		folderNotPreservedText(1, "read in the sandbox z.txt: connection lost", "the sync was cut short: context deadline exceeded"),
 		"it cannot be kept with its agent stopped and no egress: a virtual machine is not quiesced from the server's Docker", 1)
@@ -922,15 +922,15 @@ func TestFolderPassRecord_TheLongestBackTextKeepsItsOutcome(t *testing.T) {
 		t.Fatalf("the text is %d runes, want one past a seed's cap of %d: this pin would prove nothing", n, maxLocalFolderSeedError)
 	}
 	rec := folderPassRecord(time.Now(), runnerwire.FolderPass{}, text, true)
-	if rec.Error != text || !strings.HasSuffix(rec.Error, tail) {
-		t.Errorf("back record = %q, want the whole text, ending %q", rec.Error, tail)
+	if rec.Error != text || !strings.HasPrefix(rec.Error, head) {
+		t.Errorf("back record = %q, want the whole text, starting %q", rec.Error, head)
 	}
 }
 
 // A pass back whose runner reason runs past maxFolderBackError is cut there, with the marker, and a seed's record
 // of the same text is still cut at maxLocalFolderSeedError.
 func TestFolderPassRecord_ABackReasonOverTheCapIsCutAtIt(t *testing.T) {
-	text := folderNotPreservedText(1, strings.Repeat("x", 2*maxFolderBackError), "")
+	text := strings.Repeat("x", 2*maxFolderBackError)
 	for _, tc := range []struct {
 		back  bool
 		limit int

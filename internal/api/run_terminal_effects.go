@@ -40,7 +40,10 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// Teardown runs on a ctx of its own, which the steps before it cannot use up or cancel
 	// (#3466); each write after it on a fresh one, so a stop that overruns its budget takes
 	// none of them with it (#3482). Both still end when the run-op lock ctx holds is lost:
-	// another replica may then be running this same tail (#3480).
+	// another replica may then be running this same tail (#3480), and a lock the database no longer
+	// holds skips the stop: the runners' StopSandbox does not all honour a cancelled ctx (Docker
+	// detaches). The check is made just before the call, so a lock lost during the stop is not seen
+	// (Known issues).
 	stops := ref != "" && s.cfg.Runner != nil && !keep
 	budget := runTeardownBudget
 	if stops && s.macOSVMRun(ctx, runID) {
@@ -49,7 +52,12 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	tctx, cancel := teardownCtxWithin(ctx, budget)
 	defer cancel()
 	teardownOK := false
-	if stops {
+	lost := stops && lockLost(tctx) // asked once: a lock lost between two asks would skip the stop silently
+	if lost {
+		// No audit row: another server may own the run now.
+		errs = append(errs, fmt.Errorf("the sandbox was not stopped: %w", db.ErrLockLost))
+	}
+	if stops && !lost {
 		if serr := s.cfg.Runner.StopSandbox(tctx, ref); serr != nil {
 			errs = append(errs, serr)
 			td := make(map[string]any, len(data)+1)

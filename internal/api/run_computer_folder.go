@@ -264,8 +264,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if !ok {
 		// Kept only for a bump lost to an owner a fresh read proves moved the record on. A store error (whose
 		// bump may have landed), or a record never read, stops the sandbox, so a terminal run does not keep
-		// its agent and egress until a sweep.
-		return lost && !unread && s.folderGenTaken(ctx, runID, prev.Gen)
+		// its agent and egress until a sweep; the run then says why (recordFolderBumpMissed).
+		return s.keepAfterBumpMiss(ctx, runID, *folder, prev.Gen, lost, unread)
 	}
 	if folderBroughtBack(rec) {
 		// A pass back completed between the read above and the bump: none runs again.
@@ -315,6 +315,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	switch {
 	case out.busy:
 		return s.keepBusy(ctx, run, *folder, gen, qerr)
+	case out.away:
+		return s.keepAway(ctx, run, *folder, gen, qerr)
 	case out.unconfirmed:
 		// The runner the pass was to go to turned out to be one that may still run the last: kept, as
 		// lastPassOpen keeps it, with nothing counted.
@@ -417,7 +419,7 @@ func folderBackResume(prev *types.FolderResume, res *runnerwire.FolderPass, errT
 	}
 	res.Unsynced = next.Unsynced
 	if next.Stalled < computerFolderStalls {
-		return next, errText + "; the sandbox is kept with its agent stopped and no egress, and a later sweep, about hourly, tries the sync again"
+		return next, "the sandbox is kept with its agent stopped and no egress, and a later sweep, about hourly, tries the sync again: " + boundReason(errText)
 	}
 	return nil, folderBackGivenUp(errText, fmt.Sprintf("%d passes in a row brought nothing back", next.Stalled), next.Unsynced)
 }
@@ -429,9 +431,9 @@ func folderNotPreservedText(unsynced int, why, passErr string) string {
 	if unsynced > 0 {
 		s = fmt.Sprintf("the pass back could not confirm %d changed files kept on the laptop, so they count as not copied back", unsynced)
 	}
-	s += ": " + why
+	s += ": " + boundReason(why)
 	if passErr != "" && !strings.Contains(passErr, why) {
-		s += "; " + passErr
+		s += "; " + boundReason(passErr)
 	}
 	return s
 }
@@ -443,7 +445,47 @@ func folderBackGivenUp(errText, why string, unsynced int) string {
 	if unsynced > 0 {
 		left = fmt.Sprintf("changed files not brought back: %d", unsynced)
 	}
-	return fmt.Sprintf("%s; %s, so the sandbox was stopped with %s", errText, why, left)
+	return fmt.Sprintf("the sandbox was stopped with %s, because %s: %s", left, why, boundReason(errText))
+}
+
+// maxFolderReason bounds the runner's or the sandbox's reason in a pass back's record, which puts its
+// outcome first: a long reason is cut, and the outcome before it stays.
+const maxFolderReason = 300
+
+// boundReason is a pass back's reason as its record keeps it: one line of at most maxFolderReason runes.
+func boundReason(s string) string { return localFolderErrorText(s, maxFolderReason) }
+
+// keepAfterBumpMiss answers whether the sandbox stays up after a bump that did not land: only when another
+// owner moved the record on, which a fresh read proves; otherwise the miss is recorded and the sandbox stops.
+func (s *Server) keepAfterBumpMiss(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost, unread bool) bool {
+	if lost && !unread && s.folderGenTaken(ctx, id, gen) {
+		return true
+	}
+	s.recordFolderBumpMissed(ctx, id, folder, gen, lost)
+	return false
+}
+
+// recordFolderBumpMissed is what a pass back that ran no pass leaves when its record
+// could not be moved to the pass's generation (the sandbox is stopped after this, by the caller, and the stop is
+// reported on its own path): one failure row, and one try at the record on gen, the
+// generation it was read at. lost is a clean miss (another owner moved the record); otherwise the store
+// failed, and its error is in bumpComputerFolderGen's log. A write that does not land is logged and changes
+// nothing else.
+func (s *Server) recordFolderBumpMissed(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost bool) {
+	why := "its store could not write it"
+	if lost {
+		why = "another owner moved it"
+	}
+	errText := "no pass ran; the folder record could not be moved before its pass: " + boundReason(why) +
+		"; the changes were not copied back by this attempt, uncounted"
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, errText)
+	if !s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
+		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, errText, true)
+	}) {
+		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not say why its pass did not run", slog.String("run_id", id.String()))
+	}
 }
 
 // notQuiescable is quiesceKeptSandbox's answer for a sandbox whose substrate cannot stop its
@@ -640,6 +682,8 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 	res, cut, settled, err := s.computerFolderPass(passCtx, account, run, folder, pull, last)
 	out := folderPassOutcome{FolderPass: res, cut: cut, settled: settled, busy: errors.Is(err, runner.ErrFolderPassBusy),
 		unconfirmed: errors.Is(err, errFolderPassUnconfirmed)}
+	var away folderRunnerAway
+	out.away = errors.As(err, &away)
 	switch {
 	case cut:
 		out.errText = "the sync was cut short: " + passCtx.Err().Error()
@@ -654,12 +698,19 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 // folderPassOutcome is one pass as computerFolderPassWithin ended it. settled is a pass the runner
 // answered for, or one that sent nothing; busy is a runner refusing it while it runs another pass for
 // the run (folder_pass_busy): a pass that did not start; unconfirmed is a pass not sent, as the runner
-// may still run the last one (errFolderPassUnconfirmed).
+// may still run the last one (errFolderPassUnconfirmed); away is a pass not sent because the computer's runner
+// is offline or not connected here (folderRunnerAway).
 type folderPassOutcome struct {
 	runnerwire.FolderPass
-	errText                         string
-	cut, settled, busy, unconfirmed bool
+	errText                               string
+	cut, settled, busy, unconfirmed, away bool
 }
+
+// folderRunnerAway is the refusal of a pass because the computer's runner is offline or not connected here: the
+// refusal's own text, as an error that says so.
+type folderRunnerAway struct{ text string }
+
+func (e folderRunnerAway) Error() string { return e.text }
 
 // auditComputerFolderPass records one pass as run.folder.transfer: direction seed (the computer to
 // the sandbox, before the agent starts), back (the sandbox to the computer, when the run ends) or
@@ -752,6 +803,9 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		return runnerwire.FolderPass{}, false, false, errFolderPassUnconfirmed
 	}
 	if refusal != nil {
+		if refusal.body.Reason == reasonComputerRunnerOffline {
+			return runnerwire.FolderPass{}, false, true, folderRunnerAway{refusal.body.Error}
+		}
 		return runnerwire.FolderPass{}, false, true, errors.New(refusal.body.Error)
 	}
 	sess, reason, err := s.execSFTPServer(ctx, run, "-d", folder.RemoteDir)
@@ -764,8 +818,14 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 	}
 	pass, err := sub.SyncFolder(ctx, runnerwire.SyncFolderArgs{
 		RunID: run.ID, Path: folder.Path, RemoteDir: folder.RemoteDir, Pull: pull, Deny: s.cfg.SyncDeny,
+		DeadlineUnixMs: passDeadlineMs(ctx),
 	})
 	if err != nil {
+		// A pass that ended before its stream was taken has its own account: settled, as any pass the runner answered for.
+		var ended *remote.PassEnded
+		if errors.As(err, &ended) {
+			return ended.Pass, false, true, nil
+		}
 		return runnerwire.FolderPass{}, false, runnerReplied(err), fmt.Errorf("the runner could not start the sync: %w", err)
 	}
 	defer func() { _ = pass.Stream.Close() }()
@@ -793,6 +853,16 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		return runnerwire.FolderPass{}, cut, !cut && runnerReplied(err), fmt.Errorf("the runner's sync did not finish: %w", err)
 	}
 	return res, false, true, nil
+}
+
+// passDeadlineMs is when the runner must end the pass: the pass ctx's own deadline, unchanged
+// (computerFolderPassWithin already ends that ctx one account window before the pass's end); 0 without one.
+func passDeadlineMs(ctx context.Context) int64 {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return dl.UnixMilli()
 }
 
 // runnerReplied is an error the runner answered with (a typed refusal): the call was answered, not lost.

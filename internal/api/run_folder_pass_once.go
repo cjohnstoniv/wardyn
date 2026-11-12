@@ -160,6 +160,33 @@ func (s *Server) keepBusy(ctx context.Context, run types.AgentRun, folder types.
 	return s.recordFolderPassBusy(ctx, run.ID, folder, gen)
 }
 
+// folderPassAwayMsg is the record of a pass back not sent because the computer's runner was offline.
+const folderPassAwayMsg = "Kept: the computer's runner was offline at the end; the copy back is tried again when it is back"
+
+// keepAway keeps the sandbox of a pass back not sent because the computer's runner is offline or not connected
+// here, once it is safe to keep (holdUnquiesced), with a resume and nothing counted, so a later sweep tries
+// again when the runner is back. One not safe to keep (a virtual machine, an agent that cannot be stopped
+// alone, a sandbox on that same offline computer) is stopped with its changes not brought back, as before.
+func (s *Server) keepAway(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
+	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+		return s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the computer's runner was offline at the end", err)
+	}
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	if s.writeComputerFolderStatus(rctx, run.ID, gen, func(st *types.RunLocalFolderStatus) {
+		if st.Resume == nil {
+			st.Resume = &types.FolderResume{}
+		}
+		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, folderPassAwayMsg, true)
+		st.Settled = gen
+	}) {
+		s.auditComputerFolderPass(rctx, run.ID, folder, true, runnerwire.FolderPass{}, folderPassAwayMsg)
+		return true
+	}
+	// A resume that did not land leaves the sweeps nothing to resume: kept only for an owner that moved the record on.
+	return s.folderGenTaken(rctx, run.ID, gen) || s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the computer's runner was offline at the end", errors.New("its record could not be written"))
+}
+
 // keepUnconfirmed keeps the sandbox of a pass back not sent because the runner may still run the last
 // (errFolderPassUnconfirmed), once it is safe to keep (holdUnquiesced), with the last pass's send time
 // (genAt) kept, so the wait does not start again. One not safe to keep is stopped with its changes not
@@ -265,10 +292,15 @@ func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen in
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
 	rec, ok, err := st.BumpRunLocalFolderGen(rctx, id, store.FolderStatusGuard{Gen: gen}, s.cfg.Now())
-	if err != nil || !ok {
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not be moved before its pass",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+		return types.RunLocalFolderStatus{}, false, false
+	}
+	if !ok {
 		slog.WarnContext(ctx, "wardynd: a computer folder's pass record moved before its pass",
-			slog.String("run_id", id.String()), slog.Bool("moved", ok), slog.Any("err", err))
-		return types.RunLocalFolderStatus{}, false, err == nil
+			slog.String("run_id", id.String()), slog.Bool("moved", ok))
+		return types.RunLocalFolderStatus{}, false, true
 	}
 	return rec, true, false
 }
@@ -288,16 +320,31 @@ func (s *Server) folderGenTaken(ctx context.Context, id uuid.UUID, gen int) bool
 
 // recordFolderPassBusy records a pass back the runner refused as busy, at the generation it owned: settled,
 // since the runner answered, and kept for a resume so a later sweep tries again. The sandbox stays up
-// either way: a record that did not land is another owner's to decide.
+// either way, and this always answers true. The runner's busy reply is proof that another pass for this run
+// is live, and stopping the sandbox under it would cut that pass off and lose what it is moving; the 7-day
+// cap bounds the keep. So a store fault here does not stop it: it is logged apart, and the next visit tries
+// the record again. A record that did not land because another owner moved it on is that owner's to decide.
 func (s *Server) recordFolderPassBusy(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int) bool {
+	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
+		return true
+	}
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
-	if s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
-		if st.Resume == nil {
-			st.Resume = &types.FolderResume{}
+	cur, err := st.RunLocalFolderStatus(rctx, id)
+	landed := false
+	if err == nil && cur.Gen == gen {
+		if cur.Resume == nil {
+			cur.Resume = &types.FolderResume{}
 		}
-		st.Settled = gen
-	}) {
+		cur.Settled = gen
+		landed, err = st.SetRunLocalFolderStatusIf(rctx, id, store.FolderStatusGuard{Gen: gen}, cur)
+	}
+	switch {
+	case err != nil:
+		slog.WarnContext(ctx, "wardynd: recording a busy folder pass failed; the sandbox is kept because the runner is still running a pass for it",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+	case landed:
 		s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, folderPassBusyMsg)
 	}
 	return true

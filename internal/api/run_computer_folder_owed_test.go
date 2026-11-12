@@ -201,7 +201,7 @@ func TestFinalizeRunEffects_AConflictCopyThatCannotBeKeptGivesUpAfterTwoStalls(t
 	if err := f.finalize(t); err != nil {
 		t.Errorf("finalize: %v", err)
 	}
-	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, head+"; 2 passes in a row brought nothing back, so the sandbox was stopped with changed files not brought back: 1")
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the sandbox was stopped with changed files not brought back: 1, because 2 passes in a row brought nothing back: "+head)
 }
 
 // X3. A file the laptop deleted while the agent changed it comes back as a conflict copy with the agent's
@@ -222,24 +222,25 @@ func TestFinalizeRunEffects_ALaptopDeleteOfAnAgentChangeKeepsAConflictCopy(t *te
 	}
 }
 
-// X4. A resume visit whose pass fails before it moves anything (the runner gone, and staying gone) is a
-// stall, not a settle: the sandbox stays kept, and the next such visit gives up.
-func TestFinalizeRunEffects_AResumeThatFailsBeforeItMovesAnythingIsAStall(t *testing.T) {
+// X4. A resume visit whose runner is gone, and staying gone, sends no pass: nothing is counted, so it is no
+// stall, and the sandbox stays kept, visit after visit, with the stalls and changes it already had.
+func TestFinalizeRunEffects_AResumeWhoseRunnerIsGoneKeepsTheSandboxUncounted(t *testing.T) {
 	f := newOwedFixture(t, nil)
 	f.keptAfterStateSaveFails(t)
+	before := *f.cs.folderStatus().Resume
 	f.peer.Close()
 	f.s.cfg.RunnerOnline = func(id uuid.UUID) bool { return id != f.cs.runner.ID }
-	err := f.finalize(t)
-	if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
-		t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
+	for visit := 1; visit <= 2; visit++ {
+		err := f.finalize(t)
+		if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
+			t.Fatalf("visit %d: finalize = %v, stops %d; want the sandbox kept", visit, err, f.sb.stopCount())
+		}
+		st := f.cs.folderStatus()
+		if st.Resume == nil || *st.Resume != before || st.Settled != st.Gen ||
+			st.Back == nil || st.Back.Error != folderPassAwayMsg {
+			t.Fatalf("visit %d: record %+v, want the resume as it was, settled, with the runner-offline text", visit, st)
+		}
 	}
-	if st := f.cs.folderStatus(); st.Resume == nil || st.Resume.Stalled != 1 || st.Settled != st.Gen {
-		t.Fatalf("record %+v, want a stall, settled", st)
-	}
-	if err := f.finalize(t); err != nil {
-		t.Errorf("finalize: %v", err)
-	}
-	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "2 passes in a row brought nothing back, so the sandbox was stopped with its changes not brought back yet, uncounted")
 }
 
 // X5. A runner that does not say whether it kept a change (one from before not_preserved) and completes
@@ -301,5 +302,5 @@ func TestFinalizeRunEffects_AnErrorThatLeftAChangeAndMovedNothingIsAStall(t *tes
 	if err := f.finalize(t); err != nil {
 		t.Errorf("finalize: %v", err)
 	}
-	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "unexpected EOF; 2 passes in a row brought nothing back, so the sandbox was stopped with changed files not brought back: 1")
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the sandbox was stopped with changed files not brought back: 1, because 2 passes in a row brought nothing back: unexpected EOF")
 }

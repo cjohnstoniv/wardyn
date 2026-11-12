@@ -143,7 +143,7 @@ func TestPassBack_AnOlderRunnersUnansweredPassKeepsTheSandboxUntilItsBound(t *te
 	if seen.Load() {
 		t.Error("a pass was sent at the give-up")
 	}
-	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back")
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "because 2 passes in a row brought nothing back: the runner did not answer for its last pass back")
 	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "changed files not brought back: 1")
 }
 
@@ -352,7 +352,7 @@ func TestPassBack_AnOlderRunnersUnansweredPassIsRetriedOnceBeforeItGivesUp(t *te
 	if err := f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "run.complete", nil, false, false); err != nil {
 		t.Errorf("finalize: %v", err)
 	}
-	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back")
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "because 2 passes in a row brought nothing back: the runner did not answer for its last pass back")
 }
 
 // runnerTurnsAfterBump is computerFolderStore whose folder runner turns into another, once, at the first
