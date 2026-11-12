@@ -338,7 +338,7 @@ func TestCopyBackCut_Table(t *testing.T) {
 }
 
 func TestContainmentDue_TerminalOnly(t *testing.T) {
-	t0 := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 	u := t0.Add(-time.Hour)
 	capAt := t0.Add(-2 * time.Hour)
 	for name, tc := range map[string]struct {

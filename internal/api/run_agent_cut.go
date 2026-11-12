@@ -16,7 +16,7 @@ import (
 )
 
 // runnerConnected is the runner's caps while its session is live on this replica (folderRunner's test,
-// run_computer_folder.go:61-65); last-known caps alone never count.
+// in run_computer_folder.go); last-known caps alone never count.
 func (s *Server) runnerConnected(id uuid.UUID) (runnerwire.Caps, bool) {
 	caps, ok := s.runnerLastCaps(id)
 	return caps, ok && s.runnerOnline(id)
@@ -115,7 +115,7 @@ func (s *Server) keepable(run types.AgentRun) bool {
 
 // copyBackCut is stopTerminalSandbox's keep test: nil keeps the sandbox, errProxyAloneUnsupported stops it,
 // errProxyStopUnconfirmed keeps it with its failure row, as stopProxyOrAudit answers
-// (run_proxy_readback.go:450-470); errRunnerNotHere leaves a runner run in place this round, with no stop
+// (run_proxy_readback.go); errRunnerNotHere leaves a runner run in place this round, with no stop
 // sent or queued, until its runner is here. It is asked only for a sandbox kept for its copy back or whose
 // record could not be read.
 func (s *Server) copyBackCut(ctx context.Context, run types.AgentRun, action string) error {
@@ -130,8 +130,8 @@ func (s *Server) copyBackCut(ctx context.Context, run types.AgentRun, action str
 		return errProxyAloneUnsupported // Kubernetes server mode: the sandbox is stopped; it keeps nothing
 	case notObserved(err):
 		if run.RunnerID != nil {
-			// The runner is not here: a stop would only be queued (remote/substrate.go:448-476), and the
-			// runner contains egress itself at its lapse (offline/manager.go:418-438).
+			// The runner is not here: a stop would only be queued (the remote Substrate's teardown), and the
+			// runner contains egress itself at its lapse (the offline Manager's CheckLapses).
 			return errRunnerNotHere
 		}
 		return errProxyAloneUnsupported
