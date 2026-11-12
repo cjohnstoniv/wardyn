@@ -52,7 +52,9 @@ var errContainCallAbandoned = errors.New("the cut did not answer within its phas
 
 // errContainSkip is what the stop path's call-phase work (containCallPre) wraps to say it skipped: another
 // holder has the run's agent, say. A skip is not a failure: no stamp and no failure row, no mark that the
-// round was unobserved. The visit still asks d1Due with it, and releases the claim as usual.
+// round was unobserved. The visit still asks d1Due with it, and releases the claim as usual. The one
+// exception is a skip that arrives after its phase ended: the item's answer is then the phase's abandonment,
+// which is stamped and audited as a failure, and the late rule drops the stop the skip would have owed.
 var errContainSkip = errors.New("the stop path skipped this visit")
 
 // errContainCallPanicked is a cut call that panicked. It is not an observation of the sandbox.
@@ -243,7 +245,7 @@ func (s *Server) containVisit(rows []store.TerminalSandboxRow) {
 	}
 }
 
-// containRunOf is the run the listing row stands for: what cutAgent and containmentDue read.
+// containRunOf is the run the listing row stands for: what cutAgent reads, with the listing's Due column deciding whether it is visited.
 func containRunOf(row store.TerminalSandboxRow) types.AgentRun {
 	return types.AgentRun{
 		ID: row.ID, State: row.State, SandboxRef: row.SandboxRef, RunnerID: row.RunnerID, MachineKind: row.MachineKind,
@@ -486,6 +488,9 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uin
 	ans, flight := s.containCallWithin(callCtx, run, gen, func() containAnswer {
 		if err := s.containCallPre(callCtx, run); err != nil {
 			return containAnswer{err: err}
+		}
+		if err := callCtx.Err(); err != nil {
+			return containAnswer{err: fmt.Errorf("the call phase ended before the cut: %w", err)}
 		}
 		kind, err := s.cutAgent(callCtx, run)
 		return containAnswer{kind: kind, err: err}
@@ -736,7 +741,10 @@ func (s *Server) runStopItem(ctx context.Context, run types.AgentRun, gen uint64
 // containCallPre is the stop path's work at the start of the call phase, before the cut: the acts that
 // touch the run's agent. It runs inside containCallWithin on the call ctx and budget, so the worker never
 // waits past the phase on it. An error wrapping errContainSkip is a skip, not a failure. Any other error is
-// the call's outcome: it is stamped like a failed cut, reaches d1Due, and the cut is not made. It has none yet.
+// the call's outcome: it is stamped like a failed cut, reaches d1Due, and the cut is not made. The one
+// exception is an error wrapping errRunnerNotHere, runner.ErrRunnerOffline or runner.ErrPendingOnRunner,
+// which is an unobserved round, not a failure: a hook must wrap those only when the runner truly is away.
+// The cut is made only while the call ctx is still live after the hook returns. It has none yet.
 func (s *Server) containCallPre(ctx context.Context, run types.AgentRun) error {
 	if f := s.contain.containCallFn; f != nil {
 		return f(ctx, run)

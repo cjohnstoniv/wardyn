@@ -1884,6 +1884,9 @@ func TestContain_CallHookErrorIsAFailedCut(t *testing.T) {
 		if failures, _ := failuresAndSuccesses(l.rec); failures != 1 {
 			t.Errorf("failure rows = %d, want 1", failures)
 		}
+		if n := l.rn.callsTo(row.SandboxRef); n != 0 {
+			t.Errorf("cut calls = %d, want none after a hook error", n)
+		}
 		calls := l.d1Calls()
 		if len(calls) != 1 || !errors.Is(calls[0].err, errContainBoom) {
 			t.Fatalf("d1Due calls = %+v, want one with the hook's error", calls)
@@ -1986,8 +1989,43 @@ func TestContain_CallHookErrorQueuesTheStopAtOnce(t *testing.T) {
 		if got := l.stopQueue(); got != 1 {
 			t.Errorf("stop FIFO = %d, want the run queued on that visit", got)
 		}
+		if n := l.rn.callsTo(row.SandboxRef); n != 0 {
+			t.Errorf("cut calls = %d, want none after a hook error", n)
+		}
 		if !l.busy(id) {
 			t.Error("the run was released instead of handed to the stop pool")
+		}
+	})
+}
+
+// A hook that outlasts the call phase and then answers nil does not go on to cut: the phase ended, so no
+// runner call is started. The item's answer is the phase's abandonment, stamped as a failure, never a
+// success. Caught by: cutting without testing the call ctx after the hook returns.
+func TestContain_CallHookAnswersAfterThePhaseWithoutCutting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newContainLab(t, true)
+		row := dueRow(nil, time.Minute)
+		id := l.st.add(row)
+		l.srv.contain.containCallFn = func(context.Context, types.AgentRun) error {
+			time.Sleep(containCall + 5*time.Second) // ignores its ctx, then answers nil
+			return nil
+		}
+		l.start()
+		time.Sleep(containCall + 6*time.Second)
+		l.stop()
+		if n := l.rn.callsTo(row.SandboxRef); n != 0 {
+			t.Errorf("cut calls = %d, want none: the phase had ended", n)
+		}
+		failures, successes := failuresAndSuccesses(l.rec)
+		if failures != 1 || successes != 0 {
+			t.Errorf("audit rows = %d failures, %d successes, want the abandonment as the one failure", failures, successes)
+		}
+		calls := l.d1Calls()
+		if len(calls) == 0 || !errors.Is(calls[0].err, errContainCallAbandoned) {
+			t.Errorf("d1Due calls = %+v, want the first with the abandonment", calls)
+		}
+		if l.st.stamp(id) == nil {
+			t.Error("the abandoned call left no stamp")
 		}
 	})
 }

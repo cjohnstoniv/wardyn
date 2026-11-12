@@ -166,8 +166,10 @@ func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
 }
 
 // TestPG_ListTerminalSandboxPage_DueIsTheDatabases: each listed row says whether it is due by the
-// database's now(), with ended_at seeded in SQL two seconds either side of the lag, so no Go clock is
-// involved. Proven red by a due that is always true or always false, or one computed from the Go clock.
+// database's now(), with ended_at seeded in SQL 30 s short of the lag and a few seconds past it, so no Go
+// time is in any statement. Proven red by a due that is always true or always false, or a listing that
+// leaves it unset. That the server's own clock never decides it is pinned in the api package, where the
+// two clocks can differ.
 func TestPG_ListTerminalSandboxPage_DueIsTheDatabases(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
@@ -183,7 +185,7 @@ func TestPG_ListTerminalSandboxPage_DueIsTheDatabases(t *testing.T) {
 		}
 		return r.ID
 	}
-	notYet, due := add("ref-not-yet", lag-2), add("ref-due", lag+2)
+	notYet, due := add("ref-not-yet", lag-30), add("ref-due", lag+2)
 	rows, _, err := pg.ListTerminalSandboxPage(ctx, nil, 10, true)
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +198,7 @@ func TestPG_ListTerminalSandboxPage_DueIsTheDatabases(t *testing.T) {
 		t.Fatalf("listed %d rows, want the 2 seeded", len(got))
 	}
 	if got[notYet] {
-		t.Error("a run 2 s short of due listed Due = true, want false")
+		t.Error("a run 30 s short of due listed Due = true, want false")
 	}
 	if !got[due] {
 		t.Error("a run 2 s past due listed Due = false, want true")
