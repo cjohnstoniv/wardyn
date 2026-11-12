@@ -64,7 +64,7 @@ func TestPG_PassBack_TheBoundIsReadBeforeTheBump(t *testing.T) {
 	}
 	st, err := e.pg.RunLocalFolderStatus(ctx, given)
 	if err != nil || st.Gen != 3 || st.Settled != 3 || st.Resume != nil || st.Back == nil ||
-		!strings.Contains(st.Back.Error, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back") {
+		!strings.Contains(st.Back.Error, "because 2 passes in a row brought nothing back: the runner did not answer for its last pass back") {
 		t.Errorf("stall past the bound: record %+v (back %+v), %v; want the give-up at gen 3, settled, no resume", st, st.Back, err)
 	}
 
