@@ -886,6 +886,64 @@ func TestTailOwner_GivenUpRowWrittenOnceWhenMissing(t *testing.T) {
 	})
 }
 
+// loseLockAfterGiveUp is the tail lab whose give-up statement, once it applied, loses the run lock: lose cancels the
+// context the give-up's audit shares with the statement, as a lock lost right after the statement does.
+type loseLockAfterGiveUp struct {
+	*tailLab
+	lose context.CancelFunc
+}
+
+func (w loseLockAfterGiveUp) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	out, err := w.tailLab.GiveUpRunLocalFolder(ctx, id, p)
+	if err == nil && out.Applied {
+		w.lose()
+	}
+	return out, err
+}
+
+// ctxBoundAudit is an audit log that takes no row for a context already done, as a database write does.
+type ctxBoundAudit struct{ inner *recRecorder }
+
+func (a ctxBoundAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return a.inner.Record(ctx, ev)
+}
+
+// A containment give-up (d1GiveUp) whose lock is lost right after its statement applies leaves a final record with
+// no accepted audit row (given_up_at set, given_up_audited false: what ListGivenUpUnaudited lists). A tail owner on
+// another server, with no lock and no ref, then writes the row and marks the record. Catches: a tail owner that
+// does not re-audit the given-up records the containment loop's give-up left.
+func TestTailOwner_AContainmentGiveUpWhoseAuditFailedIsAuditedByTheTailOwner(t *testing.T) {
+	g := newTailRig(t)
+	g.lab.giveUpOK = true
+	row := g.owedRow(g.clock.now.Add(-time.Hour))
+	lctx, lose := context.WithCancel(context.Background())
+	defer lose()
+	g.s.cfg.Store = loseLockAfterGiveUp{g.lab, lose}
+	g.s.cfg.Audit = ctxBoundAudit{g.audit}
+	if !g.s.d1GiveUp(lctx, row.run) {
+		t.Fatal("d1GiveUp answered not final for a statement that applied")
+	}
+	if st, _ := g.lab.RunLocalFolderStatus(context.Background(), row.run.ID); !folderGivenUp(st) || st.Back.GivenUpAudited {
+		t.Fatalf("record %+v; want given up and not audited", st)
+	}
+	if n := transferAudit(g.audit); n != 0 || g.lab.markTotal() != 0 || g.lab.audited(row.run.ID) {
+		t.Fatalf("after the lost lock: %d rows, %d marks, audited %v; want 0, 0 and false", n, g.lab.markTotal(), g.lab.audited(row.run.ID))
+	}
+	g.lab.clearRef(row.run.ID) // the stop that follows a final give-up clears the ref
+	g.s.cfg.Store, g.s.cfg.Audit = g.lab, g.audit
+	g.tick()
+	if n := transferAudit(g.audit); n != 1 || !g.lab.audited(row.run.ID) {
+		t.Fatalf("after the tail owner's tick: %d rows, audited %v; want 1 and true", n, g.lab.audited(row.run.ID))
+	}
+	g.tick()
+	if n := transferAudit(g.audit); n != 1 {
+		t.Errorf("after a second tick: %d rows, want still 1", n)
+	}
+}
+
 // 51 given-up records, refs cleared: the audit write is accepted for the 50 lowest ids and their marks fail. The
 // cursor reaches the 51st on tick 2, then retries only the 50 marks; no row is written twice. Catches: a listing
 // with no cursor (the 51st never written), a cursor that skips a failed id after the wrap, and a second row for an
