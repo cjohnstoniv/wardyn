@@ -1409,7 +1409,9 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 		}
 		start := time.Now()
 		l.start()
-		time.Sleep(197 * time.Second) // after the abandoned stop's stamp at 195 s, before the 200 s tick that cuts again (off the tick instants)
+		// The stop is abandoned and stamped at +195 s (the 135 s start plus its 60 s phase); the run is
+		// cut again at the 200 s tick. The window ends between them, off the tick instants.
+		time.Sleep(20*containTick - containTick/4)
 		l.stop()
 		began, _, ok := l.dr.firstStop(row.SandboxRef)
 		if !ok || began.Sub(start) != 135*time.Second {
@@ -1437,7 +1439,10 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 		}
 		start := time.Now()
 		l.start()
-		time.Sleep(207 * time.Second) // after the stop's failure written at 205 s, before the 210 s tick that cuts again (off the tick instants)
+		// The stop's failure is written at +205 s (the 200 s phase end plus its 5 s write), the 200 s tick
+		// finds the run still claimed, and the next tick at 210 s would cut it again. The window ends between
+		// the write and that tick, off the tick instants.
+		time.Sleep(21*containTick - containTick/4)
 		l.stop()
 		began, _, ok := l.dr.firstStop(row.SandboxRef)
 		if !ok || began.Sub(start) != 140*time.Second {
