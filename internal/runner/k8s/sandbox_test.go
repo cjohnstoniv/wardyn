@@ -1451,12 +1451,14 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get proxy pod: %v", err)
 	}
-	// Exactly the three it always has: WARDYN_RUN_ID, WARDYN_CONTROL_PLANE_URL
-	// and the DNS listener address (proxy.DNSListenEnv). The config itself is
+	// Exactly the four a server-mode proxy pod always has: WARDYN_RUN_ID,
+	// WARDYN_CONTROL_PLANE_URL, the DNS listener address (proxy.DNSListenEnv),
+	// and the live deny directory (proxy.LiveDenyDirEnv), which withLiveDenyDir
+	// always sets to a fixed path, so it is never an unset knob. The config itself is
 	// no longer an env var at all (T-28, issue #688) — it reaches the
 	// container as a file via the init-container staging step, mounted
 	// read-only off the shared emptyDir tested in netpol_invariant_probe_test.go.
-	want := []string{"WARDYN_RUN_ID", "WARDYN_CONTROL_PLANE_URL", proxy.DNSListenEnv}
+	want := []string{"WARDYN_RUN_ID", "WARDYN_CONTROL_PLANE_URL", proxy.DNSListenEnv, proxy.LiveDenyDirEnv}
 	var got []string
 	for _, e := range proxyPod.Spec.Containers[0].Env {
 		got = append(got, e.Name)
