@@ -148,7 +148,7 @@ type Config struct {
 	// Unfence releases a fenced run's proxy IP once the proxy's witness is persisted: its termination
 	// is known, and CNIs hand freed pod IPs to new pods.
 	Unfence func(runID uuid.UUID, proxyIP string)
-	// IPFenced reports a proxy IP another run's fence refuses (Fable L5).
+	// IPFenced reports a proxy IP another run's fence refuses.
 	IPFenced func(ip string) bool
 	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
 	// refuses to create a sandbox while it is nil (the sink did not start).

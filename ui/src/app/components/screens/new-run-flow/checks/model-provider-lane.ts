@@ -17,8 +17,8 @@
 // never named, and nothing rendered either sentence: a disabled or
 // wholly-ungranted default fell through to R6's shape (no preselection,
 // Launch waits) with no line naming WHY. The owner approved drawing both
-// (docs/design/542-rail-gaps-mock/canon.md, same day), but Opus review round
-// 2 found R5b undrawable from here: setupModelProviderState's capVisible
+// (docs/design/542-rail-gaps-mock/canon.md, same day), but R5b is undrawable
+// from here: setupModelProviderState's capVisible
 // (internal/api/provider_access.go) already narrows `model_providers` to
 // providers THIS PERSON is granted before the wire, so an ungranted provider
 // never reaches this module at all, and the server's own chooseModelProvider
@@ -167,7 +167,7 @@ export function providerGate(
  *
  * `previousId` is kept ONLY when it is either the person's OWN prior pick
  * (`previousExplicit`) or there is nothing that could outrank it (no pin, and
- * the agent's own default isn't disabled) — Opus review round 2: keeping ANY
+ * the agent's own default isn't disabled): keeping ANY
  * still-serving previousId unconditionally, before ever looking at the pin,
  * let an AUTOMATIC pick (this function's own earlier R1/R2 adoption) outlive
  * a pin that arrived later — the workspace attaching or finishing its load

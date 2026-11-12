@@ -48,10 +48,9 @@ import (
 // An outage run's agent is stopped the same way once its end passes while it
 // is still lost, but its lost_reason stays outage (run_lost.go); this is
 // detected by probing the agent's own status rather than trusted from the
-// label, and takes the same start-again path a reboot does (F1.2, Fable
-// review). The proxy image is pulled before the claim below, never after, so
+// label, and takes the same start-again path a reboot does. The proxy image is pulled before the claim below, never after, so
 // the window a watcher sweep must leave the run alone in covers only a fast
-// create+start, not a pull (F2); keepRebootedRun (run_lost.go) is the guard
+// create+start, not a pull; keepRebootedRun (run_lost.go) is the guard
 // that actually leaves it alone.
 //
 // Authority is the OWNER's, never the caller's: an admin's own ceiling is
@@ -285,7 +284,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 
-	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
+	// A slow first pull of the proxy image belongs BEFORE
 	// the claim below, never after — the claim is what makes a watcher sweep
 	// leave this run alone (keepRebootedRun's busy check only helps once the
 	// run IS claimed), so the window it opens must cover only a fast
@@ -781,8 +780,7 @@ func (s *Server) stampLiveRevive(run types.AgentRun) {
 // reviveNeedsAgentStart reports whether a revive must start run's agent
 // again, behind its new proxy, before it can be called live: always true for
 // a reboot or an end (both stop the agent), and true for an outage run only
-// when the agent itself is not running (F1.2, long-holds design rev 4 §4.1;
-// Fable review).
+// when the agent itself is not running (section 4.1 of the long-holds design).
 //
 // stopLostSandbox (run_lost.go) stops an outage run's agent too, once its end
 // passes while it is still lost, but leaves lost_reason=outage —
@@ -791,8 +789,8 @@ func (s *Server) stampLiveRevive(run types.AgentRun) {
 // smaller and safer: a probe is read-only and can never drift, where a
 // relabel CAS could land wrong and stay wrong.
 //
-// A probe error refuses (503) rather than silently answering false (Minor,
-// Fable review): treating "could not observe" the same as "confirmed
+// A probe error refuses (503) rather than silently answering false:
+// treating "could not observe" the same as "confirmed
 // running" would let a proxy-only revive of an outage run whose agent is
 // actually stopped report success while the agent stays dead behind a proxy
 // that now claims it is live.

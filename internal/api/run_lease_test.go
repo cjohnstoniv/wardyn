@@ -824,9 +824,8 @@ func runsTerminalCount(srv *Server, st types.RunState) int64 {
 	return srv.metrics.runs[st]
 }
 
-// TestStopKeptRun_CountsTheTerminalTransitionItself is M6's pin (Opus review of
-// #1080): stopKeptRun stopped routing through casRunState when it moved to
-// StopKeptRunIf (F04), so casRunState's own runTerminal(to) call no longer
+// TestStopKeptRun_CountsTheTerminalTransitionItself is the pin for PR #1080: stopKeptRun stopped routing through casRunState when it
+// moved to StopKeptRunIf, so casRunState's own runTerminal(to) call no longer
 // counts a kept run's stop. Deleting stopKeptRun's own s.metrics.runTerminal
 // call would silently stop counting every ended/lost run that gets torn down
 // — with nothing failing except the /metrics gauge going quiet. This pins
