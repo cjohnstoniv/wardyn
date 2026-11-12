@@ -443,6 +443,22 @@ func TestCarryByHostFollowsNoLink(t *testing.T) {
 		wantLine(t, carryByHost(dir, thisID, me()), "host_prefs=skipped reason=no_other_identity")
 		listing(t, dir)
 	})
+	t.Run("a dangling link at the destination", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "missing")
+		dir := newByHost(t, map[string]string{byHostFile("a", baseID): "base"})
+		dest := filepath.Join(dir, byHostFile("a", thisID))
+		if err := os.Symlink(missing, dest); err != nil {
+			t.Fatal(err)
+		}
+		wantLine(t, carryByHost(dir, thisID, me()), "host_prefs=carried files=0 kept=1 skipped=0 failed=0")
+		if _, err := os.Lstat(missing); err == nil {
+			t.Error("the link's target was created through the link")
+		}
+		if got, err := os.Readlink(dest); err != nil || got != missing {
+			t.Errorf("destination link = %q, %v; want it unchanged, %q", got, err, missing)
+		}
+		listing(t, dir)
+	})
 	t.Run("the destination", func(t *testing.T) {
 		target := filepath.Join(t.TempDir(), "target")
 		if err := os.WriteFile(target, []byte("target"), 0o644); err != nil {
