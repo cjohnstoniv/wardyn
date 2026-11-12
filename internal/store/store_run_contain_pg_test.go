@@ -26,9 +26,10 @@ func containErrAt(t *testing.T, ctx context.Context, pg store.PG, id uuid.UUID) 
 	return got.ContainmentErrorAt
 }
 
-// TestPG_SetRunContainmentErrorSince: no stamp, or one older than since, becomes now; one not older than
-// since is kept; a run that is not terminal has no row. Proven red by the COALESCE form, which keeps a
-// kept-phase stamp from before the end.
+// TestPG_SetRunContainmentErrorSince: no stamp, or one older than since, becomes the database's now(), not
+// a time the caller names; one not older than since is kept; a run that is not terminal has no row. Proven
+// red by the COALESCE form, which keeps a kept-phase stamp from before the end, and by stamping a time
+// the caller passes in, which the one-second check against now() in SQL would not match.
 func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -42,15 +43,24 @@ func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 		}
 	}
 	older, newer := now.Add(-time.Hour), now.Add(-30*time.Second)
+	// stampedNow reports, in SQL, whether the stamp is within a second of the database's own now().
+	stampedNow := func(id uuid.UUID) bool {
+		t.Helper()
+		var ok bool
+		if err := pool.QueryRow(ctx, `SELECT abs(extract(epoch FROM now() - containment_error_at)) < 1 FROM agent_runs WHERE id = $1`, id).Scan(&ok); err != nil {
+			t.Fatalf("compare the stamp with now(): %v", err)
+		}
+		return ok
+	}
 
 	for name, tc := range map[string]struct {
 		state       types.RunState
 		stamp       *time.Time
 		wantStarted bool
-		wantAt      *time.Time
+		wantAt      *time.Time // nil: the stamp is the database's now()
 	}{
-		"null":        {types.RunKilled, nil, true, &now},
-		"older":       {types.RunKilled, &older, true, &now},
+		"null":        {types.RunKilled, nil, true, nil},
+		"older":       {types.RunKilled, &older, true, nil},
 		"newer":       {types.RunKilled, &newer, false, &newer},
 		"at since":    {types.RunKilled, &since, false, &since},
 		"running row": {types.RunRunning, &older, false, &older},
@@ -59,12 +69,17 @@ func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 		run.SandboxRef = "ref-" + run.ID.String()
 		r := persistRun(t, ctx, pool, run)
 		stamp(r.ID, tc.stamp)
-		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", now, since)
+		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", since)
 		if err != nil || started != tc.wantStarted {
 			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want %v", name, started, err, tc.wantStarted)
 		}
 		got := containErrAt(t, ctx, pg, r.ID)
-		if got == nil || !got.Equal(*tc.wantAt) {
+		switch {
+		case got == nil:
+			t.Errorf("%s: containment_error_at is NULL, want %v", name, tc.wantAt)
+		case tc.wantAt == nil && !stampedNow(r.ID):
+			t.Errorf("%s: containment_error_at = %v, want within a second of the database's now()", name, got)
+		case tc.wantAt != nil && !got.Equal(*tc.wantAt):
 			t.Errorf("%s: containment_error_at = %v, want %v", name, got, tc.wantAt)
 		}
 		run, err := pg.GetRun(ctx, r.ID)
@@ -125,7 +140,6 @@ func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	now := time.Now().UTC().Truncate(time.Microsecond)
 	for _, state := range []types.RunState{types.RunKilled, types.RunFailed} {
 		run := newRun(state)
 		run.SandboxRef = "ref-" + run.ID.String()
@@ -133,7 +147,7 @@ func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = '' WHERE id = $1`, r.ID); err != nil {
 			t.Fatalf("clear the ref: %v", err)
 		}
-		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", now, now.Add(-time.Minute))
+		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", time.Now().Add(-time.Minute))
 		if err != nil || started {
 			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want false, nil", state, started, err)
 		}
@@ -141,12 +155,12 @@ func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
 			t.Errorf("%s: MarkRunFenced: %v", state, err)
 		}
 		var errAt, fencedAt *time.Time
-		var msg string
+		var msg *string
 		if err := pool.QueryRow(ctx, `SELECT containment_error_at, fenced_at, containment_error FROM agent_runs WHERE id = $1`, r.ID).Scan(&errAt, &fencedAt, &msg); err != nil {
 			t.Fatalf("read the row: %v", err)
 		}
-		if errAt != nil || fencedAt != nil || msg != "" {
-			t.Errorf("%s: containment_error_at %v, fenced_at %v, containment_error %q; want none of them written", state, errAt, fencedAt, msg)
+		if errAt != nil || fencedAt != nil || msg != nil {
+			t.Errorf("%s: containment_error_at %v, fenced_at %v, containment_error %v; want none of them written", state, errAt, fencedAt, msg)
 		}
 	}
 }

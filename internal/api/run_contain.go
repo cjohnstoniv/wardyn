@@ -53,18 +53,14 @@ var errContainCallAbandoned = errors.New("the cut did not answer within its phas
 // errContainCallPanicked is a cut call that panicked. It is not an observation of the sandbox.
 var errContainCallPanicked = errors.New("the cut panicked")
 
-// containAnswer is what the call phase produced: cutAgent's answer, and containPreCut's error.
+// containAnswer is what the call phase produced: cutAgent's answer.
 type containAnswer struct {
-	kind   cutKind
-	err    error
-	preErr error
+	kind cutKind
+	err  error
 }
 
-// lateErr is the answer's error for the late rule: containPreCut's if any, else cutAgent's.
+// lateErr is the answer's error for the late rule.
 func (a containAnswer) lateErr() error {
-	if a.preErr != nil {
-		return a.preErr
-	}
 	return a.err
 }
 
@@ -108,13 +104,14 @@ type containState struct {
 	cursor     *store.TerminalSandboxCursor
 
 	cutQ       chan containJob
-	stopFIFO   []types.AgentRun
+	stopFIFO   []containJob // each run with the generation of the claim it was handed off under
 	stopQueued map[uuid.UUID]bool
 	stopWake   chan struct{}
 
 	// Tests only: zero means the constants; d1DueFn stands in for d1Due.
-	callPhase, postPhase time.Duration
-	d1DueFn              func(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool
+	prePhase, callPhase, postPhase time.Duration
+	preCutFn                       func(ctx context.Context, run types.AgentRun) error // stands in for containPreCut
+	d1DueFn                        func(ctx context.Context, run types.AgentRun, kind cutKind, err, preErr error) bool
 }
 
 func (c *containState) init() {
@@ -300,21 +297,30 @@ func (s *Server) containRelease(id uuid.UUID, pool containPool, gen uint64) {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	e := c.inFlight[id]
 	if e == nil || e.gen != gen || e.pool != pool {
-		var now uint64
+		var claimGen uint64
 		if e != nil {
-			now = e.gen
+			claimGen = e.gen
 		}
-		slog.Warn("wardynd: a containment release did not act: its claim is not the run's now",
-			slog.String("run_id", id.String()), slog.Uint64("release_gen", gen), slog.Uint64("claim_gen", now), slog.Bool("pool_matches", e != nil && e.pool == pool))
+		poolMatches := e != nil && e.pool == pool
+		movedToStop := e != nil && e.gen == gen && e.pool == containPoolStop
+		c.mu.Unlock()
+		// The same claim, now held by the stop pool, is the designed outcome of a hand-off, not a fault.
+		// A missing claim or another generation is a release that lost its claim.
+		level := slog.LevelWarn
+		if movedToStop {
+			level = slog.LevelDebug
+		}
+		slog.Log(context.Background(), level, "wardynd: a containment release did not act: its claim is not the run's now",
+			slog.String("run_id", id.String()), slog.Uint64("release_gen", gen), slog.Uint64("claim_gen", claimGen), slog.Bool("pool_matches", poolMatches))
 		return
 	}
 	e.held = false
 	if e.calls == 0 {
 		delete(c.inFlight, id)
 	}
+	c.mu.Unlock()
 }
 
 // containHandOffLocked moves a cut run to the stop pool with no moment unclaimed: a run held by a cut
@@ -344,12 +350,13 @@ func (s *Server) enqueueStop(run types.AgentRun, gen uint64) bool {
 	if !s.containHandOff(run.ID, gen) {
 		return false
 	}
-	s.pushStop(run)
+	s.pushStop(run, gen)
 	return true
 }
 
-// pushStop adds run to the stop FIFO unless it is already in it, and wakes a stop worker.
-func (s *Server) pushStop(run types.AgentRun) {
+// pushStop adds run to the stop FIFO unless it is already in it, and wakes a stop worker. gen is the
+// generation of the claim the stop pool now holds for run; the stop item releases that claim and no other.
+func (s *Server) pushStop(run types.AgentRun, gen uint64) {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
@@ -358,7 +365,7 @@ func (s *Server) pushStop(run types.AgentRun) {
 		return
 	}
 	c.stopQueued[run.ID] = true
-	c.stopFIFO = append(c.stopFIFO, run)
+	c.stopFIFO = append(c.stopFIFO, containJob{run: run, gen: gen})
 	c.mu.Unlock()
 	select {
 	case c.stopWake <- struct{}{}:
@@ -366,17 +373,17 @@ func (s *Server) pushStop(run types.AgentRun) {
 	}
 }
 
-// popStop takes the oldest run in the stop FIFO.
-func (s *Server) popStop() (types.AgentRun, bool) {
+// popStop takes the oldest run in the stop FIFO, with the generation of its claim.
+func (s *Server) popStop() (containJob, bool) {
 	c := &s.contain
 	c.mu.Lock()
 	if len(c.stopFIFO) == 0 {
 		c.mu.Unlock()
-		return types.AgentRun{}, false
+		return containJob{}, false
 	}
-	run := c.stopFIFO[0]
+	job := c.stopFIFO[0]
 	c.stopFIFO = c.stopFIFO[1:]
-	delete(c.stopQueued, run.ID)
+	delete(c.stopQueued, job.run.ID)
 	more := len(c.stopFIFO) > 0
 	c.mu.Unlock()
 	if more {
@@ -385,14 +392,14 @@ func (s *Server) popStop() (types.AgentRun, bool) {
 		default:
 		}
 	}
-	return run, true
+	return job, true
 }
 
 // containStopWorker takes the stop FIFO in order and runs the stop item for each run.
 func (s *Server) containStopWorker(ctx context.Context) {
 	c := &s.contain
 	for ctx.Err() == nil {
-		run, ok := s.popStop()
+		job, ok := s.popStop()
 		if !ok {
 			select {
 			case <-ctx.Done():
@@ -401,15 +408,15 @@ func (s *Server) containStopWorker(ctx context.Context) {
 			}
 			continue
 		}
-		s.containStopItem(ctx, run)
+		s.containStopItem(ctx, job.run, job.gen)
 	}
 }
 
 // containStopItem runs one stop item. The claim is released when it ends, a panic included.
-func (s *Server) containStopItem(ctx context.Context, run types.AgentRun) {
-	defer s.containRelease(run.ID, containPoolStop, s.containGenOf(run.ID))
+func (s *Server) containStopItem(ctx context.Context, run types.AgentRun, gen uint64) {
+	defer s.containRelease(run.ID, containPoolStop, gen)
 	defer containRecover(run.ID)
-	s.runStopItem(ctx, run)
+	s.runStopItem(ctx, run, gen)
 }
 
 // containRecover logs a panic in an item so it never leaves a run claimed until a restart.
@@ -432,21 +439,27 @@ func (s *Server) containCutWorker(ctx context.Context) {
 	}
 }
 
-// containPhases are the call and post phase lengths: the constants, unless a test set them.
-func (s *Server) containPhases() (call, post time.Duration) {
-	call, post = containCall, containPost
+// containPhases are the pre, call and post phase lengths: the constants, unless a test set them.
+func (s *Server) containPhases() (pre, call, post time.Duration) {
+	pre, call, post = containPre, containCall, containPost
+	if s.contain.prePhase > 0 {
+		pre = s.contain.prePhase
+	}
 	if s.contain.callPhase > 0 {
 		call = s.contain.callPhase
 	}
 	if s.contain.postPhase > 0 {
 		post = s.contain.postPhase
 	}
-	return call, post
+	return pre, call, post
 }
 
-// containCutItem cuts one ended run's agent. The call and the writes never share a deadline: a hung cut
-// must still stamp its failure, or the stop path never sees a streak. Each phase runs on its own ctx made from the
-// parent without its cancel, so a shutdown does not cut a phase short.
+// containCutItem cuts one ended run's agent in three phases: the stop path's reads (pre), the cut (call)
+// and the writes (post). The call and the writes never share a deadline: a hung cut must still stamp its
+// failure, or the stop path never sees a streak. Each phase runs on its own ctx, made when the phase starts
+// from the parent without its cancel, so a shutdown does not cut a phase short. A pre phase that fails or
+// outlasts its budget did not try the cut, so it records no failure and asks nothing of the stop path: the
+// claim is released and the next round takes the run again.
 func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uint64) {
 	handed := false
 	defer func() {
@@ -455,17 +468,24 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uin
 		}
 	}()
 	defer containRecover(run.ID)
-	callLen, postLen := s.containPhases()
+	preLen, callLen, postLen := s.containPhases()
 	base := context.WithoutCancel(ctx)
+	preCtx, cancelPre := context.WithTimeout(base, preLen)
+	preErr := s.containPreCut(preCtx, run)
+	if preErr == nil {
+		preErr = preCtx.Err()
+	}
+	cancelPre()
+	if preErr != nil {
+		slog.Warn("wardynd: the reads before cutting an ended run's agent did not finish; the next round tries again",
+			slog.String("run_id", run.ID.String()), slog.Any("err", preErr))
+		return
+	}
 	callCtx, cancelCall := context.WithTimeout(base, callLen)
 	defer cancelCall()
 	ans, flight := s.containCallWithin(callCtx, run, gen, func() containAnswer {
-		preErr := s.containPreCut(callCtx, run)
-		if err := callCtx.Err(); err != nil {
-			return containAnswer{preErr: preErr, err: fmt.Errorf("the call phase ended before the cut: %w", err)}
-		}
 		kind, err := s.cutAgent(callCtx, run)
-		return containAnswer{kind: kind, err: err, preErr: preErr}
+		return containAnswer{kind: kind, err: err}
 	})
 	if errors.Is(ans.err, errContainCallPanicked) {
 		return
@@ -485,9 +505,9 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uin
 // containD1Due asks d1Due, through the test stand-in when one is set.
 func (s *Server) containD1Due(ctx context.Context, run types.AgentRun, ans containAnswer) bool {
 	if f := s.contain.d1DueFn; f != nil {
-		return f(ctx, run, ans.kind, ans.err, ans.preErr)
+		return f(ctx, run, ans.kind, ans.err, nil)
 	}
-	return s.d1Due(ctx, run, ans.kind, ans.err, ans.preErr)
+	return s.d1Due(ctx, run, ans.kind, ans.err, nil)
 }
 
 // containCallWithin runs the call phase's work on its own goroutine and waits for its answer or for
@@ -559,7 +579,7 @@ func (s *Server) containCallDone(f *containFlight, ans containAnswer) {
 	}
 	c.mu.Unlock()
 	if push {
-		s.pushStop(f.run)
+		s.pushStop(f.run, f.gen)
 	}
 }
 
@@ -572,7 +592,7 @@ func (s *Server) containDueKnown(f *containFlight, due bool) bool {
 	push := c.containLateStopLocked(f)
 	c.mu.Unlock()
 	if push {
-		s.pushStop(f.run)
+		s.pushStop(f.run, f.gen)
 	}
 	return push
 }
@@ -647,7 +667,7 @@ func (s *Server) containFailed(ctx context.Context, st store.RunContainer, run t
 	if ctx.Err() != nil {
 		return
 	}
-	started, err := st.SetRunContainmentErrorSince(ctx, run.ID, cause.Error(), s.cfg.Now(), s.streakSince(run))
+	started, err := st.SetRunContainmentErrorSince(ctx, run.ID, cause.Error(), s.streakSince(run))
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: recording an ended run's containment failure failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return
@@ -693,10 +713,13 @@ func (s *Server) d1Due(ctx context.Context, run types.AgentRun, kind cutKind, er
 	return false
 }
 
-// containPreCut is the stop path's work in the call phase, before the cut. It has none yet.
+// containPreCut is the stop path's work in the pre phase, before the cut. It has none yet.
 func (s *Server) containPreCut(ctx context.Context, run types.AgentRun) error {
+	if f := s.contain.preCutFn; f != nil {
+		return f(ctx, run)
+	}
 	return nil
 }
 
 // runStopItem is the stop pool's item for one run. The stop path writes it.
-func (s *Server) runStopItem(ctx context.Context, run types.AgentRun) {}
+func (s *Server) runStopItem(ctx context.Context, run types.AgentRun, gen uint64) {}

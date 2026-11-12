@@ -101,7 +101,7 @@ func (f *containStore) MarkRunFenced(_ context.Context, id uuid.UUID) error {
 	time.Sleep(f.lag)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if r := f.rows[id]; r != nil && r.FencedAt == nil {
+	if r := f.rows[id]; r != nil && r.SandboxRef != "" && r.FencedAt == nil {
 		now := time.Now()
 		r.FencedAt = &now
 		f.fenceAt[id] = now
@@ -109,20 +109,25 @@ func (f *containStore) MarkRunFenced(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (f *containStore) SetRunContainmentErrorSince(_ context.Context, id uuid.UUID, msg string, now, since time.Time) (bool, error) {
+// SetRunContainmentErrorSince stamps with this store's own clock, as the Postgres statement stamps with the
+// database's now(): the caller's clock never reaches the stamp.
+func (f *containStore) SetRunContainmentErrorSince(_ context.Context, id uuid.UUID, msg string, since time.Time) (bool, error) {
 	time.Sleep(f.lag)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := f.rows[id]
-	if r == nil || !r.State.IsTerminal() {
+	if r == nil || r.SandboxRef == "" || !r.State.IsTerminal() {
 		return false, nil
 	}
 	r.msg = msg
+	started := false
 	if r.ContainmentErrorAt == nil || r.ContainmentErrorAt.Before(since) {
+		now := time.Now()
 		r.ContainmentErrorAt = &now
+		started = true
 	}
 	f.stamps = append(f.stamps, time.Now())
-	return r.ContainmentErrorAt.Equal(now), nil
+	return started, nil
 }
 
 func (f *containStore) ClearRunContainmentError(_ context.Context, id uuid.UUID) (bool, error) {
@@ -1116,6 +1121,9 @@ func TestContain_StalledRunnerWriteFreesTheWorker(t *testing.T) {
 				row := dueRow(&id, time.Minute)
 				row.SandboxRef = placement.RunnerRefPrefix(id.String()) + "sbx"
 				rowID := l.st.add(row)
+				// The link has a single writer while a delay is set, so the fake clock never stalls on the
+				// peer's write lock.
+				synctest.Wait()
 				if delayBeforeCall {
 					org.SetDelay(delay)
 				}
@@ -1123,6 +1131,7 @@ func TestContain_StalledRunnerWriteFreesTheWorker(t *testing.T) {
 				l.start()
 				if !delayBeforeCall {
 					<-sub.arrived
+					synctest.Wait()
 					org.SetDelay(delay)
 				}
 				ended := func() bool { return l.st.stamp(rowID) != nil }
@@ -1246,10 +1255,11 @@ func TestQuiesce_RunnerWithProxyFenceIsQuiesced(t *testing.T) {
 	}
 }
 
-// A run still RUNNING reaches quiesce when a kept lease ends and its first pass back runs (the run is
-// read before that end writes its state), not at a person's bring-back, which moves the run to STOPPED
-// first. Such a run is quiesced as before the cut existed: a runner's is not quiescable, a hosted one has
-// its proxy stopped directly, and cutAgent, which refuses a run that is not over, is never asked.
+// A run still RUNNING is quiesced as before the cut existed: a runner's is not quiescable, a hosted one
+// has its proxy stopped directly, and cutAgent, which refuses a run that is not over, is never asked. No
+// caller reaches this arm today: each writes the terminal state before it quiesces (a kept lease end,
+// internal/api/run_lease.go:460 before :472, and the idle stop, cmd/wardynd/adapters.go:870). Only
+// fixtures get here; the arm stays so a caller that did not would still be safe.
 func TestQuiesce_RunningRunAtAKeptLeaseEndKeepsTheLiveQuiesce(t *testing.T) {
 	l := newContainLab(t, true)
 	id := l.connect(true)
@@ -1447,7 +1457,7 @@ func (d *containDrive) queued() int {
 	defer c.mu.Unlock()
 	n := 0
 	for _, r := range c.stopFIFO {
-		if r.ID == d.id {
+		if r.run.ID == d.id {
 			n++
 		}
 	}
@@ -1469,10 +1479,10 @@ func (d *containDrive) step(ev string, i int, prev, m containModel) {
 		srv.containRelease(d.id, containPoolCut, d.cutGen)
 	case "P":
 		got, ok := srv.popStop()
-		if !ok || got.ID != d.id {
+		if !ok || got.run.ID != d.id {
 			d.fail(4, "the stop pool had nothing to take for the run", i)
 		}
-		d.stopGen = srv.containGenOf(d.id)
+		d.stopGen = got.gen
 		d.pops++
 	case "S":
 		srv.containRelease(d.id, containPoolStop, d.stopGen)
@@ -1573,6 +1583,8 @@ func boolInt(b bool) int {
 // Every order, for one run, of the cut item's release, the abandoned call's return in each answer class,
 // post's d1Due answer (true and false), the stop hand-off and the stop item's release, and a new tick's
 // claim. No clocks or goroutine races: the steps are called in the chosen order.
+// The on-time path is not enumerated here: an answer that arrives while containCallDone is still pending,
+// then the item releasing or calling enqueueStop directly. It was walked through by hand.
 func TestContain_InFlightClaimInterleavings(t *testing.T) {
 	total := 0
 	for _, cls := range containClasses {
@@ -1659,10 +1671,14 @@ func TestContain_NewCutClaimWaitsForTheStopItem(t *testing.T) {
 	if _, got := srv.containClaim(id, containPoolCut); got {
 		t.Fatal("a new cut claim succeeded while the stop pool held the run: two holders")
 	}
-	if got, ok := srv.popStop(); !ok || got.ID != id {
-		t.Fatalf("popStop = %v, %v; want the run", got.ID, ok)
+	job, ok := srv.popStop()
+	if !ok || job.run.ID != id {
+		t.Fatalf("popStop = %v, %v; want the run", job.run.ID, ok)
 	}
-	stopGen := srv.containGenOf(id)
+	stopGen := job.gen
+	if now := srv.containGenOf(id); stopGen != now {
+		t.Errorf("the FIFO carried generation %d, but the claim now is %d", stopGen, now)
+	}
 	if _, got := srv.containClaim(id, containPoolCut); got {
 		t.Fatal("a new cut claim succeeded while the stop item was still running")
 	}
@@ -1677,10 +1693,11 @@ func TestContain_NewCutClaimWaitsForTheStopItem(t *testing.T) {
 // the generation of the claim it was taken against.
 func TestContain_OldCutReleaseDoesNotEndANewClaim(t *testing.T) {
 	srv, id, oldGen := containHandedOffRun(t)
-	if _, ok := srv.popStop(); !ok {
+	job, ok := srv.popStop()
+	if !ok {
 		t.Fatal("nothing in the stop FIFO")
 	}
-	srv.containRelease(id, containPoolStop, srv.containGenOf(id))
+	srv.containRelease(id, containPoolStop, job.gen)
 	if srv.containBusy(id) {
 		t.Fatal("the run stayed claimed after the stop item's release")
 	}
@@ -1750,5 +1767,91 @@ func TestBringComputerFolderBack_AFencingRunnerRunIsCutAndItsPassSent(t *testing
 	}
 	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
 		t.Errorf("README.md = %q: the changes made before the request did not come back", b)
+	}
+}
+
+// A failure stamp comes from the store's clock and never from the server's: with the server's clock two
+// minutes ahead or behind (set after the loop started), the hung cut is stamped at the end of its call
+// phase and the streak the stop path sees is the same. Caught by: stamping from the server's clock.
+func TestContain_StreakIgnoresTheServerClock(t *testing.T) {
+	for name, offset := range map[string]time.Duration{"clock ahead": 2 * time.Minute, "clock behind": -2 * time.Minute} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newContainLab(t, true)
+				var skew atomic.Int64
+				l.srv.cfg.Now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+				id := l.st.add(dueRow(nil, 10*time.Minute))
+				l.rn.setHook(func(ctx context.Context, _ string) error {
+					<-ctx.Done()
+					return ctx.Err()
+				})
+				start := time.Now()
+				l.start()
+				skew.Store(int64(offset))
+				time.Sleep(containItem)
+				if stamp := l.st.stamp(id); stamp == nil {
+					t.Fatal("the hung cut left no stamp")
+				} else if stamp.Sub(start) != containCall {
+					t.Errorf("stamp written at +%v, want the end of the %v call phase", stamp.Sub(start), containCall)
+				}
+				time.Sleep(containTick + containItem)
+				l.stop()
+				calls := l.d1Calls()
+				if len(calls) < 2 {
+					t.Fatalf("d1Due calls = %d, want 2", len(calls))
+				}
+				if first, second := calls[0], calls[1]; first.at.Sub(*first.stamp) >= containTick || second.at.Sub(*second.stamp) < containTick {
+					t.Errorf("streak at the calls = %v then %v; want under tau, then at least tau", first.at.Sub(*first.stamp), second.at.Sub(*second.stamp))
+				}
+			})
+		})
+	}
+}
+
+// A pre phase that outlasts its budget, or fails, is not a failed cut: nothing is stamped or audited,
+// d1Due is not asked, the cut is not made, the claim is released, and the next tick takes the run again.
+// Caught by: routing a pre-phase error or timeout to the failure path.
+func TestContain_PrePhaseFailureIsNotACutFailure(t *testing.T) {
+	for name, pre := range map[string]func(ctx context.Context) error{
+		"slow read":  func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
+		"read error": func(context.Context) error { return errContainBoom },
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newContainLab(t, true)
+				row := dueRow(nil, time.Minute)
+				id := l.st.add(row)
+				var reads atomic.Int32
+				l.srv.contain.preCutFn = func(ctx context.Context, _ types.AgentRun) error {
+					reads.Add(1)
+					return pre(ctx)
+				}
+				l.start()
+				time.Sleep(containPre + time.Second)
+				if got := reads.Load(); got != 1 {
+					t.Errorf("pre reads after the first item = %d, want 1", got)
+				}
+				if l.busy(id) {
+					t.Error("the run stayed claimed after its pre phase failed")
+				}
+				time.Sleep(containTick + containPre)
+				l.stop()
+				if got := reads.Load(); got < 2 {
+					t.Errorf("pre reads = %d, want the next tick to take the run again", got)
+				}
+				if n := l.st.stampWrites(); n != 0 || l.st.stamp(id) != nil {
+					t.Errorf("failure stamps written = %d (stamp %v), want none", n, l.st.stamp(id))
+				}
+				if failures, successes := failuresAndSuccesses(l.rec); failures+successes != 0 {
+					t.Errorf("audit rows = %d failures, %d successes, want none", failures, successes)
+				}
+				if n := len(l.d1Calls()); n != 0 {
+					t.Errorf("d1Due calls = %d, want none", n)
+				}
+				if n := l.rn.callsTo(row.SandboxRef); n != 0 {
+					t.Errorf("cut calls = %d, want none: the cut waits for its pre phase", n)
+				}
+			})
+		})
 	}
 }
