@@ -797,6 +797,7 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 	}
 	pass, err := sub.SyncFolder(ctx, runnerwire.SyncFolderArgs{
 		RunID: run.ID, Path: folder.Path, RemoteDir: folder.RemoteDir, Pull: pull, Deny: s.cfg.SyncDeny,
+		DeadlineUnixMs: passDeadlineMs(ctx, pull),
 	})
 	if err != nil {
 		// A pass that ended before its stream was taken has its own account: settled, as any pass the runner answered for.
@@ -831,6 +832,19 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		return runnerwire.FolderPass{}, cut, !cut && runnerReplied(err), fmt.Errorf("the runner's sync did not finish: %w", err)
 	}
 	return res, false, true, nil
+}
+
+// passDeadlineMs is when the runner must end the pass: the pass ctx's deadline, less the account
+// window for a pass back (the runner's account then still arrives in time); 0 without a deadline.
+func passDeadlineMs(ctx context.Context, pull bool) int64 {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	if pull {
+		dl = dl.Add(-computerFolderAccountTime)
+	}
+	return dl.UnixMilli()
 }
 
 // runnerReplied is an error the runner answered with (a typed refusal): the call was answered, not lost.

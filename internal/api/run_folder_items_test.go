@@ -270,3 +270,40 @@ func TestComputerFolderPass_PassEndedIsSettled(t *testing.T) {
 		t.Errorf("the pass = %+v, want the runner's account %+v", got, account)
 	}
 }
+
+// The server sends each pass its deadline: a pass back's less the window the runner's account needs to arrive
+// in, a seed's as it is, and none without one. A pass back that read the seed's rule would leave the runner no
+// time to answer.
+func TestFolderPass_SendsItsDeadline(t *testing.T) {
+	dl := time.Now().Add(time.Hour)
+	for _, tc := range []struct {
+		name     string
+		pull     bool
+		deadline bool
+		want     int64
+	}{
+		{"back", true, true, dl.Add(-computerFolderAccountTime).UnixMilli()},
+		{"seed", false, true, dl.UnixMilli()},
+		{"back without one", true, false, 0},
+		{"seed without one", false, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, cs, run, r := scriptedFolderFixture(t, runnerwire.FolderPass{})
+			ctx := context.Background()
+			if tc.deadline {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, dl)
+				defer cancel()
+			}
+			if _, _, settled, err := s.computerFolderPass(ctx, ctx, run, *cs.folder, tc.pull, passGuard{}); err != nil || !settled {
+				t.Fatalf("computerFolderPass: settled %v, err %v", settled, err)
+			}
+			if got := r.args(); got.DeadlineUnixMs != tc.want || got.Pull != tc.pull {
+				t.Errorf("the runner was sent pull %v, deadline %d; want pull %v, deadline %d", got.Pull, got.DeadlineUnixMs, tc.pull, tc.want)
+			}
+		})
+	}
+	if computerFolderAccountTime != 5*time.Second {
+		t.Errorf("computerFolderAccountTime = %v: this pin names 5 s", computerFolderAccountTime)
+	}
+}
