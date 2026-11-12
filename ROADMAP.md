@@ -79,7 +79,7 @@ Not built:
 | High-availability completion | Open blockers a second replica still hits, chiefly that a registered runner holds its session with one replica; see [High availability](docs/operations/high-availability.md) |
 | Kubernetes parity with Docker | Open gaps listed in [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md) "Known gaps" |
 | CC3/Vault (Kata) packaged and GA | Experimental |
-| Signed action receipts | Not built; the audit hash chain ships (migration `0047`) |
+| Signed action receipts | Shipped in `v0.10.0-rc.14`: checkpoints and receipts signed with the Ed25519 boot key `wardyn-audit-receipt-key`, checked offline with `wardyn audit verify` against keys pinned off the control plane ([OPERATIONS.md](docs/OPERATIONS.md#signed-checkpoints-and-receipts)). The key is held by the control plane. |
 | Separation of duty on the control plane (super-admin tier) | Not built; `security_admin` separates governance authority ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
 
 ### Git-token ref confinement

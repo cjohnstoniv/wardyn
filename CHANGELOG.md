@@ -21,6 +21,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A live edit or revive that loses its database lock while it is replacing the proxy now stops instead of finishing the replace, and a headless run that is not on a laptop runner then ends.
 - A hosted run whose network could not be cut off when it ended is now stopped, instead of kept for its folder's copy back; changes not yet copied back are lost.
 - On a runner, a sandbox whose copy back was cut short after its agent was stopped and its network cut is now kept, so the copy back can resume.
+- Docs: corrected the default end of Interactive runs, the main-drive limit on some drivers, the status of signed checkpoints and receipts, the image-builder fallback warning, and the gateway presets.
 
 ### Fixed
 
