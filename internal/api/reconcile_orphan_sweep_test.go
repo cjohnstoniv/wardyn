@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -645,6 +646,59 @@ func TestOrphanSweep_ASlowFailureRowHoldsTheTickNoMoreThanOneTeardownBudgetPastT
 	if end.Sub(returned) > slack || took > bound+runTeardownBudget+slack {
 		t.Errorf("the sweep took %v and returned %v after the row's write; want it back once the write is, within %v",
 			took, end.Sub(returned), bound+runTeardownBudget+slack)
+	}
+}
+
+// ctxWaitingLocker is a Locker whose TryLock never takes the lock: it waits until its context ends, as a lock
+// connection that never answers does, and notes that context's deadline. Lock is the wrapped Locker's.
+type ctxWaitingLocker struct {
+	db.Locker
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (l *ctxWaitingLocker) TryLock(ctx context.Context, _ db.LockKey) (context.Context, func(), bool, error) {
+	dl, _ := ctx.Deadline()
+	l.mu.Lock()
+	l.deadlines = append(l.deadlines, dl)
+	l.mu.Unlock()
+	<-ctx.Done()
+	return ctx, nil, false, ctx.Err()
+}
+
+// The run's lock is taken inside the label sweep's bound: a lock whose acquisition never answers holds the sweep no
+// longer than that bound, and the run is left owed (no cut sent, not called an orphan, its ref kept) for the next
+// sweep. Catches: the lock taken on the caller's context, which holds the sweep past its bound for as long as that
+// context lasts.
+func TestOrphanSweep_ALockThatNeverAnswersEndsAtTheSweepsBound(t *testing.T) {
+	const bound, slack = 100 * time.Millisecond, time.Second
+	srv, st, rn, _ := keptSweepRig(t, 1, bound)
+	lk := &ctxWaitingLocker{Locker: db.NewLocalLocker()}
+	srv.locks.override = lk
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // only a lock taken outside the bound waits this out
+	defer cancel()
+	start := time.Now()
+	err := srv.sweepOrphanedSandboxes(ctx)
+	took := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took > bound+slack {
+		t.Errorf("the sweep took %v with a lock that never answers; want it back within the bound %v", took, bound)
+	}
+	lk.mu.Lock()
+	dls := append([]time.Time(nil), lk.deadlines...)
+	lk.mu.Unlock()
+	if len(dls) != 1 || dls[0].IsZero() || dls[0].After(start.Add(bound+slack)) {
+		t.Errorf("lock attempts with deadlines %v (sweep began %v); want one, ending within the bound %v", dls, start, bound)
+	}
+	r := st.runs[0]
+	if rn.cuts() != 0 || rn.verdicts[r.ID] || r.SandboxRef == "" || len(st.clearedRefs) != 0 {
+		t.Errorf("%d cuts, verdict %v, ref %q, refs cleared %v; want no cut, not an orphan, its ref kept", rn.cuts(), rn.verdicts[r.ID],
+			r.SandboxRef, st.clearedRefs)
+	}
+	if kept, err := srv.keepsSandboxForFolder(context.Background(), r); !kept || err != nil {
+		t.Errorf("still kept for its folder = %v, %v; want it owed", kept, err)
 	}
 }
 
