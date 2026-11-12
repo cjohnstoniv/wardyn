@@ -98,9 +98,9 @@ func (s PG) ListTerminalSandboxPage(ctx context.Context, after *TerminalSandboxC
 }
 
 // MarkRunFenced records that an ended run's agent was cut off every network: fenced_at is set once, and
-// only on a terminal run. It is written only after FenceProxy returned nil; a probe never counts.
+// only on a terminal run that still holds a sandbox. It is written only after FenceProxy returned nil; a probe never counts.
 func (s PG) MarkRunFenced(ctx context.Context, id uuid.UUID) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET fenced_at = now() WHERE id=$1 AND fenced_at IS NULL AND state = ANY($2)`,
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET fenced_at = now() WHERE id=$1 AND fenced_at IS NULL AND sandbox_ref <> '' AND state = ANY($2)`,
 		id, terminalRunStates); err != nil {
 		return fmt.Errorf("store: mark run fenced: %w", err)
 	}
@@ -113,13 +113,13 @@ func (s PG) MarkRunFenced(ctx context.Context, id uuid.UUID) error {
 // later of the run's due time, its last unobserved round and the process start), so a stamp left over
 // from before it never starts an ended run's streak: a kept-phase failure is recorded while the run is
 // still RUNNING, and nothing clears it at the end. It answers started when this call set the stamp to
-// now. A run that is not terminal has no row to update: started false, no error.
+// now. A run that is not terminal, or holds no sandbox, has no row to update: started false, no error.
 func (s PG) SetRunContainmentErrorSince(ctx context.Context, id uuid.UUID, msg string, now, since time.Time) (bool, error) {
 	var started bool
 	err := s.Pool.QueryRow(ctx, `
 		UPDATE agent_runs SET containment_error = $2,
 		       containment_error_at = CASE WHEN containment_error_at IS NULL OR containment_error_at < $4 THEN $3 ELSE containment_error_at END
-		 WHERE id = $1 AND state = ANY($5)
+		 WHERE id = $1 AND sandbox_ref <> '' AND state = ANY($5)
 		RETURNING containment_error_at = $3`, id, msg, pgTime(now), pgTime(since), terminalRunStates).Scan(&started)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil

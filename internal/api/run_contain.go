@@ -71,17 +71,25 @@ func (a containAnswer) lateErr() error {
 // containEntry is one run in the in-flight set: the pool that has it, whether an item holds it, and how
 // many calls are still out for it.
 type containEntry struct {
+	gen   uint64 // the claim's generation: every claim of a run, even one right after another, has its own
 	pool  containPool
 	held  bool
 	calls int
 }
 
+// containJob is a cut item's work: the run and the claim it holds.
+type containJob struct {
+	run types.AgentRun
+	gen uint64
+}
+
 // containFlight is one call run through containCallWithin. Its fields are guarded by containState.mu.
 type containFlight struct {
 	run       types.AgentRun
-	counted   bool // the call is on its run's entry
-	abandoned bool // the worker moved on without the answer
-	done      bool // the call has returned
+	gen       uint64 // the generation of the claim the call was made under
+	counted   bool   // the call is on its run's entry
+	abandoned bool   // the worker moved on without the answer
+	done      bool   // the call has returned
 	ans       containAnswer
 	dueKnown  bool // post has made d1Due's answer
 	due       bool
@@ -93,12 +101,13 @@ type containState struct {
 	mu   sync.Mutex
 
 	inFlight   map[uuid.UUID]*containEntry // claimed runs, shared by the cut and stop pools
+	lastGen    uint64                      // the generation of the latest claim
 	unobserved map[uuid.UUID]time.Time     // run id -> when its sandbox was last not observed
 	seen       map[uuid.UUID]struct{}      // ids listed since the cursor last wrapped
 	started    time.Time                   // when this process started the loop
 	cursor     *store.TerminalSandboxCursor
 
-	cutQ       chan types.AgentRun
+	cutQ       chan containJob
 	stopFIFO   []types.AgentRun
 	stopQueued map[uuid.UUID]bool
 	stopWake   chan struct{}
@@ -114,7 +123,7 @@ func (c *containState) init() {
 		c.unobserved = map[uuid.UUID]time.Time{}
 		c.seen = map[uuid.UUID]struct{}{}
 		c.stopQueued = map[uuid.UUID]bool{}
-		c.cutQ = make(chan types.AgentRun, containQueueCap)
+		c.cutQ = make(chan containJob, containQueueCap)
 		c.stopWake = make(chan struct{}, 1)
 	})
 }
@@ -124,6 +133,10 @@ func (c *containState) init() {
 func (s *Server) startContainLoop() {
 	ctx := s.watcherBaseCtx()
 	if ctx == nil {
+		return
+	}
+	if _, ok := s.cfg.Store.(store.RunContainer); !ok {
+		slog.Error("wardynd: the containment loop is not running: the store cannot list ended runs")
 		return
 	}
 	c := &s.contain
@@ -221,13 +234,14 @@ func (s *Server) containVisit(rows []store.TerminalSandboxRow) {
 		if due, ok := containmentDue(run); !ok || due.After(now) {
 			continue
 		}
-		if !s.containClaim(row.ID, containPoolCut) {
+		gen, ok := s.containClaim(row.ID, containPoolCut)
+		if !ok {
 			continue
 		}
 		select {
-		case c.cutQ <- run:
+		case c.cutQ <- containJob{run: run, gen: gen}:
 		default:
-			s.containRelease(row.ID)
+			s.containRelease(row.ID, containPoolCut, gen)
 		}
 	}
 }
@@ -250,38 +264,64 @@ func (s *Server) containBusy(id uuid.UUID) bool {
 	return busy
 }
 
-// containClaim claims id for pool; false when it is already claimed.
-func (s *Server) containClaim(id uuid.UUID, pool containPool) bool {
+// containClaim claims id for pool and answers the claim's generation, which its holder releases with;
+// false when the run is already claimed.
+func (s *Server) containClaim(id uuid.UUID, pool containPool) (uint64, bool) {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, busy := c.inFlight[id]; busy {
-		return false
+		return 0, false
 	}
-	c.inFlight[id] = &containEntry{pool: pool, held: true}
-	return true
+	c.lastGen++
+	c.inFlight[id] = &containEntry{gen: c.lastGen, pool: pool, held: true}
+	return c.lastGen, true
 }
 
-// containRelease ends an item's hold on id. The entry goes once no item holds it and no call is out.
-func (s *Server) containRelease(id uuid.UUID) {
+// containGenOf is the generation of the claim now on id, 0 when there is none.
+func (s *Server) containGenOf(id uuid.UUID) uint64 {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e := c.inFlight[id]; e != nil {
-		e.held = false
-		if e.calls == 0 {
-			delete(c.inFlight, id)
+		return e.gen
+	}
+	return 0
+}
+
+// containRelease ends a hold on id. It acts only on the claim of generation gen, and only while pool still
+// owns it: a cut item whose run was handed to the stop pool meanwhile (by the answer of its abandoned call)
+// must not drop the stop pool's claim, and one whose claim has since ended must not drop a newer claim of the
+// same run. The entry goes once no item holds it and no call is out. A release that does not act is logged
+// with both generations.
+func (s *Server) containRelease(id uuid.UUID, pool containPool, gen uint64) {
+	c := &s.contain
+	c.init()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.inFlight[id]
+	if e == nil || e.gen != gen || e.pool != pool {
+		var now uint64
+		if e != nil {
+			now = e.gen
 		}
+		slog.Warn("wardynd: a containment release did not act: its claim is not the run's now",
+			slog.String("run_id", id.String()), slog.Uint64("release_gen", gen), slog.Uint64("claim_gen", now), slog.Bool("pool_matches", e != nil && e.pool == pool))
+		return
+	}
+	e.held = false
+	if e.calls == 0 {
+		delete(c.inFlight, id)
 	}
 }
 
 // containHandOffLocked moves a cut run to the stop pool with no moment unclaimed: a run held by a cut
 // item, or kept for that item's unanswered call, becomes the stop item's. False when it is neither.
-func (c *containState) containHandOffLocked(id uuid.UUID) bool {
+func (c *containState) containHandOffLocked(id uuid.UUID, gen uint64) bool {
 	e := c.inFlight[id]
-	if e == nil || e.pool != containPoolCut || (!e.held && e.calls == 0) {
+	if e == nil || e.gen != gen || e.pool != containPoolCut || (!e.held && e.calls == 0) {
 		return false
 	}
 	e.pool, e.held = containPoolStop, true
@@ -290,18 +330,18 @@ func (c *containState) containHandOffLocked(id uuid.UUID) bool {
 
 // containHandOff is the hand-off from the cut pool to the stop pool; true when this call made it, in
 // which case the caller no longer holds the claim and must not release it.
-func (s *Server) containHandOff(id uuid.UUID) bool {
+func (s *Server) containHandOff(id uuid.UUID, gen uint64) bool {
 	c := &s.contain
 	c.init()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.containHandOffLocked(id)
+	return c.containHandOffLocked(id, gen)
 }
 
 // enqueueStop hands the run to the stop pool and adds it to the stop FIFO, once. A cut item calls it while
 // it still holds its claim, and releases only when it answered false.
-func (s *Server) enqueueStop(run types.AgentRun) bool {
-	if !s.containHandOff(run.ID) {
+func (s *Server) enqueueStop(run types.AgentRun, gen uint64) bool {
+	if !s.containHandOff(run.ID, gen) {
 		return false
 	}
 	s.pushStop(run)
@@ -367,7 +407,7 @@ func (s *Server) containStopWorker(ctx context.Context) {
 
 // containStopItem runs one stop item. The claim is released when it ends, a panic included.
 func (s *Server) containStopItem(ctx context.Context, run types.AgentRun) {
-	defer s.containRelease(run.ID)
+	defer s.containRelease(run.ID, containPoolStop, s.containGenOf(run.ID))
 	defer containRecover(run.ID)
 	s.runStopItem(ctx, run)
 }
@@ -386,8 +426,8 @@ func (s *Server) containCutWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case run := <-q:
-			s.containCutItem(ctx, run)
+		case job := <-q:
+			s.containCutItem(ctx, job.run, job.gen)
 		}
 	}
 }
@@ -405,13 +445,13 @@ func (s *Server) containPhases() (call, post time.Duration) {
 }
 
 // containCutItem cuts one ended run's agent. The call and the writes never share a deadline: a hung cut
-// must still stamp its failure, or D1 never sees a streak. Each phase runs on its own ctx made from the
+// must still stamp its failure, or the stop path never sees a streak. Each phase runs on its own ctx made from the
 // parent without its cancel, so a shutdown does not cut a phase short.
-func (s *Server) containCutItem(ctx context.Context, run types.AgentRun) {
+func (s *Server) containCutItem(ctx context.Context, run types.AgentRun, gen uint64) {
 	handed := false
 	defer func() {
 		if !handed {
-			s.containRelease(run.ID)
+			s.containRelease(run.ID, containPoolCut, gen)
 		}
 	}()
 	defer containRecover(run.ID)
@@ -419,7 +459,7 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun) {
 	base := context.WithoutCancel(ctx)
 	callCtx, cancelCall := context.WithTimeout(base, callLen)
 	defer cancelCall()
-	ans, flight := s.containCallWithin(callCtx, run, func() containAnswer {
+	ans, flight := s.containCallWithin(callCtx, run, gen, func() containAnswer {
 		preErr := s.containPreCut(callCtx, run)
 		if err := callCtx.Err(); err != nil {
 			return containAnswer{preErr: preErr, err: fmt.Errorf("the call phase ended before the cut: %w", err)}
@@ -438,7 +478,7 @@ func (s *Server) containCutItem(ctx context.Context, run types.AgentRun) {
 	case flight != nil:
 		handed = s.containDueKnown(flight, due)
 	case due:
-		handed = s.enqueueStop(run)
+		handed = s.enqueueStop(run, gen)
 	}
 }
 
@@ -456,12 +496,12 @@ func (s *Server) containD1Due(ctx context.Context, run types.AgentRun, ans conta
 // item's answer is errContainCallAbandoned. The run stays claimed until the call returns; its answer then
 // goes through the late rule (containCallDone). The returned flight is non-nil only for an abandoned call.
 // An abandoned call still counts: its stop waits for the answer, never the worker.
-func (s *Server) containCallWithin(ctx context.Context, run types.AgentRun, work func() containAnswer) (containAnswer, *containFlight) {
+func (s *Server) containCallWithin(ctx context.Context, run types.AgentRun, gen uint64, work func() containAnswer) (containAnswer, *containFlight) {
 	c := &s.contain
 	c.init()
-	f := &containFlight{run: run}
+	f := &containFlight{run: run, gen: gen}
 	c.mu.Lock()
-	if e := c.inFlight[run.ID]; e != nil {
+	if e := c.inFlight[run.ID]; e != nil && e.gen == gen {
 		e.calls++
 		f.counted = true
 	}
@@ -510,7 +550,7 @@ func (s *Server) containCallDone(f *containFlight, ans containAnswer) {
 		push = c.containLateStopLocked(f)
 	}
 	if f.counted {
-		if e := c.inFlight[f.run.ID]; e != nil {
+		if e := c.inFlight[f.run.ID]; e != nil && e.gen == f.gen {
 			e.calls--
 			if e.calls == 0 && !e.held {
 				delete(c.inFlight, f.run.ID)
@@ -552,7 +592,7 @@ func (c *containState) containLateStopLocked(f *containFlight) bool {
 	case err == nil && (f.ans.kind == cutFenced || f.ans.kind == cutProxyStopped):
 		return false
 	}
-	return c.containHandOffLocked(f.run.ID)
+	return c.containHandOffLocked(f.run.ID, f.gen)
 }
 
 // containOutcome records the call's outcome on ctx, the post phase's: a cut that held clears the run's

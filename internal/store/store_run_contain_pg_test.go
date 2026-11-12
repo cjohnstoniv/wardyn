@@ -55,7 +55,9 @@ func TestPG_SetRunContainmentErrorSince(t *testing.T) {
 		"at since":    {types.RunKilled, &since, false, &since},
 		"running row": {types.RunRunning, &older, false, &older},
 	} {
-		r := persistRun(t, ctx, pool, newRun(tc.state))
+		run := newRun(tc.state)
+		run.SandboxRef = "ref-" + run.ID.String()
+		r := persistRun(t, ctx, pool, run)
 		stamp(r.ID, tc.stamp)
 		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", now, since)
 		if err != nil || started != tc.wantStarted {
@@ -88,12 +90,17 @@ func TestPG_MarkRunFencedOnlyTerminal(t *testing.T) {
 		}
 		return at
 	}
-	live := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	withRef := func(state types.RunState) types.AgentRun {
+		run := newRun(state)
+		run.SandboxRef = "ref-" + run.ID.String()
+		return run
+	}
+	live := persistRun(t, ctx, pool, withRef(types.RunRunning))
 	if err := pg.MarkRunFenced(ctx, live.ID); err != nil || fencedAt(live.ID) != nil {
 		t.Errorf("a RUNNING run: err %v, fenced_at %v; want nil, nil", err, fencedAt(live.ID))
 	}
 	for _, st := range []types.RunState{types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived} {
-		r := persistRun(t, ctx, pool, newRun(st))
+		r := persistRun(t, ctx, pool, withRef(st))
 		if err := pg.MarkRunFenced(ctx, r.ID); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
@@ -107,6 +114,39 @@ func TestPG_MarkRunFencedOnlyTerminal(t *testing.T) {
 		}
 		if again := fencedAt(r.ID); again == nil || !again.Equal(*first) {
 			t.Errorf("%s: fenced_at moved from %v to %v", st, first, again)
+		}
+	}
+}
+
+// TestPG_ContainWritesSkipARunWithNoSandbox: an ended run whose sandbox_ref is empty is neither stamped
+// with a containment error nor marked fenced. Proven red by dropping the sandbox_ref condition from
+// either statement.
+func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for _, state := range []types.RunState{types.RunKilled, types.RunFailed} {
+		run := newRun(state)
+		run.SandboxRef = "ref-" + run.ID.String()
+		r := persistRun(t, ctx, pool, run)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = '' WHERE id = $1`, r.ID); err != nil {
+			t.Fatalf("clear the ref: %v", err)
+		}
+		started, err := pg.SetRunContainmentErrorSince(ctx, r.ID, "boom", now, now.Add(-time.Minute))
+		if err != nil || started {
+			t.Errorf("%s: SetRunContainmentErrorSince = %v, %v; want false, nil", state, started, err)
+		}
+		if err := pg.MarkRunFenced(ctx, r.ID); err != nil {
+			t.Errorf("%s: MarkRunFenced: %v", state, err)
+		}
+		var errAt, fencedAt *time.Time
+		var msg string
+		if err := pool.QueryRow(ctx, `SELECT containment_error_at, fenced_at, containment_error FROM agent_runs WHERE id = $1`, r.ID).Scan(&errAt, &fencedAt, &msg); err != nil {
+			t.Fatalf("read the row: %v", err)
+		}
+		if errAt != nil || fencedAt != nil || msg != "" {
+			t.Errorf("%s: containment_error_at %v, fenced_at %v, containment_error %q; want none of them written", state, errAt, fencedAt, msg)
 		}
 	}
 }

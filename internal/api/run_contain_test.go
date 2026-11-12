@@ -8,6 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -168,6 +172,7 @@ type containRunner struct {
 	active, peak int
 	perRef       map[string]int
 	twoAtOnce    bool
+	statusReads  int
 }
 
 func (r *containRunner) Name() string {
@@ -222,6 +227,7 @@ func (r *containRunner) StopProxy(ctx context.Context, ref string) error {
 func (r *containRunner) Status(context.Context, string) (runner.Status, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.statusReads++
 	return runner.Status{State: r.status}, nil
 }
 
@@ -523,8 +529,8 @@ func TestContain_ProxyStoppedIsRecutNextRound(t *testing.T) {
 	})
 }
 
-// An agent that exited but is still present is cut: no probe stands in for the fence. The runner has no
-// Status, so a probe would panic.
+// An agent that exited but is still present is cut: no probe stands in for the fence. The runner counts
+// its Status reads, and there are none.
 func TestContain_ExitedDockerAgentIsStillCut(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newContainLab(t, true)
@@ -536,6 +542,9 @@ func TestContain_ExitedDockerAgentIsStillCut(t *testing.T) {
 		l.stop()
 		if fences, _, _ := l.rn.counts(); fences != 1 || l.st.row(id).FencedAt == nil {
 			t.Errorf("fences = %d, fenced = %v; want one fence recorded", fences, l.st.row(id).FencedAt != nil)
+		}
+		if l.rn.statusReads != 0 {
+			t.Errorf("status reads = %d, want none: no probe stands in for the fence", l.rn.statusReads)
 		}
 	})
 }
@@ -577,7 +586,8 @@ func TestContain_StopPoolRunIsNotDispatched(t *testing.T) {
 		l := newContainLab(t, true)
 		row := dueRow(nil, time.Minute)
 		l.st.add(row)
-		if !l.srv.containClaim(row.ID, containPoolStop) {
+		gen, ok := l.srv.containClaim(row.ID, containPoolStop)
+		if !ok {
 			t.Fatal("the stop pool could not claim the run")
 		}
 		l.start()
@@ -585,7 +595,7 @@ func TestContain_StopPoolRunIsNotDispatched(t *testing.T) {
 		if fences, _, _ := l.rn.counts(); fences != 0 {
 			t.Errorf("fences = %d while the stop pool held the run, want 0", fences)
 		}
-		l.srv.containRelease(row.ID)
+		l.srv.containRelease(row.ID, containPoolStop, gen)
 		time.Sleep(containTick)
 		l.stop()
 		if fences, _, _ := l.rn.counts(); fences != 1 {
@@ -594,15 +604,16 @@ func TestContain_StopPoolRunIsNotDispatched(t *testing.T) {
 	})
 }
 
-// One substrate hangs to the call deadline; the other three runs are cut at once, not after it.
+// One substrate hangs to the call deadline; the other three runs are cut at once, not after it. The hung run
+// is the newest, so it is dispatched first: with one worker the others would wait out its call phase.
 func TestContain_HungCallCostsOneWorker(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := newContainLab(t, true)
-		hung := dueRow(nil, 10*time.Minute)
+		hung := dueRow(nil, time.Minute)
 		l.st.add(hung)
 		var others []store.TerminalSandboxRow
 		for i := range 3 {
-			r := dueRow(nil, time.Duration(i)*time.Minute)
+			r := dueRow(nil, 10*time.Minute+time.Duration(i)*time.Minute)
 			others = append(others, r)
 			l.st.add(r)
 		}
@@ -618,8 +629,9 @@ func TestContain_HungCallCostsOneWorker(t *testing.T) {
 		time.Sleep(containItem)
 		l.stop()
 		for _, r := range others {
-			if at, ok := l.st.fenceAt[r.ID]; !ok || at.Sub(start) > containItem {
-				t.Errorf("run %s fenced at +%v (recorded %v), want within %v", r.ID, at.Sub(start), ok, containItem)
+			at, ok := l.st.fenceAt[r.ID]
+			if !ok || at.Sub(start) >= containCall {
+				t.Errorf("run %s fenced at +%v (recorded %v), want before the hung call's phase (%v) ends", r.ID, at.Sub(start), ok, containCall)
 			}
 		}
 	})
@@ -853,9 +865,10 @@ func TestContain_PanickingItemReleasesItsClaim(t *testing.T) {
 	})
 }
 
-// A cut that ignores its ctx and panics after the item moved on frees the claim at the panic, and hands
-// nothing to the stop pool even with d1Due true.
+// A cut that ignores its ctx and panics after the item moved on frees the claim at the panic, hands
+// nothing to the stop pool even with d1Due true, and logs an error naming the run.
 func TestContain_PanicAfterAbandonReleasesItsClaim(t *testing.T) {
+	logs := captureSlog(t)
 	synctest.Test(t, func(t *testing.T) {
 		l := newContainLab(t, true)
 		l.d1Ask = func(n int) bool { return n == 1 }
@@ -882,6 +895,13 @@ func TestContain_PanicAfterAbandonReleasesItsClaim(t *testing.T) {
 		l.stop()
 		if got := l.rn.callsTo(row.SandboxRef); got < 2 {
 			t.Errorf("cut calls = %d, want the run dispatched again", got)
+		}
+		var named bool
+		for _, line := range strings.Split(logs.String(), "\n") {
+			named = named || (strings.Contains(line, "level=ERROR") && strings.Contains(line, "a containment cut panicked") && strings.Contains(line, "run_id="+row.ID.String()))
+		}
+		if !named {
+			t.Errorf("log = %q, want an error line for the panic naming run %s", logs.String(), row.ID)
 		}
 	})
 }
@@ -1032,24 +1052,25 @@ func TestContain_AbandonedCallLateAnswerDecidesTheStop(t *testing.T) {
 }
 
 // containAttach connects id's endpoint on srv to a served runner backed by sub over a loopback whose org
-// end the test can delay, and waits for its capabilities.
-func containAttach(t *testing.T, srv *Server, id uuid.UUID, sub *containHeldSub) *runnerwire.LoopConn {
+// end the test can delay, and waits for its capabilities. The closer ends the link and the served runner.
+func containAttach(t *testing.T, srv *Server, id uuid.UUID, sub *containHeldSub) (*runnerwire.LoopConn, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	ep := srv.runnerEndpoint(id)
 	org, run := runnerwire.Loopback()
 	peer := ep.link.Attach(ctx, org)
 	served := runnertest.Serve(ctx, run, id.String(), sub)
-	t.Cleanup(func() { peer.Close(); served.Peer.Close() })
+	closer := func() { cancel(); peer.Close(); served.Peer.Close() }
 	if err := served.PublishCaps(ctx, placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192}, nil, "test"); err != nil {
+		closer()
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		if _, ok := ep.sub.Caps(); ok {
-			return org
+			return org, closer
 		}
 		if time.Now().After(deadline) {
+			closer()
 			t.Fatal("the runner's caps never arrived")
 		}
 	}
@@ -1081,47 +1102,50 @@ func TestContain_StalledRunnerWriteFreesTheWorker(t *testing.T) {
 	const callLen, postLen, delay = 150 * time.Millisecond, 150 * time.Millisecond, 500 * time.Millisecond
 	for name, delayBeforeCall := range map[string]bool{"call write stalled": true, "reset write stalled": false} {
 		t.Run(name, func(t *testing.T) {
-			l := newContainLab(t, false)
-			l.srv.contain.callPhase, l.srv.contain.postPhase = callLen, postLen
-			id := uuid.New()
-			sub := &containHeldSub{Fake: runnertest.NewFake(), arrived: make(chan struct{}, 1), release: make(chan struct{})}
-			org := containAttach(t, l.srv, id, sub)
-			defer close(sub.release)
-			l.srv.cfg.Runner = containRemoteRunner{sub: l.srv.runnerEndpoint(id).sub}
-			l.online.Store(true)
-			row := dueRow(&id, time.Minute)
-			row.SandboxRef = placement.RunnerRefPrefix(id.String()) + "sbx"
-			rowID := l.st.add(row)
-			if delayBeforeCall {
-				org.SetDelay(delay)
-			}
-			start := time.Now()
-			l.start()
-			if !delayBeforeCall {
-				<-sub.arrived
-				org.SetDelay(delay)
-			}
-			ended := func() bool { return l.st.stamp(rowID) != nil }
-			for deadline := time.Now().Add(5 * time.Second); !ended(); time.Sleep(5 * time.Millisecond) {
-				if time.Now().After(deadline) {
-					t.Fatal("the item never stamped its failure")
+			synctest.Test(t, func(t *testing.T) {
+				l := newContainLab(t, false)
+				l.srv.contain.callPhase, l.srv.contain.postPhase = callLen, postLen
+				id := uuid.New()
+				sub := &containHeldSub{Fake: runnertest.NewFake(), arrived: make(chan struct{}, 1), release: make(chan struct{})}
+				org, closeAttach := containAttach(t, l.srv, id, sub)
+				defer closeAttach()
+				defer close(sub.release)
+				defer l.stop()
+				l.srv.cfg.Runner = containRemoteRunner{sub: l.srv.runnerEndpoint(id).sub}
+				l.online.Store(true)
+				row := dueRow(&id, time.Minute)
+				row.SandboxRef = placement.RunnerRefPrefix(id.String()) + "sbx"
+				rowID := l.st.add(row)
+				if delayBeforeCall {
+					org.SetDelay(delay)
 				}
-			}
-			if took := time.Since(start); took > callLen+postLen+delay/2 {
-				t.Errorf("the item ended after %v, want within its phases (%v) and well before the stalled write (%v)", took, callLen+postLen, delay)
-			}
-			if !l.busy(rowID) {
-				t.Error("the run was released while its call was still out")
-			}
-			for deadline := time.Now().Add(10 * time.Second); l.busy(rowID); time.Sleep(10 * time.Millisecond) {
-				if time.Now().After(deadline) {
-					t.Fatal("the run stayed claimed after the stalled write")
+				start := time.Now()
+				l.start()
+				if !delayBeforeCall {
+					<-sub.arrived
+					org.SetDelay(delay)
 				}
-			}
-			if !l.srv.runnerEndpoint(id).link.Online() {
-				t.Error("the link read offline: a late deadline error on a connected runner was expected")
-			}
-			l.stop()
+				ended := func() bool { return l.st.stamp(rowID) != nil }
+				for deadline := time.Now().Add(5 * time.Second); !ended(); time.Sleep(5 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatal("the item never stamped its failure")
+					}
+				}
+				if took := time.Since(start); took > callLen+postLen+delay/2 {
+					t.Errorf("the item ended after %v, want within its phases (%v) and well before the stalled write (%v)", took, callLen+postLen, delay)
+				}
+				if !l.busy(rowID) {
+					t.Error("the run was released while its call was still out")
+				}
+				for deadline := time.Now().Add(10 * time.Second); l.busy(rowID); time.Sleep(10 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatal("the run stayed claimed after the stalled write")
+					}
+				}
+				if !l.srv.runnerEndpoint(id).link.Online() {
+					t.Error("the link read offline: a late deadline error on a connected runner was expected")
+				}
+			})
 		})
 	}
 }
@@ -1222,7 +1246,11 @@ func TestQuiesce_RunnerWithProxyFenceIsQuiesced(t *testing.T) {
 	}
 }
 
-func TestQuiesce_LiveBringBackKeepsRc19Quiesce(t *testing.T) {
+// A run still RUNNING reaches quiesce when a kept lease ends and its first pass back runs (the run is
+// read before that end writes its state), not at a person's bring-back, which moves the run to STOPPED
+// first. Such a run is quiesced as before the cut existed: a runner's is not quiescable, a hosted one has
+// its proxy stopped directly, and cutAgent, which refuses a run that is not over, is never asked.
+func TestQuiesce_RunningRunAtAKeptLeaseEndKeepsTheLiveQuiesce(t *testing.T) {
 	l := newContainLab(t, true)
 	id := l.connect(true)
 	live := quiesceRun(&id, types.RunRunning, "")
@@ -1276,5 +1304,451 @@ func TestQuiesce_RunnerKillTailErrorIsNotQuiescable(t *testing.T) {
 	var cannot notQuiescable
 	if err == nil || errors.As(err, &cannot) {
 		t.Errorf("a hosted run's kill error = %v, want it plain", err)
+	}
+}
+
+// containClass is one class of answer an abandoned cut call can return. owed says whether a stop that
+// d1Due called for is handed to the stop pool after it: not when the cut held, was not observed, or panicked.
+type containClass struct {
+	name   string
+	ans    containAnswer
+	panics bool
+	owed   bool
+}
+
+var containClasses = []containClass{
+	{"ordinary late error", containAnswer{err: errContainBoom}, false, true},
+	{"cut held", containAnswer{kind: cutFenced}, false, false},
+	{"unobserved", containAnswer{err: runner.ErrRunnerOffline}, false, false},
+	{"panic", containAnswer{}, true, false},
+	{"unsupported with no error", containAnswer{kind: cutUnsupported}, false, true},
+}
+
+// containModel is what one run's claim must look like after each step of an order, worked out from the
+// steps alone. The steps: C, the abandoned call returns; D, post's d1Due answer is known; R, the cut item's
+// own release, which the item runs unless D handed the run on (or, for an item that ended before post, with
+// no D); P, a stop worker takes the run from the stop FIFO; S, the stop item's release; N, a new tick claims
+// the run.
+type containModel struct {
+	handoff                              bool // a stop is owed once both C and D have happened
+	panicItem                            bool // the item ends by R and never reaches D
+	cDone, dDone, dHanded, rDone, popped bool
+	sDone, nTry                          bool
+	newHolds                             bool
+}
+
+func (m containModel) pushed() bool { return m.handoff && m.cDone && m.dDone }
+
+func (m containModel) cutHolds() bool  { return !m.rDone && !m.pushed() }
+func (m containModel) stopHolds() bool { return m.pushed() && !m.sDone }
+func (m containModel) callOut() bool   { return !m.cDone }
+func (m containModel) held() bool      { return m.cutHolds() || m.stopHolds() || m.newHolds }
+
+func (m containModel) enabled() []string {
+	var out []string
+	if !m.cDone {
+		out = append(out, "C")
+	}
+	if !m.panicItem && !m.dDone {
+		out = append(out, "D")
+	}
+	if (m.panicItem || m.dDone && !m.dHanded) && !m.rDone {
+		out = append(out, "R")
+	}
+	if m.pushed() && !m.popped {
+		out = append(out, "P")
+	}
+	if m.popped && !m.sDone {
+		out = append(out, "S")
+	}
+	if !m.nTry {
+		out = append(out, "N")
+	}
+	return out
+}
+
+func (m *containModel) apply(ev string) {
+	switch ev {
+	case "C":
+		m.cDone = true
+	case "D":
+		m.dHanded = m.handoff && m.cDone
+		m.dDone = true
+	case "R":
+		m.rDone = true
+	case "P":
+		m.popped = true
+	case "S":
+		m.sDone = true
+	case "N":
+		m.newHolds = !m.held() && !m.callOut()
+		m.nTry = true
+	}
+}
+
+// containOrders lists every order of the steps that can happen: a step is taken only when it is enabled,
+// and an order ends when only N is left (N is tried at every point, and once).
+func containOrders(m containModel) [][]string {
+	var out [][]string
+	var walk func(m containModel, path []string)
+	walk = func(m containModel, path []string) {
+		en := m.enabled()
+		if !slices.ContainsFunc(en, func(e string) bool { return e != "N" }) {
+			out = append(out, slices.Clone(path))
+			if !slices.Contains(en, "N") {
+				return
+			}
+		}
+		for _, e := range en {
+			m2 := m
+			m2.apply(e)
+			walk(m2, append(slices.Clone(path), e))
+		}
+	}
+	walk(m, nil)
+	return out
+}
+
+// containDrive is one run's real claim state being driven through an order of steps.
+type containDrive struct {
+	t       *testing.T
+	srv     *Server
+	id      uuid.UUID
+	f       *containFlight
+	gate    chan struct{}
+	due     bool
+	path    []string
+	cutGen  uint64
+	stopGen uint64
+	newGen  uint64
+	existed bool
+	pops    int
+}
+
+func (d *containDrive) fail(inv int, what string, step int) {
+	d.t.Helper()
+	d.t.Fatalf("invariant %d broken after %s: %s", inv, strings.Join(d.path[:step+1], " "), what)
+}
+
+// snapshot is the run's entry now, and whether there is one.
+func (d *containDrive) snapshot() (containEntry, bool) {
+	c := &d.srv.contain
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e := c.inFlight[d.id]; e != nil {
+		return *e, true
+	}
+	return containEntry{}, false
+}
+
+func (d *containDrive) queued() int {
+	c := &d.srv.contain
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, r := range c.stopFIFO {
+		if r.ID == d.id {
+			n++
+		}
+	}
+	return n
+}
+
+// step calls the real function for ev. prev and m are the model before and after the step.
+func (d *containDrive) step(ev string, i int, prev, m containModel) {
+	srv := d.srv
+	switch ev {
+	case "C":
+		close(d.gate)
+		srv.bg.Wait()
+	case "D":
+		if handed := srv.containDueKnown(d.f, d.due); handed != m.dHanded {
+			d.fail(4, fmt.Sprintf("post's answer handed the run on = %v, want %v", handed, m.dHanded), i)
+		}
+	case "R":
+		srv.containRelease(d.id, containPoolCut, d.cutGen)
+	case "P":
+		got, ok := srv.popStop()
+		if !ok || got.ID != d.id {
+			d.fail(4, "the stop pool had nothing to take for the run", i)
+		}
+		d.stopGen = srv.containGenOf(d.id)
+		d.pops++
+	case "S":
+		srv.containRelease(d.id, containPoolStop, d.stopGen)
+	case "N":
+		gen, got := srv.containClaim(d.id, containPoolCut)
+		d.newGen = gen
+		switch {
+		case got && prev.held():
+			d.fail(1, "a new claim succeeded while the run was held: two holders", i)
+		case got && prev.callOut():
+			d.fail(2, "a new claim succeeded while a call was out: unclaimed", i)
+		case !got && m.newHolds:
+			d.fail(2, "the run stayed claimed with nothing holding it and no call out", i)
+		}
+	}
+}
+
+// check asserts the four invariants against the real state after step i.
+func (d *containDrive) check(i int, m containModel) {
+	snap, exists := d.snapshot()
+	// 1: the entry names the single holder.
+	switch {
+	case m.newHolds:
+		if !exists {
+			d.fail(3, "the new claim's entry was deleted while held, by an earlier holder's release", i)
+		}
+		if snap.gen != d.newGen || snap.pool != containPoolCut || !snap.held {
+			d.fail(1, "the entry is not the new claim, held", i)
+		}
+	case m.stopHolds() && !(exists && snap.pool == containPoolStop && snap.held):
+		d.fail(1, "the stop pool's hold is not on the entry", i)
+	case m.cutHolds() && !(exists && snap.pool == containPoolCut && snap.held):
+		d.fail(1, "the cut item's hold is not on the entry", i)
+	}
+	// 2: never unclaimed while a call is out or a stop is owed.
+	if (m.callOut() || m.stopHolds()) && !exists {
+		d.fail(2, "unclaimed while a call is out or a stop is owed", i)
+	}
+	if !m.newHolds && m.callOut() && exists && snap.calls != 1 {
+		d.fail(2, "the call is not on the entry", i)
+	}
+	// 3: the entry goes only when unheld and no call is out.
+	if d.existed && !exists && (m.held() || m.callOut()) {
+		d.fail(3, "the entry was deleted while held or a call was out", i)
+	}
+	d.existed = exists
+	// 4: a stop owed by a true d1Due is handed off exactly once, and only dropped for held, unobserved or panic.
+	if got, want := d.queued()+d.pops, boolInt(m.pushed()); got != want {
+		d.fail(4, fmt.Sprintf("stop hand-offs = %d, want %d", got, want), i)
+	}
+}
+
+// containReplay drives the real functions through one order, by hand: the call is gated and its phase
+// ctx already ended, so it is abandoned at once and returns exactly when the order says.
+func containReplay(t *testing.T, cls containClass, due bool, m containModel, path []string) {
+	t.Helper()
+	l := newContainLab(t, true)
+	defer l.cancel()
+	srv := l.srv
+	id := uuid.New()
+	run := types.AgentRun{ID: id, State: types.RunKilled, SandboxRef: "sbx-" + id.String()}
+	cutGen, claimed := srv.containClaim(id, containPoolCut)
+	if !claimed {
+		t.Fatal("the first claim failed")
+	}
+	gate := make(chan struct{})
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, f := srv.containCallWithin(ended, run, cutGen, func() containAnswer {
+		<-gate
+		if cls.panics {
+			panic("late cut exploded")
+		}
+		return cls.ans
+	})
+	if f == nil {
+		t.Fatal("the gated call was not abandoned")
+	}
+	d := &containDrive{t: t, srv: srv, id: id, f: f, gate: gate, due: due, path: path, cutGen: cutGen, existed: true}
+	for i, ev := range path {
+		prev := m
+		m.apply(ev)
+		d.step(ev, i, prev, m)
+		d.check(i, m)
+	}
+	if _, exists := d.snapshot(); exists && !m.newHolds {
+		t.Fatalf("after %s the run is still claimed with nothing holding it: a leak", strings.Join(path, " "))
+	}
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// Every order, for one run, of the cut item's release, the abandoned call's return in each answer class,
+// post's d1Due answer (true and false), the stop hand-off and the stop item's release, and a new tick's
+// claim. No clocks or goroutine races: the steps are called in the chosen order.
+func TestContain_InFlightClaimInterleavings(t *testing.T) {
+	total := 0
+	for _, cls := range containClasses {
+		for _, sc := range []struct {
+			name      string
+			due       bool
+			panicItem bool
+		}{{"d1Due true", true, false}, {"d1Due false", false, false}, {"item ends before post", false, true}} {
+			m := containModel{handoff: cls.owed && sc.due && !sc.panicItem, panicItem: sc.panicItem}
+			orders := containOrders(m)
+			total += len(orders)
+			t.Run(cls.name+"/"+sc.name, func(t *testing.T) {
+				for _, path := range orders {
+					containReplay(t, cls, sc.due, m, path)
+				}
+			})
+		}
+	}
+	t.Logf("%d orders", total)
+}
+
+// containHandedOffRun is a run whose cut item holds it, with an abandoned call out and post's answer (a
+// true d1Due) already known to the flight, then the call's late error: the run is the stop pool's. It
+// answers the claim the cut item took.
+func containHandedOffRun(t *testing.T) (*Server, uuid.UUID, uint64) {
+	t.Helper()
+	l := newContainLab(t, true)
+	t.Cleanup(l.cancel)
+	srv := l.srv
+	id := uuid.New()
+	run := types.AgentRun{ID: id, State: types.RunKilled, SandboxRef: "sbx-" + id.String()}
+	cutGen, claimed := srv.containClaim(id, containPoolCut)
+	if !claimed {
+		t.Fatal("the first claim failed")
+	}
+	gate := make(chan struct{})
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, f := srv.containCallWithin(ended, run, cutGen, func() containAnswer {
+		<-gate
+		return containAnswer{err: errContainBoom}
+	})
+	if f == nil {
+		t.Fatal("the gated call was not abandoned")
+	}
+	srv.contain.mu.Lock()
+	f.dueKnown, f.due = true, true
+	srv.contain.mu.Unlock()
+	close(gate)
+	srv.bg.Wait()
+	if got := l.stopQueue(); got != 1 {
+		t.Fatalf("stop queue = %d after the late error, want 1", got)
+	}
+	return srv, id, cutGen
+}
+
+// The cut item's release, arriving after the late error handed the run to the stop pool, leaves the stop
+// pool's claim. Caught by: an unconditional release.
+func TestContain_CutReleaseAfterHandOffKeepsTheStopClaim(t *testing.T) {
+	srv, id, cutGen := containHandedOffRun(t)
+	srv.containRelease(id, containPoolCut, cutGen)
+	c := &srv.contain
+	c.mu.Lock()
+	e := c.inFlight[id]
+	var got containEntry
+	if e != nil {
+		got = *e
+	}
+	queued := len(c.stopFIFO)
+	c.mu.Unlock()
+	if e == nil || got.pool != containPoolStop || !got.held {
+		t.Errorf("entry after the cut item's release = %+v (present %v), want the stop pool's, held", got, e != nil)
+	}
+	if queued != 1 {
+		t.Errorf("stop FIFO = %d, want the run still queued once", queued)
+	}
+}
+
+// With the stop pool holding the run, a new cut tick cannot claim it, even after the cut item's release;
+// once the stop item releases, it can. Caught by: an unconditional release.
+func TestContain_NewCutClaimWaitsForTheStopItem(t *testing.T) {
+	srv, id, cutGen := containHandedOffRun(t)
+	srv.containRelease(id, containPoolCut, cutGen)
+	if _, got := srv.containClaim(id, containPoolCut); got {
+		t.Fatal("a new cut claim succeeded while the stop pool held the run: two holders")
+	}
+	if got, ok := srv.popStop(); !ok || got.ID != id {
+		t.Fatalf("popStop = %v, %v; want the run", got.ID, ok)
+	}
+	stopGen := srv.containGenOf(id)
+	if _, got := srv.containClaim(id, containPoolCut); got {
+		t.Fatal("a new cut claim succeeded while the stop item was still running")
+	}
+	srv.containRelease(id, containPoolStop, stopGen)
+	if _, got := srv.containClaim(id, containPoolCut); !got {
+		t.Error("the run stayed claimed after the stop item's release")
+	}
+}
+
+// The stop item finishes and removes the entry, a new tick claims the run, and only then does the old cut
+// item's deferred release run: the new claim survives it. Caught by: a release that checks the pool but not
+// the generation of the claim it was taken against.
+func TestContain_OldCutReleaseDoesNotEndANewClaim(t *testing.T) {
+	srv, id, oldGen := containHandedOffRun(t)
+	if _, ok := srv.popStop(); !ok {
+		t.Fatal("nothing in the stop FIFO")
+	}
+	srv.containRelease(id, containPoolStop, srv.containGenOf(id))
+	if srv.containBusy(id) {
+		t.Fatal("the run stayed claimed after the stop item's release")
+	}
+	newGen, got := srv.containClaim(id, containPoolCut)
+	if !got {
+		t.Fatal("a new cut claim failed on a free run")
+	}
+	if newGen == oldGen {
+		t.Fatalf("the new claim has the old generation %d", oldGen)
+	}
+	srv.containRelease(id, containPoolCut, oldGen)
+	if now := srv.containGenOf(id); now != newGen {
+		t.Errorf("claim generation after the old cut item's release = %d, want the new claim's %d", now, newGen)
+	}
+	c := &srv.contain
+	c.mu.Lock()
+	held := c.inFlight[id] != nil && c.inFlight[id].held && c.inFlight[id].pool == containPoolCut
+	c.mu.Unlock()
+	if !held {
+		t.Error("the new claim is no longer held by the cut pool")
+	}
+}
+
+// fencingAgentSandbox is the bring-back fixture's sandbox on a runner that fences a proxy: the fence also
+// takes the sandbox's egress away, as a stopped proxy does.
+type fencingAgentSandbox struct {
+	*agentSandbox
+	fences atomic.Int32
+}
+
+func (r *fencingAgentSandbox) FenceProxy(context.Context, string) error {
+	r.fences.Add(1)
+	r.proxyStopped.Store(true)
+	return nil
+}
+
+// A person's bring-back moves the run to STOPPED before the pass, so quiesce sees an ended run: on a runner
+// that advertises a proxy fence it is cut off every network (one fence), its agent is killed and seen
+// ended, and the pass is sent with no separate stop of the agent. Caught by: the ended-run arm of quiesce
+// answering notQuiescable for a runner (the pass would then follow the separate stop), or never cutting.
+func TestBringComputerFolderBack_AFencingRunnerRunIsCutAndItsPassSent(t *testing.T) {
+	s, _, _, run, sb, app := bringBackFixture(t)
+	id := *run.RunnerID
+	caps, ok := s.runnerLastCaps(id)
+	if !ok {
+		t.Fatal("the fixture's runner has no caps")
+	}
+	caps.ProxyFence = true
+	data, err := json.Marshal(caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.runnerStreams.subsMu.Lock()
+	ep := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	ep.sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	fr := &fencingAgentSandbox{agentSandbox: sb}
+	s.cfg.Runner = fr
+	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
+		t.Fatalf("bring-back = %d %s", res.code, res.body)
+	}
+	sb.mu.Lock()
+	calls, stops := slices.Clone(sb.calls), sb.stops
+	sb.mu.Unlock()
+	if fr.fences.Load() != 1 || !slices.Equal(calls, []string{"quiesce", "verify", "pass"}) || stops != 0 {
+		t.Errorf("fences = %d, sandbox calls = %v, %d separate agent stops; want 1, [quiesce verify pass], 0", fr.fences.Load(), calls, stops)
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
+		t.Errorf("README.md = %q: the changes made before the request did not come back", b)
 	}
 }
