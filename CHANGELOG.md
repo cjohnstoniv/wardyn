@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A run's Folders from your computer card now says what became of the sandbox's copy after the run ends: kept for now, given up, or stopped and deleted.
+- A run's Folders from your computer card now says what became of the sandbox's copy after the run ends: kept for now, given up, stopped and deleted, or not yet confirmed as stopped.
 
 ## [0.10.0-rc.19] — 2026-11-11
 
