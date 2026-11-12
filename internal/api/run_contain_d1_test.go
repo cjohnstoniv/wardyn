@@ -2299,18 +2299,21 @@ func (l *d1LostLocker) releases() int {
 // handed its call to the call's goroutine and is waiting for it, before the call runs: that stop is no attempt
 // (no confirmation, no unobserved mark, no failure stamp or streak, d1Due's verdict unchanged). The run is
 // then left owed, its claim released as the held-lock early return leaves it: a second visit on a fresh lock
-// reaches StopSandbox once. A lock that is kept gives up and stops on the first visit.
+// reaches StopSandbox once. A lock that is kept gives up and stops on the first visit. A kept lock whose stop
+// call does not start within the stop phase is abandoned and stamped as before; once the item unlocks, the
+// late call finds the lock gone and begins no stop.
 func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 	cases := []struct {
 		name         string
 		lose         func(l *d1Lab, lk *d1LostLocker)
 		firstGiveUps int
-		lost         bool
+		lost         bool // the first visit stops nothing; a second visit on a kept lock stops once
 		finalGiveUps int
+		stamps       int // failure writes on the first visit
 	}{
-		{"lost on acquisition", func(_ *d1Lab, lk *d1LostLocker) { lk.onTake = func(lose context.CancelFunc) { lose() } }, 0, true, 1},
-		{"lost after the owed read, before the give-up", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterSeed = lk.loseNow }, 0, true, 1},
-		{"lost after the give-up, before the stop", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterGiveUp = lk.loseNow }, 1, true, 1},
+		{"lost on acquisition", func(_ *d1Lab, lk *d1LostLocker) { lk.onTake = func(lose context.CancelFunc) { lose() } }, 0, true, 1, 0},
+		{"lost after the owed read, before the give-up", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterSeed = lk.loseNow }, 0, true, 1, 0},
+		{"lost after the give-up, before the stop", func(l *d1Lab, lk *d1LostLocker) { l.ds.afterGiveUp = lk.loseNow }, 1, true, 1, 0},
 		// The loss lands once every other goroutine is parked, the stop item in its wait for the call's answer.
 		{"lost while the stop waits for its call to run", func(l *d1Lab, lk *d1LostLocker) {
 			l.srv.contain.callStartFn = func() {
@@ -2319,8 +2322,20 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 					lk.loseNow()
 				}
 			}
-		}, 1, true, 1},
-		{"kept", func(*d1Lab, *d1LostLocker) {}, 1, false, 1},
+		}, 1, true, 1, 0},
+		// The lock is kept, and the stop's call (the first call made under a lock) starts only after its phase.
+		{"kept, the stop call starts after its phase", func(l *d1Lab, lk *d1LostLocker) {
+			var slept atomic.Bool
+			l.srv.contain.callStartFn = func() {
+				lk.mu.Lock()
+				taken := lk.lose != nil
+				lk.mu.Unlock()
+				if taken && slept.CompareAndSwap(false, true) {
+					time.Sleep(d1StopPhase + time.Second)
+				}
+			}
+		}, 1, true, 1, 1},
+		{"kept", func(*d1Lab, *d1LostLocker) {}, 1, false, 1, 0},
 	}
 	for _, c := range cases {
 		synctest.Test(t, func(t *testing.T) {
@@ -2345,8 +2360,8 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 			if n := l.dr.totalStops(); n != wantStops {
 				t.Errorf("%s: StopSandbox calls = %d, want %d", c.name, n, wantStops)
 			}
-			if w := l.st.stampWrites(); w != 0 {
-				t.Errorf("%s: %d failure writes, want none: a lost lock is not a failure", c.name, w)
+			if w := l.st.stampWrites(); w != c.stamps {
+				t.Errorf("%s: %d failure writes, want %d: a lost lock is not a failure", c.name, w, c.stamps)
 			}
 			if n := l.ds.clearCalls.Load(); n != int32(wantStops) {
 				t.Errorf("%s: %d confirmed-stop clears, want %d", c.name, n, wantStops)
@@ -2373,7 +2388,7 @@ func TestContain_LostRunLockBeginsNoGiveUpAndNoStop(t *testing.T) {
 				// The next visit holds a fresh lock that is not lost: the run is still owed its stop.
 				lk.kept.Store(true)
 				dueAfter := [2]bool{l.srv.d1Due(ctx, run, cutUnsupported, nil), l.srv.d1Due(ctx, run, cutFenced, errContainBoom)}
-				if dueAfter != dueBefore {
+				if c.stamps == 0 && dueAfter != dueBefore {
 					t.Errorf("%s: d1Due (no call, failed cut) = %v after the lost visit, want %v as before it", c.name, dueAfter, dueBefore)
 				}
 				if !l.item(row) {
