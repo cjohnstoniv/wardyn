@@ -1559,3 +1559,87 @@ func TestSweepForcedStops_AFailedProxyStopWithTheLockHeldKeepsTheMark(t *testing
 		t.Errorf("%d marks with the lock free; want 0", f.leaser.markCount())
 	}
 }
+
+// bumpFailsStore answers the folder record's bump with a store error: nothing moved.
+type bumpFailsStore struct{ markedStore }
+
+func (bumpFailsStore) BumpRunLocalFolderGen(context.Context, uuid.UUID, store.FolderStatusGuard, time.Time) (types.RunLocalFolderStatus, bool, error) {
+	return types.RunLocalFolderStatus{}, false, errors.New("the database did not answer")
+}
+
+// Rule R, lock held: a forced end whose settle's bump fails leaves the record settled with no Back and no Resume, a
+// pass back owed and never run. Its observed cut keeps the sandbox with its proxy stopped and the mark waiting; with
+// the lock free the locked path keeps it and clears the mark. Catches: rule R reading that record as clear, which
+// stops the sandbox with its changes owed and nothing recorded.
+func TestForceKeptStop_AFailedBumpKeepsTheOwedSandbox(t *testing.T) {
+	f := newForced(t)
+	f.s.cfg.Store = bumpFailsStore{f.s.cfg.Store.(markedStore)}
+	f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+	f.end(f.s)
+	if f.sb.stopCount() != 0 || !f.sb.proxyStopped.Load() || f.leaser.markCount() != 1 {
+		t.Fatalf("%d sandbox stops, proxy stopped %v, %d marks; want the sandbox kept with its proxy stopped and the mark waiting", f.sb.stopCount(), f.sb.proxyStopped.Load(), f.leaser.markCount())
+	}
+	if rec := f.cs.folderStatus(); rec.Back != nil || rec.Resume != nil || rec.Gen != 3 {
+		t.Fatalf("record %+v; want it as it was, since the bump failed", rec)
+	}
+	f.release()
+	f.tick(t, f.s)
+	if f.sb.stopCount() != 0 || f.leaser.markCount() != 0 {
+		t.Errorf("with the lock free: %d stops, %d marks; want the sandbox kept and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+	}
+}
+
+// A given-up record is final to the forced retry, with the run's lock held or free: rule R does not read its
+// unsettled generation (a give-up moves the generation on and does not settle it) as a pass in flight, and the
+// retry's settle does not write over it. The sandbox is stopped, the mark cleared, and the record stays given up.
+// Catches: rule R keeping a sandbox nothing will copy back, and the settle turning a give-up back into an owed
+// resume or a "not brought back" record.
+func TestSweepForcedStops_AGivenUpRecordIsStoppedAndStaysGivenUp(t *testing.T) {
+	for name, held := range map[string]bool{"the lock held": true, "the lock free": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			f.claimOnly(t)
+			at := time.Now()
+			f.setRecord(types.RunLocalFolderStatus{Gen: 4, Settled: 3, Back: &types.FolderPassRecord{At: at, Error: "given up", GivenUpAt: &at}})
+			if !held {
+				f.release()
+			}
+			f.tick(t, f.s)
+			if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+				t.Errorf("%d stops, %d marks; want the sandbox stopped and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+			}
+			if rec := f.cs.folderStatus(); rec.Gen != 4 || rec.Resume != nil || !folderGivenUp(rec) {
+				t.Errorf("record %+v; want it as it was, given up at generation 4", rec)
+			}
+		})
+	}
+}
+
+// Rule R's control, lock held: a forced retry stops the sandbox when nothing is owed: a one way folder, or a final
+// record, settled or not (a pass back that found the record already brought back leaves its own generation
+// unsettled). Catches: a rule R widened to keep a sandbox that owes no copy back.
+func TestSweepForcedStops_NothingOwedStopsWithTheLockHeld(t *testing.T) {
+	at := time.Now()
+	for name, tc := range map[string]struct {
+		rec    types.RunLocalFolderStatus
+		oneWay bool
+	}{
+		"a one way folder":                                {types.RunLocalFolderStatus{Gen: 3, Settled: 3}, true},
+		"a record brought back":                           {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Back: &types.FolderPassRecord{At: at, Files: 1}}, false},
+		"a record brought back, its generation unsettled": {types.RunLocalFolderStatus{Gen: 4, Settled: 3, Back: &types.FolderPassRecord{At: at, Files: 1}}, false},
+		"a record not brought back":                       {types.RunLocalFolderStatus{Gen: 3, Settled: 3, Back: &types.FolderPassRecord{At: at, Error: forcedNotBroughtBack}}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newForced(t)
+			if tc.oneWay {
+				f.withoutOwedPass()
+			}
+			f.claimOnly(t)
+			f.setRecord(tc.rec)
+			f.tick(t, f.s) // the lock is held
+			if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+				t.Errorf("%d stops, %d marks; want the sandbox stopped and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+			}
+		})
+	}
+}

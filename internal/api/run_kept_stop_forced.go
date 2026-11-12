@@ -141,8 +141,8 @@ const forcedKeptForCopyBack = "Kept for its copy back: the run was ended past it
 // settleForcedFolder moves a both-ways seeded computer folder's record to the next generation and settles
 // it there. With keep the pass back is owed: the record carries a resume with nothing counted, for the
 // resume path to run under the lock. Without keep it carries no resume, recording that its changes were not
-// brought back. A record that cannot be read, that already holds a completed pass back, or that another
-// owner moved first (the bump is not applied) is left as it is: forcedKeepsSandbox then reads it.
+// brought back. A record that cannot be read, that is final (a completed pass back, or given up: folderFinal),
+// or that another owner moved first (the bump is not applied) is left as it is: forcedKeepsSandbox then reads it.
 func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID, keep bool) {
 	folder, _ := s.forcedFolder(ctx, id)
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
@@ -150,7 +150,7 @@ func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID, keep bool
 		return
 	}
 	rec, err := st.RunLocalFolderStatus(ctx, id)
-	if err != nil || folderBroughtBack(rec) {
+	if err != nil || folderFinal(rec) {
 		return
 	}
 	next, ok, _ := s.bumpComputerFolderGen(ctx, id, rec.Gen)
@@ -172,15 +172,17 @@ func (s *Server) settleForcedFolder(ctx context.Context, id uuid.UUID, keep bool
 // connected runner that fences), and its computer folder's record may be in flight. Every other sandbox is
 // stopped, as the locked path stops it.
 func (s *Server) forcedKeepsSandbox(ctx context.Context, run types.AgentRun, observed bool) bool {
-	return observed && s.keepable(run) && s.forcedRecordInFlight(ctx, run.ID)
+	return observed && s.keepable(run) && s.forcedRecordInFlight(ctx, run)
 }
 
-// forcedRecordInFlight reports whether run id's computer folder record may belong to a pass that is
-// running: it holds a resume, has a generation not settled (without the lock that can be a live pass,
-// where under it it can only be a crashed one), or cannot be read. No record, a folder that is not both-ways
-// seeded, and a record settled with no resume are clear.
-func (s *Server) forcedRecordInFlight(ctx context.Context, id uuid.UUID) bool {
-	folder, unreadable := s.forcedFolder(ctx, id)
+// forcedRecordInFlight reports whether run's computer folder record may belong to a pass that is running or
+// still owed. That is: a pass back owed (folderOwedRecord: a resume, or no pass back yet, on an ended run that
+// still holds its sandbox and was neither killed nor given up); a generation not settled on a record that is not
+// final (without the lock that can be a live pass, where under it it can only be a crashed one; no pass starts on
+// a final record); or a record that cannot be read. No record, a folder that is not both-ways seeded, a settled
+// record with a pass back and no resume, and a final record (brought back, or given up) are clear.
+func (s *Server) forcedRecordInFlight(ctx context.Context, run types.AgentRun) bool {
+	folder, unreadable := s.forcedFolder(ctx, run.ID)
 	if unreadable {
 		return true
 	}
@@ -188,14 +190,14 @@ func (s *Server) forcedRecordInFlight(ctx context.Context, id uuid.UUID) bool {
 	if folder == nil || !ok {
 		return false
 	}
-	rec, err := st.RunLocalFolderStatus(ctx, id)
+	rec, err := st.RunLocalFolderStatus(ctx, run.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return false
 	case err != nil:
 		return true
 	}
-	return rec.Resume != nil || rec.Gen != rec.Settled
+	return folderOwedRecord(run, rec) || (rec.Gen != rec.Settled && !folderFinal(rec))
 }
 
 // forcedStopConfirmed reports whether the forced end's sandbox is confirmed stopped, which the tail records
@@ -375,7 +377,7 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil) // kept with the lock held: the mark waits for it
 			return
 		}
-		if notObserved(cutErr) && s.forcedRecordInFlight(cctx, run.ID) {
+		if notObserved(cutErr) && s.forcedRecordInFlight(cctx, run) {
 			why = runner.ErrRunnerOffline // owed and the runner is not here: no stop is queued for it
 		} else {
 			stopped = s.stopSandboxOrAudit(cctx, run.ID, ref, sandboxSweepAction)
