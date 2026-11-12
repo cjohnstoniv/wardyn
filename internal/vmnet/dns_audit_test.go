@@ -217,27 +217,44 @@ func expectNone(t *testing.T, ch chan dnsRecord) {
 	}
 }
 
+// proxyOnlyNet is the DNS audit test's network: a dial that records each
+// address it is asked for, and a resolver that counts its dials and refuses
+// them, swapped in as net.DefaultResolver for the test.
+type proxyOnlyNet struct {
+	mu       sync.Mutex
+	dialed   []string
+	resolved int
+	resolver *net.Resolver
+}
+
+func newProxyOnlyNet() *proxyOnlyNet {
+	n := &proxyOnlyNet{}
+	n.resolver = &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
+		n.mu.Lock()
+		n.resolved++
+		n.mu.Unlock()
+		return nil, fmt.Errorf("no resolver in this test")
+	}}
+	return n
+}
+
+func (n *proxyOnlyNet) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	n.mu.Lock()
+	n.dialed = append(n.dialed, addr)
+	n.mu.Unlock()
+	// The test's own resolver, not net.DefaultResolver: a zero Dialer reads the
+	// global on every dial, and a report's dial can outlive the test's swap.
+	return (&net.Dialer{Resolver: n.resolver}).DialContext(ctx, network, addr)
+}
+
 // Nothing on the VM DNS path dials anywhere but the run's proxy, and nothing
 // in the process resolves a name: the relay answers from its table alone.
 func TestRelayDNSAuditDialsOnlyTheProxy(t *testing.T) {
 	f := startFakeProxy(t)
-	var mu sync.Mutex
-	var dialed []string
-	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		mu.Lock()
-		dialed = append(dialed, addr)
-		mu.Unlock()
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
-	}
-	resolved := 0
+	pn := newProxyOnlyNet()
 	defer func(r *net.Resolver) { net.DefaultResolver = r }(net.DefaultResolver)
-	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
-		mu.Lock()
-		resolved++
-		mu.Unlock()
-		return nil, fmt.Errorf("no resolver in this test")
-	}}
-	rl, err := New(Config{Proxy: f.addr, Dial: dial})
+	net.DefaultResolver = pn.resolver
+	rl, err := New(Config{Proxy: f.addr, Dial: pn.dial})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,14 +271,30 @@ func TestRelayDNSAuditDialsOnlyTheProxy(t *testing.T) {
 			return false
 		})
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	for _, a := range dialed {
+	pn.mu.Lock()
+	defer pn.mu.Unlock()
+	for _, a := range pn.dialed {
 		if a != f.addr {
 			t.Fatalf("dialed %q; only the proxy %q may be dialed", a, f.addr)
 		}
 	}
-	if resolved != 0 {
-		t.Fatalf("%d resolver dials on the VM DNS path", resolved)
+	if pn.resolved != 0 {
+		t.Fatalf("%d resolver dials on the VM DNS path", pn.resolved)
+	}
+}
+
+// A DNS report's post, and a dial its transport starts in the background, can
+// outlive the record the test waited for, so the dial must not read
+// net.DefaultResolver while the test swaps or restores it.
+func TestProxyOnlyNetDialLeavesTheDefaultResolver(t *testing.T) {
+	f := startFakeProxy(t)
+	pn := newProxyOnlyNet()
+	c := newProxyClient(f.addr, pn.dial)
+	done := make(chan error, 1)
+	go func() { done <- c.sendDNS(dnsRecord{Name: "a.test", Type: "A", Outcome: dnsAnswered}) }()
+	r := net.DefaultResolver
+	net.DefaultResolver = r // unordered with the report's dial, as the restore is
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
