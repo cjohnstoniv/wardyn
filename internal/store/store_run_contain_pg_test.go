@@ -165,6 +165,44 @@ func TestPG_ContainWritesSkipARunWithNoSandbox(t *testing.T) {
 	}
 }
 
+// TestPG_ListTerminalSandboxPage_DueIsTheDatabases: each listed row says whether it is due by the
+// database's now(), with ended_at seeded in SQL two seconds either side of the lag, so no Go clock is
+// involved. Proven red by a due that is always true or always false, or one computed from the Go clock.
+func TestPG_ListTerminalSandboxPage_DueIsTheDatabases(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	lag := store.ContainmentLag.Seconds()
+	add := func(ref string, endedAgo float64) uuid.UUID {
+		t.Helper()
+		run := newRun(types.RunKilled)
+		run.SandboxRef = ref
+		r := persistRun(t, ctx, pool, run)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = now() - $2::float8 * interval '1 second' WHERE id = $1`, r.ID, endedAgo); err != nil {
+			t.Fatalf("place run: %v", err)
+		}
+		return r.ID
+	}
+	notYet, due := add("ref-not-yet", lag-2), add("ref-due", lag+2)
+	rows, _, err := pg.ListTerminalSandboxPage(ctx, nil, 10, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]bool{}
+	for _, r := range rows {
+		got[r.ID] = r.Due
+	}
+	if len(got) != 2 {
+		t.Fatalf("listed %d rows, want the 2 seeded", len(got))
+	}
+	if got[notYet] {
+		t.Error("a run 2 s short of due listed Due = true, want false")
+	}
+	if !got[due] {
+		t.Error("a run 2 s past due listed Due = false, want true")
+	}
+}
+
 // TestPG_ListTerminalSandboxPage_Keyset: pages follow (end, id) newest first with ties broken by id, a
 // fenced row is not listed when unfencedOnly, and a running run, or one with no sandbox, never is.
 func TestPG_ListTerminalSandboxPage_Keyset(t *testing.T) {

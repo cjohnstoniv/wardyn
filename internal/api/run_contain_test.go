@@ -1267,9 +1267,9 @@ func TestQuiesce_RunnerWithProxyFenceIsQuiesced(t *testing.T) {
 
 // A run still RUNNING is quiesced as before the cut existed: a runner's is not quiescable, a hosted one
 // has its proxy stopped directly, and cutAgent, which refuses a run that is not over, is never asked. No
-// caller reaches this arm today: each writes the terminal state before it quiesces (a kept lease end,
-// internal/api/run_lease.go:460 before :472, and the idle stop, cmd/wardynd/adapters.go:870). Only
-// fixtures get here; the arm stays so a caller that did not would still be safe.
+// caller reaches this arm today: each writes the terminal state before it quiesces (a kept lease end, in
+// stopKeptRun, which calls StopKeptRunIf before finalizeRunTailOrdered, and the idle stop, in
+// lifecycleStopper.stop, which calls bringBack only after its transition). Only fixtures get here; the arm stays so a caller that did not would still be safe.
 func TestQuiesce_RunningRunAtAKeptLeaseEndKeepsTheLiveQuiesce(t *testing.T) {
 	l := newContainLab(t, true)
 	id := l.connect(true)
@@ -1956,4 +1956,38 @@ func TestContain_DueIsTheDatabasesNotTheServers(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A failing stop-path hook is a cut failure that reaches d1Due as one, so a d1Due that calls for a stop
+// has the run queued for the stop pool on that visit, without waiting for a second failure. The error d1Due
+// sees is a failure by the same test containOutcome applies: not nil, not a skip, not an unobserved
+// answer. The real d1Due is the stop path's lane; this pin uses the stand-in. Caught by: treating a hook
+// error as a skip or an unobserved round, or not asking d1Due with it.
+func TestContain_CallHookErrorQueuesTheStopAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newContainLab(t, true)
+		row := dueRow(nil, time.Minute)
+		id := l.st.add(row)
+		l.srv.contain.containCallFn = func(context.Context, types.AgentRun) error { return errContainBoom }
+		l.d1Ask = func(n int) bool { return n == 1 }
+		l.startCutOnly()
+		time.Sleep(time.Second)
+		l.stop()
+		calls := l.d1Calls()
+		if len(calls) != 1 {
+			t.Fatalf("d1Due calls = %d, want 1", len(calls))
+		}
+		if err := calls[0].err; err == nil || errors.Is(err, errContainSkip) || notObserved(err) || !errors.Is(err, errContainBoom) {
+			t.Errorf("d1Due saw %v, want the hook's error as a cut failure", err)
+		}
+		if l.st.stamp(id) == nil {
+			t.Error("the failure left no stamp: no streak would start")
+		}
+		if got := l.stopQueue(); got != 1 {
+			t.Errorf("stop FIFO = %d, want the run queued on that visit", got)
+		}
+		if !l.busy(id) {
+			t.Error("the run was released instead of handed to the stop pool")
+		}
+	})
 }
