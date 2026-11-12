@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- On Kubernetes, a live egress edit now narrows the running proxy in place: the edit's hosts join its deny list, open connections drop, and the answer waits for its policy readback. An edit that is not confirmed ends the run. Older runs, runs on a registered runner and edits that need a new proxy are refused as before (`409 egress_edit_unsupported`).
+- On Kubernetes, a live egress edit now narrows the running proxy in place: the edit's hosts join its deny list, open connections through the proxy drop, and the answer waits for its policy readback. An edit that is not confirmed ends the run. Older runs, runs on a registered runner and edits that need a new proxy are refused as before (`409 egress_edit_unsupported`).
 
 ### Known issues
 
