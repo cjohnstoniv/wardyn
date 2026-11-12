@@ -147,6 +147,12 @@ func (f *d1Store) setRef(id uuid.UUID, ref string) {
 	}
 }
 
+// SetSandboxRef is the store write the terminal effects fall back to for a store that is not PG.
+func (f *d1Store) SetSandboxRef(_ context.Context, id uuid.UUID, ref string) error {
+	f.setRef(id, ref)
+	return nil
+}
+
 // failure is run id's recorded containment failure message.
 func (f *d1Store) failure(id uuid.UUID) string {
 	f.mu.Lock()
@@ -815,22 +821,22 @@ func d1Bound(t *testing.T, l *d1Lab, rows []store.TerminalSandboxRow, kinds map[
 	return last
 }
 
-// d1BoundTwice runs one bound scenario in two separate fake-clock bubbles. Its calls end at distinct
-// instants, so the schedule does not depend on which goroutine runs first, and both runs must end at the same
-// time, inside [lo, hi].
+// d1BoundTwice runs one bound scenario in two separate fake-clock bubbles, and both runs must end inside
+// [lo, hi]. The two need not end at the same instant: cut items can end at one fake instant (rows due a
+// whole ms apart, VM cut items on the tick), and the stop FIFO then takes them in goroutine order, which
+// moves the last stop by a few ms. That order is unspecified by design, so only the bound is pinned.
 func d1BoundTwice(t *testing.T, lo, hi time.Duration, scenario func(t *testing.T) time.Duration) {
 	t.Helper()
 	var got [2]time.Duration
 	for i := range got {
 		synctest.Test(t, func(t *testing.T) { got[i] = scenario(t) })
 	}
-	if got[0] != got[1] {
-		t.Errorf("the same scenario ended at +%v and at +%v: the schedule depends on goroutine order", got[0], got[1])
+	for i, g := range got {
+		if g < lo || g > hi {
+			t.Errorf("run %d: the last stop returned at +%v, want in [%v, %v]", i+1, g, lo, hi)
+		}
 	}
-	if got[0] < lo || got[0] > hi {
-		t.Errorf("the last stop returned at +%v, want in [%v, %v]", got[0], lo, hi)
-	}
-	t.Logf("last stop at +%v", got[0])
+	t.Logf("last stop at +%v and +%v", got[0], got[1])
 }
 
 // 100 containers whose cuts fail at full length in two rounds: the last stop lands within 3895 s of the
@@ -1403,7 +1409,7 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 		}
 		start := time.Now()
 		l.start()
-		time.Sleep(300 * time.Second)
+		time.Sleep(197 * time.Second) // after the abandoned stop's stamp at 195 s, before the 200 s tick that cuts again (off the tick instants)
 		l.stop()
 		began, _, ok := l.dr.firstStop(row.SandboxRef)
 		if !ok || began.Sub(start) != 135*time.Second {
@@ -1431,7 +1437,7 @@ func TestContain_LateDeadlineErrorsStillReachTheStop(t *testing.T) {
 		}
 		start := time.Now()
 		l.start()
-		time.Sleep(300 * time.Second)
+		time.Sleep(207 * time.Second) // after the stop's failure written at 205 s, before the 210 s tick that cuts again (off the tick instants)
 		l.stop()
 		began, _, ok := l.dr.firstStop(row.SandboxRef)
 		if !ok || began.Sub(start) != 140*time.Second {
@@ -2005,6 +2011,7 @@ func TestContain_ResumeSweepLeavesARunWhoseStopIsOwed(t *testing.T) {
 		a, scripts := d1ServerLab(t, time.Second, time.Second)
 		b := a.sharing(t)
 		a.dr.claimed = nil // the sweep's tail stops sandboxes outside the stop pool
+		a.ds.onGet = nil   // the sweep's tail re-reads the run outside the stop pool
 		owed := a.rowDue(-(containServerKeepWait + time.Second), nil, "")
 		a.ds.owe(owed.ID)
 		var wg sync.WaitGroup

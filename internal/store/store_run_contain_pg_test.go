@@ -415,7 +415,11 @@ func TestPG_ClearRunContainmentErrorForRef(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Errorf("%s: cleared = %v, %v; want %v", name, got, err, tc.want)
 		}
-		if still := containErrAt(t, ctx, pg, r.ID) != nil; still == tc.want {
+		after, err := pg.GetRun(ctx, r.ID)
+		if err != nil {
+			t.Fatalf("%s: read the run back: %v", name, err)
+		}
+		if still := after.ContainmentErrorAt != nil; still == tc.want {
 			t.Errorf("%s: failure still recorded = %v, want %v", name, still, !tc.want)
 		}
 	}
