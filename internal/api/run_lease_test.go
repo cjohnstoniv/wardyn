@@ -53,6 +53,21 @@ type leaseStore struct {
 	agentStopped bool
 	// forcedAt is the forced stop's mark (forced_stop_at), zero while unmarked.
 	forcedAt time.Time
+	// dbNow is the fake database's clock for KeptHoldOffPassed; nil is the real one. The server's own clock is
+	// Config.Now.
+	dbNow func() time.Time
+}
+
+// KeptHoldOffPassed answers from the fake database's clock (store.ForcedStopper).
+func (s *leaseStore) KeptHoldOffPassed(_ context.Context, _ uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
+	s.mu.Lock()
+	run := s.run
+	s.mu.Unlock()
+	now := time.Now()
+	if s.dbNow != nil {
+		now = s.dbNow()
+	}
+	return keptHoldOffPassedAt(run, fromLostAt, after, now), nil
 }
 
 func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -362,6 +377,7 @@ func newLeaseFixture(t *testing.T, endsIn time.Duration) *leaseFixture {
 	f.srv.cfg.Approvals = f.fa
 	f.srv.cfg.EndedRunGrace = 7 * 24 * time.Hour
 	f.srv.cfg.Now = func() time.Time { return f.now }
+	f.st.dbNow = func() time.Time { return f.now } // the fake database keeps the time the fixture sets
 	f.idp = &countingIdentity{Provider: f.srv.cfg.Identity}
 	f.srv.cfg.Identity = f.idp
 	seedPendingApproval(t, f.fa, run.ID)

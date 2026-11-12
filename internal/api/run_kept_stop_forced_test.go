@@ -51,6 +51,24 @@ func (m *forcedMarks) StopKeptRunForcedIf(_ context.Context, id uuid.UUID, to ty
 	return stamp, true, nil
 }
 
+// keptHoldOffPassedAt is store.PG's KeptHoldOffPassed over a row as the fake database holds it, at the fake
+// database's time now.
+func keptHoldOffPassedAt(run types.AgentRun, fromLostAt bool, after time.Duration, now time.Time) bool {
+	from := run.EndsAt
+	if fromLostAt {
+		from = run.LostAt
+	}
+	return from != nil && !from.Add(after).After(now)
+}
+
+// KeptHoldOffPassed answers from the fixture's fake database clock (dueNow), not the server's.
+func (m *forcedMarks) KeptHoldOffPassed(_ context.Context, _ uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
+	m.cs.dispatchTestStore.mu.Lock()
+	run := m.cs.run
+	m.cs.dispatchTestStore.mu.Unlock()
+	return keptHoldOffPassedAt(run, fromLostAt, after, m.cs.dueNow()), nil
+}
+
 func (m *forcedMarks) ListForcedStops(context.Context) ([]store.ForcedStop, error) {
 	m.marksMu.Lock()
 	defer m.marksMu.Unlock()
