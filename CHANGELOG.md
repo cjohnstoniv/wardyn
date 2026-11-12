@@ -15,6 +15,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A live network edit or revive on Docker now fails if the new proxy can't renew its token with the server within 10 seconds: a run that can be kept is lost until revived, and any other run ends. Creates are unchanged.
 - A live edit or revive that loses its database lock while it is replacing the proxy now stops instead of finishing the replace, and a headless run that is not on a laptop runner then ends.
+- Docs: corrected the default end of Interactive runs, the main-drive limit on some drivers, the status of signed checkpoints and receipts, the image-builder fallback warning, and the gateway presets.
 
 ### Fixed
 

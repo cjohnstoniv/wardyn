@@ -1635,7 +1635,7 @@ These risks are **not closed by v1 Wardyn**.
 9. **Compromised platform operator / admin (insider-admin).**
    - Out of scope for v1 — no separation-of-duty on the control plane yet.
    - A platform admin can defeat audit integrity and policy.
-   - Signed action receipts are required to raise this bar (planned for v1.0); the hash chain ships (migration `0047`) and makes one such rewrite detectable.
+   - The hash chain (migration `0047`) makes one such rewrite detectable. Signed checkpoints and receipts (`v0.10.0-rc.14`) let a reader check rows offline against keys pinned off the control plane, but the signing key is held by the control plane, so an operator who holds it can still sign rewritten rows; the off-box copy of earlier statements is the control ([OPERATIONS.md](../docs/OPERATIONS.md#signed-checkpoints-and-receipts)).
 
 10. **Silent degradation to danger-full-access in nested-sandbox/DinD** (the Codex documented fallback): Wardyn fails closed instead, but full DinD isolation depends on the opt-in Sysbox tier, which shares the host kernel.
 
@@ -4381,7 +4381,7 @@ injected script whatever the CSP says.
 | | Most non-LLM HTTPS egress stays opaque, and per-workspace ephemeral-CA injection into arbitrary agent images is unprototyped. | |
 | 6 | **CC1 hardened-runc is the only tier on hosts where nothing else installs, yet shares the host kernel.** Tier-1-only customers get materially weaker isolation and must be told so explicitly. | residual #4, [§7](#7-confinement-class-claims) |
 | 7 | **A compromised platform operator can defeat audit integrity and policy in v1.** | residual #9, [§4.5](#45-the-audit-hash-chain--what-it-is-and-is-not) |
-| | Acceptable for launch only if published honestly; signed action receipts are required to raise this bar and are planned for v1.0 — the hash chain itself ships (migration `0047`). | |
+| | Acceptable for launch only if published honestly; the hash chain (migration `0047`) and signed checkpoints and receipts (`v0.10.0-rc.14`) ship; the signing key is held by the control plane, so they do not close this residual. | |
 
 ---
 

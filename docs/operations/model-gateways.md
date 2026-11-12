@@ -3,7 +3,7 @@
 # Model gateways and detectors: setup
 
 - Wardyn plugs in an established model gateway or PII detector that you run yourself. It builds neither, bundles neither and does not change them.
-- Every recipe here is a `custom_endpoint` provider (or the `detector_sidecar_url` policy field) pointed at your own deployment. Nothing is prefilled by Wardyn.
+- Every recipe here is a `custom_endpoint` provider (or the `detector_sidecar_url` policy field) pointed at your own deployment. Model providers › Your own endpoint can start from a preset for some of these gateways, which fills only the fields it names and records nothing; everything else is yours to set.
 - [An external AI gateway](ai-gateway.md) covers agentgateway, run identity and MCP federation.
 
 ## Every gateway
@@ -111,5 +111,5 @@
 | Portkey | `1.15.2` | the same test |
 | Presidio analyzer | `2.2.363` | the same test |
 
-- The test pins and asserts these versions; its first green run is pending. It runs in the `docker-tagged-live` nightly against [`test/gatewayfake`](../../test/gatewayfake), with the images pinned by digest. It asserts the credential swap, the Portkey headers, metered streaming usage, the rerouting refusal, and a Presidio hit and a code-like prompt it does not block.
+- The test pins and asserts these versions; it passes in the nightly. It runs in the `docker-tagged-live` nightly against [`test/gatewayfake`](../../test/gatewayfake), with the images pinned by digest. It asserts the credential swap, the Portkey headers, metered streaming usage, the rerouting refusal, and a Presidio hit and a code-like prompt it does not block.
 - Hosted Portkey's header contract is covered by [`gateway_portkey_strip_test.go`](../../internal/egress/proxy/gateway_portkey_strip_test.go). OpenRouter and Codex CLI through Portkey or OpenRouter are not tested.

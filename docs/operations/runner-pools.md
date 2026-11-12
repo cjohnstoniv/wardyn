@@ -70,6 +70,7 @@ A run's CPU, memory, main drive, lifetime and idle stop are each the strictest o
 - A larger ask is reduced to the limit, never refused; the answer's `resources_applied` says what was asked, what was applied and which source capped it.
 - A run that asks for no size gets the lowest default any source names, never above the maximum.
 - A pool only narrows its runners. A pool limit wider than its runners' is accepted and never takes effect.
+- A main-drive limit is a request to the runner's storage driver: some drivers and Linux VMs cannot enforce it, and the run's size chip then says **Not enforced on this runner** (see [`disk_mib`](../POLICIES.md#disk_mib)).
 - Runs at once across a pool is `max_concurrent_runs` (`--max-runs`). Left out, it is set by its runners: each runner's own Runs at once and totals still hold.
 - A pool none of whose runners has declared limits refuses the launch `runner_limits_unset`.
 - A run's live terminal sessions are capped per replica, not across the deployment. With several wardynd replicas and no sticky routing, a ticket mint that lands on a replica already at the cap is refused `attach_session_cap_reached` (503) even when another replica has room; try again.
