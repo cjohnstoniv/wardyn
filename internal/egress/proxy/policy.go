@@ -305,17 +305,13 @@ func ValidDomainEntry(d string) error {
 func (p *Policy) evalHost(host string, port int) hostDecision {
 	host = domainmatch.CanonHost(host)
 	key := hostPortKey(host, port)
-	if p.live.denies(host, port) {
+	// Deny beats allow, unconditionally. A spelling net.ParseIP refuses but a resolver or a corporate
+	// upstream reads as an address (nonCanonicalLiteralIP) is denied when that address is; deny only,
+	// so it never inherits an allow.
+	if p.deniesHost(host, port) {
 		return hostDeny
 	}
-	// Deny beats allow, unconditionally.
-	if _, ok := p.deniedExact[host]; ok {
-		return hostDeny
-	}
-	if _, ok := p.deniedExactPort[key]; ok {
-		return hostDeny
-	}
-	if domainmatch.MatchWild(host, p.deniedWild) || domainmatch.MatchWildPort(host, port, p.deniedWildPort) {
+	if ip := nonCanonicalLiteralIP(host); ip != nil && p.deniesHost(ip.String(), port) {
 		return hostDeny
 	}
 	if _, ok := p.allowedExact[host]; ok {
@@ -345,6 +341,20 @@ func (p *Policy) evalHost(host string, port int) hostDecision {
 		return hostAllow
 	}
 	return hostUnknown
+}
+
+// deniesHost is evalHost's deny half for one spelling: the live list, then denied_domains.
+func (p *Policy) deniesHost(host string, port int) bool {
+	if p.live.denies(host, port) {
+		return true
+	}
+	if _, ok := p.deniedExact[host]; ok {
+		return true
+	}
+	if _, ok := p.deniedExactPort[hostPortKey(host, port)]; ok {
+		return true
+	}
+	return domainmatch.MatchWild(host, p.deniedWild) || domainmatch.MatchWildPort(host, port, p.deniedWildPort)
 }
 
 // methodAllowed reports whether a plain-HTTP method passes the method
@@ -574,6 +584,9 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind, h
 		// for it. Where the decoded address is in a liftable range, the way out is to
 		// write it canonically; where it is never liftable, that is the sentence.
 		if dec := nonCanonicalLiteralIP(h); dec != nil {
+			if kind == blockHardDeny {
+				return neverLiftableDetail("literal IP "+h+", which decodes to "+dec.String()+",", kind)
+			}
 			if k, _ := isBlockedIP(dec); neverLiftableClass[k] == "" {
 				return "literal IP " + h + " is a non-standard way to write " + dec.String() + ". The proxy refuses every non-standard spelling, " +
 					"and no internal_hosts entry lifts that; write the address as " + dec.String() + "."

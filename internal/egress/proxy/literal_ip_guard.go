@@ -143,7 +143,7 @@ func (p *Proxy) blockedLiteralIPGuard(deny func() (net.IP, *egress.DecisionLog),
 	// Spellings net.ParseIP refuses but a real dialer accepts (see package comment) — what finally dials
 	// sees the address the canonical spelling names, so the guard must too.
 	if ip := nonCanonicalLiteralIP(host); ip != nil {
-		if kind, _ := isBlockedIP(ip); kind != blockNone {
+		if kind, _ := isBlockedIP(ip); kind != blockNone || p.hardDeny.ip(ip) {
 			return deny()
 		}
 	}
@@ -153,8 +153,8 @@ func (p *Proxy) blockedLiteralIPGuard(deny func() (net.IP, *egress.DecisionLog),
 // nonCanonicalLiteralIP is the single gap-filler beside an existing net.ParseIP check: the address host
 // names in a spelling net.ParseIP REFUSES and something downstream accepts — inet_aton IPv4 forms
 // (nonCanonicalIPv4) and the zone-suffixed IPv6 literal (zonedIPv6Literal). Nil for every spelling
-// net.ParseIP already accepts and for an ordinary hostname. SECURITY: both consumers — evaluate's step 0
-// and egressTarget's upstream branch — DENY on it; nothing else reads it, so it widens nothing.
+// net.ParseIP already accepts and for an ordinary hostname. SECURITY: every reader denies or words a
+// refusal; none grants, so it widens nothing.
 func nonCanonicalLiteralIP(host string) net.IP {
 	if ip := nonCanonicalIPv4(host); ip != nil {
 		return ip
@@ -186,8 +186,8 @@ func zonedIPv6Literal(host string) net.IP {
 
 // nonCanonicalIPv4 returns the IPv4 address host names under inet_aton(3) semantics when host is a numeric
 // literal net.ParseIP REFUSES, nil otherwise (including every spelling net.ParseIP already accepts). Read
-// only through nonCanonicalLiteralIP, whose two consumers deny — a non-canonical spelling can never
-// inherit an allowed_domains grant (authored and matched in canonical form).
+// only through nonCanonicalLiteralIP, whose readers all deny or word a refusal; none grants — a
+// non-canonical spelling can never inherit an allowed_domains grant (authored and matched in canonical form).
 func nonCanonicalIPv4(host string) net.IP {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" || net.ParseIP(h) != nil {
