@@ -382,8 +382,10 @@ export const drives = {
   // reach the caller as an HttpError carrying the server's own message: the
   // host root outside the roots, the denied prefix, the backend/runner
   // mismatch, `hash` on a share, and a zero size on a k8s_pvc claim.
-  async createDrive(input: UserDriveInput): Promise<UserDrive> {
-    return asJson<UserDrive>(await wfetch("/drives", { method: "POST", asPerson: true, body: JSON.stringify(input) }));
+  // `person` on this and the drive and allocation writes below: a later step of the editor's save names the person
+  // the save began under (core.ts WfetchInit.asPerson).
+  async createDrive(input: UserDriveInput, person?: string): Promise<UserDrive> {
+    return asJson<UserDrive>(await wfetch("/drives", { method: "POST", asPerson: person ?? true, body: JSON.stringify(input) }));
   },
 
   // PUT /api/v1/drives/{id} -> 200. Rename included: ON DELETE RESTRICT makes
@@ -393,9 +395,9 @@ export const drives = {
   // on a drive with allocations answers 409 (driveRehomeGuard) UNLESS
   // `confirmRehome` is set, which re-sends the SAME body with `?confirm=rehome`
   // — the one query param the guard reads (user_drives.go's driveRehomeConfirm).
-  async updateDrive(id: string, input: UserDriveInput, confirmRehome = false): Promise<UserDrive> {
+  async updateDrive(id: string, input: UserDriveInput, confirmRehome = false, person?: string): Promise<UserDrive> {
     const qs = confirmRehome ? "?confirm=rehome" : "";
-    const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) });
+    const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", asPerson: person ?? true, body: JSON.stringify(input) });
     return asJson<UserDrive>(res);
   },
 
@@ -441,16 +443,16 @@ export const drives = {
   // allocation and 200 when an existing one was REPOINTED (the store returns
   // the existing row's id on conflict). The console renders ALLOC_REPLACED on
   // the 200, so the status is surfaced rather than swallowed.
-  async upsertGrant(input: UserDriveGrantInput): Promise<{ grant: UserDriveGrant; replaced: boolean }> {
-    const res = await wfetch("/drives/grants", { method: "POST", asPerson: true, body: JSON.stringify(input) });
+  async upsertGrant(input: UserDriveGrantInput, person?: string): Promise<{ grant: UserDriveGrant; replaced: boolean }> {
+    const res = await wfetch("/drives/grants", { method: "POST", asPerson: person ?? true, body: JSON.stringify(input) });
     const replaced = res.status === 200;
     return { grant: await asJson<UserDriveGrant>(res), replaced };
   },
 
   // DELETE /api/v1/drives/grants/{id} -> 204. Deletes no data: the directory
   // stays until the admin reclaims it.
-  async deleteGrant(id: string): Promise<void> {
-    const res = await wfetch(`/drives/grants/${encodeURIComponent(id)}`, { method: "DELETE" });
+  async deleteGrant(id: string, person?: string): Promise<void> {
+    const res = await wfetch(`/drives/grants/${encodeURIComponent(id)}`, { method: "DELETE", asPerson: person });
     if (!res.ok && res.status !== 404) throw new HttpError(res.status, await errText(res));
   },
 

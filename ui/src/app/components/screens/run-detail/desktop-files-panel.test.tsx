@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import { makeApproval } from "../../../../test/factories";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
@@ -70,6 +70,24 @@ describe("DesktopFilesPanel", () => {
     expect(within(panel).getByText(C.blockedEmpty)).toBeTruthy();
     expect(within(panel).getByText(C.refusedLogged)).toBeTruthy();
     expect(within(panel).queryByText("secret.txt")).toBeNull();
+  });
+
+  it("a file sent after another person signed in still names the person who chose the files", async () => {
+    // The server then refuses it rather than put it in the desktop as the next person.
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    let first!: (v: unknown) => void;
+    uploadMock.mockImplementationOnce(() => new Promise((done) => (first = done))).mockResolvedValue({ name: "b.txt", bytes: 1, sha256: "0".repeat(64) });
+    setExpectedPrincipal("a@example.com");
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.upload(within(panel).getByLabelText(C.choose), [new File(["a"], "a.txt"), new File(["b"], "b.txt")]);
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    first({ name: "a.txt", bytes: 1, sha256: "0".repeat(64) });
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(2));
+    expect(uploadMock.mock.calls.map((c) => c[2])).toEqual(["a@example.com", "a@example.com"]);
+    setExpectedPrincipal("");
   });
 
   it("on a VM desktop says copy and paste are not available instead of the Allowed strip", async () => {

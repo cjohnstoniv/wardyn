@@ -10,7 +10,7 @@
 import * as React from "react";
 import { useParams } from "react-router-dom";
 import { CircleX, Loader2 } from "lucide-react";
-import { HttpError } from "../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 import { runs } from "../../lib/api/runs";
 import { getErrorMessage } from "../../lib/format";
@@ -45,6 +45,8 @@ export function OpenAppScreen() {
     if (started.current === key) return;
     started.current = key;
     setPhase({ kind: "opening" });
+    // The ticket follows the health read: it is minted for the person who opened the page, not whoever signs in.
+    const person = getExpectedPrincipal();
     void (async () => {
       try {
         const h = await health.health();
@@ -53,7 +55,7 @@ export function OpenAppScreen() {
           setPhase({ kind: "refused", text: T.GATEWAY_OFF });
           return;
         }
-        const ticket = await runs.appTicket(run, app);
+        const ticket = await runs.appTicket(run, app, person);
         await enterUIApp(run, app, h.ui_sandbox, { ticket, target: "_self" });
       } catch (e) {
         setPhase({ kind: "refused", text: refusalText(e) });

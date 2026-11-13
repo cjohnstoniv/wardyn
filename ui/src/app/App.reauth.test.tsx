@@ -787,7 +787,8 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
   });
 
   // #2489: the tab that signed out deliberately is a signed-out tab like any other once it shows the gate.
-  it("a tab that signed out itself enters the console when another tab signs in", async () => {
+  // A fresh page: nothing the person who signed out here started runs on into the console of whoever signed in.
+  it("a tab that signed out itself loads a fresh console when another tab signs in", async () => {
     await mountWithDraft();
     const header = screen.getByRole("banner");
     const headerButtons = within(header).getAllByRole("button");
@@ -795,11 +796,12 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
     await screen.findByText("Admin token", { exact: true });
     await fromAnotherTab("changed");
-    expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(screen.queryByLabelText("Note")).toBeNull();
   });
 
-  // The deliberate-sign-out hold is per sign-out: entering again through another tab's sign-in and signing out a second
-  // time holds focus out again, and the second return works the same way.
+  // The deliberate-sign-out hold is per sign-out: entering again through another tab's sign-in (a fresh page, mounted
+  // again here) and signing out a second time holds focus out again, and the second return works the same way.
   it("a second deliberate sign-out after re-entering through another tab is held and heard the same way", async () => {
     await mountWithDraft();
     const signOut = async () => {
@@ -810,7 +812,10 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     };
     await signOut();
     await fromAnotherTab("changed");
-    await screen.findByLabelText("Note");
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    cleanup();
+    assign.mockReset();
+    await mountWithDraft();
 
     await signOut();
     act(() => void window.dispatchEvent(new Event("focus")));
@@ -818,8 +823,9 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
       vi.advanceTimersByTime(3000);
     });
     expect(screen.getByText("Admin token", { exact: true })).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
     await fromAnotherTab("changed");
-    expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
   });
 
   it("announces this tab's own sign-out and sign-in to the others", async () => {
@@ -832,7 +838,7 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     expect(posted()).toContain("signed_out");
     setField(screen.getByLabelText("Admin token"), "good-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    await screen.findByLabelText("Note");
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
     expect(posted().at(-1)).toBe("changed");
   });
 });

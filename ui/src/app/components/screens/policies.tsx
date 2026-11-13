@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
-import { LIST_LIMIT } from "../../lib/api/core";
+import { getExpectedPrincipal, LIST_LIMIT } from "../../lib/api/core";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -594,6 +594,7 @@ function PolicyEditor({
     }
     if (!parsed.ok) return;
     const spec = parsed.spec;
+    const person = getExpectedPrincipal();
     setSaving(true);
     try {
       if (editing) {
@@ -601,7 +602,7 @@ function PolicyEditor({
       } else {
         const created = await api.createPolicy(name.trim(), spec);
         try {
-          await writeAvailability("policy", created.id, audience);
+          await writeAvailability("policy", created.id, audience, person);
         } catch (e) {
           initial.current = { name, specText };
           setPartial({ policy: created, message: getErrorMessage(e) });

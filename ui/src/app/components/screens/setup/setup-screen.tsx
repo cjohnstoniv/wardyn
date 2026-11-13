@@ -31,7 +31,7 @@ import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { access as accessApi } from "../../../lib/api/access";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import type { AccessResponse } from "../../../lib/types";
 import type { AccessLoadState } from "./access-panel";
@@ -615,13 +615,14 @@ export function SetupScreen({
   const viewAccess = useViewAccess();
   const finishSwitchToUser = React.useCallback(async () => {
     // Awaited: a session-admin's switch reloads the page, which could cut the
-    // request short. completeOnboarding never rejects.
+    // request short. completeOnboarding never rejects. The switch names the person who clicked, not whoever signs in.
+    const person = getExpectedPrincipal();
     await setupApi.completeOnboarding();
     dismissSetup();
     await refreshShellStatus();
     if (viewAccess === "session-admin") {
       try {
-        await switchView("user", "/setup");
+        await switchView("user", "/setup", false, undefined, person);
         return;
       } catch {
         // Fall through to the interstitial.

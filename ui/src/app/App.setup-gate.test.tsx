@@ -103,6 +103,9 @@ const GATED = {
   age_key: { durable: true },
   platform: { os: "linux", wsl: false },
 };
+// The first paint after a mount can take longer than findBy's default second on a loaded machine, which says
+// nothing about where the console lands.
+const FIRST_PAINT = { timeout: 4000 };
 const ME_ADMIN = { principal: "cj", method: "token", operator: true, security_operator: true, role: "admin", email: "" };
 
 /** Every /setup/status read after the first `good` ones answers 500.
@@ -144,7 +147,7 @@ function mountApp(good: number, browser = false): () => number {
 describe("App — an unreachable status read never replaces a real one (#469)", () => {
   it("a failed re-read keeps the gated status: '/' still lands in the funnel, not on Runs", async () => {
     const reads = mountApp(1);
-    await screen.findByText("setup funnel stub");
+    await screen.findByText("setup funnel stub", {}, FIRST_PAINT);
     const firstVisit = screen.getByTestId("funnel-key").textContent;
 
     // The refocus re-read answers 500 — READY_FALLBACK, has_runs:false, no checks.
@@ -167,7 +170,7 @@ describe("App — an unreachable status read never replaces a real one (#469)", 
 
   it("a FIRST read that fails still lands on Runs — nothing better is known, and the funnel must not trap", async () => {
     mountApp(0);
-    await screen.findByText("runs screen stub");
+    await screen.findByText("runs screen stub", {}, FIRST_PAINT);
     expect(screen.queryByText("setup funnel stub")).toBeNull();
   });
 });
@@ -179,7 +182,7 @@ describe("App — once in the funnel, the gate stays spent for the load (#469 re
   // gate fired from, and a plain fragment link's entry alike. Leaving the
   // funnel and then taking the shell's skip link must not re-fire the gate.
   async function leaveTheFunnel(): Promise<void> {
-    await screen.findByText("setup funnel stub");
+    await screen.findByText("setup funnel stub", {}, FIRST_PAINT);
     await userEvent.setup().click(screen.getByRole("link", { name: "admin runs" }));
     await screen.findByText("runs screen stub");
     expect(window.location.pathname).toBe("/admin/runs");

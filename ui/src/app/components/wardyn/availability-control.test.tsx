@@ -151,8 +151,8 @@ describe("AvailabilityControl — states.html", () => {
 
   it("a draft saved on Everyone still writes every audience it holds", async () => {
     upsertGrantMock.mockResolvedValue({});
-    await writeAvailability(KIND, ID, { restricted: false, audiences: [{ subject_type: "group", subject: "Data engineering" }] } as AvailabilityDraftValue);
-    expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ subject_type: "group", subject: "Data engineering", effect: "allow" }));
+    await writeAvailability(KIND, ID, { restricted: false, audiences: [{ subject_type: "group", subject: "Data engineering" }] } as AvailabilityDraftValue, "a@example.com");
+    expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ subject_type: "group", subject: "Data engineering", effect: "allow" }), "a@example.com");
     expect(putAvailabilityMock).not.toHaveBeenCalled();
   });
 
@@ -194,14 +194,14 @@ describe("AvailabilityControl — states.html", () => {
     await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "developer");
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
 
-    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalledWith(KIND, ID, true));
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalledWith(KIND, ID, true, ""));
     expect(upsertGrantMock).toHaveBeenCalledWith({
       subject_type: "user_type",
       subject: "developer",
       capability: KIND,
       value: ID,
       effect: "allow",
-    });
+    }, "");
     expect(calls).toEqual(["grant", "only"]);
     await waitFor(() => expect(screen.queryByTestId("availability-pending")).toBeNull());
     expect(only()).toBeChecked();
@@ -488,10 +488,10 @@ describe("AvailabilityDraft + writeAvailability — a creation form (decision 4)
         { subject_type: "user_type", subject: "developer" },
         { subject_type: "group", subject: "Data engineering" },
       ],
-    });
+    }, "a@example.com");
 
     expect(calls).toEqual(["grant developer", "grant Data engineering", "only"]);
-    expect(putAvailabilityMock).toHaveBeenCalledWith("image", "ghcr.io/acme/x:1", true);
+    expect(putAvailabilityMock).toHaveBeenCalledWith("image", "ghcr.io/acme/x:1", true, "a@example.com");
   });
 
   it("leaves the first choice alone when Only these wasn't chosen", async () => {
@@ -499,7 +499,7 @@ describe("AvailabilityDraft + writeAvailability — a creation form (decision 4)
     await writeAvailability("image", "ghcr.io/acme/x:1", {
       restricted: false,
       audiences: [{ subject_type: "user", subject: "alice@corp.com" }],
-    });
+    }, "a@example.com");
     expect(upsertGrantMock).toHaveBeenCalledTimes(1);
     expect(putAvailabilityMock).not.toHaveBeenCalled();
   });

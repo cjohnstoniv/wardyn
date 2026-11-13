@@ -14,7 +14,7 @@ vi.mock("../../lib/api/runs", () => ({ runs: { appTicket: (...a: unknown[]) => a
 const enterMock = vi.fn();
 vi.mock("./run-detail-ssh", () => ({ enterUIApp: (...a: unknown[]) => enterMock(...a) }));
 
-import { HttpError } from "../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../lib/api/core";
 import { OPEN_APP } from "../wardyn/copy/ui-apps";
 import { OpenAppScreen } from "./open-app";
 
@@ -43,8 +43,22 @@ describe("/open/{run}/{app}", () => {
     open();
     expect(screen.getByRole("status")).toHaveTextContent("Opening api…");
     await waitFor(() => expect(enterMock).toHaveBeenCalledTimes(1));
-    expect(appTicketMock).toHaveBeenCalledWith("7c41e0a9", "api");
+    expect(appTicketMock).toHaveBeenCalledWith("7c41e0a9", "api", "");
     expect(enterMock).toHaveBeenCalledWith("7c41e0a9", "api", SANDBOX, { ticket: "tkt", target: "_self" });
+  });
+
+  it("the ticket asked for after the health read still names the person who opened the page", async () => {
+    // The server then refuses it rather than mint a ticket for whoever signed in meanwhile.
+    let healthy!: (v: unknown) => void;
+    healthMock.mockImplementationOnce(() => new Promise((done) => (healthy = done)));
+    setExpectedPrincipal("a@example.com");
+    open();
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    healthy({ status: "ok", ui_sandbox: SANDBOX });
+    await waitFor(() => expect(appTicketMock).toHaveBeenCalledWith("7c41e0a9", "api", "a@example.com"));
+    setExpectedPrincipal("");
   });
 
   it.each([

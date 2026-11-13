@@ -11,6 +11,7 @@ import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../../lib/template-refu
 import type { Template, TemplatePublish, TemplateSaveRequest } from "../../../../lib/types/templates";
 import type { RunIntent } from "../draft/run-intent";
 import { TemplateSaveError } from "./save-as-dialog.api";
+import { setExpectedPrincipal } from "../../../../lib/api/core";
 import { SAVE_AS_COPY, SaveAsDialog, type SaveAsDialogProps } from "./save-as-dialog";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 
@@ -27,7 +28,7 @@ const SEAM_COPY = { ...SAVE_AS_COPY, nothingPicked: "Fixture: pick a part.", own
 const SAVED = { id: "t1" } as Template;
 
 function setup(over: Partial<SaveAsDialogProps> = {}) {
-  const save = vi.fn<(r: TemplateSaveRequest) => Promise<Template>>().mockResolvedValue(SAVED);
+  const save = vi.fn<(r: TemplateSaveRequest, person?: string) => Promise<Template>>().mockResolvedValue(SAVED);
   const props: SaveAsDialogProps = {
     open: true, onOpenChange: vi.fn(), kind: "template", intent: INTENT, hasBlockers: false, publish: MEMBER, save, onSaved: vi.fn(), ...over,
   };
@@ -180,6 +181,26 @@ describe("SaveAsDialog", () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(sent(save, 0).document.needs_setup).toBeUndefined();
     expect(sent(save, 1).document.needs_setup).toEqual([{ field: "agent" }]);
+  });
+
+  it("the save sent again after another person signed in still names the person who clicked", async () => {
+    // The server then refuses it rather than save the template as the next person.
+    const { user, save } = setup({ intent: { model_provider: "p", experience: "background" } as unknown as RunIntent });
+    const path = "intent.model_provider";
+    let refuse!: (e: unknown) => void;
+    save.mockImplementationOnce(() => new Promise((_, fail) => (refuse = fail)));
+    await user.click(screen.getByLabelText(SAVE_AS_COPY.subset));
+    setField(screen.getByLabelText("Name"), "Dep");
+    setExpectedPrincipal("a@example.com");
+    await user.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    refuse(new TemplateSaveError(422, TEMPLATE_REFUSAL.DEPENDENCY_MISSING(path, "agent"), TEMPLATE_REASON.DEPENDENCY_MISSING,
+      [{ path, reason: TEMPLATE_REASON.DEPENDENCY_MISSING, message: TEMPLATE_REFUSAL.DEPENDENCY_MISSING(path, "agent") }]));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls.map((c) => c[1])).toEqual(["a@example.com", "a@example.com"]);
+    setExpectedPrincipal("");
   });
 
   describe("kind policy", () => {

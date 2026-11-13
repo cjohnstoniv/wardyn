@@ -15,6 +15,7 @@ import { AlertTriangle, ChevronRight, Laptop, Trash2, XCircle } from "lucide-rea
 import { toast } from "sonner";
 import type { ConfinementClass, Workspace } from "../../../lib/types";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
@@ -275,6 +276,8 @@ export function WorkspaceDetailScreen() {
   // grows a new caller of approveHosts owes the same gate.
   const approveHosts = async (hosts: string[]) => {
     if (!ws || hosts.length === 0) return;
+    // Read before the fresh read below: the write names this person, not whoever signs in while it is out.
+    const person = getExpectedPrincipal();
     try {
       // Merge onto the FRESHEST overlay, not the one captured at click time —
       // the confirm dialog can sit open for minutes, and the PUT is a full
@@ -285,7 +288,7 @@ export function WorkspaceDetailScreen() {
       const fresh = (await workspacesApi.getWorkspace(ws.id).catch(() => null)) ?? ws;
       const next = { ...(fresh.requirements ?? {}) };
       for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
-      setWs(await workspacesApi.setRequirements(ws.id, next));
+      setWs(await workspacesApi.setRequirements(ws.id, next, person));
       toast.success(hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`);
       return true;
     } catch (e) {

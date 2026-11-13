@@ -12,7 +12,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
-import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 import { weekdayClock } from "./run-ends-row";
@@ -113,7 +113,7 @@ describe("RunLifetimeBanner — lost (reboot)", () => {
     const run = detail({ lost_reason: "reboot" });
     renderBanner(run, [], onChanged);
     await user.click(screen.getByRole("button", { name: "Revive" }));
-    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1", undefined));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 2 hosts now blocked.");
   });
@@ -248,6 +248,23 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     await waitFor(() => expect(order).toEqual(["end", "revive"]));
     const [, patchBody] = setRunEndAndWaitMock.mock.calls[0];
     expect(Date.parse(patchBody.endsAt)).toBeGreaterThan(Date.now());
+  });
+
+  it("Extend and revive: the revive after another person signed in still names the person who clicked", async () => {
+    // The server then refuses the revive rather than make it as the next person.
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    let moved!: (v: unknown) => void;
+    setRunEndAndWaitMock.mockImplementationOnce(() => new Promise((done) => (moved = done)));
+    reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: [], proxy_release: "r1" });
+    renderBanner(detail({ lost_reason: "ended", interactive: true }));
+    setExpectedPrincipal("a@example.com");
+    await user.click(screen.getByRole("button", { name: "Extend and revive" }));
+    await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    moved({ id: "run-1", ends_at: null, wait_budget_sec: 0, capped: [] });
+    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1", "a@example.com"));
+    setExpectedPrincipal("");
   });
 
   it("Extend and revive: a revive whose wait ended says the result is unknown, and the page still refreshes for the moved end", async () => {

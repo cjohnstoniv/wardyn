@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../lib/api/core";
 import { aheadByHours } from "../../lib/test-clock";
 
 const listPoliciesMock = vi.fn();
@@ -163,6 +163,29 @@ describe("New policy asks who gets it (decision 4)", () => {
       `grant portfolio-manager policy ${POLICY.id}`,
       `restrict policy ${POLICY.id} true`,
     ]);
+  });
+
+  it("a list written after another person signed in still names the person who created the policy", async () => {
+    // The person is read before the create: read after it, the list would go out as the next person.
+    let created!: (p: RunPolicy) => void;
+    createPolicyMock.mockImplementation(() => new Promise((done) => (created = done)));
+    upsertGrantMock.mockResolvedValue(undefined);
+    putAvailabilityMock.mockResolvedValue(undefined);
+    const dialog = await openNew();
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    expect(await within(dialog).findByText("Portfolio manager")).toBeInTheDocument();
+    setExpectedPrincipal("a@example.com");
+    await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
+    await waitFor(() => expect(createPolicyMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    created(POLICY);
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    expect(upsertGrantMock.mock.calls[0][1]).toBe("a@example.com");
+    expect(putAvailabilityMock.mock.calls[0][3]).toBe("a@example.com");
+    setExpectedPrincipal("");
   });
 
   it("Only these with nobody listed disables Create, so nothing saves open to Everyone; the first Add enables it (#2593)", async () => {

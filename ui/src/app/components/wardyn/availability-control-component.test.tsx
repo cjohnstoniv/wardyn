@@ -13,6 +13,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { aheadByHours } from "../../lib/test-clock";
 import { AVAILABILITY } from "../../lib/availability-copy";
+import { setExpectedPrincipal } from "../../lib/api/core";
 
 const getAvailabilityMock = vi.fn();
 const putAvailabilityMock = vi.fn();
@@ -102,5 +103,27 @@ describe("AvailabilityControl, the org component family", () => {
     expect(await screen.findByTestId("availability-pending")).toHaveTextContent(AVAILABILITY.PENDING_NOTE);
     expect(putAvailabilityMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId("availability-nobody")).toBeNull();
+  });
+
+  it("the first Add under Only these: its PUT after another person signed in still names the person who added", async () => {
+    // The person is read before the grant: read after it, the PUT would go out as the next person.
+    getAvailabilityMock.mockResolvedValue(view(false));
+    let granted!: (v: unknown) => void;
+    upsertGrantMock.mockImplementation(() => new Promise((done) => (granted = done)));
+    putAvailabilityMock.mockResolvedValue(view(true, [DEV]));
+    render(control(false));
+    await screen.findByText("Available to");
+    await userEvent.click(screen.getByRole("radio", { name: "Only these" }));
+    await userEvent.type(await screen.findByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "developer");
+    setExpectedPrincipal("a@example.com");
+    await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    granted({ grant: DEV, updated: false });
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    expect(upsertGrantMock.mock.calls[0][1]).toBe("a@example.com");
+    expect(putAvailabilityMock).toHaveBeenCalledWith("component", ID, true, "a@example.com");
+    setExpectedPrincipal("");
   });
 });

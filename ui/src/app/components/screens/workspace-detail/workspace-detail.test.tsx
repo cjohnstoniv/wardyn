@@ -60,7 +60,7 @@ import { toast } from "sonner";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 import { STATES } from "../../wardyn/states";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -596,7 +596,40 @@ describe("WorkspaceDetailScreen — approveHosts merges onto the freshest overla
     expect(setRequirementsMock).toHaveBeenCalledWith("ws-1", {
       "egress:concurrent.example.com": { level: "required", provenance: "operator_set" },
       "egress:evil.example.com": { level: "required", provenance: "operator_set" },
-    });
+    }, "");
+  });
+
+  it("the PUT after the fresh read still names the person who approved, when another signed in meanwhile", async () => {
+    // The server then refuses it rather than approve the host as the next person.
+    const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    const confinedRR: RecordResult = {
+      run_id: "vr1",
+      label: "build & test",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 0, deny_count: 2, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    const mounted = ws({ record_results: { "build-test": learning, "verify:build-test": confinedRR }, requirements: {} });
+    let fresh!: (w: unknown) => void;
+    getWorkspaceMock.mockResolvedValueOnce(mounted).mockImplementationOnce(() => new Promise((done) => (fresh = done)));
+    setRequirementsMock.mockResolvedValue(ws({}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    const blocked = await screen.findByTestId("verify-session-blocked");
+    setExpectedPrincipal("a@example.com");
+    await user.click(within(blocked).getByRole("button", { name: /^approve$/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(getWorkspaceMock).toHaveBeenCalledTimes(2));
+
+    setExpectedPrincipal("b@example.com");
+    fresh(mounted);
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    expect(setRequirementsMock.mock.calls[0][2]).toBe("a@example.com");
+    setExpectedPrincipal("");
   });
 });
 
