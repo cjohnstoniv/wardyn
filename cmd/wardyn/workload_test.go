@@ -69,12 +69,13 @@ func TestWorkloadListAndGet(t *testing.T) {
 	}
 }
 
-// TestWorkloadRestartAndDelete: restart answers like an apply, a refusal is exit 1, and the owner
-// flag names whose workload; delete says what it ended.
+// TestWorkloadRestartAndDelete: restart answers like an apply, a refusal is exit 1, a restart that
+// started no run says so, and the owner flag names whose workload; delete says what it ended.
 func TestWorkloadRestartAndDelete(t *testing.T) {
 	runID := uuid.New()
 	var restartOwner, deleteOwner string
 	refuse := false
+	var none *sdk.WorkloadLaunch
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/workloads/web/restart":
@@ -82,6 +83,9 @@ func TestWorkloadRestartAndDelete(t *testing.T) {
 			launch := sdk.WorkloadLaunch{State: sdk.WorkloadLaunched, RunID: &runID}
 			if refuse {
 				launch = sdk.WorkloadLaunch{State: sdk.WorkloadRefused, Reason: "pool_full", Message: "the pool is at its run limit"}
+			}
+			if none != nil {
+				launch = *none
 			}
 			_ = json.NewEncoder(w).Encode(sdk.WorkloadApplyResult{Outcome: sdk.WorkloadUnchanged, Launch: launch})
 		case "DELETE /api/v1/workloads/web":
@@ -103,6 +107,20 @@ func TestWorkloadRestartAndDelete(t *testing.T) {
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != 1 || out != "workload/web refused pool_full: the pool is at its run limit\n" {
 		t.Errorf("refused restart: err = %v, output = %q", err, out)
+	}
+
+	// A restart that started no run is not an error, and the output does not claim a restart. The sentence is
+	// the server's own for a person's workload restarted by someone else (restartLaunch in internal/api).
+	const recorded = "The restart is recorded: the owner's next apply starts the new run."
+	none = &sdk.WorkloadLaunch{State: sdk.WorkloadNoLaunch, Message: recorded}
+	out, err = rig.run(t, "workload", "restart", "web", "--owner", "person:gina")
+	if err != nil || out != "workload/web: "+recorded+"\n" {
+		t.Errorf("restart that started no run: err = %v, output = %q", err, out)
+	}
+	none = &sdk.WorkloadLaunch{State: sdk.WorkloadNoLaunch}
+	out, err = rig.run(t, "workload", "restart", "web")
+	if err != nil || out != "workload/web: restart recorded. This request did not start a new run.\n" {
+		t.Errorf("restart that started no run, no message: err = %v, output = %q", err, out)
 	}
 
 	out, err = rig.run(t, "workload", "delete", "web", "--owner", "person:gina")

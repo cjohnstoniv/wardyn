@@ -370,10 +370,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   } | null>(null);
 
   // Waiting on you: the pending requests this person may decide under a unit's deciders rule, other people's included.
-  // A security operator never gets the tab (their Pending lists every request). Everyone else asks once whether the
-  // server knows the filter, reads the list while it does, and the tab is drawn once a row carried requested_by (a
-  // request on someone else's run) and for as long as this screen is mounted.
+  // A security operator never gets the tab (their Pending lists every request). Everyone else asks whether the
+  // server knows the filter (again on each poll while the answer is unknown), reads the list while it does, and the
+  // tab is drawn once a row carried requested_by (a request on someone else's run) and for as long as this screen is
+  // mounted.
   const securityOperator = useSecurityOperator();
+  // null: not asked yet, or the last ask failed without an answer.
   const [knows, setKnows] = React.useState<boolean | null>(null);
   const [waitingRows, setWaitingRows] = React.useState<ApprovalRequest[]>([]);
   const [waitingTruncated, setWaitingTruncated] = React.useState(false);
@@ -461,21 +463,28 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     setWaitingStatus((st) => (st === "ready" ? st : "loading"));
     fetchWaiting().catch(() => setWaitingStatus((st) => (st === "ready" ? st : "error")));
   }, [fetchWaiting]);
+  // The probe answers yes, no, or null when it could not tell (a 5xx, a dropped connection, a module that has no such
+  // read): null draws nothing new and the poll asks again, so one failed ask does not hide the tab for the screen's life.
+  const securityOperatorRef = React.useRef(securityOperator);
+  securityOperatorRef.current = securityOperator;
+  const probeKnows = React.useCallback(
+    () =>
+      Promise.resolve()
+        .then(() => api.knowsDecidableBy())
+        .catch(() => null)
+        .then((k) => {
+          // An ask that could not tell never replaces an answer another ask already got.
+          if (!securityOperatorRef.current) setKnows((prev) => (k === null ? prev : k));
+        }),
+    [],
+  );
   React.useEffect(() => {
     if (securityOperator) {
       setKnows(null);
       return;
     }
-    let alive = true;
-    // Any failure, a module that has no such read included, is "does not know": nothing new is drawn.
-    void Promise.resolve()
-      .then(() => api.knowsDecidableBy())
-      .catch(() => false)
-      .then((k) => alive && setKnows(k));
-    return () => {
-      alive = false;
-    };
-  }, [securityOperator]);
+    void probeKnows();
+  }, [securityOperator, probeKnows]);
   React.useEffect(() => {
     if (waitingOn) loadWaiting();
   }, [waitingOn, loadWaiting]);
@@ -538,6 +547,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // tick during the error state can still recover it.
   const POLL_MS = 10_000;
   usePoll(() => {
+    if (!securityOperator && knows === null) void probeKnows();
     fetchAll()
       .then(() => {
         setStatus("ready");

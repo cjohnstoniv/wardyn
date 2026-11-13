@@ -6,7 +6,7 @@
 // Admin -> Runners -> Add this computer -> "Managed install (MDM)" (M-ATT-4, formerly the "Create a registration
 // token" dialog, M-RN-1 RA3, super admin): two steps in one panel. Step 1 names the person; step 2 shows the token
 // once with the command a managed computer runs. An admin can mint but never claim, so nothing here offers a claim.
-// Leaving step 2 (Done) before either copy control was used asks once (RA3b); the page keeps this panel mounted across
+// Leaving step 2 (Done) before the token was copied asks once (RA3b); the page keeps this panel mounted across
 // the Runners and Pools tabs, so switching tabs cannot lose a token that was never copied. The command's --org is the URL the server
 // answered with, because wardyn-runnerd refuses an --org that does not hash to the server's; this page's own address
 // is only the fallback. The start command and the proxy image are not shown: `setup` installs the service.
@@ -51,7 +51,8 @@ export function MintTokenPanel({
   const [error, setError] = React.useState("");
   const [token, setToken] = React.useState<RunnerRegistrationToken | null>(null);
   const [asking, setAsking] = React.useState(false);
-  // A copy control was pressed. The token cannot be read again, so leaving without one asks first.
+  // The token was copied. It cannot be read again, so leaving without a copy asks first. The command's copy does
+  // not count: it carries no token (it reads the token from a file).
   const copied = React.useRef(false);
   const titleRef = React.useRef<HTMLHeadingElement | null>(null);
   const root = React.useRef<HTMLDivElement | null>(null);
@@ -100,12 +101,7 @@ export function MintTokenPanel({
     <div ref={root}>
       {token ? (
         <div className="space-y-4">
-          <div
-            className="space-y-4"
-            onClick={(e) => {
-              if ((e.target as Element).closest("button")) copied.current = true;
-            }}
-          >
+          <div className="space-y-4">
             <div className="space-y-1">
               <h3 ref={titleRef} tabIndex={-1} className="text-sm font-semibold text-foreground outline-none">
                 {RUNNERS.MINT_DONE_TITLE(owner)}
@@ -116,7 +112,14 @@ export function MintTokenPanel({
               <h4 className="label-eyebrow">{RUNNER.TOKEN_LABEL}</h4>
               <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-2/60 p-3">
                 <code className="min-w-0 break-all font-mono text-xs">{token.token}</code>
-                <CopyButton text={token.token ?? ""} label={RUNNER.COPY_TOKEN} className={COPY_BUTTON}>
+                <CopyButton
+                  text={token.token ?? ""}
+                  label={RUNNER.COPY_TOKEN}
+                  className={COPY_BUTTON}
+                  onCopied={() => {
+                    copied.current = true;
+                  }}
+                >
                   {RUNNER.COPY_TOKEN}
                 </CopyButton>
               </div>
@@ -134,7 +137,6 @@ export function MintTokenPanel({
             <p className="text-body text-foreground">{RUNNER_V6.MINT_ONE_PER_COMPUTER}</p>
             <p className="text-body text-muted-foreground">{RUNNERS.MINT_NEXT(owner)}</p>
           </div>
-          {/* Outside the copy-detecting wrapper: pressing Done is not a copy. */}
           <div className="flex justify-end">
             <Button type="button" variant="outline" size="sm" onClick={requestDone}>
               {RUNNER.DONE}

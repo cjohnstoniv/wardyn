@@ -84,6 +84,19 @@ describe("DesktopReviewRow", () => {
     expect(onRefused).toHaveBeenCalled();
   });
 
+  it("Download approved asks for the file once while a download is in flight, and offers it again after a failure", async () => {
+    let fail: (e: Error) => void = () => {};
+    downloadMock.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    renderRow(row({ state: "APPROVED", decided_by: "sam@acme.example", decided_at: aheadByHours(-1) }));
+    await userEvent.click(screen.getByRole("button", { name: C.downloadApproved }));
+    await userEvent.click(screen.getByRole("button", { name: C.downloadApproved }));
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: C.downloadApproved })).toBeDisabled();
+    fail(new Error("gone"));
+    expect(await screen.findByText(`${C.downloadFailed}: gone`)).toBeTruthy();
+    expect(screen.getByRole("button", { name: C.downloadApproved })).toBeEnabled();
+  });
+
   it("denied shows the decider's reason and offers Request download again", () => {
     renderRow(row({ state: "DENIED", decided_by: "sam.okafor@acme.example", reason: "Customer records leave through the data team.", decided_at: aheadByHours(-1) }));
     expect(screen.getByText(C.stateDenied)).toBeTruthy();

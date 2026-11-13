@@ -906,6 +906,20 @@ describe("Admin -> Runners: Managed install (MDM)", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  it("copying only the setup command, which carries no token, still asks before leaving", async () => {
+    mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
+    const user = userEvent.setup();
+    renderScreen();
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    await user.click(mdm.getByRole("button", { name: "Copy command" }));
+    expect(await navigator.clipboard.readText()).toBe(`wardyn-runnerd setup --org ${ORG} --token-file <file>`);
+    await user.click(mdm.getByRole("button", { name: "Done" }));
+    expect(within(await screen.findByRole("alertdialog")).getByText("Close without copying the token?")).toBeInTheDocument();
+  });
+
   it("Done and Close return focus to the person field", async () => {
     mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
     const user = userEvent.setup();

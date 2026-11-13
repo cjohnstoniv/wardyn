@@ -70,6 +70,8 @@ export function AdminMintedTokens() {
   const [includeRevoked, setIncludeRevoked] = React.useState(false);
   const [target, setTarget] = React.useState<AdminMintedToken | null>(null);
   const [revoking, setRevoking] = React.useState(false);
+  // A failed revoke keeps its dialog open with the server's sentence, and Revoke tries again.
+  const [revokeError, setRevokeError] = React.useState<string | null>(null);
   // A ref as well as the state: two clicks in one tick must revoke once.
   const inFlight = React.useRef(false);
 
@@ -97,14 +99,14 @@ export function AdminMintedTokens() {
     if (!target || inFlight.current) return;
     inFlight.current = true;
     setRevoking(true);
+    setRevokeError(null);
     try {
       await credentialsApi.revokeToken(target.id);
       setTarget(null);
       toast.success(MINTED.REVOKED_TOAST);
       load();
     } catch (e) {
-      setTarget(null);
-      toast.error(getErrorMessage(e));
+      setRevokeError(getErrorMessage(e));
     } finally {
       inFlight.current = false;
       setRevoking(false);
@@ -191,7 +193,14 @@ export function AdminMintedTokens() {
                       </TableCell>
                       <TableCell>
                         {!t.revoked_at && (
-                          <Button size="sm" variant="outline" onClick={() => setTarget(t)}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setRevokeError(null);
+                              setTarget(t);
+                            }}
+                          >
                             {MINTED.REVOKE}
                           </Button>
                         )}
@@ -218,6 +227,11 @@ export function AdminMintedTokens() {
             <AlertDialogTitle>{target ? MINTED.REVOKE_TITLE(target.name, personOf(target)) : ""}</AlertDialogTitle>
             <AlertDialogDescription>{target ? MINTED.REVOKE_BODY(personOf(target)) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
+          {revokeError !== null && (
+            <p role="alert" className="text-body text-danger">
+              {revokeError}
+            </p>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={revoking}>{MINTED.REVOKE_CANCEL}</AlertDialogCancel>
             <AlertDialogAction

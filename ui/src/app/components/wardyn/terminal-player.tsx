@@ -26,6 +26,9 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [speed, setSpeed] = React.useState<(typeof SPEEDS)[number]>(1);
   const speedGroup = useRovingRadio(SPEEDS.length, SPEEDS.indexOf(speed), (i) => setSpeed(SPEEDS[i]));
+  // Where the last player stood when it was torn down, for the same recording: a speed change rebuilds the player
+  // (speed is a creation-time option), and the new one seeks back there and plays on if the old one was playing.
+  const place = React.useRef<{ cast: string; at: number; playing: boolean } | null>(null);
 
   React.useEffect(() => {
     const el = ref.current;
@@ -47,17 +50,34 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
       autoPlay: false,
       speed,
     });
+    let playing = false;
+    player.addEventListener("playing", () => {
+      playing = true;
+    });
+    player.addEventListener("pause", () => {
+      playing = false;
+    });
+    player.addEventListener("ended", () => {
+      playing = false;
+    });
+    // Seek in the player's own timeline (getCurrentTime's), not startAt, which counts the idle time idleTimeLimit cut.
+    const was = place.current?.cast === recording.cast ? place.current : null;
+    place.current = null;
+    if (was && was.at > 0) void player.seek(was.at).catch(() => undefined);
+    if (was?.playing) void player.play().catch(() => undefined);
 
     return () => {
+      try {
+        place.current = { cast: recording.cast, at: player.getCurrentTime(), playing };
+      } catch {
+        place.current = null;
+      }
       try {
         player.dispose();
       } catch {
         /* already torn down */
       }
     };
-    // speed is a creation-time option in asciinema-player v3, so changing it
-    // rebuilds the player — acceptable: the rebuild is instant and seeking
-    // back to where you were is what the progress bar is for.
   }, [recording.run_id, recording.cast, recording.header.width, recording.header.height, speed]);
 
   // Hand the operator the .cast itself — the console could only replay it, so

@@ -187,6 +187,13 @@ func printWorkloadResult(cmd *cobra.Command, name, verb string, res sdk.Workload
 			fmt.Fprintf(cmd.OutOrStdout(), "workload/%s refused %s: %s\n", name, l.Reason, l.Message)
 		case l.RunID != nil:
 			fmt.Fprintf(cmd.OutOrStdout(), "workload/%s %s run %s\n", name, verb, l.RunID)
+		case l.State == sdk.WorkloadNoLaunch && verb == "restarted":
+			// A restart that started no run did not restart anything: say what the server said instead.
+			msg := l.Message
+			if msg == "" {
+				msg = "restart recorded. This request did not start a new run."
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "workload/%s: %s\n", name, msg)
 		default:
 			fmt.Fprintf(cmd.OutOrStdout(), "workload/%s %s\n", name, verb)
 		}
