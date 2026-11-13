@@ -21,6 +21,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
 
+### Security
+
+- The CA certificates `wardyn ca add` stores are now trusted only for the CLI's connection to that organisation's host. Before, a certificate signed by one of them that also named another host was accepted on the CLI's connection to that other host, such as an `https://` proxy; that connection now uses the system's trusted roots only.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added
