@@ -78,6 +78,8 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
   // Load more has its own state: a failed next page must not take the pages already read off the screen.
   const [more, setMore] = React.useState<"idle" | "loading" | "failed">("idle");
   const seq = React.useRef(0);
+  // The search and state filter the rows on screen were read for.
+  const shown = React.useRef<string | undefined>(undefined);
 
   // The box debounces into q, so each keystroke is not a request.
   React.useEffect(() => {
@@ -88,9 +90,22 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
   const load = React.useCallback(
     (after?: string) => {
       const mine = ++seq.current;
-      // A re-read keeps the rows on screen: swapping them for the skeleton unmounts the row that opened the
-      // drawer, and closing the drawer then has nowhere to put focus back.
-      if (!after) setStatus((s) => (s === "ready" ? s : "loading"));
+      if (!after) {
+        // A cursor belongs to the query that returned it: until this first page answers there is no next page,
+        // so Load more cannot send the old cursor with a new search or filter.
+        setCursor(undefined);
+        const query = `${filter}\n${q}`;
+        if (shown.current !== query) {
+          // Another search's or state's rows are not this one's: they go, and the table waits for its first page.
+          shown.current = query;
+          setRows([]);
+          setStatus("loading");
+        } else {
+          // A re-read of the same query keeps the rows on screen: swapping them for the skeleton unmounts the row
+          // that opened the drawer, and closing the drawer then has nowhere to put focus back.
+          setStatus((s) => (s === "ready" ? s : "loading"));
+        }
+      }
       setMore(after ? "loading" : "idle");
       peopleApi
         .list({ limit: PAGE_SIZE, cursor: after, q: q || undefined, state: filter === "all" ? undefined : filter })

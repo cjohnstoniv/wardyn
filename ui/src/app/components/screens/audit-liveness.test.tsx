@@ -4,8 +4,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import * as React from "react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
 
@@ -150,5 +151,131 @@ describe("AuditScreen — the liveness chip stops claiming a feed that stopped a
     });
     expect(screen.getByText("2 events")).toBeInTheDocument();
     expect(screen.getByText("Live · appending")).toBeInTheDocument();
+  });
+});
+
+// One request generation guards everything a read writes: a read the run filter has moved past must not mark the
+// list ready, live, failed or not updating under the new filter.
+describe("AuditScreen — a read for a run filter that has since changed", () => {
+  beforeEach(() => {
+    listAuditMock.mockReset();
+    getRunMock.mockReset().mockResolvedValue(undefined);
+    healthMock.mockReset().mockResolvedValue({});
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const renderAt = (path: string) =>
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <AuditScreen />
+      </MemoryRouter>,
+    );
+
+  it("does not mark the list ready or live while the new filter's own read is still out", async () => {
+    let answerRun: ((v: AuditEvent[]) => void) | undefined;
+    listAuditMock.mockImplementation((runId?: string) => (runId ? new Promise((done) => (answerRun = done)) : new Promise(() => {})));
+    renderAt("/audit?run_id=run-A");
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-A", { newest: true }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show all events" }));
+    await waitFor(() => expect(listAuditMock).toHaveBeenLastCalledWith(undefined));
+    await act(async () => answerRun?.([ev({ id: "a1", run_id: "run-A", action: "run.a.only" })]));
+    expect(screen.queryByText("Live · appending")).toBeNull();
+    expect(screen.queryByText("run.a.only")).toBeNull();
+  });
+
+  it("does not put an error over the new filter's list when it fails late", async () => {
+    let failRun: ((e: Error) => void) | undefined;
+    listAuditMock.mockImplementation((runId?: string) =>
+      runId ? new Promise((_, reject) => (failRun = reject)) : Promise.resolve([ev({ id: "g1", action: "global.only" })]),
+    );
+    renderAt("/audit?run_id=run-A");
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-A", { newest: true }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show all events" }));
+    expect(await screen.findByText("global.only")).toBeInTheDocument();
+    await act(async () => failRun?.(new Error("503")));
+    expect(screen.getByText("global.only")).toBeInTheDocument();
+    expect(screen.getByText("Live · appending")).toBeInTheDocument();
+  });
+
+  it("a refocus read that overtakes the new filter's first read still leaves the list shown", async () => {
+    // The tab is looked at again in the gap after the filter change commits and before the screen re-renders as
+    // loading: that refocus read supersedes the new filter's first read.
+    function RefocusOnFilterChange() {
+      const { search } = useLocation();
+      const first = React.useRef(true);
+      React.useEffect(() => {
+        if (first.current) first.current = false;
+        else document.dispatchEvent(new Event("visibilitychange"));
+      }, [search]);
+      return null;
+    }
+    listAuditMock.mockImplementation((runId?: string) =>
+      Promise.resolve(runId ? [ev({ id: "a1", run_id: "run-A", action: "run.a.only" })] : [ev({ id: "g1", action: "global.only" })]),
+    );
+    render(
+      <MemoryRouter initialEntries={["/audit?run_id=run-A"]}>
+        <AuditScreen />
+        <RefocusOnFilterChange />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("run.a.only")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show all events" }));
+    expect(await screen.findByText("global.only")).toBeInTheDocument();
+    expect(listAuditMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("a poll tick still out for the old filter does not mark the new list as not updating when it fails", async () => {
+    vi.useFakeTimers();
+    listAuditMock.mockResolvedValueOnce([ev({ id: "a1", run_id: "run-A", action: "run.a.only" })]);
+    renderAt("/audit?run_id=run-A");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("Live · appending")).toBeInTheDocument();
+    let failTick: ((e: Error) => void) | undefined;
+    listAuditMock.mockImplementation((runId?: string) =>
+      runId ? new Promise((_, reject) => (failTick = reject)) : Promise.resolve([ev({ id: "g1", action: "global.only" })]),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(failTick).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Show all events" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("global.only")).toBeInTheDocument();
+    await act(async () => failTick?.(new Error("503")));
+    expect(screen.queryByText("Not updating — retrying")).toBeNull();
+    expect(screen.getByText("Live · appending")).toBeInTheDocument();
+  });
+});
+
+describe("AuditScreen — a refocus read that overtakes the new filter's first read and fails", () => {
+  it("shows the load error with its Retry, not the skeleton for good", async () => {
+    getRunMock.mockReset().mockResolvedValue(undefined);
+    healthMock.mockReset().mockResolvedValue({});
+    function RefocusOnFilterChange() {
+      const { search } = useLocation();
+      const first = React.useRef(true);
+      React.useEffect(() => {
+        if (first.current) first.current = false;
+        else document.dispatchEvent(new Event("visibilitychange"));
+      }, [search]);
+      return null;
+    }
+    listAuditMock.mockReset().mockImplementation((runId?: string) =>
+      runId ? Promise.resolve([ev({ id: "a1", run_id: "run-A", action: "run.a.only" })]) : Promise.reject(new Error("503")),
+    );
+    render(
+      <MemoryRouter initialEntries={["/audit?run_id=run-A"]}>
+        <AuditScreen />
+        <RefocusOnFilterChange />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("run.a.only")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show all events" }));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledTimes(3));
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

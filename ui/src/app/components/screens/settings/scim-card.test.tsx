@@ -163,6 +163,17 @@ describe("ScimCard", () => {
     expect(within(card).getByText("1 day")).toBeInTheDocument();
   });
 
+  // The delay before stored credentials are erased reads as the largest whole unit, never rounded up to more time.
+  it.each([
+    [3600, "1 hour"],
+    [36 * 3600, "36 hours"],
+    [30 * 86400, "30 days"],
+    [90, "90 seconds"],
+  ])("a purge delay of %i seconds reads %s", async (seconds, words) => {
+    const card = await open(status({ purge_after_seconds: seconds }));
+    expect(within(card).getByText(words)).toBeInTheDocument();
+  });
+
   it("a read the server worded shows its sentence, not the default line", async () => {
     getStatusMock.mockReset().mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "scim_failed"));
     render(<ScimCard />);
