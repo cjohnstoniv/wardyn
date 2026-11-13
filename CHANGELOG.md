@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A model gateway or organisation MCP server that asks for a client certificate now gets one naming the run: an X.509 certificate whose one URI SAN is the run's SPIFFE ID, signed by a new CA (`wardyn-gateway-client-ca`) and checked against the bundle at `/.well-known/wardyn-experimental/gateway-client-ca.pem`. It comes with run identity, with no setting of its own. When there is none to send, or the gateway names only other CAs, the proxy sends none, so a TLS front that only asks lets the call through. The identity token is still sent, and the gateway must still check it on every call.
+
 ### Changed
 
 - The proxy no longer sends a call to the host and port of a model gateway or MCP server with run identity on when no identity route's path prefix there covers the path, or the path has a dot segment or a backslash. This holds for a plain proxy request, a request in a tunnel the proxy terminates, the brokered model route and the MCP broker. The Git brokers, the push check's reads of the forge and the GitHub, Azure, Kubernetes and git_pat API doors and the AWS door on a host AWS serves never carry the identity, so they send such a host and port nothing at all. A tunnel the proxy does not terminate is not read, as before. The 400 answer names the route and says to remove any dot segments or backslashes, or, for a path outside the routes, to widen the intended route's path prefix or give the other service its own host and port. Before, most such calls were sent without the identity. Affects 0.10.0 prereleases only.

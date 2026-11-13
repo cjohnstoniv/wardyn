@@ -688,8 +688,8 @@ func parseBootFlags() *bootFlags {
 			"That file must already hold the current identity as a bare AGE-SECRET-KEY-... line; see docs/operations/secrets-and-keys.md"),
 
 		// flag.Bool, NOT flagBool: no env pair by design — see the struct field.
-		rotateGatewayIdentityKey: flag.Bool("rotate-gateway-identity-key", false, "maintenance mode, every replica must be stopped: make a new AI gateway identity signing key, "+
-			"publish the old one until its tokens have expired, write a secret.rekey audit row, then exit. See docs/operations/secrets-and-keys.md (default false)"),
+		rotateGatewayIdentityKey: flag.Bool("rotate-gateway-identity-key", false, "maintenance mode, every replica must be stopped: make a new AI gateway identity signing key and client certificate CA, "+
+			"publish the old ones until what they signed has expired, write a secret.rekey audit row for each, then exit. See docs/operations/secrets-and-keys.md (default false)"),
 		rotateAuditReceiptKey: flag.Bool("rotate-audit-receipt-key", false, "maintenance mode, every replica must be stopped: make a new audit checkpoint signing key, "+
 			"keep every old public key so old checkpoints still verify, write a secret.rekey audit row, then exit (default false)"),
 		retirePrevious: flag.Bool("retire-previous", false, "with -rotate-gateway-identity-key or -rotate-audit-receipt-key only, the recovery from a stolen key: "+

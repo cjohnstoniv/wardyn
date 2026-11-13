@@ -144,6 +144,8 @@
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
 //     gateway fetches; a gateway reads it, not an SDK caller
+//   - /.well-known/wardyn-experimental/gateway-client-ca.pem — the CA bundle a
+//     gateway that checks client certificates trusts; a gateway reads it too
 //   - the console SPA at /   — static assets
 //
 // (The AI Run Composer's /runs/compose* used to be listed here; those routes

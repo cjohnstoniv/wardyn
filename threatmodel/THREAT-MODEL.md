@@ -2476,6 +2476,7 @@ These risks are **not closed by v1 Wardyn**.
       - the SSH gateway host key (`wardyn-ssh-host-key`), only when `WARDYN_SSH_LISTEN` is set;
       - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when `WARDYN_UI_SANDBOX_LISTEN` is set;
       - the AI gateway identity key (`wardyn-gateway-identity-key`), only after the first save that turns identity on;
+      - the AI gateway client certificate CA (`wardyn-gateway-client-ca`), beside that key. An attacker who holds it can sign a certificate naming any run; a gateway that also checks the token still refuses a call with no valid token;
       - the audit checkpoint signing key (`wardyn-audit-receipt-key`), unless `WARDYN_AUDIT_CHECKPOINT_INTERVAL` is `0`. An attacker who holds it can forge checkpoints; those already sent to your sinks stay as signed.
     - An attacker who holds the age key and a read of that table (the DSN, a backup or a replica) therefore holds all of it at once.
     - That means every stored credential in cleartext and run-identity tokens the broker accepts.
@@ -4151,7 +4152,7 @@ The labelled series, every label, and where its values come from:
 ### AI gateway run identity (opt-in, experimental)
 
 - An admin can turn this on per model provider, so a gateway in front of a model learns whose call it is.
-- **It is off by default and experimental.** The token format and the key set's address may change before 0.11.
+- **It is off by default and experimental.** The token format is `1`, and the key set's address is stable through 0.11.
 - The disclosure, word for word: "When on, each model call to this gateway carries a signed token naming the person, the run and the runner."
 - A `custom_endpoint` row may opt in, and so may an `anthropic_api_key` or `openai_api_key` row with a `base_url`, a `bedrock_bearer` row with a `bedrock.base_url`, and a `bedrock_sso` row while `WARDYN_AWS_SIGV4_AT_PROXY` is on. Every other kind is refused at save, `anthropic_subscription` included.
 - A `bedrock_sso` row's gateway must be on a name AWS does not own (`proxy.AWSProviderOwnedHost`), checked at save and again when the proxy loads its config, so the token never goes to AWS.
@@ -4162,6 +4163,12 @@ The labelled series, every label, and where its values come from:
 - `wardynd` signs an ES256 token per run and provider, valid for 60 to 600 seconds (600 unless the provider sets `token_lifetime_seconds`) and minted again at half-life (`gatewayidentity.Signer`).
 - `wardyn-proxy` asks for it, holds it in memory and sends it as `X-Wardyn-Identity`, only on a request matching the provider's route: host, exact port and path prefix (`Proxy.gatewayRouteFor`).
 - The gateway verifies it against an anonymous key set, `GET /.well-known/wardyn-experimental/gateway-jwks.json`. [The AI gateway identity key](../docs/operations/secrets-and-keys.md#the-ai-gateway-identity-key) covers the key's storage and rotation.
+- When the gateway asks in the TLS handshake, `wardyn-proxy` also presents a client certificate naming the run (one URI SAN, `spiffe://<trust domain>/agent-run/<run id>`), signed by a CA of its own, `wardyn-gateway-client-ca`, and living no longer than the token (`gatewayCertHolder`, `gatewayidentity.Authority`).
+  - Its key is made in the proxy and never leaves it; wardynd signs the public half after the same checks as a token (`Server.gatewayCertAdmit`).
+  - A connection keeps the certificate it opened with, so the token, checked on every call, is what ends a cut run's access within its lifetime.
+  - The certificate never stands alone. The proxy presents it on any connection to a route's host and port, so a call to a path outside the route carries it with no token; a gateway must check the token too.
+  - A gateway that requires the certificate refuses a sandbox's own tunnel, which has none. Tested against Go's TLS server only, not a named gateway.
+  - With no usable certificate, or when the gateway names only other CAs, the proxy sends none, so a TLS front that only asks for one lets the call through.
 
 **Off changes nothing.**
 
