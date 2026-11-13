@@ -524,6 +524,10 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	case errors.Is(err, store.ErrRunnerAtCapacity):
 		// Every runner the run could start on filled between the promotion and this start.
 		return &queueEnd{token: string(placement.ReasonRunnerAtCapacity), hint: runnerpool.RunnerAtCapacityMsg(f.place.pool.Name)}
+	case errors.Is(err, store.ErrRunTasksErased):
+		// The owner's run_tasks erasure marked the run after its promotion and this start holds the erased
+		// task: it ends with the reason that erasure gives the runs it cancels (eraseRunTasks).
+		return &queueEnd{token: "person_erased", hint: queueStartFailedHint}
 	case err != nil:
 		slog.ErrorContext(st.base, queueStartFailedLogName+": write start columns", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return &queueEnd{hint: queueStartFailedHint}

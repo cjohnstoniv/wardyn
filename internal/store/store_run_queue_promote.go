@@ -565,9 +565,15 @@ type QueueStart struct {
 	WallPreset *types.WallPresetOnRun
 }
 
+// ErrRunTasksErased is StartQueuedRun's answer for a promoted run, not yet started, that its owner's
+// run_tasks erasure marked (tasks_erased_at): the start holds the queue row's copy taken before that
+// erasure, task text included, so nothing is written and the start ends the run instead.
+var ErrRunTasksErased = errors.New("store: the run's tasks were erased")
+
 // StartQueuedRun writes the start's columns on a run that was promoted (PENDING, admitted_at set) and
 // has not been dispatched, and returns the row. ok is false when the run is no longer in that state,
-// so a kill that won leaves nothing written. A run bound to a runner of either kind is held to that
+// so a kill that won leaves nothing written; a run still in it that the erasure marked answers
+// ErrRunTasksErased. A run bound to a runner of either kind is held to that
 // runner's limits at the size it starts with (Reserved, written to the row in the same statement), the
 // run itself not counted, under the runner rows' locks: RunnerID when it has room (the promotion found
 // it room there), else the first of RunnerFallbacks that has, else RunnerAtCapacityError; a
@@ -623,7 +629,7 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20, inner_walls=$21, restriction_ids=$22,
 			image_input=COALESCE($23, image_input), wall_preset=$24, image_admission=$25,
 			token_renewed_at=now(), token_jti=NULLIF($26, ''), token_prev_jti=NULL
-		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = ''
+		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = '' AND tasks_erased_at IS NULL
 		RETURNING `+runCols,
 		id, st.SPIFFEID, string(st.ConfinementClass), st.ModelProviderID, string(st.AutonomyLevel), st.EndsAt,
 		st.WaitBudgetSec, limits, st.UnitID, st.LifetimeCapAt, string(st.LifetimeCapSource),
@@ -631,6 +637,16 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB, walls, restrictionIDsParam(st.RestrictionIDs),
 		st.ImageInput, wallPreset, imageAdmission, st.TokenJTI))
 	if errors.Is(err, ErrNotFound) {
+		// Nothing matched: a kill or another end moved the run, or the erasure marked it.
+		var marked bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id=$1 AND state=$2
+			AND admitted_at IS NOT NULL AND sandbox_ref = '' AND tasks_erased_at IS NOT NULL)`,
+			id, string(types.RunPending)).Scan(&marked); err != nil {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: read the erasure mark: %w", err)
+		}
+		if marked {
+			return types.AgentRun{}, false, ErrRunTasksErased
+		}
 		return types.AgentRun{}, false, nil
 	}
 	if err != nil {

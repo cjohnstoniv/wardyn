@@ -8,7 +8,9 @@ package api
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -98,4 +100,46 @@ func TestPG_QueueErasureCancelsARunPutBackWhileItRuns(t *testing.T) {
 	if e.run(waiting.ID).State != types.RunKilled || e.queueRows(waiting.ID) != 0 {
 		t.Error("the run put back during the erasure kept its queue row")
 	}
+}
+
+// A promoted start that is past its checks when its owner's run_tasks erasure runs does not start the run
+// from its pre-erasure copy: the run ends FAILED as a refused start, with its run.queue.start failure row,
+// and the slot it held goes to another person's run, which starts. Catches a start write that ignores the
+// erasure's mark, and a refused start that leaves the run PENDING.
+func TestPG_QueueStartAfterTheOwnersTaskErasureEndsTheRun(t *testing.T) {
+	e := newQueueEnv(t)
+	erased := make(chan error, 1)
+	var fired atomic.Bool // the first start to pass its checks is the erased person's: the pool has one slot
+	e.srv.queueRace = func(point string) {
+		if point == queueRaceStartAfterPrecheck && fired.CompareAndSwap(false, true) {
+			_, err := e.srv.eraseRunTasks(context.Background(), e.personP)
+			erased <- err
+		}
+	}
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(e.person, pool, "")
+	others := e.queuedLaunch(e.other, pool, "")
+	e.free(occupant)
+	select {
+	case err := <-erased:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the erasure never ran inside the promoted start")
+	}
+	got := e.waitFailed(waiting.ID)
+	if got.StatusDetail != "queue: person_erased" || got.FailureHint != queueStartFailedHint || got.SPIFFEID != "" || got.SandboxRef != "" || got.Task != "" {
+		t.Errorf("the erased person's run = %q %q, spiffe %q, sandbox %q, task %q; want person_erased, nothing started or launched, blanked",
+			got.StatusDetail, got.FailureHint, got.SPIFFEID, got.SandboxRef, got.Task)
+	}
+	// One row, naming the erasure: not a start_lost row from a run left PENDING for the stale-start sweep.
+	if rows := e.waitAudit(got.ID, "run.queue.start"); len(rows) != 1 || rows[0].Outcome != "failure" || queueAuditData(t, rows[0])["reason"] != "person_erased" {
+		t.Errorf("run.queue.start rows = %+v; want one failure naming person_erased", rows)
+	}
+	if n := e.queueRows(waiting.ID); n != 0 {
+		t.Errorf("run_queue holds %d rows for the erased person's run; want none", n)
+	}
+	e.waitStarted(others.ID)
 }
