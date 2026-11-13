@@ -7,7 +7,7 @@
 // the TIER, not the network), fetch-failed (distinct from empty), the legacy
 // banner (zero rows), populated, and exactly ONE teal button at a time.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
@@ -254,6 +254,21 @@ describe("ProvidersScreen", () => {
     await screen.findByTestId("provider-row-github");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(putWorkspaceProvidersMock).toHaveBeenCalled();
+  });
+
+  it("the Git and Storage tabs are read-only while their save is in flight, so a limit typed then is not lost", async () => {
+    const doc = { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] };
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: doc, etag: '"e3"' });
+    let answer: ((v: unknown) => void) | undefined;
+    putWorkspaceProvidersMock.mockReturnValue(new Promise((done) => (answer = done)));
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    expect(within(row).getByRole("textbox")).toBeDisabled();
+    await userEvent.click(screen.getByRole("tab", { name: PROVIDERS.STORAGE_TAB }));
+    expect(screen.getByLabelText(PROVIDERS.FIELD_MAX_DISK)).toBeDisabled();
+    await act(async () => answer?.({ providers: doc, etag: '"e4"', sourcesNoLongerAdmitted: 0 }));
+    expect(screen.getByLabelText(PROVIDERS.FIELD_MAX_DISK)).toBeEnabled();
   });
 
   // #3329: an edit made between the saved toast and the screen adopting the PUT response was overwritten by it.

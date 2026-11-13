@@ -7,7 +7,7 @@
 // card sends (only narrowing values), what it shows back, and the strings of the owner-approved board.
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../test/set-field";
 import { HttpError } from "../../../lib/api/core";
@@ -245,6 +245,19 @@ describe("Your walls card", () => {
     await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
     expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("could not clear");
     expect(screen.getByText("a.example.com")).toBeInTheDocument();
+  });
+
+  it("is read-only while its save is in flight, so a limit added then is neither dropped nor reported as Saved", async () => {
+    let answer: ((w: PersonalWalls) => void) | undefined;
+    putMock.mockReturnValueOnce(new Promise<PersonalWalls>((done) => (answer = done)));
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    expect(screen.getByRole("checkbox", { name: "Block upload" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Wall" })).toBeDisabled();
+    await act(async () => answer?.({ spec: {} }));
+    expect(screen.getByRole("checkbox", { name: "Block upload" })).toBeEnabled();
+    expect(screen.getByText(YOUR_WALLS.SAVED)).toBeInTheDocument();
   });
 
   it("puts a refusal under the section it names, without the prefix or the reason code, and offers no Saved", async () => {

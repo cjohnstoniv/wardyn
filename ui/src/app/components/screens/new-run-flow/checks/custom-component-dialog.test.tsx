@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ComponentSaved } from "../../../../lib/types";
@@ -179,6 +179,20 @@ describe("CustomComponentDialog: save to reuse", () => {
     ]);
     expect(props.onAttach).toHaveBeenCalledWith({ id: SAVED.id });
     expect(props.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: SAVED.id }));
+  });
+
+  it("its fields are read-only while the save is in flight, so nothing typed then is lost when it closes", async () => {
+    let answer: ((r: Response) => void) | undefined;
+    fetchMock.mockReturnValue(new Promise<Response>((done) => (answer = done)));
+    const { props, user } = open();
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByLabelText(/^Name/)).toBeDisabled();
+    expect(screen.getByLabelText(/^Hosts it reaches/)).toBeDisabled();
+    expect(screen.getByLabelText(/^Stored secret name/)).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save to reuse" })).toBeDisabled();
+    await act(async () => answer?.(json(201, SAVED)));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
   });
 
   it("renders the answer's missing secrets with a link to add them (D18)", async () => {

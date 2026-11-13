@@ -7,7 +7,7 @@
 // and each row's default model provider (packet MP-C's G1–G4). Since 0.8
 // (#548) a row carries no model credential.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool } from "../../../lib/types";
 import type { ModelProvider } from "../../../lib/api/model-providers";
@@ -119,6 +119,22 @@ describe("AgentsTab", () => {
     expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-codex-cli")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-none")).toBeInTheDocument();
+  });
+
+  it("the rows are read-only while a save is in flight, so a switch flipped then is not lost", async () => {
+    let answer: ((v: unknown) => void) | undefined;
+    putAgentProvidersMock.mockReturnValue(new Promise((done) => (answer = done)));
+    withProviders([GATEWAY, ANTHROPIC_KEY]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const enabled = within(row).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — ${HARNESSES[0].display}` });
+    expect(enabled).toBeDisabled();
+    // The default provider's select is not a native control: a disabled fieldset alone leaves it openable.
+    await userEvent.click(within(row).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — ${HARNESSES[0].display}` }));
+    expect(screen.queryByRole("option")).toBeNull();
+    await act(async () => answer?.({ providers: { agents: [] }, etag: '"e5"' }));
+    expect(enabled).toBeEnabled();
   });
 
   it("saves the whole roster, untouched catalog rows as bare ids", async () => {

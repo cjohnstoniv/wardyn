@@ -207,6 +207,7 @@ export function CustomComponentDialog({
                 { value: "save", label: T.KEEP_SAVE },
               ]}
               onChange={setKeep}
+              disabled={saving}
             />
           </Field>
         )}
@@ -216,6 +217,7 @@ export function CustomComponentDialog({
           <Input
             id="ccd-name"
             autoFocus
+            disabled={saving}
             value={draft.name}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             autoComplete="off"
@@ -228,6 +230,7 @@ export function CustomComponentDialog({
           <Textarea
             id="ccd-hosts"
             rows={3}
+            disabled={saving}
             value={draft.hosts}
             onChange={(e) => setDraft({ ...draft, hosts: e.target.value })}
             className="font-mono"
@@ -237,7 +240,7 @@ export function CustomComponentDialog({
         </Field>
         <FieldError id="ccd-hosts" text={errors.hosts} />
 
-        <fieldset className="space-y-3">
+        <fieldset disabled={saving} className="space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SECRETS}</legend>
           <p className="text-xs text-muted-foreground">{T.SECRETS_HINT}</p>
           {draft.secrets.map((s, i) => (
@@ -258,7 +261,7 @@ export function CustomComponentDialog({
           </Button>
         </fieldset>
 
-        <fieldset className="space-y-3">
+        <fieldset disabled={saving} className="space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SETTINGS}</legend>
           <p className="text-xs text-muted-foreground">{T.SETTINGS_HINT}</p>
           {draft.settings.map((s, i) => (

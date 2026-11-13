@@ -320,28 +320,34 @@ export function ProvidersScreen() {
           )}
 
           <div {...pageTabPanelProps("providers", tab)}>
+          {/* Git and Storage are read-only while their save is in flight: its answer becomes the draft, so an
+              edit made meanwhile would be dropped. */}
           {tab === "git" && (
-            <AdoRowsContext.Provider value={{ refusal: saveError, saveAndEnable, saveBlocked: saving || invalidGitRow }}>
-              <GitTab
-                git={draft.git ?? []}
-                onChange={(git) => setDraft((d) => ({ ...d, git }))}
-                present={secretsPresent}
-                githubApp={githubApp}
-                operator={operator}
-                loadedEmpty={loadedEmpty}
-                patBrokerEnabled={draft.git_pat_broker_enabled ?? true}
-                onStatusRefresh={refreshSetupStatus}
-              />
-            </AdoRowsContext.Provider>
+            <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
+              <AdoRowsContext.Provider value={{ refusal: saveError, saveAndEnable, saveBlocked: saving || invalidGitRow }}>
+                <GitTab
+                  git={draft.git ?? []}
+                  onChange={(git) => setDraft((d) => ({ ...d, git }))}
+                  present={secretsPresent}
+                  githubApp={githubApp}
+                  operator={operator}
+                  loadedEmpty={loadedEmpty}
+                  patBrokerEnabled={draft.git_pat_broker_enabled ?? true}
+                  onStatusRefresh={refreshSetupStatus}
+                />
+              </AdoRowsContext.Provider>
+            </fieldset>
           )}
           {tab === "storage" && (
-            <StorageTab
-              storage={draft.storage ?? {}}
-              onChange={(storage) => setDraft((d) => ({ ...d, storage }))}
-              enforcement={enforcement}
-              kubernetes={setupStatus?.runner.kubernetes}
-              operator={operator}
-            />
+            <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
+              <StorageTab
+                storage={draft.storage ?? {}}
+                onChange={(storage) => setDraft((d) => ({ ...d, storage }))}
+                enforcement={enforcement}
+                kubernetes={setupStatus?.runner.kubernetes}
+                operator={operator}
+              />
+            </fieldset>
           )}
           {/* Agents is its own resource (SiteConfig.agent_providers, its
               own GET/PUT) — a separate document from Git/Storage's

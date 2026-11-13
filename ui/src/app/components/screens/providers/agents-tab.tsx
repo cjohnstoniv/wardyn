@@ -471,7 +471,9 @@ export function AgentsTab({
         </div>
       )}
 
-      <div className="space-y-3">
+      {/* Read-only while a save is in flight: its answer becomes the draft, so a switch flipped meanwhile
+          would be dropped. */}
+      <fieldset disabled={saving} className="m-0 min-w-0 space-y-3 border-0 p-0">
         {roster.map((h) => (
           <Row
             key={h.id}
@@ -479,11 +481,11 @@ export function AgentsTab({
             row={resolvedRow(agents, h)}
             enabled={rowEnabled(agents, h)}
             providers={providers}
-            operator={operator}
+            operator={operator && !saving}
             onUpdate={(next) => updateRow(h.id, next)}
           />
         ))}
-      </div>
+      </fieldset>
 
       {/* A daemon that legitimately reports an EMPTY roster is a different
           case from an absent one — the lead still reads, and the rows are

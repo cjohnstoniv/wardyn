@@ -6,7 +6,7 @@
 // The Key domains card (mock packet M5 S2/S4). Every expected string is read from KEY_DOMAINS,
 // which is the packet's text; the Go wire shape is pinned in wire-parity.test.ts.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -129,6 +129,23 @@ describe("assignments", () => {
     expect(screen.queryByText(KEY_DOMAINS.SUBMITTED_TITLE)).toBeNull();
     // Only declared domains (and default) are offered; the undeclared one that live keys name is not.
     expect(setMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the dialog's fields are read-only while its write is in flight, so a choice changed then is not lost", async () => {
+    listMock.mockResolvedValue(data());
+    let answer: ((v: string) => void) | undefined;
+    setMock.mockReturnValue(new Promise<string>((done) => (answer = done)));
+    renderCard();
+    await screen.findByText(KEY_DOMAINS.ASSIGN_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: KEY_DOMAINS.ASSIGN_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(KEY_DOMAINS.TYPE_USER, { selector: "#key-domain-subject" }), "ann@corp.example");
+    await userEvent.click(within(dialog).getByRole("button", { name: KEY_DOMAINS.ASSIGN_CTA }));
+    expect(within(dialog).getByLabelText(KEY_DOMAINS.TYPE_USER, { selector: "#key-domain-subject" })).toBeDisabled();
+    expect(within(dialog).getByLabelText(KEY_DOMAINS.FIELD_DOMAIN)).toBeDisabled();
+    expect(within(dialog).getByRole("radio", { name: KEY_DOMAINS.TYPE_ALL })).toBeDisabled();
+    await act(async () => answer?.("applied"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("offers declared domains only, and Everyone needs no subject", async () => {

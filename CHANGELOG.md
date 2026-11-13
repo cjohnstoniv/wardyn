@@ -21,6 +21,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
 - A model provider key save or sign-in that answers after its door was closed no longer closes or completes the door opened since, and a cancelled Azure DevOps sign-in no longer closes the next attempt's sign-in window. The Azure DevOps personal access token, SSH key and wall preset dialogs, and the confirm for deleting a wall preset, now stay open until their save or delete answers, with their fields read-only.
+- Your walls, branding, the Git and Storage settings, the agent settings, the key domain assignment dialog, the dialog that saves a custom component for reuse and the user type editor are now read-only while their save is in flight; before, a change made during the save was dropped without a word.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
