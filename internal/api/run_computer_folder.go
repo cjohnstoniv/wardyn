@@ -303,12 +303,18 @@ func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID,
 		return false
 	}
 	gen := rec.Gen
-	rctx, cancel = teardownCtx(ctx)
-	defer cancel()
+	// Each record is written on a teardownCtx made as it is written, not before the quiesce and the pass: for a
+	// caller with no deadline that ctx is reconcileFinalizeTimeout, which a pass of up to computerFolderBackTimeout
+	// would outlast. Under an end hold it still ends at the hold's deadline (teardownCtxWithin).
+	record := func(settled bool, next *types.FolderResume, res runnerwire.FolderPass, errText string) bool {
+		wctx, wcancel := teardownCtx(ctx)
+		defer wcancel()
+		return s.recordFolderBackAt(wctx, runID, *folder, gen, settled, next, res, errText)
+	}
 	if unansweredStallsPast(prev, past) {
 		errText := folderBackGivenUp("the runner did not answer for its last pass back",
 			fmt.Sprintf("%d passes in a row brought nothing back", prev.Resume.Stalled), prev.Resume.Unsynced)
-		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
+		return record(true, nil, runnerwire.FolderPass{}, errText)
 	}
 	// Every pass back, the first included, runs with the agent stopped and no egress where the
 	// substrate can do that and keep the folder; where that fails, no pass runs. On a sandbox it
@@ -336,7 +342,7 @@ func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID,
 			errText = "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"
 		}
 		// Nothing was sent, so this generation is settled.
-		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
+		return record(true, nil, runnerwire.FolderPass{}, errText)
 	}
 	d := computerFolderBackTimeout
 	if dl, ok := ctx.Deadline(); ok {
@@ -362,7 +368,7 @@ func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID,
 	if !out.settled {
 		next, errText = keptUnanswered(prev.Resume, next, errText, passErr, res.Unsynced, qerr)
 	}
-	return s.recordFolderBackAt(rctx, runID, *folder, gen, out.settled, next, res, errText)
+	return record(out.settled, next, res, errText)
 }
 
 // recordFolderBackAt records a pass back's outcome at the generation it owns, settled when the runner

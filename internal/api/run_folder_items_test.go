@@ -818,3 +818,44 @@ func TestFolderBack_BusyAndUnconfirmedKeepsStopTheAgentForACancelledCaller(t *te
 		})
 	}
 }
+
+// recordCtxStore is computerFolderStore noting each guarded record write's ctx deadline.
+type recordCtxStore struct {
+	*computerFolderStore
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (s *recordCtxStore) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
+	dl, _ := ctx.Deadline()
+	s.mu.Lock()
+	s.deadlines = append(s.deadlines, dl)
+	s.mu.Unlock()
+	return s.computerFolderStore.SetRunLocalFolderStatusIf(ctx, id, guard, st)
+}
+
+// A pass back's record is written on a ctx made after the pass, not before its quiesce: for a caller with no deadline
+// (the completion watcher, a person's bring-back) that ctx is reconcileFinalizeTimeout, and a pass of up to
+// computerFolderBackTimeout would find a ctx made before it already done, losing the record and stopping the sandbox.
+// The record's deadline must be at least reconcileFinalizeTimeout after the pass started, compared on the monotonic
+// clock with no margin. Catches the record's ctx made before the pass.
+func TestFolderBack_RecordCtxStartsAfterThePass(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	rs := &recordCtxStore{computerFolderStore: f.cs}
+	f.s.cfg.Store = rs
+	var passAt time.Time
+	f.sb.onPass = func() {
+		rs.mu.Lock()
+		passAt = time.Now()
+		rs.mu.Unlock()
+	}
+	_ = f.back()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if passAt.IsZero() || len(rs.deadlines) == 0 {
+		t.Fatalf("pass at %v, record deadlines %v: want a pass and its record", passAt, rs.deadlines)
+	}
+	if last := rs.deadlines[len(rs.deadlines)-1]; last.Before(passAt.Add(reconcileFinalizeTimeout)) {
+		t.Errorf("record deadline %v is before the pass's start %v plus %s: its ctx was made before the pass", last, passAt, reconcileFinalizeTimeout)
+	}
+}
