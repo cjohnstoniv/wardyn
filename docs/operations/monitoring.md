@@ -102,7 +102,7 @@ These are the sweeps, with the interval each ticks at:
 | `idle_reaper` | `WARDYN_AUTOSTOP_INTERVAL`, default 1m | A runner exists and the interval is above 0 |
 | `terminal_sandbox` | 5m | A runner exists |
 | `approval_expiry` | `WARDYN_APPROVAL_EXPIRY_INTERVAL`, default 10m | The interval is above 0 |
-| `run_secret` | 15m | Always, on every replica |
+| `run_secret` | 15m | Always, on every replica; only the leader records `success` |
 | `credential_expiry` | 24h | Always |
 | `recording_retention` | 1h | The recording store can sweep and `WARDYN_RECORDING_RETENTION_DAYS` is above 0 (default 0, off) |
 | `run_watcher` | 1m | A runner exists, on every replica |
@@ -111,7 +111,7 @@ These are the sweeps, with the interval each ticks at:
 | `run_queue` | 10s | Always: ends waiting runs past their wait, fails promoted runs whose start died, and promotes for every pool with waiting runs. Runs on the sweeper leader |
 | `aws_sso_renewal` | 1m | Always: renews a live run's captured AWS SSO session inside `WARDYN_AWS_SSO_REFRESH_SKEW` of its expiry. Runs on the sweeper leader |
 
-- Every replica registers every sweep whose condition holds on the install, whichever replica holds the sweeper lock, so a follower notices a leader that stopped ticking.
+- Every replica registers every sweep whose condition holds, whichever replica holds the sweeper lock, so a follower notices a stopped leader.
 - A sweep whose condition does not hold has no series and can never be stale.
 - A sweep with no success on record warns only once three of its intervals have passed since this process started.
 
