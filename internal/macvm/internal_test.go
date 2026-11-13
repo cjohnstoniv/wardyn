@@ -255,6 +255,38 @@ func TestRotatingLogCapsAtTwoFiles(t *testing.T) {
 	}
 }
 
+// A rotation that cannot rename (here helper.log.1 is a directory) refuses that write and leaves the log
+// open: once the obstacle is gone the next write rotates and lands.
+func TestRotatingLogSurvivesAFailedRotation(t *testing.T) {
+	p := filepath.Join(t.TempDir(), HelperLog)
+	if err := os.MkdirAll(filepath.Join(p+".1", "in-the-way"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l, err := OpenRotatingLog(p, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	line := []byte(strings.Repeat("x", 59) + "\n") // 60 bytes
+	if _, err := l.Write(line); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Write(line); err == nil {
+		t.Fatal("a write that needed the failed rotation was accepted")
+	}
+	if err := os.RemoveAll(p + ".1"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := l.Write(line); err != nil || n != len(line) {
+		t.Fatalf("write after the rotation could work again: %d, %v", n, err)
+	}
+	for _, f := range []string{p, p + ".1"} {
+		if fi, err := os.Stat(f); err != nil || fi.Size() != 60 {
+			t.Fatalf("%s: %v %v, want one 60-byte line in each file", f, fi, err)
+		}
+	}
+}
+
 func TestParsePmsetBatt(t *testing.T) {
 	for out, want := range map[string]bool{
 		"Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged;\n":  true,
