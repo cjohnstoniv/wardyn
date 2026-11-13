@@ -14,7 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A No network run no longer has an upstream proxy hop. Its proxy wrote an `egress.allow` row for the upstream proxy (`builtin:upstream-proxy`) at start, the one allow in its audit, and `run.upstream_proxy.resolve` said `in_effect: true`. Now the server resolves no upstream for it, and `run.upstream_proxy.resolve` says `in_effect: false` with reason `no-network`. A proxy of this release also drops a runner's own `--upstream-proxy` for such a run and writes no such row; an older runner's proxy still writes it.
-- A run on a person's runner no longer records `run.upstream_proxy.resolve` with `in_effect: true`. The organisation's upstream proxy is never sent to a person's runner, so the row now says `in_effect: false` with reason `not-sent-to-runner`, at dispatch and, newly, at a revive on that runner.
+- A run on a person's runner no longer records `run.upstream_proxy.resolve` with `in_effect: true` at dispatch. The organisation's upstream proxy is never sent to a person's runner, so that row, written at dispatch and now also at a revive on that runner, says `in_effect: false` with reason `not-sent-to-runner` (reason `no-network` for a No network run). A destination such a run reaches through the organisation (a `via_org` grant) goes out through an organisation-side proxy, which still records its own row with `in_effect: true` under the same run when the site's upstream resolves.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

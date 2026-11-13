@@ -6,10 +6,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -235,6 +238,14 @@ func TestResolveRunUpstreamProxy_NoHopReasons(t *testing.T) {
 			if string(ev.Data) != `{"in_effect":false,"reason":"`+reason+`"}` {
 				t.Errorf("event data = %s, want in_effect false and reason %s", ev.Data, reason)
 			}
+			// The reason is checked before the site config read error: such a run has no hop either way.
+			errID := uuid.New()
+			if got := h.srv.resolveRunUpstreamProxy(context.Background(), errID, siteCfg, errors.New("site config unreadable"), reason); got != "" {
+				t.Fatalf("resolveRunUpstreamProxy with a site config read error = %q, want \"\"", got)
+			}
+			if ev := findAudit(h.audit.events, errID, "run.upstream_proxy.resolve", "success"); ev == nil || string(ev.Data) != `{"in_effect":false,"reason":"`+reason+`"}` {
+				t.Errorf("with a site config read error: event = %v, want success, in_effect false and reason %s; events=%s", ev, reason, auditDump(h.audit.events, errID))
+			}
 		})
 	}
 	h := newHarness(t)
@@ -284,5 +295,115 @@ func TestDispatchLocalRunHasNoUpstreamHop(t *testing.T) {
 	}
 	if string(ev.Data) != `{"in_effect":false,"reason":"not-sent-to-runner"}` {
 		t.Errorf("event data = %s, want in_effect false and reason not-sent-to-runner", ev.Data)
+	}
+}
+
+// TestLocalReviveHasNoUpstreamHop: reviving a run on a person's runner leaves the organisation's upstream proxy out
+// of its config though the site configures one, and records run.upstream_proxy.resolve with reason
+// not-sent-to-runner, as its dispatch does.
+func TestLocalReviveHasNoUpstreamHop(t *testing.T) {
+	f := newComponentFixture(t)
+	runnerID := uuid.New()
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, RunnerID: &runnerID}
+	f.srv.cfg.Store = residentFactsStore{localPlanTestStore: localPlanTestStore{f.st},
+		policy:  json.RawMessage(`{"classes":{},"by_trust":{"org_cluster":{"classes":{"env_secret":{"mode":"runner_resident"}}}}}`),
+		posture: types.RunnerPosture{OS: "linux", Evidence: types.PostureEvidenceOSProbe},
+		trust:   types.RunnerTrustOrgCluster, recorded: types.RunnerTrustOrgCluster}
+	cfg := proxy.Config{RunID: run.ID}
+	sc := types.SiteConfig{UpstreamProxyURL: "http://proxy.corp.internal:3128"}
+	if err := f.srv.refreshLocalDeploymentConfig(context.Background(), run, sc, &cfg); err != nil {
+		t.Fatalf("revive: %v", err)
+	}
+	if cfg.UpstreamProxyURL != "" {
+		t.Errorf("revived upstream proxy = %q, want none on a person's runner", cfg.UpstreamProxyURL)
+	}
+	ev := findAudit(f.rec.snapshot(), run.ID, "run.upstream_proxy.resolve", "success")
+	if ev == nil || string(ev.Data) != `{"in_effect":false,"reason":"not-sent-to-runner"}` {
+		t.Errorf("run.upstream_proxy.resolve success event = %v, want in_effect false and reason not-sent-to-runner; events=%s", ev, auditDump(f.rec.snapshot(), run.ID))
+	}
+}
+
+// TestRemoteReviveUpstreamHop: a revive on the organisation's own executor refreshes the site's upstream proxy into
+// the run's config, except for a No network run, which gets none and is recorded with reason no-network.
+func TestRemoteReviveUpstreamHop(t *testing.T) {
+	nn := &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Scope: types.WallPresetScopeBuiltin}
+	for _, tc := range []struct {
+		name   string
+		preset *types.WallPresetOnRun
+		want   string
+		data   string
+	}{
+		{"the site's hop", nil, "http://proxy.corp.internal:3128", `"in_effect":true`},
+		{"No network", nn, "", `{"in_effect":false,"reason":"no-network"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, ls, rec, run := localDispatchFixture(t, types.PlacementRemote)
+			run.WallPreset = tc.preset
+			sc := types.SiteConfig{UpstreamProxyURL: "http://proxy.corp.internal:3128"}
+			srv.cfg.Store = siteConfigDispatchStore{localDispatchStore: ls, sc: &sc}
+			cfg := &proxy.Config{RunID: run.ID}
+			if err := srv.refreshDeploymentConfig(context.Background(), run, cfg); err != nil {
+				t.Fatalf("revive: %v", err)
+			}
+			if cfg.UpstreamProxyURL != tc.want {
+				t.Errorf("revived upstream proxy = %q, want %q", cfg.UpstreamProxyURL, tc.want)
+			}
+			ev := findAudit(rec.snapshot(), run.ID, "run.upstream_proxy.resolve", "success")
+			if ev == nil || !strings.Contains(string(ev.Data), tc.data) {
+				t.Errorf("run.upstream_proxy.resolve success event = %v, want data holding %s; events=%s", ev, tc.data, auditDump(rec.snapshot(), run.ID))
+			}
+		})
+	}
+}
+
+// TestViaOrgEngineUpstreamHop: the organisation-side engine of a run on a person's runner chains through the
+// organisation's upstream proxy, so it records run.upstream_proxy.resolve with in_effect true under that run,
+// while a No network run's engine has no hop and records reason no-network.
+func TestViaOrgEngineUpstreamHop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		noNetwork bool
+		want      string
+		data      string
+	}{
+		{"the organisation's hop", false, "http://proxy.corp.internal:3128", `"in_effect":true`},
+		{"No network", true, "", `{"in_effect":false,"reason":"no-network"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, ls, rec, run := localDispatchFixture(t, types.PlacementLocal)
+			ctx := context.Background()
+			spec := localOrgNetworkSpec(run.ID)
+			spec.ProxyConfig.ControlPlaneURL = "http://127.0.0.1:9"
+			if !srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
+				t.Fatal("an all-own plan was refused")
+			}
+			if tc.noNetwork {
+				raw, err := srv.loadRunProxyConfig(ctx, run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var stored map[string]any
+				if err := json.Unmarshal(raw, &stored); err != nil {
+					t.Fatal(err)
+				}
+				stored["no_network"] = true
+				if err := srv.storeRunProxyConfig(ctx, run.ID, mustJSON(stored)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sc := types.SiteConfig{UpstreamProxyURL: "http://proxy.corp.internal:3128"}
+			srv.cfg.Store = siteConfigDispatchStore{localDispatchStore: ls, sc: &sc}
+			cfg, err := srv.viaOrgEngineConfig(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.UpstreamProxyURL != tc.want {
+				t.Errorf("the organisation-side engine's upstream proxy = %q, want %q", cfg.UpstreamProxyURL, tc.want)
+			}
+			ev := findAudit(rec.snapshot(), run.ID, "run.upstream_proxy.resolve", "success")
+			if ev == nil || !strings.Contains(string(ev.Data), tc.data) {
+				t.Errorf("run.upstream_proxy.resolve success event = %v, want data holding %s; events=%s", ev, tc.data, auditDump(rec.snapshot(), run.ID))
+			}
+		})
 	}
 }
