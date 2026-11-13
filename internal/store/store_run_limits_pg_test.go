@@ -37,7 +37,7 @@ func TestPG_RunLimitsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRun: %v", err)
 	}
-	if got.EndsAt == nil || !got.EndsAt.Equal(endsAt) {
+	if !spanFrom(got.CreatedAt, got.EndsAt, endsAt.Sub(r.CreatedAt)) { // re-anchored with created_at (stampRunTimes)
 		t.Errorf("ends_at = %v, want %v", got.EndsAt, endsAt)
 	}
 	if got.WaitBudgetSec != 3600 || got.RunLimits != limits {
