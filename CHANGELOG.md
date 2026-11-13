@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
+- The folder-only runner now opens every folder from the top of the drive down to each of its roots when it starts, and refuses to start when the runner's user cannot read one of them. The error names that folder: make it readable, or choose another root with `--folder-root`.
 
 ### Fixed
 
@@ -24,6 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - In a `.env` template such as `.env.example`, a value of `""` or `''`, or a comment alone after `=`, now marks the name required, as an empty value does. Before, it counted as a default and the name was optional.
 - When a scan finds two secret names that are stored under one name, such as `SESSION_SECRET` and `session_secret`, the requirement is now required when either one is. Before, the name later in sort order decided.
 - A build heap given in kibibytes, such as `-Xmx1048576k`, now reads as 1024 MiB. Before, the number was capped before its unit was applied, so it read as 256 MiB.
+- The folder-only runner now opens each root when it starts, and each shared folder when it checks it, one folder at a time without following a link, and keeps that folder open until its browse or pass ends. A root or shared folder renamed or replaced by a link after its check is not followed. Inside a pass, the runner and `wardyn sync` reach each file through its folder opened the same way, and never read or write a file through a link, with three exceptions that still use a path or a link: on Windows, a file brought back is moved into place by its folder's path; if the pass's own new file is replaced by a link before its modified time is set, that time is set on the link's target; and `wardyn sync --git` and `--pull-commits` run git on the folder by its path.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

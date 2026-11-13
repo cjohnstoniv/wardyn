@@ -114,7 +114,7 @@ func syncTemp(tmp *os.File) error {
 func installDurable(root *os.Root, note *dirNote, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
 	if err := syncTemp(tmp); err != nil {
 		_ = tmp.Close()
-		_ = root.Remove(tmpName)
+		_ = removeIn(root, tmpName)
 		return "", err
 	}
 	return installSynced(root, note, tmp, tmpName, mode, dsts...)
@@ -127,7 +127,7 @@ func installDurable(root *os.Root, note *dirNote, tmp *os.File, tmpName string, 
 // every install: a retry, or a copy already in place, included. The temp is removed after success
 // or after the last name failed.
 func installSynced(root *os.Root, note *dirNote, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
-	defer func() { _ = root.Remove(tmpName) }() // after a rename or move it names nothing
+	defer func() { _ = removeIn(root, tmpName) }() // after a rename or move it names nothing
 	if err := tmp.Close(); err != nil {
 		return "", &InstallError{Step: "close", Err: err}
 	}
@@ -202,7 +202,7 @@ func keptAlready(root *os.Root, tmpName, dst string) (bool, error) {
 var errNotKeptFile = errors.New("not a regular file, or replaced while it was opened")
 
 // openFileIn is root.OpenFile, replaced by tests to fail.
-var openFileIn = func(root *os.Root, name string, flag int) (*os.File, error) { return root.OpenFile(name, flag, 0) }
+var openFileIn = func(root *os.Root, name string, flag int) (*os.File, error) { return openIn(root, name, flag, 0) }
 
 // openKept opens the laptop's regular file name in root with flag, never through a link at its
 // name: what is compared, synced and recorded is this one file, not one swapped in at its name.
@@ -212,7 +212,7 @@ func openKept(root *os.Root, name string, flag int) (*os.File, os.FileInfo, erro
 		return nil, nil, err
 	}
 	fi, ferr := f.Stat()
-	li, lerr := root.Lstat(name)
+	li, lerr := lstatIn(root, name)
 	if ferr != nil || lerr != nil || !fi.Mode().IsRegular() || !os.SameFile(fi, li) {
 		_ = f.Close()
 		return nil, nil, fmt.Errorf("%s: %w", name, errNotKeptFile)
@@ -268,11 +268,11 @@ func (sy *Syncer) recordKept(rel string, remote Side, same func(f *os.File, fi o
 
 // fileSum is the sha256 of the regular file name.
 func fileSum(root *os.Root, name string) ([]byte, bool) {
-	fi, err := root.Lstat(name)
+	fi, err := lstatIn(root, name)
 	if err != nil || !fi.Mode().IsRegular() {
 		return nil, false
 	}
-	f, err := root.Open(name)
+	f, err := openIn(root, name, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, false
 	}
@@ -289,6 +289,6 @@ func createTemp(root *os.Root, dir, prefix, suffix string) (string, *os.File, er
 		return "", nil, err
 	}
 	name := path.Join(dir, prefix+hex.EncodeToString(b[:])+suffix)
-	f, err := root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := openIn(root, name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	return name, f, err
 }

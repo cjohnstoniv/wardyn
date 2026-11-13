@@ -18,10 +18,10 @@ const existingSyncFlag = os.O_RDONLY
 // readOnlyRefusal is false: a file is synced through a read-only handle here.
 func readOnlyRefusal(*os.Root, string, error) bool { return false }
 
-func replaceFile(root *os.Root, from, to string) error { return root.Rename(from, to) }
+func replaceFile(root *os.Root, from, to string) error { return renameIn(root, from, to) }
 
 // linkFile is root.Link, replaced by tests to fail.
-var linkFile = func(root *os.Root, from, to string) error { return root.Link(from, to) }
+var linkFile = func(root *os.Root, from, to string) error { return linkIn(root, from, to) }
 
 // placeNew links to at from; it fails with fs.ErrExist when to exists. On a filesystem without
 // hard links it creates to exclusively instead and copies from into it, synced (copyNew).
@@ -48,7 +48,7 @@ func noHardLinks(err error) bool {
 // mode and modification time, then syncs it. A copy that fails part-way is removed: it is this
 // call's own file.
 func copyNew(root *os.Root, from, to string) (err error) {
-	src, err := root.Open(from)
+	src, err := openIn(root, from, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
@@ -57,7 +57,7 @@ func copyNew(root *os.Root, from, to string) (err error) {
 	if err != nil {
 		return err
 	}
-	dst, err := root.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	dst, err := openIn(root, to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func copyNew(root *os.Root, from, to string) (err error) {
 			err = cerr
 		}
 		if err != nil {
-			_ = root.Remove(to)
+			_ = removeIn(root, to)
 		}
 	}()
 	if _, err := io.Copy(dst, src); err != nil {
@@ -75,14 +75,14 @@ func copyNew(root *os.Root, from, to string) (err error) {
 	if err := dst.Chmod(fi.Mode().Perm()); err != nil {
 		return err
 	}
-	if err := root.Chtimes(to, fi.ModTime(), fi.ModTime()); err != nil {
+	if err := chtimesIn(root, to, fi.ModTime(), fi.ModTime()); err != nil {
 		return err
 	}
 	return fsyncFile(dst)
 }
 
 func syncDirIn(root *os.Root, note *dirNote, dir string) error {
-	d, err := root.Open(dir)
+	d, err := openIn(root, dir, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
