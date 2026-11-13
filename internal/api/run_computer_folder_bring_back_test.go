@@ -496,6 +496,66 @@ func TestBringComputerFolderBack_AStopThatFailsCopiesNothing(t *testing.T) {
 	}
 }
 
+// cancelAtAgentStop is ctxExecSandbox that cancels the daemon's ctx as the bring-back's agent stop reaches the
+// sandbox: a shutdown that lands after the run's compare-and-set, while the run's lock and its end hold are still good.
+type cancelAtAgentStop struct {
+	ctxExecSandbox
+	cancel context.CancelFunc
+}
+
+func (r cancelAtAgentStop) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if len(spec.Argv) == 3 && spec.Argv[0] == "sh" && spec.Argv[2] == agentStopScript {
+		r.cancel()
+	}
+	return r.ctxExecSandbox.ExecStream(ctx, ref, spec)
+}
+
+// A daemon shutdown that cancels a person's bring-back after the run is ended, on a runner's sandbox (which cannot be
+// quiesced), still stops the agent and keeps the sandbox owed with no pass sent: a resume, settled at its generation,
+// with the no-time text, and no StopSandbox. An agent that then cannot be stopped is still not kept. Catches the agent
+// stop asked on the cancelled ctx, whose exec fails, which settled the bring-back with no pass run and stopped the
+// sandbox with its changes in it.
+func TestBringComputerFolderBack_AShutdownAfterTheEndKeepsTheChangesOwed(t *testing.T) {
+	for name, stopFails := range map[string]bool{"the agent stops": false, "the agent cannot be stopped": true} {
+		t.Run(name, func(t *testing.T) {
+			s, cs, _, run, sb, app := bringBackFixture(t)
+			sb.stopFails = stopFails
+			base, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s.cfg.BaseCtx = base
+			s.cfg.Runner = cancelAtAgentStop{ctxExecSandbox{sb}, cancel}
+			stops := 0
+			sb.stopped = func() { stops++ }
+			res := bringBack(t, s, bringBackOwnerSession(t), run)
+			if res.code != http.StatusOK || res.json["sandbox_removed"] != stopFails {
+				t.Fatalf("bring-back = %d %s, want 200 with sandbox_removed %v", res.code, res.body, stopFails)
+			}
+			if base.Err() == nil {
+				t.Fatal("the daemon's ctx was not cancelled: the agent stop never reached the sandbox")
+			}
+			if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "hello" {
+				t.Errorf("README.md = %q: a pass ran after the shutdown", b)
+			}
+			st := cs.folderStatus()
+			if stopFails {
+				if stops != 1 || st.Resume != nil || st.Back == nil || st.Back.Error != bringBackAgentRunningMsg {
+					t.Errorf("sandbox stops %d, record %+v: want an agent that cannot be stopped not kept, with the stop's error", stops, st)
+				}
+				return
+			}
+			sb.mu.Lock()
+			down := sb.agentDown
+			sb.mu.Unlock()
+			if stops != 0 || !down {
+				t.Errorf("sandbox stops %d, agent stopped %v: want the agent stopped and the sandbox kept", stops, down)
+			}
+			if st.Resume == nil || st.Settled != st.Gen || st.Back == nil || st.Back.Error != folderPassNoTimeMsg {
+				t.Errorf("record %+v, want a resume, settled at its generation, with the no-time text", st)
+			}
+		})
+	}
+}
+
 // The folder can come back while the sandbox's teardown after it fails: the answer says which.
 func TestBringComputerFolderBack_SaysWhetherTheSandboxWasRemoved(t *testing.T) {
 	for _, stopErr := range []error{nil, errors.New("daemon unreachable")} {

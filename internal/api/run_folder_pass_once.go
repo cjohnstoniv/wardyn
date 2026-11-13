@@ -238,6 +238,17 @@ func (s *Server) holdOnTeardown(ctx context.Context, run types.AgentRun, qerr er
 	return s.holdUnquiesced(hctx, run, qerr)
 }
 
+// stopAgentOnTeardown is stopAgentForPass asked on a teardownCtx, as holdOnTeardown asks holdUnquiesced: a person's
+// bring-back whose ctx is cancelled after the run's end (a daemon shutdown) still gets its agent stopped, and its pass
+// then has no time left and is kept owed (keepNoTime). On the cancelled ctx itself the stop fails, which would record
+// the bring-back as settled with no pass run and stop its sandbox with the changes in it. The stop still ends at the
+// end hold's deadline and when the run's lock is lost (teardownCtxWithin).
+func (s *Server) stopAgentOnTeardown(ctx context.Context, ref string) error {
+	actx, cancel := teardownCtx(ctx)
+	defer cancel()
+	return s.stopAgentForPass(actx, ref)
+}
+
 // keepUnconfirmed keeps the sandbox of a pass back not sent because the runner may still run the last
 // (errFolderPassUnconfirmed), once it is safe to keep (holdOnTeardown), with the last pass's send time
 // (genAt) kept, so the wait does not start again. One not safe to keep is stopped with its changes not
