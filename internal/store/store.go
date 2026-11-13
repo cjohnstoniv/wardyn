@@ -85,6 +85,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		} else {
 			args[2] = anchor.Translate(r.UpdatedAt)
 		}
+		stampRunTimes(anchor, r, args)
 		if out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...)); e != nil {
 			return e
 		}
@@ -176,6 +177,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	} else {
 		args[2] = anchor.Translate(r.UpdatedAt)
 	}
+	stampRunTimes(anchor, r, args)
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)

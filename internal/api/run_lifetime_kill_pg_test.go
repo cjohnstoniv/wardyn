@@ -475,3 +475,55 @@ func TestPG_LeaseRun_TheEndIsTheDatabasesClock(t *testing.T) {
 		}
 	}
 }
+
+// A direct run created on a replica whose clock is 2 minutes off the database's ends on the database's clock
+// exactly at created_at plus its seconds: the lease sweep, reading the database's now (store.PG's DatabaseNow,
+// moved here), leaves it a minute before and kills it a minute after, for the replica ahead and behind. Before,
+// ends_at was the replica's created time plus the seconds, so the kill came 2 minutes early or late.
+func TestPG_DirectRunEnd_IsCreatedPlusItsSeconds(t *testing.T) {
+	for _, skew := range []time.Duration{2 * time.Minute, -2 * time.Minute} {
+		for _, c := range []struct {
+			name   string
+			at     time.Duration // the database's time, from created_at
+			killed bool
+		}{{"a minute before", time.Hour - time.Minute, false}, {"a minute after", time.Hour + time.Minute, true}} {
+			t.Run(fmt.Sprintf("%s, replica clock %v", c.name, skew), func(t *testing.T) {
+				f := newLifetimeFixture(t)
+				pg := f.st
+				pg.Now = func() time.Time { return time.Now().Add(skew) }
+				f.st, f.srv.cfg.Store = pg, pg
+				replicaNow := pg.Now().UTC()
+				end := replicaNow.Add(time.Hour)
+				run, err := pg.CreateRun(context.Background(), types.AgentRun{
+					ID: uuid.New(), CreatedAt: replicaNow, UpdatedAt: replicaNow, CreatedBy: "life@example.com",
+					Agent: "claude-code", Task: "lifetime", ConfinementClass: types.CC2, State: types.RunRunning,
+					RunnerTarget: "docker", SandboxRef: "wardyn-agent-" + uuid.NewString()[:8], Experience: types.ExperienceBackground,
+					EndsAt: &end,
+				})
+				if err != nil {
+					t.Fatalf("create run: %v", err)
+				}
+				var dbNow time.Time
+				if err := pg.Pool.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&dbNow); err != nil {
+					t.Fatal(err)
+				}
+				if d := run.CreatedAt.Sub(dbNow); d > 5*time.Second || d < -5*time.Second {
+					t.Fatalf("created_at %v is %v off the database's clock %v; want it on that clock, not the replica's", run.CreatedAt, d, dbNow)
+				}
+				if !spanFromAPI(run.CreatedAt, run.EndsAt, time.Hour) {
+					t.Fatalf("ends_at %v, want 1 h after created_at %v", run.EndsAt, run.CreatedAt)
+				}
+				moveDBClock(t, f.srv, func() time.Time { return run.CreatedAt.Add(c.at) })
+				f.srv.leaseRun(context.Background(), f.srv.cfg.Store.(store.PG), run)
+				if got := f.get(t, run.ID); (got.State == types.RunKilled) != c.killed {
+					t.Errorf("state = %s, want killed = %v", got.State, c.killed)
+				}
+			})
+		}
+	}
+}
+
+// spanFromAPI reports whether at is span after from, to within two microseconds of column rounding.
+func spanFromAPI(from time.Time, at *time.Time, span time.Duration) bool {
+	return at != nil && (at.Sub(from)-span).Abs() <= 2*time.Microsecond
+}
