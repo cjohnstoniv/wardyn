@@ -709,3 +709,64 @@ func TestTailFinalize_AGiveUpStopsASandboxWhoseFolderCannotBeRead(t *testing.T) 
 		})
 	}
 }
+
+// A pass back with no time left to start, because the caller's deadline was too near or its ctx was cancelled, sends
+// nothing and keeps a sandbox that can be held (here a container whose quiesce worked), as a runner that is away
+// does: a resume with nothing counted, settled at its generation, and the record and its audit row say Wardyn tries
+// again. Catches a no-time pass recorded as done with an error, which stops the sandbox with the changes in it, and
+// one counted as a stall on a resume visit, which gives the changes up at the second.
+func TestFolderBack_NoTimeLeftKeepsAHoldableSandbox(t *testing.T) {
+	t.Run("the caller's deadline leaves no time", func(t *testing.T) {
+		f := newPassFixture(t, 1, 1, nil)
+		seen := passSeen(f.sb)
+		err := f.finalizeWithin(10 * time.Second)
+		if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
+			t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
+		}
+		if seen.Load() {
+			t.Error("a pass was sent with no time left")
+		}
+		st := f.cs.folderStatus()
+		if st.Resume == nil || !reflect.DeepEqual(*st.Resume, types.FolderResume{}) || st.Gen != 2 || st.Settled != 2 || st.Back == nil || st.Back.Error != folderPassNoTimeMsg {
+			t.Errorf("record %+v, want a resume with nothing counted, settled at gen 2, with the no-time text", st)
+		}
+		if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", folderPassNoTimeMsg); ev == nil || ev.Outcome != "failure" {
+			t.Errorf("audit row %v, want a failure row with the no-time text", ev)
+		}
+		if v := f.s.computerFolderRunView(context.Background(), f.run.ID); v == nil || v.Back == nil || v.Back.Error != folderPassNoTimeMsg {
+			t.Errorf("GET /runs/{id} computer_folder %+v, want back.error to be the no-time text verbatim", v)
+		}
+	})
+	t.Run("a cancelled caller on a resume visit", func(t *testing.T) {
+		f := newPassFixture(t, 2, 2, &types.FolderResume{Stalled: 1})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := f.s.finalizeRunEffects(ctx, f.run.ID, "sbx", "run.complete", nil, false, false)
+		if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
+			t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
+		}
+		st := f.cs.folderStatus()
+		if st.Resume == nil || st.Resume.Stalled != 1 || st.Gen != 3 || st.Settled != 3 || st.Back == nil || st.Back.Error != folderPassNoTimeMsg {
+			t.Errorf("record %+v, want the resume's one stall unchanged, settled at gen 3, with the no-time text", st)
+		}
+	})
+}
+
+// A pass back with no time left on a sandbox that cannot be held (a virtual machine) is stopped as before, with its
+// changes not brought back, and the record says no pass ran for want of time.
+func TestFolderBack_NoTimeLeftStopsAnUnholdableSandbox(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.MachineKind = types.MachineLinuxVM
+	ds.mu.Unlock()
+	if err := f.finalizeWithin(10 * time.Second); errors.Is(err, errComputerFolderResumes) {
+		t.Errorf("finalize = %v, want the sandbox left to its stop", err)
+	}
+	for _, want := range []string{"no pass ran; no time was left for it when the run ended", "a virtual machine's agent cannot be stopped alone", "its changes not brought back yet, uncounted"} {
+		assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, want)
+	}
+	if st := f.cs.folderStatus(); st.Resume != nil || st.Settled != 2 {
+		t.Errorf("record %+v, want no resume, settled at gen 2", st)
+	}
+}

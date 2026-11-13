@@ -383,8 +383,8 @@ func TestEndHold_RunnerExitIsAHold(t *testing.T) {
 
 // A first pass back under an end hold with less time left than the teardown's 15 s is still sent, with the budget it
 // has without a hold (a deadline past the hold's), and is recorded: the hold caps the stop and the writes after the
-// pass, not the pass. Catches a pass budget that reads the hold's deadline: that pass is never sent, is recorded
-// settled as "no time was left", and its sandbox is stopped with the changes still in it. Also catches the cap
+// pass, not the pass. Catches a pass budget that reads the hold's deadline: that pass is never sent, and is left
+// owed for a later sweep instead of brought back now. Also catches the cap
 // applied only inside computerFolderPassWithin, which would send the pass a deadline inside the hold.
 func TestEndHold_PassBackKeepsItsBudgetUnderAShortHold(t *testing.T) {
 	f := newPassFixture(t, 2, 2, nil)

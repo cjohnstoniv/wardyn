@@ -217,8 +217,10 @@ const computerFolderStalls = 2
 // (quiesceKeptSandbox): a pass that was cut short after it saved files keeps it, and so does the
 // first of computerFolderStalls such passes in a row that saved nothing, the last of which gives
 // the rest up, and so does a pass that left changes behind or could not prove them kept
-// (folderBackVerdict). A pass that completes with nothing owed, fails on its first visit or does not
-// start does not, nor does a sandbox that cannot be quiesced. An end that cannot read the folder's settings or its data_out rule keeps it only as the sweeps would (keepUnreadFolder). The runner's state file holds what each pass saved, so the next pass, from
+// (folderBackVerdict). A pass that completes with nothing owed, or fails on its first visit, does not, nor
+// does a sandbox that cannot be quiesced; a pass with no time left to start keeps a sandbox that can be held
+// (keepNoTime). An end that cannot read the folder's settings or its data_out rule keeps it only as the sweeps
+// would (keepUnreadFolder). The runner's state file holds what each pass saved, so the next pass, from
 // the tail owner (folderCleanupLoop), starts after it (#3466).
 func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) bool {
 	return s.bringComputerFolderBackAs(ctx, runID, ref, "run.revoke")
@@ -233,8 +235,8 @@ func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID,
 	if !ok || ref == "" {
 		return false
 	}
-	// The reads, like the record, are on a teardownCtx: a caller already cancelled still gets the
-	// record that no time was left.
+	// The reads, like the record, are on a teardownCtx: a caller already cancelled still gets its
+	// record.
 	rctx, cancel := teardownCtx(ctx)
 	if ok, err := s.folderBackEligible(rctx, runID); err != nil || !ok {
 		cancel()
@@ -350,6 +352,10 @@ func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID,
 		// The runner the pass was to go to turned out to be one that may still run the last: kept, as
 		// lastPassOpen keeps it, with nothing counted.
 		return s.keepUnconfirmed(ctx, run, *folder, gen, rec, prev.GenAt, qerr)
+	case out.noTime:
+		// No pass was sent, so the runner owes no answer and no stall is counted: kept owed for the tail owner
+		// where it can be held (keepNoTime).
+		return s.keepNoTime(ctx, run, *folder, gen, qerr)
 	}
 	res, passErr, cut := out.FolderPass, out.errText, out.cut
 	next, errText := s.folderBackVerdict(ctx, run, &res, passErr, cut, qerr)
@@ -672,7 +678,7 @@ const computerFolderAccountTime = 5 * time.Second
 
 // computerFolderPassWithin is computerFolderPass under a deadline of d derived from ctx: the pass
 // ends by d, or by ctx's own deadline or cancel when that comes first. A pass with no time left
-// does not start. cut is a pass that started and was stopped by that end; a pass back stops
+// does not start (noTime). cut is a pass that started and was stopped by that end; a pass back stops
 // computerFolderAccountTime before it, for the runner's account. The caller records the outcome:
 // the seed on ctx (seedComputerFolder), the pass back on teardownCtx, since a finalizing caller's
 // ctx can end before d does (#3466).
@@ -688,7 +694,7 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 	passCtx, cancel := context.WithDeadline(ctx, stop)
 	defer cancel()
 	if err := passCtx.Err(); err != nil {
-		return folderPassOutcome{errText: "no time was left for the sync: " + err.Error(), settled: true}
+		return folderPassOutcome{errText: "no time was left for the sync: " + err.Error(), settled: true, noTime: true}
 	}
 	account, cancelAccount := context.WithDeadline(context.WithoutCancel(ctx), end)
 	defer cancelAccount()
@@ -712,11 +718,12 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 // answered for, or one that sent nothing; busy is a runner refusing it while it runs another pass for
 // the run (folder_pass_busy): a pass that did not start; unconfirmed is a pass not sent, as the runner
 // may still run the last one (errFolderPassUnconfirmed); away is a pass not sent because the computer's runner
-// is offline or not connected here (folderRunnerAway).
+// is offline or not connected here (folderRunnerAway); noTime is a pass not started because its deadline had already
+// passed: the caller's deadline was too near, or its ctx was cancelled.
 type folderPassOutcome struct {
 	runnerwire.FolderPass
-	errText                               string
-	cut, settled, busy, unconfirmed, away bool
+	errText                                       string
+	cut, settled, busy, unconfirmed, away, noTime bool
 }
 
 // folderRunnerAway is the refusal of a pass because the computer's runner is offline or not connected here: the
