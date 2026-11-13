@@ -164,6 +164,11 @@ func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*ups
 		return nil, err
 	}
 	if up != nil {
+		// Config load holds this host to the spelling rule; this is the backstop for a Config whose URL was
+		// set after its load, as the via_org engine's is: the hop is dialed with no step 0 of its own.
+		if err := ValidConfigHost(up.host); err != nil {
+			return nil, err
+		}
 		for _, v := range up.maskValues() {
 			procMaskFor(maskKey, v)
 		}

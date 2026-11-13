@@ -3611,9 +3611,10 @@ Claude sign-in's token, each the person's own on their model provider.
   - Deny only: such a spelling inherits no `allowed_domains` grant, and is refused wherever its address is denied: `denied_domains`, a live egress edit, a Kubernetes runner's hard deny.
   - Every other non-standard spelling is refused at step 0 on every run (`builtin:ip-spelling`): an all-numeric host or a zoned IPv6 address.
     - Programs differ on which address such a spelling names (`010.0.0.1` is `8.0.0.1` to `inet_aton` and `10.0.0.1` to a decimal parser), so no check of one decoded address binds the hop that dials it.
-    - An all-numeric one in a policy entry, host rule, MCP server URL or live egress edit is refused at write, and a stored one stops the run at proxy load.
+    - One in a policy entry, host rule, MCP server URL, live egress edit or any other host a run's config names is refused at write, and a stored one, or an upstream proxy URL held in a secret, stops the run at proxy load.
   - So is every host with a character outside ASCII (`builtin:non-ascii-host`).
     - One program maps `８.８.８.８` or a full-width `example.com` to the address or name a policy lists, and the next to another or to nothing.
+    - A configured host with one is refused at write and at proxy load the same way, naming its `xn--` form where IDNA gives one.
   - A third EMBEDDED-v4 shape is covered on the canonical path rather than by that gap-filler:
     - the deprecated IPv4-compatible IPv6 form (`::127.0.0.1`, `::169.254.169.254`, RFC 4291 §2.5.5.1) is one `net.ParseIP` DOES parse,
     - and it carries a real IPv4 in its low 32 bits that `To4()` cannot see (`To4` unwraps only `::ffff:/96`), so every stdlib predicate answered false for it.

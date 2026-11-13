@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -374,11 +375,24 @@ func validateProviderAddress(mp types.ModelProvider) error {
 		}
 	}
 	for _, public := range providerPublicHosts(mp.Kind) {
-		if _, err := validateOneLLMGateway(public, mp.BaseURL, local); err != nil {
+		if err := validateProviderGateway(public, mp.BaseURL, local); err != nil {
 			return fmt.Errorf(mp400BaseURL, mp.ID, err)
 		}
 	}
 	return nil
+}
+
+// validateProviderGateway is validateOneLLMGateway for a base URL the run's proxy dials, whose host is
+// also held to the rule the proxy's config load holds it to (proxy.ValidConfigHost).
+func validateProviderGateway(publicHost, raw string, allowPlainHTTP bool) error {
+	if _, err := validateOneLLMGateway(publicHost, raw, allowPlainHTTP); err != nil {
+		return err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	return proxy.ValidConfigHost(u.Hostname())
 }
 
 // localPlainHTTPHost reports whether a token may cross plain http to host: the
@@ -447,7 +461,7 @@ func validateProviderBedrock(mp types.ModelProvider, allowTestEndpoints bool) er
 		return fmt.Errorf(mp400Region, mp.ID, b.Region)
 	}
 	if b.BaseURL != "" {
-		if _, err := validateOneLLMGateway(bedrockRuntimeHost(b.Region), b.BaseURL, allowTestEndpoints); err != nil {
+		if err := validateProviderGateway(bedrockRuntimeHost(b.Region), b.BaseURL, allowTestEndpoints); err != nil {
 			return fmt.Errorf(mp400BRBaseURL, mp.ID, err)
 		}
 	}

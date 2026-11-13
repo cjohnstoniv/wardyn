@@ -76,26 +76,36 @@ func localModelKey(host string, port int) string {
 func compileLocalModels(in map[string]types.LocalModelSettings, relayed []string) map[string]*localModel {
 	out := make(map[string]*localModel, len(in))
 	for raw, s := range in {
-		u, err := url.Parse(raw)
-		if err != nil || u.Hostname() == "" {
+		key, plaintext, ok := localModelURLKey(raw)
+		if !ok {
 			continue
 		}
-		port := 443
-		if u.Scheme == "http" {
-			port = 80
-		}
-		if n, err := strconv.Atoi(u.Port()); err == nil && n > 0 {
-			port = n
-		}
-		lm := &localModel{plaintext: u.Scheme == "http", models: map[string]bool{}, bounds: s.LocalModelBounds(), relayed: slices.Contains(relayed, raw)}
+		lm := &localModel{plaintext: plaintext, models: map[string]bool{}, bounds: s.LocalModelBounds(), relayed: slices.Contains(relayed, raw)}
 		for _, m := range s.Models {
 			if !types.LocalModelNameRefused(m) {
 				lm.models[m] = true
 			}
 		}
-		out[localModelKey(u.Hostname(), port)] = lm
+		out[key] = lm
 	}
 	return out
+}
+
+// localModelURLKey is the localModelKey of a LocalModels base URL's host and port (the scheme's own
+// port when it names none), and whether the server speaks http://.
+func localModelURLKey(raw string) (key string, plaintext, ok bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return "", false, false
+	}
+	port := 443
+	if u.Scheme == "http" {
+		port = 80
+	}
+	if n, err := strconv.Atoi(u.Port()); err == nil && n > 0 {
+		port = n
+	}
+	return localModelKey(u.Hostname(), port), u.Scheme == "http", true
 }
 
 // validateLocalModels: each entry is an http(s) base URL this run's brokered

@@ -5,6 +5,7 @@ package api
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
@@ -36,6 +37,11 @@ import (
 func validateUpstreamProxyNoProxy(entries []string) error {
 	for i, e := range entries {
 		if !proxy.ValidNoProxyEntry(e) {
+			// A host (no "/", so no CIDR) in a spelling the proxy refuses in every request says so, not that it is
+			// no host.
+			if err := proxy.ValidConfigHost(strings.TrimPrefix(strings.TrimSpace(e), ".")); err != nil && !strings.Contains(e, "/") {
+				return fmt.Errorf("upstream_proxy_no_proxy[%d]: %w", i, err)
+			}
 			return fmt.Errorf("upstream_proxy_no_proxy[%d]: %q must be a CIDR (100.64.0.0/10) or a host/domain suffix "+
 				"(vpce.amazonaws.com, .corp.internal) — wildcards are not accepted; clear upstream_proxy_url to bypass everything", i, e)
 		}

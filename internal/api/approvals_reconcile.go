@@ -6,12 +6,14 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -188,7 +190,8 @@ func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecisi
 // alwaysEgressDecision resolves one decided approval row into the workspace write
 // it stands for, or reports false when it stands for none: a non-egress kind, a
 // scope short of `always`, a host that would not survive the write-time shape
-// check, a run that no longer exists, or a run with no recorded workspace link.
+// or spelling check (logged), a run that no longer exists, or a run with no
+// recorded workspace link.
 //
 // These are the predicates that need only the APPROVAL. The live decide path
 // applies two more that need the current workspace row — approveAlwaysRejects
@@ -203,6 +206,13 @@ func (s *Server) alwaysEgressDecision(ctx context.Context, ap types.ApprovalRequ
 	}
 	host := approvalHost(ap)
 	if host == "" || !hostrules.ValidApprovedHost(host) {
+		return egressDecision{}, false
+	}
+	// resolveAlwaysTarget refuses it now; one decided before that is not re-applied, since it would stop
+	// each run of the workspace at load.
+	if err := proxy.ValidConfigHost(host); err != nil {
+		slog.WarnContext(ctx, "api: always egress decision not re-applied", slog.String("approval_id", ap.ID.String()),
+			slog.String("host", host), slog.String("why", err.Error()))
 		return egressDecision{}, false
 	}
 	run, err := s.cfg.Store.GetRun(ctx, ap.RunID)

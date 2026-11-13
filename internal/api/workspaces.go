@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -256,6 +257,13 @@ func validateWorkspaceSource(src types.WorkspaceSource, adoServerHosts []string)
 		}
 		if repoCloneURL(src.Source) == "" {
 			return "source is not a recognized repo slug or http(s) clone URL"
+		}
+		// The clone host joins the run's allowed_domains (workspaceCloneEgress), which config load holds to
+		// the spelling rule, so a host the proxy refuses in every request is refused here.
+		for _, h := range scanEgressDomains(repoCloneURL(src.Source)) {
+			if err := proxy.ValidConfigHost(h); err != nil {
+				return "source host " + err.Error()
+			}
 		}
 	case types.WorkspaceSourceTypeEphemeral:
 		// no host/repo value to validate — target only, below.

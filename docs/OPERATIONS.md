@@ -2238,6 +2238,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 - The upstream proxy is one setting: its URL and secret reference together.
 - The consequence: to remove a seeded setting, remove it from the file; clearing it in the console lasts until the next restart.
 - Any other key, malformed JSON, or a value `PUT /site-config` would refuse (an embedded `user:pass@` among them) refuses boot.
+- That includes a host in a spelling the proxy refuses in every request, such as `010.0.0.1`, here or in the default policy file (`WARDYN_DEFAULT_POLICY`); the error names the file, the field and the entry.
 
 > [!IMPORTANT]
 > Use `upstream_proxy_secret_ref`, never a credentialed URL.
@@ -2253,6 +2254,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 > **A SiteConfig write reaches only runs dispatched after it lands.**
 
 - The fields that shape a run's egress (`internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects) are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup. A running run keeps the config it started with, however often you fix the SiteConfig underneath it.
+- A host in one of those fields, the upstream proxy URL, `scm_hosts` or a model provider's base URL is refused at write in a spelling the proxy refuses in every request. Such a spelling is an IP address in a non-standard form (`134744072`, `010.0.0.1`) or a host with a character outside ASCII. A stored one, or an upstream proxy URL in a secret, stops each run that carries it from starting.
 - `PUT /site-config` says so in its response (`applies_from: "next_dispatch"`).
 - The console repeats it in the toast on saving the upstream proxy (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress redirects (`setRedirects` in `corp-network-egress.tsx`). No other console write of site config does, and `PUT /site-config` or `wardyn site-config set` has the response field and nothing else.
 - Live sidecar reload is out of scope: a running sandbox's egress posture must not change under it with no audit row to show why.
@@ -2284,6 +2286,8 @@ A URL held in a secret is checked at
 DISPATCH instead, because no write-time validator can see inside the secret.
 It is dropped there with an audited reason (`unloadable-upstream-url`, a
 `run.upstream_proxy.resolve` failure) and the run falls back to direct egress rather than being delivered.
+A URL refused only for its host's spelling, such as `http://010.0.0.1:3128`, is the exception: it is delivered with the reason `upstream-url-host-refused`.
+The run's proxy refuses its config, naming the entry, and the run does not start rather than go around the proxy you named.
 
 - If both fields are set, `upstream_proxy_url` wins — harmless mid-migration from one to the other, but don't rely on it; clear whichever you're not using.
 
@@ -2397,6 +2401,7 @@ Three things in a run's audit trail say which hop its connections took and why o
   - `in_effect: false` with `reason: not-configured` (outcome `success`) means none is configured, so an absent row now means the dispatch failed before that point, not "none configured".
   - `in_effect: false` with outcome `failure` means the run's egress is direct although it may not have been meant to be.
     - `site-config-read-error` says the site config could not be read, so whether an upstream is configured is unknown; `unsupported-scheme`, `unloadable-upstream-url`, `reserved-secret-name`, `no-secret-store` and `secret-not-found` say one was configured and was dropped.
+    - `upstream-url-host-refused` is the exception: the URL was delivered, not dropped. A proxy given it refuses its config, so a dispatched run does not start and a revive is refused.
   - `in_effect` says what the run was given.
   - Which hop carried one connection is `via`.
 - **`via` on an `egress.allow` row says which hop carried that connection**: `upstream-proxy` or `direct`, a class and never an address.

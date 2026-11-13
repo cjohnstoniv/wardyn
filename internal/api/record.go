@@ -39,6 +39,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -738,6 +739,11 @@ func promotableHosts(obs *recordmode.Observations, selfHost string, skipHost map
 		if !hostrules.ValidApprovedHost(host) {
 			continue // junk shape — the approve lane wouldn't take it either
 		}
+		// Its requirement row would stop the workspace's runs at load (a lying or pre-step-0 sidecar's host).
+		if err := proxy.ValidConfigHost(host); err != nil {
+			slog.Warn("api: recorded host not offered for promotion", slog.String("host", host), slog.String("why", err.Error()))
+			continue
+		}
 		promotable[host] = struct{}{}
 	}
 	return promotable
@@ -844,7 +850,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 
 	wantHosts, skipped, notPromotable := selectPromoteHosts(req.Hosts, promotable, providerHosts)
 	if notPromotable != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+notPromotable+" was not observed+allowed in this recording — cannot promote")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, notPromotableText(notPromotable))
 		return
 	}
 

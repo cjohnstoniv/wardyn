@@ -194,7 +194,7 @@ func (s *Server) readNarrowSnapshot(sctx context.Context, n runner.ProxyNarrower
 		return rd, unreadable("read the run's stored proxy config", err)
 	}
 	if rd.cfg, err = proxy.LoadConfigBytes(rd.stored); err != nil {
-		return rd, unreadable("decode the run's stored proxy config", err)
+		return rd, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
 	if rd.ps, _, err = gens.RunPolicyState(sctx, run.ID); err != nil {
 		return rd, unreadable("read the run's policy generation", err)

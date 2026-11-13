@@ -134,9 +134,12 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A host the run's Azure DevOps Entra grant covers takes that lane instead
-	// (pat_broker_entra.go), which admits only Azure DevOps' own _git paths.
+	// (pat_broker_entra.go), which admits only Azure DevOps' own _git paths. The
+	// lane is handed the grant's key (hostKey), never the request's spelling of
+	// it: the entry's push rules, the audit rows and the upstream URL all read
+	// the host, and another spelling of it would be held to the base rules.
 	if adoLane {
-		p.serveADOGit(w, r, host, rest, verb, ado)
+		p.serveADOGit(w, r, hostKey(host), rest, verb, ado)
 		return
 	}
 	if !patGitPath(grant.scope().Forge, rest, verb) {

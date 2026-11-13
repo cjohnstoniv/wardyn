@@ -601,7 +601,10 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			host := strings.ToLower(strings.TrimSpace(ev.Target))
-			if host == "" || skip[host] || deadApprovedEgressHost(dead, host) || !hostrules.ValidApprovedHost(host) {
+			// A host in a spelling the proxy refuses in every request (step 0 denies each one) is not offered:
+			// the approved-egress write refuses it (proxy.ValidConfigHost).
+			if host == "" || skip[host] || deadApprovedEgressHost(dead, host) || !hostrules.ValidApprovedHost(host) ||
+				proxy.ValidConfigHost(host) != nil {
 				continue
 			}
 			// Policy allowed these hosts and the network lost the connection:

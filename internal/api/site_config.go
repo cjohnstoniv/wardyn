@@ -98,14 +98,15 @@ func validSiteURL(raw string) bool {
 		return false
 	}
 	host := hostrules.HostOf(raw)
-	return host != "" && hostrules.ValidApprovedHost(host)
+	return host != "" && hostrules.ValidApprovedHost(host) && proxy.ValidConfigHost(host) == nil
 }
 
 // validSiteHost reports whether h is a bare host suitable for ScmHosts — the
 // same shape the scanner's approved-egress promotion accepts (no scheme, port,
 // path, or wildcard).
 func validSiteHost(h string) bool {
-	return hostrules.ValidApprovedHost(strings.ToLower(strings.TrimSpace(h)))
+	h = strings.ToLower(strings.TrimSpace(h))
+	return hostrules.ValidApprovedHost(h) && proxy.ValidConfigHost(h) == nil
 }
 
 // validSecretRef reports whether ref names a real, non-reserved secret (the
@@ -137,7 +138,8 @@ func validSiteURLOrHost(raw string) bool {
 	if !shellSafeSiteString(raw) || strings.Contains(raw, "://") {
 		return false
 	}
-	return hostrules.HostOf(raw) != "" // tolerates a trailing /path or :port
+	h := hostrules.HostOf(raw) // tolerates a trailing /path or :port
+	return h != "" && proxy.ValidConfigHost(h) == nil
 }
 
 // normalizeSiteConfigTopology canonicalizes PUT /site-config's plain-string

@@ -73,6 +73,9 @@ func validHostRule(r HostRule) error {
 	switch {
 	case h == "":
 		return fmt.Errorf("host: required")
+	// The proxy refuses every request host with a character outside ASCII, so such a rule binds nothing.
+	case nonASCIIHost(h):
+		return fmt.Errorf("host: %q: %s", h, NonASCIIHostWhy(h))
 	case h != strings.ToLower(h):
 		return fmt.Errorf("host: %q must be lowercase (%q)", h, strings.ToLower(h))
 	case strings.ContainsAny(h, "*"):

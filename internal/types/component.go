@@ -882,11 +882,16 @@ func MCPURLDestination(raw string) (Destination, error) {
 		return Destination{}, errors.New("must be an https URL with a host, and no credentials or fragment")
 	}
 	d, err := ParseDestination(u.Host)
-	if err != nil || d.Wildcard {
+	// A percent sign is in no host name, and the proxy refuses every request host with one, as config load does.
+	if err != nil || d.Wildcard || strings.Contains(d.Host, "%") {
 		return Destination{}, fmt.Errorf("%q is not one host", u.Host)
 	}
 	if numericHost(d.Host) && net.ParseIP(d.Host) == nil {
 		return Destination{}, fmt.Errorf("%q: an IPv4 address is written as four decimal numbers from 0 to 255 with no leading zeros", u.Host)
+	}
+	// The broker refuses every call to a host with a character outside ASCII, as step 0 does.
+	if nonASCIIHost(d.Host) {
+		return Destination{}, fmt.Errorf("%q: %s", u.Host, NonASCIIHostWhy(d.Host))
 	}
 	if d.Port == 443 {
 		d.Port = 0

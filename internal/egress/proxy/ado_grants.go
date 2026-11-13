@@ -3,11 +3,7 @@
 
 package proxy
 
-import (
-	"strings"
-
-	"github.com/cjohnstoniv/wardyn/internal/adoscope"
-)
+import "github.com/cjohnstoniv/wardyn/internal/adoscope"
 
 // ADOGrantConfig is the run's per-person Azure DevOps grant as dispatch writes
 // it into this sidecar's configuration. The sidecar is a separate process, so
@@ -25,9 +21,10 @@ type ADOGrantConfig struct {
 // adoGrantsByHost is the run's grant indexed by host; nil == no host gated.
 type adoGrantsByHost map[string]ADOGrant
 
-// ADOGrantFor reports ok=false when host is not covered.
+// ADOGrantFor reports ok=false when host is not covered. host is keyed as the map is (hostKey), so every
+// spelling of a covered address reaches its grant.
 func (m adoGrantsByHost) ADOGrantFor(host string) (ADOGrant, bool) {
-	g, ok := m[strings.ToLower(strings.TrimSuffix(host, "."))]
+	g, ok := m[hostKey(host)]
 	return g, ok
 }
 

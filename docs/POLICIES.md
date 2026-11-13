@@ -94,7 +94,7 @@
 - A policy stored before that check can still carry a dead entry.
 - Each sidecar's boot `WARN` names every dead entry in both lists.
 - Never a refusal: failing a run over a long-inert entry is worse.
-- An all-numeric IP address in a non-standard spelling is the exception, since it binds nothing: a run whose stored policy holds one does not start, and the proxy's log names each with its standard form.
+- An entry in a spelling the proxy refuses in every request is the exception, since it binds nothing: an IP address in a non-standard spelling, or a host with a character outside ASCII. A run whose stored policy holds one does not start, and the proxy's log names each with its standard or ASCII form.
 - It matters most on `denied_domains`: it denies nothing.
 - Capped at **256 entries**, a hostile-input ceiling; more is a write-time `400`.
 

@@ -292,8 +292,12 @@ func ValidDomainEntry(d string) error {
 	// no request host can end with.
 	case strings.Contains(wild, ":"):
 		return bad(`the ":port" qualifier must be a number in 1..65535`)
-	// Charset. See domain_charset.go.
+	// Charset. See domain_charset.go. An entry with a character outside ASCII is named in its ASCII form
+	// where IDNA gives one.
 	case deadCharsetEntry(exact, wild):
+		if a, ok := types.ASCIIHostForm(domainEntryHost(d)); ok && nonASCIIHost(exact+wild) {
+			return bad(charsetWhy + "; its ASCII form is " + a)
+		}
 		return bad(charsetWhy)
 	// An address in a non-standard spelling: step 0 refuses every request written that way
 	// (nonStandardIPSpelling), and a request for the address in its standard spelling is another key, so
