@@ -7,7 +7,7 @@
 // one (#1428, #1430): mock states 4, 8b, 9, 10 and 11, through the card's own
 // shell so the deep link and the collapse behave as they do for the sign-in lane.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
@@ -284,6 +284,26 @@ describe("a row where each person adds their own token", () => {
     dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveValue("");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveValue("");
+  });
+
+  it("a token still being stored keeps its dialog and its fields: Escape and Cancel do nothing until the answer", async () => {
+    let answer: (() => void) | undefined;
+    storeMock.mockImplementation(() => new Promise<void>((done) => (answer = done)));
+    const onChanged = renderCard({ ...own, state: "not_configured" });
+    await expandCard("Azure DevOps");
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "pasted-secret");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2000-10-27");
+    await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }));
+    expect(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_CANCEL })).toBeDisabled();
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveValue("pasted-secret");
+    await act(async () => answer?.());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
   it("10: expiring counts the days and offers Replace token", async () => {

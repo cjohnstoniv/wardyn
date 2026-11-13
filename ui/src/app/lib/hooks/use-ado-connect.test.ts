@@ -348,6 +348,37 @@ describe("useAdoConnect", () => {
     expect(result.current.connecting).toBe(true);
   });
 
+  // A cancelled attempt's own straggler must not act either: the next attempt opens the same named window, so a
+  // late "live" closing "its" popup would close the window the person is signing in with now.
+  it("a cancelled attempt's late answer leaves the next attempt's popup open and polling", async () => {
+    const popup = fakePopup();
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    let answer: ((rows: Array<{ state: string }>) => void) | undefined;
+    getMineMock.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    getMineMock.mockResolvedValue([]);
+
+    const { result } = renderHook(() => useAdoConnect());
+    act(() => {
+      void result.current.connect();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    act(() => result.current.cancel());
+    act(() => {
+      void result.current.connect();
+    });
+
+    await act(async () => {
+      answer?.([{ state: "live" }]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(result.current.connecting).toBe(true);
+  });
+
   describe("connectFallback", () => {
     // ticket: N1 (review follow-up)
     it("never opens a popup", async () => {

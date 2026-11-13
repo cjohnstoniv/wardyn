@@ -504,3 +504,31 @@ describe("a latched door and an unreadable store", () => {
     expect(screen.queryByText(CONNECTIONS.COULD_NOT_CHECK)).toBeNull();
   });
 });
+
+describe("a save that answers after its door was closed", () => {
+  it("leaves the door opened since alone: it stays open with its draft, and its opener's onSignedIn does not run", async () => {
+    let answer: (() => void) | undefined;
+    putCredential.mockReturnValueOnce(new Promise<void>((done) => (answer = done)));
+    const onSignedIn = vi.fn();
+    render(
+      <WithDoor status={providerStatus([{ provider: gateway }])}>
+        <Entrance label="first" options={{ for: { provider: gateway.id } }} />
+        <Entrance label="second" options={{ for: { provider: gateway.id }, onSignedIn }} />
+      </WithDoor>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "first" }));
+    await userEvent.type(await screen.findByLabelText("Token"), "token-a");
+    await userEvent.click(screen.getByRole("button", { name: KEY_DOOR.SAVE }));
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: "second" }));
+    await userEvent.type(await screen.findByLabelText("Token"), "token-b");
+
+    await act(async () => answer?.());
+
+    expect(screen.getByRole("dialog", { name: "Add your token for Corp gateway" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Token")).toHaveValue("token-b");
+    expect(onSignedIn).not.toHaveBeenCalled();
+    expect(success).not.toHaveBeenCalled();
+  });
+});

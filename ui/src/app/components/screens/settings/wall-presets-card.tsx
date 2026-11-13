@@ -54,6 +54,7 @@ export function WallPresetsCard({ admin = false }: { admin?: boolean }) {
   const [dialog, setDialog] = React.useState<(PresetDialogMode & { nonce: number }) | null>(null);
   const [deleting, setDeleting] = React.useState<WallPreset | null>(null);
   const [deleteError, setDeleteError] = React.useState("");
+  const [removing, setRemoving] = React.useState(false);
   const [open, setOpen] = React.useState<ReadonlySet<string>>(new Set());
   const [saved, setSaved] = React.useState(false);
 
@@ -89,6 +90,7 @@ export function WallPresetsCard({ admin = false }: { admin?: boolean }) {
   };
   const remove = async (p: WallPreset) => {
     setDeleteError("");
+    setRemoving(true);
     try {
       await wallPresets.remove(p.id);
       setDeleting(null);
@@ -96,6 +98,8 @@ export function WallPresetsCard({ admin = false }: { admin?: boolean }) {
       void read();
     } catch (e) {
       setDeleteError(e instanceof HttpError ? e.message : W.DELETE_FAILED);
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -190,7 +194,7 @@ export function WallPresetsCard({ admin = false }: { admin?: boolean }) {
         />
       )}
       {deleting && (
-        <Dialog open onOpenChange={(o) => !o && setDeleting(null)}>
+        <Dialog open onOpenChange={(o) => !o && !removing && setDeleting(null)}>
           <DialogContent>
             <DialogTitle>{W.DELETE_TITLE(deleting.name)}</DialogTitle>
             <DialogDescription>{W.DELETE_BODY}</DialogDescription>
@@ -200,10 +204,10 @@ export function WallPresetsCard({ admin = false }: { admin?: boolean }) {
               </p>
             )}
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setDeleting(null)}>
+              <Button type="button" variant="outline" disabled={removing} onClick={() => setDeleting(null)}>
                 {W.CANCEL}
               </Button>
-              <Button type="button" variant="destructive" onClick={() => void remove(deleting)}>
+              <Button type="button" variant="destructive" disabled={removing} onClick={() => void remove(deleting)}>
                 {W.DELETE_CONFIRM}
               </Button>
             </DialogFooter>

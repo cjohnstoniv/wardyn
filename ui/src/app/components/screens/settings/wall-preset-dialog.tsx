@@ -121,7 +121,9 @@ export function WallPresetDialog({
   };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    // A save still in flight keeps its dialog and its form: dismissed, its answer would close a dialog opened since,
+    // and an edit made during it would not be in what it saves.
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent className="sm:max-w-xl">
         <form
           className="grid gap-4"
@@ -138,7 +140,7 @@ export function WallPresetDialog({
               <Label htmlFor="wall-preset-name">{W.NAME}</Label>
               <span className="text-xs text-muted-foreground">{NR_SHARED.REQUIRED}</span>
             </div>
-            <Input id="wall-preset-name" value={name} maxLength={128} aria-invalid={nameError !== ""} aria-describedby={nameError ? "wall-preset-name-error" : undefined} onChange={(e) => (setName(e.target.value), clear())} />
+            <Input id="wall-preset-name" disabled={busy} value={name} maxLength={128} aria-invalid={nameError !== ""} aria-describedby={nameError ? "wall-preset-name-error" : undefined} onChange={(e) => (setName(e.target.value), clear())} />
             {nameError && (
               <p id="wall-preset-name-error" role="alert" className="text-xs text-danger">
                 {nameError}
@@ -150,7 +152,7 @@ export function WallPresetDialog({
               <Label htmlFor="wall-preset-description">{W.DESCRIPTION}</Label>
               <span className="text-xs text-muted-foreground">{W.OPTIONAL}</span>
             </div>
-            <Input id="wall-preset-description" value={description} placeholder={W.DESCRIPTION_PLACEHOLDER} aria-invalid={descriptionError !== ""} aria-describedby={descriptionError ? "wall-preset-description-error" : undefined} onChange={(e) => (setDescription(e.target.value), clear())} />
+            <Input id="wall-preset-description" disabled={busy} value={description} placeholder={W.DESCRIPTION_PLACEHOLDER} aria-invalid={descriptionError !== ""} aria-describedby={descriptionError ? "wall-preset-description-error" : undefined} onChange={(e) => (setDescription(e.target.value), clear())} />
             {descriptionError && (
               <p id="wall-preset-description-error" role="alert" className="text-xs text-danger">
                 {descriptionError}
@@ -166,7 +168,7 @@ export function WallPresetDialog({
               </>
             ) : (
               <>
-                <select id="wall-preset-audience" className={SELECT_CLASS} value={audience.value} aria-describedby="wall-preset-audience-hint" onChange={(e) => setAudienceValue(e.target.value)}>
+                <select id="wall-preset-audience" className={SELECT_CLASS} disabled={busy} value={audience.value} aria-describedby="wall-preset-audience-hint" onChange={(e) => setAudienceValue(e.target.value)}>
                   {audiences.map((a) => (
                     <option key={a.value} value={a.value}>{audienceName(a)}</option>
                   ))}
@@ -177,7 +179,9 @@ export function WallPresetDialog({
           </div>
           <hr className="border-border" />
           {copyOfOpen && empty && <p className="text-sm text-muted-foreground">{W.COPY_OPEN}</p>}
-          <WallsForm form={form} onEdit={edit} errors={sectionErrors} />
+          <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
+            <WallsForm form={form} onEdit={edit} errors={sectionErrors} />
+          </fieldset>
           {mode.kind === "edit" && <p className="text-xs text-muted-foreground">{W.EDITING_VERSION(mode.preset.version)}</p>}
           {failure && (
             <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
@@ -191,7 +195,7 @@ export function WallPresetDialog({
           )}
           <DialogFooter>
             {empty && !blocked && <p className="text-xs text-muted-foreground sm:mr-auto sm:self-center">{W.NEEDS_A_LIMIT}</p>}
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
               {W.CANCEL}
             </Button>
             <Button type="submit" disabled={empty || blocked || !name.trim() || busy}>
