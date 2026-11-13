@@ -4237,6 +4237,14 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 The second line means the split did not take; the deployment is no worse off than
 single-DSN mode, and no better.
 
+- **With the split, every start also compares the migrations the two DSNs record.**
+- wardynd refuses to start when `schema_migrations` read through `WARDYN_PG_DSN` differs
+  from the one `WARDYN_PG_MIGRATE_DSN` just migrated, and the refusal names `WARDYN_PG_DSN`;
+  point both DSNs at the same database and `search_path`.
+- The app role needs `SELECT` on `schema_migrations` for this check, which the script above
+  grants; a start that cannot read it is refused, so grant the app role `SELECT` on
+  `schema_migrations`.
+
 > [!NOTE]
 > **Why a role with SELECT and EXECUTE can write to a hash-chained table at all.**
 

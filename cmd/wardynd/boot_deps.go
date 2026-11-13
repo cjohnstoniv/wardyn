@@ -94,6 +94,9 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 			return nil, fmt.Errorf("connect migrate db: %w", merr)
 		}
 		merr = migrate(migrateCtx, mpool)
+		if merr == nil {
+			merr = refuseAppSchemaDrift(migrateCtx, mpool, pool)
+		}
 		mpool.Close()
 		if merr != nil {
 			pool.Close()
