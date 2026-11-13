@@ -13,6 +13,8 @@
 #
 # A hit is a `x := net.Listen*(... ":0" ...)` (or Port: 0, JoinHostPort(h, "0"), AddrPortFrom(a, 0)) whose address is read before a plain
 # `x.Close()` and is still used after it, or a function that defers `x.Close()` and returns the address.
+# A test server is the same: `x := httptest.New*Server(...)`, a plain `x.Close()`, then `x.URL` (or a name
+# built from it) used as an address nothing answers on.
 # ALLOWED lists the few sites that must name a port and pick again when the bind fails, each with why.
 # `--selftest` plants each shape and proves the check refuses it.
 set -euo pipefail
@@ -45,7 +47,9 @@ FUNC = re.compile(r'^func\s+(?:\([^)]*\)\s*)?(\w+)')
 ASSIGN = re.compile(r'^\s*([\w.]+(?:\s*,\s*[\w.]+)*)\s*:?=(?!=)(.*)$')
 STRING = re.compile(r'"(?:\\.|[^"\\])*"|`[^`]*`')
 # Calls that only reshape an address or a port; a value built with any other call is not the address.
-RESHAPE = {'', 'String', 'int', 'uint16', 'string', 'strconv.Itoa', 'fmt.Sprint', 'fmt.Sprintf', 'net.SplitHostPort', 'net.JoinHostPort'}
+RESHAPE = {'', 'String', 'int', 'uint16', 'string', 'strconv.Itoa', 'fmt.Sprint', 'fmt.Sprintf', 'net.SplitHostPort', 'net.JoinHostPort',
+           'strings.TrimPrefix', 'strings.TrimSuffix', 'strings.Replace', 'strings.ReplaceAll', 'url.Parse'}
+TESTSERVER = re.compile(r'(\w+)\s*:?=\s*httptest\.New(?:TLS|Unstarted)?Server\(')
 
 
 def code(line):
@@ -67,10 +71,38 @@ def carried(body, addr):
     return names
 
 
+def closed_servers(lines):
+    """(line, function, why) for each test server closed with a plain Close whose URL is used afterwards."""
+    found = []
+    for i, line in enumerate(lines):
+        m = TESTSERVER.search(line)
+        if not m or line.lstrip().startswith('//'):
+            continue
+        v = re.escape(m.group(1))
+        url = re.compile(r'(?<![\w.])%s\.(?:URL\b|Listener\.Addr\(\))' % v)
+        end = next((j for j in range(i + 1, len(lines)) if lines[j] == '}'), len(lines))
+        body, held = lines[i + 1:end], None
+        for k, b in enumerate(body):
+            if held is None and re.match(r'\s*(?:t\.Cleanup\(|defer\s+)func\(\)\s*\{\s*$', b):
+                held = len(b) - len(b.lstrip())
+            elif held is not None and b.strip() in ('})', '}()') and len(b) - len(b.lstrip()) == held:
+                held = None
+            if held is not None or not re.match(r'\s*%s\.Close\(\)' % v, b):
+                continue
+            # The name may be given a new server after the close; what follows that is the new one's URL.
+            again = next((j for j in range(k + 1, len(body)) if re.match(r'\s*%s\s*:?=[^=]' % v, body[j])), len(body))
+            names = carried(body[:k], url)
+            if any(url.search(r) or any(re.search(r'(?<![\w.])%s\b' % re.escape(n), r) for n in names) for r in map(code, body[k + 1:again])):
+                fn = next((f.group(1) for f in (FUNC.match(lines[j]) for j in range(i, -1, -1)) if f), '?')
+                found.append((i + 1, fn, 'closes the test server, then uses its URL'))
+            break
+    return found
+
+
 def hits(path, text):
     """(line, function, why) for each freed-port use in text."""
     lines = text.split('\n')
-    found = []
+    found = closed_servers(lines)
     for i, line in enumerate(lines):
         m = LISTEN.search(line)
         if not m or not PORT0.search(m.group(2)) or line.lstrip().startswith('//'):
@@ -194,6 +226,21 @@ def selftest():
            '\t_ = ln.Close()\n\tstart(cfg)\n}\n', True, "a freed address carried in a struct")
     expect('func TestX(t *testing.T) {\n\tln, _ := net.Listen("tcp", "127.0.0.1:0")\n\tport := ln.Addr().(*net.TCPAddr).Port\n'
            '\tget(port)\n\tln.Close()\n\tt.Errorf("a closed port") // port\n}\n', False, "the name only in text after the close")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewServer(h)\n\tsrv.Close()\n\tget(srv.URL)\n}\n', True, "a closed test server's URL used as a dead address")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewServer(h)\n\tdead := srv.URL + "/hook"\n\tsrv.Close() // nothing listens\n\tstart(dead)\n}\n',
+           True, "a name built from a closed test server's URL")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewTLSServer(h)\n\thost := strings.TrimPrefix(srv.URL, "https://")\n\tsrv.Close()\n\tdial(host)\n}\n',
+           True, "a host cut from a closed TLS test server's URL")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewServer(h)\n\tdefer srv.Close()\n\tget(srv.URL)\n}\n', False, "a test server closed by defer")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewServer(h)\n\tt.Cleanup(srv.Close)\n\tget(srv.URL)\n}\n', False, "a test server closed at cleanup")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewServer(h)\n\tt.Cleanup(func() {\n\t\tsrv.Close()\n\t\tdone()\n\t})\n\tget(srv.URL)\n}\n',
+           False, "a test server closed inside a t.Cleanup block")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewServer(h)\n\tout, err := call(srv.URL)\n\tsrv.Close()\n\tif err != nil || out != want {\n\t\tt.Fatal(out, err)\n\t}\n}\n',
+           False, "a test server closed after its last use")
+    expect('func TestX(t *testing.T) {\n\tfor range 2 {\n\t\tsrv := httptest.NewServer(h)\n\t\tget(srv.URL)\n\t\tsrv.Close()\n\t}\n'
+           '\tsrv := httptest.NewServer(h)\n\tdefer srv.Close()\n\tget(srv.URL)\n}\n', False, "the name given to a new test server after the close")
+    expect('func TestX(t *testing.T) {\n\tsrv := httptest.NewServer(p)\n\tif relayed {\n\t\tsrv.Close()\n\t\tsrv = relayServer(p)\n\t}\n\tget(srv.URL)\n}\n',
+           False, "a test server replaced after the close")
     _, stale = check({"x_test.go": pre + 'func TestX(t *testing.T) {}\n'}, {("x_test.go", "TestX"): "why"})
     if not stale:
         bad.append("an allowed entry that matches nothing: wanted it reported, got none")

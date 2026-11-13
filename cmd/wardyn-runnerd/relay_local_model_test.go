@@ -161,8 +161,8 @@ func TestLocalModelRelayClosesWhenTheLastFlaggedRunEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = r.Close()
-	if _, err := askModel(t, "127.0.0.3", port); err == nil {
-		t.Errorf("the listener at 127.0.0.1:%d still accepts after the runner stopped", port)
+	if _, err := askModel(t, "127.0.0.3", port); err == nil || len(r.models) != 0 {
+		t.Errorf("the listener at 127.0.0.1:%d still accepts after the runner stopped (%v)", port, r.models)
 	}
 	if err := r.OpenLocalModel(b, []uint16{port}, []netip.Addr{netip.MustParseAddr("127.0.0.5")}); err == nil {
 		t.Error("a stopped runner's relay opened a local model port")

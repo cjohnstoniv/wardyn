@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -127,13 +128,17 @@ func TestStartMetricsListener(t *testing.T) {
 	cancel()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		// Only a refused connection ends the wait: a dial that timed out says nothing about the listener,
+		// and a connection means something still listens there.
 		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err != nil {
+		if errors.Is(err, syscall.ECONNREFUSED) {
 			break
 		}
-		_ = c.Close()
+		if err == nil {
+			_ = c.Close()
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("metrics listener still accepting after rootCtx was cancelled")
+			t.Fatalf("metrics listener does not refuse after rootCtx was cancelled (last dial: %v)", err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
