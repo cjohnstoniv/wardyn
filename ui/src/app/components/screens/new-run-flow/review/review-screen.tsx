@@ -312,6 +312,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
           hasBlockers={hard.length > 0}
           publish={publish}
           ownDriveIds={ownDriveIds}
+          startLeftOut={draft.guided.startLeftOut}
           onSaved={saved}
         />
       )}

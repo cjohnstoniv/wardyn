@@ -96,6 +96,17 @@ describe("Run step: agent text held beside the draft", () => {
     expect(now().intent.workload).toEqual({ kind: "agent_task", agent: "codex-cli", task: TASK });
   });
 
+  // An Autonomous VM template that starts a harness opens with the start's first message as its task, so a switch to
+  // Interactive holds it and the way back returns it.
+  it("an Autonomous VM template's first message is its task, and survives a switch to Interactive and back", async () => {
+    await show({ shape: "agent_task", experience: "background", machine_kind: "linux_vm", tools: [codex], startup: { kind: "harness", tool: "codex-cli", prompt: TASK } }, TEMPLATE);
+    expect(now()).toEqual({ intent: { shape: "agent_task", experience: "background", tools: [codex], machine_kind: "linux_vm", workload: { kind: "agent_task", agent: "codex-cli", task: TASK } }, held: null });
+    await mode(NR_RUN.MODE_INTERACTIVE);
+    expect(now().held).toEqual({ "codex-cli": TASK });
+    await mode(NR_RUN.MODE_AUTONOMOUS);
+    expect(now().intent.workload).toEqual({ kind: "agent_task", agent: "codex-cli", task: TASK });
+  });
+
   // The fact is left in place on a switch to Autonomous, so each switch to Interactive must replace it: text it carries
   // in the run is held no longer, and is never given to a harness started later.
   it("a switch to Interactive that leaves no text out holds none", async () => {

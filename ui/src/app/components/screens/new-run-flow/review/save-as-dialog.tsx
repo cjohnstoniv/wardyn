@@ -22,6 +22,7 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
 import { getErrorMessage } from "../../../../lib/format";
 import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../../lib/template-refusals";
+import { isVMKind } from "../../../../lib/types/machine-kind";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
 import type { RunIntent } from "../draft/run-intent";
 import { saveTemplate, TemplateSaveError, type SaveTemplate } from "./save-as-dialog.api";
@@ -63,6 +64,7 @@ export const SAVE_AS_COPY = {
   nothingPicked: NR_SAVE.NOTHING_PICKED as string,
   ownDrivesLeftOut: NR_SAVE.OWN_DRIVES_LEFT_OUT as string,
   wallPresetNotSaved: WALL_PRESETS.SAVE_AS_NOTE as string,
+  startNotSaved: NR_SAVE.START_NOT_SAVED as string,
 };
 
 export type SaveAsCopy = typeof SAVE_AS_COPY;
@@ -83,6 +85,8 @@ export interface SaveAsDialogProps {
   publish: TemplatePublish;
   /** The saver's own member drives; a shared template leaves them out. */
   ownDriveIds?: ReadonlySet<string>;
+  /** The seed left a harness start out of the draft (GuidedFacts.startLeftOut). */
+  startLeftOut?: boolean;
   copy?: SaveAsCopy;
   save?: SaveTemplate;
   onSaved: (template: Template) => void;
@@ -105,7 +109,7 @@ export function SaveAsDialog(props: SaveAsDialogProps) {
 }
 
 function SaveAsForm({
-  onOpenChange, kind, intent, hasBlockers, publish, ownDriveIds, copy = SAVE_AS_COPY, save = saveTemplate, onSaved,
+  onOpenChange, kind, intent, hasBlockers, publish, ownDriveIds, startLeftOut, copy = SAVE_AS_COPY, save = saveTemplate, onSaved,
 }: SaveAsDialogProps) {
   const [name, setName] = React.useState("");
   const [audienceValue, setAudienceValue] = React.useState(ONLY_ME);
@@ -239,6 +243,10 @@ function SaveAsForm({
         <p className="text-xs text-muted-foreground">{copy.omittedValues}</p>
         {audienceIntent.leftOut && copy.ownDrivesLeftOut && <p className="text-xs text-muted-foreground">{copy.ownDrivesLeftOut}</p>}
         {intent.wall_preset && copy.wallPresetNotSaved && <p className="text-xs text-muted-foreground">{copy.wallPresetNotSaved}</p>}
+        {/* Only while the draft still has no place for that start. A draft that carries a task, the run's or a harness's own, is not told: the first message may be that task, which is saved. */}
+        {startLeftOut && kind === "template" && isVMKind(intent.machine_kind) && !intent.startup && !intent.workload?.task?.trim() && !intent.tools?.some((t) => t.task?.trim()) && (
+          <p className="text-xs text-muted-foreground">{copy.startNotSaved}</p>
+        )}
         {(nothingToSave || fields.length === 0) && reason && <p className="text-xs text-muted-foreground">{reason}</p>}
       </fieldset>
 

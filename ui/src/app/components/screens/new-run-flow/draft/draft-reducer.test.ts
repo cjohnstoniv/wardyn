@@ -34,8 +34,14 @@ describe("draftReducer (U3)", () => {
       const vm = draftReducer(initialDraft("alice"), { type: "seed", origin: TEMPLATE, intent: { shape: "agent_task", machine_kind, tools: [codex], startup: start } });
       expect(vm.intent).toEqual({ shape: "agent_task", machine_kind, tools: [codex] });
       expect(vm.guided.heldText).toEqual({ "codex-cli": "fix it" });
+      expect(vm.guided.startLeftOut).toBe(true);
       expect(isDirty(vm)).toBe(false);
     }
+    // An Autonomous draft has a place for the message: it is the task, and nothing is held.
+    const auto = draftReducer(initialDraft("alice"), { type: "seed", origin: TEMPLATE, intent: { shape: "agent_task", experience: "background", machine_kind: "linux_vm", tools: [codex], startup: start } });
+    expect(auto.intent).toEqual({ shape: "agent_task", experience: "background", machine_kind: "linux_vm", tools: [codex], workload: { kind: "agent_task", agent: "codex-cli", task: "fix it" } });
+    expect(auto.guided.heldText).toBeUndefined();
+    expect(isDirty(auto)).toBe(false);
     const container: RunIntent = { shape: "agent_task", tools: [codex], startup: start };
     const command: RunIntent = { shape: "environment", machine_kind: "linux_vm", startup: { kind: "command", command: "make dev" } };
     // A workload beside the start is Autonomous's to read: the start's first message is its task.
@@ -44,6 +50,7 @@ describe("draftReducer (U3)", () => {
       const d = draftReducer(initialDraft("alice"), { type: "seed", origin: TEMPLATE, intent });
       expect(d.intent).toBe(intent);
       expect(d.guided.heldText).toBeUndefined();
+      expect(d.guided.startLeftOut).toBeUndefined();
     }
   });
 

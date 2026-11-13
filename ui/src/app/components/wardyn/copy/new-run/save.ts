@@ -46,5 +46,7 @@ export const NR_SAVE = {
   NOTHING_PICKED: "Choose at least one part to include.",
   /** Round wording (DS-2): under Include when a shared template leaves the saver's own drives out. */
   OWN_DRIVES_LEFT_OUT: "Your own drives are left out of shared templates.",
+  /** Under Include when the draft was opened without the harness start its template or run names, on a virtual machine. */
+  START_NOT_SAVED: "A virtual machine starts no harness, so the harness start this draft was opened with, and its first message, are not saved with the template.",
   SAVED: (kind: string | number) => `${kind} saved without changing the draft.`,
 } as const;

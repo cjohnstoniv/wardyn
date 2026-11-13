@@ -81,6 +81,8 @@ export interface GuidedFacts {
    * starting that harness.
    */
   heldText?: Record<string, string>;
+  /** The seed left a harness start, and its first message, out of a VM draft: a template saved from the draft has neither, and Save as template says so. */
+  startLeftOut?: boolean;
 }
 
 export interface DocDiagnostic {
