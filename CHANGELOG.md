@@ -25,7 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The recorder now also retries its last upload when the server answers 500, within the same 30-second retry window, so a short run's recording is not lost to one failed write of the recording store.
 - A desktop clipboard paste is now audited as relayed (`ui.clipboard.transfer` `success`) only once it was written to the desktop; a paste in a message the relay refused, or whose write to the desktop failed, is no longer recorded as relayed.
 - A confined workspace replay is no longer finalized as clean while the server that finalizes it still holds one of its audit events in the audit spool after a failed write; the replay stays recording until that spool has drained, and a later read of the workspace finalizes it.
-- A desktop recording that ends because the relay refused a pixel format is now marked as stopped there: its replay shows where the screen recording stopped, its `desktop.recording.write` audit row carries `stopped_ms`, and the stored recording names the refused format (`stop_reason`). Before, it just ended, with no mark.
+- A desktop recording that ends because the relay refused a pixel format is now marked as stopped there: its replay shows where the screen recording stopped and why, its `desktop.recording.write` audit row carries `stopped_ms`, and the stored recording names the refused format (`stop_reason`). Before, it just ended, with no mark.
 
 ### Security
 

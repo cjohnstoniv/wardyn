@@ -137,6 +137,9 @@ func (p *parser) refused([]byte) error {
 
 func (p *parser) serverInit(b []byte) error {
 	if err := setBPP(p.s, b[4]); err != nil {
+		if named := p.recordedPixels(b[4:17]); named != nil {
+			return named // recorded: the refusal names the format, as every pixel format refused there does
+		}
 		return err
 	}
 	copy(p.s.pixels[:], b[4:17])
@@ -271,7 +274,7 @@ func (p *parser) recordedPixels(f []byte) error {
 
 // PixelFormatError is the relay's refusal of a pixel format on a recorded desktop (Rules.Recorded). Pixels
 // is the refused format's 13 bytes: the browser's SetPixelFormat, or ServerInit's when the browser asked
-// for pixels in the desktop's own format.
+// for pixels in the desktop's own format or when its pixel size is one the relay does not take (setBPP).
 type PixelFormatError struct{ Pixels [13]byte }
 
 func (e *PixelFormatError) Error() string {

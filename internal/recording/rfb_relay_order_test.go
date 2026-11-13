@@ -40,11 +40,15 @@ func (d *desk) Read(p []byte) (int, error) {
 func (d *desk) Write(p []byte) (int, error) { d.written += len(p); return len(p), nil }
 func (d *desk) Close() error                { d.closed = true; return nil }
 
-// relayHandshake runs rfbHello through c, the desktop d's side and the browser's answers (masked by mask).
-func relayHandshake(t *testing.T, c *rfbfilter.Conn, d *desk, mask []byte) {
+// relayHandshake runs hello (rfbHello, or its start) through c, the desktop d's side and the browser's
+// answers (masked by mask).
+func relayHandshake(t *testing.T, c *rfbfilter.Conn, d *desk, mask, hello []byte) {
 	t.Helper()
-	hello := rfbHello() // the server's version, security types, security result and ServerInit
+	// the server's version, security types, security result and ServerInit
 	for i, msg := range [][]byte{hello[:12], []byte(rfbVersion8), hello[12:14], {1}, hello[14:18], {1}, hello[18:]} {
+		if len(msg) == 0 {
+			break // hello ends before ServerInit
+		}
 		if i%2 == 1 { // the browser's version, security type and ClientInit
 			if _, err := c.Write(wsFrame(true, 2, msg, mask)); err != nil {
 				t.Fatalf("handshake write: %v", err)
@@ -70,7 +74,7 @@ func TestARecordedDesktopNeverKeepsTheClipboardAsPixels(t *testing.T) {
 		d := &desk{}
 		r := NewRFBFrameRecorder(time.Now)
 		c := rfbfilter.Wrap(ReadSide(d, r, func() {}), rfbfilter.Rules{CopyOut: true, Recorded: recorded}, func(rfbfilter.Event) {}, func(error) {})
-		relayHandshake(t, c, d, mask)
+		relayHandshake(t, c, d, mask, rfbHello())
 		before := d.written
 		_, err := c.Write(wsFrame(true, 2, pixelFormat8, mask))
 		if heard := d.written > before; recorded == (err == nil) || heard == recorded {
@@ -111,7 +115,7 @@ func TestARefusedPixelFormatEndsTheRecordingWithAStopMark(t *testing.T) {
 					r.Stop("refused: " + refusal.Refused())
 				}
 			})
-			relayHandshake(t, c, d, mask)
+			relayHandshake(t, c, d, mask, rfbHello())
 			at = at.Add(time.Second)
 			d.chunks = append(d.chunks, wsFrame(true, 2, bell, nil))
 			_, _ = io.ReadAll(c)
@@ -138,5 +142,60 @@ func TestARefusedPixelFormatEndsTheRecordingWithAStopMark(t *testing.T) {
 				t.Fatalf("kept %x, want the handshake and the Bell before the refusal %x", got, want)
 			}
 		})
+	}
+}
+
+// TestAServerInitSizeTheRelayRefusesEndsTheRecordingWithAStopMark: a desktop whose ServerInit names a pixel
+// size the relay does not take (not 8, 16 or 32 bits) is refused as it arrives. On a recorded desktop that
+// refusal names the format too, so the recording ends with the stop mark; unrecorded, it stays the relay's
+// plain refusal.
+func TestAServerInitSizeTheRelayRefusesEndsTheRecordingWithAStopMark(t *testing.T) {
+	for _, recorded := range []bool{true, false} {
+		at := time.Unix(1, 0)
+		d, r := &desk{}, NewRFBFrameRecorder(func() time.Time { return at })
+		var refusal *rfbfilter.PixelFormatError
+		c := rfbfilter.Wrap(ReadSide(d, r, func() {}), rfbfilter.Rules{Recorded: recorded}, func(rfbfilter.Event) {}, func(err error) {
+			if errors.As(err, &refusal) {
+				r.Stop("refused: " + refusal.Refused())
+			}
+		})
+		hello := rfbHello()
+		hello[18+4] = 24 // ServerInit's bits per pixel
+		relayHandshake(t, c, d, []byte{1, 2, 3, 4}, hello[:18])
+		at = at.Add(time.Second)
+		d.chunks = append(d.chunks, wsFrame(true, 2, hello[18:], nil))
+		if _, err := io.ReadAll(c); err == nil || (refusal != nil) != recorded {
+			t.Fatalf("recorded=%v: ServerInit of 24 bits per pixel: err %v, PixelFormatError %v", recorded, err, refusal != nil)
+		}
+		pb, want := playback(t, r), "refused: 24 bits per pixel, depth 24, little-endian true colour, maxima of 0, 0 and 0 and shifts of 0, 0 and 0 for red, green and blue"
+		if !recorded {
+			want = ""
+		}
+		if (pb.StoppedMS == 1000) != recorded || pb.StopReason != want {
+			t.Fatalf("recorded=%v: stop mark at %d ms for %q, want %q", recorded, pb.StoppedMS, pb.StopReason, want)
+		}
+	}
+}
+
+// TestStopKeepsTheFirstStopMark: a recording the recorder stopped itself, at a message it could not follow,
+// keeps that stop mark when the relay stops it later. No frame after the first mark was kept, so a later
+// mark would read as frames kept up to it. A stop in the recording's first millisecond is still a mark.
+func TestStopKeepsTheFirstStopMark(t *testing.T) {
+	at := time.Unix(1, 0)
+	r := NewRFBFrameRecorder(func() time.Time { return at })
+	_, _ = r.Write(wsFrame(true, 2, rfbHello(), nil))
+	at = at.Add(time.Second)
+	_, _ = r.Write(wsFrame(true, 2, []byte{99}, nil)) // a server message the recorder cannot follow
+	at = at.Add(time.Second)
+	r.Stop("later")
+	if pb := playback(t, r); pb.StoppedMS != 1000 || pb.StopReason != "" || r.StoppedMS() != 1000 {
+		t.Fatalf("stop mark at %d ms for %q, want the recorder's own at 1000 ms", pb.StoppedMS, pb.StopReason)
+	}
+	first := NewRFBFrameRecorder(func() time.Time { return at })
+	first.Stop("at once")
+	at = at.Add(time.Second)
+	first.Stop("later")
+	if pb := playback(t, first); pb.StoppedMS != 1 || pb.StopReason != "at once" {
+		t.Fatalf("stop mark at %d ms for %q, want 1 ms for the first stop", pb.StoppedMS, pb.StopReason)
 	}
 }

@@ -134,4 +134,6 @@ export interface DesktopPlayback {
   clipboard_omitted?: number;
   /** When the stream stopped being one the recorder could follow; nothing after it is kept. */
   stopped_ms?: number;
+  /** Why the relay stopped the recording at stopped_ms (a pixel format it refused); unset when the recorder stopped it. */
+  stop_reason?: string;
 }
