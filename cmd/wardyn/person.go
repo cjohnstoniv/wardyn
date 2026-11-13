@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -60,6 +61,14 @@ scopes finishes them. You cannot erase yourself except --scope credentials.`,
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "erased %s for %s\n", strings.Join(res.Scopes, ", "), res.Person)
+			if ne := res.NotErased; ne != nil && len(ne.Subjects) > 0 {
+				quoted := make([]string, len(ne.Subjects))
+				for i, s := range ne.Subjects {
+					quoted[i] = strconv.Quote(s)
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: not erased: %s; each is a principal of its own that has, or had, this person's tenant and object id. If one is the same person, erase it by that name too\n",
+					strings.Join(quoted, ", "))
+			}
 			return nil
 		},
 	}

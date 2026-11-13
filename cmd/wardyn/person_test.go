@@ -50,6 +50,36 @@ func TestPersonEraseSendsTheScopesAndPrintsWhatFinished(t *testing.T) {
 	}
 }
 
+// Principals the erasure left alone are named on stderr, and --json keeps them.
+func TestPersonEraseNamesWhatWasNotErased(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"person":"p","scopes":["credentials"],"outcome":{"credentials":"done"},"detail":{},` +
+			`"not_erased":{"subjects":["y\u001b[2J"],"note":"not erased: erase by subject"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	run := func(args ...string) (string, string) {
+		t.Helper()
+		cmd := personCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+		out, errOut := &strings.Builder{}, &strings.Builder{}
+		cmd.SetOut(out)
+		cmd.SetErr(errOut)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), errOut.String()
+	}
+	out, errOut := run("erase", "p", "--scope", "credentials")
+	if !strings.Contains(out, "erased credentials for p") || !strings.Contains(errOut, `warning: not erased: "y\x1b[2J"`) {
+		t.Errorf("stdout %q, stderr %q: want the erasure and then the principal left alone, escaped", out, errOut)
+	}
+	out, _ = run("erase", "p", "--scope", "credentials", "--json")
+	if !strings.Contains(out, `"not_erased":{"subjects":["y\u001b[2J"]`) {
+		t.Errorf("--json = %s, want not_erased kept", out)
+	}
+}
+
 // Without --scope nothing is sent: erasing needs the scopes named.
 func TestPersonEraseNeedsAScope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

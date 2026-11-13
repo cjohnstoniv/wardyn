@@ -183,6 +183,24 @@ describe("Erase someone's data (M4)", () => {
     expect(await within(dialog).findByText("Saved components")).toBeInTheDocument();
   });
 
+  it("names the principals the erasure left alone beside the result", async () => {
+    erasePersonMock.mockResolvedValue({
+      person: "sub-ana",
+      scopes: [],
+      outcome: {},
+      not_erased: { subjects: ["iss2|ana", "sub-ana-2"], note: "not erased: erase by subject" },
+    });
+    const dialog = await openDialog();
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "ana@example.com");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Erase data" }));
+    expect(await within(dialog).findByText("Erased the chosen data for ana@example.com.")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "Not erased: iss2|ana, sub-ana-2. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("with recordings: ticking it sends the scope and lists it in the result", async () => {
     erasePersonMock.mockResolvedValue({ person: "sub-ana", scopes: [], outcome: {} });
     const dialog = await openDialog();

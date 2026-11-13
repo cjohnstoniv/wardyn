@@ -78,9 +78,18 @@ export interface ErasePerson {
 
 const personOf = (p: PersonSummary): ErasePerson => ({ principal: p.principal, label: p.email || p.principal });
 
+// notErased: the principals the answer's not_erased left alone, shown beside the result.
 type Result =
-  | { kind: "scopes"; person: string; erased: Set<string>; chosen: ErasureScope[]; complete: boolean }
-  | { kind: "credentials"; person: string; count: number; store?: string; purged?: boolean; recoverable_days?: number };
+  | { kind: "scopes"; person: string; erased: Set<string>; chosen: ErasureScope[]; complete: boolean; notErased: string[] }
+  | {
+      kind: "credentials";
+      person: string;
+      count: number;
+      store?: string;
+      purged?: boolean;
+      recoverable_days?: number;
+      notErased: string[];
+    };
 
 export function EraseDataDialog({
   open,
@@ -164,14 +173,15 @@ export function EraseDataDialog({
     try {
       if (credentialsOnly) {
         const res = await credentialsApi.erase(principal);
-        setResult({ kind: "credentials", person: label, ...res });
+        setResult({ kind: "credentials", person: label, ...res, notErased: res.not_erased?.subjects ?? [] });
       } else {
-        await credentialsApi.erasePerson(principal, chosen);
-        setResult({ kind: "scopes", person: label, erased: new Set(chosen), chosen, complete: true });
+        const res = await credentialsApi.erasePerson(principal, chosen);
+        const notErased = res.not_erased?.subjects ?? [];
+        setResult({ kind: "scopes", person: label, erased: new Set(chosen), chosen, complete: true, notErased });
       }
     } catch (e) {
       if (e instanceof ErasureIncomplete) {
-        setResult({ kind: "scopes", person: label, erased: new Set(e.done), chosen, complete: false });
+        setResult({ kind: "scopes", person: label, erased: new Set(e.done), chosen, complete: false, notErased: [] });
       } else {
         // A >=500 never finished, so it may have partly landed: its own sentence. A 4xx refusal (self-erasure, an
         // unknown scope, the operator namespace, an unknown address) shows the server's sentence as sent.
@@ -205,6 +215,9 @@ export function EraseDataDialog({
             {result.count > 0 && result.store && !result.purged && !!result.recoverable_days && (
               <p className="text-body text-muted-foreground">{ERASE.KEY_VAULT_RECOVERABLE(result.recoverable_days)}</p>
             )}
+            {result.notErased.length > 0 && (
+              <p className="text-body text-foreground">{ERASE.NOT_ERASED(result.notErased.join(", "))}</p>
+            )}
             {result.count > 0 && <p className="text-body text-muted-foreground">{ERASE.DONE_AUDIT}</p>}
             <DialogFooter>
               <Button onClick={() => close(true)}>{ERASE.CLOSE}</Button>
@@ -227,6 +240,9 @@ export function EraseDataDialog({
             <p className="text-body text-foreground">
               {result.complete ? ERASE_DATA.DONE(result.person) : ERASE_DATA.PARTIAL(result.person)}
             </p>
+            {result.notErased.length > 0 && (
+              <p className="text-body text-foreground">{ERASE.NOT_ERASED(result.notErased.join(", "))}</p>
+            )}
             <p className="text-body text-muted-foreground">{ERASE_DATA.DONE_AUDIT}</p>
             <DialogFooter>
               <Button variant="ghost" onClick={() => close(true)}>
