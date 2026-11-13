@@ -91,6 +91,20 @@ func TestSCIMCovStatusRequiresASecurityAdmin(t *testing.T) {
 	}
 }
 
+// A purge delay the sweeper honours (any value above zero) is never reported as 0, which means only a DELETE
+// purges; whole seconds are otherwise unchanged.
+func TestSCIMCovStatusPurgeDelayUnderASecondIsNotZero(t *testing.T) {
+	for _, tc := range []struct {
+		after time.Duration
+		want  int64
+	}{{0, 0}, {time.Nanosecond, 1}, {500 * time.Millisecond, 1}, {time.Second, 1}, {1500 * time.Millisecond, 1}, {36 * time.Hour, 129600}} {
+		e := newSCIMCovEnv(t, newSCIMCovStore(), func(cfg *Config) { cfg.SCIM.PurgeAfter = tc.after })
+		if w, body := e.status(); w.Code != http.StatusOK || body.PurgeAfterSeconds != tc.want {
+			t.Errorf("purge delay %v: purge_after_seconds = %d (%s), want %d", tc.after, body.PurgeAfterSeconds, w.Body.String(), tc.want)
+		}
+	}
+}
+
 func TestSCIMCovStatusListsDeactivatedAndPending(t *testing.T) {
 	st := newSCIMCovStore()
 	gone := time.Now().UTC().Truncate(time.Second).In(time.FixedZone("x", 2*3600))
