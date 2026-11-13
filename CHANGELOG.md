@@ -17,7 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- `POST /api/v1/runs/{id}/exec` answers a governance profile's refusal as `403 governance_unit` at target `runs.exec`, with its own error naming the limit: `deny_interactive` on any run, and now `deny_task_mode_exec` on a background run. Before, `deny_interactive` was recorded at target `runs.attach` with the terminal's error. Its `409 run_exec_unavailable` errors no longer say "ssh unavailable", and a Docker sandbox whose runtime runs only the task (libkrun) answers `501 run_inspect_exec_stream_unsupported` instead of `502 run_exec_failed`.
+- `POST /api/v1/runs/{id}/exec` answers a governance profile's refusal as `403 governance_unit` at target `runs.exec`, with its own error naming the limit: `deny_interactive` on any run, and now `deny_task_mode_exec` on a background run. Before, `deny_interactive` was recorded at target `runs.attach` with the terminal's error. Its `409 run_exec_unavailable` errors no longer say "ssh unavailable". On a runner of this release, a Docker sandbox whose runtime runs only the task (libkrun) refuses any command beside the task before a `docker exec` is made, so this route answers `501 run_inspect_exec_stream_unsupported` instead of `502 run_exec_failed`, and every other feature that runs a command in such a sandbox (SSH, the Files panel and the rest) gets the refusal it gives a runner with no command streaming.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

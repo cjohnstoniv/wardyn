@@ -422,6 +422,35 @@ func TestRunExecBackgroundRunKeepsTheDoors(t *testing.T) {
 	})
 }
 
+// TestRunExecSuperAdminSkipsTheGovernanceDoor: a super admin's command into a run they may enter passes the
+// governance door, as sshAuth exempts them, unless WARDYN_GOVERN_ADMIN_RUNS governs their runs and the run is not
+// operator-owned (adminDoorExempt).
+func TestRunExecSuperAdminSkipsTheGovernanceDoor(t *testing.T) {
+	ok := func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil }
+	for _, tc := range []struct {
+		name     string
+		governed bool
+		execs    int32
+	}{
+		{"exempt", false, 1},
+		{"governed by WARDYN_GOVERN_ADMIN_RUNS", true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecHarness(t, ok)
+			e.underProfile(types.GovernanceLimits{DenyInteractive: true})
+			e.srv.cfg.GovernAdminRuns = tc.governed
+			admin := ssoSession(t, execOwner, "owner@corp.example", oidc.RoleAdmin)
+			w := doSSO(t, e.srv, http.MethodPost, "/api/v1/runs/"+e.id.String()+"/exec", admin, `{"command":"id"}`)
+			if n := e.execs.Load(); n != tc.execs {
+				t.Errorf("ExecStream was called %d times, want %d (POST /exec = %d %s)", n, tc.execs, w.Code, w.Body)
+			}
+			if tc.governed && (w.Code != http.StatusForbidden || wireReason(t, w) != string(authz.ReasonGovernanceUnit)) {
+				t.Errorf("POST /exec = %d %s, want 403 %s", w.Code, w.Body, authz.ReasonGovernanceUnit)
+			}
+		})
+	}
+}
+
 // TestRunExecForeignRunIsMissing: a member who does not own the run gets the missing run's 404 and the
 // runner is never called.
 func TestRunExecForeignRunIsMissing(t *testing.T) {
