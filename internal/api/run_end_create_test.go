@@ -387,4 +387,10 @@ func TestCreateEnd_NamesTheElevationThatBoundTheEnd(t *testing.T) {
 			t.Errorf("%s: end %v, warnings %q; want it as asked, uncapped and no sentence", c.name, a, w)
 		}
 	}
+	// One microsecond past the stored end is cut, inside one millisecond.
+	end := at.Truncate(time.Second).Add(500 * time.Microsecond)
+	over := types.AgentRun{CreatedAt: end.Add(time.Microsecond - time.Hour), EndsAt: &end, LifetimeCapAt: &end, LifetimeCapSource: types.LimitSourceElevation}
+	if a, w := asked.audit(over), asked.warnings(over); a["capped"] != true || a["source"] != "your elevation" || len(w) != 1 {
+		t.Errorf("an ask one microsecond past the elevation: end %v, warnings %q; want it capped by your elevation", a, w)
+	}
 }
