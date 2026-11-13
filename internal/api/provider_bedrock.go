@@ -253,9 +253,10 @@ func runBedrockProvider(sc types.SiteConfig, run types.AgentRun, uid string, kin
 // providerSSOScopeAt is the provider arm of resolveAWSSSOInjection's scope
 // re-derivation: the run owner's own session for the provider the grant
 // recorded, when that provider is still the run's own bedrock_sso provider, on
-// and serving its agent, and still pins what the grant recorded. drift names
-// the first thing that moved ("" = equal). A grant with no provider on a run
-// that chose one — or one naming a provider on a run that did not — drifts.
+// and serving its agent, and still pins the account, role and region the grant
+// recorded. drift names the first thing that moved ("" = equal). A grant with no
+// provider on a run that chose one — or one naming a provider on a run that did
+// not — drifts.
 func providerSSOScopeAt(sc types.SiteConfig, run types.AgentRun, sn awsSSOScopeSnapshot, subject string) (awsSSOScope, string) {
 	p, live := runBedrockProvider(sc, run, sn.ProviderUID, types.ModelProviderBedrockSSO)
 	switch {
@@ -265,8 +266,14 @@ func providerSSOScopeAt(sc types.SiteConfig, run types.AgentRun, sn awsSSOScopeS
 	case sn.OwnerSubject == "" || sn.OwnerSubject != subject:
 		return awsSSOScope{}, "owner_not_caller"
 	}
-	if b := providerBedrockSettings(p); b.SSOAccountID != "" && (b.SSOAccountID != sn.SSOAccountID || b.SSORoleName != sn.SSORoleName) {
+	b := providerBedrockSettings(p)
+	switch {
+	case b.SSOAccountID != "" && (b.SSOAccountID != sn.SSOAccountID || b.SSORoleName != sn.SSORoleName):
 		return awsSSOScope{}, "sso_pin"
+	// The grant's region is its session's, and a sign-in stores a session for the provider's region
+	// only: once the provider moves, no sign-in can serve this run, so it is refused, never held.
+	case b.Region != sn.Region:
+		return awsSSOScope{}, "region"
 	}
 	return chosenProvider{provider: p, owner: subject}.awsScope(), ""
 }

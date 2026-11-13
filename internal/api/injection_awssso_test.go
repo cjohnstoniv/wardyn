@@ -526,6 +526,36 @@ func TestResolveAWSSSOInjection_ASessionForAnotherRegionReadByTheRenewalIsRefuse
 	}
 }
 
+// A provider moved to another region since dispatch: the move removed its sessions, and its owner's next
+// sign-in is for the new region, which this run's grant cannot use. The resolve refuses at once and
+// raises no sign-in request.
+func TestResolveAWSSSOInjection_AProviderMovedToAnotherRegionIsRefusedNotHeld(t *testing.T) {
+	f := newReauthFixture(t, nil) // no session stored
+	p := reauthProvider()
+	p.Bedrock.Region = "us-west-2"
+	f.st.site = reauthProviderSite(p)
+
+	w := f.resolve(t)
+	var body errorBody
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusForbidden || body.Reason != reasonScopeChanged || body.Error != credentialReauthScopeChangedRefusal {
+		t.Fatalf("resolve = %d %s, want 403 %s", w.Code, w.Body.String(), reasonScopeChanged)
+	}
+	if n := pendingReauths(t, f); n != 0 {
+		t.Errorf("%d sign-in request(s) raised, want none", n)
+	}
+	var drift any
+	for _, ev := range f.audit.events() {
+		var d map[string]any
+		if ev.Action == "secret.read" && ev.Outcome == "failure" && json.Unmarshal(ev.Data, &d) == nil && d["reason"] == "scope_changed" {
+			drift = d["drift"]
+		}
+	}
+	if drift != "region" {
+		t.Errorf("secret.read failure drift = %v, want region", drift)
+	}
+}
+
 // I2 — a grant naming an owner who is not the run token's own subject cannot
 // pass on the per_user lane, however truthfully it names the roster.
 func TestResolveAWSSSOInjection_GrantNamingAnotherOwnerIsRefused(t *testing.T) {
