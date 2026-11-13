@@ -8,6 +8,7 @@ package envbuild
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"maps"
@@ -375,6 +376,34 @@ func TestBuild_SuccessPath(t *testing.T) {
 	// Build container must be removed after success.
 	if !f.removed {
 		t.Error("build container must be removed after success")
+	}
+}
+
+// A failed wait leaves the build container running with its log follow open. Build must end the follow and
+// return, not sit in the deferred log join until the 30-minute build deadline, and still remove the container.
+func TestBuild_WaitErrorEndsLogFollowAndRemovesContainer(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.waitErr = errors.New("daemon connection lost")
+	f.blockLogs = true
+	b := newPushBuilder(t, f)
+	b.DefaultLogSink = io.Discard
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel() // frees the build goroutine if the pin fails
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.Build(ctx, BuildSpec{RepoURL: "https://github.com/example/repo", OutputImageTag: "wardyn-ws:abc"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, f.waitErr) {
+			t.Errorf("err = %v, want it to wrap the wait error", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Build still waiting on the log follow after the wait failed")
+	}
+	if !f.removed {
+		t.Error("build container must be removed after a wait error")
 	}
 }
 

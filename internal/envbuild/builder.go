@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path"
@@ -288,6 +289,8 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		return Built{}, fmt.Errorf("envbuild: build cancelled or timed out: %w", ctx.Err())
 
 	case waitErr := <-wait.Error:
+		// The container may still be running: end the log stream the deferred join waits on.
+		cancel()
 		return Built{}, fmt.Errorf("envbuild: waiting for build container: %w", waitErr)
 
 	case resp := <-wait.Result:
@@ -502,7 +505,7 @@ func (b *Builder) effectiveMemoryBytes() (int64, error) {
 		return 0, err
 	}
 	if mb > 0 {
-		return mb << 20, nil
+		return mibToBytes(envBuildMemoryMB, mb)
 	}
 	return defaultBuildMemoryBytes, nil
 }
@@ -514,7 +517,11 @@ func (b *Builder) effectiveNanoCPUs() (int64, error) {
 		return 0, err
 	}
 	if c > 0 {
-		return int64(c * 1e9), nil
+		// A value under one nano-CPU would convert to 0, which Docker reads as no limit.
+		if n := c * 1e9; n >= 1 && n < 1<<63 {
+			return int64(n), nil
+		}
+		return 0, fmt.Errorf("envbuild: invalid %s=%v: want at least 1e-9 and a count that fits in nano-CPUs", envBuildCPUs, c)
 	}
 	return defaultBuildNanoCPUs, nil
 }
@@ -527,9 +534,18 @@ func (b *Builder) effectiveMaxContextBytes() (int64, error) {
 		return 0, err
 	}
 	if mb > 0 {
-		return mb << 20, nil
+		return mibToBytes(envMaxContextMB, mb)
 	}
 	return 0, nil
+}
+
+// mibToBytes converts a MiB cap to bytes. A count past int64 bytes would wrap to zero, which Docker reads
+// as no limit, or to a negative size.
+func mibToBytes(key string, mb int64) (int64, error) {
+	if mb > math.MaxInt64>>20 {
+		return 0, fmt.Errorf("envbuild: invalid %s=%d: too large to express in bytes", key, mb)
+	}
+	return mb << 20, nil
 }
 
 // envInt64 parses a non-negative int64 from env key. Unset/empty is 0 ("not configured"); a present but unparseable/negative value is an error, never 0.
@@ -552,7 +568,7 @@ func envFloat(key string) (float64, error) {
 		return 0, nil
 	}
 	f, err := strconv.ParseFloat(v, 64)
-	if err != nil || f < 0 {
+	if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, fmt.Errorf("envbuild: invalid %s=%q: want a non-negative number", key, v)
 	}
 	return f, nil
