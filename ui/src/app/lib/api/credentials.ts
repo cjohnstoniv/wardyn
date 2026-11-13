@@ -57,7 +57,7 @@ export interface AdminMintedToken {
   service_identity?: string;
 }
 
-/** An erasure's `not_erased`: other principals with the person's tenant and object id, left alone. */
+/** An erasure's `not_erased`: other principals that have, or had, the person's tenant and object id, left alone. */
 export interface NotErased {
   subjects: string[];
   note: string;
