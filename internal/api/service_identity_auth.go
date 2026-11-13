@@ -34,13 +34,32 @@ const (
 // serviceIdentityCtxKey carries the service identity that authenticated the request and its sponsor.
 type serviceIdentityCtxKey struct{}
 
-type serviceIdentityCtx struct{ name, sponsor string }
+type serviceIdentityCtx struct {
+	name, sponsor string
+	// since is the sponsor_since of the row the request's token was admitted against. It is zero on a
+	// context rebuilt for a queued launch, whose start checks the identity itself (queueOwnerLive).
+	since time.Time
+}
 
 // withServiceIdentity marks ctx as a request made by service identity name, sponsored by sponsor. The
 // sponsor rides audit.WithSponsor too, so the recorder chain stamps data.sponsor on every row.
 func withServiceIdentity(ctx context.Context, name, sponsor string) context.Context {
-	ctx = context.WithValue(ctx, serviceIdentityCtxKey{}, serviceIdentityCtx{name: name, sponsor: sponsor})
-	return audit.WithSponsor(ctx, sponsor)
+	return withServiceAdmitted(ctx, types.ServiceIdentity{Name: name, Sponsor: sponsor})
+}
+
+// withServiceAdmitted is withServiceIdentity for a request whose token was admitted against si, the
+// identity's live row. It also keeps si's sponsor_since, which the request's own writes are held to
+// (ownerGuard), so one that reaches the store after a suspension, retirement or sponsor change is refused.
+func withServiceAdmitted(ctx context.Context, si types.ServiceIdentity) context.Context {
+	ctx = context.WithValue(ctx, serviceIdentityCtxKey{}, serviceIdentityCtx{name: si.Name, sponsor: si.Sponsor, since: si.SponsorSince})
+	return audit.WithSponsor(ctx, si.Sponsor)
+}
+
+// serviceAdmittedFromContext reports the service identity ctx's request was admitted as and the
+// sponsor_since its token was admitted against, when it was (serviceTokenAuth).
+func serviceAdmittedFromContext(ctx context.Context) (name string, since time.Time, ok bool) {
+	v, ok := ctx.Value(serviceIdentityCtxKey{}).(serviceIdentityCtx)
+	return v.name, v.since, ok && !v.since.IsZero()
 }
 
 // serviceIdentityFromContext reports the service identity ctx's request was made by, when it was.
@@ -149,7 +168,7 @@ func (s *Server) serviceTokenAuth(w http.ResponseWriter, r *http.Request, t type
 	// sequence rides the request as an API token's does, so a queued launch, an event stream or a terminal
 	// this request opens is ordered against the sponsor's cuts by that sequence and not by two clocks.
 	ctx := oidc.WithRevocationSeq(withHumanIdentity(r.Context(), t.Principal, "", oidc.RoleUser, si.UserType, []string{}, false), t.Principal, t.RevSeq)
-	r = r.WithContext(withAPITokenID(withServiceIdentity(ctx, si.Name, si.Sponsor), t.ID))
+	r = r.WithContext(withAPITokenID(withServiceAdmitted(ctx, si), t.ID))
 	if rctx := chi.RouteContext(r.Context()); rctx == nil || !serviceAllowed[r.Method+" "+rctx.RoutePattern()] {
 		d := authz.Deny(authz.ReasonServiceScope, r.URL.Path, serviceScopeRefusal)
 		writeErrorReason(w, d.Status, string(d.Reason), d.Sentence)

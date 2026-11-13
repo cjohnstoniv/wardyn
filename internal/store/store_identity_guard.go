@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ErrIdentityDeactivated is the refusal of anything that would give a deactivated, purged or
@@ -35,6 +37,10 @@ type IdentityGuard struct {
 	CutAfter int64
 	// Email is the owner's address, which a cut may be keyed by. Read only with CutAfter.
 	Email string
+	// ServiceSince, when set, makes the write a service identity's own (Principal is service:<name>), made
+	// by a request whose token was admitted while the identity's sponsor_since was ServiceSince. The write
+	// is also refused once that identity is suspended or retired, or its sponsor has changed since.
+	ServiceSince time.Time
 }
 
 type identityGuardKey struct{}
@@ -55,6 +61,8 @@ func identityGuardFrom(ctx context.Context) (IdentityGuard, bool) {
 // checkIdentityGuard locks every identity row bound to g.Principal FOR SHARE and refuses when one
 // is deactivated, purged, past g.Epoch, or when g.Principal was cut after since, the revocation
 // sequence (ReadRevocationSeq) read before this transaction began, or, with g.CutAfter, after that.
+// With g.ServiceSince it also locks that service identity's row FOR SHARE and refuses when the
+// identity is suspended, retired or no longer on the sponsor it was admitted under.
 func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard, since int64) error {
 	rows, err := tx.Query(ctx, `
 		SELECT deactivated_at IS NOT NULL OR purged_at IS NOT NULL, authority_epoch
@@ -77,6 +85,24 @@ func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard, since i
 	}
 	if refused {
 		return ErrIdentityDeactivated
+	}
+	// A suspension, a retirement and a sponsor change take the service identity's row FOR UPDATE, so
+	// each either waits for this write's commit (a retirement's credential erase runs after its own
+	// commit and finds the write) or committed first and refuses it here.
+	if !g.ServiceSince.IsZero() {
+		var usable bool
+		var sponsorSince time.Time
+		err := tx.QueryRow(ctx, `SELECT suspended_at IS NULL AND retired_at IS NULL, sponsor_since
+			FROM service_identities WHERE name = $1 FOR SHARE`,
+			strings.TrimPrefix(g.Principal, types.ServicePrincipalPrefix)).Scan(&usable, &sponsorSince)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrIdentityDeactivated
+		case err != nil:
+			return fmt.Errorf("store: identity guard: %w", err)
+		case !usable || !sponsorSince.Equal(g.ServiceSince):
+			return ErrIdentityDeactivated
+		}
 	}
 	// An unbind releases the principal while this guard waits for its row lock.
 	// The row no longer matches, so its revocation cutoff must refuse the queued write.

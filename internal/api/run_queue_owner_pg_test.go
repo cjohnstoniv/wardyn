@@ -116,6 +116,58 @@ func TestPG_QueueRetiredServiceIdentityNeverStarts(t *testing.T) {
 	}
 }
 
+// A start rebuilt from a queue row carries no admission of its own, so the owner guard holds no service
+// identity row for it: the start's own check refuses a run queued before its identity was suspended, or
+// before its sponsor was handed on, a hand-over and back included, and starts one whose suspension ended.
+func TestPG_QueueSuspendedOrRehomedServiceIdentityNeverStarts(t *testing.T) {
+	ctx := context.Background()
+	e := newQueueEnv(t)
+	e.revocations()
+	const other = "sponsor-b"
+	for _, p := range []string{e.personP, other} {
+		if _, err := e.pg.IssueLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: "https://idp.example", TenantID: "t",
+			ObjectID: "o-" + p, Email: p + "@corp.example"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	si, err := e.pg.CreateServiceIdentity(ctx, types.ServiceIdentity{Name: "ci-queue", Sponsor: e.personP, UserType: types.UserTypeStandard, CreatedBy: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageSponsorships(t, e.pg.Pool)
+	auth := queueAuthority{Sub: si.Principal(), Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{}, Service: si.Name, Sponsor: e.personP}
+	queued := e.startOf(auth, types.AgentRun{ID: uuid.New()}) // queued now, before every change below
+	change := func(ch store.ServiceIdentityChange) {
+		t.Helper()
+		ch.By = "admin"
+		if _, err := e.pg.UpdateServiceIdentity(ctx, si.Name, ch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := func(what string) {
+		t.Helper()
+		if end := e.srv.queueOwnerStanding(queued); end == nil || end.token != string(types.RunEndIdentityDeactivated) {
+			t.Errorf("the start of a run queued before %s = %+v; want identity_deactivated", what, end)
+		}
+	}
+	if end := e.srv.queueOwnerStanding(queued); end != nil {
+		t.Fatalf("a live service identity's start ended: %+v", end)
+	}
+	yes, no := true, false
+	change(store.ServiceIdentityChange{Suspended: &yes})
+	refused("the identity was suspended")
+	change(store.ServiceIdentityChange{Suspended: &no})
+	if end := e.srv.queueOwnerStanding(queued); end != nil {
+		t.Errorf("the start after the suspension ended: %+v; want it to go on", end)
+	}
+	to := other
+	change(store.ServiceIdentityChange{Sponsor: &to})
+	refused("its sponsor was handed on")
+	to = e.personP
+	change(store.ServiceIdentityChange{Sponsor: &to})
+	refused("its sponsor was handed on and back")
+}
+
 // The start judges the owner by the user type the current role mappings give them, not the one their
 // session carried at launch: a person moved to a type whose agent door is shut has the run ended.
 func TestPG_QueueRetypedOwnerIsJudgedByTheCurrentType(t *testing.T) {
