@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -75,4 +76,21 @@ func (m *Manager) retryUnconfirmedTeardowns(ctx context.Context) {
 		}
 		m.mu.Unlock()
 	}
+}
+
+// clearTeardown drops r's open hold, for its kill or end finished at at, and keeps it as TeardownCleared
+// with that time.
+func (r *localRun) clearTeardown(at time.Time) {
+	if h := r.TeardownUnconfirmed; h != nil {
+		r.TeardownCleared = &runnerwire.TeardownHold{Kind: h.Kind, Since: h.Since, ClearedAt: &at}
+		r.TeardownUnconfirmed = nil
+	}
+}
+
+// teardownReport is r's TeardownHold for the state page: the open hold, else the last one that cleared.
+func (r localRun) teardownReport() *runnerwire.TeardownHold {
+	if h := r.TeardownUnconfirmed; h != nil {
+		return &runnerwire.TeardownHold{Kind: h.Kind, Since: h.Since}
+	}
+	return r.TeardownCleared
 }

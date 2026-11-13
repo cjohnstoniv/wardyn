@@ -233,7 +233,7 @@ func (m *Manager) settleFinishedLocked(id uuid.UUID, r *localRun, kind types.Run
 	// StopProxy returned nil only on completion evidence, so a pending report the tick held goes with it.
 	r.ContainmentPending = nil
 	if kind == types.RunnerActionKill || kind == types.RunnerActionEnd {
-		r.TeardownUnconfirmed = nil // this kill or end finished
+		r.clearTeardown(at) // this kill or end finished
 	}
 	contained := m.mutationsDrained(id) && (r.Containment.Contained || r.Containment.Operation == string(kind))
 	if contained {

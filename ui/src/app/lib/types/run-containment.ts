@@ -63,10 +63,23 @@ export interface RunNodeRecord {
   decided_at?: string;
 }
 
+export type TeardownHoldKind = "kill" | "end";
+
+/**
+ * GET /runs/{id}/containment's teardown hold: a kill or end the runner refused because it could not see it
+ * finish, and holds the run for. `cleared_at` is absent while it holds. Both times are the runner's.
+ */
+export interface RunTeardownHold {
+  kind: TeardownHoldKind;
+  since: string;
+  cleared_at?: string;
+}
+
 /** GET /runs/{id}/containment. */
 export interface RunContainment {
   pending?: RunContainmentPending;
   records: RunNodeRecord[];
+  teardown_hold?: RunTeardownHold;
 }
 
 /** POST /runs/{id}/node-record: `tuple` is the one the form showed. */

@@ -48,6 +48,9 @@ type localRun struct {
 	// (runner.TeardownUnconfirmedError): that action was refused, and each session's Pending makes the
 	// call again until it finishes (retryUnconfirmedTeardowns).
 	TeardownUnconfirmed *teardownHold `json:"teardown_unconfirmed,omitempty"`
+	// TeardownCleared is the last such hold once its kill or end finished, with when, kept so every later
+	// state page tells the org (clearTeardown).
+	TeardownCleared *runnerwire.TeardownHold `json:"teardown_cleared,omitempty"`
 	// OutputCapture records that the create handed the sandbox an output
 	// writer; a retirement that says the run had no output is refused when set.
 	OutputCapture bool `json:"output_capture,omitempty"`

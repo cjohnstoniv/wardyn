@@ -274,7 +274,11 @@ func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementC
 //     with a receipt computed now, recorded as runner.retire;
 //   - the latest action deferred: queue a fresh-ID successor in the same phase
 //     (a retire_run with a recomputed receipt), or abandon the obligation once
-//     RetirementSuccessorBound successors were spent.
+//     RetirementSuccessorBound successors were spent;
+//   - kill, its latest kill refused: queue a fresh-ID successor kill, within
+//     that bound, when the run's teardown hold cleared after the refusal, or
+//     else close the obligation as refused once the runner's state pages
+//     are all in.
 //
 // Anything else (an action still open, another obligation fencing the run, a
 // run not terminal or not eligible, a closed snapshot) is RetirementIdle.
@@ -331,6 +335,15 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 	if fenced {
 		return RetirementIdle, nil
 	}
+	// A kill or end the runner could not see finish holds the run: a kill queued now would only be refused
+	// again. The snapshot waits until the runner reports the hold finished.
+	var held bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at IS NULL)`, run.ID).Scan(&held); err != nil {
+		return RetirementIdle, err
+	}
+	if held {
+		return RetirementIdle, nil
+	}
 	tip, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions
 		WHERE run_id = $1 AND obligation_id = $2 ORDER BY queue_seq DESC LIMIT 1 FOR UPDATE`, run.ID, t.obligationID))
 	switch {
@@ -357,6 +370,34 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 			return RetirementSuccessor, insertRetirementActionTx(ctx, tx, owner, t, types.RunnerActionKill, nil, &tip.ID)
 		}
 		return RetirementSuccessor, queueRetireTx(ctx, tx, owner, t, &tip.ID, prepare)
+	case tip.Outcome == types.RunnerActionRefused && tip.Kind == types.RunnerActionKill:
+		// A kill refused while the runner held the run goes again once the runner reports the hold finished
+		// after that refusal, on the runner's clock, as the orphan sweep reads it. Any other refusal is final,
+		// but only once the runner's state pages are all in: the refusal is recorded before its session's
+		// pages, which carry the hold. Until then, or while a hold they brought is open, the snapshot waits.
+		// One statement, so a hold the pages brought is never missed.
+		var cleared, paged bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at > $2),
+			EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $3 AND complete)
+			AND NOT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at IS NULL)`,
+			run.ID, tip.ObservedAt, t.runnerID).Scan(&cleared, &paged); err != nil {
+			return RetirementIdle, err
+		}
+		if !cleared && !paged {
+			return RetirementIdle, nil
+		}
+		if !cleared {
+			_, err := closeRetirementTx(ctx, tx, run.ID, "refused", RetirementRunnerRefused)
+			return RetirementIdle, err
+		}
+		if t.successors >= RetirementSuccessorBound {
+			return RetirementAbandoned, abandonRetirementTx(ctx, tx, t, RetirementDeferredExhausted, prepare)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runner_retirements SET successors = successors + 1 WHERE run_id = $1`, run.ID); err != nil {
+			return RetirementIdle, err
+		}
+		// A refused action is never marked superseded (runner_pending_actions_chain); supersedes links it.
+		return RetirementSuccessor, insertRetirementActionTx(ctx, tx, owner, t, types.RunnerActionKill, nil, &tip.ID)
 	case tip.Outcome == types.RunnerActionSuccess && t.state == "kill":
 		// The retire_run is the kill's success successor: never queued beside
 		// a kill, so it always meets a containment the runner settled.
@@ -542,7 +583,8 @@ func retirementBindsResultTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendi
 // settleRetirementResultTx applies a recorded result to its retirement
 // obligation, if it has one: a success settles the phase's earlier deferred
 // actions ('chain'), and a retire_run success settles the obligation; a
-// refusal in either phase closes it as refused, with no successor.
+// refused retire_run closes it as refused, with no successor. A refused kill
+// leaves it open for advanceRetirementTx, which reads the run's teardown hold.
 func settleRetirementResultTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, outcome string) error {
 	if retirementPhase(a.Kind) == "" || a.Asserted {
 		return nil
@@ -573,7 +615,9 @@ func settleRetirementResultTx(ctx context.Context, tx pgx.Tx, a types.RunnerPend
 		if err := settle(false); err != nil {
 			return err
 		}
-		_, err = closeRetirementTx(ctx, tx, a.RunID, "refused", RetirementRunnerRefused)
+		if a.Kind == types.RunnerActionRetire {
+			_, err = closeRetirementTx(ctx, tx, a.RunID, "refused", RetirementRunnerRefused)
+		}
 	}
 	return err
 }

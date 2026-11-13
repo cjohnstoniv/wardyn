@@ -25,6 +25,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a Mac runner, an update of a macOS base or kept machine whose new copy failed its file check, and whose swap back to the old copy failed too, deleted the old copy. The old copy is now moved aside, next to the base or kept machine, and the error names where it is. Deleting that kept machine, or its expiry, deletes the moved-aside copy with it, so move it back first to keep it.
 - On a Mac runner, two tools updates running at once that downloaded the same tool could push a copy other than the one whose checksum was checked, or fail. The second now waits for the first's download and reuses the checked file.
 - On a Docker runner, a Linux VM run ended because its audit spool was full, and whose AWS credential caches could not be wiped, kept being ended again on every pass, with a warning logged each minute. That end now counts as finished.
+- On a Mac runner, when the runner refused a kill or end of a macOS VM run because it could not see the VM stop, the server kept only the refusal, and never learned when the runner's later try finished it. The run page now shows the kill or end as not finished on the runner, with the time the runner began holding it, until the runner reports that it finished, and then the time it finished. `GET /runs/{id}/containment` returns it as `teardown_hold`. Once the runner reports that its teardown hold has cleared, the server sends the refused kill again on its next reconcile pass, so the run's teardown goes on. A migration (`0286_run_teardown_holds`) adds one table; split-role installs need the grant under Before you upgrade.
+
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `run_teardown_holds`.
+  Without it, a Mac runner that holds a kill or end has its state pages refused, so it does not come back online.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

@@ -638,6 +638,18 @@ type RunState struct {
 	// ContainmentPending is set while a k8s runner holds the run without completion evidence for its
 	// proxy (design K1 §3.1 Q2). It is never plain containment: ProxyStoppedAt stays unset.
 	ContainmentPending *ContainmentPending `json:"containment_pending,omitempty"`
+	// TeardownHold is set once the runner refused a kill or end of the run because it could not see it
+	// finish (runner.TeardownUnconfirmedError): open while it holds the run, with ClearedAt once that kill
+	// or end finished. A runner that predates it sends none; an organisation that predates it ignores it.
+	TeardownHold *TeardownHold `json:"teardown_hold,omitempty"`
+}
+
+// TeardownHold is RunState's teardown-hold report: the kill or end the runner holds the run for, and
+// since when. ClearedAt is when that kill or end finished; the runner holds nothing for it after that.
+type TeardownHold struct {
+	Kind      types.RunnerActionKind `json:"kind"`
+	Since     time.Time              `json:"since"`
+	ClearedAt *time.Time             `json:"cleared_at,omitempty"`
 }
 
 // ContainmentPending is RunState's containment-pending report.

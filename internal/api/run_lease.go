@@ -364,11 +364,7 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) (wipeFailed
 	if !ok {
 		return "", runner.ErrEndUnsupported
 	}
-	err = ender.EndSandbox(ctx, run.SandboxRef)
-	if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
-		return err.Error(), nil
-	}
-	return "", err
+	return runner.SplitAWSCacheWipe(ender.EndSandbox(ctx, run.SandboxRef))
 }
 
 // noteContainmentFailure records that a kept run's stop failed with err
