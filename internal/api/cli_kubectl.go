@@ -159,7 +159,7 @@ func (s *Server) handlePutKubectlToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body putSecretRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil ||
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &body, false); err != nil ||
 		body.Value == "" || len(body.Value) > maxKubectlTokenBytes || strings.ContainsAny(body.Value, " \t\r\n") {
 		writeErrorReason(w, http.StatusBadRequest, reasonSecretBodyInvalid, kubectlTokenBody)
 		return

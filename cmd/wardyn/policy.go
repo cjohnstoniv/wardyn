@@ -198,6 +198,9 @@ func policyRenderCmd() *cobra.Command {
 				if err := json.Unmarshal(jsonBytes, &body); err != nil {
 					return fmt.Errorf("parse policy body: %w", err)
 				}
+				if err := types.RefuseRepeatedJSONKeysFor(jsonBytes, "the policy", &body); err != nil {
+					return fmt.Errorf("parse policy body: %w", err)
+				}
 				specBytes = body.Spec
 			}
 			// Strict decode so an unknown/misspelled field is caught locally,
@@ -257,6 +260,9 @@ func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 		if perr := json.Unmarshal(raw, &probe); perr != nil {
 			return sdk.PolicyRequest{}, fmt.Errorf("parse policy body: %w", perr)
 		}
+		if perr := types.RefuseRepeatedJSONKeysFor(raw, "the policy", &probe); perr != nil {
+			return sdk.PolicyRequest{}, fmt.Errorf("parse policy body: %w", perr)
+		}
 		body.Name = probe.Name
 		specBytes = probe.Spec
 	}
@@ -285,6 +291,12 @@ func decodeSpecStrict(raw []byte) (types.RunPolicySpec, error) {
 	dec.DisallowUnknownFields()
 	var spec types.RunPolicySpec
 	if err := dec.Decode(&spec); err != nil {
+		return types.RunPolicySpec{}, err
+	}
+	// The decode kept the last of a field written in two letter cases, so a restriction written
+	// under the other spelling would be dropped. A key written twice in one case never gets here:
+	// policyToJSON refuses it.
+	if err := types.RefuseRepeatedJSONKeysFor(raw, "the policy", &spec); err != nil {
 		return types.RunPolicySpec{}, err
 	}
 	return spec, nil

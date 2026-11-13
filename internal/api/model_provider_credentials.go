@@ -11,7 +11,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -252,7 +251,7 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body putSecretRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &body, false); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialBodyInvalid, mpcBody)
 		return
 	}

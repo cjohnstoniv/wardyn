@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -289,16 +288,18 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var rows []types.FederatedAuditEvent
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&rows); err != nil {
-		s.auditIngestFailure(r, d, "invalid_body", 0)
-		writeErrorReason(w, http.StatusBadRequest, reasonDeviceIngestInvalidBody, "invalid JSON body: "+err.Error())
+	// The rows are counted before any is decoded: a megabyte of empty rows would otherwise decode
+	// to hundreds of megabytes before the count refused it.
+	err := types.DecodeOneJSONRows(bytes.NewReader(body), &rows, true, "", maxDeviceIngestRows)
+	var tooMany *types.TooManyJSONRowsError
+	if errors.As(err, &tooMany) {
+		s.auditIngestFailure(r, d, "batch_too_large", tooMany.Rows)
+		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonDeviceIngestBatchTooLarge, fmt.Sprintf("batch exceeds %d rows", maxDeviceIngestRows))
 		return
 	}
-	if len(rows) > maxDeviceIngestRows {
-		s.auditIngestFailure(r, d, "batch_too_large", len(rows))
-		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonDeviceIngestBatchTooLarge, fmt.Sprintf("batch exceeds %d rows", maxDeviceIngestRows))
+	if err != nil {
+		s.auditIngestFailure(r, d, "invalid_body", 0)
+		writeErrorReason(w, http.StatusBadRequest, reasonDeviceIngestInvalidBody, "invalid JSON body: "+err.Error())
 		return
 	}
 	if msg := invalidFederatedRow(rows); msg != "" {

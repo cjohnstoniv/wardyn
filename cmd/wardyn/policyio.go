@@ -70,8 +70,9 @@ func decodeOneJSONStrict(r io.Reader, v any) error {
 	if err := dec.Decode(&extra); err != io.EOF {
 		return errNotOneDocument
 	}
-	// Decoding keeps only the last of a repeated key, so the first one's value would be lost.
-	if err := types.RefuseRepeatedJSONKeys(first, "the document"); err != nil {
+	// Decoding keeps only the last of a repeated key, also in another letter case, so the first
+	// one's value would be lost.
+	if err := types.RefuseRepeatedJSONKeysFor(first, "the document", v); err != nil {
 		return err
 	}
 	strict := json.NewDecoder(bytes.NewReader(first))

@@ -587,26 +587,9 @@ const maxJSONBody = 1 << 20 // 1 MiB
 // as the 400 below ("... request body too large"), not a labeled 413; use
 // readCappedBody where the 413 matters.
 func decodeStrictMsg(w http.ResponseWriter, r *http.Request, dst any) string {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
-	var body json.RawMessage
-	if err := dec.Decode(&body); err != nil {
-		return "invalid JSON body: " + err.Error()
-	}
-	// Decode stops after the first value: without this, `{} {"spec":...}` reads as an empty
-	// document, and a whole-document PUT replaces what was stored with it.
-	if err := dec.Decode(new(json.RawMessage)); err == nil {
-		return "invalid JSON body: more than one JSON value"
-	} else if !errors.Is(err, io.EOF) {
-		return "invalid JSON body: " + err.Error()
-	}
-	// The typed decode keeps the last of a key written twice, so `"denied_domains":["x"],
-	// "denied_domains":[]` would save as the empty list.
-	if err := types.RefuseRepeatedJSONKeys(body, "the body"); err != nil {
-		return "invalid JSON body: " + err.Error()
-	}
-	strict := json.NewDecoder(bytes.NewReader(body))
-	strict.DisallowUnknownFields()
-	if err := strict.Decode(dst); err != nil {
+	// The typed decode keeps the last of a key written twice, also in another letter case, so
+	// `"denied_domains":["x"],"Denied_Domains":[]` would save as the empty list.
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), dst, true); err != nil {
 		return "invalid JSON body: " + err.Error()
 	}
 	return ""
@@ -639,7 +622,7 @@ func decodeStrictKeys(w http.ResponseWriter, r *http.Request, dst any) (present 
 		return nil, "invalid JSON body: " + err.Error()
 	}
 	// The decode keeps the last of a key written twice, which decodeStrictMsg refuses.
-	if err := types.RefuseRepeatedJSONKeys(body, "the body"); err != nil {
+	if err := types.RefuseRepeatedJSONKeysFor(body, "the body", dst); err != nil {
 		return nil, "invalid JSON body: " + err.Error()
 	}
 	var keys map[string]json.RawMessage
@@ -648,7 +631,9 @@ func decodeStrictKeys(w http.ResponseWriter, r *http.Request, dst any) (present 
 	}
 	present = make(map[string]bool, len(keys))
 	for k := range keys {
-		present[k] = true
+		// By the field the decode read it into: a key in another letter case set that field, and
+		// counted as absent it would be carried forward over.
+		present[types.JSONFieldName(dst, k)] = true
 	}
 	return present, ""
 }

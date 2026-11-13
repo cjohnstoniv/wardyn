@@ -741,7 +741,7 @@ func (s *Server) handleInternalProxyLoaded(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var body proxyLoadedReport
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil || !isSHA256Hex(body.ConfigSHA256) {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, 64<<10), &body, false); err != nil || !isSHA256Hex(body.ConfigSHA256) {
 		writeErrorReason(w, http.StatusBadRequest, reasonProxyReportInvalid, "the report needs config_sha256, a lowercase hex SHA-256")
 		return
 	}

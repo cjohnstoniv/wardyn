@@ -753,7 +753,7 @@ func (s *Server) handleInternalDesktopSigninCheck(w http.ResponseWriter, r *http
 	var body struct {
 		Credential string `json:"credential"`
 	}
-	if !on || json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&body) != nil || body.Credential == "" {
+	if !on || types.DecodeOneJSON(io.LimitReader(r.Body, 1<<10), &body, false) != nil || body.Credential == "" {
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopSigninCredentialRefused, "not an open sign-in's credential")
 		return
 	}

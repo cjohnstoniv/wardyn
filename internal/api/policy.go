@@ -52,8 +52,8 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	// After the decode, which checks the syntax and the depth: it kept only the last of a key
-	// written twice, so a restriction written first would be dropped.
-	if err := types.RefuseRepeatedJSONKeys(b, "the policy"); err != nil {
+	// written twice, also in another letter case, so a restriction written first would be dropped.
+	if err := types.RefuseRepeatedJSONKeysFor(b, "the policy", &spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)

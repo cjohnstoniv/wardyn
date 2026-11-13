@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -49,7 +48,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body mintRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSidecarBody)).Decode(&body); err != nil || body.GrantID == uuid.Nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxSidecarBody), &body, false); err != nil || body.GrantID == uuid.Nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonMintGrantIDRequired, "grant_id is required")
 		return
 	}

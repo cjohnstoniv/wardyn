@@ -951,7 +951,7 @@ func (s *Server) handleMacWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body macWindowBody
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, 4096), &body, false); err != nil && !errors.Is(err, io.EOF) {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid request body")
 		return
 	}
