@@ -69,6 +69,10 @@ func holdPassed(ctx context.Context) bool {
 	return ok && !time.Now().Before(dl)
 }
 
+// EndHoldPassed is holdPassed for cmd/wardynd's idle and max-age stop, whose ctx carries the hold LockRunEnd took:
+// true once that hold's deadline has passed, when the stop is left to the readers.
+func EndHoldPassed(ctx context.Context) bool { return holdPassed(ctx) }
+
 // endHoldSlots is the end-hold semaphore: at most maxEndHolds taken at once. Zero value is ready to use.
 type endHoldSlots struct {
 	mu sync.Mutex
