@@ -222,7 +222,7 @@ func TestRunExecCutsAStartWhoseLockIsLostWhileItRuns(t *testing.T) {
 }
 
 // TestStartFence_AnEndBehindAStartLandsAfterTheStartIsHandedOn: a write that ends the run, arriving while a start
-// holds the fence, with 2 s left on its context, behind a runner call of 1.5 s (inside the start's budget), is
+// holds the fence, with 5 s left on its context, behind a runner call of 3 s (inside the start's budget), is
 // written only once the runner has returned the session, and the start is handed on.
 // Catches: a writer that gives the fence up early (any cap below a start's budget) and ends the run while a start
 // is inside the runner.
@@ -230,7 +230,7 @@ func TestStartFence_AnEndBehindAStartLandsAfterTheStartIsHandedOn(t *testing.T) 
 	var mu sync.Mutex
 	var returned time.Time
 	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
-		time.Sleep(1500 * time.Millisecond)
+		time.Sleep(3 * time.Second)
 		mu.Lock()
 		returned = time.Now()
 		mu.Unlock()
@@ -245,7 +245,7 @@ func TestStartFence_AnEndBehindAStartLandsAfterTheStartIsHandedOn(t *testing.T) 
 		_, err := e.srv.execAdmitted(context.Background(), h, "sbx-1", runner.ExecSpec{Argv: []string{"id"}})
 		handed <- err
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var wrote time.Time
 	if _, err := e.srv.fenced(ctx, e.id, func() (bool, error) { wrote = time.Now(); return true, ctx.Err() }); err != nil {
