@@ -181,6 +181,8 @@ func (c *Client) DeleteMyDriveResult(ctx context.Context, id uuid.UUID) (MyDrive
 
 // DeleteMyDrive is DeleteMyDriveResult that returns nil only when the drive's files are gone. A delete
 // the server took without removing them (deferred or record only) is a *MyDriveDeleteUnfinishedError.
+// The server has taken the delete in both cases: calling again does not remove the files, and once only
+// the record was removed, a second call answers 404.
 func (c *Client) DeleteMyDrive(ctx context.Context, id uuid.UUID) error {
 	res, err := c.DeleteMyDriveResult(ctx, id)
 	if err == nil && res.Reason != "" {
