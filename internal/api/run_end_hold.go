@@ -31,7 +31,7 @@ import (
 // has a bound of its own instead (heldCall), so the lock is released even on a holder whose ctx has no deadline (the
 // completion watcher, a person's bring-back): the end's audit, the approvals' cancel and the model-access note on
 // heldStoreCallBound, the revoke on heldRevokeBound (a revoke cut there stays owed for the revoke queue once its owed
-// mark is written; otherwise it is retried only while the run holds a sandbox), the output's drain and persist on
+// mark is written; otherwise the mark is written again in the background until it lands), the output's drain and persist on
 // killCascadeTimeout, and the agent stop before a pass on bringBackExecBound. Together they can take 150 to 165 s of
 // endHoldDedicated's 180 s; with a macOS VM run's status read or a pass on top, the stop can reach B and is then left
 // to the tail owner and the terminal sweep, which repeat it with a full hold. The holder's own state write and reads

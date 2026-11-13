@@ -519,6 +519,7 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 				nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
 				s.notePauseSettleOrRetry(nctx, run.ID)
 				ncancel()
+				s.notePauseSettleLater(run.ID)
 			}
 			data["error"] = err.Error()
 			s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
@@ -736,6 +737,7 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			nctx, ncancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 			defer ncancel()
 			s.notePauseSettleOrRetry(nctx, run.ID)
+			s.notePauseSettleLater(run.ID)
 		}
 		return
 	}
@@ -752,7 +754,7 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			})))
 		// A paused run holds no Azure DevOps token; its resume creates one.
 		// After the mark, so a resolve racing it sees the pause and creates none.
-		s.revokeRunPATs(ctx, run.ID, adoPATRevokePause)
+		heldCall(ctx, heldRevokeBound, func(ctx context.Context) { s.revokeRunPATs(ctx, run.ID, adoPATRevokePause) })
 		return
 	}
 	// The compensation outlives a lease lost mid-pass: a freeze must not be

@@ -236,6 +236,31 @@ func (s *Server) retryPauseSettle(base context.Context, id uuid.UUID) bool {
 	return err == nil
 }
 
+// pauseLateSettleAfter is how long after a cut freeze or thaw notePauseSettleLater writes its settle record again. A
+// runtime call its context cut can still land after the pause sweep has settled the first record (the runtime need
+// not stop at the cut), and nothing would record that; the later record has the sweep look once more. A variable
+// only so a test can shorten it.
+var pauseLateSettleAfter = 2 * time.Minute
+
+// notePauseSettleLater writes run id's settle record again pauseLateSettleAfter from now, in a tracked goroutine
+// (goBackground), unless the daemon stops first.
+func (s *Server) notePauseSettleLater(id uuid.UUID) {
+	base := s.cfg.BaseCtx
+	if base == nil {
+		return
+	}
+	s.goBackground(func() {
+		select {
+		case <-base.Done():
+			return
+		case <-time.After(pauseLateSettleAfter):
+		}
+		ctx, cancel := context.WithTimeout(base, pauseCompensateTimeout)
+		defer cancel()
+		s.notePauseSettleOrRetry(ctx, id)
+	})
+}
+
 // clearPauseSettle deletes the settle record a compensation wrote, once its
 // sandbox is settled. A failure only leaves the sweep a settle that changes
 // nothing.

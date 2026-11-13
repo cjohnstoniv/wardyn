@@ -23,7 +23,7 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// Each of these runs on a bound of its own (heldCall), not the end hold's deadline: a holder's ctx may have none
 	// (the completion watcher, a person's bring-back), and the run's lock is released only when they return. The
 	// revoke runs first and is never cut at the hold's deadline; one cut at its own bound stays owed for the revoke
-	// queue once its owed mark is written, otherwise it is retried only while the run holds a sandbox
+	// queue once its owed mark is written, otherwise the mark is written again in the background until it lands
 	// (settleRevokeOwed). The output keeps the bound a kill gives it (finishRunOutputDetached).
 	var revokeErr, approvalsErr error
 	heldCall(ctx, heldRevokeBound, func(ctx context.Context) { revokeErr = s.revokeRunCascade(ctx, runID) })

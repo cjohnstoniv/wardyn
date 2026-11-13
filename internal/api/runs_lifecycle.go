@@ -331,28 +331,30 @@ func (s *Server) RevokeStoppedRun(ctx context.Context, runID uuid.UUID) map[stri
 	return out
 }
 
-// revokeRunSteps is the cascade's work, unaudited: every step runs, and each
-// failure (or the count of PATs still unrevoked) is returned under its key.
+// revokeRunSteps is the cascade's work, unaudited: every step runs, each on a bound of its own (revokeStep), and
+// each failure (or the count of PATs still unrevoked) is returned under its key.
 func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string]any {
 	data := map[string]any{}
 	if s.cfg.Identity != nil {
-		if rerr := s.cfg.Identity.RevokeRun(ctx, runID); rerr != nil {
+		if rerr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Identity.RevokeRun(ctx, runID) }); rerr != nil {
 			data["identity_error"] = rerr.Error()
 		}
 	}
 	if s.cfg.Broker != nil {
-		if berr := s.cfg.Broker.RevokeRun(ctx, runID); berr != nil {
+		if berr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Broker.RevokeRun(ctx, runID) }); berr != nil {
 			data["broker_error"] = berr.Error()
 		}
 	}
-	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
+	if perr := revokeStep(ctx, func(ctx context.Context) error { return s.dropRunProxyConfig(ctx, runID) }); perr != nil {
 		data["proxy_config_error"] = perr.Error()
 	}
 	macGUIEnvForget(runID)
-	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
+	_ = revokeStep(ctx, func(ctx context.Context) error { s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd); return nil })
 	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
-		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
+		lctx, lcancel := context.WithTimeout(ctx, revokeStepBound)
+		rows, err := st.ListUnrevokedRunPATs(lctx, store.RunPATFilter{RunID: runID})
+		lcancel()
 		if err != nil {
 			data["pat_revoke_check_error"] = err.Error()
 		} else if len(rows) > 0 {

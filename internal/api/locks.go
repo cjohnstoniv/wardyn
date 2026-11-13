@@ -180,7 +180,7 @@ var heldStoreCallBound = runTeardownBudget
 
 // heldRevokeBound bounds a revoke of a run's credentials made under the run's lock: the boot pass's budget for one
 // teardown call. A revoke cut at it stays owed for the revoke queue once its owed mark is written;
-// otherwise it is retried only while the run holds a sandbox (settleRevokeOwed). A variable only so a test can
+// otherwise the mark is written again in the background until it lands (settleRevokeOwed). A variable only so a test can
 // shorten it.
 var heldRevokeBound = reconcileFinalizeTimeout
 

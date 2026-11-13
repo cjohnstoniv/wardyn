@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -99,7 +100,7 @@ func (s *Server) markRevokeOwed(ctx context.Context, runID uuid.UUID) bool {
 	if !ok {
 		return true
 	}
-	if err := st.MarkRevokeOwed(ctx, runID); err != nil {
+	if err := revokeStep(ctx, func(ctx context.Context) error { return st.MarkRevokeOwed(ctx, runID) }); err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run's revoke as owed failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		return false
@@ -122,8 +123,8 @@ func (s *Server) clearRevokeOwed(ctx context.Context, runID uuid.UUID) {
 
 // settleRevokeOwed ends a revoke attempt. Nothing owed clears the mark. Something owed with the first mark
 // not landed writes it again, on a fresh teardownCtx so a cancelled caller still writes it; if that fails too
-// (Identity.RevokeRun is itself a database insert, so the database may be down) the run is retried only
-// while it holds a sandbox.
+// (Identity.RevokeRun is itself a database insert, so the database may be down) a background loop writes it
+// again until it lands (remarkRevokeOwed), and until then the run is retried only while it holds a sandbox.
 func (s *Server) settleRevokeOwed(ctx context.Context, runID uuid.UUID, marked, owed bool) {
 	switch {
 	case !owed:
@@ -132,8 +133,61 @@ func (s *Server) settleRevokeOwed(ctx context.Context, runID uuid.UUID, marked, 
 		mctx, cancel := teardownCtx(ctx)
 		defer cancel()
 		if !s.markRevokeOwed(mctx, runID) {
-			slog.ErrorContext(ctx, "wardynd: a run's revoke is owed and could not be recorded; it is retried only while the run holds a sandbox",
+			slog.ErrorContext(ctx, "wardynd: a run's revoke is owed and could not be recorded; the mark is written again in the background, and until it lands the revoke is retried only while the run holds a sandbox",
 				slog.String("run_id", runID.String()))
+			s.remarkRevokeOwed(runID)
 		}
 	}
+}
+
+// revokeStepBound bounds one step of a run's revoke (revokeRunSteps) and its owed mark, so a step that never answers
+// leaves the steps after it a live context: each step is a separate revoke, and one hung call must not cost the
+// others theirs. A variable only so a test can shorten it.
+var revokeStepBound = 10 * time.Second
+
+// revokeStep runs one revoke step on revokeStepBound.
+func revokeStep(ctx context.Context, step func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, revokeStepBound)
+	defer cancel()
+	return step(ctx)
+}
+
+// revokeRemarkEvery is how long remarkRevokeOwed's loop waits before each new write of an owed mark that could not
+// be written; a variable only so a test can shorten it.
+var revokeRemarkEvery = revokeOwedTick
+
+// revokeRemarks holds, per server and run, a remarkRevokeOwed loop still writing that run's owed mark, so one outage
+// starts one loop per run. Package level as pauseSettleRetries is: the key carries the server.
+var revokeRemarks sync.Map
+
+type revokeRemarkKey struct {
+	srv *Server
+	run uuid.UUID
+}
+
+// remarkRevokeOwed writes run id's owed mark again in a tracked loop (goBackground), every revokeRemarkEvery, until
+// it lands or the daemon stops. A revoke whose mark could not be written is then still retried by the revoke queue
+// once the database answers, even when the run no longer holds a sandbox.
+func (s *Server) remarkRevokeOwed(id uuid.UUID) {
+	base := s.cfg.BaseCtx
+	if base == nil {
+		return
+	}
+	key := revokeRemarkKey{s, id}
+	if _, busy := revokeRemarks.LoadOrStore(key, struct{}{}); busy {
+		return
+	}
+	s.goBackground(func() {
+		defer revokeRemarks.Delete(key)
+		for {
+			select {
+			case <-base.Done():
+				return
+			case <-time.After(revokeRemarkEvery):
+			}
+			if s.markRevokeOwed(base, id) {
+				return
+			}
+		}
+	})
 }
