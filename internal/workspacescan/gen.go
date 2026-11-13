@@ -278,11 +278,28 @@ func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, goSumDBO
 	// go rides containerEnv (GOPROXY/GOSUMDB); other ecosystems emit their own
 	// config files, merged into the return below.
 	artifactFiles, artifactEnv := hostrules.EmitArtifactConfig(artifactBases, goSumDBOff)
-	for k, v := range artifactEnv {
+	setEnv := func(k, v string) {
 		if dc.ContainerEnv == nil {
 			dc.ContainerEnv = map[string]string{}
 		}
 		dc.ContainerEnv[k] = v
+	}
+	for k, v := range artifactEnv {
+		setEnv(k, v)
+	}
+	// Those paths are relative to HOME, but this export writes them into the project and nothing
+	// copies them into the container user's HOME. npm and Cargo read .npmrc and .cargo/config.toml
+	// from the project as they are; NuGet reads a NuGet.Config at the project root; pip gets its
+	// index from PIP_INDEX_URL, which leaves the user's own pip config loaded. Maven has no setting
+	// that adds a mirror without replacing the user's own settings.xml, so its file stays in the
+	// project and AGENTS.md says how to pass it.
+	if _, ok := artifactFiles[".config/pip/pip.conf"]; ok {
+		delete(artifactFiles, ".config/pip/pip.conf")
+		setEnv("PIP_INDEX_URL", strings.TrimSpace(artifactBases["pip"]))
+	}
+	if c, ok := artifactFiles[".nuget/NuGet/NuGet.Config"]; ok {
+		delete(artifactFiles, ".nuget/NuGet/NuGet.Config")
+		artifactFiles["NuGet.Config"] = c
 	}
 	b, err := json.MarshalIndent(dc, "", "  ")
 	if err != nil {
@@ -298,6 +315,11 @@ func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, goSumDBO
 	}
 	for path, content := range artifactFiles {
 		out[path] = content
+	}
+	if _, ok := artifactFiles[".m2/settings.xml"]; ok {
+		out["AGENTS.md"] += "## Maven mirror\n\n- **Maven mirror**: `.m2/settings.xml` in this project names the mirror, and Maven " +
+			"does not read it there. From the project root run `mvn --settings .m2/settings.xml` with your goals, or copy its " +
+			"`<mirror>` block into your own `~/.m2/settings.xml`.\n"
 	}
 	return out, nil
 }
