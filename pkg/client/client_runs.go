@@ -126,7 +126,8 @@ type EditRunEgressResponse struct {
 // means it did not confirm and its stop is not confirmed yet, and is being retried; a 503
 // egress_edit_superseded means another revive replaced the edit's start and nothing was stopped for
 // it; its message says whether that revive started from the edited config or the edit was not
-// applied and must be sent again.
+// applied and must be sent again. The answer comes within 8 minutes, counted from the server's own
+// time limits and not counting a stalled database read: give ctx a deadline of at least 530 seconds.
 func (c *Client) EditRunEgress(ctx context.Context, runID uuid.UUID, req EditRunEgressRequest) (EditRunEgressResponse, error) {
 	var out EditRunEgressResponse
 	err := c.do(ctx, http.MethodPatch, "/api/v1/runs/"+runID.String()+"/egress", req, &out)

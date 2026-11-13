@@ -17,6 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A live egress edit (`PATCH /api/v1/runs/{id}/egress`) now has one deadline on every substrate: counted from the server's own time limits, and not counting a stalled database read, it answers within 8 minutes, including for a run with a computer folder. If the edit runs out of time while it stops the run, the rest of the run's end, such as copying the folder back and stopping the sandbox, finishes after the answer. An ingress in front of the server needs a proxy read timeout of at least 530 seconds for it.
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
 
 ### Fixed

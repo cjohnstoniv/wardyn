@@ -77,11 +77,12 @@ FAKE_BEDROCK_HOST="${FAKE_SVC}-bedrock.${NAMESPACE}.svc.cluster.local"
 PROVIDER_ID="ci-model-fake"
 MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 CURL_MAX_TIME=15
-# A live egress edit answers once its proxy has confirmed the narrowed policy, or after a failed edit's
-# stop and run-fate read. Worst branch, for a run with no computer folder (this run has none): a refused
-# delivery whose undo fails, the 75 s readback wait runs out, then the abandoned start's stop with its
-# finalize tail and the fate read: 425 s. 425 s plus 10%, rounded up to a multiple of 10.
-PATCH_MAX_TIME=470
+# A live egress edit answers within one total on every branch, with or without a computer folder: its
+# request calls end by 230 s (egressEditCallBudget), its readback wait by 350 s (egressEditBudget), and every
+# window and run's end it opens by 380 s, its hard end. Past that only lock checks and releases and Docker's
+# 60 s sandbox stop remain: 454 s, stated as 8 minutes (docs/operations/run-lifetime.md). 480 s plus 10%,
+# rounded up to a multiple of 10.
+PATCH_MAX_TIME=530
 RUNS_NAMESPACE="wardyn-runs"
 EVIDENCE_DIR="${WARDYN_KIND_CI_MODEL_EVIDENCE:-${ROOT}/local/evidence/kind-ci-model-run}"
 mkdir -p "${EVIDENCE_DIR}"
