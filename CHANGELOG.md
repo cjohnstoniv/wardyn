@@ -31,6 +31,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A scan of a member's workspace now opens each of its folders when it checks the folder against the member's workspace roots, one folder at a time from the top of the drive without following a link, and reads the folder only through that open handle. Before, the scan read the folder again by its path after the check, so a folder, or a folder above it, replaced by a link between the check and the read could put a folder outside the member's roots into the scan's results: its repository remotes, host names, secret names and secret-file paths, not secret values. Every folder scan now also lists and reads the files inside the folder without following a link at any folder on the way. The server needs read access to each folder from the top of the drive down to a member's folder; where it can only pass through one, the scan is refused as outside the member's roots, and the server log says why.
 
+### Before you upgrade
+
+- `scripts/setup.sh` host mode, where the server runs as you, and rootless Docker: a member's folder scan now opens every folder from the top of the drive down to the member's folder, so the server's user needs read access to each one. Where that user can only pass through one of them (execute without read), the scan is refused as outside the member's roots and the server log says why. Before upgrading, give that user read access to every folder on the way to the member workspace roots and inside them, or move the roots to where it has that access.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added
