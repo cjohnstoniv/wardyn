@@ -13,6 +13,17 @@ const aliasBomb = ["a: &a [x, x, x, x, x, x, x, x, x, x]",
 
 describe("parsePolicySource refusals", () => {
   it.each([
+    ["a block key", "a: 1\nb: 2\na: 3\n", 3, 1],
+    ["a flow map's value before its own key", '{\n  "a": 1,\n  "a": {"b": 1, "b": 2}\n}', 3, 17],
+    ["a repeated key before another error", "a: 1\na: 2\nb: [\n", 2, 1],
+    ["an empty key", "? \n: 1\n? \n: 2\n", 4, 1],
+    ["a key after an empty value", "a:\na: 1\n", 1, 3],
+  ])("refuses a repeated key, %s, in the parser's words and at its place", (_, source, line, column) => {
+    expect(parsePolicySource(source, source.startsWith("{") ? "json" : "yaml"))
+      .toEqual({ ok: false, line, column, message: "DUPLICATE_KEY: Map keys must be unique" });
+  });
+
+  it.each([
     ["DUPLICATE_KEY", "a: 1\na: 2", "DUPLICATE_KEY"],
     ["DUPLICATE_KEY nested", "a:\n  b: 1\n  b: 2", "DUPLICATE_KEY"],
     ["DUPLICATE_KEY pasted JSON", '{"a":1,"a":2}', "DUPLICATE_KEY"],

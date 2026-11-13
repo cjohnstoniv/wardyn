@@ -50,6 +50,10 @@ describe("locatePath", () => {
     expect(locatePath(YAML, "").line).toBe(1);
     expect(locatePath("not: [closed", "not").line).toBe(1);
   });
+
+  it("takes the first of a repeated key", () => {
+    expect(locatePath("a: 1\nb: 2\na: 3\n", "a").line).toBe(1);
+  });
 });
 
 describe("placeDiagnostics", () => {
