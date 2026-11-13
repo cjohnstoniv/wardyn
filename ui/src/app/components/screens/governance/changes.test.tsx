@@ -175,6 +175,23 @@ describe("the Changes tab", () => {
     expect(screen.queryByTestId("changes-empty")).toBeNull();
     expect(screen.getByText(CHANGES.LEAD)).toBeInTheDocument();
   });
+
+  // The server cuts the queue at 500 changes the viewer may see and says so in its header; exactly 500 rows
+  // without it is the whole queue.
+  it("says the list was cut only when the server says so, never from 500 rows alone", () => {
+    const many = Array.from({ length: 500 }, (_, i) => change({ id: `c${i}`, target_key: `team-${i}` }));
+    const { unmount } = render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} principal="bo@example.com">
+          <ChangesTab changes={many} loadError={null} onChanged={vi.fn()} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText(CHANGES.TRUNCATED)).toBeNull();
+    unmount();
+    renderTab(Object.assign([...many], { truncated: true }));
+    expect(screen.getByText(CHANGES.TRUNCATED)).toBeInTheDocument();
+  });
 });
 
 describe("the change drawer", () => {

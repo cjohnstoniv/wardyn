@@ -20,8 +20,7 @@ import { nonNegativeInt } from "../../../lib/format";
 import * as React from "react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceUnit, type GovernanceUnitInput } from "../../../lib/api/governance";
-import { policies as policiesApi } from "../../../lib/api/policies";
+import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceEffective, type GovernanceLimits, type GovernanceUnit, type GovernanceUnitInput } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
@@ -93,11 +92,17 @@ export function ProfileEditor({
   onSaved,
   onSubmitted,
   deciders, decidersSupported, unitNames, onDecidersChanged,
+  deploymentCeiling,
+  parentWalls,
 }: {
   /** The profile being edited, or null for a new one. */
   profile: GovernanceUnit | null;
   /** Every profile, for the base picker and an overlay's inherited values. */
   profiles?: GovernanceUnit[];
+  /** The Default unit's effective ceiling: what a profile built on the deployment ceiling inherits. */
+  deploymentCeiling?: RunPolicySpec;
+  /** The parent's effective ceiling and limits when the parent is outside `profiles` (a unit admin's subtree root). */
+  parentWalls?: GovernanceEffective;
   disabled: boolean;
   onCancel: () => void;
   /** Hands the write's OMISSION warnings up: the screen renders them after the
@@ -127,21 +132,15 @@ export function ProfileEditor({
   // A standalone profile saves what its source parses to NOW; one that does not parse cannot be saved.
   const ceiling = React.useMemo(() => (composed ? null : parseSpec(spec, format)), [composed, spec, format]);
   const baseProfile = profiles.find((p) => p.id === base);
-  // The deployment ceiling, read once and only when a deployment-based overlay needs its values.
-  const [deployment, setDeployment] = React.useState<RunPolicySpec | null>(null);
-  React.useEffect(() => {
-    if (base !== BASE_DEPLOYMENT || deployment) return;
-    let alive = true;
-    void policiesApi
-      .getDefaultPolicy()
-      .then((d) => alive && setDeployment(d))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [base, deployment]);
+  // A profile built on the deployment ceiling is saved under the Default unit, so it inherits Default's
+  // effective ceiling. GET /policies/default answers the signed-in person's own ceiling, which their own
+  // profile may narrow, so it is not what such a profile inherits. A base the viewer cannot list (a unit
+  // admin's subtree root under a unit outside their scope) inherits the parent walls the snapshot carries.
+  const outside = base === profile?.parent_id ? parentWalls : undefined;
+  const deployment = base === BASE_DEPLOYMENT ? deploymentCeiling : outside?.ceiling;
   const inheritedCeiling = (baseProfile?.effective?.ceiling ?? deployment ?? {}) as unknown as Record<string, unknown>;
-  const inheritedLimits = (baseProfile?.effective?.limits ?? {}) as Record<string, unknown>;
+  // Default holds no limits, so only a listed base or the walls of a parent outside the list carry any.
+  const inheritedLimits = (baseProfile?.effective?.limits ?? outside?.limits ?? {}) as Record<string, unknown>;
   const [limits, setLimits] = React.useState<GovernanceLimits>(profile?.limits ?? {});
   const [limitsMoved, setLimitsMoved] = React.useState(false);
   const [limitsFolded, setLimitsFolded] = React.useState(false);

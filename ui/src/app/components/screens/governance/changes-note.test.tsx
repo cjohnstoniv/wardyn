@@ -256,6 +256,16 @@ describe("the Only security can decide filter", () => {
     await vi.waitFor(() => expect(listChangesMock).toHaveBeenCalledTimes(2));
   });
 
+  it("says a list was cut for the list it shows: the filtered read's own flag, not the prop's", async () => {
+    const mine = change({ id: "s1", target_kind: "governance_envelope", target_key: "root" });
+    listChangesMock.mockResolvedValue([mine]);
+    render(ui(Object.assign([change(), mine], { truncated: true }), { security: true }));
+    expect(screen.getByText(CHANGES.TRUNCATED)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_SECURITY }));
+    await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Profile · Edit" })).toBeNull());
+    expect(screen.queryByText(CHANGES.TRUNCATED)).toBeNull();
+  });
+
   it("does not flash the empty state while the filtered read is in flight", async () => {
     let finish!: (c: GovernanceChange[]) => void;
     listChangesMock.mockReturnValue(new Promise<GovernanceChange[]>((r) => (finish = r)));

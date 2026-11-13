@@ -22,7 +22,7 @@ import { Inbox } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
-import { governance as api } from "../../../lib/api/governance";
+import { governance as api, type GovernanceChangeList } from "../../../lib/api/governance";
 import { runnerPools } from "../../../lib/api/runner-pools";
 import { absoluteTime, formatDuration, getErrorMessage, relativeTime } from "../../../lib/format";
 import { goDurationMs } from "../../../lib/go-duration";
@@ -39,7 +39,7 @@ import { IMG } from "../../wardyn/copy/image-request";
 import { changeTargetRef, splitImageRef } from "../elevation/image-ref";
 import { Field } from "../../wardyn/form-primitives";
 import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context";
-import { EmptyState } from "../../wardyn/states";
+import { EmptyState, TruncatedNote } from "../../wardyn/states";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { ChangeNoteForm } from "./change-note-form";
 import { Note } from "./display";
@@ -199,7 +199,7 @@ export function ChangesTab({
   loadError,
   onChanged,
 }: {
-  changes: GovernanceChange[];
+  changes: GovernanceChangeList;
   /** The server's message when the list could not be read; null when it was. */
   loadError: string | null;
   onChanged: () => void;
@@ -210,7 +210,7 @@ export function ChangesTab({
   // "Only security can decide" is a request of its own: the list rows do not say who could decide them, so the
   // server answers which ones are security's alone. It is read again whenever the parent reloads the list.
   const [onlySecurity, setOnlySecurity] = React.useState(false);
-  const [filtered, setFiltered] = React.useState<GovernanceChange[] | null>(null);
+  const [filtered, setFiltered] = React.useState<GovernanceChangeList | null>(null);
   const [filterError, setFilterError] = React.useState<string | null>(null);
   React.useEffect(() => {
     if (!onlySecurity) return;
@@ -254,6 +254,14 @@ export function ChangesTab({
         </div>
       )}
       <div className={shown && shown.length > 0 ? "mt-4" : undefined}>
+        {/* The server's header decides, not the row count: exactly 500 rows can be the whole queue. */}
+        {shown?.truncated && (
+          <div className="px-6">
+            <TruncatedNote count={1} cap={1}>
+              {CHANGES.TRUNCATED}
+            </TruncatedNote>
+          </div>
+        )}
         {shown === null ? null : shown.length === 0 && onlySecurity ? (
           <div data-testid="changes-empty-filtered">
             <EmptyState
