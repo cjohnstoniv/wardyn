@@ -44,7 +44,7 @@ func logoutCmd(serverURL func() string) *cobra.Command {
 				return err
 			}
 			// Renew a spent token first (this takes and releases the lock itself).
-			_, loadErr := loadSession(cmd.Context(), origin)
+			_, loadErr := loadSession(cmd.Context(), origin, uuid.Nil)
 			beforeLogoutLock()
 			unlock, ok, err := lockRefresh(dir)
 			if err != nil {

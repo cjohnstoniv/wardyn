@@ -134,13 +134,13 @@ type login struct {
 // stepUp is `login --admin`: a cli_admin token for this computer's live CLI session, signing in first when
 // there is none.
 func (l *login) stepUp(ctx context.Context) error {
-	s, err := loadSession(ctx, l.origin)
+	s, err := loadSession(ctx, l.origin, uuid.Nil)
 	if err != nil || s.kind == "" {
 		fmt.Fprintln(l.errOut, copyAdminFirst)
 		if err := l.signIn(ctx, nil); err != nil {
 			return err
 		}
-		if s, err = loadSession(ctx, l.origin); err != nil {
+		if s, err = loadSession(ctx, l.origin, uuid.Nil); err != nil {
 			return err
 		}
 	}
