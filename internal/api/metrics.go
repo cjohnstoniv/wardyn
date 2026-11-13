@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -569,6 +570,8 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 		"# TYPE wardyn_audit_spool_quarantined_total counter\nwardyn_audit_spool_quarantined_total %d\n", s.cfg.AuditSpool.Quarantined())
 	fmt.Fprintf(w, "# HELP wardyn_audit_outcome_refused_total Audit rows refused before the store because their outcome is not success, failure or denied; each is also an ERROR log naming the action.\n"+
 		"# TYPE wardyn_audit_outcome_refused_total counter\nwardyn_audit_outcome_refused_total %d\n", store.RefusedAuditOutcomes())
+	fmt.Fprintf(w, "# HELP wardyn_lock_holds_over_limit_total Holds of a run's lock that ran past their 10 minute limit; each is also a WARN log naming the lock and the functions that took it. The lock is never freed for it.\n"+
+		"# TYPE wardyn_lock_holds_over_limit_total counter\nwardyn_lock_holds_over_limit_total %d\n", db.LongLockHolds())
 	if s.cfg.OrgFederation != nil {
 		fmt.Fprintf(w, "# HELP wardyn_org_federation_lag Local audit rows the organisation has not yet acknowledged (hybrid laptops only).\n"+
 			"# TYPE wardyn_org_federation_lag gauge\nwardyn_org_federation_lag %d\n", s.cfg.OrgFederation().Lag())
