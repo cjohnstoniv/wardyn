@@ -242,6 +242,21 @@ describe("deleting a disk drive (MAC-D10, D11, D12)", () => {
     expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM(DOCKER.name))).toBeInTheDocument();
     expect(within(top()).queryByText(MEMBER_DRIVES.DELETE_CONFIRM_MAC(DOCKER.name))).toBeNull();
   });
+  it("a disk on a Mac says so while this card's own read of the drives has not answered", async () => {
+    show();
+    const add = await screen.findByRole("button", { name: NR_FILES.ADD_ARIA });
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([path]) => String(path).startsWith("/me/drives"))).toBe(true));
+    // The step has its list; a read started from here on (the create control's own) does not answer.
+    const answered = wfetchMock.getMockImplementation()!;
+    wfetchMock.mockImplementation((path: string, init?: { method?: string }) =>
+      path.startsWith("/me/drives") && (init?.method ?? "GET") === "GET" ? new Promise<Response>(() => {}) : answered(path, init));
+    await userEvent.click(add);
+    await userEvent.click(within(top()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    await within(top()).findByRole("radio", { name: new RegExp(`^${DISK.name}`) });
+    await userEvent.click(dialogs()[0].querySelector<HTMLElement>(`[data-own-delete="${DISK.id}"]`)!);
+    expect(within(top()).getByText(MEMBER_DRIVES.DELETE_CONFIRM_MAC(DISK.name))).toBeInTheDocument();
+    expect(within(top()).queryByText(NR_FILES.DELETE_CONFIRM(DISK.name))).toBeNull();
+  });
   it("a Mac that is offline: the server's sentence stays up until the person closes it", async () => {
     del = () => json({ reason: "member_drive_delete_deferred", message: DRIVE_REFUSAL.MEMBER_DELETE_DEFERRED("kofi-mbp") }, 202);
     await openChoose();
