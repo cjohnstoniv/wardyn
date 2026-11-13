@@ -202,11 +202,19 @@ func (s *Server) resolveCreateEnd(r *http.Request, req createRunRequest, ceiling
 
 // stored is the decision as the stored run carries it. The insert picks the run's cap on the database's
 // clock (types.RunCapInputs), so an elevation that ends before the end decided here cuts it there: an end
-// stored at an elevation's cap was bound by that elevation, whichever limit cut the ask first, and an asked
-// end was cut by it. A run with no stored end (No end, or one still waiting in a queue) is as decided.
+// stored at an elevation's cap was bound by that elevation, whichever limit cut the ask first. An asked end
+// past the stored end was cut by it; one that fits is as asked. Both instants are compared at the
+// microsecond, as PostgreSQL stores them. A run with no stored end (No end, or one still waiting in a
+// queue) is as decided.
 func (e createEnd) stored(run types.AgentRun) createEnd {
 	if run.EndsAt != nil && run.LifetimeCapAt != nil && run.EndsAt.Equal(*run.LifetimeCapAt) &&
 		run.LifetimeCapSource == types.LimitSourceElevation {
+		if e.askedSec > 0 {
+			asked := run.CreatedAt.Add(time.Duration(e.askedSec) * time.Second)
+			if !asked.Truncate(time.Microsecond).After(run.EndsAt.Truncate(time.Microsecond)) {
+				return e
+			}
+		}
 		e.capped, e.source = e.askedSec > 0, types.LimitSourceElevation
 	}
 	return e

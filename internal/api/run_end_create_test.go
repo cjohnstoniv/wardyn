@@ -349,7 +349,7 @@ func TestPlanEnd_PastLifetimeCapRefuses(t *testing.T) {
 func TestCreateEnd_NamesTheElevationThatBoundTheEnd(t *testing.T) {
 	at := time.Now().UTC().Add(time.Hour)
 	later := at.Add(time.Hour)
-	cut := types.AgentRun{EndsAt: &at, LifetimeCapAt: &at, LifetimeCapSource: types.LimitSourceElevation}
+	cut := types.AgentRun{CreatedAt: at.Add(-time.Hour), EndsAt: &at, LifetimeCapAt: &at, LifetimeCapSource: types.LimitSourceElevation}
 	inside := types.AgentRun{EndsAt: &at, LifetimeCapAt: &later, LifetimeCapSource: types.LimitSourceElevation}
 	sentence := "the end you asked for is past what your elevation allows, so the run ends at " + at.Format(time.RFC3339) + " instead"
 	for _, c := range []struct {
@@ -371,5 +371,20 @@ func TestCreateEnd_NamesTheElevationThatBoundTheEnd(t *testing.T) {
 	asked := createEnd{askedSec: 3600, pool: "P"}
 	if a, w := asked.audit(inside), asked.warnings(inside); a["capped"] != false || a["source"] != nil || w != nil {
 		t.Errorf("an end inside the elevation's cap: end %v, warnings %q; want it as decided", a, w)
+	}
+	// An ask that ends exactly at the elevation's cap fits: nothing was cut, also when the stored instants
+	// carry only microseconds and the run's creation carried nanoseconds.
+	created := at.Add(-time.Hour).Add(123456789 * time.Nanosecond)
+	exact := (created.Add(time.Hour)).Truncate(time.Microsecond)
+	for _, c := range []struct {
+		name string
+		run  types.AgentRun
+	}{
+		{"an ask exactly at the elevation", types.AgentRun{CreatedAt: at.Add(-time.Hour), EndsAt: &at, LifetimeCapAt: &at, LifetimeCapSource: types.LimitSourceElevation}},
+		{"a read-back row at the microsecond", types.AgentRun{CreatedAt: created, EndsAt: &exact, LifetimeCapAt: &exact, LifetimeCapSource: types.LimitSourceElevation}},
+	} {
+		if a, w := asked.audit(c.run), asked.warnings(c.run); a["capped"] != false || a["source"] != nil || w != nil {
+			t.Errorf("%s: end %v, warnings %q; want it as asked, uncapped and no sentence", c.name, a, w)
+		}
 	}
 }
