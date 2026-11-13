@@ -429,4 +429,22 @@ describe("DesktopFilesPanel on a run that keeps its content in", () => {
     finish({ blob: new Blob(["x"]), sha256: "abcd".repeat(16) });
     await waitFor(() => expect(button).toBeEnabled());
   });
+
+  it("a Download revokes the object URL only after the click's task, so the browser has the file first", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: { ...defaults, download: "allowed" }, files: [{ name: "a.csv", bytes: 12 }] });
+    downloadMock.mockResolvedValue({ blob: new Blob(["x"]), sha256: "abcd".repeat(16) });
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    const atClick: number[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+      setTimeout(() => atClick.push(vi.mocked(URL.revokeObjectURL).mock.calls.length), 0); // a task queued at the click
+    });
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+    await userEvent.click(await within(panel).findByRole("button", { name: `${C.download} a.csv` }));
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:x"));
+    expect(atClick).toEqual([0]);
+    click.mockRestore();
+  });
 });

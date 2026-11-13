@@ -71,7 +71,8 @@ export function DesktopReviewRow({ runId, file, latest, onAsked, onRefused }: De
       a.href = url;
       a.download = file.name;
       a.click();
-      URL.revokeObjectURL(url);
+      // Next tick: a revoke right after the click can cancel the download before the browser has the file.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
       setReleased({ id: request.id, at: clockOf(), sha: sha256 });
       onRefused();
     } catch (e) {

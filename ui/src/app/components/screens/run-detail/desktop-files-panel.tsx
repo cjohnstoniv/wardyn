@@ -142,7 +142,8 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
       a.href = url;
       a.download = name;
       a.click();
-      URL.revokeObjectURL(url);
+      // Next tick: a revoke right after the click can cancel the download before the browser has the file.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
       setMarks((m) => ({ ...m, [name]: { line: C.downloaded(clock(), sha256) } }));
     } catch (e) {
       setMarks((m) => ({ ...m, [name]: { error: message(e) } }));
