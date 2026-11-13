@@ -2098,6 +2098,7 @@ jobs:
   #   - the helper signed ad hoc with its one entitlement, read back with codesign
   #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
+  #   - the folder sync's copy pins on an exFAT disk image, a filesystem without hard links
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
   macos:
@@ -2159,6 +2160,48 @@ jobs:
           set -euo pipefail
           export TMPDIR=/private/tmp
           go test -count=1 -tags macvm_live ./test/conformance/macvm/
+      # The folder sync's copy into a laptop name, where hard links are refused, on a real exFAT volume: the pins
+      # in Tests run on APFS with links made to fail, and exFAT may number a file by its directory entry, which
+      # the copy's same-file checks rely on. hdiutil ships with macOS. The test binary is built on the runner's
+      # disk; only the tests' temp dirs (TMPDIR, and GOTMPDIR, which t.TempDir reads first) are on the image.
+      - name: Attach an exFAT disk image
+        id: exfat
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          img="$RUNNER_TEMP/exfat.dmg"
+          mnt="$RUNNER_TEMP/exfat"
+          hdiutil create -size 64m -fs ExFAT -volname WEXFAT "$img"
+          mkdir "$mnt"
+          hdiutil attach -nobrowse -noautoopen -mountpoint "$mnt" "$img"
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          # The pins' premise: this volume refuses a hard link.
+          : >"$mnt/link-probe"
+          if ln "$mnt/link-probe" "$mnt/link-probe-2"; then echo "::error::the exFAT volume made a hard link"; exit 1; fi
+          rm -f "$mnt/link-probe"
+      - name: Folder sync copy pins on the exFAT image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mnt="$RUNNER_TEMP/exfat"
+          # Still the exFAT volume: a plain directory at this path would run the pins on APFS, and they would pass.
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          pins='TestInstall_AFailedCopyOrLinkRefusesThePush|TestPass_AFailedCopyNeverRemovesAnEditorsSave'
+          pins+='|TestPass_ACopyNeverStampsOrClaimsAnEditorsSave|TestPass_ASecondSaveIsNeverTakenForTheFailedCopy'
+          pins+='|TestPass_APutBackNamesALaterSaveItsFailedCopyMovedAside|TestPass_APartialCopyThatCannotBeMovedAsideIsNamed'
+          pins+='|TestPass_APutBackCopyWhoseNameIsGoneKeepsTheSave|TestPass_ALaptopSaveAfterAPullDeletesLookIsKept'
+          pins+='|TestPass_ALaptopFileMadeDuringAPullDeletesMoveBackIsKept'
+          go test -c -o "$RUNNER_TEMP/foldersync.test" ./internal/foldersync/
+          (cd internal/foldersync && env TMPDIR="$mnt" GOTMPDIR="$mnt" "$RUNNER_TEMP/foldersync.test" \
+            -test.count=1 -test.v -test.timeout 5m -test.run "^($pins)\$") | tee "$RUNNER_TEMP/foldersync-exfat.out"
+          # -v and the count prove all nine ran and passed, not just compiled: a skip prints no PASS line.
+          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 9
+      - name: Detach the exFAT disk image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 2
+        run: hdiutil detach -force "$RUNNER_TEMP/exfat"
       - name: Build the darwin runnerd
         if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
