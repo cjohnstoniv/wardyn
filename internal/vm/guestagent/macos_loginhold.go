@@ -11,9 +11,9 @@
 // a disk saved from that boot rests the same way. The agent does not serve while it holds the sign-in.
 //
 // Every path that finds auto-login off writes it back before the guest restarts, so a held boot signs in
-// on the next one. Auto-login that cannot be written, a guest that does not restart, and a write that
-// macOS keeps losing end as failed: the agent then serves, and Init refuses a run with a desktop that is
-// still at the login window.
+// on the next one. Auto-login or a record that cannot be written, a guest that does not restart, and a
+// write that macOS keeps losing end as failed: the agent then serves, and Init refuses a run with a
+// desktop that is still at the login window.
 package guestagent
 
 import (
@@ -198,14 +198,23 @@ func (h LoginHold) again(ctx context.Context, step string, n int, auto string, o
 			return hostPrefs, LoginHoldStart{Path: "failed", Reason: "write_failed", Restarts: n}
 		}
 	}
+	if n > loginHoldMaxRestarts {
+		// The hold that began in this boot was at the limit already: no restart past it.
+		return hostPrefs, LoginHoldStart{Path: "failed", Reason: "restart_limit", Restarts: n - 1}
+	}
 	h.setBootStep("retry", n)
 	return h.restart(ctx, hostPrefs, LoginHoldStart{Path: "fallback", Reason: reason, Restarts: n, Rearm: on})
 }
 
 // restart records st for the next boot and restarts the guest.
 func (h LoginHold) restart(ctx context.Context, hostPrefs string, st LoginHoldStart) (string, LoginHoldStart) {
-	// A record that cannot be written still restarts: the next boot then reads as armed and signs in.
-	_ = h.writeRecord(loginHoldRecord{Path: st.Path, Reason: st.Reason, Restarts: st.Restarts, Carry: hostPrefs})
+	// No restart without its record: the next boot counts restarts only from it, so a record that cannot
+	// be written while macOS keeps losing auto-login would restart for good. Auto-login is written back
+	// already, so this boot stays at the login window and the next one signs in.
+	if err := h.writeRecord(loginHoldRecord{Path: st.Path, Reason: st.Reason, Restarts: st.Restarts, Carry: hostPrefs}); err != nil {
+		st.Path, st.Reason, st.Rearm = "failed", "write_failed", false
+		return hostPrefs, st
+	}
 	if h.runOK(ctx, loginHoldRestartArgv) || h.runOK(ctx, loginHoldRebootArgv) {
 		select {
 		case <-ctx.Done():

@@ -411,6 +411,57 @@ func TestLoginHoldFailsWhereNoCodeCanSignIn(t *testing.T) {
 	})
 }
 
+// A restart is asked only once its record is on the disk: the next boot counts restarts only from that
+// record, so with a record that cannot be written and auto-login that macOS keeps losing, every boot would
+// hold and restart again. The boot instead stays at the login window, with auto-login written back.
+func TestLoginHoldNoRestartWithoutItsRecord(t *testing.T) {
+	for name, fault := range map[string]func(*simGuest){
+		"the hold":                       func(*simGuest) {},
+		"the agent died before the hold": func(g *simGuest) { g.crashInCarry = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newSim(t)
+			g.lose = 99
+			fault(g)
+			// A folder at the record's path still reads as an armed base, and no write replaces it.
+			if err := os.Remove(g.hold.Record); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(g.hold.Record, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_, line := g.run()
+			wantHold(t, line, "login_hold=failed reason=write_failed restarts=1 signed_in=no rest=set")
+			if g.boots != 1 || g.ran("/sbin/") != 0 || g.auto != MacAgentUser {
+				t.Errorf("boots %d, restart commands %d, auto-login %q; want no restart and auto-login written back", g.boots, g.ran("/sbin/"), g.auto)
+			}
+		})
+	}
+}
+
+// The limit holds when the agent keeps dying in a boot that began a hold: the start after it writes auto-login
+// back and asks for no restart past the third, and a later start in the limit's boot asks for none either.
+func TestLoginHoldRestartLimitHoldsWhenTheAgentStartsAgain(t *testing.T) {
+	t.Run("the agent dies in the carry at every boot", func(t *testing.T) {
+		g := newSim(t)
+		g.lose, g.crashInCarry = 99, 99
+		_, line := g.run()
+		wantHold(t, line, "login_hold=failed reason=restart_limit restarts=3 signed_in=no rest=set")
+		if g.boots != 4 || g.asked != 3 || g.auto != MacAgentUser {
+			t.Errorf("boots %d, restarts %d, auto-login %q; want 3 restarts, then auto-login written and the agent serving", g.boots, g.asked, g.auto)
+		}
+	})
+	t.Run("the agent starts again in the limit's boot", func(t *testing.T) {
+		g := newSim(t)
+		g.lose = 99
+		g.run()
+		_, st, _ := g.start()
+		if st.Path != "failed" || st.Reason != "restart_limit" || st.Restarting || g.asked != 3 {
+			t.Errorf("start %+v, restarts %d; want failed restart_limit and no fourth restart", st, g.asked)
+		}
+	})
+}
+
 // Someone signed in at the login window before the agent started: the carry skips, auto-login is written
 // back and nothing restarts under them.
 func TestLoginHoldNeverRestartsUnderSomeoneAtTheConsole(t *testing.T) {
