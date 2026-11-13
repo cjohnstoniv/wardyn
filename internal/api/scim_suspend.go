@@ -337,6 +337,78 @@ func (s *Server) resumeSuspension(ctx context.Context, st scimStore, p store.Pen
 	return s.runSuspension(ctx, st, p.ID, scimSweeperSlot, p.DeactivatedAt)
 }
 
+// suspensionBoundKey carries a suspension tail's bound (withSuspensionBound).
+type suspensionBoundKey struct{}
+
+// suspensionBoundOf is the identity a tail works for and the deactivated_at its step 1 left on it.
+type suspensionBoundOf struct {
+	id uuid.UUID
+	at time.Time
+}
+
+// withSuspensionBound marks ctx as the tail of the suspension that deactivated identity id at at, on the
+// database's clock. A reactivation can commit as soon as step 1 releases the row, and what the person makes
+// after it is not this suspension's. The sweep and the kill under ctx leave a run, token or SSH key the database
+// stamped after at, and only when the same read shows the person active again; while the person is still
+// deactivated they spare nothing. They write no new session cut for a form that already carries one from at on
+// (cutSub), since that cut would end the reactivated person's sessions and tokens too, and the one there, which
+// a reactivation keeps, already ended every session and token from before.
+func withSuspensionBound(ctx context.Context, id uuid.UUID, at time.Time) context.Context {
+	return context.WithValue(ctx, suspensionBoundKey{}, suspensionBoundOf{id: id, at: at})
+}
+
+func suspensionBound(ctx context.Context) (suspensionBoundOf, bool) {
+	b, ok := ctx.Value(suspensionBoundKey{}).(suspensionBoundOf)
+	return b, ok
+}
+
+// runsMadeAfterBound is the subset of run ids a suspension tail does not owe (withSuspensionBound). It is
+// empty outside a tail, and on a store that keeps no insert stamps.
+func runsMadeAfterBound(ctx context.Context, st any, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	b, ok := suspensionBound(ctx)
+	sb, can := st.(store.SuspensionBounds)
+	if !ok || !can || len(ids) == 0 {
+		return nil, nil
+	}
+	return sb.RunsInsertedAfter(ctx, b.id, ids, b.at)
+}
+
+// tokensMadeAfterBound is runsMadeAfterBound for API token ids.
+func tokensMadeAfterBound(ctx context.Context, st any, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	b, ok := suspensionBound(ctx)
+	sb, can := st.(store.SuspensionBounds)
+	if !ok || !can || len(ids) == 0 {
+		return nil, nil
+	}
+	return sb.APITokensInsertedAfter(ctx, b.id, ids, b.at)
+}
+
+// cutSub writes a session cutoff for sub. Under a suspension tail's bound it writes none when sub already
+// carries one from the bound on (the suspension's own, or a later one), which ended every session and token
+// from before it; a form with none still owes the cut and gets it.
+func (s *Server) cutSub(ctx context.Context, sub string) error {
+	if b, ok := suspensionBound(ctx); ok {
+		if sb, can := s.cfg.Store.(store.SuspensionBounds); can {
+			cut, err := sb.SubCutSince(ctx, sub, b.at)
+			if err != nil || cut {
+				return err
+			}
+		}
+	}
+	return s.cfg.SessionRevocations.RevokeSub(ctx, sub)
+}
+
+// finishStep marks a suspension step done. A bound tail (withSuspensionBound) marks it only while the identity
+// is not deactivated at another instant: a suspension begun after a reactivation owns the ledger, and this tail
+// did less than that one owes. That refusal is store.ErrSuperseded, and the tail stops (runSuspension).
+func finishStep(ctx context.Context, st scimStore, id uuid.UUID, key store.JobKey, detail map[string]int) error {
+	b, bound := suspensionBound(ctx)
+	if sb, can := st.(store.SuspensionBounds); bound && can {
+		return sb.FinishSuspensionJobAt(ctx, id, key, detail, b.at)
+	}
+	return st.FinishDeprovisionJob(ctx, id, store.JobKindSuspend, key, detail)
+}
+
 // runSuspension is suspendIdentity, and with resumeOf (the deactivated_at a sweeper's resume was listed with)
 // resumeSuspension: a resume whose identity no longer has it does nothing (store.ErrSuperseded).
 func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, slot string, resumeOf *time.Time) error {
@@ -357,15 +429,23 @@ func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, 
 	if err := st.EnsureDeprovisionJobs(ctx, id, store.JobKindSuspend, keys); err != nil {
 		return err
 	}
+	// Every tail is bound, the first request's too: a reactivation can commit as soon as step 1 releases the row.
+	if ident.DeactivatedAt != nil {
+		ctx = withSuspensionBound(ctx, id, *ident.DeactivatedAt)
+	}
 	stepErr := errors.Join(
 		s.sweepStep(ctx, st, id, ident, forms),
 		s.killStep(ctx, st, id, forms.targets),
 	)
+	// A suspension begun after a reactivation owns the ledger now (finishStep): it finishes and audits itself.
+	if errors.Is(stepErr, store.ErrSuperseded) {
+		return nil
+	}
 	if stepErr != nil {
 		slog.WarnContext(ctx, "api: a suspension step failed and stays pending", slog.String("identity", id.String()), slog.Any("err", stepErr))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, stepErr)
 	}
-	if err := s.auditSuspension(ctx, st, id, slot, forms.notErased); err != nil {
+	if err := unlessSuperseded(s.auditSuspension(ctx, st, id, slot, forms.notErased)); err != nil {
 		slog.WarnContext(ctx, "api: a suspension's audit rows were not written and stay pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
@@ -447,8 +527,13 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID,
 		if s.cfg.SCIM != nil {
 			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
 		}
-		if _, err := st.SuspendIdentity(ctx, plan); err != nil {
+		res, err := st.SuspendIdentity(ctx, plan)
+		if err != nil {
 			return ident, forms, nil, err
+		}
+		// The tail is bound to the deactivation this step left on the row under its lock (withSuspensionBound).
+		if !res.DeactivatedAt.IsZero() {
+			ident.DeactivatedAt = &res.DeactivatedAt
 		}
 	}
 	return ident, forms, keys, nil
@@ -472,7 +557,7 @@ func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, iden
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
 		}
-		errs = append(errs, st.FinishDeprovisionJob(ctx, id, store.JobKindSuspend, key,
+		errs = append(errs, finishStep(ctx, st, id, key,
 			map[string]int{"tokens_revoked": res.Tokens, "keys_deleted": res.Keys}))
 	}
 	return errors.Join(errs...)
@@ -490,7 +575,7 @@ func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverFor
 		return s.revokePersonCredentialsBy(ctx, target, ident.Principal != "" || !strings.Contains(target, "@"))
 	}
 	if !slices.Contains(forms.shared, strings.ToLower(target)) {
-		if err := s.cfg.SessionRevocations.RevokeSub(ctx, target); err != nil {
+		if err := s.cutSub(ctx, target); err != nil {
 			return personRevocation{}, err
 		}
 	}
@@ -533,6 +618,16 @@ func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targe
 	if jobs, err = st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend); err != nil {
 		return err
 	}
+	var pending []uuid.UUID
+	for _, j := range jobs {
+		if runID, perr := uuid.Parse(j.Target); perr == nil && j.Step == jobStepKillRun && !j.Done {
+			pending = append(pending, runID)
+		}
+	}
+	spared, err := runsMadeAfterBound(ctx, st, pending)
+	if err != nil {
+		return err
+	}
 	var errs []error
 	for _, j := range jobs {
 		if j.Step != jobStepKillRun || j.Done {
@@ -543,11 +638,19 @@ func (s *Server) killStep(ctx context.Context, st scimStore, id uuid.UUID, targe
 			continue
 		}
 		key := store.JobKey{Step: j.Step, Target: j.Target}
+		if spared[runID] {
+			// A run the database stamped after the tail's bound, read while the person is active again, was made
+			// after a reactivation: the suspension never owed its kill, so its row, whether this pass or an earlier
+			// one added it, closes with no teardown and no kill counted.
+			slog.InfoContext(ctx, "api: a suspension left a run made after its deactivation", slog.String("identity", id.String()), slog.String("run", j.Target))
+			errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0}))
+			continue
+		}
 		if err := s.teardownRun(ctx, st, runID); err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
 		}
-		errs = append(errs, st.FinishDeprovisionJob(ctx, id, store.JobKindSuspend, key, map[string]int{"runs_killed": 1}))
+		errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 1}))
 	}
 	return errors.Join(errs...)
 }
@@ -617,7 +720,7 @@ func (s *Server) auditSuspension(ctx context.Context, st scimStore, id uuid.UUID
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
 		}
-		errs = append(errs, st.FinishDeprovisionJob(ctx, id, store.JobKindSuspend, key, nil))
+		errs = append(errs, finishStep(ctx, st, id, key, nil))
 	}
 	return errors.Join(errs...)
 }

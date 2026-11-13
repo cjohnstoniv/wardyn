@@ -1,0 +1,191 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// What a suspension's tail reads to reach only what it owed. Guarded by WARDYN_TEST_PG; skipped cleanly when
+// unset.
+package store_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// A new run, token and SSH key get inserted_at from the column default, inside the database's own readings
+// around the insert, whatever the application put in created_at. SuspendIdentity reports the deactivated_at it
+// left on the row, and a repeat keeps it. While the person is deactivated nothing is spared: the probes name no
+// row and DeleteSSHKeysUpTo deletes a key stamped after the bound. Once the person is active again, a row stamped
+// strictly after the bound is the only one not owed: one stamped at the bound itself, one before it and one from
+// before the stamp existed (NULL) are owed. RunsInsertedAfter and APITokensInsertedAfter name only the later
+// row, and DeleteSSHKeysUpTo deletes every key but the later one. SubCutSince counts a cutoff written at the
+// bound and not one written before it. FinishSuspensionJobAt closes a step for the identity's current
+// deactivation and refuses one bound to another instant.
+func TestPG_SuspensionBounds_TheBoundItselfIsOwed(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	leaver := signedIn(t, st, "sub-stamp", "stamp@corp.example", leaverOID)
+	plan := store.SuspendPlan{IdentityID: leaver.ID, Principal: "sub-stamp", Principals: []string{"sub-stamp"}}
+	clock := func() time.Time {
+		t.Helper()
+		var at time.Time
+		if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	stamp := func(table, key string, id any) *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := pool.QueryRow(ctx, `SELECT inserted_at FROM `+table+` WHERE `+key+` = $1`, id).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+
+	lo := clock()
+	var runs, toks []uuid.UUID
+	var keys []string
+	for i := 0; i < 4; i++ {
+		r := newRun(types.RunRunning)
+		r.CreatedAt = r.CreatedAt.Add(24 * time.Hour) // an app clock far ahead moves created_at, never inserted_at
+		runs = append(runs, persistRun(t, ctx, pool, r).ID)
+		toks = append(toks, seedToken(t, st, "sub-stamp", uuid.NewString(), nil).ID)
+		fp := "SHA256:" + uuid.NewString()
+		if _, err := st.AddSSHKey(ctx, types.SSHPublicKey{Fingerprint: fp, Principal: "sub-stamp", Name: "k",
+			PublicKey: "ssh-ed25519 AAAA " + fp, Role: "user", CreatedAt: time.Now().UTC().Add(24 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, fp)
+	}
+	hi := clock()
+	for i := range runs {
+		for _, got := range []*time.Time{stamp("agent_runs", "id", runs[i]), stamp("api_tokens", "id", toks[i]), stamp("ssh_public_keys", "fingerprint", keys[i])} {
+			if got == nil || got.Before(lo) || got.After(hi) {
+				t.Fatalf("inserted_at = %v, want the database's clock inside [%v, %v]", got, lo, hi)
+			}
+		}
+	}
+
+	bound := hi.Add(time.Hour).Truncate(time.Microsecond)
+	set := []any{nil, bound.Add(-time.Microsecond), bound, bound.Add(time.Microsecond)}
+	for i, v := range set {
+		for _, q := range []struct {
+			sql string
+			id  any
+		}{
+			{`UPDATE agent_runs SET inserted_at = $2 WHERE id = $1`, runs[i]},
+			{`UPDATE api_tokens SET inserted_at = $2 WHERE id = $1`, toks[i]},
+			{`UPDATE ssh_public_keys SET inserted_at = $2 WHERE fingerprint = $1`, keys[i]},
+		} {
+			if _, err := pool.Exec(ctx, q.sql, q.id, v); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	res, err := st.SuspendIdentity(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetIdentity(ctx, leaver.ID); err != nil || got.DeactivatedAt == nil || !got.DeactivatedAt.Equal(res.DeactivatedAt) {
+		t.Fatalf("SuspendIdentity reported deactivated_at %v; the row holds %v (%v)", res.DeactivatedAt, got.DeactivatedAt, err)
+	}
+	if again, err := st.SuspendIdentity(ctx, plan); err != nil || !again.DeactivatedAt.Equal(res.DeactivatedAt) {
+		t.Errorf("a repeat suspension reported %v, %v; want the kept %v", again.DeactivatedAt, err, res.DeactivatedAt)
+	}
+	gotRuns, err := st.RunsInsertedAfter(ctx, leaver.ID, runs, bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotToks, err := st.APITokensInsertedAfter(ctx, leaver.ID, toks, bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotRuns) != 0 || len(gotToks) != 0 {
+		t.Errorf("while the person is deactivated the probes spared runs %v and tokens %v, want none", gotRuns, gotToks)
+	}
+	other := "SHA256:" + uuid.NewString()
+	if _, err := st.AddSSHKey(ctx, types.SSHPublicKey{Fingerprint: other, Principal: "sub-other", Name: "k",
+		PublicKey: "ssh-ed25519 AAAA " + other, Role: "user", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE ssh_public_keys SET inserted_at = $2 WHERE fingerprint = $1`, other, bound.Add(time.Microsecond)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.DeleteSSHKeysUpTo(ctx, leaver.ID, "sub-other", bound); err != nil || n != 1 {
+		t.Errorf("while the person is deactivated, keys deleted = %d, %v; want the one stamped after the bound", n, err)
+	}
+
+	if _, err := st.ApplyIdentityUpdate(ctx, leaver.ID, store.IdentityUpdate{Reactivate: true}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if gotRuns, err = st.RunsInsertedAfter(ctx, leaver.ID, runs, bound); err != nil {
+		t.Fatal(err)
+	}
+	if gotToks, err = st.APITokensInsertedAfter(ctx, leaver.ID, toks, bound); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotRuns) != 1 || !gotRuns[runs[3]] {
+		t.Errorf("runs after the bound = %v, want only %s, stamped a microsecond after it", gotRuns, runs[3])
+	}
+	if len(gotToks) != 1 || !gotToks[toks[3]] {
+		t.Errorf("tokens after the bound = %v, want only %s, stamped a microsecond after it", gotToks, toks[3])
+	}
+	if n, err := st.DeleteSSHKeysUpTo(ctx, leaver.ID, "sub-stamp", bound); err != nil || n != 3 {
+		t.Errorf("keys deleted up to the bound = %d, %v; want 3", n, err)
+	}
+	if left, err := st.ListSSHKeysByPrincipal(ctx, "sub-stamp"); err != nil || len(left) != 1 || left[0].Fingerprint != keys[3] {
+		t.Errorf("keys left = %+v, %v; want only %s, stamped a microsecond after the bound", left, err, keys[3])
+	}
+
+	for _, c := range []struct {
+		at   time.Time
+		want bool
+	}{{bound.Add(-time.Microsecond), false}, {bound, true}} {
+		if _, err := pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ('sub-cut', $1)
+			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, c.at); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := st.SubCutSince(ctx, "sub-cut", bound); err != nil || got != c.want {
+			t.Errorf("cutoff written %v before the bound: cut since = %v, %v; want %v", bound.Sub(c.at), got, err, c.want)
+		}
+	}
+	if got, err := st.SubCutSince(ctx, "sub-never-cut", bound); err != nil || got {
+		t.Errorf("a sub with no cutoff: cut since = %v, %v; want false", got, err)
+	}
+
+	res, err = st.SuspendIdentity(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := store.JobKey{Step: "sweep", Target: "x"}
+	if err := st.EnsureDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend, []store.JobKey{key}); err != nil {
+		t.Fatal(err)
+	}
+	done := func() bool {
+		t.Helper()
+		jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range jobs {
+			if j.Step == key.Step && j.Target == key.Target {
+				return j.Done
+			}
+		}
+		t.Fatalf("no ledger row %+v", key)
+		return false
+	}
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, nil, res.DeactivatedAt.Add(-time.Microsecond)); !errors.Is(err, store.ErrSuperseded) || done() {
+		t.Errorf("a finish bound to another instant = %v, row done %v; want ErrSuperseded and the row pending", err, done())
+	}
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, nil, res.DeactivatedAt); err != nil || !done() {
+		t.Errorf("a finish bound to the current deactivation = %v, row done %v; want it done", err, done())
+	}
+}

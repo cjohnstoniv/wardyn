@@ -24,6 +24,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Security
 
 - A person removed from a group in the identity provider could keep an API token holding that group if they minted it, or claimed it from an invitation, while the removal ran; that mint or claim is now refused. When the person was added back and removed again while an earlier removal was still finishing, the earlier removal could mark the later one done before it revoked anything; each removal now finishes only its own steps. A person reactivated while the leaver sweeper was resuming their earlier suspension now stays active; before, the sweeper suspended them again, revoked their tokens, ended their runs and scheduled their purge.
+- When the identity provider reactivated a person while their suspension was still finishing, in the request that suspended them or in the leaver sweeper's later pass, that suspension could still end runs, revoke API tokens, delete SSH keys and cut sessions the person started or added after the reactivation. A suspension now leaves what the database recorded after its deactivation once the person is active again, and writes no new session cut for a form it already cut. Migration `0281` records when each run, API token and SSH key row was created, by the database's clock.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

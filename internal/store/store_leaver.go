@@ -92,6 +92,9 @@ type SuspendPlan struct {
 type SuspendResult struct {
 	WasActive bool
 	Epoch     int64
+	// DeactivatedAt is the deactivated_at this step left on the identity row: the one it stamped, or the earlier
+	// one it kept.
+	DeactivatedAt time.Time
 }
 
 // DeprovisionJob is one row of the step ledger.
@@ -476,7 +479,7 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			return SuspendResult{}, err
 		}
 	}
-	if err = tx.QueryRow(ctx, `SELECT authority_epoch FROM principal_identities WHERE id = $1`, p.IdentityID).Scan(&res.Epoch); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT authority_epoch, deactivated_at FROM principal_identities WHERE id = $1`, p.IdentityID).Scan(&res.Epoch, &res.DeactivatedAt); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: read authority epoch: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
