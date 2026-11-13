@@ -39,17 +39,18 @@ type PauseCandidate struct {
 	// WaitingRequest: one of those counts toward a waiting pause
 	// (waitingHoldSQL).
 	WaitingRequest bool
-	// RequestDecidedSincePause: a request of the run was decided after the run
-	// was paused (false for a run that is not paused). It is how the sweep tells
-	// an idle pause whose closing request was missed from one that simply has
-	// no request open.
+	// RequestDecidedSincePause: a request of the run was decided, or a takeover
+	// of it handed back, after the run was paused (false for a run that is not
+	// paused). It is how the sweep tells an idle pause whose closing request was
+	// missed from one that simply has no request open.
 	RequestDecidedSincePause bool
 }
 
 // decidedSincePauseSQL is TRUE when agent_runs (the outer query's row) is
-// paused and has a request decided after paused_at.
+// paused and has a request decided, or a takeover handed back, after paused_at.
 const decidedSincePauseSQL = `EXISTS (SELECT 1 FROM approvals a WHERE a.run_id = agent_runs.id
-		  AND agent_runs.paused_at IS NOT NULL AND a.decided_at > agent_runs.paused_at)`
+		  AND agent_runs.paused_at IS NOT NULL
+		  AND (a.decided_at > agent_runs.paused_at OR a.handed_back_at > agent_runs.paused_at))`
 
 // RunPauser is the pause surface. Optional like RunLeaser and for the same
 // reason; the api layer runs no pause sweep, and stamps no presence, when a

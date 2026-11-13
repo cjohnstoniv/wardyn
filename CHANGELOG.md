@@ -17,6 +17,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- `wardyn needs-you` now returns when the person hands control back: the sandbox's read of its request carries `handed_back_at`, and still not who held control or decided.
+- Handing back a takeover now wakes a run that was paused for being idle while the person had control, and the pause sweep wakes it if that did not run. A hand back that lands while the sweep is pausing the run leaves it running.
+- A takeover whose desktop did not open now says the person has control and keeps Hand back, with an Open the desktop button to try again, instead of saying the takeover failed.
+- After a hand back, a new takeover request on the same run page now shows its Take over instead of the finished banner.
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.

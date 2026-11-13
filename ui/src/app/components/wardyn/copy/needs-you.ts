@@ -56,6 +56,8 @@ export const NEEDS_YOU = {
     offDetail: "This run isn't being recorded.",
     handBack: "Hand back",
     handingBack: "Handing back…",
+    // Not on the boards: opens the held takeover's desktop again in a new tab.
+    openDesktop: "Open the desktop",
   },
   done: {
     title: "You handed control back",
@@ -85,6 +87,8 @@ export const NEEDS_YOU = {
   // Not on the boards: failures of the three verbs, with the server's reason after.
   failed: {
     takeOver: "Couldn't take over",
+    // The takeover is held but its desktop did not open.
+    openDesktop: "You have control, but the desktop didn't open",
     handBack: "Couldn't hand back",
     decline: "Couldn't decline",
   },

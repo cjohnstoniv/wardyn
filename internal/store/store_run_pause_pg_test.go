@@ -336,6 +336,114 @@ func TestPG_RunPause_ListsARequestDecidedSincePause(t *testing.T) {
 	since("decided after the pause", true)
 }
 
+// TestPG_RunPause_ListsAHandBackSincePause: a takeover handed back after an idle freeze that came while it
+// was held is "since" the pause, so the backstop wakes a run whose hand back committed but whose thaw did not
+// run; one handed back before the pause is not.
+func TestPG_RunPause_ListsAHandBackSincePause(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef, run.WaitBudgetSec = "ref-handback", 3600
+	persistRun(t, ctx, pool, run)
+	since := func(step string, want bool) {
+		t.Helper()
+		if c := pauseCandidate(t, pg, run.ID); c == nil || c.RequestDecidedSincePause != want {
+			t.Errorf("%s: candidate = %+v; want RequestDecidedSincePause = %v", step, c, want)
+		}
+	}
+	takeover := func() uuid.UUID {
+		t.Helper()
+		ap := newApproval(run.ID, time.Now().UTC())
+		ap.Kind = types.ApprovalHumanTakeover
+		created, err := pg.CreateApproval(ctx, ap)
+		if err != nil {
+			t.Fatalf("create takeover: %v", err)
+		}
+		if _, _, err := pg.TakeOverApproval(ctx, created.ID, "holder"); err != nil {
+			t.Fatalf("take over: %v", err)
+		}
+		return created.ID
+	}
+	pause := func() {
+		t.Helper()
+		fresh, _ := pg.GetRun(ctx, run.ID)
+		if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, fresh.ActiveAt); err != nil || !ok {
+			t.Fatalf("idle pause while held = %v, %v; want true", ok, err)
+		}
+	}
+
+	early := takeover()
+	if _, err := pg.HandBackApproval(ctx, early, "holder", time.Now().UTC()); err != nil {
+		t.Fatalf("hand back: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	held := takeover()
+	pause()
+	since("handed back before the pause, another still held", false)
+	time.Sleep(10 * time.Millisecond)
+	if _, err := pg.HandBackApproval(ctx, held, "holder", time.Now().UTC()); err != nil {
+		t.Fatalf("hand back: %v", err)
+	}
+	since("handed back after the pause", true)
+}
+
+// TestPG_RunPause_AHandBackIsReadOnTheDatabaseClock: paused_at is the database's now(), so a hand back
+// stamped from an app clock an hour behind it would read as before every pause and the backstop would never
+// wake the run, and one an hour ahead would read as after a pause that followed it.
+func TestPG_RunPause_AHandBackIsReadOnTheDatabaseClock(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		skew time.Duration
+	}{{"app clock an hour behind", -time.Hour}, {"app clock an hour ahead", time.Hour}} {
+		pg := store.NewPG(pool)
+		pg.Now = func() time.Time { return time.Now().Add(tc.skew) }
+		run := newRun(types.RunRunning)
+		run.SandboxRef, run.WaitBudgetSec = "ref-handback-"+tc.skew.String(), 3600
+		persistRun(t, ctx, pool, run)
+		since := func(step string, want bool) {
+			t.Helper()
+			if c := pauseCandidate(t, pg, run.ID); c == nil || c.RequestDecidedSincePause != want {
+				t.Errorf("%s, %s: candidate = %+v; want RequestDecidedSincePause = %v", tc.name, step, c, want)
+			}
+		}
+		heldThenBack := func(handBack bool) uuid.UUID {
+			t.Helper()
+			ap := newApproval(run.ID, time.Now().UTC())
+			ap.Kind = types.ApprovalHumanTakeover
+			created, err := pg.CreateApproval(ctx, ap)
+			if err != nil {
+				t.Fatalf("%s: create takeover: %v", tc.name, err)
+			}
+			if _, _, err := pg.TakeOverApproval(ctx, created.ID, "holder"); err != nil {
+				t.Fatalf("%s: take over: %v", tc.name, err)
+			}
+			if handBack {
+				if _, err := pg.HandBackApproval(ctx, created.ID, "holder", pg.Now().UTC()); err != nil {
+					t.Fatalf("%s: hand back: %v", tc.name, err)
+				}
+			}
+			return created.ID
+		}
+
+		heldThenBack(true)
+		time.Sleep(10 * time.Millisecond)
+		held := heldThenBack(false)
+		fresh, _ := pg.GetRun(ctx, run.ID)
+		if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, fresh.ActiveAt); err != nil || !ok {
+			t.Fatalf("%s: idle pause while held = %v, %v; want true", tc.name, ok, err)
+		}
+		since("handed back before the pause", false)
+		time.Sleep(10 * time.Millisecond)
+		if _, err := pg.HandBackApproval(ctx, held, "holder", pg.Now().UTC()); err != nil {
+			t.Fatalf("%s: hand back: %v", tc.name, err)
+		}
+		since("handed back after the pause", true)
+	}
+}
+
 func pauseCandidate(t *testing.T, pg store.PG, id uuid.UUID) *store.PauseCandidate {
 	t.Helper()
 	cands, now, err := pg.ListPauseCandidates(context.Background())
