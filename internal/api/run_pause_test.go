@@ -46,13 +46,14 @@ func (s *pauseStore) NotePauseSettle(_ context.Context, id uuid.UUID, after time
 	return due, nil
 }
 
-func (s *pauseStore) DuePauseSettles(context.Context) ([]store.PauseSettle, error) {
+func (s *pauseStore) DuePauseSettles(_ context.Context, lookFor time.Duration) ([]store.PauseSettle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.PauseSettle
+	now := time.Now()
 	for id, due := range s.settles {
-		if !due.After(time.Now()) {
-			out = append(out, store.PauseSettle{RunID: id, DueAt: due})
+		if !due.After(now) {
+			out = append(out, store.PauseSettle{RunID: id, DueAt: due, Last: !due.Add(lookFor).After(now)})
 		}
 	}
 	return out, nil
@@ -94,12 +95,16 @@ func (s *pauseStore) owing() int {
 	return len(s.settles)
 }
 
-// settleDue makes every recorded settle due: the compensation's deadline has passed.
-func (s *pauseStore) settleDue() {
+// settleDue makes every recorded settle due and past its late look (pauseLateSettleAfter), so the next settle is its
+// last: the compensation's deadline has passed, and so has the time a cut call has to land.
+func (s *pauseStore) settleDue() { s.dueSince(pauseLateSettleAfter + time.Second) }
+
+// dueSince makes every recorded settle due since ago.
+func (s *pauseStore) dueSince(ago time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id := range s.settles {
-		s.settles[id] = time.Now().Add(-time.Second)
+		s.settles[id] = time.Now().Add(-ago)
 	}
 }
 

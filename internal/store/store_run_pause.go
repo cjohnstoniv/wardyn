@@ -86,6 +86,9 @@ var _ RunPauser = PG{}
 type PauseSettle struct {
 	RunID uuid.UUID
 	DueAt time.Time
+	// Last is true once DueAt is the listing's lookFor or more in the past (the
+	// database's clock): the settle that finds it so is the record's last.
+	Last bool
 }
 
 // PauseSettler is the durable record of the runs whose container may not match
@@ -103,8 +106,9 @@ type PauseSettler interface {
 	// PauseSettleFor returns run id's due_at, or the zero time when no settle
 	// is recorded for it.
 	PauseSettleFor(ctx context.Context, id uuid.UUID) (time.Time, error)
-	// DuePauseSettles lists the runs whose settle is due.
-	DuePauseSettles(ctx context.Context) ([]PauseSettle, error)
+	// DuePauseSettles lists the runs whose settle is due, each with Last set
+	// once its due_at is lookFor or more in the past.
+	DuePauseSettles(ctx context.Context, lookFor time.Duration) ([]PauseSettle, error)
 	// ClearPauseSettle deletes run id's record only while it still reads due,
 	// so a later note survives.
 	ClearPauseSettle(ctx context.Context, id uuid.UUID, due time.Time) error
@@ -162,14 +166,15 @@ func (s PG) PauseSettleFor(ctx context.Context, id uuid.UUID) (time.Time, error)
 }
 
 // DuePauseSettles — see PauseSettler.
-func (s PG) DuePauseSettles(ctx context.Context) ([]PauseSettle, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT run_id, due_at FROM run_pause_settles WHERE due_at <= now() ORDER BY due_at`)
+func (s PG) DuePauseSettles(ctx context.Context, lookFor time.Duration) ([]PauseSettle, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT run_id, due_at, due_at + make_interval(secs => $1) <= now()
+		FROM run_pause_settles WHERE due_at <= now() ORDER BY due_at`, lookFor.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("store: list due pause settles: %w", err)
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (PauseSettle, error) {
 		var p PauseSettle
-		return p, r.Scan(&p.RunID, &p.DueAt)
+		return p, r.Scan(&p.RunID, &p.DueAt, &p.Last)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list due pause settles: %w", err)

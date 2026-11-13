@@ -367,7 +367,7 @@ func TestPG_RunPauseSettles(t *testing.T) {
 
 	due := func() []store.PauseSettle {
 		t.Helper()
-		got, err := pg.DuePauseSettles(ctx)
+		got, err := pg.DuePauseSettles(ctx, time.Minute)
 		if err != nil {
 			t.Fatalf("DuePauseSettles: %v", err)
 		}
@@ -448,5 +448,38 @@ func TestPG_RunPauseIntent(t *testing.T) {
 	}
 	if _, wrote, err := pg.NotePauseIntent(ctx, uuid.New(), time.Hour); err == nil || wrote {
 		t.Errorf("an intent for a run that does not exist = %v, %v; want an error", wrote, err)
+	}
+}
+
+// TestPG_RunPauseSettleLateLook pins the late look on the database's clock: a
+// due record is listed with Last unset until its due_at is lookFor in the past,
+// and with Last set from then on.
+func TestPG_RunPauseSettleLateLook(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef = "ref-late-look"
+	persistRun(t, ctx, pool, run)
+	if _, err := pg.NotePauseSettle(ctx, run.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	last := func(ago time.Duration) bool {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE run_pause_settles SET due_at = now() - make_interval(secs => $2) WHERE run_id = $1`,
+			run.ID, ago.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+		got, err := pg.DuePauseSettles(ctx, 2*time.Minute)
+		if err != nil || len(got) != 1 || got[0].RunID != run.ID {
+			t.Fatalf("DuePauseSettles = %+v, %v; want the run's record", got, err)
+		}
+		return got[0].Last
+	}
+	if last(time.Second) {
+		t.Error("a record due a second ago is listed as its last settle; want it looked at again until two minutes past due")
+	}
+	if !last(2*time.Minute + time.Second) {
+		t.Error("a record due two minutes and a second ago is not listed as its last settle")
 	}
 }

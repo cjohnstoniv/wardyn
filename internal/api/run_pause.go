@@ -524,7 +524,6 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 				nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
 				s.notePauseSettleOrRetry(nctx, run.ID)
 				ncancel()
-				s.notePauseSettleLater(run.ID)
 			}
 			data["error"] = err.Error()
 			s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
@@ -755,7 +754,6 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			nctx, ncancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 			defer ncancel()
 			s.notePauseSettleOrRetry(nctx, run.ID)
-			s.notePauseSettleLater(run.ID)
 		}
 		// Any other error keeps the record too: a reply lost on its way back can hide a freeze that landed.
 		return
@@ -783,7 +781,7 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 	// left behind because the sweep's context ended between freeze and thaw.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 	defer cancel()
-	s.undoFreeze(cctx, ctx, f, run, reason, intent)
+	s.undoFreeze(cctx, ctx, f, run, reason, intent, wrote)
 }
 
 // handleResumeRun serves POST /runs/{id}/resume: the person presses Resume.
