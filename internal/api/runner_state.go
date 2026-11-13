@@ -137,7 +137,12 @@ func (s *Server) OfflineFromRunner(ctx context.Context, runnerID uuid.UUID) erro
 		}
 		for _, run := range rows {
 			bounded, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
-			s.loseRun(bounded, runnerLossClaim{PG: st, runnerID: runnerID, ref: run.SandboxRef}, st, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, s.cfg.Now())
+			at, err := s.dbNow(bounded)
+			if err != nil {
+				cancel()
+				return err // as a failed listing: nothing more is marked, and the runner's next report retries
+			}
+			s.loseRun(bounded, runnerLossClaim{PG: st, runnerID: runnerID, ref: run.SandboxRef}, st, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at)
 			cancel()
 			after = run.ID
 		}
@@ -185,7 +190,10 @@ func (s *Server) endGoneRun(ctx context.Context, st store.PG, run types.AgentRun
 	defer unlock()
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
-	at := s.cfg.Now()
+	at, err := s.dbNow(ctx) // lost_at: later decisions read it against the database's now()
+	if err != nil {
+		return false // the mark did not land; a later pass retries
+	}
 	applied, err := claim(ctx, at)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a gone runner run lost failed",

@@ -63,7 +63,11 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 			defer cancel()
-			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, s.cfg.Now()) != loseNotKeepable {
+			at, err := s.dbNow(ctx)
+			if err != nil {
+				return // no mark and no teardown: the next sweep reads the clock again
+			}
+			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at) != loseNotKeepable {
 				return
 			}
 			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
@@ -116,7 +120,11 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 	if *st.ExitCode == 0 {
 		terminal = types.RunCompleted
 	}
-	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0, s.cfg.Now()) != loseNotKeepable
+	at, err := s.dbNow(ctx)
+	if err != nil {
+		return true // handled: no mark and no finalize; the next sweep decides
+	}
+	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0, at) != loseNotKeepable
 }
 
 // loseOutcome is what loseRun did.

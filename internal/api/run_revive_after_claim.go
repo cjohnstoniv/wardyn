@@ -167,7 +167,7 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 // so a failed revive never restarts its files grace.
 //
 // It reports what was persisted (reloseFate): relostUnwritten when the lost mark
-// could not be written, so nothing says the run is lost. The run is contained
+// could not be written (or the database's clock could not be read for it), so nothing says the run is lost. The run is contained
 // anyway, its proxy stopped and its broker credentials revoked, and a sweep
 // settles the rest; the caller must not tell anyone the run is lost. stopErr is
 // non-nil when the proxy stop is not confirmed.
@@ -177,7 +177,7 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 // A run that cannot be kept is ended whatever the generation, and the effects after a mark that landed
 // are not fenced.
 func (s *Server) reloseRun(ctx context.Context, run types.AgentRun, fence int) (fate reloseFate, stopErr error) {
-	reason, at := types.LostOutage, s.cfg.Now()
+	reason, at := types.LostOutage, time.Time{}
 	switch run.LostReason {
 	case types.LostReboot:
 		reason = types.LostReboot
@@ -188,16 +188,20 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun, fence int) (
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
 	if ok && lok {
+		if at.IsZero() {
+			now, err := s.dbNow(ctx) // lost_at: later decisions read it against the database's now()
+			if err != nil {
+				// No time to mark the run lost at, so no mark is written: contained as a mark that could not
+				// be written is, so a revive that failed never leaves a live proxy and live credentials behind.
+				run.LostReason = reason
+				return s.containUnwrittenLoss(ctx, run, fence)
+			}
+			at = now
+		}
 		switch o, err := s.loseRunStopped(ctx, loser, leaser, run, reason, types.RunFailed, 0, at, fence); o {
 		case loseWriteFailed:
-			s.revokeRunBroker(ctx, run.ID)
 			run.LostAt, run.LostReason = &at, reason
-			if err := s.stopLostSandboxAt(ctx, run, fence); err != nil {
-				slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
-					slog.String("run_id", run.ID.String()), slog.Any("err", err))
-				return relostUnwritten, err
-			}
-			return relostUnwritten, nil
+			return s.containUnwrittenLoss(ctx, run, fence)
 		case loseApplied:
 			if errors.Is(err, runner.ErrEndUnsupported) {
 				return s.reloseEnded(ctx, run.ID) // the mark landed, but its substrate cannot keep a sandbox: loseRunStopped ended it
@@ -211,4 +215,18 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun, fence int) (
 		slog.String("run_id", run.ID.String()))
 	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "its proxy could not be replaced at revive")
 	return s.reloseEnded(ctx, run.ID)
+}
+
+// containUnwrittenLoss is reloseRun's answer when no lost mark was written for run (the write failed, or the
+// database's clock could not be read for it): nothing says the run is lost, so it is contained anyway, its
+// broker credentials revoked and its proxy stopped under fence, and a sweep settles the rest. It answers
+// relostUnwritten, with the stop's error when the stop is not confirmed.
+func (s *Server) containUnwrittenLoss(ctx context.Context, run types.AgentRun, fence int) (reloseFate, error) {
+	s.revokeRunBroker(ctx, run.ID)
+	if err := s.stopLostSandboxAt(ctx, run, fence); err != nil {
+		slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return relostUnwritten, err
+	}
+	return relostUnwritten, nil
 }
