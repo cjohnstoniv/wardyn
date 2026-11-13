@@ -215,7 +215,7 @@ declare -A ALLOWLIST=(
   # 0.10 W4d: the scheduled-runs (SCHED), kept and team drive (KEEP, TEAM) and runner-health (RDIAG-B) tests. Each date is a fixed
   # instant passed in as the clock (NOW, now) or stubbed row data the code under test only echoes or compares to that
   # injected clock; none is compared to the wall clock.
-  ["internal/api/run_schedule_test.go"]=19
+  ["internal/api/run_schedule_test.go"]=37
   ["internal/store/store_runner_health_pg_test.go"]=1
   ["ui/e2e/runs-scheduled.spec.ts"]=3
   ["ui/e2e/team-drives.spec.ts"]=1
@@ -228,7 +228,7 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/runs/run-row.test.tsx"]=3 # display only: a scheduled start and two end times, rendered as absolute dates, never compared to the clock
   ["ui/src/app/components/screens/runs/runs-model.test.ts"]=1
   ["ui/src/app/components/screens/runs/scheduled-state.test.ts"]=3
-  ["ui/src/app/lib/schedule.test.ts"]=32
+  ["ui/src/app/lib/schedule.test.ts"]=50
   # 0.10 W4f: SESS-M12's signedInUntil tests pass a fixed instant in as the clock (now) and compare only to it.
   ["ui/src/app/lib/session-continuity-copy.test.ts"]=3 # injected clock only: signedInUntil(at, now), never compared to the wall clock
   # 0.10 MAC26: a sample AppKit stderr line whose timestamp is log text the prepare.log readers skip, never a time.

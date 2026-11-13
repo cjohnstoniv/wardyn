@@ -27,14 +27,14 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { AdoLaunchNote, AdoOwnTokenNote, adoLaunchNoteKind } from "../../../wardyn/ado-run-token-line";
-import { scheduleDaysAhead, scheduledRunsOn, startInstant, startWire, whenText } from "../../../../lib/schedule";
+import { scheduleDaysAhead, scheduledRuns, startInstant, startWire, whenText, type StartProblem } from "../../../../lib/schedule";
 import { useOwnTokenRows } from "../../../../lib/hooks/use-own-token-rows";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
 import { rememberedPreset } from "../steps/tools/use-wall-presets";
 import { intentToWire } from "../draft/intent-to-wire";
-import { launchStart } from "../draft/launch-start";
+import { launchStart, startHeld, startHeldText } from "../draft/launch-start";
 import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
@@ -44,7 +44,7 @@ import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
 import { useLaunchRun, type PendingLaunch } from "./use-launch-run";
 
-const startProblemText = (): Record<"missing" | "past" | "far", string> => ({ missing: NR_RUN.START_MISSING, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR(scheduleDaysAhead()) });
+const startProblemText = (): Record<StartProblem, string> => ({ missing: NR_RUN.START_MISSING, clock: NR_RUN.START_CLOCK, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR(scheduleDaysAhead()) });
 
 // Only the manual check runs here: nothing is asked again while the person types.
 const MANUAL_ONLY = { local: false, backendArm: false, modelArm: false };
@@ -123,8 +123,12 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
     wasAdoBusy.current = adoBusy;
   }, [adoBusy, check]);
   const { status } = useShellSetupStatus();
+  const on = scheduledRuns(status);
   // A start later: its line, or the reason it can't launch yet. Nothing here when the run starts now.
-  const start = launchStart(draft, scheduledRunsOn(status), Date.now());
+  const start = launchStart(draft, on, Date.now());
+  // A Later start the switch, off or not known, does not keep: Launch is held, never turned into a launch now,
+  // until the person chooses Run now (or the server says the switch is on).
+  const held = startHeld(draft, on);
   const startAt = start && !start.problem ? startInstant(start.choice) : null;
   const ownRows = useOwnTokenRows(status);
   const adoAccess = status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined);
@@ -156,9 +160,16 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
   const adoNote = create.refusal && adoDoor.refusal ? adoLaunchNoteKind(adoAccess, adoDoor.refusal) : null;
   const refusalIsAdoNote = adoNote === "blocked" && sentence === ADO_PAT.LAUNCH_POLICY_REFUSED;
   const named = title.trim() !== "";
-  const canLaunch = named && !checking && !create.creating && !checks.preflightBlock && !start?.problem;
+  const canLaunch = named && !checking && !create.creating && !checks.preflightBlock && !start?.problem && !held;
   // The visible reason a held Launch is held: the missing title, the check in flight, or the refusal.
-  const heldBy = canLaunch || create.creating ? undefined : !named ? "name-run-required" : checking ? "name-run-checking" : sentence ? "name-run-sentence" : start?.problem ? "name-run-start" : undefined;
+  const heldBy = canLaunch || create.creating ? undefined : !named ? "name-run-required" : checking ? "name-run-checking" : sentence ? "name-run-sentence" : start?.problem || held ? "name-run-start" : undefined;
+  // Run now unmounts the button that had focus: focus goes to Launch, or to the title while Launch is still held.
+  const ranNow = React.useRef(false);
+  React.useEffect(() => {
+    if (!ranNow.current || held) return;
+    ranNow.current = false;
+    (canLaunch ? launchButton.current : document.getElementById("name-run-title"))?.focus();
+  }, [held, canLaunch]);
 
   return (
     <>
@@ -199,10 +210,27 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
           />
         </div>
 
+        {/* The dialog has no start fields, so its start line and held row appear unasked: polite, never an alert. */}
         {start && (
-          <p id="name-run-start" role={start.problem ? "alert" : "status"} className={start.problem ? "text-sm text-danger" : "text-sm"}>
+          <p id="name-run-start" role="status" className={start.problem ? "text-sm text-danger" : "text-sm"}>
             {start.problem ? startProblemText()[start.problem] : <strong>{NR_RUN.STARTS(whenText(startAt ?? 0, start.choice.zone))}</strong>}
           </p>
+        )}
+        {held && (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p id="name-run-start" role="status" className="text-sm text-danger">{startHeldText(held)}</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                ranNow.current = true;
+                dispatch({ type: "schedule", schedule: undefined });
+              }}
+            >
+              {NR_RUN.TIMING_NOW}
+            </Button>
+          </div>
         )}
 
         <div

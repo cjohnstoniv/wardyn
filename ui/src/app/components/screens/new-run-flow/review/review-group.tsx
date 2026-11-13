@@ -29,17 +29,19 @@ export interface ReviewGroupProps {
   /** More read-only content under the value. */
   children?: React.ReactNode;
   docRows?: readonly DocRow[];
+  /** Needs the person without blocking Review (a held start): the attention mark, not the check. */
+  attention?: boolean;
   /** The Change disclosure's body. Without one the group has no Change. */
   editor?: (close: () => void) => React.ReactNode;
 }
 
-export function ReviewGroup({ id, label, value, mark, detail, provenance, children, docRows = [], editor }: ReviewGroupProps) {
+export function ReviewGroup({ id, label, value, mark, detail, provenance, children, docRows = [], attention = false, editor }: ReviewGroupProps) {
   const [open, setOpen] = React.useState(false);
   const regionId = `nr-edit-${id}`;
   const blocked = React.useContext(BlockedGroups).has(id);
   return (
     <div data-review-group={id} data-blocked={blocked || undefined} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5 border-t border-border py-4 pr-4 pl-5 first:border-t-0">
-      {blocked ? (
+      {blocked || attention ? (
         <span className="grid size-[22px] place-items-center rounded-full border border-danger/25 bg-danger-subtle text-danger">
           <CircleAlert aria-hidden="true" className="size-3" />
           <span className="sr-only">{NR_REVIEW.BADGE_ATTENTION}</span>

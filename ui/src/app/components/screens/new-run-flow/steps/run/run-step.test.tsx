@@ -12,6 +12,7 @@ import { setField } from "../../../../../../test/set-field";
 import { SCENARIO_POOLS, SHARED, TEAM_LAPTOPS, barrierOptions, effectiveLimits, unavailablePool } from "../../../../../lib/new-run-fixtures/scenarios/pools";
 import { HttpError } from "../../../../../lib/api/core";
 import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
+import { SCHEDULE_REFUSAL } from "../../../../../lib/schedule-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -660,28 +661,20 @@ describe("Run step: Schedule for later", () => {
     }
   });
 
-  it("shows no start when the switch is off, even for a draft that holds one", async () => {
-    function Holds() {
-      const dispatch = useNewRunDispatch();
-      React.useEffect(() => dispatch({ type: "schedule", schedule: { date: "2026-10-21", time: "02:00", zone: "UTC" } }), [dispatch]);
-      return null;
+  it("says a start the draft still holds as held when the switch is off or not known, never as Run now, and Run now clears it", async () => {
+    for (const [status, text] of [[{} as SetupStatus, SCHEDULE_REFUSAL.OFF()], [null, NR_RUN.START_HELD_UNKNOWN]] as const) {
+      show(AUTONOMOUS, MEMBER, status, { date: "2026-10-21", time: "02:00", zone: "UTC" });
+      await poolSelect();
+      expect(screen.getByText(text)).toHaveAttribute("role", "status");
+      expect(screen.queryByText(NR_RUN.TIMING_NOW_BODY, { exact: false })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: NR_RUN.TIMING_NOW }));
+      expect(scheduleNow()).toBeNull();
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
+      const now = screen.getByText(new RegExp(NR_RUN.TIMING_NOW_BODY)).closest("p");
+      await waitFor(() => expect(now).toHaveFocus());
+      cleanup();
     }
-    document.head.append(sheet);
-    render(
-      <MemoryRouter>
-        <ModelAccessProvider status={{} as SetupStatus} onRefresh={() => {}}>
-          <NewRunDraftProvider owner="alice">
-            <Seeded intent={AUTONOMOUS}>
-              <RunStep location={{ screen: "step", step: "run" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: async () => MEMBER }} />
-              <Holds />
-            </Seeded>
-          </NewRunDraftProvider>
-        </ModelAccessProvider>
-      </MemoryRouter>,
-    );
-    await poolSelect();
-    expect(screen.getByText(NR_RUN.TIMING_NOW)).toBeInTheDocument();
-    expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
   });
 
   it("opens Date, Time and Time zone when on, losing its Coming soon, and tells nothing until a field is touched", async () => {
@@ -731,10 +724,13 @@ describe("Run step: Schedule for later", () => {
     }
   });
 
-  it("comes back with values already typed telling their problem at once", async () => {
-    show(AUTONOMOUS, MEMBER, ON, { date: "2020-01-01", time: "02:00", zone: "UTC" });
+  it("comes back with values already typed telling their problem at once, politely, and as an alert only once typed in", async () => {
+    show(AUTONOMOUS, MEMBER, ON, { date: "2025-03-30", time: "01:30", zone: "Europe/London" });
     await poolSelect();
-    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_PAST);
+    expect(screen.getByText(NR_RUN.START_CLOCK)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    setField(screen.getByLabelText(NR_RUN.START_TIME), "01:45");
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_CLOCK);
   });
 
   it("sets the earliest date from the picked zone's today and keeps the browser's zone first in the list", async () => {

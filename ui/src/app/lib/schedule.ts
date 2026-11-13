@@ -19,9 +19,13 @@ export interface StartChoice {
 /** The furthest ahead a start may be: the queue's longest wait. */
 export const SCHEDULE_MAX_AHEAD_MS = 7 * 24 * 3600_000;
 
-/** WARDYN_SCHEDULED_RUNS, as the setup status carries it. Absent reads as off. */
-export const scheduledRunsOn = (status: Pick<SetupStatus, "features"> | null | undefined): boolean =>
-  status?.features?.scheduled_runs === true;
+/**
+ * WARDYN_SCHEDULED_RUNS as the server said it: true or false once it has answered (a daemon that sends no features
+ * has the switch off), undefined while nothing it said is known: no status yet, or the stand-in the console makes
+ * up when the server cannot be reached.
+ */
+export const scheduledRuns = (status: Pick<SetupStatus, "features" | "unreachable"> | null | undefined): boolean | undefined =>
+  !status || status.unreachable ? undefined : status.features?.scheduled_runs === true;
 
 /** The browser's own time zone, where the picker starts. */
 export function browserZone(): string {
@@ -58,22 +62,38 @@ function offsetMs(zone: string, ms: number): number {
   return Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute"), n("second")) - Math.floor(ms / 1000) * 1000;
 }
 
-/** The instant (ms since the epoch) a wall-clock date and time name in `zone`, or null when they name none. */
-export function startInstant(choice: StartChoice): number | null {
+// The typed date and time as one number, read as if they were UTC, or null until both are typed.
+function wallClock(choice: StartChoice): number | null {
   const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(choice.date);
   const t = /^(\d{2}):(\d{2})$/.exec(choice.time);
-  if (!d || !t) return null;
-  const wall = Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]));
+  return d && t ? Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2])) : null;
+}
+
+/**
+ * Every instant whose wall clock in the choice's zone reads as the one typed: one, none in the hour the clocks skip
+ * (spring forward) or two in the hour they repeat (fall back). null until a date and time are typed, or for a zone
+ * the browser does not know. internal/api/run_schedule.go refuses the same wall times.
+ */
+function wallInstants(choice: StartChoice): number[] | null {
+  const wall = wallClock(choice);
+  if (wall === null) return null;
   try {
-    // A zone's offset can change within the day, so the guess is corrected once with the offset found at the guess.
-    const first = wall - offsetMs(choice.zone, wall);
-    return wall - offsetMs(choice.zone, first);
+    // The zone's offsets a day either side cover any change near the wall time; an offset whose instant reads
+    // back as the typed wall clock is a match.
+    const offsets = new Set([wall - 86_400_000, wall, wall + 86_400_000].map((ms) => offsetMs(choice.zone, ms)));
+    return [...offsets].map((o) => wall - o).filter((at) => at + offsetMs(choice.zone, at) === wall);
   } catch {
     return null;
   }
 }
 
-export type StartProblem = "missing" | "past" | "far";
+/** The instant (ms since the epoch) a wall-clock date and time name in `zone`, or null when they name none or two. */
+export function startInstant(choice: StartChoice): number | null {
+  const at = wallInstants(choice);
+  return at?.length === 1 ? at[0] : null;
+}
+
+export type StartProblem = "missing" | "clock" | "past" | "far";
 
 /**
  * The wait a scheduled start must leave before the 7-day cap, as the server reads it (scheduleLeadWaitSec in
@@ -90,12 +110,15 @@ export const scheduleDaysAhead = (interactive = false): number =>
   daysAhead(interactive ? SCHEDULE_LEAD_WAIT_SEC.interactive : SCHEDULE_LEAD_WAIT_SEC.background);
 
 /**
- * Why a start is not one the server will take, or null when it looks fine. Only an Autonomous (background) run
- * can be scheduled, so the latest start is 7 days less a background run's lead wait.
+ * Why a start is not one the server will take, or null when it looks fine: not typed, a wall time the clocks skip
+ * or repeat, past, or too far. Only an Autonomous (background) run can be scheduled, so the latest start is 7 days
+ * less a background run's lead wait.
  */
 export function startProblem(choice: StartChoice, now: number): StartProblem | null {
-  const at = startInstant(choice);
-  if (at === null) return "missing";
+  const instants = wallInstants(choice);
+  if (instants === null) return "missing";
+  if (instants.length !== 1) return "clock";
+  const at = instants[0];
   if (at <= now) return "past";
   if (at - now > SCHEDULE_MAX_AHEAD_MS - SCHEDULE_LEAD_WAIT_SEC.background * 1000) return "far";
   return null;

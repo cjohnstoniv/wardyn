@@ -8,7 +8,7 @@
 
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../../lib/api/core";
@@ -24,11 +24,24 @@ import type { RunIntent } from "../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../new-run-route";
 import { NameRunDialog } from "./name-run-dialog";
 
-const shell = vi.hoisted(() => ({ status: {} as Record<string, unknown> }));
-vi.mock("../../../wardyn/model-access-context", () => ({
-  useModelAccessDoor: () => ({ openDoor: vi.fn(), refresh: vi.fn() }),
-  useShellSetupStatus: () => ({ status: shell.status }),
-}));
+const shell = vi.hoisted(() => ({ status: {} as Record<string, unknown>, listeners: new Set<() => void>() }));
+vi.mock("../../../wardyn/model-access-context", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (l: () => void) => {
+    shell.listeners.add(l);
+    return () => void shell.listeners.delete(l);
+  };
+  return {
+    useModelAccessDoor: () => ({ openDoor: vi.fn(), refresh: vi.fn() }),
+    useShellSetupStatus: () => ({ status: useSyncExternalStore(subscribe, () => shell.status) }),
+  };
+});
+/** A new setup status reaching an open dialog, as the shell's poll delivers one. */
+const setStatus = (status: Record<string, unknown>) =>
+  act(() => {
+    shell.status = status;
+    shell.listeners.forEach((l) => l());
+  });
 
 const AUTONOMOUS: RunIntent = { shape: "agent_task", experience: "background", workload: { kind: "agent_task", agent: "claude-code", task: "x" } };
 const LIFETIME = { default: { value: 3600 }, cap: { value: 7200 } };
@@ -101,7 +114,8 @@ describe("Name this run: a start later", () => {
     open({ date: "2020-01-01", time: "12:00", zone: "UTC" });
     const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
     await named(box);
-    expect(within(box).getByRole("alert")).toHaveTextContent(NR_RUN.START_PAST);
+    expect(within(box).getByText(NR_RUN.START_PAST)).toHaveAttribute("role", "status");
+    expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
     expect(launchButton()).toBeDisabled();
     expect(launchButton()).toHaveAttribute("aria-describedby", "name-run-start");
     expect(create).not.toHaveBeenCalled();
@@ -111,7 +125,7 @@ describe("Name this run: a start later", () => {
     open(inDays(6.5));
     const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
     await named(box);
-    expect(within(box).getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR(scheduleDaysAhead()));
+    expect(within(box).getByText(NR_RUN.START_FAR(scheduleDaysAhead()))).toHaveAttribute("role", "status");
     expect(launchButton()).toBeDisabled();
     expect(create).not.toHaveBeenCalled();
   });
@@ -125,12 +139,68 @@ describe("Name this run: a start later", () => {
     expect(launchButton()).toBeEnabled();
   });
 
-  it("starts now, with no line and no start in the body, when the switch is off or the run is Interactive", async () => {
-    shell.status = {};
+  it("holds a Later start when the switch turns off with the dialog open, and starts the run now only on Run now", async () => {
+    const schedule = tomorrow();
+    open(schedule);
+    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await named(box);
+    expect(within(box).getByText(NR_RUN.STARTS(whenText(Date.parse(`${schedule.date}T12:00:00Z`), "UTC")))).toBeInTheDocument();
+    setStatus({});
+    expect(within(box).queryByText(/^Starts /)).not.toBeInTheDocument();
+    expect(within(box).getByText(SCHEDULE_REFUSAL.OFF())).toBeInTheDocument();
+    expect(launchButton()).toBeDisabled();
+    expect(launchButton()).toHaveAttribute("aria-describedby", "name-run-start");
+    await userEvent.click(launchButton());
+    expect(create).not.toHaveBeenCalled();
+    await userEvent.click(within(box).getByRole("button", { name: NR_RUN.TIMING_NOW }));
+    expect(within(box).queryByText(SCHEDULE_REFUSAL.OFF())).not.toBeInTheDocument();
+    await userEvent.click(launchButton());
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0][0]).not.toHaveProperty("start_at");
+  });
+
+  it("says the held row politely, not as an alert, and gives focus to Launch when Run now goes", async () => {
     open(tomorrow());
+    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await named(box);
+    setStatus({});
+    expect(within(box).getByText(SCHEDULE_REFUSAL.OFF())).toHaveAttribute("role", "status");
+    expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
+    await userEvent.click(within(box).getByRole("button", { name: NR_RUN.TIMING_NOW }));
+    await waitFor(() => expect(launchButton()).toHaveFocus());
+  });
+
+  it("says a start the clocks skip politely, not as an alert, and holds Launch on it", async () => {
+    open({ date: "2025-03-30", time: "01:30", zone: "Europe/London" });
+    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await named(box);
+    expect(within(box).getByText(NR_RUN.START_CLOCK)).toHaveAttribute("role", "status");
+    expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
+    expect(launchButton()).toBeDisabled();
+  });
+
+  it("holds a Later start as not known, never as off, until the server says the switch is on", async () => {
+    shell.status = { unreachable: true };
+    const schedule = tomorrow();
+    open(schedule);
+    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await named(box);
+    expect(within(box).getByText(NR_RUN.START_HELD_UNKNOWN)).toHaveAttribute("role", "status");
+    expect(within(box).queryByText(SCHEDULE_REFUSAL.OFF())).not.toBeInTheDocument();
+    expect(launchButton()).toBeDisabled();
+    setStatus({ features: { scheduled_runs: true } });
+    expect(within(box).queryByText(NR_RUN.START_HELD_UNKNOWN)).not.toBeInTheDocument();
+    expect(within(box).getByText(NR_RUN.STARTS(whenText(Date.parse(`${schedule.date}T12:00:00Z`), "UTC")))).toBeInTheDocument();
+    expect(launchButton()).toBeEnabled();
+  });
+
+  it("starts now, with no line and no start in the body, when the switch is off and nothing was scheduled, or the run is Interactive", async () => {
+    shell.status = {};
+    open(undefined);
     let box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
     await named(box);
     expect(within(box).queryByText(/^Starts /)).not.toBeInTheDocument();
+    expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
     await userEvent.click(launchButton());
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0][0]).not.toHaveProperty("start_at");

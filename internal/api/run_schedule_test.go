@@ -65,6 +65,41 @@ func TestParseRunSchedule(t *testing.T) {
 	}
 }
 
+// A wall-clock start its zone's clocks skip (spring forward) or repeat (fall back) names no single moment, so
+// it is refused, as the console refuses it, instead of being moved to whichever offset the parse picked; the
+// minutes either side are kept, and an explicit offset names one instant.
+func TestParseRunSchedule_ClockChange(t *testing.T) {
+	spring, fall := time.Date(2027, 3, 25, 12, 0, 0, 0, time.UTC), time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name, start, zone string
+		now, want         time.Time
+	}{
+		{name: "skipped in London", start: "2027-03-28T01:30", zone: "Europe/London", now: spring},
+		{name: "skipped in New York", start: "2027-03-14T02:30", zone: "America/New_York", now: time.Date(2027, 3, 10, 12, 0, 0, 0, time.UTC)},
+		{name: "the first minute after the skip", start: "2027-03-28T02:00", zone: "Europe/London", now: spring, want: time.Date(2027, 3, 28, 1, 0, 0, 0, time.UTC)},
+		{name: "repeated in London", start: "2026-10-25T01:30", zone: "Europe/London", now: fall},
+		{name: "repeated, with seconds", start: "2026-10-25T01:30:00", zone: "Europe/London", now: fall},
+		{name: "the last minute before the repeat", start: "2026-10-25T00:59", zone: "Europe/London", now: fall, want: time.Date(2026, 10, 24, 23, 59, 0, 0, time.UTC)},
+		{name: "a repeated hour named by its offset", start: "2026-10-25T01:30:00+01:00", zone: "Europe/London", now: fall, want: time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)},
+		{name: "a one-digit hour is no clock change", start: "2027-03-28T2:00", zone: "Europe/London", now: spring, want: time.Date(2027, 3, 28, 1, 0, 0, 0, time.UTC)},
+		{name: "a skipped one-digit hour", start: "2027-03-28T1:30", zone: "Europe/London", now: spring},
+		{name: "fractional seconds are no clock change", start: "2026-10-25T00:59:00.5", zone: "UTC", now: fall, want: time.Date(2026, 10, 25, 0, 59, 0, 500_000_000, time.UTC)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sch, refusal := parseRunSchedule(c.start, c.zone, true, c.now, scheduleLeadWaitSec(false))
+			if c.want.IsZero() {
+				if refusal == nil || refusal.status != http.StatusBadRequest || refusal.body.Reason != reasonStartAtInvalid || refusal.body.Detail != startAtClockChangeDetail || !strings.Contains(refusal.body.Error, "when the clocks change") {
+					t.Fatalf("schedule = %+v, refusal = %+v; want a 400 %s, detail %s, that names the clock change", sch, refusal, reasonStartAtInvalid, startAtClockChangeDetail)
+				}
+				return
+			}
+			if refusal != nil || sch == nil || !sch.at.Equal(c.want) {
+				t.Fatalf("schedule = %+v, refusal = %+v; want %s", sch, refusal, c.want)
+			}
+		})
+	}
+}
+
 // A scheduled run's wait counts from its start, and nothing is held more than seven days from the request.
 func TestScheduledDeadline(t *testing.T) {
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
