@@ -98,7 +98,7 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 	}
 	defer unlock()
 	// One winner against a kill or any other end: both move the run from RUNNING.
-	applied, err := s.casRunState(ctx, id, types.RunRunning, types.RunStopped)
+	applied, err := s.casRunStateHeld(ctx, id, types.RunRunning, types.RunStopped)
 	if err != nil {
 		writeServerError(w, r, "stop the run for its bring-back", err)
 		return
@@ -108,16 +108,16 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	data := map[string]any{"folder": folder.Name, "state": types.RunStopped}
-	s.recordAudit(ctx, s.auditEvent(&id, actorType, principal, "run.folder.finalize", id.String(), "success", mustJSON(data)))
+	s.recordAuditHeld(ctx, s.auditEvent(&id, actorType, principal, "run.folder.finalize", id.String(), "success", mustJSON(data)))
 	// Its error is already audited by the tail; what the person is told is read back below.
 	_ = s.finalizeRunEffects(ctx, id, run.SandboxRef, "run.folder.finalize", data, false, true)
 	view := computerFolderBringBackView{State: types.RunStopped}
 	// The tail clears the run's sandbox ref only once its StopSandbox succeeded.
-	if cur, err := s.cfg.Store.GetRun(ctx, id); err == nil {
+	if cur, err := s.getRunHeld(ctx, id); err == nil {
 		view.SandboxRemoved = cur.SandboxRef == ""
 	}
 	if st, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
-		if rec, err := st.RunLocalFolderStatus(ctx, id); err == nil {
+		if rec, err := heldRead(ctx, func(ctx context.Context) (types.RunLocalFolderStatus, error) { return st.RunLocalFolderStatus(ctx, id) }); err == nil {
 			view.Back = newFolderPassView(rec.Back)
 		}
 	}

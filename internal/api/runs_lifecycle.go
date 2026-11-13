@@ -122,10 +122,10 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					return
 				}
 				defer unlock()
-				applied, uerr := s.casRunState(ctx, runID, types.RunRunning, types.RunFailed)
+				applied, uerr := s.casRunStateHeld(ctx, runID, types.RunRunning, types.RunFailed)
 				if uerr != nil {
 					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
-					s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+					s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 						runID.String(), "failure", mustJSON(data)))
 					return
 				}
@@ -181,13 +181,13 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			return
 		}
 		defer unlock()
-		cur, gerr := s.cfg.Store.GetRun(ctx, runID)
+		cur, gerr := s.getRunHeld(ctx, runID)
 		if gerr != nil {
 			select {
 			case <-time.After(completionWatcherReadRetryDelay):
 			case <-ctx.Done():
 			}
-			cur, gerr = s.cfg.Store.GetRun(ctx, runID)
+			cur, gerr = s.getRunHeld(ctx, runID)
 		}
 		if gerr != nil {
 			slog.WarnContext(ctx, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
@@ -199,9 +199,9 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		}
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
-		applied, uerr := s.casRunState(ctx, runID, types.RunRunning, terminal)
+		applied, uerr := s.casRunStateHeld(ctx, runID, types.RunRunning, terminal)
 		if uerr != nil {
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+			s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"exit_code": exitCode, "error": uerr.Error(),
 				})))

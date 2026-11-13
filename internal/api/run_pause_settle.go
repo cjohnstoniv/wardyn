@@ -296,7 +296,7 @@ func (s *Server) settlePause(ctx context.Context, f runner.Freezer, id uuid.UUID
 		return false
 	}
 	defer unlock()
-	cur, err := s.readRunRetrying(lctx, id)
+	cur, err := heldRead(lctx, func(ctx context.Context) (types.AgentRun, error) { return s.readRunRetrying(ctx, id) })
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return true

@@ -395,6 +395,10 @@ func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID) {
 // ref and step is still its due step, with the note a give-up carries: the reads here decide it (tailStepOf). ok
 // false is a read that failed or a run with nothing to tail.
 func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (run types.AgentRun, st types.RunLocalFolderStatus, note string, again, ok bool) {
+	// Reads only, under the run's lock on a loop's context with no deadline: one bound for them all.
+	ctx, cancel := context.WithTimeout(ctx, heldStoreCallBound)
+	defer cancel()
+
 	run, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil {
 		tailSkipped(ctx, id, err)
@@ -451,12 +455,15 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran 
 		s.tailFinalize(lctx, run, step)
 	case tailFolder:
 		// A run whose stop is owed gets no new pass: the containment loop stops it, and a pass begun now would
-		// be cut by that stop. A read that fails answers owed (containStopOwed).
-		if s.containStopOwed(lctx, run) {
+		// be cut by that stop. A read that fails answers owed (containStopOwed). Its reads, and the pass note's, run
+		// on heldStoreCallBound: the loop's context has no deadline, and a read its bound cuts answers owed.
+		owed := true
+		heldCall(lctx, heldStoreCallBound, func(ctx context.Context) { owed = s.containStopOwed(ctx, run) })
+		if owed {
 			return false
 		}
 		s.tailFinalize(lctx, run, step)
-		s.tailNotePass(lctx, id, st, now)
+		heldCall(lctx, heldStoreCallBound, func(ctx context.Context) { s.tailNotePass(ctx, id, st, now) })
 	}
 	return true
 }
