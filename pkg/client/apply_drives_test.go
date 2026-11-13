@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -107,6 +108,53 @@ func TestApplyDrivesResult_CarriesSecondPlace(t *testing.T) {
 				if body[k] != v {
 					t.Errorf("%s body %s = %v, want %v", tc.method, k, body[k], v)
 				}
+			}
+		})
+	}
+}
+
+// A change between two pages of the allocation read must refuse the document:
+// fed back to ApplyDrives it would restore a partial set. One added ahead of
+// the rows already read repeats a row; one removed there makes the next page
+// skip a row, with nothing read twice (only grant_total moving shows it); one
+// moved ahead (its priority raised) repeats a row and is itself never read,
+// with grant_total unchanged (only the distinct count shows it).
+func TestGetDrives_RefusesAReadThatChangedBetweenPages(t *testing.T) {
+	const pageSize = 2
+	all := make([]client.UserDriveGrant, 5)
+	for i := range all {
+		all[i] = client.UserDriveGrant{ID: uuid.New(), SubjectType: "user", Subject: string(rune('a' + i)), Enabled: true}
+	}
+	added := append([]client.UserDriveGrant{{ID: uuid.New(), SubjectType: "user", Subject: "0", Enabled: true}}, all...)
+	moved := append([]client.UserDriveGrant{all[4]}, all[:4]...)
+	for name, tc := range map[string]struct {
+		later []client.UserDriveGrant
+		want  string
+	}{
+		"added ahead":   {added, "allocations changed while being read, retry"},
+		"removed ahead": {all[1:], "allocations changed while being read, retry"},
+		"moved ahead":   {moved, "read 4 allocations but the server reports 5"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				now := all
+				off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+				if off > 0 {
+					now = tc.later
+				}
+				end := min(off+pageSize, len(now))
+				if end < len(now) {
+					w.Header().Set("X-Wardyn-Truncated", "true")
+				}
+				writeJSON(w, http.StatusOK, client.DrivesDocument{Grants: now[min(off, end):end], GrantTotal: len(now)})
+			}))
+			t.Cleanup(srv.Close)
+			doc, err := newTestClient(srv).GetDrives(context.Background())
+			if err == nil {
+				t.Fatalf("GetDrives returned %d allocations from a read that changed between pages, want a refusal", len(doc.Grants))
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want %q", err, tc.want)
 			}
 		})
 	}

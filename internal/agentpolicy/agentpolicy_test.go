@@ -150,9 +150,10 @@ func TestAgentPolicyNoFileWhereNothingIsBound(t *testing.T) {
 }
 
 // TestAgentPolicyOnlyClaudeCodeGetsAFile pins the allowlist of one. codex-cli
-// reads no managed-policy file (the spike found nothing in the tree that does),
-// and a BYOA run has no Wardyn launcher at all — a generated document for
-// either is a ceiling in the audit trail and nowhere else.
+// has no managed settings for an autonomy level (its sandbox requirements are
+// CodexRequirements, a separate file), and a BYOA run has no Wardyn launcher
+// at all — a generated document for either is a ceiling in the audit trail
+// and nowhere else.
 func TestAgentPolicyOnlyClaudeCodeGetsAFile(t *testing.T) {
 	for _, agent := range []string{"codex-cli", "", "Claude-Code", "claude-code-next"} {
 		for _, level := range []types.AutonomyLevel{types.AutonomyL0, types.AutonomyL1, types.AutonomyL2, types.AutonomyL3, ""} {
