@@ -1522,6 +1522,7 @@ func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsIsStoppedNotKept(t *tes
 		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0: both stops failed, so the retry waits", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
 	}
 	f.sb.stopErr = nil
+	f.cs.giveUpApplies = true // the stop ends the keep: the owed copy back is given up before the ref is cleared
 	f.tick(t, f.s)
 	if f.leaser.markCount() != 0 || f.sb.stopCount() != 1 {
 		t.Errorf("%d marks, %d sandbox stops; want 0 and 1: the proxy stop still fails, so the sandbox is stopped, not kept", f.leaser.markCount(), f.sb.stopCount())

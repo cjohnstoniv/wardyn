@@ -15,6 +15,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - An ended run's sandbox that is kept to copy changes back to your computer is no longer deleted by the run's automatic retirement on its runner: before the copy back has run, while a pass is under way, or while it waits to resume. Retirement now waits until the copy back has finished, has been given up, or its sandbox has been stopped, and a deletion queued before the sandbox was kept is held back until then if the runner has not received it yet. Affects 0.10.0 prereleases only.
 - When the server, as it starts, tears down a sandbox it was keeping to copy changes back, because it could not confirm that the sandbox's agent was cut off, the run now records the copy back as given up, with the count and up to 50 names of the changes not brought back when a pass had counted them, and writes its audit row. Before, the run went on showing the copy back as still owed. Affects 0.10.0 prereleases only.
+- When a run that was ended past its end while another operation held it has its kept sandbox stopped later, because the server could not confirm that the sandbox's agent was cut off, the run now records the copy back to your computer as given up, with the count and up to 50 names of the changes not brought back when a pass had counted them, and writes its audit row. Before, the run went on showing the copy back as still owed. Affects 0.10.0 prereleases only.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

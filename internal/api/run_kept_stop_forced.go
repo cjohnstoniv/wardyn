@@ -406,6 +406,20 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		}
 	}
 	if stopped {
+		// A copy back still owed is given up first, while the ref the give-up needs is set: once the ref is cleared
+		// no pass runs again, and the record would still show the changes as owed with no given_up row. Without the
+		// lock too: the give-up moves the record's generation on, so a pass still holding it writes nothing. A record
+		// not final yet keeps the ref and the mark for this tick. The next tick decides the sandbox again: while its
+		// cut is still not confirmed it stops again (a stop of a gone sandbox answers success) and tries the give-up
+		// again; once a cut is confirmed the sandbox counts as kept, and the tail owner's pass closes the record.
+		final, gerr := false, error(nil)
+		settleAfterTeardown(ctx, func(sctx context.Context) { final, gerr = s.giveUpFolderStopped(sctx, run) })
+		if !final {
+			slog.WarnContext(ctx, "wardynd: forced stop retry stopped a sandbox whose folder copy back could not be given up; its ref and mark stay",
+				slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+			return
+		}
 		// One success row per confirmed stop across replicas: only the clear that changed the row writes it,
 		// whatever the revoke does (the empty-ref clear that follows a failed revoke writes none). A store that
 		// is not Postgres has one writer, and counts as the one that cleared. A clear that errored writes none.

@@ -86,8 +86,9 @@ func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 b
 	return s.giveUpFolderWith(ctx, run, st, note, p)
 }
 
-// giveUpFolderStopped gives up the copy back still owed by a terminal run whose sandbox a boot sweep tore down
-// and whose ref it is about to clear (reconcileOrphanedRun): with no ref no pass runs again, so the keep ends now
+// giveUpFolderStopped gives up the copy back still owed by a terminal run whose sandbox a boot sweep
+// (reconcileOrphanedRun) or the forced stop's retry (retryForcedStop) stopped, and whose ref the caller is about
+// to clear: with no ref no pass runs again, so the keep ends now
 // (a zero cap) and the final record and its given_up row keep what was left behind. final says the ref may be
 // cleared: nothing was owed (no resume, and no pass owed that never ran: keepsSandboxForFolder's two halves), or
 // the record is final. A record or rule that cannot be read, or a give-up that left the record open, is not final.
