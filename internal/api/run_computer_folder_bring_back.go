@@ -284,7 +284,5 @@ func (s *Server) sandboxExecOutput(ctx context.Context, ref string, argv ...stri
 	if sess.Stdout == nil || sess.Wait == nil {
 		return "", -1, errors.New("the exec has no output")
 	}
-	out, _ := io.ReadAll(io.LimitReader(sess.Stdout, 8<<10))
-	code, err := sess.Wait()
-	return string(out), code, err
+	return waitExecWithin(ctx, sess, 8<<10)
 }

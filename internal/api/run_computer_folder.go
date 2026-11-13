@@ -608,7 +608,7 @@ func (s *Server) killKeptAgent(ctx context.Context, run types.AgentRun, ref stri
 		_ = sess.Stdin.Close()
 	}
 	if sess.Wait != nil {
-		_, _ = sess.Wait()
+		_, _, _ = waitExecWithin(ctx, sess, 0)
 	}
 	if sess.Close != nil {
 		_ = sess.Close()
