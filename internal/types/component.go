@@ -6,6 +6,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"slices"
@@ -883,6 +884,9 @@ func MCPURLDestination(raw string) (Destination, error) {
 	d, err := ParseDestination(u.Host)
 	if err != nil || d.Wildcard {
 		return Destination{}, fmt.Errorf("%q is not one host", u.Host)
+	}
+	if numericHost(d.Host) && net.ParseIP(d.Host) == nil {
+		return Destination{}, fmt.Errorf("%q: an IPv4 address is written as four decimal numbers from 0 to 255 with no leading zeros", u.Host)
 	}
 	if d.Port == 443 {
 		d.Port = 0

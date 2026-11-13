@@ -295,9 +295,18 @@ func ValidDomainEntry(d string) error {
 	// Charset. See domain_charset.go.
 	case deadCharsetEntry(exact, wild):
 		return bad(charsetWhy)
+	// An address in a non-standard spelling: step 0 refuses every request written that way
+	// (nonStandardIPSpelling), and a request for the address in its standard spelling is another key, so
+	// the entry binds nothing. A deny written this way would be silently void.
+	case nonStandardIPSpelling(exact):
+		return bad(ipSpellingWhy)
 	}
 	return nil
 }
+
+// ipSpellingWhy is the reason ValidDomainEntry gives for an address entry in a non-standard spelling.
+const ipSpellingWhy = "an IP address is written in standard form: four decimal numbers from 0 to 255 with no leading zeros " +
+	`("8.8.8.8", not "134744072", "0x8080808" or "010.0.0.1"), or an IPv6 address`
 
 // evalHost returns the policy-only verdict for a host+port. Deny always wins.
 // A bare allow/deny entry matches any port; a port-qualified entry ("host:443")
@@ -703,6 +712,12 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 	case "builtin:resolve-failed":
 		w.Header().Set(egressHeaderDetail, resolveFailedDetail)
 		detail = "egress denied: " + resolveFailedDetail
+	case ruleSourceIPSpelling:
+		w.Header().Set(egressHeaderDetail, ipSpellingDetail)
+		detail = "egress denied: " + ipSpellingDetail
+	case ruleSourceNonASCIIHost:
+		w.Header().Set(egressHeaderDetail, nonASCIIHostDetail)
+		detail = "egress denied: " + nonASCIIHostDetail
 	case ruleSourcePort:
 		w.Header().Set(egressHeaderDetail, portRuleDetail)
 		detail = "egress denied: " + portRuleDetail

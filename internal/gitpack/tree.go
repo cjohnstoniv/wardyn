@@ -162,6 +162,9 @@ func parseCommit(data []byte, hashLen int) (commitInfo, error) {
 				return commitInfo{}, fmt.Errorf("%w: the commit object carries a parent header git would not read",
 					ErrUninspectable)
 			}
+			if len(c.parents) == maxCommitParents {
+				return commitInfo{}, ErrTooManyParents
+			}
 		default:
 			inParentBlock = false
 			continue

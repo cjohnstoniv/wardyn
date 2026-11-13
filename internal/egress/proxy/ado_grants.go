@@ -38,7 +38,7 @@ func newADOGrantsByHost(g *ADOGrantConfig) adoGrantsByHost {
 	}
 	m := adoGrantsByHost{}
 	for _, h := range g.Hosts {
-		m[strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))] = ADOGrant{
+		m[hostKey(h)] = ADOGrant{
 			Organization: g.Organization,
 			Capabilities: append([]adoscope.Capability(nil), g.Capabilities...),
 		}

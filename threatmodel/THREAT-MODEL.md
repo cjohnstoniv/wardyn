@@ -925,7 +925,7 @@ is not the deployment described above.**
 
 | Step | Check | Refused as |
 |---|---|---|
-| 1 | A run with no network refuses everything first; then a literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `policy:no-network`; `builtin:private-ip`, `policy:ip-literal` |
+| 1 | A run with no network refuses everything first; then a literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `policy:no-network`; `builtin:private-ip`, `builtin:non-ascii-host`, `builtin:ip-spelling`, `policy:ip-literal` |
 | 2 | A host reached only by a brokered route: an MCP server, a local model server | `brokered:mcp:direct`, `brokered:local-model` |
 | 3 | Host, port and method (`gateConnect`), then a push to a code host under `deny_all` | `policy:denied`, `policy:port`, `policy:method`, `policy:evaluator-error`, `brokered:git:push-deny-all-forge` |
 | 4 | A private address refused before (`privateIPMemoHit`) | Refused again, with no new decision row |
@@ -3599,7 +3599,7 @@ Claude sign-in's token, each the person's own on their model provider.
   - Reaching an internal-IP-resolving hostname still requires ALL of:
     - (1) an operator configured the upstream proxy,
     - (2) the run's own egress **policy** allows that hostname (default-deny allowlist + first-use approval + method rules, all unaffected),
-    - and (3) the destination is named by HOSTNAME: a literal private/loopback/link-local/metadata IP is still denied at the literal-IP guard, **in every literal spelling that guard parses** (see below).
+    - and (3) the destination is named by HOSTNAME: a literal private/loopback/link-local/metadata IP is still denied at the literal-IP guard, **in every literal spelling** (see below).
   - Only the PIN is deferred, to the operator's own corp proxy; §4.2 states the two residuals that deferral leaves.
   - That literal-IP guard covers the NON-CANONICAL spellings too:
     - `net.ParseIP` accepts only the canonical dotted-quad, while `inet_aton(3)` — and so glibc `getaddrinfo`, and so the corp proxy that finally dials — also reads `127.1`, `0x7f000001` and `2130706433` as `127.0.0.1`, and `0251.0376.0.1` as
@@ -3609,13 +3609,18 @@ Claude sign-in's token, each the person's own on their model provider.
     - So the zone id alone used to decide the verdict for an address whose canonical spelling is denied.
   - `evaluate` step 0 and `egressTarget`'s upstream branch both re-run the block check on all of these (`nonCanonicalLiteralIP`, [`internal/egress/proxy/literal_ip_guard.go`](../internal/egress/proxy/literal_ip_guard.go)).
   - Deny only: such a spelling inherits no `allowed_domains` grant, and is refused wherever its address is denied: `denied_domains`, a live egress edit, a Kubernetes runner's hard deny.
+  - Every other non-standard spelling is refused at step 0 on every run (`builtin:ip-spelling`): an all-numeric host or a zoned IPv6 address.
+    - Programs differ on which address such a spelling names (`010.0.0.1` is `8.0.0.1` to `inet_aton` and `10.0.0.1` to a decimal parser), so no check of one decoded address binds the hop that dials it.
+    - An all-numeric one in a policy entry, host rule, MCP server URL or live egress edit is refused at write, and a stored one stops the run at proxy load.
+  - So is every host with a character outside ASCII (`builtin:non-ascii-host`).
+    - One program maps `８.８.８.８` or a full-width `example.com` to the address or name a policy lists, and the next to another or to nothing.
   - A third EMBEDDED-v4 shape is covered on the canonical path rather than by that gap-filler:
     - the deprecated IPv4-compatible IPv6 form (`::127.0.0.1`, `::169.254.169.254`, RFC 4291 §2.5.5.1) is one `net.ParseIP` DOES parse,
     - and it carries a real IPv4 in its low 32 bits that `To4()` cannot see (`To4` unwraps only `::ffff:/96`), so every stdlib predicate answered false for it.
   - It is denied by `isBlockedIP`'s IPv4-compatible arm (`v4CompatibleEmbeddedV4`, [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)), which re-runs the embedded address through the same check the NAT64 arm beside it uses.
     - So the form is bound at `evaluate` step 0 AND in `VetHost` (whose literal fast path calls that same predicate), not by one instead of the other.
   - Only the embedded address decides: `::8.8.8.8` stays reachable, so the arm can only add the denials the canonical spelling already gets.
-  - **Residual, stated rather than hedged:** the guard covers the spellings it PARSES and the embedded-v4 prefixes it KNOWS.
+  - **Residual, stated rather than hedged:** the guard refuses every ASCII spelling it cannot read as one standard address, and every non-ASCII host, but it knows only the embedded-v4 prefixes below.
   - A NETWORK-SPECIFIC RFC 6052 NAT64 prefix is unknowable here without operator config (`ipguard.NAT64Prefixes` carries the well-known `64:ff9b::/96` and local-use `64:ff9b:1::/48` only), so an address inside a site's own translation prefix is judged on its IPv6 form alone.
     - Under a corp upstream that is left to the operator's own egress controls, like any other name only that proxy resolves.
 - The optional **sidecar** (`detector_sidecar_url`) treats an error/timeout/non-200 as a scanner error like the in-process detectors.

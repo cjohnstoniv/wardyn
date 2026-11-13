@@ -66,7 +66,7 @@ type localModel struct {
 }
 
 func localModelKey(host string, port int) string {
-	return strings.TrimSuffix(strings.ToLower(host), ".") + "\x00" + strconv.Itoa(port)
+	return hostKey(host) + "\x00" + strconv.Itoa(port)
 }
 
 // compileLocalModels keys each entry by its base URL's host and port, the

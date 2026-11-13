@@ -79,11 +79,11 @@ func TestNumericAliasOfADeniedAddressNeverReachesTheCorpProxy(t *testing.T) {
 					t.Fatalf("the corp proxy was handed %q for %s, an alias of a denied address", got, host)
 				}
 			}
-			// Control: an alias of an address nothing denies is still chained, so the empty snapshot
-			// above means refused, not unseen.
-			conn, status := connectThrough(t, srv.URL, "0x8080404:443")
+			// Control: an address nothing denies is still chained, so the empty snapshot above means
+			// refused, not unseen. (Step 0 now refuses every alias whatever it decodes to.)
+			conn, status := connectThrough(t, srv.URL, "8.8.4.4:443")
 			_ = conn.Close()
-			if got, _ := f.snapshot(); !strings.Contains(status, "200") || got != "CONNECT 0x8080404:443" {
+			if got, _ := f.snapshot(); !strings.Contains(status, "200") || got != "CONNECT 8.8.4.4:443" {
 				t.Fatalf("control: status %q, corp proxy saw %q", status, got)
 			}
 		})

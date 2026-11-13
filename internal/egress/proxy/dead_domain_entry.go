@@ -22,6 +22,9 @@ const deadDomainEntryWarning = "wardyn-proxy: policy entry can never match any r
 //
 // Warn, never fail: refusing the run would take every sandbox down on upgrade
 // day over an entry already inert, a worse outcome than the deny it reports.
+// An address in a non-standard spelling is the exception, refused before this
+// runs (refuseIPSpellingEntries, at config load): step 0 refuses every request
+// in that spelling, so it reads as a deny of the address and binds nothing.
 func warnDeadDomainEntries(ctx context.Context, spec types.RunPolicySpec) {
 	for _, l := range []struct {
 		field   string

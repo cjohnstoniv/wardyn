@@ -475,8 +475,11 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	res, err := gitpack.Inspect(buf)
 	if errors.Is(err, gitpack.ErrTooLarge) {
 		remedy := "push fewer commits at a time"
-		if errors.Is(err, gitpack.ErrTooDeep) {
+		switch {
+		case errors.Is(err, gitpack.ErrTooDeep):
 			remedy = "push a tree with fewer levels of nested directories"
+		case errors.Is(err, gitpack.ErrTooManyParents):
+			remedy = "merge fewer branches in one commit"
 		}
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+"\n"+remedy)

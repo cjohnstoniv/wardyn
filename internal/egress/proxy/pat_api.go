@@ -159,7 +159,7 @@ func bitbucketCheck(row patAPIRow, _ []patAPISeg, repo string, f *patAPIFields) 
 }
 
 // patAPIHost is the grant's host, normalised as the proxy keys every lookup.
-func patAPIHost(host string) string { return strings.ToLower(strings.TrimSuffix(host, ".")) }
+func patAPIHost(host string) string { return hostKey(host) }
 
 // isPATAPIHost reports whether host carries a git_pat grant with api: true.
 func (p *Proxy) isPATAPIHost(host string) bool {

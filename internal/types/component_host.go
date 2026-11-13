@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -102,6 +103,12 @@ func refuseAddressLiteral(d Destination) error {
 		return errors.New("must be a DNS name, not an IP address (a name ending in a number reads as one)")
 	}
 	return nil
+}
+
+// numericHost reports whether a resolver may read every label of h as a number: an address when
+// net.ParseIP reads it, else one in a spelling the proxy refuses in a request (builtin:ip-spelling).
+func numericHost(h string) bool {
+	return !slices.ContainsFunc(strings.Split(h, "."), func(l string) bool { return !numericLabel(l) })
 }
 
 // numericLabel reports whether a resolver may read s as a number: decimal
