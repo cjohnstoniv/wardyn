@@ -324,13 +324,32 @@ func jobByKey(jobs []store.DeprovisionJob, step, target string) (store.Deprovisi
 // errDeprovisionIncomplete with whatever is left pending on the ledger. A suspension whose ledger is
 // already done writes nothing new, so an identity provider that repeats the request costs nothing.
 func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID, slot string) error {
+	return s.runSuspension(ctx, st, id, slot, nil)
+}
+
+// resumeSuspension is the sweeper's recovery of a suspension it listed (store.PendingLeavers). It goes on only
+// while the identity is still deactivated at the instant it was listed with: a reactivation that commits in
+// between stands, and a person suspended again since is that suspension's own work.
+func (s *Server) resumeSuspension(ctx context.Context, st scimStore, p store.PendingLeaver) error {
+	if p.DeactivatedAt == nil {
+		return nil
+	}
+	return s.runSuspension(ctx, st, p.ID, scimSweeperSlot, p.DeactivatedAt)
+}
+
+// runSuspension is suspendIdentity, and with resumeOf (the deactivated_at a sweeper's resume was listed with)
+// resumeSuspension: a resume whose identity no longer has it does nothing (store.ErrSuperseded).
+func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, slot string, resumeOf *time.Time) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	ident, forms, keys, err := s.suspendStepOne(ctx, st, id)
+	ident, forms, keys, err := s.suspendStepOne(ctx, st, id, resumeOf)
 	// A sign-in that bound the row after it was read is seen under the suspension's lock: read it again, so
 	// the newly bound principal is cut, swept and has its runs killed. A binding never changes once made,
 	// so the second plan is the last one.
 	if errors.Is(err, store.ErrIdentityRebound) {
-		ident, forms, keys, err = s.suspendStepOne(ctx, st, id)
+		ident, forms, keys, err = s.suspendStepOne(ctx, st, id, resumeOf)
+	}
+	if errors.Is(err, store.ErrSuperseded) {
+		return nil
 	}
 	if err != nil {
 		return err
@@ -354,11 +373,15 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 }
 
 // suspendStepOne reads the identity and its forms and, unless a finished suspension already covers it,
-// runs step 1 with them. It returns what steps 2 and 3 run under.
-func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID) (store.PrincipalIdentity, leaverForms, []store.JobKey, error) {
+// runs step 1 with them. It returns what steps 2 and 3 run under. With resumeOf it is store.ErrSuperseded,
+// and nothing is written, once the identity is no longer deactivated at that instant.
+func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID, resumeOf *time.Time) (store.PrincipalIdentity, leaverForms, []store.JobKey, error) {
 	ident, err := st.GetIdentity(ctx, id)
 	if err != nil {
 		return ident, leaverForms{}, nil, err
+	}
+	if resumeOf != nil && (ident.DeactivatedAt == nil || !ident.DeactivatedAt.Equal(*resumeOf)) {
+		return ident, leaverForms{}, nil, store.ErrSuperseded
 	}
 	forms, err := s.leaverForms(ctx, st, ident)
 	if err != nil && forms.refusal == "" {
@@ -403,7 +426,8 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 		if stepOne {
 			// The owed row rides in the cut's own transaction: if the owe above failed, the marker that makes a
 			// retry treat the refusal as recorded is never stored without the obligation to write it.
-			plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: proven, CutoffSubs: proven, Partial: forms.refusal}
+			plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: proven, CutoffSubs: proven, Partial: forms.refusal,
+				ResumeOf: resumeOf}
 			if owed != "" {
 				plan.OwedAudit = []store.JobKey{{Step: owed}}
 			}
@@ -419,7 +443,7 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 	if stepOne {
 		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
 		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, PurgePrincipals: forms.destructive().bound,
-			CutoffSubs: forms.cutTargets(), PendingJobs: keys}
+			CutoffSubs: forms.cutTargets(), PendingJobs: keys, ResumeOf: resumeOf}
 		if s.cfg.SCIM != nil {
 			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
 		}

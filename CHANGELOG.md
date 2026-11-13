@@ -21,6 +21,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
 
+### Security
+
+- A person removed from a group in the identity provider could keep an API token holding that group if they minted it, or claimed it from an invitation, while the removal ran; that mint or claim is now refused. When the person was added back and removed again while an earlier removal was still finishing, the earlier removal could mark the later one done before it revoked anything; each removal now finishes only its own steps. A person reactivated while the leaver sweeper was resuming their earlier suspension now stays active; before, the sweeper suspended them again, revoked their tokens, ended their runs and scheduled their purge.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

@@ -29,8 +29,9 @@ var ErrIdentityPurged = errors.New("store: identity purged")
 var ErrIdentityBindingMismatch = errors.New("store: identity bound to another principal")
 
 // ErrSuperseded is a write bound to one occurrence of leaver work that found a newer one in its place: a
-// ledger write naming its row's id (JobKey.ID) whose row a reopened group removal replaced. Nothing is
-// written.
+// ledger write naming its row's id (JobKey.ID) whose row a reopened group removal replaced, or a sweeper's
+// resumed suspension (SuspendPlan.ResumeOf) of an identity reactivated or suspended again since. Nothing
+// is written.
 var ErrSuperseded = errors.New("store: a newer occurrence replaced the one this write was bound to")
 
 // Job kinds and the one step name every kind shares.
@@ -80,6 +81,10 @@ type SuspendPlan struct {
 	// OwedAudit are refusal-audit ledger rows (JobStepRefusalAudit) written pending in the same transaction,
 	// reopened if they exist, so the cut never commits without the obligation to write its refusal row.
 	OwedAudit []JobKey
+	// ResumeOf is set by the sweeper's resume of a suspension it selected: the deactivated_at the identity
+	// row had then. Step 1 runs only while the row still has it; a row reactivated since (none) or suspended
+	// again (another) is ErrSuperseded, so an old resume never deactivates a reactivated person again.
+	ResumeOf *time.Time
 }
 
 // SuspendResult is step 1's outcome. WasActive says the identity was active before it, so this
@@ -365,7 +370,7 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		purgeAfter = 0
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT id, deactivated_at IS NULL, COALESCE(principal, '') FROM principal_identities
+		SELECT id, deactivated_at, COALESCE(principal, '') FROM principal_identities
 		 WHERE id = $1 OR principal = ANY($2::text[]) ORDER BY id FOR UPDATE`, p.IdentityID, principals)
 	if err != nil {
 		return SuspendResult{}, fmt.Errorf("store: lock identities: %w", err)
@@ -374,17 +379,21 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	found := false
 	for rows.Next() {
 		var id uuid.UUID
-		var active bool
+		var deactivated *time.Time
 		var bound string
-		if err = rows.Scan(&id, &active, &bound); err != nil {
+		if err = rows.Scan(&id, &deactivated, &bound); err != nil {
 			rows.Close()
 			return SuspendResult{}, fmt.Errorf("store: lock identities: %w", err)
 		}
 		if id == p.IdentityID {
-			found, res.WasActive = true, active
+			found, res.WasActive = true, deactivated == nil
 			if bound != p.Principal {
 				rows.Close()
 				return SuspendResult{}, ErrIdentityRebound
+			}
+			if p.ResumeOf != nil && (deactivated == nil || !deactivated.Equal(*p.ResumeOf)) {
+				rows.Close()
+				return SuspendResult{}, ErrSuperseded
 			}
 		}
 	}
