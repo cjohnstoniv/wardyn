@@ -199,4 +199,39 @@ describe("the provider editor's Available to", () => {
     ]);
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("is read-only through both writes of a new provider, so a refused list leaves what was typed", async () => {
+    let saved!: () => void;
+    putMock.mockImplementation((doc: { providers: ModelProvider[] }) => new Promise((done) => (saved = () => done({ providers: doc, etag: '"e2"' }))));
+    let refuse!: (e: unknown) => void;
+    upsertGrantMock.mockImplementation(() => new Promise((_, no) => (refuse = no)));
+    getAvailabilityMock.mockResolvedValue({ kind: "model_provider", value: "bloomberg-gateway", restricted: false, allowed_by: [] });
+    renderEditor(null);
+    await userEvent.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
+    const d = screen.getByRole("dialog");
+    await userEvent.clear(within(d).getByLabelText(E.NAME));
+    await userEvent.type(within(d).getByLabelText(E.NAME), "Bloomberg gateway");
+    await userEvent.click(within(d).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(d).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
+    await userEvent.click(within(d).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await userEvent.click(within(d).getByRole("button", { name: E.SAVE }));
+
+    // The provider write is out.
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(within(d).getByLabelText(E.NAME)).toBeDisabled();
+    saved();
+    // The list write is out: the provider write has answered, and the form is still read-only.
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
+    expect(within(d).getByLabelText(E.NAME)).toBeDisabled();
+    expect(within(d).getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeDisabled();
+    expect(within(d).getByRole("button", { name: E.SAVE })).toBeDisabled();
+    await userEvent.click(within(d).getByRole("button", { name: E.SAVE }));
+    expect(putMock).toHaveBeenCalledTimes(1);
+
+    refuse(new HttpError(400, UNKNOWN_TYPE));
+    expect(await within(d).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
+    expect(within(d).getByLabelText(E.NAME)).toBeEnabled();
+    expect(within(d).getByLabelText(E.NAME)).toHaveValue("Bloomberg gateway");
+    expect(within(d).getByRole("button", { name: E.SAVE })).toBeEnabled();
+  });
 });

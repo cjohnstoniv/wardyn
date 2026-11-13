@@ -73,17 +73,24 @@ export function ProfileReview({
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saveOpen, setSaveOpen] = React.useState(false);
 
+  // This sheet stays mounted while the run it shows changes. Only the newest synthesis may land: a slower answer for
+  // the run shown before would replace the proposal under review, and with it the policy Save policy creates.
+  const asked = React.useRef(0);
   const load = React.useCallback(() => {
     if (!runId) return;
+    const mine = ++asked.current;
     setStatus("loading");
     setProposal(null);
     runsApi
       .profileRun(runId)
       .then((p) => {
+        if (mine !== asked.current) return;
         setProposal(p);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch(() => {
+        if (mine === asked.current) setStatus("error");
+      });
   }, [runId]);
 
   React.useEffect(() => {

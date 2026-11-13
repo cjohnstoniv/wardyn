@@ -215,6 +215,9 @@ export function ProfileEditor({
   // Narrow is on for the models and the box is empty: there is nothing to save for it.
   const narrowedModels = overlayLimits[ALLOWED_MODELS_KEY];
   const narrowsToNothing = composed && Array.isArray(narrowedModels) && narrowedModels.length === 0;
+  // The Deciders section saves on its own, and this editor closes on its own save: Save waits until those rules are
+  // saved or discarded, and the section is read-only while this save is out.
+  const [decidersDirty, setDecidersDirty] = React.useState(false);
 
   const save = async () => {
     const parsed = ceiling;
@@ -612,7 +615,7 @@ export function ProfileEditor({
       {/* Read-only, as of the last save: a composed profile's binding policy is its base, narrowed. */}
       {profile?.overlay && composed && <EffectiveView profile={profile} />}
 
-      <UnitDeciders profile={profile} profiles={profiles} deciders={deciders} supported={decidersSupported} unitNames={unitNames} disabled={readOnly} onChanged={onDecidersChanged} />
+      <UnitDeciders profile={profile} profiles={profiles} deciders={deciders} supported={decidersSupported} unitNames={unitNames} disabled={readOnly} onChanged={onDecidersChanged} profileSaving={saving} onDirtyChange={setDecidersDirty} />
       <section id="governance-section-contact" className="mt-6 scroll-mt-4" data-testid="governance-profile-contact">
         <h4 className="text-body font-medium text-foreground">{GOV.CONTACT_TITLE}</h4>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{GOV.CONTACT_LEAD}</p>
@@ -683,7 +686,7 @@ export function ProfileEditor({
         onCancel={onCancel}
         onSave={save}
         saving={saving}
-        saveDisabled={disabled || !name.trim() || ceiling?.ok === false || narrowsToNothing}
+        saveDisabled={disabled || decidersDirty || !name.trim() || ceiling?.ok === false || narrowsToNothing}
         saveLabel={GOV.SAVE}
         cancelLabel={PEOPLE.CANCEL}
       />

@@ -415,10 +415,20 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       }),
     [],
   );
-  const fetchElevation = React.useCallback(
-    () => elevationApi.list().then(setElevation),
-    [],
-  );
+  // Every caller (mount, poll, a withdraw's reload) bumps this; only the newest read may land, so a slower read that
+  // still saw a request pending cannot put it back after the reload that shows it withdrawn.
+  const elevationRead = React.useRef(0);
+  const fetchElevation = React.useCallback(() => {
+    const read = ++elevationRead.current;
+    return elevationApi.list().then(
+      (list) => {
+        if (read === elevationRead.current) setElevation(list);
+      },
+      (e: unknown) => {
+        if (read === elevationRead.current) throw e;
+      },
+    );
+  }, []);
   const fetchDecided = React.useCallback(() => {
     return Promise.all([
       api.listApprovals("APPROVED", "", view),
@@ -537,8 +547,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // precedent); paused only while the foreground load is in flight, so a
   // tick during the error state can still recover it.
   const POLL_MS = 10_000;
+  // The chain is returned, so a tick waits for the read still out instead of starting one that supersedes it.
   usePoll(() => {
-    fetchAll()
+    return fetchAll()
       .then(() => {
         setStatus("ready");
         onChanged?.();

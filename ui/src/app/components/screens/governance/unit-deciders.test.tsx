@@ -24,7 +24,7 @@ vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unkno
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { DeciderRule, GovernanceDeciders } from "../../../lib/api/deciders";
-import type { GovernanceUnit } from "../../../lib/api/governance";
+import { governance, type GovernanceUnit } from "../../../lib/api/governance";
 import { CHANGES, GOVERNANCE as GOV, RUN_LIMITS as RL } from "../../../lib/governance-copy";
 import { aheadByHours } from "../../../lib/test-clock";
 import { baseStatus } from "../../../lib/test-fixtures";
@@ -458,5 +458,45 @@ describe("ProfileEditor: the Deciders section", () => {
     const href = links[labels.indexOf(DECIDERS.TITLE)].getAttribute("href")!.slice(1);
     expect(href).toBe("governance-section-deciders");
     expect(document.getElementById(href)).not.toBeNull();
+  });
+
+  // The profile's Save closes the editor, and the Deciders section saves on its own route.
+  const editor = () =>
+    render(
+      <ProfileEditor profile={P} profiles={[P]} disabled={false} onCancel={vi.fn()} onSaved={vi.fn()} onSubmitted={vi.fn()} deciders={[ownEntry(FOUR)]} decidersSupported unitNames={{ p1: "Payments" }} onDecidersChanged={vi.fn()} />,
+    );
+  const section = () => within(screen.getByTestId("governance-profile-deciders"));
+
+  it("holds Save profile while the deciders draft has a change not saved, until it is saved or discarded", async () => {
+    editor();
+    expect(button(GOV.SAVE)).toBeEnabled();
+    await userEvent.click(section().getAllByRole("button", { name: DECIDERS.REMOVE })[0]);
+    expect(button(GOV.SAVE)).toBeDisabled();
+    await userEvent.click(section().getByRole("button", { name: DECIDERS.DISCARD }));
+    expect(button(GOV.SAVE)).toBeEnabled();
+  });
+
+  it("does not hold Save profile for a deciders change the server held for a second person", async () => {
+    putMock.mockRejectedValue(new PendingChangeError({ id: "ch1" } as never));
+    editor();
+    await userEvent.click(section().getAllByRole("button", { name: DECIDERS.REMOVE })[0]);
+    await userEvent.click(section().getByRole("button", { name: DECIDERS.SAVE }));
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(button(GOV.SAVE)).toBeEnabled();
+    // A rule changed after that was not sent.
+    await userEvent.click(section().getAllByRole("button", { name: DECIDERS.REMOVE })[0]);
+    expect(button(GOV.SAVE)).toBeDisabled();
+  });
+
+  it("keeps the deciders read-only while the profile save is out, the open rule's unit picker too", async () => {
+    const update = vi.spyOn(governance, "updateProfile").mockReturnValue(new Promise(() => {}));
+    editor();
+    await userEvent.click(section().getAllByRole("button", { name: DECIDERS.EDIT })[3]);
+    await userEvent.click(button(GOV.SAVE));
+    expect(update).toHaveBeenCalledTimes(1);
+    for (const remove of section().getAllByRole("button", { name: DECIDERS.REMOVE })) expect(remove).toBeDisabled();
+    await userEvent.click(within(editorBox(3)).getByRole("combobox", { name: RL.UNIT_PICKER_LABEL(DECIDERS.ELEV_MAX_LABEL) }));
+    expect(screen.queryByRole("option")).toBeNull();
+    update.mockRestore();
   });
 });

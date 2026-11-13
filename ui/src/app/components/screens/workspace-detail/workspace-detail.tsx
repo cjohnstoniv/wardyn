@@ -118,7 +118,9 @@ export function WorkspaceDetailScreen() {
       if (!id) return;
       const requestId = ++loadRequestId.current;
       if (foreground) setStatus("loading");
-      workspacesApi
+      // Returned so the poll waits for it: each read discards the one before, so reads that overlap because the
+      // server answers slower than the interval would all be discarded and the page would never update.
+      return workspacesApi
         .getWorkspace(id)
         .then((w) => {
           if (loadRequestId.current !== requestId) return;
@@ -139,7 +141,7 @@ export function WorkspaceDetailScreen() {
   React.useEffect(() => {
     setWs(undefined);
     setStatus("loading");
-    load(true);
+    void load(true);
   }, [id, load]);
 
   React.useEffect(() => {
@@ -184,7 +186,7 @@ export function WorkspaceDetailScreen() {
     try {
       await workspacesApi.buildWorkspace(ws.id);
       toast.success(`Rebuild started for "${ws.name}"`);
-      load(false);
+      void load(false);
     } catch (e) {
       toast.error("Failed to start the rebuild", { description: getErrorMessage(e) });
     } finally {
@@ -222,7 +224,7 @@ export function WorkspaceDetailScreen() {
       } else {
         setRecordLaunch({ warnings: r.warnings, confinementClass: r.confinement_class });
       }
-      load(false);
+      void load(false);
     } catch (e) {
       toast.error(confined ? "Confined replay failed to start" : "Recording failed to start", {
         description: getErrorMessage(e),
@@ -239,7 +241,7 @@ export function WorkspaceDetailScreen() {
   const doneRecording = async (runId: string) => {
     try {
       await runsApi.killRun(runId);
-      load(false);
+      void load(false);
     } catch (e) {
       toast.error("Failed to stop the session", { description: getErrorMessage(e) });
     }

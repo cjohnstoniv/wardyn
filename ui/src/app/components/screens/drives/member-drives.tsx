@@ -56,6 +56,9 @@ export function MemberDrives() {
   const [total, setTotal] = React.useState(0);
   const [status, setStatus] = React.useState<"loading" | "ready" | "error" | "hidden">("loading");
   const [more, setMore] = React.useState(false);
+  // Each first page starts a new list. A later page still out for the list it replaced is dropped, and a later page
+  // joins only rows of the length it was asked after: either would show a row twice and then skip one.
+  const listGen = React.useRef(0);
   const [macs, setMacs] = React.useState<Record<string, string>>({});
   const [toDelete, setToDelete] = React.useState<MemberDriveAdminItem | null>(null);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
@@ -63,17 +66,23 @@ export function MemberDrives() {
 
   // The first page replaces what is shown (after a delete the list is read again from the top); a later page adds to it.
   const load = React.useCallback((offset: number) => {
+    const gen = offset > 0 ? listGen.current : ++listGen.current;
     setMore(offset > 0);
     return Promise.resolve()
       .then(() => api.listMemberDrives(offset))
       .then((page) => {
-        setRows((prev) => (offset > 0 ? [...prev, ...page.drives] : page.drives));
+        if (gen !== listGen.current) return;
+        setRows((prev) => (offset === 0 ? page.drives : prev.length === offset ? [...prev, ...page.drives] : prev));
         setTotal(page.total);
         setStatus("ready");
       })
       // A security admin reads this screen but not this list: the tier's answer is a section that is not there, not an error.
-      .catch((e) => setStatus(e instanceof HttpError && e.status === 403 ? "hidden" : "error"))
-      .finally(() => setMore(false));
+      .catch((e) => {
+        if (gen === listGen.current) setStatus(e instanceof HttpError && e.status === 403 ? "hidden" : "error");
+      })
+      .finally(() => {
+        if (gen === listGen.current) setMore(false);
+      });
   }, []);
   React.useEffect(() => {
     void load(0);

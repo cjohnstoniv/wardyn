@@ -90,6 +90,8 @@ export function UnitDeciders({
   unitNames = {},
   disabled,
   onChanged = () => {},
+  profileSaving = false,
+  onDirtyChange,
 }: {
   /** The profile being edited, or null for one not saved yet. */
   profile: GovernanceUnit | null;
@@ -101,6 +103,10 @@ export function UnitDeciders({
   disabled: boolean;
   /** The save landed or was held: the screen reloads its snapshot. A returned promise settles when that reload has landed. */
   onChanged?: () => void | Promise<unknown>;
+  /** The profile's own save is out; its answer closes the editor, so the section is read-only meanwhile. */
+  profileSaving?: boolean;
+  /** Whether the draft holds rules not saved here: the profile's Save closes the editor and would drop them. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const entry = profile ? deciders.find((d) => d.unit_id === profile.id) : undefined;
   const stored = entry?.rules ?? [];
@@ -109,6 +115,7 @@ export function UnitDeciders({
   const [editing, setEditing] = React.useState<number | null>(null);
   const [refusal, setRefusal] = React.useState<Refusal | null>(null);
   const [held, setHeld] = React.useState(false);
+  const heldDraft = React.useRef("");
   const [saving, setSaving] = React.useState(false);
   // A reload that brings different stored rules starts the draft over from them.
   React.useEffect(() => {
@@ -120,6 +127,13 @@ export function UnitDeciders({
 
   const dirty = JSON.stringify(draft) !== storedKey;
   useUnsavedGuard("unit-deciders", dirty, () => JSON.stringify(draft));
+  // A draft the server held for a second person is already sent: closing the editor loses nothing, unless it was
+  // edited since.
+  const unsent = dirty && !(held && JSON.stringify(draft) === heldDraft.current);
+  React.useEffect(() => {
+    onDirtyChange?.(unsent);
+  }, [unsent, onDirtyChange]);
+  const frozen = saving || profileSaving;
 
   const locker = profile ? lockedBy(profile, profiles) : null;
   const canEdit = supported && profile !== null && !disabled && !locker;
@@ -154,6 +168,7 @@ export function UnitDeciders({
       await onChanged();
     } catch (e) {
       if (e instanceof PendingChangeError) {
+        heldDraft.current = JSON.stringify(draft);
         setHeld(true);
         void onChanged();
       } else if (e instanceof HttpError) {
@@ -224,7 +239,7 @@ export function UnitDeciders({
         <>
           {/* Read-only while the save is in flight: the reload after it puts the stored rules back in the draft, so an
               edit made meanwhile would be dropped. */}
-          <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
+          <fieldset disabled={frozen} className="m-0 min-w-0 border-0 p-0">
             {showEmpty ? (
               <div className="mt-3">
                 <EmptyState
@@ -253,7 +268,7 @@ export function UnitDeciders({
                           rule={rule}
                           draft={draft}
                           refusal={refusal?.index === i ? <RefusalNote body={refusal.body} mono={refusal.mono} /> : undefined}
-                          disabled={saving}
+                          disabled={frozen}
                           onChange={(next) => setDraft(draft.map((r, j) => (j === i ? next : r)))}
                           onDone={() => setEditing(null)}
                           onRemove={() => {
