@@ -43,7 +43,12 @@ const rewrapActor = "wardyn/rewrap"
 //
 // Safe beside a serving daemon configured the same way: it reads a row under
 // both the old and the new KEK, and reads the boot keys only at boot. While
-// it runs, a write to an existing secret waits for its commit.
+// it runs, a write to an existing secret waits for its commit. Its retirement
+// step holds only for a run started once every wardynd process that was
+// running when the key's latest version was made has exited: a Put seals its
+// row before it writes it, with no check of the key version at the write, so a
+// write sealed before then can land under an older version after this run
+// (retireStep says so).
 func rewrapMode(f *bootFlags) error {
 	if strings.TrimSpace(*f.dsn) == "" {
 		return fmt.Errorf("refusing to rewrap: -rewrap needs the secret store's database; set WARDYN_PG_DSN")
@@ -172,12 +177,15 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 }
 
 // retireStep names the key service id at version v, and what retires every
-// other version at that service.
+// other version at that service, once no replica that sealed a row before v
+// was made is still running.
 func retireStep(id, v string) string {
 	if strings.HasPrefix(id, kek.AzureKeyIDPrefix) {
-		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every OLDER version of both keys in Key Vault (never a newer one) now retires them", id, v)
+		return fmt.Sprintf("%s at versions %s (wrapping/signing); if every wardynd process that was running when those versions were made had exited before this run started, "+
+			"disabling every OLDER version of both keys in Key Vault (never a newer one) now retires them", id, v)
 	}
-	return fmt.Sprintf("%s version %s; raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v)
+	return fmt.Sprintf("%s version %s; if every wardynd process that was running when version %s was made had exited before this run started, "+
+		"raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v, v)
 }
 
 // failureReason is a maintenance mode's audit reason for a failed run: unknown

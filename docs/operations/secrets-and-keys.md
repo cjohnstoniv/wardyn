@@ -468,16 +468,23 @@ The two `auth/token/` paths are the client's own token upkeep (`token-file` auth
 
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep `WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and run `wardynd -rewrap` again.
 
-**Rotating the Transit key.** Rotate in Vault, rewrap, then retire the old versions:
+**Rotating the Transit key.** Rotate in Vault, restart, rewrap, then retire the old versions:
 
-1. ```sh
+1. Rotate the key:
+   ```sh
    vault write -f transit/keys/wardyn/rotate
+   ```
+2. Restart every replica, and wait until every old wardynd process has exited. Until then, a write that sealed its row before the rotation can land under the older version, even after a `-rewrap` printed its retirement step.
+3. Rewrap:
+   ```sh
    wardynd -rewrap
    ```
-   Expected output: `every sealed secret and principal key is wrapped under
-   transit:transit/wardyn version 2; raising the Transit key's
-   min_decryption_version to 2 now retires the older versions`
-2. ```sh
+   Expected output:
+   ```
+   every sealed secret and principal key is wrapped under transit:transit/wardyn version 2; if every wardynd process that was running when version 2 was made had exited before this run started, raising the Transit key's min_decryption_version to 2 now retires the older versions
+   ```
+4. Retire the older versions:
+   ```sh
    vault write transit/keys/wardyn/config min_decryption_version=2
    ```
 
@@ -558,10 +565,11 @@ Set the versionless ids, `https://<vault>.vault.azure.net/keys/wardyn-kek` and `
 **Rotating either key.**
 
 1. `az keyvault key rotate --vault-name <vault> --name wardyn-kek` (or `wardyn-kek-sig`). New writes name the new version at once, with no restart.
-2. Run `wardynd -rewrap`. Every row not at the latest versions is unwrapped and wrapped again, bound to its row.
-3. Run `wardynd -rewrap` again. **It must report 0 rows.** A write, or an automatic rotation, during step 2 can leave a row on an older version. When a rotation lands mid-run, the command says so and prints no retirement step. Repeat until it reports 0.
-4. Disable every older version of both keys: `az keyvault key set-attributes --vault-name <vault> --name <key> --version <v> --enabled false`.
-5. Restart every replica, so none keeps an older signing version cached.
+2. Restart every replica, and wait until every old wardynd process has exited. Until then, a write that sealed its row before step 1 can land under the older version, even after a run reported 0.
+3. Run `wardynd -rewrap`. Every row not at the latest versions is unwrapped and wrapped again, bound to its row.
+4. Run `wardynd -rewrap` again. **It must report 0 rows.** A write, or an automatic rotation, during step 3 can leave a row on an older version. When a rotation lands mid-run, the command says so and prints no retirement step. Repeat until it reports 0.
+5. Disable every older version of both keys: `az keyvault key set-attributes --vault-name <vault> --name <key> --version <v> --enabled false`.
+6. Restart every replica, so none keeps an older signing version cached.
 
 A row still wrapped under a disabled wrapping version is refused, naming the row, until that version is enabled again.
 
@@ -860,11 +868,12 @@ A background write by someone who has not signed in since a group changed (a tok
 
 **Rotating one domain's key.** `wardynd -rewrap` and `-rotate-age-key` read `WARDYN_KEY_DOMAINS_FILE` and build every domain's key.
 
-- Rotate domain A's key at its service, then run `wardynd -rewrap`: it moves only A's principal keys onto A's latest version and leaves B's `domain`, `kek_id` and bytes as they were.
+- Rotate domain A's key at its service. Then restart every replica, and wait until every old wardynd process has exited. Until then, a write that sealed a principal key or a row before the rotation can land under the older version, even after a run.
+- Then run `wardynd -rewrap`: it moves only A's principal keys onto A's latest version and leaves B's `domain`, `kek_id` and bytes as they were.
 - It prints a retirable version per domain, and the `secret.rewrap` row carries them as `domain_key_versions`:
 
 ```
-every principal key in key domain "acme" is wrapped under transit:transit/acme-keys version 2; raising the Transit key's min_decryption_version to 2 now retires the older versions
+every principal key in key domain "acme" is wrapped under transit:transit/acme-keys version 2; if every wardynd process that was running when version 2 was made had exited before this run started, raising the Transit key's min_decryption_version to 2 now retires the older versions
 ```
 
 A principal key never leaves its domain in a rewrap, and a live key naming an undeclared domain refuses the rewrap with nothing changed.
