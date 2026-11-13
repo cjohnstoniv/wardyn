@@ -92,6 +92,8 @@ func run(out, plist string) error {
 		TrustRunCA: keychain.TrustRunCA,
 		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID), Probe: guestagent.ShareProbe{Cred: cred}.Read}.Mount,
 		Disk:       guestagent.MacDisks{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Attach,
+		EndAgent:   guestagent.AgentProcesses{Run: runner, UID: ids.UID}.End,
+		Guest:      ctx,
 	}
 	srv.ScreenLockOff = guestagent.ScreenLock{Run: runner, Stdin: runner, Console: guestagent.ConsoleOwner{}}.Off
 	srv.Scrub, srv.RecordMCPTables = scrub.Scrub, scrub.RecordMCPTables

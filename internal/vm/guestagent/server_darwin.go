@@ -62,6 +62,13 @@ type Server struct {
 	// Scrub removes what a run wrote (MacScrub.Scrub), at POST /v1/scrub; nil answers that request
 	// 501 (tests only).
 	Scrub func(ctx context.Context, when string) ScrubReport
+	// EndAgent ends every process of the agent account, its desktop session included (AgentProcesses.End),
+	// and says how many were running; the stop scrub runs it before and after Scrub (stopScrub). nil ends
+	// none, and the stop scrub then reports failed.
+	EndAgent func(ctx context.Context) (int, error)
+	// Guest is the guest agent's own context, which ends when the guest goes down. After a stop scrub the
+	// agent account is kept ended until then (keepEnded); nil keeps nothing ended (tests only).
+	Guest context.Context
 	// RecordMCPTables records Init's Codex MCP table names for a later scrub
 	// (MacScrub.RecordMCPTables); nil records none (tests only). It never fails the Init.
 	RecordMCPTables func(env ...map[string]string) error
@@ -87,6 +94,7 @@ type Server struct {
 	starts startFence
 	// stopCtx ends with the stop scrub, so the GUI settings step does not outlive the run's settings.
 	stopOnce   sync.Once
+	keepOnce   sync.Once
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 }
@@ -289,7 +297,14 @@ func (s *Server) handleScrub(w http.ResponseWriter, r *http.Request) {
 	s.starts.close(errStopping)
 	s.sessionCtx()
 	s.stopCancel()
-	writeJSON(w, s.Scrub(r.Context(), ScrubAtStop))
+	// A program of the run already running, in an exec or on the desktop, could write back what the scrub
+	// removes: the account is ended first, and the scrub is done only when none of it ran at its end.
+	rep := stopScrub(r.Context(), s.EndAgent, s.Scrub)
+	// What starts as the agent account after this answer would run until the power-off.
+	if s.Guest != nil && s.EndAgent != nil {
+		s.keepOnce.Do(func() { go keepEnded(s.Guest, s.EndAgent) })
+	}
+	writeJSON(w, rep)
 }
 
 // buildCA writes MacCAFullPath from the system roots and the CA Init has just written.

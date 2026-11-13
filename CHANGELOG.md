@@ -24,6 +24,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Security
 
 - macOS kept machines: a command sent to a run just as it stopped could start after the stop scrub had finished, and write back what the scrub removed, such as the AWS CLI's sign-in cache, while the machine's record said it was scrubbed. The guest agent now refuses a command that has not started by the time the stop scrub begins, and the scrub waits for one that is already starting. Run the tools update once to get the new guest agent. Not yet tried on a real Mac.
+- macOS kept machines: a program of a run still running when a normal stop scrubbed the disk, such as its harness, a command or an app on the desktop, could write back what the scrub removed, and the machine's record still said it was scrubbed. A normal stop now asks macOS to sign `agent` out and ends every program of `agent` before the scrub, without asking any to save, and looks again after it. If one will not end, or the check immediately after the scrub finds one running, the machine shows `scrubbed: false` and is scrubbed when it next starts. Run the tools update once to get the new guest agent. Not yet tried on a real Mac.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
