@@ -55,7 +55,15 @@ func TestEnvFloat_UnsetValidInvalid(t *testing.T) {
 		t.Fatalf("valid: got (%v, %v), want (1.5, nil)", f, err)
 	}
 
-	for _, bad := range []string{"1.5cpus", "-2", "two", "1,5", "NaN", "Inf", "-Inf"} {
+	// Zero in any spelling is unset; a nonzero value that underflows float64 is not.
+	for _, zero := range []string{"0", "0.0", "-0", "0e-350", "0x0p-2000"} {
+		t.Setenv(key, zero)
+		if f, err := envFloat(key); f != 0 || err != nil {
+			t.Fatalf("zero %q: got (%v, %v), want (0, nil)", zero, f, err)
+		}
+	}
+
+	for _, bad := range []string{"1.5cpus", "-2", "two", "1,5", "NaN", "Inf", "-Inf", "1e-350", "2e-324", "0.001e-400", "0x1p-2000"} {
 		t.Setenv(key, bad)
 		f, err := envFloat(key)
 		if err == nil {
@@ -124,6 +132,7 @@ func TestHardenedHostConfig_InvalidEnvIsLoud(t *testing.T) {
 		{envBuildMemoryMB, "8796093022208"},  // 2^43 MiB wraps negative
 		{envMaxContextMB, "17592186044416"},  // would omit the layer cap
 		{envBuildCPUs, "1e-10"},              // under one nano-CPU converts to 0, no limit
+		{envBuildCPUs, "1e-350"},             // underflows float64 to 0, which would read as unset
 		{envBuildCPUs, "NaN"},
 	} {
 		t.Run(tc.key+"="+tc.val, func(t *testing.T) {

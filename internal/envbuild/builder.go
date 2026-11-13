@@ -571,7 +571,22 @@ func envFloat(key string) (float64, error) {
 	if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, fmt.Errorf("envbuild: invalid %s=%q: want a non-negative number", key, v)
 	}
+	// ParseFloat rounds a nonzero value too small for float64 (1e-350) to 0, which would read as unset.
+	if f == 0 && hasNonzeroDigit(v) {
+		return 0, fmt.Errorf("envbuild: invalid %s=%q: too small to express; want 0 or a larger number", key, v)
+	}
 	return f, nil
+}
+
+// hasNonzeroDigit reports whether the mantissa of a number ParseFloat accepted has a digit other than 0.
+func hasNonzeroDigit(v string) bool {
+	m := strings.ToLower(strings.TrimLeft(v, "+-"))
+	if h, ok := strings.CutPrefix(m, "0x"); ok {
+		m, _, _ = strings.Cut(h, "p")
+	} else {
+		m, _, _ = strings.Cut(m, "e")
+	}
+	return strings.Trim(m, "0._") != ""
 }
 
 // validateBuildInput enforces a scheme allowlist on the caller-supplied git URL/ref: file://,
