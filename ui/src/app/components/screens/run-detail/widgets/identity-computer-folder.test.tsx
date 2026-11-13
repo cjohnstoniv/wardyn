@@ -75,6 +75,8 @@ describe("Folders from your computer", () => {
       // forcedKeptForCopyBack, internal/api/run_kept_stop_forced.go
       "Kept for its copy back: the run was ended past its end while another operation held it or too many runs were ending at once",
       "Kept for its copy back: test reason.",
+      // folderPassNoTimeMsg, internal/api/run_folder_pass_once.go
+      "Kept for its copy back: there was no time left to bring the changes back. Wardyn tries again on its next check.",
     ])("shows the record's own words, muted, not as an alert: %s", (error) => {
       keptWith(error);
       const p = screen.getByText(error);
