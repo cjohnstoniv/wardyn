@@ -118,6 +118,7 @@ type session struct {
 	mu      sync.Mutex
 	applied []uuid.UUID
 	peer    *runnerwire.Peer // the runner's side of the session, once online
+	serves  sync.WaitGroup   // the hub's Serve goroutines this session's dials started
 }
 
 func (f *admissionFixture) connect(t *testing.T, during func(), rows ...runnerwire.RunState) *session {
@@ -189,7 +190,11 @@ func (f *admissionFixture) connect(t *testing.T, during func(), rows ...runnerwi
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: admissionOrgURL, RunnerID: f.rn.ID.String(), PrivateKey: f.key, Hooks: hooks,
 		Dial: func(context.Context) (runnerwire.Conn, error) {
 			org, run := runnerwire.Loopback()
-			go func() { _ = hub.Serve(ctx, org, f.rn.ID) }()
+			s.serves.Add(1)
+			go func() {
+				defer s.serves.Done()
+				_ = hub.Serve(ctx, org, f.rn.ID)
+			}()
 			return run, nil
 		}})
 	if err != nil {
@@ -199,6 +204,19 @@ func (f *admissionFixture) connect(t *testing.T, during func(), rows ...runnerwi
 		s.err = client.Connect(ctx)
 		close(s.done)
 	}()
+	t.Cleanup(func() {
+		// Join what this session started: the client's Connect, then the hub's Serve for each dial (no dial
+		// follows Connect's return). runnerwire's own call handlers are not joined: Peer cancels them when it
+		// closes but keeps no handle to wait on.
+		cancel()
+		if !joinedWithin(func() { <-s.done }, 10*time.Second) {
+			t.Errorf("the runner's connection had not ended 10s after its session was cancelled")
+			return
+		}
+		if !joinedWithin(s.serves.Wait, 10*time.Second) {
+			t.Errorf("the hub's side of the session had not ended 10s after its session was cancelled")
+		}
+	})
 	return s
 }
 
@@ -368,5 +386,21 @@ func TestRunnerAdmissionPG_BootRegistersClaimedRunnersOnly(t *testing.T) {
 	want := placement.RunnerSubstrateName(f.rn.ID.String())
 	if len(reg.added) != 1 || reg.added[0] != want {
 		t.Fatalf("registered %v, want only %s (not unclaimed %s)", reg.added, want, unclaimed.ID)
+	}
+}
+
+// joinedWithin reports whether wait returned within d. A fixture's cleanup uses it to show the goroutines it
+// started have ended, without hanging the test binary when one has not.
+func joinedWithin(wait func(), d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
 	}
 }
