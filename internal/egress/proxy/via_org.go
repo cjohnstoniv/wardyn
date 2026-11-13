@@ -253,6 +253,7 @@ var errViaOrgCleartext = errors.New("via_org: the organisation dials TLS only")
 // and Azure gates, inspection, the injection pins, the sandbox credential
 // strip, the vetted TLS dial and the decision rows).
 func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, host string) {
+	r = trackNetworkBody(r)
 	if e.refuseClosed(w) {
 		return
 	}
@@ -282,6 +283,9 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 	if log != nil {
 		p.sink.emit(*log)
 	}
+	// The control plane's listener sets no read timeout, so the body gets the bound a terminated
+	// tunnel's does, armed after the hold above and before allowed_models, the first gate that reads it.
+	rearmBodyDeadline(w, r)
 	p.serveMITMRequest(w, r, host, 443)
 }
 
