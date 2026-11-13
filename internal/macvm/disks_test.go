@@ -353,3 +353,21 @@ func TestStage2BootRefusesDisks(t *testing.T) {
 		t.Fatalf("ToolsBoot with a disk = %v", err)
 	}
 }
+
+// The mark goes before the image. A folder that holds a file stands in for an image that cannot be removed:
+// the remove fails, and no mark is left that could vouch for a later file at that path.
+func TestRemoveDiskImageRemovesTheMarkBeforeTheImage(t *testing.T) {
+	img := filepath.Join(t.TempDir(), "d.img")
+	if err := os.MkdirAll(filepath.Join(img, "held"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(img+".new", []byte("1 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if gone, err := macvm.RemoveDiskImage(img); gone || err == nil {
+		t.Fatalf("an image that cannot be removed: %v %v", gone, err)
+	}
+	if _, err := os.Stat(img + ".new"); !os.IsNotExist(err) {
+		t.Fatalf("the mark outlived an image that could not be removed: %v", err)
+	}
+}
