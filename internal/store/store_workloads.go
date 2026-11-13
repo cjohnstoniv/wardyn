@@ -212,6 +212,9 @@ type WorkloadStore interface {
 	PlanWorkloadPut(ctx context.Context, in WorkloadPut) (*Workload, WorkloadWrite, error)
 	ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bool, error)
 	SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error)
+	SetBoundWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID, binding uuid.UUID) (*uuid.UUID, error)
+	WorkloadHoldsRun(ctx context.Context, owner, name string, runID uuid.UUID) (held, deferred bool, err error)
+	DropWorkloadRunEndIfHeld(ctx context.Context, owner, name string, runID uuid.UUID) (bool, error)
 	RecordWorkloadRefusal(ctx context.Context, id, claim uuid.UUID, r WorkloadRefusal) error
 	RestartWorkload(ctx context.Context, id uuid.UUID) (Workload, error)
 	SetWorkloadStatusPushed(ctx context.Context, id uuid.UUID, hash string) error
@@ -231,6 +234,7 @@ type WorkloadStore interface {
 	RestoreWorkloadRun(ctx context.Context, e WorkloadRunEnd, refusal WorkloadRefusal) (bool, error)
 	CreateWorkloadBinding(ctx context.Context, b WorkloadBinding) (WorkloadBinding, error)
 	ListWorkloadBindings(ctx context.Context, p Page) ([]WorkloadBinding, error)
+	GetWorkloadBinding(ctx context.Context, id uuid.UUID) (WorkloadBinding, error)
 	DeleteWorkloadBinding(ctx context.Context, id uuid.UUID) (WorkloadBinding, error)
 	BindingForRunner(ctx context.Context, runner uuid.UUID, namespace string) (WorkloadBinding, error)
 }
@@ -469,9 +473,20 @@ func workloadRunRanSQL(tbl, states string) string {
 // (it lapsed and was taken again, or its holder already recorded) or that generation, or a later one, was
 // recorded first; the caller ends runID (OweWorkloadRunEnd).
 func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
+	return s.setWorkloadRun(ctx, nil, id, claim, generation, runID)
+}
+
+// setWorkloadRun is SetWorkloadRun with fence, when set, run first in its transaction: an error from it is
+// returned and nothing is written.
+func (s PG) setWorkloadRun(ctx context.Context, fence func(q Querier) error, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
 	var prev *uuid.UUID
 	var deferred bool
 	err := s.inTx(ctx, func(q Querier) error {
+		if fence != nil {
+			if err := fence(q); err != nil {
+				return err
+			}
+		}
 		var cur int64
 		var token *uuid.UUID
 		var owner, name string
@@ -522,6 +537,12 @@ func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation 
 			waiters = nil
 		}
 		if _, err := q.Exec(ctx, `UPDATE workload_run_ends SET after_run_id = $2 WHERE after_run_id = $1`, *prev, waiters); err != nil {
+			return err
+		}
+		// prev is the workload's current run under this row lock, so an owed end of prev's for this workload
+		// that waits on nothing was left by a record whose outcome was unknown: this record's owed end replaces it.
+		if _, err := q.Exec(ctx, `DELETE FROM workload_run_ends WHERE run_id = $1 AND owner = $2 AND name = $3 AND after_run_id IS NULL`,
+			*prev, owner, name); err != nil {
 			return err
 		}
 		end := WorkloadRunEnd{RunID: *prev, Owner: owner, Name: name, Generation: generation, Reason: WorkloadEndReplaced}
@@ -688,17 +709,18 @@ func (s PG) deleteWorkload(ctx context.Context, by WorkloadReporter, where strin
 
 // The reasons a workload's run is owed its end, which its run.kill row carries.
 const (
-	WorkloadEndReplaced = "workload_replaced" // a newer launch of the workload replaced it
-	WorkloadEndDeleted  = "workload_deleted"  // the workload was deleted
+	WorkloadEndReplaced       = "workload_replaced"        // a newer launch of the workload replaced it
+	WorkloadEndDeleted        = "workload_deleted"         // the workload was deleted
+	WorkloadEndBindingDeleted = "workload_binding_deleted" // its namespace binding was deleted while it started
 )
 
 // WorkloadRunEnd is a run a workload let go of that is still owed its end (migration 0244): written in the
 // transaction that let it go, and dropped once the run is ended, so an end cut short is still owed. Owner,
-// Name and Generation are the workload's, for the run.kill row; Reason is WorkloadEndReplaced or
-// WorkloadEndDeleted. AfterRunID, when set, is the queued run that replaces it: the end waits until that
-// run is running. AfterState and AfterDetail are that run's state and status_detail, and AfterRan whether
-// it took its slot (workloadRunRanSQL: a run that ran and then ended still replaced this one), as
-// ListWorkloadRunEnds read them.
+// Name and Generation are the workload's, for the run.kill row; Reason is WorkloadEndReplaced,
+// WorkloadEndDeleted or WorkloadEndBindingDeleted. AfterRunID, when set, is the queued run that replaces
+// it: the end waits until that run is running. AfterState and AfterDetail are that run's state and
+// status_detail, and AfterRan whether it took its slot (workloadRunRanSQL: a run that ran and then ended
+// still replaced this one), as ListWorkloadRunEnds read them.
 type WorkloadRunEnd struct {
 	RunID       uuid.UUID
 	Owner       string

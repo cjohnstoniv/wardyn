@@ -20,6 +20,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- A workload apply whose record of its new run landed but answered an error, as when the caller went away while it was saved, ended that new run though the workload pointed at it; the run it replaced was ended too, and the service stayed down until its spec changed or it was restarted. The outcome is now read back: a run the workload took keeps running, and one whose outcome cannot be read is left to the workload sweep, which ends it only if the workload did not take it.
+
+### Security
+
+- Deleting a namespace binding did not stop a custom resource's launch that was already under way: a launch waiting in the background, the sweep's retry of a lapsed one or a restart could still start a run as the bound service after the delete answered. Such a launch now reads the binding again before it starts a run and is refused `workload_binding_inactive`, and a run whose binding is deleted while it starts is ended with the new `run.kill` reason `workload_binding_deleted` and never becomes the workload's. Runs started before the delete keep running. This adds a database migration (0280, forward only), so take a database backup first.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

@@ -126,7 +126,7 @@ intent:
 - A refused launch is not an error: the answer is a `201` when the apply created the workload and a `200` otherwise. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
 - The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
-- Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
+- Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`. A custom resource's launch whose namespace binding is deleted while its run starts is ended with reason `workload_binding_deleted`.
 - With several runners serving one bound namespace, the runner that last applied a workload is the one whose removals count. If that runner is down but still in the pool, remove it from the pool so another can take over.
 - `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. A person's workload starts at their next apply.
 - A restart that is not the owner's own request launches only while the service identity is not suspended or retired, its sponsor is unchanged and the sponsor's access is not revoked.
@@ -177,7 +177,7 @@ The binding stops being authority when any of these happens. The spec is still r
 | The sponsor's access is revoked (a sign-out that keeps their tokens does not count) | The same |
 | The identity is retired | Its bindings are deleted |
 
-To bind the namespace again, delete the binding and create it again with the identity's current sponsor. `wardyn workload binding delete ID` ends the namespace's launching; the runs it started continue.
+To bind the namespace again, delete the binding and create it again with the identity's current sponsor. `wardyn workload binding delete ID` ends the namespace's launching; the runs it started continue. A run that was still starting when the delete answered is ended (`run.kill` reason `workload_binding_deleted`), and its launch is refused `workload_binding_inactive`.
 
 ### What the runner reports
 

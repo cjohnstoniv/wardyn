@@ -44,8 +44,9 @@ import (
 
 // The run.kill reason a workload's run ends with.
 const (
-	workloadKillReplaced = store.WorkloadEndReplaced // a newer launch of the workload replaced it
-	workloadKillDeleted  = store.WorkloadEndDeleted  // the workload was deleted
+	workloadKillReplaced       = store.WorkloadEndReplaced       // a newer launch of the workload replaced it
+	workloadKillDeleted        = store.WorkloadEndDeleted        // the workload was deleted
+	workloadKillBindingDeleted = store.WorkloadEndBindingDeleted // its namespace binding was deleted while it started
 )
 
 const workloadNotFoundMsg = "There is no workload of that name that you may reach."
@@ -328,11 +329,13 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 	if err != nil || !ok {
 		return none, err
 	}
-	return s.launchClaimed(r, ws, claimed)
+	return s.launchClaimed(r, ws, claimed, nil)
 }
 
 // launchClaimed is launchWorkload once claimed, the workload ClaimWorkloadLaunch returned, holds the claim.
-func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed store.Workload) (client.WorkloadLaunch, error) {
+// binding is the namespace binding a custom resource's launch was authorised under, nil for any other
+// launch: the run is recorded only while that binding exists (recordWorkloadRun).
+func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed store.Workload, binding *uuid.UUID) (client.WorkloadLaunch, error) {
 	none := client.WorkloadLaunch{State: client.WorkloadNoLaunch}
 	ctx := r.Context()
 	if claimed.Source == store.WorkloadSourceK8s && claimed.SourcePoolID == nil {
@@ -357,18 +360,9 @@ func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed 
 	if err := json.Unmarshal(cw.body, &created); err != nil {
 		return none, fmt.Errorf("read the launched run: %w", err)
 	}
-	prev, err := ws.SetWorkloadRun(ctx, claimed.ID, claimed.ClaimToken, claimed.Generation, created.ID)
+	prev, err := s.recordWorkloadRun(r, ws, claimed, binding, created.ID)
 	if err != nil {
-		// The run is not the workload's: another launch was recorded first, or the workload is gone.
-		why := workloadKillReplaced
-		if errors.Is(err, store.ErrNotFound) {
-			why = workloadKillDeleted
-		}
-		s.endUntakenWorkloadRun(r, ws, created.ID, claimed, why)
-		if errors.Is(err, store.ErrWorkloadSuperseded) || errors.Is(err, store.ErrNotFound) {
-			return none, nil
-		}
-		return none, err
+		return s.untakenWorkloadLaunch(r, ws, claimed, created.ID, err)
 	}
 	actorType, actor := workloadActorOf(r)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, actorType, actor, "workload.launch", workloadTarget(claimed), "success", mustJSON(map[string]any{
@@ -545,7 +539,7 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 		}
 		switch {
 		case e.AfterRunID == nil:
-			s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
+			s.endOwedWorkloadRunUnlessHeld(ctx, ws, e)
 		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting, isTerminalRunState(e.AfterState) && e.AfterRan:
 			s.takeOverWorkloadRun(ctx, e)
 		case isTerminalRunState(e.AfterState):
