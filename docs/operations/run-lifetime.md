@@ -48,7 +48,7 @@ A run's lease ends it, or someone ends it now.
 - A run lost to an outage or a reboot (`run.lost`) is a separate path; see [Revive](#revive).
 - `run.ending_soon` warns at 24h, 1h and 10m before the end.
 - A kept run's token is refused all the same: every `/internal/*` door refuses it (ended, or lost to a reboot or an outage) with `403` and an `authz.denied` row, reason `run_kept`. Nothing can mint a credential, resolve an injection or decide an approval with it.
-- Only the three tail uploads are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
+- Only the four tail uploads (the recording, the scan results, the captured SSO cache and the egress proxy's last decisions) are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
 
 ### At the lifetime cap
 
@@ -56,7 +56,7 @@ The cap (`lifetime_cap_at`) is a run's hard end. An extension never passes it, a
 
 - From the cap, every request the run's sandbox makes to the organisation is refused (`authz.denied`, `run_terminal`, with `lifetime_cap_at`), its token is not renewed, and its pending approvals cannot be decided (`409 approval_run_past_lifetime`).
 - Within a minute the lease sweep kills it (`run.kill`, `max_lifetime_reached`).
-- The three tail uploads are still accepted for five minutes from the cap.
+- The four tail uploads are still accepted for five minutes from the cap.
 
 At the kill:
 

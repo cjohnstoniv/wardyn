@@ -888,7 +888,7 @@ type Server struct {
 	leaseDeferred   sync.Map        // see deferRenewedLease
 	execOutputs     execOutputTails // each non-interactive run's output tail (run_output.go)
 	uiGatewayState                  // the UI gateway's process state (server_uigateway.go)
-
+	doorRefusals    doorRefusals    // the decision door's once-per-run refusal row (internal_live_run.go)
 	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
 	desktopRecs desktopRecordings
 

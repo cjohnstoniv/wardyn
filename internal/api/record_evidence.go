@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -19,9 +20,12 @@ import (
 // A confined replay's clean verdict is read from its run's audit trail, and the trail can still grow after
 // the capture read it: an egress decision whose insert was still in flight, or one waiting in the audit
 // spool of a replica other than the one that took the capture, lands later. And the trail can be missing an
-// event for good, when a spool set it aside because the store refused it. So the capture records the audit
-// position it read through, a later workspace read takes a clean verdict again when an egress decision has
-// landed past that position, and a spool that sets a run's event aside notes it on that run's trail.
+// event for good, when a spool set it aside because the store refused it, or when the decision door refused
+// the egress proxy's post. So the capture records the audit position it read through, a later workspace
+// read takes a clean verdict again when an egress decision has landed past that position, a spool that sets
+// a run's event aside notes it on that run's trail, and the door keeps a run's last decisions inside its
+// tail grace (terminalGraceRoutes) and writes a refusal row on the run's trail when it refuses a post past
+// it (once per run: claimDecisionRefusal).
 
 // auditSpoolQuarantineAction is the row an audit spool writes on a run's trail when it sets one of that
 // run's events aside (AuditSpool.noteRunEventSetAside).
@@ -35,6 +39,14 @@ const recordEvidenceSetAsideHint = "One of this replay's audit events could not 
 // recordDecisionsDroppedHint is the failure hint of a confined replay whose egress proxy dropped decisions.
 const recordDecisionsDroppedHint = "The egress proxy could not deliver every decision of this replay to the server " +
 	"and reported how many it dropped, so the replay cannot be judged clean. Replay again."
+
+// recordDecisionRefusedHint is the failure hint of a confined replay whose egress proxy had a post refused.
+const recordDecisionRefusedHint = "The server refused a report the egress proxy sent for this replay, which " +
+	"could have been one of its decisions, so the replay cannot be judged clean. Replay again."
+
+// decisionsDoor is the path the egress proxy posts its reports to, and so the target of the authz.denied row
+// internalAuth writes when it refuses one (auditInternalDenied).
+const decisionsDoor = InternalPathPrefix + "decisions"
 
 // recordEvidenceSeq is the audit position a confined capture reads its run's trail through, taken before the
 // read: every row of the run at or below it has committed and is in the read, and every row that commits
@@ -54,7 +66,8 @@ func (s *Server) recordEvidenceSeq(ctx context.Context, runID uuid.UUID, confine
 }
 
 // recheckCleanReplays takes each clean confined verdict in ws again when its run's trail has, past the
-// entry's EvidenceSeq, an egress decision or a note that an event was set aside. The entry is captured again
+// entry's EvidenceSeq, an egress decision, a note that an event was set aside, or a refused post to the
+// decision door (cleanVerdictMoved). The entry is captured again
 // from the run's whole trail and swapped in only while the stored entry is still the one read, so a
 // promotion, a re-record or another replica's recheck that wrote first is kept. A store error leaves the
 // entry as it is, for the next read. Reports whether ws is stale: an entry was swapped, or a swap found
@@ -93,10 +106,11 @@ func (s *Server) recheckCleanReplays(ctx context.Context, ws types.Workspace) bo
 }
 
 // cleanVerdictMoved reports whether res's run has, past res.EvidenceSeq, an egress decision (each of
-// allow, deny and hold can change the verdict) or a note that an event was set aside. A failed probe
-// reports nothing, and the next read probes again.
+// allow, deny and hold can change the verdict), a note that an event was set aside, or a refused post to
+// the decision door. A failed probe reports nothing, and the next read probes again.
 func cleanVerdictMoved(ctx context.Context, ev store.RecordEvidence, res RecordTaskResult) bool {
-	for _, f := range []store.AuditFilter{{ActionPrefix: "egress."}, {Action: auditSpoolQuarantineAction}} {
+	for _, f := range []store.AuditFilter{{ActionPrefix: "egress."}, {Action: auditSpoolQuarantineAction},
+		{Action: authz.AuditAction, Target: decisionsDoor}} {
 		if found, err := ev.HasRunAuditEventAfter(ctx, res.RunID, res.EvidenceSeq, f); err == nil && found {
 			return true
 		}
@@ -124,6 +138,18 @@ func runDecisionsDropped(events []types.AuditEvent) bool {
 			RuleSource string `json:"rule_source"`
 		}
 		if ev.Action == "egress.deny" && json.Unmarshal(ev.Data, &d) == nil && strings.HasPrefix(d.RuleSource, ruleSourceDroppedDecisions) {
+			return true
+		}
+	}
+	return false
+}
+
+// runDecisionPostRefused reports whether events hold internalAuth's refusal of a post to the decision door,
+// such as one the egress proxy sent after its run's tail grace (terminalGraceRoutes). What it posted is not
+// on the trail, and it could have been a deny.
+func runDecisionPostRefused(events []types.AuditEvent) bool {
+	for _, ev := range events {
+		if ev.Action == authz.AuditAction && ev.Target == decisionsDoor {
 			return true
 		}
 	}

@@ -449,8 +449,9 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 // for a confined entry, the clean verdict, read through evidenceSeq (recordEvidenceSeq). The first capture
 // and recheckCleanReplays both take it here, so a verdict taken again is the one a first capture of the
 // same trail would give. A confined run whose trail notes an event set aside by an audit spool
-// (auditSpoolQuarantineAction), or holds the egress proxy's summary of decisions it dropped
-// (runDecisionsDropped), is a failed capture: what it is missing could have been a deny.
+// (auditSpoolQuarantineAction), holds the egress proxy's summary of decisions it dropped
+// (runDecisionsDropped), or holds a refused post to the decision door (runDecisionPostRefused), is a failed
+// capture: what it is missing could have been a deny.
 func (s *Server) takeRecordCapture(ctx context.Context, run types.AgentRun, res RecordTaskResult, events []types.AuditEvent, evidenceSeq int64) RecordTaskResult {
 	res.Clean, res.Caught, res.FailureHint, res.SecretNamesMinted, res.EvidenceSeq = nil, 0, "", nil, evidenceSeq
 	obs := recordmode.Capture(events, res.Confined, s.kernelWindow(ctx, run))
@@ -510,6 +511,8 @@ func (s *Server) takeRecordCapture(ctx context.Context, run types.AgentRun, res 
 		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordEvidenceSetAsideHint, nil, 0
 	} else if res.Confined && runDecisionsDropped(events) {
 		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordDecisionsDroppedHint, nil, 0
+	} else if res.Confined && runDecisionPostRefused(events) {
+		res.Status, res.FailureHint, res.Clean, res.Caught = recordStatusFailed, recordDecisionRefusedHint, nil, 0
 	}
 	return res
 }

@@ -60,6 +60,22 @@ func (e *ExpiredTokenError) Error() string {
 
 func (e *ExpiredTokenError) Unwrap() error { return e.Err }
 
+// RevokedTokenError is the typed refusal for a presented token whose ONLY defect is
+// revocation: signature, audience and expiry were good. It carries the token's claims so the
+// API's internal-auth boundary can still take a run's last egress reports after the run ended
+// and its identity was revoked (internal/api's verifyRunToken), and nothing else.
+//
+// NOT an authorization result: Verify still returns nil claims with it, and every other
+// caller keeps failing closed. A revocation-store error is an ordinary error, never this.
+type RevokedTokenError struct {
+	Claims *Claims
+	Err    error
+}
+
+func (e *RevokedTokenError) Error() string { return e.Err.Error() }
+
+func (e *RevokedTokenError) Unwrap() error { return e.Err }
+
 // RunIdentity is what a provider mints at sandbox start.
 type RunIdentity struct {
 	SPIFFEID string

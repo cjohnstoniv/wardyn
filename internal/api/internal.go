@@ -85,15 +85,18 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// so one touch per touchDebounce per run loses nothing.
 	// An allowed request is activity, a refused one is not (egress.CountsAsActivity): a run that is only
 	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
+	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
+	// decisions are kept on its trail and, as on the runner spool, are not activity.
 	var kind types.MachineKind
+	var over bool
 	if run, ok := liveRunFromContext(r.Context()); ok {
-		kind = run.MachineKind
+		kind, over = run.MachineKind, runIsOver(run, s.cfg.Now().UTC())
 	}
-	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) {
+	if s.cfg.Store != nil && !over && s.shouldTouch(runID, kind, dl) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if decisionIsActivity(kind, dl) {
+	if !over && decisionIsActivity(kind, dl) {
 		s.noteAgentActive(r.Context(), runID)
 	}
 
@@ -147,10 +150,14 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.MatchedRule != "" {
 		fields["matched_rule"] = dl.MatchedRule // the tool_rules key behind a policy:tool-* row
 	}
-	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
+	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go). A run that is over keeps
+	// the row alone: the hint write bumps updated_at, which the terminal tail grace is counted from, so a
+	// post kept inside the grace must not be able to open it again.
 	if dl.UpstreamFault != "" {
 		fields["upstream_fault"] = dl.UpstreamFault
-		s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
+		if !over {
+			s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
+		}
 	}
 	data, _ := json.Marshal(fields)
 	outcome := decisionOutcome(dl.Decision)

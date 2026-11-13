@@ -8,14 +8,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -239,6 +242,194 @@ func TestRecordReplayWhoseProxyDroppedDecisionsIsNeverClean(t *testing.T) {
 		srv.repairStaleWorkspaceRuns(ctx, ws)
 		failed(t, fake)
 	})
+}
+
+// refusedDecisionPost is the row internalAuth writes on a run's trail when it refuses a post to the decision door.
+func refusedDecisionPost(runID uuid.UUID) types.AuditEvent {
+	return types.AuditEvent{ID: uuid.New(), RunID: &runID, ActorType: types.ActorAgent, Action: "authz.denied",
+		Target: "/api/v1/internal/decisions", Outcome: "denied",
+		Data: mustJSON(map[string]any{"reason": "run_terminal", "run_state": "COMPLETED", "method": "POST"})}
+}
+
+// A post the decision door refused (one sent after the run's tail grace, say) is not on the trail, and it could
+// have been a deny: a confined replay whose trail holds the refusal is a failed capture, never a clean replay,
+// at the first capture and when the refusal lands after a clean verdict was stamped. A refusal at any other
+// door is itself on the trail and lost nothing.
+func TestRecordReplayWithARefusedDecisionPostIsNeverClean(t *testing.T) {
+	ctx := context.Background()
+	failed := func(t *testing.T, fake *recordStore) {
+		t.Helper()
+		res := fake.savedResult(t, "verify:build")
+		if res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordDecisionRefusedHint {
+			t.Fatalf("status %q, clean %v, hint %q; want record_failed, no verdict, the refused-report hint", res.Status, res.Clean, res.FailureHint)
+		}
+	}
+	t.Run("on the trail at the capture", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		fake.events = append(fake.events, refusedDecisionPost(runID))
+		newTestSrv(t, fake).reconcileRecordRun(ctx, runID)
+		failed(t, fake)
+	})
+	t.Run("landed after a clean verdict", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		srv := newTestSrv(t, fake)
+		srv.reconcileRecordRun(ctx, runID)
+		if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+			t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+		}
+		fake.events = append(fake.events, refusedDecisionPost(runID))
+		ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+		srv.repairStaleWorkspaceRuns(ctx, ws)
+		failed(t, fake)
+	})
+	t.Run("a refusal at another door loses nothing", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		mint := refusedDecisionPost(runID)
+		mint.Target = InternalPathPrefix + "credentials/mint"
+		fake.events = append(fake.events, mint)
+		newTestSrv(t, fake).reconcileRecordRun(ctx, runID)
+		if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusRecorded || res.Clean == nil || !*res.Clean {
+			t.Fatalf("status %q, clean %v, hint %q; want the replay recorded clean", res.Status, res.Clean, res.FailureHint)
+		}
+	})
+}
+
+// confinedReplayDoor is confinedRecording whose run ended `ended` ago, behind a server whose audit rows land on
+// the fake's trail, with the run's own token for the decision door. revoked revokes the run's identity first, as
+// the completion path does before it stops the sandbox (finalizeRunEffects).
+func confinedReplayDoor(t *testing.T, ended time.Duration, revoked bool) (*recordStore, uuid.UUID, *Server, string) {
+	t.Helper()
+	fake, runID := confinedRecording(t)
+	fake.run.UpdatedAt = time.Now().UTC().Add(-ended)
+	h := newHarness(t)
+	cfg := baseTestConfig(h, fake)
+	cfg.Audit = refusingDrain{s: fake}
+	tok := h.mintRunToken(t, runID)
+	if revoked {
+		if err := h.idp.RevokeRun(context.Background(), runID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fake, runID, New(cfg), tok
+}
+
+// A deny the egress proxy posts just after its run ended, as it drains at teardown and so on the run's revoked
+// token, is kept on the run's trail and turns the replay's clean verdict on the next workspace read; past the
+// tail grace the door refuses it, and its refusal fails the replay. Either way the verdict is never left clean.
+func TestRecordDenyPostedAfterTheRunEndedTurnsTheVerdict(t *testing.T) {
+	ctx := context.Background()
+	const deny = `{"request":{"host":"example.com","method":"GET"},"decision":"deny","rule_source":"policy"}`
+	for name, tc := range map[string]struct {
+		ended   time.Duration
+		revoked bool
+		status  string
+		hint    string
+	}{
+		"before the revoke":   {time.Second, false, recordStatusRecorded, ""},
+		"after the revoke":    {time.Second, true, recordStatusRecorded, ""},
+		"past the tail grace": {terminalUploadGrace + time.Minute, true, recordStatusFailed, recordDecisionRefusedHint},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, runID, srv, tok := confinedReplayDoor(t, tc.ended, tc.revoked)
+			srv.reconcileRecordRun(ctx, runID)
+			if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+				t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+			}
+			w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, deny)
+			ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+			srv.repairStaleWorkspaceRuns(ctx, ws)
+			res := fake.savedResult(t, "verify:build")
+			if res.Status != tc.status || res.FailureHint != tc.hint || (res.Clean != nil && *res.Clean) {
+				t.Fatalf("after a deny posted %s after the run ended (answered %d): status %q, clean %v, caught %d, hint %q; want %q, not clean, hint %q",
+					tc.ended, w.Code, res.Status, res.Clean, res.Caught, res.FailureHint, tc.status, tc.hint)
+			}
+			if tc.status == recordStatusRecorded && (w.Code != http.StatusAccepted || res.Clean == nil || res.Caught != 1) {
+				t.Fatalf("inside the grace: answered %d, clean %v, caught %d; want 202 and the deny caught", w.Code, res.Clean, res.Caught)
+			}
+		})
+	}
+}
+
+// Past the tail grace every post on the run's revoked token is refused, and only the first leaves a row on the
+// run's trail (claimDecisionRefusal): many refused posts leave one, and that one fails the replay.
+func TestRecordRefusedDecisionPostsLeaveOneRowThatFailsTheReplay(t *testing.T) {
+	ctx := context.Background()
+	const deny = `{"request":{"host":"example.com","method":"GET"},"decision":"deny","rule_source":"policy"}`
+	fake, runID, srv, tok := confinedReplayDoor(t, terminalUploadGrace+time.Minute, true)
+	srv.reconcileRecordRun(ctx, runID)
+	for i := range 5 {
+		if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, deny); w.Code != http.StatusForbidden {
+			t.Fatalf("post %d past the grace answered %d, want 403; body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	rows := 0
+	for _, ev := range fake.events {
+		if ev.Action == "authz.denied" && ev.Target == decisionsDoor && ev.RunID != nil && *ev.RunID == runID {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("refusal rows on the run's trail = %d after 5 refused posts, want 1", rows)
+	}
+	ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordDecisionRefusedHint {
+		t.Fatalf("status %q, clean %v, hint %q; want record_failed, no verdict, the refused-report hint", res.Status, res.Clean, res.FailureHint)
+	}
+}
+
+// A local run's token posting to the decision door off its runner's relay is refused on every post, inside the
+// tail grace too, and leaves one refusal row on the run's trail, which fails the replay.
+func TestRecordOffRelayDecisionPostsLeaveOneRowThatFailsTheReplay(t *testing.T) {
+	ctx := context.Background()
+	const deny = `{"request":{"host":"example.com","method":"GET"},"decision":"deny","rule_source":"policy"}`
+	fake, runID, srv, tok := confinedReplayDoor(t, time.Second, true)
+	srv.reconcileRecordRun(ctx, runID)
+	runner := uuid.New()
+	fake.run.Placement, fake.run.RunnerID = types.PlacementLocal, &runner
+	for i := range 5 {
+		w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, deny)
+		if w.Code != http.StatusForbidden || reasonOf(t, w) != string(placement.ReasonRelayRequired) {
+			t.Fatalf("post %d off the relay answered %d; body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	rows := 0
+	for _, ev := range fake.events {
+		if ev.Action == "authz.denied" && ev.Target == decisionsDoor && ev.RunID != nil && *ev.RunID == runID {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("refusal rows on the run's trail = %d after 5 posts off the relay, want 1", rows)
+	}
+	ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusFailed || res.Clean != nil {
+		t.Fatalf("status %q, clean %v; want record_failed and no verdict", res.Status, res.Clean)
+	}
+}
+
+// What the proxy posts as it drains at teardown, on the run's revoked token, is ordinary: an allow of a host the
+// replay already reached, a DNS row and a model call's token counts are kept inside the tail grace, and the
+// replay stays clean. A refusal of each would have failed a replay that lost nothing.
+func TestRecordReplayKeepsItsVerdictForTailReportsThatLostNothing(t *testing.T) {
+	ctx := context.Background()
+	fake, runID, srv, tok := confinedReplayDoor(t, time.Second, true)
+	srv.reconcileRecordRun(ctx, runID)
+	for _, body := range []string{
+		`{"request":{"host":"pypi.org","method":"GET"},"decision":"allow","rule_source":"policy"}`,
+		`{"request":{},"dns":{"name":"pypi.org","type":"A","outcome":"refused","via":"proxy"}}`,
+		`{"request":{"host":"api.anthropic.com"},"rule_source":"llm:usage","usage":{}}`,
+	} {
+		if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, body); w.Code != http.StatusAccepted {
+			t.Fatalf("a tail report just after the run ended answered %d, want 202: %s; body=%s", w.Code, body, w.Body.String())
+		}
+	}
+	ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusRecorded || res.Clean == nil || !*res.Clean {
+		t.Fatalf("status %q, clean %v, hint %q; want the replay still recorded clean", res.Status, res.Clean, res.FailureHint)
+	}
 }
 
 // drainUntilQuarantined runs the drain passes that set a refused line aside (spoolPoisonAttempts strikes,

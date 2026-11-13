@@ -9,10 +9,14 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -23,7 +27,8 @@ import (
 // It is a GRACE, not a retention window, and it is sized by what actually runs
 // in that span: wardyn-rec PUTs the finished cast as the session closes,
 // wardyn-scan PUTs its ScanFacts as the scan process exits, and wardyn-aws-sso
-// PUTs the captured token cache as the login run finishes — all of them
+// PUTs the captured token cache as the login run finishes, and the egress
+// proxy posts its last decisions as it drains at teardown — all of them
 // milliseconds-to-seconds after the state flips, all of them racing the
 // completion watcher that flips it. Five minutes is generous enough that a slow
 // upload over a saturated link still lands and short enough that a stolen run
@@ -37,16 +42,26 @@ const terminalUploadGrace = 5 * time.Minute
 //
 // The exemption is explicit and short by design. Every one of these is
 // an UPLOAD of something the run produced and nothing else can produce: the
-// asciicast, the scan facts, the captured SSO cache. None of them mints,
-// injects or decides anything, so a terminal run walking through one cannot
-// obtain a credential — which is the whole reason the other doors are shut.
+// asciicast, the scan facts, the captured SSO cache, and the egress proxy's
+// last reports (its decisions, DNS rows and model token counts). None of them
+// mints, injects or decides anything, so a terminal run walking through one
+// cannot obtain a credential — which is the whole reason the other doors are
+// shut. A report from a run that is over (runIsOver) is kept on its trail, even
+// on its revoked token (verifyRunToken), and moves no idle or presence clock;
+// one refused past the grace fails a confined replay of the run
+// (runDecisionPostRefused), since it may have been a deny.
 // Adding a route here is adding a door a dead run may open; the test table in
 // internal_live_run_test.go exists so that stays a deliberate act.
 var terminalGraceRoutes = []string{
+	decisionDoorSegment,
 	"/internal/recordings/",
 	"/internal/scan-results/",
 	"/internal/sso-token/",
 }
+
+// decisionDoorSegment is the egress proxy's decision door (handlePostDecision): its decisions, DNS rows and
+// model token counts.
+const decisionDoorSegment = "/internal/decisions"
 
 // internalSelfGatedRoutes are the /internal/* doors that run their OWN, STRICTER
 // liveness check and therefore skip this one.
@@ -193,6 +208,36 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	return nil, false
 }
 
+// verifyRunToken is internalAuth's Verify, with one door more for a run that is over. The run's identity is
+// revoked before its sandbox is stopped (finalizeRunEffects), so the egress proxy's last reports, posted as
+// it drains, arrive on a revoked token. At the decision door alone, a token whose only defect is revocation
+// (identity.RevokedTokenError) is taken for a run that is over (runIsOver), and refuseTerminalRun then holds
+// it to the tail grace like any other: a post inside it is kept as the run's own rows and nothing else
+// (handlePostDecision), and one past it is refused, with one row on the run's trail per replica
+// (claimDecisionRefusal) that fails its confined replay (runDecisionPostRefused).
+// Every other door, a run still going (an old token a revive retired), and a run that cannot be read keep
+// the refusal.
+func (s *Server) verifyRunToken(r *http.Request, tok string) (*identity.Claims, error) {
+	claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
+	var revoked *identity.RevokedTokenError
+	// The door's exact path: chi routes on the escaped path, so another door's parameter can spell the segment.
+	if err == nil || s.cfg.Store == nil || !errors.As(err, &revoked) || revoked.Claims == nil ||
+		r.URL.Path != decisionsDoor {
+		return claims, err
+	}
+	run, rerr := s.cfg.Store.GetRun(r.Context(), revoked.Claims.RunID)
+	if rerr != nil || !runIsOver(run, s.cfg.Now().UTC()) {
+		return nil, err
+	}
+	return revoked.Claims, nil
+}
+
+// runIsOver reports whether run is past every arm refuseTerminalRun refuses on (terminal, kept, or at its
+// lifetime cap), so a door it still reaches is one of its tail-grace doors.
+func runIsOver(run types.AgentRun, now time.Time) bool {
+	return isTerminalRunState(run.State) || runIsKept(run) || pastLifetimeCap(run, now)
+}
+
 // internalUploadWithinGrace reports whether this is one of the tail-upload doors
 // AND the run's row was written recently enough for its own tail to still be
 // arriving.
@@ -216,13 +261,17 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // It is accepted rather than closed because the exposure is bounded on three
 // sides and closing it needs a schema column this lane does not own:
 //
-//   - all three graced doors are UPLOAD-ONLY. None mints, injects or decides
+//   - all four graced doors are UPLOAD-ONLY. None mints, injects or decides
 //     anything, so a re-opened window cannot yield a credential.
-//   - each one re-checks the run for itself. The SSO-token door additionally
+//   - each upload door re-checks the run for itself, and the decision door
+//     writes rows on the token's own run alone. The SSO-token door additionally
 //     requires the run to be an aws-sso container login AND binds the blob to
 //     the launch-time scope stamp, so a dead run cannot write anything the live
 //     run could not have written.
-//   - the caller still has to hold that run's own unexpired, unrevoked token.
+//   - the caller still has to hold that run's own unexpired token, unrevoked
+//     but at the decision door (verifyRunToken). A run token lapses about an hour
+//     after its last renewal (identity.RunTokenTTL), and renewal stops with the
+//     run, so a re-opened window takes a revoked token for that hour at most.
 //
 // The durable fix is a terminal_at column (or having the reconciler skip the
 // sandbox_ref bump for already-terminal rows); until then the window is
@@ -254,14 +303,72 @@ func uploadGraceOpen(since, now time.Time) bool {
 // member of that enum — `run_terminal` is, with `run_state` saying which
 // terminal state was found (and `run_kept` with `lost_reason`). key is "" for
 // the reasons that have no such datum.
+//
+// The decision door's refusal of a run that is over, or of a post off its runner's relay binding, is the one
+// exception to a row per refusal: it is written once per run (claimDecisionRefusal), and given back when it
+// could not be written durably.
 func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, reason authz.Reason, key, val string) {
+	once := r.URL.Path == decisionsDoor &&
+		(reason == authz.ReasonRunTerminal || reason == authz.ReasonRunKept || placement.Reason(reason).Valid())
+	if once && !s.claimDecisionRefusal(claims.RunID) {
+		return
+	}
 	d := authz.Deny(reason, r.URL.Path, "").OnRun(claims.RunID).With("actor", internalAuthActor)
 	if key != "" {
 		d = d.With(key, val)
 	}
 	ev := s.refusalEvent(r.Context(), types.ActorAgent, claims.SPIFFEID, r.Method, d)
 	ev.SourceIP = r.RemoteAddr
-	s.recordAudit(r.Context(), ev)
+	if !once {
+		s.recordAudit(r.Context(), ev)
+	} else if !s.recordAuditDurably(r.Context(), ev) {
+		s.releaseDecisionRefusal(claims.RunID)
+	}
+}
+
+// doorRefusals holds, per run, until when this replica writes no further refusal row for the decision door
+// (claimDecisionRefusal). The zero value is ready to use.
+type doorRefusals struct {
+	mu    sync.Mutex
+	until map[uuid.UUID]time.Time
+}
+
+// claimDecisionRefusal reports whether this refusal of the decision door is the one this replica writes on the
+// run's trail. Past the tail grace, a holder of the run's token (revoked, at this door: verifyRunToken) is
+// refused on every post until the token lapses; a post off the run's relay binding is refused on every post
+// too; and the internal lane has no rate limit. One authz.denied row already fails the run's confined replay
+// (runDecisionPostRefused), so the rest write none. A claim holds for identity.RunTokenLapseAfter: renewal
+// stops when the run is over, so every token of a run that is over lapses inside that span, Verify's leeway
+// included. This replica therefore writes at most one such row per run in any RunTokenLapseAfter, a restart
+// at most one more, and a claim whose span is over is dropped at the next claim, so the set holds only the
+// runs refused within the last span.
+func (s *Server) claimDecisionRefusal(runID uuid.UUID) bool {
+	g := &s.doorRefusals
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := s.cfg.Now()
+	if until, ok := g.until[runID]; ok && now.Before(until) {
+		return false
+	}
+	if g.until == nil {
+		g.until = map[uuid.UUID]time.Time{}
+	}
+	for id, until := range g.until {
+		if !now.Before(until) {
+			delete(g.until, id)
+		}
+	}
+	g.until[runID] = now.Add(identity.RunTokenLapseAfter)
+	return true
+}
+
+// releaseDecisionRefusal gives a run's claim back when its row was neither written nor spooled, so the next
+// refused post writes it.
+func (s *Server) releaseDecisionRefusal(runID uuid.UUID) {
+	g := &s.doorRefusals
+	g.mu.Lock()
+	delete(g.until, runID)
+	g.mu.Unlock()
 }
 
 // pathHasAny reports whether path contains any of the segments. A substring

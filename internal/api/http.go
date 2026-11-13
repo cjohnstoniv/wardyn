@@ -897,7 +897,7 @@ func (s *Server) releaseIdentityExpired(runID uuid.UUID) {
 
 // internalAuth verifies a per-run token via identity.Provider.Verify with the
 // "wardyn-internal" audience and stashes the resulting claims on the context.
-// Any verification error fails closed with 401 (revoked/expired tokens too).
+// Any verification error fails closed with 401 (revoked/expired tokens too), but for verifyRunToken's one door.
 func (s *Server) internalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Identity == nil {
@@ -911,7 +911,7 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunToken, "missing run token")
 			return
 		}
-		claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
+		claims, err := s.verifyRunToken(r, tok) // Verify, and a revoked token's one door for a run that is over
 		if err != nil {
 			// Do not leak the verification reason (revoked vs expired vs forged)
 			// to the caller. The audit row is equally coarse — one reason for the

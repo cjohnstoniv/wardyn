@@ -42,7 +42,7 @@ import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
 import { DeniedHostsCard } from "./denied-hosts-card";
 import { RecordPane } from "./record-pane";
-import { isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
+import { cleanVerdictMayMove, isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
 import { PageContainer } from "../../wardyn/page-container";
 
 const POLL_MS = 2500;
@@ -173,9 +173,11 @@ export function WorkspaceDetailScreen() {
   }, []);
 
   // Poll while a session (open record / confined replay) is in-flight
-  // server-side, so the page reflects it without a manual refresh — paused
-  // otherwise so a settled workspace isn't polled forever.
-  const inFlight = !!ws && isRecording(ws);
+  // server-side, so the page reflects it without a manual refresh, and for a
+  // while after a confined replay is stamped clean, which the server can still
+  // take back (cleanVerdictMayMove) — paused otherwise so a settled workspace
+  // isn't polled forever.
+  const inFlight = !!ws && (isRecording(ws) || cleanVerdictMayMove(ws, Date.now()));
   usePoll(() => load(false), POLL_MS, !(id && inFlight));
 
   const rebuild = async () => {
