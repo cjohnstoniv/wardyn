@@ -20,6 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- `wardyn attach` on a run of your own runner now waits up to 2 seconds for the runner's last output to reach your terminal when the session ends without the organisation stopping it, instead of ending as soon as the organisation's connection closes; before, output the runner had already sent could go unshown. When that wait runs out and nothing else has ended the command first, it exits with an error that says the output may be incomplete.
+- `wardyn attach` on a run of your own runner now detaches with exit status 0 when the runner reports that the shell exited or the run ended and the organisation did not stop the session; before, the command could exit with an error ending in `failed to read frame header: EOF`.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
