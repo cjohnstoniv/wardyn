@@ -69,3 +69,35 @@ func (s *Server) handleGatewayJWKS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	_, _ = w.Write(body)
 }
+
+// gatewayClientCARoute is the client CA bundle's path, beside the key set and on
+// the same terms.
+const gatewayClientCARoute = wellKnownPrefix + "/wardyn-experimental/gateway-client-ca.pem"
+
+// handleGatewayClientCA serves the CA certificates a gateway that asks for a
+// client certificate checks a run's certificate against: the current one and,
+// until it retires, the previous one. Anonymous and gated like the key set: with
+// identity off, or with no CA row, it answers exactly as a path no route holds.
+// mountUI registers it.
+func (s *Server) handleGatewayClientCA(w http.ResponseWriter, r *http.Request) {
+	on, err := s.gatewayIdentityOn(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "error"})
+		return
+	}
+	var ca *gatewayidentity.Authority
+	if on && s.cfg.GatewayClientCA != nil {
+		if ca, err = s.cfg.GatewayClientCA(r.Context(), false); err != nil {
+			slog.Error("gateway identity: load the client CA for its bundle", slog.Any("err", err))
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "error"})
+			return
+		}
+	}
+	if ca == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	_, _ = w.Write(ca.BundlePEM())
+}

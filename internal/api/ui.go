@@ -39,15 +39,19 @@ func (s *Server) mountUI(r chi.Router) {
 		// unheld path answers 404, and with no GET /* to share that 405 another
 		// method would show the JWKS exists. Every other path gets chi's own answer.
 		r.NotFound(func(w http.ResponseWriter, req *http.Request) {
-			if req.URL.Path == gatewayJWKSRoute && req.Method == http.MethodGet {
+			switch {
+			case req.URL.Path == gatewayJWKSRoute && req.Method == http.MethodGet:
 				s.handleGatewayJWKS(w, req)
-				return
+			case req.URL.Path == gatewayClientCARoute && req.Method == http.MethodGet:
+				s.handleGatewayClientCA(w, req)
+			default:
+				http.NotFound(w, req)
 			}
-			http.NotFound(w, req)
 		})
 		return
 	}
 	r.Get(gatewayJWKSRoute, s.handleGatewayJWKS)
+	r.Get(gatewayClientCARoute, s.handleGatewayClientCA)
 	dir := s.cfg.UIDir
 	fs := http.FileServer(http.Dir(dir))
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {

@@ -54,6 +54,8 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-internal-ca":       true,
 	// The AI gateway token's signing key (cmd/wardynd's gatewayIdentity).
 	"wardyn-gateway-identity-key": true,
+	// The AI gateway client certificate CA (cmd/wardynd's gatewayClientCA).
+	"wardyn-gateway-client-ca": true,
 	// The audit checkpoint signing key (cmd/wardynd's loadOrCreateAuditReceiptKey):
 	// overwriting it would orphan every checkpoint already sent off-box.
 	"wardyn-audit-receipt-key": true,

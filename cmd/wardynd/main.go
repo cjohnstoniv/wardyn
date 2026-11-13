@@ -63,6 +63,10 @@ const (
 // token (internal/gatewayidentity): the current key and the previous one's public half.
 const secretGatewayIdentityKey = "wardyn-gateway-identity-key"
 
+// secretGatewayClientCA holds the CA that signs a run's AI gateway client certificate
+// (internal/gatewayidentity's Authority): its key, its certificate and the previous certificate.
+const secretGatewayClientCA = "wardyn-gateway-client-ca"
+
 // secretAuditReceiptKey holds the Ed25519 key that signs audit checkpoints (internal/auditsign): the current
 // key and every previous one's public half.
 const secretAuditReceiptKey = "wardyn-audit-receipt-key"
@@ -397,6 +401,8 @@ func run() error {
 	leader := db.NewSweeperLeader(pool, holder)
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	receiptKeys, checkpointStatus := startAuditCheckpoints(rootCtx, *f.auditCheckpointInterval, bootKeys, st, maskedRec)
+	gatewayClientCA := bootKeys.gatewayClientCA()
+	bootKeys.ensureGatewayClientCA(bootCtx, gatewayClientCA)
 	srv := api.New(api.Config{
 		ImageAdmissionConfig: api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
 		SweeperLease:         leader,
@@ -406,6 +412,7 @@ func run() error {
 		// Reads its row on first use, so an install with identity off has no key
 		// and takes no query per anonymous JWKS request past one each 30 seconds.
 		GatewayIdentity: bootKeys.gatewayIdentity(),
+		GatewayClientCA: gatewayClientCA,
 		Approvals:       approvals,
 		Broker:          brk,
 		// The wait ceiling a run's captured wait folds under; the approval

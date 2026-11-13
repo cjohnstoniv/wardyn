@@ -742,6 +742,8 @@ var reservedBrokerSecretNames = map[string]bool{
 	"bedrock-api-key":          true,
 	// The AI gateway token's signing key (cmd/wardynd's gatewayIdentity).
 	"wardyn-gateway-identity-key": true,
+	// The AI gateway client certificate CA (cmd/wardynd's gatewayClientCA).
+	"wardyn-gateway-client-ca": true,
 	// The audit checkpoint signing key: no grant may hand it into a sandbox.
 	"wardyn-audit-receipt-key": true,
 	// The hybrid device credential: no grant may hand it into a sandbox.

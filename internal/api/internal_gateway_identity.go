@@ -148,9 +148,10 @@ func (s *Server) mountGatewayIdentityRoute(r chi.Router) {
 
 // handleInternalGatewayIdentity mints a run's gateway token. internalAuth has
 // refused a terminal, kept, queued or wrongly relayed run. The run is the token's
-// claims.RunID and the body names the provider, or the MCP server, alone. What the token
-// says comes from the run token and the live record, checked against what was sealed at
-// dispatch (gatewayMintAdmit), never from the request.
+// claims.RunID and the body names the provider, or the MCP server, alone; a body naming a
+// public key alone asks for the run's client certificate (handleGatewayClientCertificate).
+// What the token says comes from the run token and the live record, checked against what
+// was sealed at dispatch (gatewayMintAdmit), never from the request.
 //
 //	POST /api/v1/internal/gateway-identity
 func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Request) {
@@ -162,8 +163,17 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 	var body struct {
 		ProviderID string `json:"provider_id"`
 		MCPServer  string `json:"mcp_server"`
+		PublicKey  string `json:"public_key"`
 	}
 	if !decodeStrict(w, r, &body) {
+		return
+	}
+	if body.PublicKey != "" {
+		if body.ProviderID != "" || body.MCPServer != "" {
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "public_key is asked for alone")
+			return
+		}
+		s.handleGatewayClientCertificate(w, r, claims, body.PublicKey)
 		return
 	}
 	ctx := r.Context()
@@ -749,7 +759,7 @@ func introducedGatewayIdentity(block, stored *types.ModelProviders) bool {
 }
 
 // refuseGatewayIdentityWrite is a save door's stored-block half of the identity
-// rules, and makes the signing key at the first save that turns identity on, so
+// rules, and makes the signing key and the client CA at the first save that turns identity on, so
 // the key set can serve it before any run starts and an install with identity off
 // has no row. A failed create refuses the save. It answers for itself and returns
 // true when it refused; prefix is the door's own sentence opening.
@@ -774,10 +784,17 @@ func (s *Server) refuseGatewayIdentityWrite(w http.ResponseWriter, r *http.Reque
 	}
 	if s.cfg.GatewayIdentity != nil {
 		signer, err := s.cfg.GatewayIdentity(r.Context(), true)
+		// The client CA is made beside the key, so a gateway can fetch its bundle before any run starts.
+		if err == nil && signer != nil && s.cfg.GatewayClientCA != nil {
+			var ca *gatewayidentity.Authority
+			if ca, err = s.cfg.GatewayClientCA(r.Context(), true); err == nil && ca == nil {
+				err = errors.New("no client CA was made")
+			}
+		}
 		if err == nil && signer != nil {
 			return false
 		}
-		slog.ErrorContext(r.Context(), "gateway identity: make the signing key", slog.Any("err", err))
+		slog.ErrorContext(r.Context(), "gateway identity: make the signing key or the client CA", slog.Any("err", err))
 	}
 	writeErrorReason(w, http.StatusServiceUnavailable, reasonGatewayIdentityUnavailable, gatewayKeyUnavailableMsg)
 	return true

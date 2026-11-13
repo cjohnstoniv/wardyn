@@ -50,11 +50,10 @@ type Config struct {
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit CRUD + reads),
 	// used instead of *pgxpool.Pool so a future pure-Go backend can be swapped in. Defaults
 	// to a store.NewPG(Pool) adapter when wired from wardynd.
-	Store store.Store
-	// Identity mints/verifies/revokes per-run identities (embedded by default).
-	Identity identity.Provider
-	// GatewayIdentity returns the AI gateway token's signer (contract: handleGatewayJWKS).
-	GatewayIdentity func(ctx context.Context, create bool) (*gatewayidentity.Signer, error)
+	Store           store.Store
+	Identity        identity.Provider                                                          // mints/verifies/revokes per-run identities (embedded by default)
+	GatewayIdentity func(ctx context.Context, create bool) (*gatewayidentity.Signer, error)    // the AI gateway token's signer (contract: handleGatewayJWKS)
+	GatewayClientCA func(ctx context.Context, create bool) (*gatewayidentity.Authority, error) // a run's gateway client certificate CA (contract: handleGatewayClientCA)
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
 	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
