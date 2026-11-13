@@ -20,6 +20,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- A run waiting in a runner pool's queue for the one kind of runner it needs (one that enforces its barrier, takes its drives or folders, or has room for its size) no longer holds its owner's later runs back: a later run another of the owner's runners can take now starts. Only a wait no run of that owner could get past, such as no runner online with room or no recording store where recording is required, still holds them.
+- A run that has waited in a runner pool's queue since a 0.9 release, before a run's size was stored with it, no longer keeps the runs behind it waiting while the runner it was judged for cannot take it at the size it joined with; it keeps its place and the next run that fits starts.
+- A run scheduled for later no longer refuses the revive of a kept run into a pool with a free slot; only a waiting run that is due does.
+- A run promoted from a runner pool's queue now starts before the queue records the waits of the runs it passed over, and that record gives up at the pass's time limit, so a slow record no longer leaves the promoted run to be failed as a lost start.
+- A promoted run sent back to wait for its owner's sign-in after its pool was deleted now ends with `runner_pool_removed` instead of waiting in the deleted pool until its deadline.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

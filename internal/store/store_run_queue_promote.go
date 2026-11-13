@@ -40,6 +40,9 @@ type PromotePass struct {
 	// pool full writes it on every waiting run of the pool that says something else, so a run that waited
 	// for a runner goes back to waiting for a slot. "" writes nothing.
 	AtCapacityDetail string
+	// HoldKey names the waiting runs one Owner verdict holds: once a run is held for a reason of its
+	// owner's, the later runs with its key are passed over for the pass. nil keys every run by its owner.
+	HoldKey func(RunQueueEntry) string
 }
 
 // QueueVerdict is the pass's answer for one waiting run.
@@ -49,8 +52,9 @@ type QueueVerdict struct {
 	Wait  string
 	// Stop says no run can be admitted this pass (the host has no room), so the rest are not judged.
 	Stop bool
-	// Owner says a held run's reason is its owner's (none of their runners can take a run), so their
-	// later runs are passed over this pass. A run held for a reason of its own holds only itself.
+	// Owner says a held run's reason is its owner's (no runner of theirs could take any run now), so the
+	// later runs with its hold key (PromotePass.HoldKey) are passed over this pass. A run held for a reason
+	// of its own holds only itself.
 	Owner bool
 	// Runners are the registered runners an admitted run may be placed on, each with room as judged;
 	// Remotes the remote-hosted runners. Both empty for a run placed on none. The promotion binds the
@@ -159,19 +163,27 @@ func (s PG) setPoolQueueWait(ctx context.Context, poolID uuid.UUID, detail strin
 
 // judgeQueue reads the pool's waiting runs oldest first, a page at a time, and asks the verdict of each
 // until room runs are admitted, the queue ends, a verdict stops the pass, or half the pass's deadline is
-// spent (the rest is the promotion's). Once a run is held for a reason of its owner's (Owner), that
-// owner's later runs are passed over this time, so neither a long run of one person's held heads nor a
-// fixed scan window keeps a run further back from being judged. A read that fails, or a deadline spent,
-// part way still returns the runs already admitted, with the error, and PromoteRunQueue promotes them.
+// spent (the rest is the promotion's). Once a run is held for a reason of its owner's (Owner), the later
+// runs with its hold key are passed over this time, so neither a long run of one person's held heads nor a
+// fixed scan window keeps a run further back from being judged. A run admitted with runners but no size
+// for them (a launch queued before its unbound size was recorded) was judged at no size: the promotion
+// holds it to the size it joined with and may refuse it, so it does not count against room and the runs
+// behind it are still judged. A read that fails, or a deadline spent, part way still returns the runs
+// already admitted, with the error, and PromoteRunQueue promotes them.
 func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerPool, room int, admit QueueAdmit) ([]admittedRun, []QueueHeld, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(time.Until(dl)/2))
 		defer cancel()
 	}
+	holdKey := pass.HoldKey
+	if holdKey == nil {
+		holdKey = func(e RunQueueEntry) string { return e.Owner }
+	}
 	var admitted []admittedRun
 	var held []QueueHeld
 	busy := map[string]bool{}
+	counted := 0
 	var after *RunQueueEntry
 	for {
 		page, err := s.queuePage(ctx, pool.ID, after, pass.ScanLimit)
@@ -180,7 +192,7 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 		}
 		for i := range page {
 			e := page[i]
-			if busy[e.Owner] {
+			if busy[holdKey(e)] {
 				continue
 			}
 			if ctx.Err() != nil {
@@ -193,12 +205,16 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 			case v.Stop:
 				return admitted, held, nil
 			case v.Admit:
-				if admitted = append(admitted, admittedRun{entry: e, runners: v.Runners, remotes: v.Remotes, needs: v.Needs}); len(admitted) >= room {
+				admitted = append(admitted, admittedRun{entry: e, runners: v.Runners, remotes: v.Remotes, needs: v.Needs})
+				if len(v.Needs) > 0 || len(v.Runners)+len(v.Remotes) == 0 {
+					counted++
+				}
+				if counted >= room {
 					return admitted, held, nil
 				}
 			default:
 				held = append(held, QueueHeld{RunID: e.RunID, Wait: v.Wait})
-				busy[e.Owner] = v.Owner
+				busy[holdKey(e)] = v.Owner
 			}
 		}
 		if pass.ScanLimit <= 0 || len(page) < pass.ScanLimit {
@@ -655,10 +671,22 @@ func (s PG) SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail st
 // unchanged) and detail as its status_detail. Guarded: only a run still PENDING with admitted_at set and
 // no sandbox moves, so a kill or another end that moved it first keeps its outcome, and a kill after it
 // meets a QUEUED run. Its binding and size stay the promotion's; the next promotion sets them again.
+// It takes the pool row first (FOR NO KEY UPDATE, the lock an enqueue takes), so it is ordered against a
+// pool delete: ErrNotFound when the pool was deleted (or is gone) and nothing is written, since the
+// delete ended every run it found waiting and a row put back now would wait in a pool no promotion
+// serves. A disabled pool takes the run back.
 // false means the run had moved.
 func (s PG) RequeuePromotedRun(ctx context.Context, e RunQueueEntry, detail string) (bool, error) {
 	var moved int
-	if err := s.Pool.QueryRow(ctx, `
+	err := s.inTx(ctx, func(q Querier) error {
+		var state string
+		switch err := q.QueryRow(ctx, `SELECT state FROM runner_pools WHERE id = $1 FOR NO KEY UPDATE`, e.PoolID).Scan(&state); {
+		case errors.Is(err, pgx.ErrNoRows) || (err == nil && state == string(types.RunnerPoolDeleted)):
+			return ErrNotFound
+		case err != nil:
+			return fmt.Errorf("store: lock the requeue's pool: %w", err)
+		}
+		return q.QueryRow(ctx, `
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=NULL, status_detail=$3
 			WHERE id=$1 AND state=$4 AND admitted_at IS NOT NULL AND sandbox_ref = '' RETURNING id),
@@ -667,8 +695,13 @@ func (s PG) RequeuePromotedRun(ctx context.Context, e RunQueueEntry, detail stri
 			SELECT id, $5::uuid, $6::text, $7::timestamptz, $8::timestamptz, $9::jsonb, $10::jsonb, $11::jsonb, $12::timestamptz
 			FROM moved RETURNING run_id)
 		SELECT count(*) FROM back`,
-		e.RunID, string(types.RunQueued), detail, string(types.RunPending), e.PoolID, e.Owner, e.QueuedAt, e.DeadlineAt,
-		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch), e.StartAt).Scan(&moved); err != nil {
+			e.RunID, string(types.RunQueued), detail, string(types.RunPending), e.PoolID, e.Owner, e.QueuedAt, e.DeadlineAt,
+			jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch), e.StartAt).Scan(&moved)
+	})
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return false, ErrNotFound
+	case err != nil:
 		return false, fmt.Errorf("store: requeue promoted run: %w", err)
 	}
 	return moved > 0, nil

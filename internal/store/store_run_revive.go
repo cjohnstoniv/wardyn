@@ -144,7 +144,7 @@ func (s PG) claimRevived(ctx context.Context, id uuid.UUID, from types.LostReaso
 // should fail the revive.
 func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, owe bool, expected PolicySlot) (claimed bool, owedAt time.Time, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
-		if err := lockPoolForRevive(ctx, q, id); err != nil {
+		if err := lockPoolForRevive(ctx, q, id, s.now()); err != nil {
 			return err
 		}
 		if limit > 0 {
@@ -259,9 +259,10 @@ func (e *RunnerPoolFullError) Error() string { return ErrRunnerPoolFull.Error() 
 func (e *RunnerPoolFullError) Unwrap() error { return ErrRunnerPoolFull }
 
 // lockPoolForRevive locks the run's pool row FOR NO KEY UPDATE and refuses when the pool has a
-// concurrent-run cap that its other slot-holders have reached or that has runs waiting. A run with no
-// pool, or a pool with no cap, passes without a lock.
-func lockPoolForRevive(ctx context.Context, q Querier, runID uuid.UUID) error {
+// concurrent-run cap that its other slot-holders have reached or that has runs waiting. A scheduled run
+// whose start time is still ahead of now is not waiting yet, as the promotion's page (queuePage) leaves
+// it out. A run with no pool, or a pool with no cap, passes without a lock.
+func lockPoolForRevive(ctx context.Context, q Querier, runID uuid.UUID, now time.Time) error {
 	var poolID uuid.UUID
 	var name string
 	var limitsRaw []byte
@@ -284,8 +285,8 @@ func lockPoolForRevive(ctx context.Context, q Querier, runID uuid.UUID) error {
 	var others, waiting int
 	if err := q.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM agent_runs WHERE runner_pool_id = $1 AND id <> $2 AND state = ANY($3) AND `+HoldsSandboxSQL+`),
-		       (SELECT count(*) FROM run_queue WHERE pool_id = $1)`,
-		poolID, runID, slotHoldingStateNames()).Scan(&others, &waiting); err != nil {
+		       (SELECT count(*) FROM run_queue WHERE pool_id = $1 AND (start_at IS NULL OR start_at <= $4))`,
+		poolID, runID, slotHoldingStateNames(), now).Scan(&others, &waiting); err != nil {
 		return fmt.Errorf("store: count revive pool: %w", err)
 	}
 	if others >= *limits.MaxConcurrentRuns || waiting > 0 {
