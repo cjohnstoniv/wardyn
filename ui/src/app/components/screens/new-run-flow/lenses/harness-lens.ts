@@ -112,6 +112,13 @@ export function giveBackText(intent: RunIntent, held: Record<string, string> | u
 export const heldKey = (held: Record<string, string> | undefined, id: string): string | undefined =>
   !held || id === "none" ? undefined : id in held ? id : "" in held ? "" : undefined;
 
+/** What is held for a card's harness follows it on a swap, as its task does (swapHarness); text already held for the new harness stays. */
+export function swapHeld(held: Record<string, string> | undefined, from: string, to: string): Record<string, string> | undefined {
+  if (!held || !(from in held) || to in held) return held;
+  const { [from]: text, ...rest } = held;
+  return { ...rest, [to]: text };
+}
+
 /** Starts `id`, with the text held for it as its first message when it has none. */
 export function startWithHeld(intent: RunIntent, id: string, held: Record<string, string> | undefined): RunIntent {
   const next = setStarter(intent, id);

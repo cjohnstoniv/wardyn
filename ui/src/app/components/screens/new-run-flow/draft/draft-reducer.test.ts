@@ -25,6 +25,28 @@ describe("draftReducer (U3)", () => {
     expect(isDirty(d)).toBe(false);
   });
 
+  // A VM starts no harness and the server refuses a start there: a template that names one opens without it, its first
+  // message held, and the draft is the template as it can run, so nothing reads as changed.
+  it("a seed on a VM leaves a harness start out and holds its first message", () => {
+    const codex = { id: "codex-cli", kind: "harness" as const };
+    const start = { kind: "harness" as const, tool: "codex-cli", prompt: "fix it" };
+    for (const machine_kind of ["linux_vm", "macos_vm"] as const) {
+      const vm = draftReducer(initialDraft("alice"), { type: "seed", origin: TEMPLATE, intent: { shape: "agent_task", machine_kind, tools: [codex], startup: start } });
+      expect(vm.intent).toEqual({ shape: "agent_task", machine_kind, tools: [codex] });
+      expect(vm.guided.heldText).toEqual({ "codex-cli": "fix it" });
+      expect(isDirty(vm)).toBe(false);
+    }
+    const container: RunIntent = { shape: "agent_task", tools: [codex], startup: start };
+    const command: RunIntent = { shape: "environment", machine_kind: "linux_vm", startup: { kind: "command", command: "make dev" } };
+    // A workload beside the start is Autonomous's to read: the start's first message is its task.
+    const workload: RunIntent = { shape: "agent_task", machine_kind: "linux_vm", tools: [codex], workload: { kind: "agent_task", agent: "codex-cli", task: "" }, startup: start };
+    for (const intent of [container, command, workload]) {
+      const d = draftReducer(initialDraft("alice"), { type: "seed", origin: TEMPLATE, intent });
+      expect(d.intent).toBe(intent);
+      expect(d.guided.heldText).toBeUndefined();
+    }
+  });
+
   it("edit applies a lens change and bumps the revision each time", () => {
     const d1 = draftReducer(seeded(), { type: "edit", apply: (i) => ({ ...i, runner_pool_id: "p" }) });
     const d2 = draftReducer(d1, { type: "edit", apply: (i) => i });

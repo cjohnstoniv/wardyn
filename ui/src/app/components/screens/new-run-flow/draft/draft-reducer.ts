@@ -4,6 +4,9 @@
  */
 
 import type { StartChoice } from "../../../../lib/schedule";
+import { isVMKind } from "../../../../lib/types/machine-kind";
+import { textLeft } from "../lenses/harness-lens";
+import { withKeys } from "../lenses/lens-keys";
 import { emptyGuided, initialDraft, type DocBuffer, type GuidedFacts, type NewRunDraft, type NewRunOrigin, type RunIntent } from "./run-intent";
 
 export type DraftAction =
@@ -21,11 +24,18 @@ const startFromOf = (origin: NewRunOrigin): GuidedFacts["startFrom"] =>
 
 export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDraft {
   switch (action.type) {
-    case "seed":
+    case "seed": {
+      // A VM starts no harness and the server refuses a start there, though a template can still name one: the seed
+      // leaves the start out and holds its first message, as choosing a VM does (chooseMachineKind). A template that
+      // also names a workload is left as written: Autonomous takes the start's first message as its task (shapeCarriers).
+      const vmStart = isVMKind(action.intent.machine_kind) && action.intent.startup?.kind === "harness" && !action.intent.workload;
+      const intent = vmStart ? withKeys(action.intent, { startup: undefined }) : action.intent;
+      const heldText = textLeft(action.intent, intent);
       return {
-        ...draft, intent: action.intent, base: action.intent, origin: action.origin,
-        guided: emptyGuided(startFromOf(action.origin)), doc: undefined, schedule: undefined, revision: draft.revision + 1,
+        ...draft, intent, base: intent, origin: action.origin,
+        guided: { ...emptyGuided(startFromOf(action.origin)), ...(heldText && { heldText }) }, doc: undefined, schedule: undefined, revision: draft.revision + 1,
       };
+    }
     case "edit": {
       const intent = action.apply(draft.intent);
       // Text held for an agent task is that task's: another shape takes none of it.

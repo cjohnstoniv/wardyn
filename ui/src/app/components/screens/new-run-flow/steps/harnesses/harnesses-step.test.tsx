@@ -399,6 +399,15 @@ describe("Harnesses step: text a switch to Interactive held", () => {
     expect(heldNow()).toEqual({ "": "fix it" });
   });
 
+  // The card keeps its text on a swap (swapHarness), so what a switch to Interactive held for its harness follows it.
+  it("a swap moves the text held for the card's harness to the new one", async () => {
+    showHeld({ ...INTERACTIVE, machine_kind: "linux_vm", tools: [harness("codex-cli")] }, { "codex-cli": "fix it" });
+    await waitFor(() => expect(screen.getByRole("option", { name: "Claude Code" })).toBeEnabled());
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) }), "claude-code");
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code"]);
+    expect(heldNow()).toEqual({ "claude-code": "fix it" });
+  });
+
   // A switch back to Autonomous leaves the fact in place: a harness added there starts nothing, as the server refuses a start on a background task.
   it("an Autonomous run starts no harness, whatever is held", async () => {
     const user = userEvent.setup();

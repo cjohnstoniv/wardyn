@@ -14,7 +14,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { Notice } from "../../../../wardyn/notice";
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
-import { addHarness, agentTask, clearStarter, heldKey, removeHarness, setAgentTask, setStartPrompt, setStarter, startWithHeld, swapHarness } from "../../lenses/harness-lens";
+import { addHarness, agentTask, clearStarter, heldKey, removeHarness, setAgentTask, setStartPrompt, setStarter, startWithHeld, swapHarness, swapHeld } from "../../lenses/harness-lens";
 import { harnessIds } from "../../lenses/lens-keys";
 import { modeOf } from "../../lenses/shape-lens";
 import { isVMKind } from "../../../../../lib/types/machine-kind";
@@ -124,7 +124,10 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             started={intent.startup?.kind === "harness" && intent.startup.tool === id}
             vm={vm}
             text={mode === "autonomous" ? agentTask(intent, id) : intent.startup?.tool === id ? intent.startup.prompt ?? "" : ""}
-            onSwap={(to) => edit((i) => swapHarness(i, id, to))}
+            onSwap={(to) => {
+              dispatch({ type: "guided", patch: { heldText: swapHeld(held, id, to) } });
+              edit((i) => swapHarness(i, id, to));
+            }}
             onRemove={() => {
               edit((i) => removeHarness(i, id));
               announce(NR_HARNESSES.REMOVED);
