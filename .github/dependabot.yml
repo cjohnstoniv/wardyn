@@ -11,20 +11,14 @@ updates:
         update-types: [minor, patch]
     ignore:
       # These modules' next versions need go 1.27 while go.mod is go 1.26, so
-      # they stay at the versions below. Remove these entries with the toolchain
+      # Dependabot leaves them alone. Remove these entries with the toolchain
       # bump planned for 0.10.1.
       - dependency-name: "github.com/sigstore/sigstore-go"
-        versions: ["> v1.3.0"]
       - dependency-name: "github.com/sigstore/sigstore"
-        versions: ["> v1.10.8"]
       - dependency-name: "github.com/sigstore/rekor"
-        versions: ["> v1.5.3"]
       - dependency-name: "github.com/sigstore/rekor-tiles/v2"
-        versions: ["> v2.3.0"]
       - dependency-name: "github.com/sigstore/timestamp-authority/v2"
-        versions: ["> v2.1.3"]
       - dependency-name: "github.com/digitorus/pkcs7"
-        versions: ["> v0.0.0-20230818184609-3a137a874352"]
   - package-ecosystem: npm
     directory: /ui
     schedule:
