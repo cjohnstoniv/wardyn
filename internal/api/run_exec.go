@@ -185,8 +185,9 @@ func (s *Server) refuseExecGovernance(w http.ResponseWriter, r *http.Request, ru
 	return false
 }
 
-// execStartBudget is the longest a command's start holds the run's start lock: a runner that has not started the
-// command by then is cut off and the command refused, so the run's end waits no longer than that for a slow runner.
+// execStartBudget is the longest an exec's start, or a display's dial, holds the run's start lock (an attach has its
+// own, attachPrepareTimeout): a runner that has not started the command by then is cut off and the command refused,
+// so the run's end waits no longer than that for a slow runner.
 var execStartBudget = 10 * time.Second
 
 // runExec runs command in fresh and answers its result. execAdmitted lets execFreshRun's start lock go beside the

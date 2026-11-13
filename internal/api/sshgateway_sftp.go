@@ -38,9 +38,20 @@ func sftpServerPathFor(kind types.MachineKind) string {
 // gone sandbox is named as such, ErrExecStreamUnsupported maps to the shared
 // honest message every primitive here uses, and any other launch failure is
 // read as a BYOI image without the binary and names the image contract (never
-// a hang).
-func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, args ...string) (*runner.ExecSession, string, error) {
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: append([]string{sftpServerPathFor(run.MachineKind), "-e"}, args...)})
+// a hang). fenced starts it as a person's channel does, under the run's start lock
+// on the run as it stands there (execFresh); a computer folder's pass, which an
+// end runs on a run that is no longer live, is never fenced.
+func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fenced bool, args ...string) (*runner.ExecSession, string, error) {
+	spec := runner.ExecSpec{Argv: append([]string{sftpServerPathFor(run.MachineKind), "-e"}, args...)}
+	var (
+		sess *runner.ExecSession
+		err  error
+	)
+	if fenced {
+		sess, err = s.execFresh(ctx, run.ID, sshLiveRunWords, spec)
+	} else {
+		sess, err = s.cfg.Runner.ExecStream(ctx, run.SandboxRef, spec)
+	}
 	if err == nil {
 		return sess, "", nil
 	}
@@ -52,6 +63,8 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, args ..
 		reason = "sftp unavailable: the runner for this sandbox is offline; retry when it reconnects"
 	case errors.Is(err, runner.ErrSandboxGone):
 		reason = "sftp unavailable: the sandbox is gone"
+	case startCut(err):
+		reason = "sftp unavailable: " + err.Error()
 	default:
 		reason = strings.Replace(sftpServerMissing, sftpServerPath, sftpServerPathFor(run.MachineKind), 1) + " (" + err.Error() + ")"
 	}
@@ -111,7 +124,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, reason, err := s.execSFTPServer(ctx, run, "-d", "%d")
+	sess, reason, err := s.execSFTPServer(ctx, run, true, "-d", "%d")
 	if err != nil {
 		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
 			runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))

@@ -198,7 +198,7 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 	if dataOut.DataOut() != types.TransferAllowed {
 		args = append(args, "-P", sftpServerDeny) // no file content leaves the run
 	}
-	sess, reason, err := s.execSFTPServer(ctx, run, args...)
+	sess, reason, err := s.execSFTPServer(ctx, run, true, args...)
 	if err != nil {
 		fail(err.Error(), reason)
 		return

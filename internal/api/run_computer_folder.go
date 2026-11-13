@@ -839,7 +839,7 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		}
 		return runnerwire.FolderPass{}, false, true, errors.New(refusal.body.Error)
 	}
-	sess, reason, err := s.execSFTPServer(ctx, run, "-d", folder.RemoteDir)
+	sess, reason, err := s.execSFTPServer(ctx, run, false, "-d", folder.RemoteDir)
 	if err != nil {
 		return runnerwire.FolderPass{}, false, true, errors.New(reason)
 	}

@@ -270,11 +270,14 @@ func (s *Server) signinRun(w http.ResponseWriter, r *http.Request) (types.AgentR
 		return types.AgentRun{}, nil, false
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
-		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNotRunning, "the run is not running, so it has no desktop to sign in to")
+		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNotRunning, signinNotRunningMsg)
 		return types.AgentRun{}, nil, false
 	}
 	return run, st, true
 }
+
+// signinNotRunningMsg is the sign-in doors' answer for a run that is not running, or is kept.
+const signinNotRunningMsg = "the run is not running, so it has no desktop to sign in to"
 
 type desktopSigninBeginResponse struct {
 	SigninID  uuid.UUID `json:"signin_id"`
@@ -376,7 +379,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be stopped, so the sign-in did not start", "pause", err)
 		return
 	}
-	pauseRec, err := s.signinExec(ctx, run.SandboxRef, false, nil, 1<<20, "pause-agent")
+	pauseRec, err := s.signinExec(ctx, run, signinAsAgent, nil, 1<<20, "pause-agent")
 	if err != nil {
 		if errors.Is(err, errSigninNotStarted) {
 			// pause-agent never ran, so pid 1 is the one process this begin
@@ -408,7 +411,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		s.PauseDesktopRecording(ctx, run, desktopPauseSignin, si.ID.String())
 	}
 	startCfg, _ := json.Marshal(map[string]string{"credential": cred, "proxy": signinProxyAddr})
-	if _, err := s.signinExec(ctx, run.SandboxRef, true, startCfg, 64<<10, "start"); err != nil {
+	if _, err := s.signinExec(ctx, run, signinOpensDisplay, startCfg, 64<<10, "start"); err != nil {
 		s.rollbackDesktopSignin(ctx, run, si, principal)
 		fail(http.StatusBadGateway, reasonDesktopSigninStartFailed, "the sign-in display did not start; the agent was resumed", "start", err)
 		return
@@ -546,10 +549,10 @@ func (s *Server) handleShareDesktopSignin(w http.ResponseWriter, r *http.Request
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorHuman, principal, "desktop_signin.transfer", site, outcome, mustJSON(d)))
 	}
-	out, err := s.signinExec(ctx, run.SandboxRef, true, nil, desktopSigninExport+1, "export", "--site", site)
+	out, err := s.signinExec(ctx, run, signinExportsLogin, nil, desktopSigninExport+1, "export", "--site", site)
 	if err != nil {
 		audit("failure", 0, "export")
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninShareFailed, "the site's login could not be read from the sign-in browser; nothing was shared")
+		writeShareFailure(w, err, "the site's login could not be read from the sign-in browser; nothing was shared")
 		return
 	}
 	var cookies []json.RawMessage
@@ -566,9 +569,9 @@ func (s *Server) handleShareDesktopSignin(w http.ResponseWriter, r *http.Request
 		}
 	}
 	body, _ := json.Marshal(kept)
-	if _, err := s.signinExec(ctx, run.SandboxRef, false, body, 4<<10, "import", "--site", site); err != nil {
+	if _, err := s.signinExec(ctx, run, signinImportsLogin, body, 4<<10, "import", "--site", site); err != nil {
 		audit("failure", 0, "import")
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninShareFailed, "the login could not be written for the agent; nothing was shared")
+		writeShareFailure(w, err, "the login could not be written for the agent; nothing was shared")
 		return
 	}
 	sh := types.DesktopSigninShare{ID: uuid.New(), SigninID: si.ID, RunID: run.ID, Site: site, CookieCount: len(kept),
@@ -578,6 +581,16 @@ func (s *Server) handleShareDesktopSignin(w http.ResponseWriter, r *http.Request
 	}
 	audit("success", len(kept), "")
 	writeJSON(w, http.StatusOK, desktopSigninShareResponse{Site: site, Cookies: len(kept)})
+}
+
+// writeShareFailure answers a share step that failed: a run that ended or was kept by the step's start lock with
+// signinRun's refusal, any other failure with msg.
+func writeShareFailure(w http.ResponseWriter, err error, msg string) {
+	if errors.As(err, new(startRefused)) {
+		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNotRunning, signinNotRunningMsg)
+		return
+	}
+	writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninShareFailed, msg)
 }
 
 // heldSignin is the run's open sign-in when principal holds it. A sign-in
@@ -642,7 +655,7 @@ func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si
 	if made, ok := signinContinueMade(si.EndStage); ok {
 		return s.continueDesktopSignin(ctx, st, run, si, made, reason, actorType, actor)
 	}
-	if _, err := s.signinExec(ctx, run.SandboxRef, true, nil, 4<<10, "stop"); err != nil {
+	if _, err := s.signinExec(ctx, run, signinAsPerson, nil, 4<<10, "stop"); err != nil {
 		if errors.Is(err, runner.ErrSandboxGone) {
 			return s.closeDesktopSignin(ctx, st, run, si, signinEndRunEnded, actorType, actor, false)
 		}
@@ -652,7 +665,7 @@ func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si
 	if len(rec) == 0 {
 		rec = []byte(`{}`)
 	}
-	if _, err := s.signinExec(ctx, run.SandboxRef, false, rec, 4<<10, "resume-agent"); err != nil {
+	if _, err := s.signinExec(ctx, run, signinAsAgent, rec, 4<<10, "resume-agent"); err != nil {
 		return failed("resume", err)
 	}
 	if se, ok := s.cfg.Runner.(runner.SigninExecer); ok {
@@ -679,10 +692,25 @@ func (s *Server) closeDesktopSignin(ctx context.Context, st store.DesktopSigninS
 	return nil
 }
 
-// signinExec runs one wardyn-signin subcommand in the sandbox, as the person
-// (asPerson) or as the container's own user (the agent), with stdin, and
-// returns its stdout. A non-zero exit, or more than maxOut bytes, is an error.
-func (s *Server) signinExec(ctx context.Context, ref string, asPerson bool, stdin []byte, maxOut int, args ...string) ([]byte, error) {
+// signinUser is who one wardyn-signin subcommand runs as, and whether it starts under the run's start lock.
+type signinUser int
+
+const (
+	signinAsAgent      signinUser = iota // the container's own user
+	signinAsPerson                       // the person
+	signinOpensDisplay                   // the person, for the step that opens their display; under the start lock
+	signinExportsLogin                   // the person, for a share's export; under the start lock
+	signinImportsLogin                   // the container's own user, for a share's import; under the start lock
+)
+
+// signinExec runs one wardyn-signin subcommand in run's sandbox, as the person
+// or as the container's own user (the agent), with stdin, and returns its
+// stdout. A non-zero exit, or more than maxOut bytes, is an error. The steps a
+// person starts on a live run, the display and a share's export and import,
+// start under the run's start lock, on the run as it stands there (startFresh):
+// a run that ended or was kept there is refused (startRefused). The others never
+// wait on it, so an end's stop and resume are never refused by a start.
+func (s *Server) signinExec(ctx context.Context, run types.AgentRun, as signinUser, stdin []byte, maxOut int, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, signinExecTimeout)
 	defer cancel()
 	spec := runner.ExecSpec{Argv: append([]string{signinBinary}, args...)}
@@ -690,14 +718,21 @@ func (s *Server) signinExec(ctx context.Context, ref string, asPerson bool, stdi
 		sess *runner.ExecSession
 		err  error
 	)
-	if asPerson {
-		se, ok := s.cfg.Runner.(runner.SigninExecer)
-		if !ok {
-			return nil, runner.ErrSigninUnsupported
+	se, _ := s.cfg.Runner.(runner.SigninExecer)
+	agent := as == signinAsAgent || as == signinImportsLogin
+	start := func(ctx context.Context, run types.AgentRun) (*runner.ExecSession, error) {
+		if agent {
+			return s.cfg.Runner.ExecStream(ctx, run.SandboxRef, spec)
 		}
-		sess, err = se.ExecStreamAs(ctx, ref, runner.SigninPersonUser, spec)
-	} else {
-		sess, err = s.cfg.Runner.ExecStream(ctx, ref, spec)
+		return se.ExecStreamAs(ctx, run.SandboxRef, runner.SigninPersonUser, spec)
+	}
+	switch {
+	case !agent && se == nil:
+		return nil, runner.ErrSigninUnsupported
+	case as == signinOpensDisplay || as == signinExportsLogin || as == signinImportsLogin:
+		sess, err = startFresh(s, ctx, run.ID, uiLiveRunWords, execStartBudget, start, closeExecSession)
+	default:
+		sess, err = start(ctx, run)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errSigninNotStarted, err)

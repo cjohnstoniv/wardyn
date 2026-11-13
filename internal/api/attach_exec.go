@@ -31,6 +31,14 @@ import (
 // socket reading nothing, forever.
 const attachPrepareTimeout = 30 * time.Second
 
+// attachLiveRunWords are an attach's refusals at its last read (startFresh), as the attach route writes them.
+var attachLiveRunWords = liveRunWords{
+	noRunner:   "no runner configured; attach unavailable",
+	notFound:   "run not found",
+	notRunning: "run is not RUNNING; cannot attach (state=%s)",
+	ended:      "run has ended; cannot attach",
+}
+
 // attachPrepareEvery is attachPrepareTimeout unless THIS server was built with
 // an override (Server.attachPrepare, tests only).
 func (s *Server) attachPrepareEvery() time.Duration {
@@ -263,12 +271,13 @@ func (s *Server) attachOptionsFor(runID uuid.UUID, h *attachHolder, writer bool)
 // session that comes back after the holder was evicted, released, or promoted
 // to the other role is closed here by its own identity (the object Attach
 // returned), and the loop opens again only if the role changed. A replacement
-// exec also re-proves the run's masking corpus whole.
+// exec also re-proves the run's masking corpus whole. Each Attach is a start under
+// the run's start lock (startFresh), on the run as it stands there.
 func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attachHolder) error {
 	if backgroundOnlyRefusal(run, "interactive exec") != nil {
 		return errAttachBackgroundOnly
 	}
-	runID, sandboxRef := run.ID, run.SandboxRef
+	runID := run.ID
 	h.openMu.Lock()
 	defer h.openMu.Unlock()
 	for {
@@ -287,7 +296,11 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 
 		actx, acancel := context.WithCancel(ctx)
 		timer := time.AfterFunc(s.attachPrepareEvery(), acancel)
-		sess, err := s.cfg.Runner.Attach(actx, sandboxRef, opts)
+		sess, err := startFresh(s, actx, runID, attachLiveRunWords, s.attachPrepareEvery(),
+			func(ctx context.Context, run types.AgentRun) (runner.Session, error) {
+				return s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
+			},
+			func(sess runner.Session) { _ = sess.Close() })
 		inTime := timer.Stop()
 		if err != nil {
 			acancel()

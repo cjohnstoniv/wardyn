@@ -5,7 +5,7 @@ package api
 
 // The start fence. A command start (an exec, an attach, a relay, a desktop dial) and a write that ends the run it
 // starts in, or marks it kept, take one per-run lock (db.RunStartLockClass). A start holds it from its last read of
-// the run until the runner has started the command, at most execStartBudget; a writer holds it around its state
+// the run until the runner has started the command, at most its budget; a writer holds it around its state
 // write alone, never its tail. So a run ended before a start's last read is refused, and an end that comes after it
 // lands once the command has started, which then loses its sandbox with the run. A start that cannot take the lock
 // is refused. A writer is never refused by a start: one refused the lock (no lock connection, or none within
@@ -29,9 +29,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// runStartFenceWait is the longest a start or a writer waits for the fence: past a start's own budget, so a writer
-// gives up only on a hold that outlived it.
-var runStartFenceWait = 2 * execStartBudget
+// runStartFenceWait is the longest a start or a writer waits for the fence: past the longest start's own budget (an
+// attach's), so a writer gives up only on a hold that outlived it.
+var runStartFenceWait = 2 * max(execStartBudget, attachPrepareTimeout)
 
 func runStartKey(id uuid.UUID) db.LockKey { return db.NewLockKey(db.RunStartLockClass, id.String()) }
 
@@ -80,11 +80,16 @@ func (s *Server) fenceRunsStarts(ctx context.Context, runs []types.AgentRun) fun
 	}
 }
 
-// The start fence's own refusals, each one the person may retry. A start that cannot take the fence is
-// startUnfenced (lockUnavailableMsg's words).
+// The start fence's own refusals, each one the person may retry, in fixed words a 5xx body may carry. A start that
+// cannot take the fence is startUnfenced (lockUnavailableMsg's words).
+const (
+	startTooSlowMsg  = "the runner took too long to start the command; try again"
+	startLockLostMsg = "the server lost its hold on the run while starting the command; try again"
+)
+
 var (
-	errStartTooSlow  = errors.New("the runner took too long to start the command; try again")
-	errStartLockLost = errors.New("the server lost its hold on the run while starting the command; try again")
+	errStartTooSlow  = errors.New(startTooSlowMsg)
+	errStartLockLost = errors.New(startLockLostMsg)
 )
 
 // startUnfenced is a start refused because its fence could not be taken. It reads lockUnavailableMsg and is the
@@ -93,6 +98,18 @@ type startUnfenced struct{ err error }
 
 func (e startUnfenced) Error() string { return lockUnavailableMsg }
 func (e startUnfenced) Unwrap() error { return e.err }
+
+// startCut reports whether err is one of the start fence's own refusals, which a door may show as they read.
+func startCut(err error) bool {
+	return errors.As(err, new(startUnfenced)) || errors.Is(err, errStartTooSlow) || errors.Is(err, errStartLockLost)
+}
+
+// startRefused is a start refused at its last read, in the door's words for a run that cannot take a command. It is
+// runner.ErrSandboxGone to a door that maps that.
+type startRefused string
+
+func (e startRefused) Error() string        { return string(e) }
+func (e startRefused) Is(target error) bool { return target == runner.ErrSandboxGone }
 
 // thawRefusal is a command door's answer to its thaw (thawForExec): "" for none, the lock's words when the run's
 // operation lock could not be taken (another operation holds the run), else the paused run's.
@@ -184,19 +201,19 @@ func (s *Server) lockStart(ctx context.Context, id uuid.UUID) (startHold, error)
 }
 
 // startAdmitted runs start, one command start under h, and lets the fence go beside the started command, never
-// while it runs. start runs on a context of ctx's that is cut at execStartBudget, which also lets the fence go, or
-// when h's lock is lost. A value start returns after either, or once a check on the lock's own connection
+// while it runs. start runs on a context of ctx's that is cut at budget, which also lets the fence go, or when h's
+// lock is lost. A value start returns after either, or once a check on the lock's own connection
 // (lockHeld) finds the lock gone, is ended (end) and refused (errStartTooSlow, errStartLockLost): a command the
 // fence did not cover is never handed on. That context is never ended once start has returned in time, so the
 // command outlives the fence.
-func startAdmitted[T any](s *Server, ctx context.Context, h startHold, start func(context.Context) (T, error), end func(T)) (T, error) {
+func startAdmitted[T any](s *Server, ctx context.Context, h startHold, budget time.Duration, start func(context.Context) (T, error), end func(T)) (T, error) {
 	var zero T
 	if errors.Is(context.Cause(h.ctx), db.ErrLockLost) {
 		h.release()
 		return zero, errStartLockLost
 	}
 	sctx, cut := context.WithCancelCause(ctx)
-	slow := time.AfterFunc(execStartBudget, func() { cut(errStartTooSlow); h.release() })
+	slow := time.AfterFunc(budget, func() { cut(errStartTooSlow); h.release() })
 	unwatch := context.AfterFunc(h.ctx, func() {
 		if errors.Is(context.Cause(h.ctx), db.ErrLockLost) {
 			cut(errStartLockLost)
@@ -225,7 +242,30 @@ func startAdmitted[T any](s *Server, ctx context.Context, h startHold, start fun
 
 // execAdmitted is startAdmitted for an ExecStream into ref.
 func (s *Server) execAdmitted(ctx context.Context, h startHold, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
-	return startAdmitted(s, ctx, h, func(ctx context.Context) (*runner.ExecSession, error) { return s.execStream(ctx, ref, spec) }, closeExecSession)
+	return startAdmitted(s, ctx, h, execStartBudget, func(ctx context.Context) (*runner.ExecSession, error) { return s.execStream(ctx, ref, spec) }, closeExecSession)
+}
+
+// startFresh runs start on run id as it stands under its start lock: the last read (liveRunForExec, in words)
+// refuses a run that cannot take a command now (startRefused), and the start is startAdmitted's.
+func startFresh[T any](s *Server, ctx context.Context, id uuid.UUID, words liveRunWords, budget time.Duration, start func(context.Context, types.AgentRun) (T, error), end func(T)) (T, error) {
+	var zero T
+	h, err := s.lockStart(ctx, id)
+	if err != nil {
+		return zero, err
+	}
+	run, msg := s.liveRunForExec(h.ctx, id, words)
+	if msg != "" {
+		h.release()
+		return zero, startRefused(msg)
+	}
+	return startAdmitted(s, ctx, h, budget, func(ctx context.Context) (T, error) { return start(ctx, run) }, end)
+}
+
+// execFresh is startFresh for an ExecStream into the run's sandbox.
+func (s *Server) execFresh(ctx context.Context, id uuid.UUID, words liveRunWords, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	return startFresh(s, ctx, id, words, execStartBudget, func(ctx context.Context, run types.AgentRun) (*runner.ExecSession, error) {
+		return s.execStream(ctx, run.SandboxRef, spec)
+	}, closeExecSession)
 }
 
 // execStream is the runner's ExecStream, with no session read as a failure.
