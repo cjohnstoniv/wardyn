@@ -6,7 +6,7 @@
 // #923, editors.html section 1 and states.html state 8: the stored policy's
 // "Available to" on its detail sheet, and New policy asking who gets it.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
 import { HttpError } from "../../lib/api/core";
@@ -25,6 +25,10 @@ vi.mock("../../lib/api/policies", () => ({
 }));
 vi.mock("../../lib/api/runs", () => ({
   runs: { gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }) },
+}));
+const getSetupStatusMock = vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error("not mocked")));
+vi.mock("../../lib/api/setup", () => ({
+  setup: { getSetupStatus: () => getSetupStatusMock() },
 }));
 const getAvailabilityMock = vi.fn();
 const putAvailabilityMock = vi.fn();
@@ -62,6 +66,8 @@ const UNKNOWN_TYPE = 'The user type "portfolio-mgr" doesn\'t exist. Create it un
 beforeEach(() => {
   listPoliciesMock.mockReset();
   createPolicyMock.mockReset();
+  getSetupStatusMock.mockReset();
+  getSetupStatusMock.mockRejectedValue(new Error("not mocked"));
   getAvailabilityMock.mockReset();
   putAvailabilityMock.mockReset();
   upsertGrantMock.mockReset();
@@ -202,5 +208,27 @@ describe("New policy asks who gets it (decision 4)", () => {
     expect(await within(dialog).findByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
     expect(within(dialog).getByRole("heading", { name: "Edit policy" })).toBeInTheDocument();
     expect(createPolicyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a setup status that answers after the create landed leaves the saved policy's spec alone", async () => {
+    let settle!: (v: unknown) => void;
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    createPolicyMock.mockResolvedValue(POLICY);
+    upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
+    const dialog = await openNew();
+    const spec = dialog.querySelector("textarea") as HTMLTextAreaElement;
+    const saved = spec.value;
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
+    expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
+
+    await act(async () =>
+      settle({ model_providers: [{ id: "p1", kind: "bedrock_sso", host: "bedrock-runtime.us-east-1.amazonaws.com", harnesses: ["claude-code"] }] }),
+    );
+    expect(spec.value).toBe(saved);
   });
 });

@@ -74,4 +74,11 @@ describe("SavedElsewhereBanner", () => {
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_RELOADED }));
     expect(onDiscard).toHaveBeenCalledTimes(1);
   });
+
+  it("disabled holds Discard and leaves Copy my changes live", () => {
+    render(<SavedElsewhereBanner documentText="{}" onDiscard={() => {}} disabled />);
+
+    expect(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD })).toBeDisabled();
+    expect(screen.getByRole("button", { name: PROVIDERS_EXTRA.CONFLICT_COPY })).toBeEnabled();
+  });
 });

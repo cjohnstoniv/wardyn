@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
@@ -429,6 +429,130 @@ describe("PoliciesScreen — the editor opens in YAML and saves what it parses t
       expect.objectContaining({ allowed_domains: ["api.anthropic.com"] }),
       "2026-11-13T03:05:00.654321Z",
     );
+  });
+
+  // Saves the draft into a 409 policy_stale, which raises the saved-elsewhere banner and its Discard.
+  const saveIntoStale = async () => {
+    updatePolicyMock.mockRejectedValueOnce(new HttpError(409, "Someone saved this policy since you opened it.", "policy_stale"));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE);
+  };
+  const openEditOf = async (name: string) => {
+    await userEvent.click(await screen.findByRole("button", { name: `Policy actions: ${name}` }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^edit/i }));
+    return (await screen.findByLabelText(/^Spec \(YAML\)/)) as HTMLTextAreaElement;
+  };
+
+  it("a reload that answers after the editor closed and opened another policy leaves that policy's draft and save alone", async () => {
+    const other = policy({ id: "pol-2", name: "payments-open", updated_at: "2026-11-13T03:10:00.111111Z" });
+    listPoliciesMock.mockResolvedValue([policy({ updated_at: OPENED_AT }), other]);
+    render(<PoliciesScreen />);
+    fireEvent.change(await openEditOf("payments-strict"), { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    let answerFirst!: (p: RunPolicy) => void;
+    getPolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((r) => (answerFirst = r)));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const box = await openEditOf("payments-open");
+    const draft = "allowed_domains:\n  - b.example.com\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    await act(async () => answerFirst(policy({ updated_at: "2026-11-13T03:05:00.654321Z" })));
+    expect(box.value).toBe(draft);
+    expect(screen.getByLabelText(/^Name/)).toHaveValue("payments-open");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updatePolicyMock).toHaveBeenCalledTimes(2));
+    expect(updatePolicyMock).toHaveBeenLastCalledWith(
+      "pol-2",
+      "payments-open",
+      { allowed_domains: ["b.example.com"], min_confinement_class: "CC2" },
+      "2026-11-13T03:10:00.111111Z",
+    );
+  });
+
+  it("while Discard's reload is pending the name, the spec and Save are frozen, and Save shows it is busy", async () => {
+    const box = await openEdit();
+    fireEvent.change(box, { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    let answer!: (p: RunPolicy) => void;
+    getPolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((r) => (answer = r)));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(screen.getByRole("dialog")).toHaveFocus();
+    expect(box.closest("fieldset[inert]")).not.toBeNull();
+    expect(box).toBeDisabled();
+    expect(screen.getByLabelText(/^Name/)).toBeDisabled();
+    expect(save).toBeDisabled();
+    expect(save.querySelector(".animate-spin")).not.toBeNull();
+
+    const stored = policy({ updated_at: "2026-11-13T03:05:00.654321Z" });
+    await act(async () => answer(stored));
+    expect(box).toBeEnabled();
+    expect(box.value).toBe(`${toYaml(stored.spec)}\n`);
+  });
+
+  it("a reload that fails leaves the draft as it was and the editor open for edits", async () => {
+    const box = await openEdit();
+    const draft = "allowed_domains: []\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    await saveIntoStale();
+    getPolicyMock.mockRejectedValueOnce(new Error("The policy could not be read."));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The policy could not be read.");
+    expect(box.value).toBe(draft);
+    expect(box).toBeEnabled();
+    expect(screen.getByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+  });
+
+  it("a reload that fails after the editor closed and opened another policy says nothing in that policy's editor", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ updated_at: OPENED_AT }), policy({ id: "pol-2", name: "payments-open" })]);
+    render(<PoliciesScreen />);
+    fireEvent.change(await openEditOf("payments-strict"), { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    let failFirst!: (e: Error) => void;
+    getPolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((_, j) => (failFirst = j)));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await openEditOf("payments-open");
+    await act(async () => failFirst(new Error("The policy could not be read.")));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("an answer that names another policy is not applied", async () => {
+    const box = await openEdit();
+    const draft = "allowed_domains: []\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    await saveIntoStale();
+    getPolicyMock.mockResolvedValueOnce(policy({ id: "pol-2", name: "payments-open" }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(box).toBeEnabled());
+    expect(box.value).toBe(draft);
+    expect(screen.getByLabelText(/^Name/)).toHaveValue("payments-strict");
+  });
+
+  it("the editor cannot close while a save is in flight, so its answer never lands in another policy's editor", async () => {
+    const box = await openEdit();
+    fireEvent.change(box, { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    let land!: (p: RunPolicy) => void;
+    updatePolicyMock.mockReturnValueOnce(new Promise<RunPolicy>((r) => (land = r)));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => land(policy()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("Discard is held while a second save is in flight, so its refusal cannot land over the reloaded policy", async () => {
+    const box = await openEdit();
+    fireEvent.change(box, { target: { value: "allowed_domains: []\nmin_confinement_class: CC2\n" } });
+    await saveIntoStale();
+    updatePolicyMock.mockReturnValueOnce(new Promise<RunPolicy>(() => {}));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD })).toBeDisabled();
   });
 
   it("an invalid source cannot be saved: nothing is sent, least of all the last valid policy", async () => {
