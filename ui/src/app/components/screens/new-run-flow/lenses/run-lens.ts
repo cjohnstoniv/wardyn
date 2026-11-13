@@ -6,7 +6,7 @@
 // Owns experience, workload.kind, runner_pool_id, machine_kind and confinement_class (a command
 // and the ports of an application server are apps-lens).
 
-import type { MachineKind } from "../../../../lib/types/machine-kind";
+import { isVMKind, type MachineKind } from "../../../../lib/types/machine-kind";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { RunnerPoolScope } from "../../../../lib/types/runner-pools";
 import { withAskedRunMode } from "../document/legacy-run-mode";
@@ -21,8 +21,9 @@ export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
   // Only an interactive run keeps or resumes a machine.
   const machine = mode === "interactive" ? {} : { machine: undefined };
   // A draft still in the older run-mode fields (a template that leaves its run mode to the person) is converted with
-  // the mode the person names. An interactive agent task starts its harness, so an older task is its first message.
-  const start = intent.shape === "agent_task" && intent.agent ? { interactive_start: "agent" as const } : {};
+  // the mode the person names. An interactive agent task starts its harness, so an older task is its first message;
+  // on a VM it starts none, as shapeCarriers writes it.
+  const start = intent.shape === "agent_task" && intent.agent && !isVMKind(intent.machine_kind) ? { interactive_start: "agent" as const } : {};
   const asked = withAskedRunMode(intent, mode === "interactive" ? { interactive: true, ...start } : { interactive: false });
   // Carriers converted to the draft's shape are the run as written; another shape says them again.
   if (asked !== intent && (!intent.shape || asked.shape === intent.shape)) return withKeys(asked, machine);

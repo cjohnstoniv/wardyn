@@ -33,6 +33,13 @@ describe("draftReducer (U3)", () => {
     expect([d1.revision, d2.revision]).toEqual([2, 3]);
   });
 
+  it("drops text held for an agent task on a shape change and on a committed document, and keeps it otherwise", () => {
+    const held = draftReducer(seeded(), { type: "guided", patch: { heldText: { "": "fix it" } } });
+    expect(draftReducer(held, { type: "edit", apply: (i) => ({ ...i, runner_pool_id: "p" }) }).guided.heldText).toEqual({ "": "fix it" });
+    expect(draftReducer(held, { type: "edit", apply: (i) => ({ ...i, shape: "agent_task" }) }).guided.heldText).toBeUndefined();
+    expect(draftReducer(held, { type: "commitDoc", intent: LOADED }).guided.heldText).toBeUndefined();
+  });
+
   it("dirty: an intent that differs from its base, an editor buffer, or typed launch fields", () => {
     expect(isDirty(initialDraft("alice"))).toBe(false);
     expect(isDirty(draftReducer(seeded(), { type: "edit", apply: (i) => ({ ...i, no_end: false }) }))).toBe(true);

@@ -197,6 +197,24 @@ describe("Run step: pool select", () => {
     expect(intentNow().startup).toBeUndefined();
   });
 
+  // Interactive has no place for a task with no harness to start, or on a VM, which starts none: the draft holds it
+  // beside the run, never in it, and a switch back to Autonomous gives it back.
+  it.each<[string, RunIntent]>([
+    ["the Runs composer's task", { shape: "agent_task", workload: { kind: "agent_task", task: "fix the flaky test" } }],
+    ["a template's task with no agent", { shape: "agent_task", task: "fix the flaky test" }],
+    ["a task on a VM", { shape: "agent_task", machine_kind: "linux_vm", tools: [{ id: "codex-cli", kind: "harness" }], workload: { kind: "agent_task", agent: "codex-cli", task: "fix the flaky test" } }],
+  ])("keeps %s across a switch to Interactive and back", async (_name, seeded) => {
+    show(seeded);
+    await poolSelect();
+    expect(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_INTERACTIVE }));
+    expect(intentNow()).toMatchObject({ experience: "interactive" });
+    expect(intentNow().workload).toBeUndefined();
+    expect(intentNow().startup).toBeUndefined();
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS }));
+    expect(intentNow()).toMatchObject({ experience: "background", workload: { kind: "agent_task", task: "fix the flaky test" } });
+  });
+
   // The older `interactive: true` is the draft's own word: its task does not make the run Autonomous.
   it("keeps Interactive as the default for an older task whose draft states interactive", async () => {
     const { load } = show({ shape: "agent_task", agent: "claude-code", task: "npm ci", interactive: true });

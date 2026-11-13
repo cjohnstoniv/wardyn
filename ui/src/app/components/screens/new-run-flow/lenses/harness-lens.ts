@@ -82,6 +82,43 @@ export function setTask(intent: RunIntent, task: string): RunIntent {
   return withKeys(intent, { workload: { kind: "agent_task", ...(agent ? { agent } : {}), task } });
 }
 
+/** Each agent's text in the draft, by agent: the run's task ("" while no harness is in the draft), a harness's own task, and the started harness's first message. A blank text is none. */
+function agentTexts(intent: RunIntent): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const t of intent.tools ?? []) if (t.kind === "harness" && t.task?.trim()) out[t.id] = t.task;
+  if (intent.workload?.kind === "agent_task" && intent.workload.task?.trim()) out[workloadAgent(intent) ?? ""] = intent.workload.task;
+  if (intent.startup?.kind === "harness" && intent.startup.tool && intent.startup.prompt?.trim()) out[intent.startup.tool] = intent.startup.prompt;
+  return out;
+}
+
+/** The agent text a mode switch left out of the draft, by agent, for the draft to hold beside the intent. */
+export function textLeft(before: RunIntent, after: RunIntent): Record<string, string> | undefined {
+  const kept = agentTexts(after);
+  const left = Object.entries(agentTexts(before)).filter(([agent, text]) => kept[agent] !== text);
+  return left.length ? Object.fromEntries(left) : undefined;
+}
+
+/** Gives held text back to each agent whose task is empty; a text written before any harness is the run's task. */
+export function giveBackText(intent: RunIntent, held: Record<string, string> | undefined): RunIntent {
+  let next = intent;
+  for (const [agent, text] of Object.entries(held ?? {})) {
+    if (!agent) next = next.workload?.task?.trim() ? next : setTask(next, text);
+    else if (harnessIds(next).includes(agent) && !agentTask(next, agent).trim()) next = setAgentTask(next, agent, text);
+  }
+  return next;
+}
+
+/** The held text a harness takes when the person starts it: its own, else one written before any harness. Your own tools takes none. */
+export const heldKey = (held: Record<string, string> | undefined, id: string): string | undefined =>
+  !held || id === "none" ? undefined : id in held ? id : "" in held ? "" : undefined;
+
+/** Starts `id`, with the text held for it as its first message when it has none. */
+export function startWithHeld(intent: RunIntent, id: string, held: Record<string, string> | undefined): RunIntent {
+  const next = setStarter(intent, id);
+  const key = heldKey(held, id);
+  return key === undefined || !held || next.startup?.prompt ? next : setStartPrompt(next, held[key]);
+}
+
 export const harnessIssues: StepValidator = (intent) => {
   if (intent.shape !== "agent_task") return [];
   const out: StepIssue[] = [];

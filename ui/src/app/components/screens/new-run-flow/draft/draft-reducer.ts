@@ -26,8 +26,12 @@ export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDra
         ...draft, intent: action.intent, base: action.intent, origin: action.origin,
         guided: emptyGuided(startFromOf(action.origin)), doc: undefined, schedule: undefined, revision: draft.revision + 1,
       };
-    case "edit":
-      return { ...draft, intent: action.apply(draft.intent), revision: draft.revision + 1 };
+    case "edit": {
+      const intent = action.apply(draft.intent);
+      // Text held for an agent task is that task's: another shape takes none of it.
+      const guided = draft.guided.heldText && intent.shape !== draft.intent.shape ? { ...draft.guided, heldText: undefined } : draft.guided;
+      return { ...draft, intent, guided, revision: draft.revision + 1 };
+    }
     case "guided":
       return { ...draft, guided: { ...draft.guided, ...action.patch } };
     case "doc":
@@ -36,8 +40,9 @@ export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDra
       return {
         ...draft, intent: action.intent, doc: undefined, revision: draft.revision + 1,
         origin: draft.origin.kind === "scratch" ? { kind: "import" } : draft.origin,
-        // A document the person commits holds the figures they chose, so leaving macOS takes none of them back.
-        guided: { ...draft.guided, macosFill: undefined },
+        // A document the person commits holds the figures they chose, so leaving macOS takes none of them back, and
+        // its agent text is the run as written, so no held text is given back over it.
+        guided: { ...draft.guided, macosFill: undefined, heldText: undefined },
       };
     case "launchFields":
       return { ...draft, launch: { ...draft.launch, ...action.patch } };

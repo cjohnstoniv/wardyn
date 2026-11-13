@@ -6,6 +6,7 @@
 // Owns `shape`, and keeps the run-mode carriers coherent with it (DS-5's four
 // draft rows; run-mode-map.ts holds only the older fields' adapter).
 
+import { isVMKind } from "../../../../lib/types/machine-kind";
 import type { RunShape } from "../../../../lib/types/runs";
 import { withAskedRunMode } from "../document/legacy-run-mode";
 import type { RunIntent } from "../draft/run-intent";
@@ -21,13 +22,16 @@ export const modeOf = (intent: RunIntent): RunMode | undefined =>
 /** The carriers one shape and mode say. Undefined removes the key. */
 export function shapeCarriers(shape: RunShape, mode: RunMode | undefined, intent: RunIntent): Pick<RunIntent, "experience" | "workload" | "startup" | "tools"> {
   const ids = harnessIds(intent);
-  const harness = ids[0];
-  // The run's task belongs to workload.agent, so it stays with that agent when it is still among the harnesses.
-  const taskAgent = ids.includes(intent.workload?.agent ?? "") ? intent.workload?.agent : harness;
-  // The person's text crosses a mode switch: the task is the started harness's first message, and back. Only the harness
-  // the text belongs to takes it, a blank text is none, and Your own tools starts no CLI, so it takes no prompt.
-  const said = intent.startup?.kind === "harness" && intent.startup.tool === taskAgent ? intent.startup.prompt : undefined;
-  const prompt = taskAgent === harness && harness !== "none" && intent.workload?.task?.trim() ? { prompt: intent.workload.task } : {};
+  const started = intent.startup?.kind === "harness" && ids.includes(intent.startup.tool ?? "") ? intent.startup : undefined;
+  // The text belongs to one agent: the run's task to workload.agent while it is among the harnesses, a first message
+  // to the started harness. That agent is the one the other mode runs or starts, so text never moves to another agent.
+  const taskAgent = ids.includes(intent.workload?.agent ?? "") ? intent.workload?.agent : started?.tool ?? ids[0];
+  // The person's text crosses a mode switch: the task is the started harness's first message, and back. A blank text is
+  // none, and Your own tools starts no CLI, so it takes no prompt.
+  const said = started && started.tool === taskAgent ? started.prompt : undefined;
+  const prompt = taskAgent !== "none" && intent.workload?.task?.trim() ? { prompt: intent.workload.task } : {};
+  // A VM's terminal opens a shell, not the agent, and the server refuses a harness start there.
+  const startup = isVMKind(intent.machine_kind) ? undefined : started ?? (taskAgent ? { kind: "harness" as const, tool: taskAgent, ...prompt } : undefined);
   switch (shape) {
     case "environment":
       return { experience: "interactive", workload: undefined, startup: undefined, ...dropAgentTasks(intent) };
@@ -42,7 +46,7 @@ export function shapeCarriers(shape: RunShape, mode: RunMode | undefined, intent
         };
       }
       if (mode === "interactive") {
-        return { experience: "interactive", workload: undefined, startup: harness ? { kind: "harness", tool: harness, ...prompt } : undefined, ...dropAgentTasks(intent) };
+        return { experience: "interactive", workload: undefined, startup, ...dropAgentTasks(intent) };
       }
       return { experience: undefined, workload: undefined, startup: undefined, ...dropAgentTasks(intent) };
   }

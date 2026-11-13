@@ -8,7 +8,7 @@ import { LEGACY_RUN_MODE_FIELDS } from "../../../../lib/run-mode-map";
 import { intentToWire } from "../draft/intent-to-wire";
 import type { RunIntent } from "../draft/run-intent";
 import { attachWorkspace, chooseNothing, detachWorkspace, setStartsHere } from "./files-lens";
-import { addHarness, removeHarness, setStarter, setTask } from "./harness-lens";
+import { addHarness, giveBackText, removeHarness, setStarter, setTask, startWithHeld, textLeft } from "./harness-lens";
 import { setCpu, setMemory } from "./limits-lens";
 import { firstInvalidStep, localIssues, stepIssues } from "./local-issues";
 import { setCommand } from "./apps-lens";
@@ -101,7 +101,7 @@ describe("lens edits", () => {
     expect(chooseShape(interactive, "environment").startup).toBeUndefined();
   });
 
-  describe("the person's text crosses a mode switch, only to the harness it belongs to", () => {
+  describe("the person's text crosses a mode switch, only to the agent it belongs to", () => {
     const tools: RunIntent["tools"] = [{ id: "claude-code", kind: "harness" }];
     const autonomous: RunIntent = { shape: "agent_task", experience: "background", tools, workload: { kind: "agent_task", agent: "claude-code", task: "fix it" } };
     const interactive: RunIntent = { shape: "agent_task", experience: "interactive", tools, startup: { kind: "harness", tool: "claude-code", prompt: "fix it" } };
@@ -115,9 +115,25 @@ describe("lens edits", () => {
       // Your own tools starts no CLI, so the server refuses it a prompt.
       const none: RunIntent = { ...autonomous, tools: [{ id: "none", kind: "harness" }], workload: { kind: "agent_task", agent: "none", task: "fix it" } };
       expect(chooseMode(none, "interactive").startup).toEqual({ kind: "harness", tool: "none" });
-      // A task that belongs to another harness than the one Interactive starts carries nothing.
+      // Interactive starts in the agent the task belongs to, whichever harness it is.
       const second: RunIntent = { ...autonomous, tools: [...tools, { id: "codex-cli", kind: "harness" }], workload: { kind: "agent_task", agent: "codex-cli", task: "fix it" } };
-      expect(chooseMode(second, "interactive").startup).toEqual({ kind: "harness", tool: "claude-code" });
+      expect(chooseMode(second, "interactive").startup).toEqual({ kind: "harness", tool: "codex-cli", prompt: "fix it" });
+    });
+
+    it("Interactive keeps a harness the draft already starts in, with its first message", () => {
+      const second: RunIntent = { shape: "agent_task", tools: [...tools, { id: "codex-cli", kind: "harness" }], startup: { kind: "harness", tool: "codex-cli", prompt: "review" } };
+      expect(chooseMode(second, "interactive")).toEqual({ ...second, experience: "interactive" });
+      // A start that names a harness the draft does not include is not kept: the server refuses it.
+      expect(chooseMode({ ...second, tools }, "interactive").startup).toEqual({ kind: "harness", tool: "claude-code" });
+    });
+
+    it.each(["linux_vm", "macos_vm"] as const)("Interactive on a %s starts no harness, and the task is left out of the draft", (kind) => {
+      const vm: RunIntent = { ...autonomous, machine_kind: kind };
+      const next = chooseMode(vm, "interactive");
+      expect(next).toEqual({ shape: "agent_task", experience: "interactive", tools, machine_kind: kind });
+      expect(textLeft(vm, next)).toEqual({ "claude-code": "fix it" });
+      // A template's agent in the older field, its run mode left to the person: the same, with no older field left.
+      expect(chooseMode({ shape: "agent_task", agent: "claude-code", machine_kind: kind }, "interactive")).toEqual({ shape: "agent_task", experience: "interactive", tools, machine_kind: kind });
     });
 
     it("Interactive to Autonomous: the started harness's first message is the task", () => {
@@ -125,9 +141,46 @@ describe("lens edits", () => {
       const taskOf = (startup: RunIntent["startup"], t: RunIntent["tools"] = tools) => chooseMode({ ...interactive, tools: t, startup }, "autonomous").workload;
       const empty = { kind: "agent_task", agent: "claude-code", task: "" };
       expect(taskOf({ kind: "harness", tool: "claude-code", prompt: "  " })).toEqual(empty);
-      // A prompt for another harness than the one the task lands on, and a startup command, carry nothing.
-      expect(taskOf({ kind: "harness", tool: "codex-cli", prompt: "review" }, [...tools, { id: "codex-cli", kind: "harness" }])).toEqual(empty);
+      // Autonomous runs the started harness, so its first message is its task; a startup command carries nothing.
+      expect(taskOf({ kind: "harness", tool: "codex-cli", prompt: "review" }, [...tools, { id: "codex-cli", kind: "harness" }])).toEqual({ kind: "agent_task", agent: "codex-cli", task: "review" });
       expect(taskOf({ kind: "command", command: "npm ci" })).toEqual(empty);
+      // A draft that names one agent for its task and starts another: the other's first message is not that agent's task.
+      const both: RunIntent = { ...interactive, tools: [...tools, { id: "codex-cli", kind: "harness" }], workload: { kind: "agent_task", agent: "claude-code", task: "" }, startup: { kind: "harness", tool: "codex-cli", prompt: "review" } };
+      expect(chooseMode(both, "autonomous").workload).toEqual(empty);
+    });
+
+    // What Interactive has no place for is held beside the draft, and a switch back gives it to its agent where that is empty.
+    it("text Interactive has no place for is held, never in the draft, and Autonomous gives it back", () => {
+      const roundTrip = (from: RunIntent) => {
+        const there = chooseMode(from, "interactive");
+        return { there, held: textLeft(from, there), back: giveBackText(chooseMode(there, "autonomous"), textLeft(from, there)) };
+      };
+      // The Runs composer's task, before any harness is in the draft: Interactive writes no startup.
+      const composer: RunIntent = { shape: "agent_task", experience: "background", workload: { kind: "agent_task", task: "fix it" } };
+      expect(roundTrip(composer)).toEqual({ there: { shape: "agent_task", experience: "interactive" }, held: { "": "fix it" }, back: composer });
+      // Another agent's own task: Interactive starts one harness and has no place for the rest.
+      const two: RunIntent = { ...autonomous, tools: [...tools, { id: "codex-cli", kind: "harness", task: "review" }] };
+      expect(roundTrip(two)).toMatchObject({ held: { "codex-cli": "review" }, back: two });
+      // Your own tools takes no first message.
+      const none: RunIntent = { ...autonomous, tools: [{ id: "none", kind: "harness" }], workload: { kind: "agent_task", agent: "none", task: "fix it" } };
+      expect(roundTrip(none)).toMatchObject({ held: { none: "fix it" }, back: none });
+      // Text Interactive carries is not held, and a blank text is none.
+      expect(roundTrip(autonomous).held).toBeUndefined();
+      expect(roundTrip({ ...composer, workload: { kind: "agent_task", task: "  " } }).held).toBeUndefined();
+      expect(textLeft({ ...interactive, startup: { kind: "harness", tool: "claude-code", prompt: "  " } }, composer)).toBeUndefined();
+      expect(textLeft({ shape: "agent_task", tools: [{ id: "codex-cli", kind: "harness", task: "  " }] }, composer)).toBeUndefined();
+      // Held text never writes over a task the person typed since.
+      expect(giveBackText(composer, { "": "older" })).toEqual(composer);
+      expect(giveBackText(two, { "codex-cli": "older" })).toEqual(two);
+    });
+
+    it("a harness the person starts takes the text held for it, or one written before any harness; Your own tools takes none", () => {
+      const two: RunIntent = { shape: "agent_task", experience: "interactive", tools: [...tools, { id: "codex-cli", kind: "harness" }] };
+      expect(startWithHeld(two, "codex-cli", { "codex-cli": "review", "": "fix it" }).startup).toEqual({ kind: "harness", tool: "codex-cli", prompt: "review" });
+      expect(startWithHeld(two, "claude-code", { "codex-cli": "review", "": "fix it" }).startup).toEqual({ kind: "harness", tool: "claude-code", prompt: "fix it" });
+      expect(startWithHeld(two, "claude-code", { "codex-cli": "review" }).startup).toEqual({ kind: "harness", tool: "claude-code" });
+      expect(startWithHeld({ ...two, tools: [{ id: "none", kind: "harness" }] }, "none", { "": "fix it" }).startup).toEqual({ kind: "harness", tool: "none" });
+      expect(startWithHeld(interactive, "claude-code", { "": "other" })).toBe(interactive);
     });
 
     it("another shape takes no agent text: a task or a prompt never becomes a command", () => {
