@@ -949,7 +949,7 @@ func TestDriveOpenWorkKeepsTheFolderWhenWriteBackFails(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(dir, "a.txt")); err != nil || string(b) != "changed" {
 		t.Fatalf("the edit is gone: %q, %v", b, err)
 	}
-	if want := "The folder " + dir + " is kept: it holds the changes that did not go back.\n"; !strings.HasSuffix(out.String(), want) {
+	if want := "The folder " + dir + " is kept: it holds your local copy of the changes.\n"; !strings.HasSuffix(out.String(), want) {
 		t.Fatalf("the last line is not %q:\n%s", want, out)
 	}
 }
@@ -971,7 +971,7 @@ func TestDriveOpenWorkKeepsTheFolderWhenTheSyncFails(t *testing.T) {
 	if strings.Contains(out.String(), "Wrote back") || strings.Contains(out.String(), "moved to the Trash") {
 		t.Fatalf("output claims the write back:\n%s", out)
 	}
-	if want := "The folder " + dir + " is kept: it holds the changes that did not go back.\n"; !strings.HasSuffix(out.String(), want) {
+	if want := "The folder " + dir + " is kept: it holds your local copy of the changes.\n"; !strings.HasSuffix(out.String(), want) {
 		t.Fatalf("the last line is not %q:\n%s", want, out)
 	}
 	syncs := 0
