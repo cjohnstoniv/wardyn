@@ -709,13 +709,8 @@ const (
 // the person is told how many items are missing.
 func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err error) {
 	j.hard = cmp.Or(j.hard, context.WithoutCancel(ctx))
-	defer func() {
-		sctx, cancel := context.WithTimeout(j.hard, driveOpenSyncWait)
-		defer cancel()
-		if err := j.run(sctx, nil, "/bin/sync"); err != nil {
-			fmt.Fprintf(j.out, "The throwaway VM did not confirm it had written the drive (%s).\n", driveOpenSafe(err.Error()))
-		}
-	}()
+	var syncTried bool
+	defer j.syncOnReturn(&syncTried)
 	c, err := j.copyOut(ctx)
 	if err != nil {
 		j.dest.undo()
@@ -743,8 +738,15 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err erro
 	}
 	sent, err := j.dest.sent()
 	var unsent int
+	var wrote string
 	if err == nil {
-		unsent, err = j.writeBack(c)
+		unsent, wrote, err = j.writeBack(c)
+	}
+	if err == nil {
+		err = j.confirmWriteBack(&syncTried)
+	}
+	if err == nil {
+		fmt.Fprintln(j.out, wrote)
 	}
 	switch {
 	case err != nil:
@@ -863,22 +865,22 @@ func driveOpenUnreadLines(lines []string) []string {
 // one stream that overwrites; files and folders it did not hold go in another that never overwrites (tar
 // -k), so a name the copy never held, an unreadable item among them, is never replaced. With deleteGone,
 // the copied files deleted here are removed from the drive, and no other name is. An error says which
-// changes did not go back.
-func (j driveOpenJob) writeBack(c *driveOpenCopy) (unsent int, err error) {
+// changes did not go back. The line saying they did is returned, for the caller to print after the sync.
+func (j driveOpenJob) writeBack(c *driveOpenCopy) (unsent int, wrote string, err error) {
 	ctx, cancel := context.WithTimeout(j.hard, driveOpenBackWait)
 	defer cancel()
 	var archives [2]*os.File
 	for i := range archives {
 		f, err := os.CreateTemp("", "wardyn-drive-*.tar")
 		if err != nil {
-			return 0, err
+			return 0, "", err
 		}
 		archives[i] = f
 		defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
 	}
 	back, err := driveOpenPack(j.dest.root, c, archives[0], archives[1])
 	if err != nil {
-		return 0, fmt.Errorf("read the changed files: %w", err)
+		return 0, "", fmt.Errorf("read the changed files: %w", err)
 	}
 	send := func(f *os.File, names []string, argv ...string) error {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -891,26 +893,26 @@ func (j driveOpenJob) writeBack(c *driveOpenCopy) (unsent int, err error) {
 	}
 	if len(back.known) > 0 {
 		if err := send(archives[0], slices.Concat(back.known, back.fresh), "/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-xf", "-"); err != nil {
-			return 0, err
+			return 0, "", err
 		}
 	}
 	if len(back.fresh)+back.newDirs > 0 {
 		if err := send(archives[1], back.fresh, "/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-k", "-xf", "-"); err != nil {
-			return 0, err
+			return 0, "", err
 		}
 	}
 	if gone := back.gone; j.deleteGone && len(gone) > 0 {
 		names := "./" + strings.Join(gone, "\x00./") + "\x00"
 		if err := j.run(ctx, strings.NewReader(names), "/bin/sh", "-c", `cd "$1" && exec /usr/bin/xargs -0 /bin/rm -f --`, "sh", macvm.DriveOpenTarget); err != nil {
-			return 0, fmt.Errorf("delete the removed files from the drive: %w. These deletions did not go through, or are not confirmed: %s", err, driveOpenNames(gone))
+			return 0, "", fmt.Errorf("delete the removed files from the drive: %w. These deletions did not go through, or are not confirmed: %s", err, driveOpenNames(gone))
 		}
 	}
-	fmt.Fprintln(j.out, strings.TrimSpace(fmt.Sprintf("Wrote back %s. The next run that uses this drive sees them, owned by the agent. %s",
-		driveOpenCount(back.changed(), "changed file", "changed files"), back.skipped.text())))
+	wrote = strings.TrimSpace(fmt.Sprintf("Wrote back %s. The next run that uses this drive sees them, owned by the agent. %s",
+		driveOpenCount(back.changed(), "changed file", "changed files"), back.skipped.text()))
 	for _, n := range back.skipped {
 		unsent += n
 	}
-	return unsent, nil
+	return unsent, wrote, nil
 }
 
 // driveOpenNames lists up to driveOpenNamesShown names, each quoted, and how many more there are.

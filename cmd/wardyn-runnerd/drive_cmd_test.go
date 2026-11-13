@@ -954,6 +954,37 @@ func TestDriveOpenWorkKeepsTheFolderWhenWriteBackFails(t *testing.T) {
 	}
 }
 
+// A guest that does not confirm its sync after the write back keeps the folder, fails the write back, and
+// never says the changes were written back.
+func TestDriveOpenWorkKeepsTheFolderWhenTheSyncFails(t *testing.T) {
+	j, g, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+	driveOpenOwnDest(t, &j, dir)
+	g.failing = map[string]string{"/bin/sync": "sync: I/O error"}
+	j.in = &driveOpenKeys{before: func() { _ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed"), 0o644) }}
+	result, err := driveOpenWork(t.Context(), j)
+	if err == nil || result != driveOpenBackFailed || !strings.Contains(err.Error(), "did not confirm it had written the changes") {
+		t.Fatalf("%q, %v", result, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "a.txt")); err != nil || string(b) != "changed" {
+		t.Fatalf("the edit is gone: %q, %v", b, err)
+	}
+	if strings.Contains(out.String(), "Wrote back") || strings.Contains(out.String(), "moved to the Trash") {
+		t.Fatalf("output claims the write back:\n%s", out)
+	}
+	if want := "The folder " + dir + " is kept: it holds the changes that did not go back.\n"; !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("the last line is not %q:\n%s", want, out)
+	}
+	syncs := 0
+	for _, c := range g.calls {
+		if c.argv[0] == "/bin/sync" {
+			syncs++
+		}
+	}
+	if syncs != 1 {
+		t.Fatalf("sync ran %d times, want once", syncs)
+	}
+}
+
 // A write back that succeeded but left out a link the person made keeps the folder: the link is in it only.
 func TestDriveOpenWorkKeepsTheFolderWhenItemsWereNotSent(t *testing.T) {
 	j, _, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})

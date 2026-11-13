@@ -170,6 +170,23 @@ func TestApplyStopsAtAnAPIError(t *testing.T) {
 	}
 }
 
+// TestApplyJSONKeepsTheResultsBeforeAnAPIError: with --json, the workloads stored before a later
+// document fails are still printed (the same array), and the exit stays the error's.
+func TestApplyJSONKeepsTheResultsBeforeAnAPIError(t *testing.T) {
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+		putWeb:    applied(sdk.WorkloadCreated, sdk.WorkloadLaunch{State: sdk.WorkloadNoLaunch}),
+		putWorker: replyJSON(http.StatusBadRequest, map[string]string{"error": "workload_invalid"}),
+	})
+	out, err := rig.run(t, "apply", "--json", "-f", writeTemplateFile(t, "w.yaml", webYAML+"---\n"+workerCR))
+	if err == nil || !strings.Contains(err.Error(), "workload/worker") || exitCodeFor(err) != 3 {
+		t.Fatalf("err = %v (exit %d)", err, exitCodeFor(err))
+	}
+	var got []sdk.WorkloadApplyResult
+	if jerr := json.Unmarshal([]byte(out), &got); jerr != nil || len(got) != 1 || got[0].Outcome != sdk.WorkloadCreated {
+		t.Fatalf("stdout = %q (%v), want a one-result array", out, jerr)
+	}
+}
+
 // TestApplyRefusesAFileBeforeSendingAnything: a document the client cannot read, a repeated name,
 // an empty file and a flag clash are all refused with no request made.
 func TestApplyRefusesAFileBeforeSendingAnything(t *testing.T) {
