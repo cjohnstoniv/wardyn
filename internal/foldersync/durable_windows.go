@@ -47,11 +47,12 @@ func replaceFile(root *os.Root, from, to string) error {
 }
 
 // placeNew moves from to to, written through, never replacing to: it fails with fs.ErrExist when
-// to exists. A hard link is not used, as it has no write-through flag.
+// to exists. A hard link is not used, as it has no write-through flag, except when the directory's
+// path cannot be resolved: then it links through root, as replaceFile renames through it.
 func placeNew(root *os.Root, from, to string) error {
 	src, dst, err := nativePaths(root, from, to)
 	if err != nil {
-		return err
+		return root.Link(from, to)
 	}
 	err = windows.MoveFileEx(src, dst, windows.MOVEFILE_WRITE_THROUGH)
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
