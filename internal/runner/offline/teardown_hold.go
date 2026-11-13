@@ -40,7 +40,8 @@ func (m *Manager) holdTeardownLocked(id uuid.UUID, kind types.RunnerActionKind) 
 }
 
 // retryUnconfirmedTeardowns makes each held kill or end again, as the refused action would have, with
-// m.mu unlocked: one that finishes drops its hold, and any other answer keeps it and is logged.
+// m.mu unlocked: one that finishes is settled as settleApplied settles it, which drops its hold, and any
+// other answer keeps the hold and is logged.
 func (m *Manager) retryUnconfirmedTeardowns(ctx context.Context) {
 	m.actionMu.Lock()
 	defer m.actionMu.Unlock()
@@ -65,7 +66,8 @@ func (m *Manager) retryUnconfirmedTeardowns(ctx context.Context) {
 		}
 		m.mu.Lock()
 		if cur, ok := m.state.Runs[id]; ok && cur.TeardownUnconfirmed != nil {
-			cur.TeardownUnconfirmed = nil
+			// Its containment marker and proxy stop are stamped as well: a retirement of the run needs both.
+			m.settleFinishedLocked(id, &cur, r.TeardownUnconfirmed.Kind, m.now().UTC())
 			m.state.Runs[id] = cur
 			if err := m.save(); err != nil {
 				slog.WarnContext(ctx, "runner: could not save a finished sandbox teardown", "run_id", id, "error", err)

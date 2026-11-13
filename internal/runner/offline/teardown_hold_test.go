@@ -6,10 +6,12 @@ package offline
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -131,5 +133,48 @@ func TestAKillOfAHeldRunThatFinishesDropsTheHold(t *testing.T) {
 	}
 	if h := m.state.Runs[held].TeardownUnconfirmed; h != nil {
 		t.Fatalf("hold %+v after the kill finished, want none", h)
+	}
+}
+
+// A held kill that a later session's retry finishes is settled as a kill that finishes at once is: its
+// containment marker is contained and the proxy stopped, so the org's retirement of the run is taken.
+// Dropping the hold alone left the run's retirement refused.
+func TestARetriedKillThatFinishesLeavesTheRunRetirable(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	if err := m.MutationFinished(t.Context(), runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	peer, receipts := receiptPeer(ctx, t)
+	sub.killErr = &runner.TeardownUnconfirmedError{Err: errors.New("docker: the macOS VM helper is still running")}
+	if err := m.Pending(ctx, peer, []runnerwire.PendingAction{pendingContainment(m, id, types.RunnerActionKill)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-receipts; got.Outcome != types.RunnerActionRefused {
+		t.Fatalf("receipt %+v, want the held kill refused", got)
+	}
+	sub.killErr = nil
+	if err := m.Pending(ctx, peer, nil); err != nil {
+		t.Fatal(err)
+	}
+	spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := spool.Receipt(ctx)
+	if err := errors.Join(err, spool.Close()); err != nil {
+		t.Fatal(err)
+	}
+	retire := pendingContainment(m, id, types.RunnerActionRetire)
+	retire.Retirement = &types.RunnerRetirement{ID: uuid.New(), Spool: receipt}
+	r := m.state.Runs[id]
+	if err := retirementProof(retire, r); err != nil || r.TeardownUnconfirmed != nil {
+		t.Fatalf("after the retry finished the kill: hold %+v, containment %+v, proxy stopped %v, retirement %v; want no hold and the retirement taken",
+			r.TeardownUnconfirmed, r.Containment, r.ProxyStoppedAt, err)
+	}
+	if got, err := m.apply(ctx, retire); err != nil || got.Outcome != "success" || !m.state.Runs[id].Retired {
+		t.Fatalf("retire = %+v, %v; want the run retired", got, err)
 	}
 }
