@@ -40,7 +40,9 @@ type PersonErasureStore interface {
 	// rows, built from their tenant and object ids and never from an alias value.
 	PrincipalEntraNames(ctx context.Context, principal string) ([]string, error)
 	// PrincipalsSharingObject lists the other principals bound to a sign-in with the same tenant and object
-	// id as one of principal's own, under another issuer: often the same human, never the same principal.
+	// id as one of principal's own, under another issuer, and those an unbind released from one of
+	// principal's own sign-in rows (principal_identity_unbinds): often the same human, never the same
+	// principal.
 	PrincipalsSharingObject(ctx context.Context, principal string) ([]string, error)
 	// EraseGovernanceChangePersonalFields clears the proposer and decider (the decider's reason, and the
 	// reason a proposer typed into a runner trust change's payload) of
@@ -260,9 +262,12 @@ func (s PG) PrincipalEntraNames(ctx context.Context, principal string) ([]string
 
 func (s PG) PrincipalsSharingObject(ctx context.Context, principal string) ([]string, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT DISTINCT o.principal FROM principal_identities me
+		SELECT o.principal FROM principal_identities me
 		  JOIN principal_identities o ON o.tenant_id = me.tenant_id AND o.object_id = me.object_id AND o.issuer <> me.issuer
-		 WHERE me.principal = $1 AND me.object_id <> '' AND o.principal IS NOT NULL AND o.principal <> $1 ORDER BY 1`, principal)
+		 WHERE me.principal = $1 AND me.object_id <> '' AND o.principal IS NOT NULL AND o.principal <> $1
+		UNION
+		SELECT h.principal FROM principal_identities me JOIN principal_identity_unbinds h ON h.identity_id = me.id
+		 WHERE me.principal = $1 AND h.principal IS NOT NULL AND h.principal <> $1 ORDER BY 1`, principal)
 	if err != nil {
 		return nil, fmt.Errorf("store: list principals sharing an object id: %w", err)
 	}
@@ -271,6 +276,31 @@ func (s PG) PrincipalsSharingObject(ctx context.Context, principal string) ([]st
 		return nil, fmt.Errorf("store: list principals sharing an object id: %w", err)
 	}
 	return names, nil
+}
+
+// EraseBindingHistoryOf clears principals from the binding history (principal_identity_unbinds) and
+// returns how many rows it cleared. The caller destroys their audit-seal keys first. It first waits for
+// every unbind in flight of an identity row still bound to one of them, by that row's lock: such an unbind
+// writes its history row before it commits, so the clear finds it, and an unbind that locks the row after
+// this commits reads the destroyed key and writes no name (UnbindIdentity).
+func (s PG) EraseBindingHistoryOf(ctx context.Context, principals []string) (int, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return 0, fmt.Errorf("store: erase binding history: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM principal_identities WHERE principal = ANY($1::text[]) ORDER BY id FOR KEY SHARE`,
+		principals); err != nil {
+		return 0, fmt.Errorf("store: wait for unbinds in flight: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE principal_identity_unbinds SET principal = NULL WHERE principal = ANY($1::text[])`, principals)
+	if err != nil {
+		return 0, fmt.Errorf("store: erase binding history: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("store: commit binding history erasure: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func (s PG) SubjectKeyDestroyedSince(ctx context.Context, owner, purpose string, since time.Time) (bool, error) {

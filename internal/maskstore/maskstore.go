@@ -215,21 +215,31 @@ func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 // registration there while an erasure runs.
 var afterRunCommit = func() {}
 
+// beforeRunFenceRead gives the context publishRun reads the run's fence again with, after it cached the
+// value; a variable so a test can act there and fail the read.
+var beforeRunFenceRead = func(ctx context.Context) context.Context { return ctx }
+
 // publishRun puts a committed per-run value in this process's cache (rf, when this process wrote the
 // row, and the registry), then reads the run's fence and the row again. An erasure or purge that
 // tombstoned the row before the value was cached found nothing here to drop, and no later read of the
 // table applies a tombstone twice, so a row gone or a run fenced by now takes the value back out and
 // refuses as a fenced run does; one that comes later finds the value here and drops it. Only what this
-// call added is taken out: a copy the registry already held is the other writer's to drop.
+// call added is taken out: a copy the registry already held is the other writer's to drop. A read that
+// fails takes nothing out: the row is committed, another registration of the value may already have found
+// it cached and returned, and this process's read of the table may have moved past the row, so the value
+// and this process's ref stay and the call reports the error.
 func (s *Store) publishRun(ctx context.Context, runID uuid.UUID, digest, value []byte, rf *ref) error {
 	if rf != nil {
 		s.note(rf)
 	}
 	added := s.reg.AddLocal(runID, value)
 	var live bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_mask_manifest WHERE run_id=$1 AND fenced_at IS NULL)
+	err := s.pool.QueryRow(beforeRunFenceRead(ctx), `SELECT EXISTS (SELECT 1 FROM run_mask_manifest WHERE run_id=$1 AND fenced_at IS NULL)
 		AND EXISTS (SELECT 1 FROM mask_values WHERE bucket=$2 AND digest=$3 AND NOT tombstone)`, runID, bucketRun, digest).Scan(&live)
-	if err == nil && live {
+	if err != nil {
+		return fmt.Errorf("maskstore: read the run's fence again: %w", err)
+	}
+	if live {
 		return nil
 	}
 	if rf != nil {
@@ -245,9 +255,6 @@ func (s *Store) publishRun(ctx context.Context, runID uuid.UUID, digest, value [
 	}
 	if added {
 		s.reg.RemoveLocal(runID, value)
-	}
-	if err != nil {
-		return fmt.Errorf("maskstore: read the run's fence again: %w", err)
 	}
 	return ErrFenced
 }

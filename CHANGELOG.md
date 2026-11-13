@@ -28,6 +28,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - File recording store: retention (`WARDYN_RECORDING_RETENTION_DAYS`) could delete a recording saved again under the same name just as the sweep reached it. The sweep now checks the file's age again, under the recording's lock, before it deletes it.
 - File recording store: an upload for a run whose recordings were erased is now refused before any of it is written to disk. Before, it was written to a staging file first, and a crash during the upload could leave that file until retention removed it.
 - A credential value registered for masking a run's output at the moment the run's masking values were erased (`mask_copies`) or purged by retention could stay in the server's memory until it restarted; the stored copy was erased as before. That registration is now refused and leaves no copy.
+- With `WARDYN_AUDIT_SEAL=full`, an audit row written before an identity row was unbound (`POST /api/v1/admin/identities/{id}/unbind`) read as whoever the row was bound to next, and erasing that person after the unbind did not erase it. An unbind now records the principal it released and the database time of the unbind. A row written at or before that time reads as that person, or `[erased]` once their audit personal fields are erased; erasing the row's later holder no longer erases it, and that erasure lists the person under `not_erased`. Erasing their audit personal fields clears the person from that record, and an unbind of a person already erased records no name. An unbind made before this change left no record, so rows from before it read as the next person the record names, or as before when it names none; a row an earlier erasure had turned to `[erased]` still reads `[erased]`. A row that waited to be written because its person could not be looked up, and is written after that person's unbind, is stored under the identity row that was theirs when it happened, so it reads and is erased the same way instead of keeping their name. A migration (`0283_principal_identity_unbinds`) adds one table; split-role installs need the grant under Before you upgrade.
+
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
+  `principal_identity_unbinds`. Without it, unbinding an identity fails, so do erasing a person or their credentials
+  and a SCIM purge, and so does reading any audit row that names a person by subject (`WARDYN_AUDIT_SEAL=full`). An
+  upgrade from before 0.10.0-rc.18 also needs the 0.10.0-rc.18 grant: `SELECT, INSERT, UPDATE` on `run_proxy_starts`.
+  An upgrade from before 0.10.0-rc.17 also needs the 0.10.0-rc.16 grants: `SELECT, INSERT, UPDATE, DELETE` on
+  `governance_unit_deciders` and `governance_envelopes`. An upgrade from
+  before 0.10.0-rc.14 also needs every grant the 0.10.0-rc.14 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `run_create_keys`, `wall_presets`, `kept_machines`, `workloads`, `workload_bindings`, `workload_run_ends`,
+  `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`,
+  `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`, `governance_restrictions`,
+  `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`,
+  `SELECT, INSERT, UPDATE` on `groundtruth_sensors`, `runner_health`, `launch_preset_version_floor`, `cli_sessions`
+  and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`), and `SELECT, INSERT`
+  on `audit_checkpoints` and `run_model_usage`.
 
 ### Security
 
