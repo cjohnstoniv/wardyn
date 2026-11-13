@@ -79,16 +79,51 @@ func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, 
 // folderStatusUnreadable when the read that decided the give-up failed (tailStepOf), so the give-up says it did not
 // wait on that read, and its given_up row names it; "" for a give-up decided on reads that all answered.
 func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 bool, st types.RunLocalFolderStatus, note string) (final bool, err error) {
+	p := store.GiveUpParams{Cap: s.pendingCap()}
+	if d1 {
+		p.D1, p.Lag, p.Unsupported = true, containmentLag, true
+	}
+	return s.giveUpFolderWith(ctx, run, st, note, p)
+}
+
+// giveUpFolderStopped gives up the copy back still owed by a terminal run whose sandbox a boot sweep tore down
+// and whose ref it is about to clear (reconcileOrphanedRun): with no ref no pass runs again, so the keep ends now
+// (a zero cap) and the final record and its given_up row keep what was left behind. final says the ref may be
+// cleared: nothing was owed (no resume, and no pass owed that never ran: keepsSandboxForFolder's two halves), or
+// the record is final. A record or rule that cannot be read, or a give-up that left the record open, is not final.
+func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (final bool, err error) {
+	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
+		return true, nil
+	}
+	st, err := ss.RunLocalFolderStatus(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return true, nil
+	case err != nil:
+		return false, err
+	}
+	owed := st.Resume != nil
+	if !owed {
+		if owed, err = s.folderOwed(ctx, run, st); err != nil {
+			return false, err
+		}
+	}
+	if !owed {
+		return true, nil
+	}
+	return s.giveUpFolderWith(ctx, run, st, "", store.GiveUpParams{})
+}
+
+// giveUpFolderWith is giveUpFolderNoted with the statement's dues in p; the final record it writes is built here.
+func (s *Server) giveUpFolderWith(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, note string, p store.GiveUpParams) (final bool, err error) {
 	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
 		return false, errors.New("this server's store cannot keep a folder record")
 	}
 	back := s.folderGivenUpRecord(st)
 	back.Error += note
-	p := store.GiveUpParams{Back: back, Cap: s.pendingCap()}
-	if d1 {
-		p.D1, p.Lag, p.Unsupported = true, containmentLag, true
-	}
+	p.Back = back
 	out, err := ss.GiveUpRunLocalFolder(ctx, run.ID, p)
 	if err != nil {
 		return false, err

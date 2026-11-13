@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -760,5 +761,124 @@ func TestOrphanPasses_LeaveASandboxKeptForAComputerFolderResume(t *testing.T) {
 	}
 	if rn.verdicts[kept] || !rn.verdicts[ended] {
 		t.Errorf("orphan sweep verdicts: kept %v, ended %v; want false and true", rn.verdicts[kept], rn.verdicts[ended])
+	}
+}
+
+// givenUpSweepStore is keptFolderStore whose kept runs hold resume and have a folder for the given_up row. Each
+// give-up is noted with the ref its run held when it was made; it applies unless refuse is set, and a kept run's
+// record cannot be read when unreadable is.
+type givenUpSweepStore struct {
+	*keptFolderStore
+	resume     *types.FolderResume
+	refuse     bool
+	unreadable bool
+	giveUps    []store.GiveUpParams
+	refAt      []string
+}
+
+func (s *givenUpSweepStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
+	if s.kept[id] && s.unreadable {
+		return types.RunLocalFolderStatus{}, errors.New("record unreadable")
+	}
+	if s.kept[id] {
+		return types.RunLocalFolderStatus{Gen: 2, Settled: 2, Resume: s.resume}, nil
+	}
+	return types.RunLocalFolderStatus{}, nil
+}
+
+func (s *givenUpSweepStore) GiveUpRunLocalFolder(_ context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.runs {
+		if r.ID == id {
+			s.refAt = append(s.refAt, r.SandboxRef)
+		}
+	}
+	s.giveUps = append(s.giveUps, p)
+	if s.refuse {
+		return store.GiveUpOutcome{}, nil
+	}
+	return store.GiveUpOutcome{Applied: true, Gen: 3}, nil
+}
+
+func (s *givenUpSweepStore) RunLocalFolderSeed(context.Context, uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	return &types.RunLocalFolder{Name: "work", Direction: types.ComputerFolderBoth}, store.LocalFolderSeed{}, nil
+}
+
+func (s *givenUpSweepStore) SetRunLocalFolderSeed(context.Context, uuid.UUID, string) (bool, error) {
+	return false, nil
+}
+
+// The boot pass that tears down a sandbox kept for its computer folder, on a cut it could not confirm, gives the
+// owed copy back up before it clears the run's ref: the give-up is made while the ref is still set, due at once (a
+// zero cap), its final record keeps the count and names of the changes left behind, and its run.folder.transfer
+// given_up row is written. A give-up that leaves the record open, or a record that cannot be read, keeps the ref for
+// the next boot, with no give-up and no row for the unreadable one. A run with nothing owed is not given up and its
+// ref is cleared. Catches: a ref cleared while the record still shows the changes owed, with no given_up row.
+func TestOrphanPass_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		refuse, unreadable bool
+	}{{"applied", false, false}, {"left open", true, false}, {"record unreadable", false, true}} {
+		refuse, unreadable := c.refuse, c.unreadable
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			now := time.Now().UTC()
+			kept, ended := uuid.New(), uuid.New()
+			run := func(id uuid.UUID, ref string) types.AgentRun {
+				return types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Agent: "claude-code",
+					ConfinementClass: types.CC1, State: types.RunCompleted, RunnerTarget: "docker", SandboxRef: ref}
+			}
+			st := &givenUpSweepStore{keptFolderStore: &keptFolderStore{
+				orphanSweepStore: &orphanSweepStore{runs: []types.AgentRun{run(kept, "kept"), run(ended, "ended")}},
+				kept:             map[uuid.UUID]bool{kept: true}},
+				resume: &types.FolderResume{Unsynced: 3, Counted: true, Paths: []string{"a.txt", "b.txt"}}, refuse: refuse, unreadable: unreadable}
+			rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}} // no fence and no proxy stop: no cut is confirmed
+			audit := &recRecorder{}
+			cfg := baseTestConfig(h, st)
+			cfg.Runner = rn
+			cfg.Audit = audit
+			srv := testServer(t, cfg)
+			if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if k, e := rn.stopCount("kept"), rn.stopCount("ended"); k != 1 || e != 1 {
+				t.Fatalf("stopped the kept sandbox %d times and the other %d; want 1 and 1", k, e)
+			}
+			if unreadable {
+				for _, ev := range audit.snapshot() {
+					if ev.Action == "run.folder.transfer" {
+						t.Errorf("audit row %s %s for a run whose record could not be read; want none", ev.Action, ev.Outcome)
+					}
+				}
+				if len(st.giveUps) != 0 || slices.Contains(st.clearedRefs, kept) || !slices.Contains(st.clearedRefs, ended) {
+					t.Errorf("%d give-ups, refs cleared %v; want none, the kept run's ref kept and the other run's cleared", len(st.giveUps), st.clearedRefs)
+				}
+				return
+			}
+			if len(st.giveUps) != 1 || st.refAt[0] != "kept" {
+				t.Fatalf("%d give-ups, refs at give-up %v; want one, for the kept run, made while its ref was set", len(st.giveUps), st.refAt)
+			}
+			p := st.giveUps[0]
+			if p.Cap != 0 || p.D1 || p.Back.GivenUpAt == nil || p.Back.GivenUpCount == nil || *p.Back.GivenUpCount != 3 ||
+				!slices.Equal(p.Back.GivenUpPaths, []string{"a.txt", "b.txt"}) || p.Back.GivenUpPathsMore != 1 {
+				t.Errorf("give-up %+v; want a zero cap, no containment terms, and the record given up with 3 changes, 2 named and 1 more", p)
+			}
+			rows := 0
+			for _, ev := range audit.snapshot() {
+				if ev.Action == "run.folder.transfer" && ev.Outcome == "failure" && ev.RunID != nil && *ev.RunID == kept &&
+					strings.Contains(string(ev.Data), "changed files not brought back: 3") {
+					rows++
+				}
+			}
+			wantRows := 1
+			if refuse {
+				wantRows = 0
+			}
+			if rows != wantRows || slices.Contains(st.clearedRefs, kept) == refuse || !slices.Contains(st.clearedRefs, ended) {
+				t.Errorf("%d given_up rows, refs cleared %v; want %d rows, the kept run's ref cleared only when the record is final, "+
+					"and the other run's cleared", rows, st.clearedRefs, wantRows)
+			}
+		})
 	}
 }
