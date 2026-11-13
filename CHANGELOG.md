@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- A run's or a governance unit's model usage no longer fails to load, and `wardyn_model_tokens_total` no longer turns negative, when token counts add up past 9,223,372,036,854,775,807. A model line whose counts add up past that, or would take a total of the view past it, now shows its calls as not counted, reason `count_out_of_range`, and a count that would take a token series past it is left out of that series.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

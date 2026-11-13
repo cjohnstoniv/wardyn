@@ -25,10 +25,7 @@ var _ UnitModelUsageReader = PG{}
 
 func (s PG) UnitModelUsage(ctx context.Context, units []uuid.UUID, since, until time.Time) (map[uuid.UUID]ModelUsageSummary, error) {
 	out := map[uuid.UUID]ModelUsageSummary{}
-	rows, err := s.Pool.Query(ctx, `SELECT r.unit_id, u.vendor, u.host, u.model,
-			COALESCE(sum(u.input_tokens),0)::bigint, COALESCE(sum(u.output_tokens),0)::bigint,
-			COALESCE(sum(u.cache_read_tokens),0)::bigint, COALESCE(sum(u.cache_write_tokens),0)::bigint,
-			COALESCE(sum(u.reasoning_tokens),0)::bigint,
+	rows, err := s.Pool.Query(ctx, `SELECT r.unit_id, u.vendor, u.host, u.model, `+usageSumsSQL+`,
 			count(*), count(*) FILTER (WHERE u.state='uncounted'), count(*) FILTER (WHERE u.state='partial'), max(u.at)
 		FROM run_model_usage u JOIN agent_runs r ON r.id = u.run_id
 		WHERE r.unit_id = ANY($1) AND r.created_at >= $2 AND r.created_at < $3
@@ -41,9 +38,13 @@ func (s PG) UnitModelUsage(ctx context.Context, units []uuid.UUID, since, until 
 		var unit uuid.UUID
 		var g ModelUsageGroup
 		var newest time.Time
-		if err := rows.Scan(&unit, &g.Vendor, &g.Host, &g.Model, &g.Input, &g.Output, &g.CacheRead, &g.CacheWrite, &g.Reasoning,
+		var over bool
+		if err := rows.Scan(&unit, &g.Vendor, &g.Host, &g.Model, &g.Input, &g.Output, &g.CacheRead, &g.CacheWrite, &g.Reasoning, &over,
 			&g.Calls, &g.UncountedCalls, &g.PartialCalls, &newest); err != nil {
 			return nil, fmt.Errorf("store: scan unit model usage: %w", err)
+		}
+		if over {
+			g = g.Uncounted()
 		}
 		sum := out[unit]
 		if sum.UpdatedAt == nil || newest.After(*sum.UpdatedAt) {

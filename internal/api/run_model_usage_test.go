@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -205,6 +207,61 @@ func TestRunModelUsage_EmptyRunIsEmptyNotNull(t *testing.T) {
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/model-usage", owner, "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"by_model":[]`) || !strings.Contains(w.Body.String(), `"opaque_tunnels":0`) {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}
+
+// Totals of max-1 and max add exactly. A line that would take a total past an int64 is shown as not counted, in
+// its line and in the totals, never as a wrapped or cut figure.
+func TestBuildModelUsageView_TotalsAtTheInt64Edge(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		second int64
+		total  int64
+		over   bool
+	}{
+		{"max-1", math.MaxInt64 - 2, math.MaxInt64 - 1, false},
+		{"max", math.MaxInt64 - 1, math.MaxInt64, false},
+		{"max+1", math.MaxInt64, 1, true},
+	} {
+		v := buildModelUsageView(store.ModelUsageSummary{Groups: []store.ModelUsageGroup{
+			{Vendor: "anthropic", Host: "h", Model: "a", Input: 1, Output: 2, Calls: 1},
+			{Vendor: "anthropic", Host: "h", Model: "b", Input: tc.second, Output: 3, Calls: 2, PartialCalls: 1},
+		}}, 0, nil)
+		b := v.ByModel[1]
+		if v.Totals.InputTokens != tc.total || v.Totals.Calls != 3 {
+			t.Errorf("%s: totals %+v, want input %d over 3 calls", tc.name, v.Totals, tc.total)
+		}
+		if !tc.over && (b.InputTokens != tc.second || b.UncountedCalls != 0 || v.Totals.OutputTokens != 5 || v.Totals.PartialCalls != 1) {
+			t.Errorf("%s: line %+v, totals %+v, want both lines counted", tc.name, b, v.Totals)
+		}
+		if tc.over && (b.InputTokens != 0 || b.OutputTokens != 0 || b.PartialCalls != 0 || b.UncountedCalls != 2 ||
+			b.UncountedReasons[store.UncountedReasonOutOfRange] != 2 || v.Totals.OutputTokens != 2 || v.Totals.UncountedCalls != 2) {
+			t.Errorf("%s: line %+v, totals %+v, want the second line's 2 calls not counted", tc.name, b, v.Totals)
+		}
+	}
+}
+
+// A token series at max-1 does not take a count that would pass an int64, neither wrapped nor cut to max, and
+// still takes one that reaches max exactly.
+func TestModelTokens_SeriesAtTheInt64Edge(t *testing.T) {
+	m := &metrics{}
+	add := func(n int64) int64 {
+		m.modelTokens(egress.ModelUsage{Vendor: "anthropic", Input: n})
+		return m.modelTok[[2]string{"anthropic", "input"}]
+	}
+	if got := add(math.MaxInt64 - 1); got != math.MaxInt64-1 {
+		t.Fatalf("max-1: series %d", got)
+	}
+	if got := add(2); got != math.MaxInt64-1 {
+		t.Fatalf("max+1: series %d, want the count left out and the series at max-1", got)
+	}
+	if got := add(1); got != math.MaxInt64 {
+		t.Fatalf("max: series %d", got)
+	}
+	var out strings.Builder
+	m.writeModelTokens(&out)
+	if !strings.Contains(out.String(), `wardyn_model_tokens_total{vendor="anthropic",direction="input"} 9223372036854775807`+"\n") {
+		t.Errorf("metrics:\n%s", out.String())
 	}
 }
 
