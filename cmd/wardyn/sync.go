@@ -124,7 +124,10 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 // adoptTypedSyncState moves the sync state an earlier release saved under the run id as it was typed (upper
 // case, urn:uuid:, braces or no hyphens) to stateFile, the run's one name, when that name holds none. A sync
 // that found no state would send every file again, over what the sandbox changed since the last sync.
-func adoptTypedSyncState(typed, stateFile string) {
+func adoptTypedSyncState(typed, runID, stateFile string) {
+	if typed == runID {
+		return
+	}
 	old, err := foldersync.StatePath(typed)
 	if err != nil {
 		return
@@ -164,9 +167,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
-	if typed != runID {
-		adoptTypedSyncState(typed, stateFile)
-	}
+	adoptTypedSyncState(typed, runID, stateFile)
 	stateRoot, err := foldersync.StateRoot()
 	if err != nil {
 		return err
