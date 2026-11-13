@@ -368,7 +368,7 @@ func invalidFederatedRow(rows []types.FederatedAuditEvent) string {
 		switch {
 		case e.Seq <= prev:
 			return fmt.Sprintf("row %d: seq %d does not increase", i, e.Seq)
-		case !slices.Contains([]types.ActorType{types.ActorHuman, types.ActorAgent, types.ActorSystem}, e.ActorType):
+		case !e.ActorType.Valid():
 			return fmt.Sprintf("row %d: invalid actor_type %q", i, e.ActorType)
 		case !slices.Contains([]string{"success", "failure", "denied"}, e.Outcome):
 			return fmt.Sprintf("row %d: invalid outcome %q", i, e.Outcome)

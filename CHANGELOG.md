@@ -17,6 +17,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A laptop's audit forwarding no longer stops at a row made by a service identity. The organisation answered it with 400 `invalid_row`, and every later row waited behind it; it now stores the row, with its claimed actor type `service`, as it does a human, agent or system row.
+- After every organisation server runs this release, restart `wardynd` on each laptop whose audit forwarding had already stopped at a service identity's row; it does not start again by itself. Such a laptop's log says forwarding is halted until wardynd restarts, and its `/healthz` `org_federation.lag` stays above 0. After the restart the laptop sends again from the first row the organisation has not acknowledged. This fix needs no change on the laptop besides that restart.
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.

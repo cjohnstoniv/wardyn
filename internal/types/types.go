@@ -126,6 +126,16 @@ const (
 	ActorService ActorType = "service"
 )
 
+// Valid reports whether a is an actor type audit_events stores (its actor_type CHECK constraint). A new
+// ActorType constant is added here too, so every boundary that admits an actor type reads one list.
+func (a ActorType) Valid() bool {
+	switch a {
+	case ActorHuman, ActorAgent, ActorSystem, ActorService:
+		return true
+	}
+	return false
+}
+
 // AgentRun is one governed execution of a coding agent on behalf of a human, with its own identity
 // (SPIFFE ID), credential grants, and audit trail.
 type AgentRun struct {
