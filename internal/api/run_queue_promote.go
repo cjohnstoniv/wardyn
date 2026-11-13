@@ -339,7 +339,8 @@ const queueLeaseStale = watcherLeaseStaleAfter
 
 // failStalePromoted fails each promoted run (PENDING, no sandbox, admitted_at set) whose start stopped
 // touching its lease, revoking any identity it was given, so its slot frees within a tick. A plain
-// PENDING run in its image build is never listed: only promotion writes admitted_at.
+// PENDING run in its image build is never listed: only promotion writes admitted_at. The list is a
+// snapshot: failStaleStart's own transition decides, and only a run it ended is audited.
 func (s *Server) failStalePromoted(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	runs, err := qs.StalePromotedRuns(ctx, queueLeaseStale)
@@ -349,21 +350,42 @@ func (s *Server) failStalePromoted(ctx context.Context) error {
 	}
 	var errs []error
 	for _, run := range runs {
-		if !s.failAndRevoke(ctx, run.ID, types.RunPending, queueStartLostHint) {
-			// false is also "a concurrent kill or start won", which is no failure: only a run still PENDING
-			// (or unreadable) means the transition itself failed, and failAndRevoke has only logged that.
-			switch cur, gerr := s.cfg.Store.GetRun(ctx, run.ID); {
-			case gerr != nil:
-				errs = append(errs, fmt.Errorf("read the stale promoted run %s: %w", run.ID, gerr))
-			case cur.State == types.RunPending:
-				errs = append(errs, fmt.Errorf("fail the stale promoted run %s: the transition did not apply", run.ID))
-			}
+		won, ferr := s.failStaleStart(ctx, qs, run.ID)
+		if ferr != nil {
+			errs = append(errs, fmt.Errorf("fail the stale promoted run %s: %w", run.ID, ferr))
+			continue
+		}
+		if !won {
+			// A concurrent kill or start moved the run, or its start touched its lease after the list:
+			// not this pass's to end, and no failure.
 			continue
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.queue.start", run.ID.String(), "failure",
 			mustJSON(map[string]any{"reason": "start_lost", "pool_id": run.RunnerPoolID})))
 	}
 	return errors.Join(errs...)
+}
+
+// failStaleStart is failAndRevoke for a run the stale-lease pass listed. Its transition to FAILED
+// (FailStalePromotedRun) re-checks, in the same statement, that the run is still promoted, PENDING with no
+// sandbox and no lost mark, and that its start has still not touched its lease for queueLeaseStale by the
+// database's clock: a start whose heartbeat landed after the list keeps its run. Only a won transition
+// sets the hint, revokes and finishes the output (failedRunEffects); the caller audits it. A failed write
+// is audited as failAndRevoke audits one, and the next sweep tries again.
+func (s *Server) failStaleStart(ctx context.Context, qs queueStore, runID uuid.UUID) (bool, error) {
+	applied, err := qs.FailStalePromotedRun(ctx, runID, queueLeaseStale)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: fail a stale promoted run; the next sweep tries again",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
+			runID.String(), "failure", mustJSON(map[string]any{"from": string(types.RunPending), "error": err.Error()})))
+		return false, err
+	}
+	s.runStateMoved(runID, types.RunPending, types.RunFailed, applied)
+	if applied {
+		s.failedRunEffects(ctx, runID, types.RunPending, queueStartLostHint)
+	}
+	return applied, nil
 }
 
 // queueStartLostHint is the line under the FAILED badge of a promoted run whose start died.

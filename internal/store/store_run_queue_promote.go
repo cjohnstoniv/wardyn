@@ -523,6 +523,26 @@ func (s PG) StalePromotedRuns(ctx context.Context, staleAfter time.Duration) ([]
 		[]any{string(types.RunPending), staleAfter.String()}, scanRun)
 }
 
+// FailStalePromotedRun moves run id from PENDING to FAILED only while it is still what StalePromotedRuns
+// lists: promoted (admitted_at set), with no sandbox and no lost mark, and its start's lease still older
+// than staleAfter by the database's clock at this statement. A start whose heartbeat landed after the list
+// keeps its run: the answer is false, as it is for a run another writer already moved. The columns written
+// are UpdateRunStateIf's for a terminal move.
+func (s PG) FailStalePromotedRun(ctx context.Context, id uuid.UUID, staleAfter time.Duration) (bool, error) {
+	if staleAfter < 0 {
+		staleAfter = 0
+	}
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET state = $1, updated_at = now(), ended_at = COALESCE(ended_at, now())
+		 WHERE id = $2 AND state = $3 AND admitted_at IS NOT NULL AND sandbox_ref = '' AND lost_at IS NULL
+		   AND watcher_heartbeat < now() - $4::interval`,
+		string(types.RunFailed), id, string(types.RunPending), staleAfter.String())
+	if err != nil {
+		return false, fmt.Errorf("store: fail a stale promoted run: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // QueueStart is the columns the start of a promoted run writes: everything a QUEUED run left empty
 // (the identity, the end and its cap, the governance capture) and the placement the start settled.
 type QueueStart struct {
