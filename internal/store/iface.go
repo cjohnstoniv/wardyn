@@ -419,8 +419,9 @@ type ComponentStore interface {
 	CreateComponent(ctx context.Context, c types.Component) (types.Component, error)
 	// UpdateComponent replaces the name and definition of the row with c's id AND owner and moves
 	// its version by one. ErrNotFound when that owner has no such row; ErrConflict on a name the
-	// owner already uses.
-	UpdateComponent(ctx context.Context, c types.Component) (types.Component, error)
+	// owner already uses. With expected not 0 it writes only while the row is at that version, the
+	// one the caller read: ErrComponentStale otherwise, a row gone since included.
+	UpdateComponent(ctx context.Context, c types.Component, expected int) (types.Component, error)
 	// DeleteComponent removes owner's row and returns it, or ErrNotFound. Snapshots of it on
 	// runs already launched are kept.
 	DeleteComponent(ctx context.Context, id uuid.UUID, owner string) (types.Component, error)

@@ -37,6 +37,7 @@ import {
   requestOf,
   settingField,
   validateDraft,
+  withStored,
   type ComponentDraft,
   type FormErrors,
 } from "./custom-component-form-model";
@@ -133,7 +134,11 @@ export function CustomComponentDialog({
     }
     setSaving(true);
     try {
-      const result = component ? await api.updateMine(component.id, req) : await api.saveMine(req);
+      // An edit keeps what this form has no control for (an MCP server's address and transport), and names the
+      // version it opened, so a save from another tab since is refused rather than written back.
+      const result = component
+        ? await api.updateMine(component.id, { ...withStored(req, component, ""), expected_version: component.version })
+        : await api.saveMine(req);
       onSaved?.(result);
       if (context === "run") onAttach?.({ id: result.id });
       if ((result.requirements ?? []).some((r) => r.status === "missing")) setSaved(result);

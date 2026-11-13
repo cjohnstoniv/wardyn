@@ -259,8 +259,32 @@ describe("CustomComponentDialog: editing a saved component", () => {
 
     await waitFor(() => expect(props.onClose).toHaveBeenCalled());
     expect(calls()).toEqual([
-      { path: `/api/v1/me/components/${SAVED.id}`, method: "PUT", body: { name: "Acme v2", definition: { hosts: ["api.acme.test"] } } },
+      { path: `/api/v1/me/components/${SAVED.id}`, method: "PUT", body: { name: "Acme v2", definition: { hosts: ["api.acme.test"] }, expected_version: 1 } },
     ]);
+  });
+
+  it("keeps a saved MCP server's address and transport when it is renamed", async () => {
+    const mcp = { ...SAVED, definition: { hosts: ["mcp.acme.test"], mcp: { url: "https://mcp.acme.test/mcp", transport: "http" as const } } };
+    fetchMock.mockResolvedValue(json(200, { ...mcp, name: "Acme v2", version: 2 }));
+    const { props, user } = open({ context: "saved", component: mcp, onAttach: undefined });
+    await type(user, /^Name/, "Acme v2");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    expect(calls()[0].body).toEqual({ name: "Acme v2", definition: { hosts: ["mcp.acme.test"], mcp: { url: "https://mcp.acme.test/mcp", transport: "http" } }, expected_version: 1 });
+  });
+
+  it("keeps the form open, as typed, when the component was saved elsewhere since it opened", async () => {
+    const msg = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again.";
+    fetchMock.mockResolvedValue(json(409, { error: msg, reason: "component_version_conflict" }));
+    const { props, user } = open({ context: "saved", component: SAVED, onAttach: undefined });
+    await type(user, /^Name/, "Acme v2");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText(msg)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Name/)).toHaveValue("Acme v2");
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(props.onSaved).not.toHaveBeenCalled();
   });
 
   it("has no this-run-only choice: it always saves", () => {

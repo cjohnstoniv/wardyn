@@ -299,7 +299,8 @@ export function ComponentEditor({
     setError(null);
     const id = component?.id ?? newUuid();
     try {
-      await api.put(id, withStored(requestOf(draft), component, audience));
+      // The version this editor opened: a row someone saved since is refused, not overwritten.
+      await api.put(id, { ...withStored(requestOf(draft), component, audience), ...(component && { expected_version: component.version }) });
       onSaved(id, component === null);
     } catch (e) {
       setError(getErrorMessage(e));

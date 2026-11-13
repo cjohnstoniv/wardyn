@@ -20,6 +20,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- A component saved from an editor opened before someone else saved it no longer writes back what that save changed, such as a removed host or a removed plain-HTTP delivery. The console now sends the version it opened as `expected_version` on `PUT /components/{id}` and `PUT /me/components/{id}`, and the server refuses a save the component has moved past with `409` `component_version_conflict`, before it writes anything or removes a CLI sign-in. Closing the editor reads the list again. A `PUT` without `expected_version` replaces the component as before.
+- Editing one of your own saved MCP server components in the console no longer removes its server address and transport.
+- A granted organisation MCP server is now listed under MCP in New run's Add tools and access, not under APIs. A remote server's address is shown as its scheme, host and port only.
+- Components saved with Save to reuse are now offered in New run's Add tools and access, marked "Saved to your components", so a later run can add them.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

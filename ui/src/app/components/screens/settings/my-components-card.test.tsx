@@ -99,6 +99,21 @@ describe("MyComponentsCard", () => {
     expect(JSON.parse(String(put[1].body)).name).toBe("Acme v2");
   });
 
+  it("closing the form reads the list again, so the next edit names the version now saved", async () => {
+    mount();
+    await openCard();
+    await user.click(screen.getByRole("button", { name: "Edit Acme" }));
+    await screen.findByLabelText(/^Name/);
+    mine = reply({ mine: [{ ...A, name: "Acme (renamed)", version: 2 }, B] });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Acme (renamed)" }));
+    await screen.findByLabelText(/^Name/);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent()).toContain(`PUT /api/v1/me/components/${A.id}`));
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT")!;
+    expect(JSON.parse(String(put[1].body)).expected_version).toBe(2);
+  });
+
   it("creates a new one with POST", async () => {
     mount();
     await openCard();

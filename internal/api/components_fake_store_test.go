@@ -91,11 +91,14 @@ func (f *fakeComponentStore) DeleteRestrictedComponent(ctx context.Context, id u
 	return deleted, 0, restored, nil
 }
 
-func (f *fakeComponentStore) UpdateComponent(_ context.Context, c types.Component) (types.Component, error) {
+func (f *fakeComponentStore) UpdateComponent(_ context.Context, c types.Component, expected int) (types.Component, error) {
 	f.cmu.Lock()
 	defer f.cmu.Unlock()
 	f.ensure()
 	cur, ok := f.components[c.ID]
+	if expected != 0 && (!ok || cur.Owner != c.Owner || cur.Version != expected) {
+		return types.Component{}, store.ErrComponentStale
+	}
 	if !ok || cur.Owner != c.Owner {
 		return types.Component{}, store.ErrNotFound
 	}

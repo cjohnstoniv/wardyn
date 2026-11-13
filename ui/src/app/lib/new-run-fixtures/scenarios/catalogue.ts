@@ -8,9 +8,10 @@
 
 import type { MyComponents, OrgComponentView } from "../../types/components";
 
+/** A remote MCP server: the server shows a granted person its origin only (internal/api/components_project.go). */
 export const ORG_LINEAR: OrgComponentView = {
   id: "11111111-1111-4111-8111-111111111111", name: "Linear", category: "mcp", hosts: ["mcp.linear.app"], secrets: [], config_keys: [],
-  mcp: { url: "https://mcp.linear.app/mcp", transport: "http" },
+  mcp: { url: "https://mcp.linear.app", transport: "http" },
 };
 export const ORG_BILLING: OrgComponentView = {
   id: "22222222-2222-4222-8222-222222222222", name: "Billing API", category: "api", hosts: ["billing.acme.internal"],

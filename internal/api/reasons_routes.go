@@ -919,9 +919,10 @@ const reasonCredentialHostCollision = "credential_host_collision"
 // definition, shared-secret and store-unavailable refusals they also answer are
 // the gate's, declared above.
 const (
-	reasonComponentCapReached   = "component_cap_reached"   // the person, or the organisation, is at the saved-component limit
-	reasonComponentNameConflict = "component_name_conflict" // another component of this owner already has the name (or, for an org id, the id)
-	reasonComponentNotFound     = "component_not_found"     // no such component of this owner's; another person's and an absent id answer alike
+	reasonComponentCapReached      = "component_cap_reached"      // the person, or the organisation, is at the saved-component limit
+	reasonComponentNameConflict    = "component_name_conflict"    // another component of this owner already has the name (or, for an org id, the id)
+	reasonComponentNotFound        = "component_not_found"        // no such component of this owner's; another person's and an absent id answer alike
+	reasonComponentVersionConflict = "component_version_conflict" // the row is no longer at the expected_version the caller read
 )
 
 // Runner registration request and deployment refusals. Token and claim refusals
