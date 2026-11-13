@@ -343,8 +343,9 @@ PY
 log "a refused first start is retried on freshly picked ports"
 
 # The retry keeps the caller's bind host: only the ports change.
-export WARDYN_E2E_ADDR="127.0.0.2:$(pick_free_port)" WARDYN_E2E_UI_ADDR="127.0.0.2:$(pick_free_port)"
-export WARDYN_E2E_INTERNAL_ADDR="127.0.0.2:$(pick_free_port)"
+export WARDYN_E2E_ADDR="127.0.0.2:$(pick_free_port)"
+export WARDYN_E2E_UI_ADDR="127.0.0.2:$(pick_free_port "${WARDYN_E2E_ADDR##*:}")"
+export WARDYN_E2E_INTERNAL_ADDR="127.0.0.2:$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}")"
 : > "${tmp}/fail-once"
 E2E_TEST_FAIL_ONCE="${tmp}/fail-once" run_wrapper one
 grep -q 'retrying once' "${tmp}/wrapper.log" || { cat "${tmp}/wrapper.log"; die "the refused first start was not retried"; }
@@ -368,8 +369,8 @@ wait "${wrapper_pid}" || true
 log "an interrupted run after a retry tears the re-picked backend down"
 
 export WARDYN_E2E_ADDR="127.0.0.2:$(pick_free_port)"
-export WARDYN_E2E_UI_ADDR="127.0.0.2:$(pick_free_port)"
-export WARDYN_E2E_INTERNAL_ADDR="127.0.0.2:$(pick_free_port)"
+export WARDYN_E2E_UI_ADDR="127.0.0.2:$(pick_free_port "${WARDYN_E2E_ADDR##*:}")"
+export WARDYN_E2E_INTERNAL_ADDR="127.0.0.2:$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}")"
 export WARDYN_E2E_TOKEN=explicit-private-test-token
 run_wrapper one two
 check_events 2 1 '' 127.0.0.2
@@ -396,7 +397,8 @@ done
 log "tmux rejects every non-loopback entry point before Docker, build, reset or startup"
 
 touch ui/e2e/cockpit-terminal-tmux-probe.spec.ts
-export WARDYN_E2E_ADDR=":$(pick_free_port)" WARDYN_E2E_UI_ADDR="localhost:$(pick_free_port)"
+export WARDYN_E2E_ADDR=":$(pick_free_port)"
+export WARDYN_E2E_UI_ADDR="localhost:$(pick_free_port "${WARDYN_E2E_ADDR##*:}")"
 run_wrapper cockpit-terminal-tmux-probe
 check_events 1 1 '' 127.0.0.1
 log "port-only and localhost overrides stay loopback in the real-tmux lane"

@@ -218,9 +218,8 @@ jq -e --arg h "${FAKE_BEDROCK_HOST}" 'any(.[]; .action == "egress.allow" and .da
 check "the proxy let a model call through to the fake" $?
 
 step "reading the fake's counter (/_seen)"
-PF_PORT="$(pick_free_port)"
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}-bedrock" "${PF_PORT}:8091" >/dev/null 2>&1 &
-PF_PID=$!
+port_forward PF_PID PF_PORT "${TMPDIR}/pf-bedrock.log" --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}-bedrock" :8091 \
+  || die "the port-forward to the fake named no local port: $(cat "${TMPDIR}/pf-bedrock.log")"
 seen=""
 for _ in $(seq 1 15); do
   seen="$(curl -sf --max-time 3 "http://127.0.0.1:${PF_PORT}/_seen" 2>/dev/null)" && break

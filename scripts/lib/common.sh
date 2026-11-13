@@ -17,9 +17,13 @@
 # also run a teardown hook first) still keeps its own local override, defined
 # AFTER sourcing this file so bash lets the later definition win.
 
-# wait_healthy URL [TRIES] [SLEEP_SECS] — poll URL/healthz until it answers
+# wait_healthy URL [TRIES] [SLEEP_SECS] [PID] — poll URL/healthz until it answers
 # (curl -fsS), sleeping SLEEP_SECS (default 1) between up to TRIES (default 60)
-# attempts. Returns 1 on timeout.
+# attempts. Returns 1 on timeout. With PID (the server this script started),
+# returns 2 as soon as PID has exited, and an answer counts only while PID still
+# runs. A server handed a port another process took first exits on its bind
+# error, but only once it gets that far: until then the other process's answer
+# passes, so a caller checks PID again after its own first calls (e2e-backend.sh).
 #
 # -m 3 is what makes the TRIES budget mean anything: a peer that ACCEPTS the
 # connection and then never replies (a daemon wedged mid-boot, a stale WSL2 NAT
@@ -27,9 +31,13 @@
 # second attempt and the advertised ceiling is not a ceiling. Pinned by
 # scripts/test-up-probes.sh.
 wait_healthy() {
-  local url="$1" tries="${2:-60}" slp="${3:-1}"
+  local url="$1" tries="${2:-60}" slp="${3:-1}" pid="${4:-}"
   for _ in $(seq 1 "${tries}"); do
-    curl -fsS -m 3 "${url}/healthz" >/dev/null 2>&1 && return 0
+    [[ -z "${pid}" ]] || kill -0 "${pid}" 2>/dev/null || return 2
+    if curl -fsS -m 3 "${url}/healthz" >/dev/null 2>&1; then
+      [[ -z "${pid}" ]] || kill -0 "${pid}" 2>/dev/null || return 2
+      return 0
+    fi
     sleep "${slp}"
   done
   return 1
@@ -48,17 +56,51 @@ wait_down() {
   return 1
 }
 
-# pick_free_port — ask the OS for a free TCP port and print it. Binds "" (all
-# interfaces), the same address wardynd listens on for `:PORT` — a port held
-# only on another address would otherwise pass this probe and then fail to
-# bind. Bind then immediately close, so nothing holds the port afterwards:
-# another process can take it before the caller binds it. run-ui-e2e.sh
-# accepts that rather than run a lockfile protocol: its backend then fails to
-# come up, and it reports "backend up failed ... this is the backend, not the
-# spec". Its one retry re-picks the lane's ports first (repick_lane_ports), so
-# a stolen one is recovered. Requires python3, already relied on elsewhere under scripts/.
+# pick_free_port [TAKEN...] — ask the OS for a free TCP port and print it, never
+# one of the TAKEN ports. Binds "" (all interfaces), the same address wardynd
+# listens on for `:PORT` — a port held only on another address would otherwise
+# pass this probe and then fail to bind. Bind then immediately close, so nothing
+# holds the port afterwards: another process can take it before the caller
+# binds it, and a second pick can return the same port while the first is still
+# unbound. Pass the ports already picked for this run as TAKEN, so two
+# consumers are never handed one port. A caller that binds a picked port must
+# turn a lost race into a retry: a port-forward that can choose its own port
+# lets it (port_forward); a server it starts is waited on with its pid
+# (wait_healthy) and started again on new ports when it exits (run-ui-e2e.sh's
+# repick_lane_ports). Requires python3, already relied on elsewhere under scripts/.
 pick_free_port() {
-  python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()'
+  python3 -c 'import socket, sys
+taken, held = set(sys.argv[1:]), []
+while True:
+    s = socket.socket()
+    s.bind(("", 0))
+    port = str(s.getsockname()[1])
+    if port not in taken:
+        break
+    held.append(s)  # kept bound, so the next bind cannot return it
+print(port)' "$@"
+}
+
+# port_forward PID_VAR PORT_VAR LOG ARGS... — run `kubectl ARGS` in the background:
+# a port-forward whose local port is left empty (":8091"), so kubectl binds a port
+# of its own choosing before it prints "Forwarding from 127.0.0.1:N". Waits up to
+# 10 s for that line, then sets PID_VAR to kubectl's pid and PORT_VAR to N.
+# Returns 1 when kubectl exits or names no port in time. No port is picked first,
+# so none is left free for another process to take.
+port_forward() {
+  local pid_var="$1" port_var="$2" log="$3" pid port=""
+  shift 3
+  kubectl "$@" >"${log}" 2>&1 &
+  pid=$!
+  printf -v "${pid_var}" '%s' "${pid}"
+  for _ in $(seq 1 50); do
+    port="$(sed -nE 's/^Forwarding from 127\.0\.0\.1:([0-9]+) .*/\1/p' "${log}" | sed -n 1p)"
+    [[ -z "${port}" ]] || break
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.2
+  done
+  printf -v "${port_var}" '%s' "${port}"
+  [[ -n "${port}" ]]
 }
 
 WARDYN_LOG_TAG="${WARDYN_LOG_TAG:-==>}"

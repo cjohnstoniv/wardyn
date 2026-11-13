@@ -21,6 +21,7 @@ cleanup() {
     # Only a real pid above 1: an empty or unreadable file must never become `kill -- -0` (our own group).
     [[ "${p}" =~ ^[0-9]+$ && "${p}" -gt 1 ]] && kill -KILL -- "-${p}" 2>/dev/null || true
   done
+  for p in "${taker:-}" "${holder:-}"; do [[ -z "${p}" ]] || kill "${p}" 2>/dev/null || true; done  # (g), (h)
   rm -rf "${tmp}"
 }
 trap cleanup EXIT
@@ -52,19 +53,38 @@ class H(http.server.BaseHTTPRequestHandler):
     do_POST = do_PUT = do_GET
 http.server.ThreadingHTTPServer((host, int(port)), H).serve_forever()
 PY
+# The base-path proxy stub for (i): records its pid, binds -listen (exiting on a taken port), answers 200.
+cat > "${tmp}/repo/.e2e-bin/basepathproxy" <<'PY'
+#!/usr/bin/env python3
+import http.server, os, sys
+from pathlib import Path
+(Path(os.environ["E2E_TEST_EVENTS"]) / f"proxy-{os.getpid()}").write_text(f"{os.getpid()}\n")
+flags = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+host, port = flags["-listen"].rsplit(":", 1)
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+http.server.ThreadingHTTPServer((host, int(port)), H).serve_forever()
+PY
 cat > "${tmp}/bin/docker" <<'SH'
 #!/usr/bin/env bash
 if [[ "$1" == port ]]; then echo '127.0.0.1:55432'
 elif [[ -n "${E2E_TEST_PSQL_FAIL:-}" && "$*" == *ON_ERROR_STOP* ]]; then cat >/dev/null; exit 1  # Postgres unreachable at seed time
+elif [[ -n "${E2E_TEST_SEED_WAITS:-}" && "$*" == *ON_ERROR_STOP* ]]; then  # (g), (i): the seed waits for that stub's exit
+  for _ in $(seq 1 100); do p="$(cat "${E2E_TEST_EVENTS}/${E2E_TEST_SEED_WAITS}"-* 2>/dev/null || true)"; [[ -n "${p}" ]] && ! kill -0 "${p}" 2>/dev/null && break; sleep 0.1; done
+  cat >/dev/null
 elif [[ "$*" == *' -i '* && "$*" != *' -c '* && "$*" != *' -tAc '* ]]; then cat >/dev/null
 elif [[ "$*" == *' -tAc '* ]]; then echo 9
 fi
 SH
-chmod +x "${tmp}/bin/docker" "${tmp}/repo/.e2e-bin/wardynd"
+chmod +x "${tmp}/bin/docker" "${tmp}/repo/.e2e-bin/wardynd" "${tmp}/repo/.e2e-bin/basepathproxy"
 for name in ${!WARDYN_E2E_@}; do unset "${name}"; done
 export PATH="${tmp}/bin:${PATH}" E2E_TEST_EVENTS="${tmp}/events"
 export WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_PG_CONTAINER=fake-e2e-pg
-export WARDYN_E2E_ADDR="127.0.0.1:$(pick_free_port)" WARDYN_E2E_UI_ADDR="127.0.0.1:$(pick_free_port)" WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:$(pick_free_port)"
+export WARDYN_E2E_ADDR="127.0.0.1:$(pick_free_port)"
+export WARDYN_E2E_UI_ADDR="127.0.0.1:$(pick_free_port "${WARDYN_E2E_ADDR##*:}")"
+export WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}")"
 cd "${tmp}/repo"
 PIDF=".e2e-bin/wardynd-${WARDYN_E2E_ADDR##*:}.pid"
 
@@ -146,4 +166,84 @@ pid="$(cat "${PIDF}")"
 ! grep -E 'lock[89]' "${tmp}/events/fds-${pid}" >/dev/null || fail "(f) wardynd inherited a gate lock fd: $(grep -E 'lock[89]' "${tmp}/events/fds-${pid}")"
 ./scripts/e2e-backend.sh down >/dev/null 2>&1 || fail "(f) down failed"
 echo "ok (f) lock fds 8 and 9 are closed in wardynd"
+# (g) another process took the -listen port before wardynd bound it, and answers every request, so the
+# health check passes while wardynd is still starting. Once wardynd has exited on its bind error, up
+# fails and names that exit. The docker stub holds the seed until the stub wardynd has exited
+# (E2E_TEST_SEED_WAITS): without that the seed and the exit race, and a wardynd still starting when
+# the seed ends is not caught by this check.
+reset_events
+python3 -c 'import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+    do_POST = do_PUT = do_GET
+srv = http.server.ThreadingHTTPServer((sys.argv[1], int(sys.argv[2])), H)
+open(sys.argv[3], "w").close()
+srv.serve_forever()' "${WARDYN_E2E_ADDR%:*}" "${WARDYN_E2E_ADDR##*:}" "${tmp}/taker-ready" & taker=$!
+for _ in $(seq 1 50); do [[ -e "${tmp}/taker-ready" ]] && break; sleep 0.1; done
+[[ -e "${tmp}/taker-ready" ]] || { kill "${taker}"; fail "(g) the taker never listened"; }
+started=${SECONDS}
+if E2E_TEST_SEED_WAITS=stub ./scripts/e2e-backend.sh up >"${tmp}/up.log" 2>&1; then kill "${taker}"; fail "(g) up succeeded while another process held ${WARDYN_E2E_ADDR}"; fi
+took=$((SECONDS - started))
+grep -q 'wardynd exited' "${tmp}/up.log" || { cat "${tmp}/up.log"; kill "${taker}"; fail "(g) up did not name wardynd's exit"; }
+[[ ${took} -lt 15 ]] || { kill "${taker}"; fail "(g) up took ${took}s to notice wardynd had exited"; }
+alive "${taker}" || fail "(g) up stopped the process that held the port"
+[[ ! -e "${PIDF}" ]] || { kill "${taker}"; fail "(g) failed up left the pid file"; }
+kill "${taker}"; wait "${taker}" 2>/dev/null || true; taker=""
+echo "ok (g) a wardynd that exited on a taken port fails up, though another process answered for it"
+# (h) the port is held but nothing answers on it: up fails as soon as wardynd exits, not after the
+# whole health-check budget (30 s). A port no test above used: a plain bind cannot share one that still
+# has connections in TIME_WAIT.
+reset_events
+export WARDYN_E2E_ADDR="127.0.0.1:$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}" "${WARDYN_E2E_INTERNAL_ADDR##*:}")"
+PIDF=".e2e-bin/wardynd-${WARDYN_E2E_ADDR##*:}.pid"
+python3 -c 'import signal, socket, sys
+s = socket.socket(); s.bind((sys.argv[1], int(sys.argv[2])))  # bound, never listening
+open(sys.argv[3], "w").close()
+signal.pause()' "${WARDYN_E2E_ADDR%:*}" "${WARDYN_E2E_ADDR##*:}" "${tmp}/holder-ready" & holder=$!
+for _ in $(seq 1 50); do [[ -e "${tmp}/holder-ready" ]] && break; sleep 0.1; done
+[[ -e "${tmp}/holder-ready" ]] || { kill "${holder}"; fail "(h) the holder never bound"; }
+started=${SECONDS}
+if ./scripts/e2e-backend.sh up >"${tmp}/up.log" 2>&1; then kill "${holder}"; fail "(h) up succeeded on a held port"; fi
+took=$((SECONDS - started))
+kill "${holder}"; wait "${holder}" 2>/dev/null || true; holder=""
+grep -q 'wardynd exited before it served' "${tmp}/up.log" || { cat "${tmp}/up.log"; fail "(h) up did not name wardynd's exit"; }
+[[ ${took} -lt 15 ]] || fail "(h) up took ${took}s to notice wardynd had exited"
+echo "ok (h) a held port fails up as soon as wardynd exits"
+# (i) the same for the base-path proxy: another process took its port and answers, so its health check
+# passes. Once the proxy has exited on its bind error, up fails and names that exit.
+reset_events
+export WARDYN_E2E_BASE_PATH=/wardyn
+export WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}" "${WARDYN_E2E_INTERNAL_ADDR##*:}")"
+python3 -c 'import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+srv = http.server.ThreadingHTTPServer((sys.argv[1], int(sys.argv[2])), H)
+open(sys.argv[3], "w").close()
+srv.serve_forever()' "${WARDYN_E2E_PROXY_ADDR%:*}" "${WARDYN_E2E_PROXY_ADDR##*:}" "${tmp}/ptaker-ready" & taker=$!
+for _ in $(seq 1 50); do [[ -e "${tmp}/ptaker-ready" ]] && break; sleep 0.1; done
+[[ -e "${tmp}/ptaker-ready" ]] || fail "(i) the taker never listened"
+if E2E_TEST_SEED_WAITS=proxy ./scripts/e2e-backend.sh up >"${tmp}/up.log" 2>&1; then fail "(i) up succeeded while another process held ${WARDYN_E2E_PROXY_ADDR}"; fi
+grep -q 'basepathproxy exited' "${tmp}/up.log" || { cat "${tmp}/up.log"; fail "(i) up did not name the proxy's exit"; }
+alive "${taker}" || fail "(i) up stopped the process that held the port"
+[[ ! -e "${PIDF}" ]] || fail "(i) failed up left the pid file"
+kill "${taker}"; wait "${taker}" 2>/dev/null || true; taker=""
+echo "ok (i) a base-path proxy that exited on a taken port fails up, though another process answered for it"
+# (j) the proxy's port is held but nothing answers on it: up fails as soon as the proxy exits (the pid
+# is passed to its wait), not after the whole health-check budget (10 s).
+reset_events
+export WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}" "${WARDYN_E2E_INTERNAL_ADDR##*:}" "${WARDYN_E2E_PROXY_ADDR##*:}")"
+python3 -c 'import signal, socket, sys
+s = socket.socket(); s.bind((sys.argv[1], int(sys.argv[2])))  # bound, never listening
+open(sys.argv[3], "w").close()
+signal.pause()' "${WARDYN_E2E_PROXY_ADDR%:*}" "${WARDYN_E2E_PROXY_ADDR##*:}" "${tmp}/pholder-ready" & holder=$!
+for _ in $(seq 1 50); do [[ -e "${tmp}/pholder-ready" ]] && break; sleep 0.1; done
+[[ -e "${tmp}/pholder-ready" ]] || fail "(j) the holder never bound"
+if ./scripts/e2e-backend.sh up >"${tmp}/up.log" 2>&1; then fail "(j) up succeeded on a held proxy port"; fi
+kill "${holder}"; wait "${holder}" 2>/dev/null || true; holder=""
+grep -q 'basepathproxy exited before it served' "${tmp}/up.log" || { cat "${tmp}/up.log"; fail "(j) up did not name the proxy's exit"; }
+echo "ok (j) a held proxy port fails up as soon as the proxy exits"
 echo "test-e2e-backend-down: PASS"

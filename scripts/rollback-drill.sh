@@ -104,15 +104,28 @@ admin_token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
 # Free loopback ports, not fixed ones: a port already bound by something else
 # on the host would make wait_healthz's curl a false PASS (answering for that
-# other process) and make a genuine refusal look like a hang. There is a race
-# between picking them here and wardynd binding them below, same as any "ask
-# the OS, then reuse" allocation; acceptable for a one-shot drill.
-free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
+# other process) and make a genuine refusal look like a hang. A picked port is
+# free until wardynd binds it, so another process can take it first: wardynd
+# then exits on its bind error, and wait_healthz starts it again on new ports.
+# free_port [TAKEN...] never prints one of TAKEN.
+free_port() {
+  python3 -c 'import socket, sys
+taken, held = set(sys.argv[1:]), []
+while True:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = str(s.getsockname()[1])
+    if port not in taken:
+        break
+    held.append(s)  # kept bound, so the next bind cannot return it
+print(port)' "$@"
+}
 port="$(free_port)"
-internal_port="$(free_port)"
+internal_port="$(free_port "$port")"
 
 # start_wardynd <binary>
 start_wardynd() {
+  wardynd_bin="$1"
   WARDYN_PG_DSN="$dsn" WARDYN_LISTEN="127.0.0.1:$port" WARDYN_INTERNAL_LISTEN="127.0.0.1:$internal_port" \
     WARDYN_RUNNER=none WARDYN_AGE_KEY="$age_key" WARDYN_ADMIN_TOKEN="$admin_token" \
     "$1" >"$work/wardynd.log" 2>&1 &
@@ -130,13 +143,29 @@ stop_wardynd() {
 # FIRST each iteration, so a stray process already answering on $port cannot
 # be mistaken for our wardynd, and a wardynd that neither serves nor exits
 # (hung) is a timeout, not an infinite wait.
+# A wardynd that exits on "address already in use" lost a picked port to
+# another process before it bound it: it is started again on new ports, at most
+# twice. Any other exit (the refusal step 3 expects) still returns 1.
 wait_healthz() {
-  local timeout_s="$1" waited=0
+  local timeout_s="$1" waited=0 restarts=0 old
   while [ "$waited" -lt "$timeout_s" ]; do
     if ! kill -0 "$wardynd_pid" 2>/dev/null; then
+      if [ "$restarts" -lt 2 ] && grep -q 'address already in use' "$work/wardynd.log"; then
+        wait "$wardynd_pid" 2>/dev/null || true
+        old="$port $internal_port"
+        # shellcheck disable=SC2086 # one word per port
+        port="$(free_port $old)"
+        # shellcheck disable=SC2086
+        internal_port="$(free_port $old "$port")"
+        log "  a port was taken before wardynd bound it; starting it again on $port and $internal_port"
+        restarts=$((restarts + 1))
+        start_wardynd "$wardynd_bin"
+        continue
+      fi
       return 1
     fi
-    if curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+    # -m 3: a process that took the port and accepts without answering must not hang the drill.
+    if curl -fsS -m 3 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1

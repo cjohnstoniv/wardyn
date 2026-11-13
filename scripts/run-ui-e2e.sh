@@ -81,11 +81,9 @@ if [[ -z "${WARDYN_E2E_ADDR:-}" ]]; then
 fi
 WARDYN_E2E_ADDR="$(e2e_listen_addr "${WARDYN_E2E_ADDR}")"
 if [[ -z "${WARDYN_E2E_UI_ADDR:-}" ]]; then
-  ui_port="$(pick_free_port)"
   # wardynd refuses to boot with UI_ADDR == ADDR (e2e-backend.sh's own
-  # comment); pick_free_port's bind-then-close race makes that collision rare
-  # but not impossible, so reroll once rather than fail the whole run over it.
-  [[ "${ui_port}" == "${WARDYN_E2E_ADDR##*:}" ]] && ui_port="$(pick_free_port)"
+  # comment), and a second pick can return a port the first one freed.
+  ui_port="$(pick_free_port "${WARDYN_E2E_ADDR##*:}")"
   WARDYN_E2E_UI_ADDR="127.0.0.1:${ui_port}"
 fi
 WARDYN_E2E_UI_ADDR="$(e2e_listen_addr "${WARDYN_E2E_UI_ADDR}")"
@@ -96,8 +94,7 @@ if [[ -z "${WARDYN_E2E_INTERNAL_ADDR:-}" ]]; then
   # nothing overriding it, a second instance on the same host (a second
   # worktree, a second lane below) dies with "address already in use" the
   # moment it tries to boot.
-  internal_port="$(pick_free_port)"
-  [[ "${internal_port}" == "${WARDYN_E2E_ADDR##*:}" || "${internal_port}" == "${WARDYN_E2E_UI_ADDR##*:}" ]] && internal_port="$(pick_free_port)"
+  internal_port="$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}")"
   WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:${internal_port}"
 fi
 WARDYN_E2E_INTERNAL_ADDR="$(e2e_listen_addr "${WARDYN_E2E_INTERNAL_ADDR}")"
@@ -135,7 +132,7 @@ export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
 # Unset, nothing below changes.
 if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
   if [[ -z "${WARDYN_E2E_PROXY_ADDR:-}" ]]; then
-    WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port)"
+    WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port "${WARDYN_E2E_ADDR##*:}" "${WARDYN_E2E_UI_ADDR##*:}" "${WARDYN_E2E_INTERNAL_ADDR##*:}")"
   fi
   WARDYN_E2E_PROXY_ADDR="$(e2e_listen_addr "${WARDYN_E2E_PROXY_ADDR}")"
   export WARDYN_E2E_PROXY_ADDR
@@ -224,11 +221,25 @@ LANE_UI_ADDR=("${WARDYN_E2E_UI_ADDR}")
 LANE_INTERNAL_ADDR=("${WARDYN_E2E_INTERNAL_ADDR}")
 LANE_PROXY_ADDR=("${WARDYN_E2E_PROXY_ADDR:-}")
 LANE_DB=("${DB}")
+# lane_ports: every port the lanes were given, for pick_free_port to skip. A
+# picked port stays free until its backend binds it, so the OS can hand it out
+# again, and two lanes on one port share e2e-backend.sh's per-port pid file: one
+# lane's `up` would stop the other's backend.
+lane_ports() {
+  local a
+  for a in "${LANE_ADDR[@]}" "${LANE_UI_ADDR[@]}" "${LANE_INTERNAL_ADDR[@]}" "${LANE_PROXY_ADDR[@]}"; do
+    [[ -z "${a}" ]] || printf '%s\n' "${a##*:}"
+  done
+}
 for ((i = 1; i < NUM_LANES; i++)); do
-  LANE_ADDR+=("127.0.0.1:$(pick_free_port)")
-  LANE_UI_ADDR+=("127.0.0.1:$(pick_free_port)")
-  LANE_INTERNAL_ADDR+=("127.0.0.1:$(pick_free_port)")
-  [[ -z "${WARDYN_E2E_BASE_PATH:-}" ]] || LANE_PROXY_ADDR+=("127.0.0.1:$(pick_free_port)")
+  # shellcheck disable=SC2046 # one word per port
+  LANE_ADDR+=("127.0.0.1:$(pick_free_port $(lane_ports))")
+  # shellcheck disable=SC2046
+  LANE_UI_ADDR+=("127.0.0.1:$(pick_free_port $(lane_ports))")
+  # shellcheck disable=SC2046
+  LANE_INTERNAL_ADDR+=("127.0.0.1:$(pick_free_port $(lane_ports))")
+  # shellcheck disable=SC2046
+  [[ -z "${WARDYN_E2E_BASE_PATH:-}" ]] || LANE_PROXY_ADDR+=("127.0.0.1:$(pick_free_port $(lane_ports))")
   LANE_DB+=("${DB}_lane${i}")
 done
 
@@ -269,6 +280,26 @@ fi
 # holding that spec's result line. Removed on exit by cleanup_all below.
 work="$(mktemp -d)"
 
+# repick_port — a port for a lane's backend-up retry: never one any lane was given (lane_ports) or one
+# any re-pick has claimed, this lane's earlier re-picks included. The claim is a noclobber create in
+# ${work} (as the spec claims below are), so two lanes re-picking at once never share a port: a shared
+# port would mean a shared per-port pid file, and the later lane's `up` would stop the other's backend.
+# Claims are never dropped, so every later re-pick skips them.
+repick_port() {
+  local taken f p
+  taken="$(lane_ports)"
+  for f in "${work}"/port-*; do [[ ! -e "${f}" ]] || taken+=" ${f##*/port-}"; done
+  while :; do
+    # A SIGHUP's cleanup_all removes ${work} while lanes run; without it no claim can ever succeed.
+    [[ -d "${work}" ]] || { echo "repick_port: ${work} is gone, no port can be claimed" >&2; return 1; }
+    # shellcheck disable=SC2086 # one word per port
+    p="$(pick_free_port ${taken})"
+    ( set -o noclobber; : > "${work}/port-${p}" ) 2>/dev/null && break
+    taken+=" ${p}"
+  done
+  printf '%s\n' "${p}"
+}
+
 # Lane $1: claims the next unclaimed spec, runs it against its own freshly
 # seeded backend, records the result in ${work}/<spec>/result, and repeats
 # until every spec is claimed. Claiming from one shared list balances the
@@ -300,13 +331,15 @@ run_lane() {
   # ports (the same pick-then-bind way the lane setup above does) and rebuild
   # the base URL from them. Lane-local: exports are invisible to siblings.
   repick_lane_ports() {
-    # Each address keeps the host the caller gave it; only the port is re-picked.
-    export WARDYN_E2E_ADDR="${WARDYN_E2E_ADDR%:*}:$(pick_free_port)" WARDYN_E2E_UI_ADDR="${WARDYN_E2E_UI_ADDR%:*}:$(pick_free_port)"
-    export WARDYN_E2E_INTERNAL_ADDR="${WARDYN_E2E_INTERNAL_ADDR%:*}:$(pick_free_port)"
+    # Each address keeps the host the caller gave it; only the port is re-picked (repick_port), so the
+    # ports that just failed, whether first picks or an earlier re-pick's, are never handed out again.
+    export WARDYN_E2E_ADDR="${WARDYN_E2E_ADDR%:*}:$(repick_port)"
+    export WARDYN_E2E_UI_ADDR="${WARDYN_E2E_UI_ADDR%:*}:$(repick_port)"
+    export WARDYN_E2E_INTERNAL_ADDR="${WARDYN_E2E_INTERNAL_ADDR%:*}:$(repick_port)"
     if [[ -z "${LIVE_BASE_URL}" ]]; then
       export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
       if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
-        export WARDYN_E2E_PROXY_ADDR="${WARDYN_E2E_PROXY_ADDR%:*}:$(pick_free_port)"
+        export WARDYN_E2E_PROXY_ADDR="${WARDYN_E2E_PROXY_ADDR%:*}:$(repick_port)"
         export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_PROXY_ADDR}")${WARDYN_E2E_BASE_PATH}/"
       fi
     fi
