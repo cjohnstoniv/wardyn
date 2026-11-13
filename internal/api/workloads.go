@@ -521,7 +521,9 @@ const workloadRunEndBatch = 100
 // It also settles a replacement that waited in its pool's queue (SetWorkloadRun): once the new run is
 // running the old one ends and the replacement is recorded; when the new run ends before it ran (the
 // start refused it, or it was ended while it waited) the workload takes the old run back and records the
-// refusal. Until then the old run keeps running.
+// refusal. Until then the old run keeps running, and its owed end takes no place in a pass
+// (store.WorkloadStore.ListDueWorkloadRunEnds), so ends that wait never hold back one that is due. A pass
+// starts after the last end a full pass read, so ends that keep failing never hold back the ones behind them.
 func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 	ws, ok := s.cfg.Store.(store.WorkloadStore)
 	if !ok {
@@ -532,10 +534,11 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 		return nil
 	}
 	defer end()
-	owed, err := ws.ListWorkloadRunEnds(ctx, workloadRunEndGrace, workloadRunEndBatch)
+	owed, next, err := ws.ListDueWorkloadRunEnds(ctx, workloadRunEndGrace, s.workloadEndsFrom.Load(), workloadRunEndBatch)
 	if err != nil {
 		return err
 	}
+	s.workloadEndsFrom.Store(next)
 	for _, e := range owed {
 		if ctx.Err() != nil {
 			return ctx.Err() // the rest wait for the next pass
