@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -88,7 +89,7 @@ func bringBackAnswer(t *testing.T, n int, text string) string {
 		refused[i] = refusal{text, text}
 	}
 	b, err := json.Marshal(map[string]any{"state": "STOPPED", "sandbox_removed": true,
-		"back": map[string]any{"at": "2026-10-22T14:32:00Z", "files": 7, "bytes": 1, "refused": refused}})
+		"back": map[string]any{"at": time.Now().UTC().Format(time.RFC3339), "files": 7, "bytes": 1, "refused": refused}})
 	if err != nil {
 		t.Fatal(err)
 	}
