@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS VM runs: a guest agent that restarts after the run's setup now refuses each command with "the guest agent restarted and lost the run's environment; end this run and start a new one", as a Linux VM's agent does. Before, such a command ran without the run's proxy settings, CA or secrets. Run the tools update once to get the new guest agent. Not yet tried on a real Mac.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added
