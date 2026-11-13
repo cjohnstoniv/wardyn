@@ -44,7 +44,8 @@ import (
 //
 // The caller supplies BOTH identities: the daemon must be offline (its
 // in-memory Store still holds the old KEK), and the caller must persist
-// newID before a restart and emit the secret.rekey audit event.
+// newID before a restart and emit the secret.rekey audit event. It must keep
+// newID on an error too: after a COMMIT error, whether the rows moved is unknown.
 func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.Identity) (int, error) {
 	from, to := &Store{}, &Store{}
 	if err := from.setLocalKeys(oldID, platform); err != nil {
@@ -352,8 +353,10 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 			return 0, 0, fmt.Errorf("pg secretstore: %s ABORTED in principal_keys (nothing committed — every secret is still readable with the OLD key): %w", op, perr)
 		}
 	}
+	// A COMMIT error does not prove a rollback: the reply can be lost after the
+	// server committed, so this error claims neither outcome.
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, fmt.Errorf("pg secretstore: %s commit (%d rows, %d principal keys, NOTHING committed — the old key still reads every secret): %w", op, n, pk, err)
+		return 0, 0, fmt.Errorf("pg secretstore: %s commit (%d rows, %d principal keys) returned an error, so whether it took effect is UNKNOWN — a commit whose reply is lost can still have landed: %w", op, n, pk, err)
 	}
 	return n, pk, nil
 }

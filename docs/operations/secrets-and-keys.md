@@ -242,7 +242,7 @@ The key file is a **bare `AGE-SECRET-KEY-…` line** (`#` comment lines allowed,
    ```
 4. Write the new key into the Secret, or into the Vault/CSI source it comes from, before you scale back up. Until the source holds the new key, every restart reads the retired one and fails closed.
 
-**Verify** the same way the restore runbook does: a row count proves nothing about decryptability, so launch a run against a workspace that depends on a stored secret and confirm it starts. Check the audit trail for the rotation itself:
+**Verify** the same way the restore runbook does: a row count proves nothing about decryptability, so launch a run against a workspace that depends on a stored secret and confirm it starts. Check the audit trail for the rotation itself (a rotation finished by hand from `<key-file>.new` has no such row):
 
 ```sh
 docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
@@ -253,9 +253,29 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 | --- | --- |
 | **Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until *you* delete it | Restoring it is only half an undo — the database is already re-encrypted, so `.bak` is usable **only** together with the Postgres dump from step 1 |
 | ↳ | Once the rotated deployment is confirmed working, delete `.bak`: leaving it leaves a second copy of a retired master key on disk |
+| The rewrap returns an error, from a row or from its commit | `<key-file>.new` is kept. A commit error does not say whether the commit took effect, so the error prints the new key's fingerprint: run the check below |
+| ↳ | No `secret.rekey` row is written, then or after a recovery by hand. On Kubernetes, copy the file off the one-off pod before the pod ends |
 | A step after the commit fails (the key file could not be replaced) | The error says so and names `<key-file>.new`. That file holds the new identity, and at that point is the **only** key that reads the store — save it before doing anything else |
-| A re-run finds `<key-file>.new` or `<key-file>.new.tmp` from an earlier run | The rotation refuses and leaves the file alone. If the latest `secret.rekey` row (above) names the recipient `age-keygen -y <key-file>.new` prints, move it into place and set `WARDYN_AGE_KEY` to it; otherwise remove it and run again |
+| A re-run finds `<key-file>.new` or `<key-file>.new.tmp` from an earlier run | The rotation refuses and leaves the file alone. Run the check below on that file |
+| ↳ | A count above 0 means the earlier rotation landed: move the file into place and set `WARDYN_AGE_KEY` to it. The fingerprint it prints must match the one the error printed, if you have it |
+| ↳ | A count of 0, or `could not check, keep every key file`, proves nothing. Keep the file: move it aside under another name, keep it at mode `0600`, and run again. It decrypts nothing unless the store uses it |
 | Always | **Back the key up off-host.** Rotation re-encrypts what is there; it cannot recover a key you have already lost |
+
+Save the block below to a file and run it with `sh`, so your interactive shell does not change any of its characters.
+
+```sh
+staged=~/.wardyn/age.key.new   # the path the refusal names
+if pub=$(age-keygen -y "$staged") && [ -n "$pub" ] &&
+  sum=$(printf %s "$pub" | sha256sum) && fp=$(printf %s "$sum" | cut -c1-16) &&
+  [ ${#fp} -eq 16 ] && printf '%s\n' "$fp" | grep -qx '[0-9a-f]\{16\}' && echo "fingerprint: $fp" &&
+  n=$(docker exec -i wardyn-postgres psql -U wardyn -d wardyn -tAc \
+    "SELECT (SELECT count(*) FROM secrets WHERE kek_id LIKE '%:$fp') + (SELECT count(*) FROM principal_keys WHERE kek_id LIKE '%:$fp');") &&
+  case $n in '' | *[!0-9]*) false ;; esac; then
+  echo "rows under it: $n"
+else
+  echo "could not check, keep every key file"
+fi
+```
 
 - With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows under the age key — the boot keys under the platform key stay as they are.
 - Rows sealed under Vault Transit (below) hold nothing under the age key either, and a rotation leaves them alone.
