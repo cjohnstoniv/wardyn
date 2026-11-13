@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- With `push_rules.max_file_size_mib` set, an Azure DevOps REST push that renames a file, or makes any change other than a delete without carrying its new content, is now refused (`403`, `brokered:git:push-rules`), because the size of that content cannot be checked. It used to be forwarded with no size check.
+
 ### Security
 
 - The proxy now drops the headers a request's `Connection` header names as soon as the request arrives, before any check reads them. The checks used to read those headers while the forward dropped them, so a check could judge a different request from the one sent. On an Azure DevOps host with no `host_rules` entry, a `POST` to a repository's `refs` carrying `X-HTTP-Method-Override: PATCH` and `Connection: X-HTTP-Method-Override` was judged as an update of the run's own branch named in its `filter`. The `POST` was then sent with the run's credential, and could move the refs its body named, such as `main`; push rules other than `deny_all` did not check it.
