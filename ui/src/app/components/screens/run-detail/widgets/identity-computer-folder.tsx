@@ -9,7 +9,7 @@
 // run has ended, the changes that came back. One side edits at a time, so there is no live sync to show.
 import { absoluteTime, fmtBytes, shortTime } from "../../../../lib/format";
 import { isTerminalRunState, type RunComputerFolder, type RunDetail } from "../../../../lib/types";
-import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
+import { FORCED_KEEP_PREFIX, RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
 
 // Only a fate this page knows is drawn; an absent or unknown one falls back to the neutral line.
 const isKnownFate = (v: unknown) => v === "retained" || v === "given_up" || v === "complete";
@@ -54,7 +54,12 @@ export function ComputerFolderRows({ run }: { run: RunDetail }) {
       )}
       {refused > 0 && <p className="col-span-2 text-meta text-muted-foreground">{C.REFUSED(count(refused))}</p>}
       {ended && f.back && !f.back.error && <p className="col-span-2 text-meta text-muted-foreground">{C.BACK_AT(shortTime(f.back.at), count(f.back.files))}</p>}
-      {f.back?.error && <p role="alert" className="col-span-2 text-meta text-danger">{C.BACK_FAILED(f.back.error)}</p>}
+      {f.back?.error &&
+        (f.back.error.startsWith(FORCED_KEEP_PREFIX) ? (
+          <p className="col-span-2 text-meta text-muted-foreground">{C.BACK_KEPT_FORCED}</p>
+        ) : (
+          <p role="alert" className="col-span-2 text-meta text-danger">{C.BACK_FAILED(f.back.error)}</p>
+        ))}
       {ended && f.state === "synced" && !isKnownFate(f.fate) && f.sandbox_copy !== "deleted" && <p className="col-span-2 text-meta text-muted-foreground">{C.MAY_BE_GONE}</p>}
       {ended && (f.fate === "retained" || f.fate === "given_up") && <OwedRows f={f} />}
       {ended && f.sandbox_copy === "deleted" && <p className="col-span-2 text-meta text-muted-foreground">{C.DELETED}</p>}

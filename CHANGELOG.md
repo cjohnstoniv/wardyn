@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
+
+### Fixed
+
+- When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now says the changes have not come back yet, instead of saying they could not come back.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

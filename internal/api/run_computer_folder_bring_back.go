@@ -43,9 +43,9 @@ func bringBackBy(ctx context.Context) (bringBackActor, bool) {
 // state, the pass's record (files, bytes, refused paths, any error), and whether the sandbox's
 // removal was confirmed. A pass can succeed while the teardown after it fails.
 type computerFolderBringBackView struct {
-	State          types.RunState          `json:"state"`
-	Back           *types.FolderPassRecord `json:"back,omitempty"`
-	SandboxRemoved bool                    `json:"sandbox_removed"`
+	State          types.RunState  `json:"state"`
+	Back           *folderPassView `json:"back,omitempty"`
+	SandboxRemoved bool            `json:"sandbox_removed"`
 }
 
 // handleBringComputerFolderBack serves POST /runs/{id}/computer-folder/bring-back. Only the run's
@@ -118,7 +118,7 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 	}
 	if st, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := st.RunLocalFolderStatus(ctx, id); err == nil {
-			view.Back = rec.Back
+			view.Back = newFolderPassView(rec.Back)
 		}
 	}
 	writeJSON(w, http.StatusOK, view)

@@ -208,6 +208,10 @@ export const RUN_RECORDING = {
   policy_off: "Recording off. Nothing is captured. The audit log still shows what happened.",
 } as const;
 
+// The opening words of the back error a forced end records when it keeps the sandbox for its copy back
+// (forcedKeptForCopyBack, internal/api/run_kept_stop_forced.go); runs.wire.fields.test.ts pins the match.
+export const FORCED_KEEP_PREFIX = "Kept for its copy back";
+
 // The run's folder from the person's computer (M4, #2982, owner-approved 2026-10-19): its first sync and,
 // for Both ways, the pass that brings changes back when the run ends.
 export const RUN_COMPUTER_FOLDER = {
@@ -230,6 +234,8 @@ export const RUN_COMPUTER_FOLDER = {
   MAY_BE_GONE: "The run has ended. Its sandbox copy may no longer be available.",
   REFUSED: (n: string) => `${n} paths were not copied.`,
   BACK_FAILED: (text: string) => `The changes could not come back: ${text}`,
+  // A forced end kept the sandbox for its copy back (FORCED_KEEP_PREFIX): nothing failed, so not BACK_FAILED.
+  BACK_KEPT_FORCED: "This run was ended while another operation held it or too many runs were ending at once, so its changes have not come back yet.",
   NOT_BACK: "Not back to you yet",
   NOT_COUNTED: "Not counted",
   GIVEN_UP: "Given up",

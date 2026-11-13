@@ -8,7 +8,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { shortTime } from "../../../../lib/format";
 import { aheadByHours } from "../../../../lib/test-clock";
 import type { RunComputerFolder, RunDetail } from "../../../../lib/types";
-import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
+import { FORCED_KEEP_PREFIX, RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
 import { ComputerFolderRows } from "./identity-computer-folder";
 
 const AT = aheadByHours(-1);
@@ -61,6 +61,18 @@ describe("Folders from your computer", () => {
   it("says when the changes could not come back", () => {
     show("COMPLETED", { ...FOLDER, state: "synced", seed: { at: AT, files: 1, bytes: 1, refused: [] }, back: { at: AT, files: 0, bytes: 0, refused: [], error: "laptop-7f2 is offline" } });
     expect(screen.getByRole("alert")).toHaveTextContent(C.BACK_FAILED("laptop-7f2 is offline"));
+  });
+
+  it("a forced end that kept the sandbox for its copy back is not called a failure", () => {
+    show("FAILED", {
+      ...FOLDER, state: "synced", fate: "retained", sandbox_copy: "kept",
+      seed: { at: AT, files: 1, bytes: 1, refused: [] },
+      back: { at: AT, files: 0, bytes: 0, refused: [], error: `${FORCED_KEEP_PREFIX}: the run was ended past its end while another operation held it or too many runs were ending at once` },
+    });
+    expect(screen.getByText(C.BACK_KEPT_FORCED)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/could not come back/)).toBeNull();
+    expect(screen.getByText(C.NOT_BACK)).toBeInTheDocument();
   });
 
   describe("what became of the sandbox copy", () => {
