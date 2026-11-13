@@ -120,8 +120,8 @@ type Options struct {
 }
 
 // Syncer holds one sync's connections. Every read and write on the laptop goes
-// through Root, so a link swapped in under the local directory cannot lead one
-// outside it.
+// through Root one directory at a time (nofollow.go), so a link swapped in under
+// the local directory is never followed, inside it or out.
 type Syncer struct {
 	Client    *sftp.Client
 	Meter     *ListMeter // the byte count on Client's input; nil leaves a listing unbounded
@@ -538,7 +538,7 @@ func (sy *Syncer) sameBytes(rel string, lsize int64, remote string, rsize int64)
 	if lsize != rsize {
 		return false
 	}
-	lf, err := sy.Root.Open(rel)
+	lf, err := openIn(sy.Root, rel, os.O_RDONLY, 0)
 	if err != nil {
 		return false
 	}
@@ -630,7 +630,7 @@ func (sy *Syncer) deleteLocal(ctx context.Context, v *passView, rep *Report) err
 
 // moveToTrash copies rel out of the root into trash, then removes it.
 func (sy *Syncer) moveToTrash(rel string) error {
-	src, err := sy.Root.Open(rel)
+	src, err := openIn(sy.Root, rel, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
@@ -650,14 +650,14 @@ func (sy *Syncer) moveToTrash(rel string) error {
 	if err != nil {
 		return err
 	}
-	return sy.Root.Remove(rel)
+	return removeIn(sy.Root, rel)
 }
 
 func (sy *Syncer) walkLocal(rep *Report) (files map[string]syncFile, dirs []string, tree treeSeen, err error) {
 	files = map[string]syncFile{}
 	tree = newTreeSeen()
 	count := 0
-	err = fs.WalkDir(sy.Root.FS(), ".", func(rel string, d fs.DirEntry, werr error) error {
+	err = fs.WalkDir(FS(sy.Root), ".", func(rel string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			if rel == "." {
 				return werr
@@ -792,7 +792,7 @@ func (sy *Syncer) walkRemote(ctx context.Context, rep *Report) (*remoteView, err
 }
 
 func (sy *Syncer) push(ctx context.Context, rel string, l syncFile, rep *Report) error {
-	f, err := sy.Root.Open(rel)
+	f, err := openIn(sy.Root, rel, os.O_RDONLY, 0)
 	if err != nil {
 		rep.refuse(rel, "unreadable: "+err.Error())
 		return nil
@@ -803,7 +803,7 @@ func (sy *Syncer) push(ctx context.Context, rel string, l syncFile, rep *Report)
 		rep.refuse(rel, "changed while syncing")
 		return nil
 	}
-	if lstat, err := sy.Root.Lstat(rel); err != nil || !os.SameFile(lstat, fi) {
+	if lstat, err := lstatIn(sy.Root, rel); err != nil || !os.SameFile(lstat, fi) {
 		rep.refuse(rel, "symlink")
 		return nil
 	}
@@ -848,7 +848,7 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 		rep.refuse(rel, err.Error())
 		return nil
 	}
-	if fi, err := sy.Root.Lstat(rel); err == nil {
+	if fi, err := lstatIn(sy.Root, rel); err == nil {
 		switch {
 		case walked == nil:
 			rep.refuse(rel, "a local entry by another spelling is in the way")
@@ -866,7 +866,7 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 	if tmp == nil {
 		return err
 	}
-	defer sy.Root.Remove(tmpName)
+	defer removeIn(sy.Root, tmpName)
 	defer tmp.Close()
 	// Synced before the re-check, so a save made while the bytes reach the disk is still seen.
 	if err := syncTemp(tmp); err != nil {
@@ -898,7 +898,7 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 // still be the file the walk saw, or still absent. A developer's save made
 // after the walk wins.
 func (sy *Syncer) unchangedLocally(rel string, walked *syncFile) bool {
-	fi, err := sy.Root.Lstat(rel)
+	fi, err := lstatIn(sy.Root, rel)
 	if walked == nil {
 		return errors.Is(err, fs.ErrNotExist)
 	}
@@ -917,7 +917,7 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 		rep.refuse(rel, "over --max-pull-bytes for this pass")
 		return "", nil, nil
 	}
-	if err := sy.Root.MkdirAll(path.Dir(dst), 0o755); err != nil { // the install syncs every directory above dst
+	if err := mkdirAllIn(sy.Root, path.Dir(dst), 0o755); err != nil { // the install syncs every directory above dst
 		return "", nil, sy.keptFailed(ctx, rep, rel, "create the local directory", err)
 	}
 	src, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))
@@ -943,11 +943,11 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 			err = sy.keptFailed(ctx, rep, rel, "set the local mode", err)
 			break
 		}
-		_ = sy.Root.Chtimes(tmpName, mt, mt)
+		_ = chtimesIn(sy.Root, tmpName, mt, mt)
 		return tmpName, tmp, nil
 	}
 	_ = tmp.Close()
-	_ = sy.Root.Remove(tmpName)
+	_ = removeIn(sy.Root, tmpName)
 	return "", nil, err
 }
 

@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- The folder-only runner now opens a shared folder once, when it checks it, and every browse and pass reads and writes through that opened folder one directory at a time, following no link. A folder renamed or replaced by a link after its check is no longer followed. `wardyn sync` reads and writes the same way.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added
