@@ -825,16 +825,18 @@ ssh:
 
 # UI-sandbox gateway (see docs/UI-SANDBOXES.md — a governed, ticket-gated
 # relay from a browser to ONE policy-declared loopback port inside a run's
-# sandbox, e.g. a code editor). Off by default; enabled it is a CONDITIONAL
-# third port on the same Service/Deployment, driving
-# WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/_ORIGIN_TEMPLATE.
+# sandbox, e.g. a code editor). Off by default; enabled it is a third port on
+# the same Service/Deployment, driving
+# WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/_ORIGIN_TEMPLATE, and uiSandbox.ingress
+# can render its Ingress.
 #
 # `port` MUST differ from service.port: what the gateway serves is the
 # SANDBOX's own pages, and the separate browser origin is the only thing
 # keeping that code away from the console's session (the chart refuses to
 # render, and wardynd refuses to boot, when the two are equal). Terminating both ports on one hostname
 # defeats the same control — give the gateway its own host, and a certificate
-# that covers it, at your ingress/LoadBalancer (README "UI sandbox gateway").
+# that covers it (uiSandbox.ingress, or your own ingress/LoadBalancer; README
+# "UI sandbox gateway").
 uiSandbox:
   enabled: false
   port: 8081
@@ -854,7 +856,22 @@ uiSandbox:
   # With SSO configured (env.WARDYN_OIDC_ISSUER) and no originTemplate the chart
   # refuses to render and wardynd refuses to boot, because every run's apps would
   # share one origin. true accepts that (WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN).
+  # Without SSO the chart renders and prints a warning after install or upgrade
+  # instead; true silences it.
   acceptSharedOrigin: false
+  # An Ingress for the `ui` port (templates/ui-ingress.yaml): the advertiseURL
+  # host and, with originTemplate, its wildcard host (run-{run}.ui.example.com
+  # gives *.ui.example.com; {run} must sit in the first label). It refuses a
+  # host ingress.hosts routes for the console. tls names a secret you provide that covers both hosts;
+  # give it the same backend-protocol annotation your console Ingress uses.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    tls: []
+    # tls:
+    #   - hosts: ["wardyn-ui.example.com", "*.ui.example.com"]
+    #     secretName: wardyn-ui-sandbox-tls
 
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 # Its podSelector governs the control-plane pod ONLY (app.kubernetes.io/

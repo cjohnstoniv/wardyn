@@ -1821,6 +1821,7 @@ These risks are **not closed by v1 Wardyn**.
     <details><summary>Details</summary>
 
     - In the default path mode (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` unset) every run's relayed apps are served from one origin under `/r/<run-id>/<app>/`, separated only by the relay cookie's `Path` scope.
+    - Who is in path mode: wardynd and the Helm chart refuse it with SSO configured unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN` (chart: `uiSandbox.acceptSharedOrigin`) accepts it. A deployment with no SSO still boots in it; the chart then prints a warning after install or upgrade.
     - That stops the browser ATTACHING run A's cookie to a request for run B — it is not an origin boundary.
     - Two apps open at once are same-origin, so one app's page can script the other's tab where it holds a window handle, and origin-scoped storage (`localStorage`, `IndexedDB`) is shared.
     - The console is out of reach either way (§4, B10).

@@ -2055,7 +2055,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Bool, default `false` (flag `-allow-ui-sandbox-shared-origin`).
 - With SSO configured and the UI-sandbox gateway on (`WARDYN_UI_SANDBOX_LISTEN`), boot is refused while `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` is unset; set this to `true` to accept that every run's apps share one origin.
 - Prefer the template: with the shared origin, a page one run serves can reach another run's app.
-- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`.
+- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`. Without SSO and with no template, the chart still renders and prints a warning unless that is set.
 
 ### `WARDYN_UI_SANDBOX_SESSION_TTL`
 

@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Helm: `uiSandbox.ingress` renders the UI-sandbox gateway's Ingress: the `advertiseURL` host and the wildcard host `originTemplate` needs (`run-{run}.ui.example.com` gives `*.ui.example.com`), to the `ui` port. DNS and the certificate stay yours.
+- Helm: with `uiSandbox.enabled`, no SSO, no `uiSandbox.originTemplate` and no `uiSandbox.acceptSharedOrigin`, `helm install` and `helm upgrade` now print a warning: every run's apps share one browser origin, so a page one run serves can reach another run's app in the same person's browser. It names both settings, and the chart renders as before.
+
 ### Changed
 
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.

@@ -170,7 +170,7 @@ what keeps this render check and the boot check agreeing.
 {{- end -}}
 
 {{/*
-"true" when the UI-sandbox gateway may run on one shared origin with SSO configured:
+"true" when the UI-sandbox gateway may run on one shared origin:
 uiSandbox.acceptSharedOrigin, or WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN set in env/extraEnv to something
 wardynd reads as true (the same set as wardyn.allowNoOperatorList).
 */}}
