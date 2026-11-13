@@ -366,7 +366,7 @@ func TestPass_ACopyNeverStampsOrClaimsAnEditorsSave(t *testing.T) {
 				if filepath.Base(f.Name()) == name && saved == nil {
 					// The sandbox's length, at a time no other file here has.
 					editorSave(t, root, name, "editor's version")
-					p, own := filepath.Join(root, name), time.Date(2026, 1, 2, 3, 4, 5, 6000, time.UTC)
+					p, own := filepath.Join(root, name), time.Now().Add(-48*time.Hour).Truncate(time.Second).Add(6*time.Microsecond)
 					var err error
 					if err = os.Chtimes(p, own, own); err == nil {
 						saved, err = os.Lstat(p)
