@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,7 +68,7 @@ func retrying(ctx context.Context, fn func() error) error {
 // record is deleted only by a round that read the row and moved the sandbox to
 // it with its lock held throughout.
 func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run types.AgentRun, reason types.PauseReason) {
-	due, recorded := s.notePauseSettle(ctx, run.ID)
+	due, recorded := s.notePauseSettleOrRetry(ctx, run.ID)
 	release := func() {}
 	defer func() { release() }()
 	thawed := false
@@ -164,6 +165,77 @@ func (s *Server) notePauseSettle(ctx context.Context, id uuid.UUID) (due time.Ti
 	return due, true
 }
 
+// pauseSettleRetryEvery is how long notePauseSettleOrRetry's loop waits before each new write of a settle record that
+// could not be written; a variable only so a test can shorten it.
+var pauseSettleRetryEvery = pauseCompensateTimeout
+
+// pauseSettleRetries holds, per server and run, a notePauseSettleOrRetry loop still writing that run's settle record,
+// so one outage starts one loop per run, not one per pass. Package level as teardownRowsWritten is: the key carries
+// the server, so two servers in one process do not share an entry.
+var pauseSettleRetries sync.Map
+
+type pauseSettleRetryKey struct {
+	srv *Server
+	run uuid.UUID
+}
+
+// notePauseSettleOrRetry is notePauseSettle for a freeze or thaw that may land unrecorded. When the record cannot be
+// written, a tracked loop (goBackground) writes it again every pauseSettleRetryEvery until it lands, the run is gone
+// or no longer running with a sandbox, or the daemon stops. Without it, a sandbox the cut call moved would not match
+// its row with only an error log to show for it; once the record lands, the pause sweep (settlePauses) moves the
+// sandbox to its row. due and ok are the first write's.
+func (s *Server) notePauseSettleOrRetry(ctx context.Context, id uuid.UUID) (time.Time, bool) {
+	due, ok := s.notePauseSettle(ctx, id)
+	base := s.cfg.BaseCtx
+	if ok || base == nil {
+		return due, ok
+	}
+	key := pauseSettleRetryKey{s, id}
+	if _, busy := pauseSettleRetries.LoadOrStore(key, struct{}{}); busy {
+		return due, ok
+	}
+	slog.WarnContext(ctx, "wardynd: a pause's settle record could not be written; it is written again in the background until it lands",
+		slog.String("run_id", id.String()))
+	s.goBackground(func() {
+		defer pauseSettleRetries.Delete(key)
+		for {
+			select {
+			case <-base.Done():
+				return
+			case <-time.After(pauseSettleRetryEvery):
+			}
+			if s.retryPauseSettle(base, id) {
+				return
+			}
+		}
+	})
+	return due, ok
+}
+
+// retryPauseSettle is one round of notePauseSettleOrRetry's loop: true once the record is written, or once the run
+// needs none (it is gone, or no longer running with a sandbox, as settlePause reads it).
+func (s *Server) retryPauseSettle(base context.Context, id uuid.UUID) bool {
+	ctx, cancel := context.WithTimeout(base, pauseCompensateTimeout)
+	defer cancel()
+	run, err := s.cfg.Store.GetRun(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return true
+	case err != nil:
+		return false
+	case run.State != types.RunRunning || run.SandboxRef == "":
+		return true
+	}
+	// One write a round, straight to the store: notePauseSettle's own retries and its error log are the first
+	// write's, and the loop has already said once that it is writing again.
+	st, has := s.cfg.Store.(store.PauseSettler)
+	if !has {
+		return true
+	}
+	_, err = st.NotePauseSettle(ctx, id, pauseCompensateTimeout)
+	return err == nil
+}
+
 // clearPauseSettle deletes the settle record a compensation wrote, once its
 // sandbox is settled. A failure only leaves the sweep a settle that changes
 // nothing.
@@ -183,7 +255,7 @@ func (s *Server) clearPauseSettle(ctx context.Context, id uuid.UUID, due time.Ti
 func (s *Server) pauseUnsettled(ctx context.Context, id uuid.UUID, recorded bool, what string, err error) {
 	msg := "wardynd: a pause compensation could not " + what + "; the pause sweep settles the run once it is due"
 	if !recorded {
-		msg = "wardynd: a pause compensation could not " + what + "; the sandbox is left as it is and nothing records it"
+		msg = "wardynd: a pause compensation could not " + what + "; the sandbox is left as it is until its settle record, written again in the background, lets the pause sweep settle it"
 	}
 	slog.ErrorContext(ctx, msg, slog.String("run_id", id.String()), slog.Any("err", err))
 }

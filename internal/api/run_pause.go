@@ -514,7 +514,7 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 				// A thaw its context ended may still land in the runtime, under a row that stays paused. The settle
 				// record leaves it to the pause sweep, which freezes a sandbox whose row is paused (settlePauses).
 				nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
-				s.notePauseSettle(nctx, run.ID)
+				s.notePauseSettleOrRetry(nctx, run.ID)
 				ncancel()
 			}
 			data["error"] = err.Error()
@@ -732,7 +732,7 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			// record leaves it to the pause sweep, which thaws a sandbox whose row is not paused (settlePauses).
 			nctx, ncancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 			defer ncancel()
-			s.notePauseSettle(nctx, run.ID)
+			s.notePauseSettleOrRetry(nctx, run.ID)
 		}
 		return
 	}
