@@ -581,12 +581,14 @@ func (s statusReadFails) RunLocalFolderStatus(context.Context, uuid.UUID) (types
 }
 
 // An end that cannot read its computer folder's settings or its run's data_out rule has no answer on whether a pass
-// back is owed. It keeps the sandbox as the sweeps would (folderKeepVerdict): on a confirmed cut, with no pass run and
-// the record left as it was, so the tail owner runs the pass once the reads answer. Past the keep it is still kept: the
-// tail owner gives the changes up durably before anything stops it. A virtual machine, a sandbox whose cut fails
-// (audited under the end's own action), a killed run, a record whose pass already ran and a second read that finds no
-// folder are stopped as before. Catches the unreadable read taken as "no folder" at either of the end's two reads,
-// which stops the sandbox with the changes in it and nothing recorded.
+// back is owed. It keeps the sandbox as the sweeps would (folderKeepVerdict): on a confirmed cut, or left in place
+// while the run's runner is not here, with no pass run and the record left as it was, so the tail owner runs the pass
+// once the reads answer. Past the keep it is still kept: the tail owner gives the changes up durably before anything
+// stops it. A virtual machine, a sandbox whose cut fails (audited under the end's own action), a killed run (with a
+// resume or without), a record whose pass already ran and a second read that finds no folder are stopped as before.
+// Catches the unreadable read taken as "no folder" at either of the end's two reads, which stops the sandbox with the
+// changes in it and nothing recorded; a keep on a confirmed cut alone, which stops a sandbox whose runner is away; and
+// a killed run kept for its resume.
 func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
 	down := errors.New("database down")
 	for name, tc := range map[string]struct {
@@ -619,6 +621,22 @@ func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
 			ds.state = types.RunKilled
 			ds.mu.Unlock()
 		}, false},
+		"a killed run with a resume": {func(f *passFixture) {
+			f.cs.seedErr = down
+			f.set(func(st *types.RunLocalFolderStatus) { st.Resume = &types.FolderResume{} })
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunKilled
+			ds.mu.Unlock()
+		}, false},
+		"a runner that is not here": {func(f *passFixture) {
+			f.cs.seedErr = down
+			absent := uuid.New()
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.run.RunnerID = &absent
+			ds.mu.Unlock()
+		}, true},
 		"past the keep": {func(f *passFixture) {
 			f.cs.seedErr = down
 			f.advance(f.s.pendingCap() + time.Minute)
@@ -637,6 +655,9 @@ func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
 			ds.state = types.RunCompleted
 			ds.mu.Unlock()
 			tc.setup(f)
+			ds.mu.Lock()
+			away := ds.run.RunnerID != nil // left in place, with no cut, while its runner is not here
+			ds.mu.Unlock()
 			before := f.cs.folderStatus()
 			seen := passSeen(f.sb)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -652,7 +673,7 @@ func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
 			if n := f.sb.stopCount(); n != wantStops {
 				t.Errorf("StopSandbox called %d times, want %d", n, wantStops)
 			}
-			if tc.kept && !f.sb.proxyStopped.Load() {
+			if tc.kept && !away && !f.sb.proxyStopped.Load() {
 				t.Error("kept with its proxy not stopped: the cut was not confirmed")
 			}
 			if seen.Load() {
