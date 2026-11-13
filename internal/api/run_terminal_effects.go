@@ -57,7 +57,14 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 		// No audit row: another server may own the run now.
 		errs = append(errs, fmt.Errorf("the sandbox was not stopped: %w", db.ErrLockLost))
 	}
-	if stops && !lost && !holdPassed(tctx) {
+	// The hold's deadline is asked once, on the clock, as the lost lock is, and the skip is said here: tctx's own
+	// timer may not have fired yet, and context.Cause(tctx) below would then be nil.
+	passed := stops && !lost && holdPassed(tctx)
+	if passed {
+		// No audit row: the readers (the containment loop and the tail owner) finish the run.
+		errs = append(errs, fmt.Errorf("the sandbox was not stopped: %w", errHoldPassed))
+	}
+	if stops && !lost && !passed {
 		if serr := s.cfg.Runner.StopSandbox(tctx, ref); serr != nil {
 			errs = append(errs, serr)
 			td := make(map[string]any, len(data)+1)
