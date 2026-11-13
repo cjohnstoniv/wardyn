@@ -85,21 +85,44 @@ const (
 // member's persistent storage, not a per-run object — deleting it on a
 // failed rollback would be a data-loss path a transient image pull failure
 // could trigger.
-func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMount) error {
+//
+// Returns the volume it judged, which the run's hold compares against once the
+// volume is held (pinDriveVolumes).
+func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMount) (volume.Volume, error) {
 	name := drive.ObjectName
 	if name == "" {
 		// SECURITY fail closed: an empty name would make VolumeCreate
 		// allocate an ANONYMOUS volume, findable by no reclaim command.
-		return fmt.Errorf("docker: user drive has no object name (backend %s)", drive.Backend)
+		return volume.Volume{}, fmt.Errorf("docker: user drive has no object name (backend %s)", drive.Backend)
 	}
 	if res, err := cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); err == nil {
-		return driveVolumeAdoptable(res.Volume, name, drive)
+		return res.Volume, driveVolumeAdoptable(res.Volume, name, drive)
 	} else if !isNotFound(err) {
 		// Fail closed: a daemon that can't answer whether the volume exists
 		// must not have one created over whatever it couldn't read.
-		return fmt.Errorf("docker: inspect user drive volume %q: %w", name, err)
+		return volume.Volume{}, fmt.Errorf("docker: inspect user drive volume %q: %w", name, err)
 	}
-	// Omitted, not blank: adoption checks read an absent label as "predates it".
+	created, err := cli.VolumeCreate(ctx, client.VolumeCreateOptions{
+		Name:   name,
+		Driver: driveVolumeDriver,
+		// NO DriverOpts. Ever. See driveVolumeDriver.
+		Labels: driveVolumeLabels(drive),
+	})
+	if err != nil {
+		return volume.Volume{}, fmt.Errorf("docker: create user drive volume %q: %w", name, err)
+	}
+	// Same predicate on both arms, or the first-run race above stays open.
+	return created.Volume, driveVolumeAdoptable(created.Volume, name, drive)
+}
+
+// driveVolumeLabels are the labels drive's volume is made with: by its create,
+// by the hold's mount, which makes it again when a reclaim removed it after its
+// check, and by the seed's and the agent's, which can only if the hold itself
+// was removed (docker rm or a prune). SECURITY: every volume a Wardyn mount
+// makes is then this drive's, never unlabelled, which driveVolumeAdoptable
+// would adopt for any drive. Omitted, not blank: adoption checks read an
+// absent label as "predates it".
+func driveVolumeLabels(drive *types.DriveMount) map[string]string {
 	labels := map[string]string{
 		labelManaged:   "true",
 		labelDrive:     drive.DriveID.String(),
@@ -108,17 +131,7 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 	if drive.SubjectHash != "" {
 		labels[labelDriveSubject] = drive.SubjectHash
 	}
-	created, err := cli.VolumeCreate(ctx, client.VolumeCreateOptions{
-		Name:   name,
-		Driver: driveVolumeDriver,
-		// NO DriverOpts. Ever. See driveVolumeDriver.
-		Labels: labels,
-	})
-	if err != nil {
-		return fmt.Errorf("docker: create user drive volume %q: %w", name, err)
-	}
-	// Same predicate on both arms, or the first-run race above stays open.
-	return driveVolumeAdoptable(created.Volume, name, drive)
+	return labels
 }
 
 // driveVolumeAdoptable reports whether v — found by inspect or handed back by
@@ -201,31 +214,33 @@ const driveSeedRemoveTimeout = 30 * time.Second
 // mounts the volume with NoCopy at teamDriveSeedTarget in the same
 // never-started container, refuses an image whose agent is not runner.AgentUID
 // (checkTeamDriveUser), and gives it to the agent with ownEmptyTeamVolume.
+//
+// agentMounts calls it for every judged volume once the run's hold has checked
+// them, so the seed mounts the held volume; one at runner.DriveTarget needs no
+// seed (the image's own directory is there).
 func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image string, drive *types.DriveMount) error {
-	if drive.Team && drive.ReadOnly {
+	if drive.Target == runner.DriveTarget || drive.Team && drive.ReadOnly {
 		return nil
 	}
-	seedMount := mount.Mount{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}
+	// Labels apply only when this mount makes the volume, which the hold prevents unless it was removed (driveVolumeLabels).
+	seedMount := mount.Mount{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget,
+		VolumeOptions: &mount.VolumeOptions{Labels: driveVolumeLabels(drive)}}
 	if drive.Team {
-		seedMount.Target, seedMount.VolumeOptions = teamDriveSeedTarget, teamDriveVolumeOptions(drive)
+		seedMount.Target, seedMount.VolumeOptions.NoCopy = teamDriveSeedTarget, teamDriveVolumeOptions(drive).NoCopy
 	}
-	name := driveSeedName(runID)
-	remove := func(ctx context.Context) error {
-		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
-			return fmt.Errorf("docker: seed user drive volume %q: remove: %w", drive.ObjectName, err)
-		}
-		return nil
-	}
-	if err := remove(ctx); err != nil {
-		return err
+	// One a crash left under the seed's name goes only once its labels say it is this run's seed; any other
+	// container there refuses the run and is left as it is. The seed made here is then used and removed by
+	// the id its create returned, never by the name.
+	if err := d.removeRunContainer(ctx, driveSeedName(runID), runID, componentDriveSeed); err != nil {
+		return fmt.Errorf("docker: seed user drive volume %q: %w", drive.ObjectName, err)
 	}
 	// A runner's own label lets its orphan sweep tell its seeds from another's.
 	extra := map[string]string{labelDrive: drive.DriveID.String()}
 	if d.cfg.RunnerID != "" {
 		extra[runner.LabelRunnerID] = d.cfg.RunnerID
 	}
-	_, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: name,
+	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: driveSeedName(runID),
 		Config: &container.Config{Image: image, Cmd: []string{"true"}, NetworkDisabled: true,
 			Labels: d.labels(runID, componentDriveSeed, extra)},
 		HostConfig: &container.HostConfig{
@@ -234,15 +249,17 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 		},
 	})
 	if err == nil && drive.Team {
-		err = d.checkTeamDriveUser(ctx, name, drive)
+		err = d.checkTeamDriveUser(ctx, created.ID, drive)
 	}
 	if err == nil && drive.Team {
-		err = d.ownEmptyTeamVolume(ctx, name)
+		err = d.ownEmptyTeamVolume(ctx, created.ID)
 	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
-	defer cancel()
-	if rerr := remove(rctx); err == nil {
-		err = rerr
+	if created.ID != "" {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
+		defer cancel()
+		if rerr := d.removeSeedByID(rctx, created.ID); err == nil {
+			err = rerr
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("docker: seed user drive volume %q: %w", drive.ObjectName, err)

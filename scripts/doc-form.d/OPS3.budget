@@ -151,7 +151,7 @@ docs/operations/member-runs.md=1079 share=35 # -7, measured: the onboarding-note
 # docs/operations/user-drives.md 4877 adds 54 over 4823, measured: a person's reclaim refuses a team drive; a leaver's team-drive writes are kept (0.10 FEAT-2TEAM).
 # docs/operations/user-drives.md 4938 adds 7 over 4931, measured: a bound folder may be the drive root itself.
 # docs/operations/user-drives.md 4984 adds 46 over 4938, measured: a drive bound to a person's runner also serves Linux VM runs there.
-docs/operations/user-drives.md=4984 share=35 # unchanged, measured: the mac_disk pointer is added and the migration and release narration removed
+docs/operations/user-drives.md=5016 share=35 # 5016 measured (+32 over 4984: a reclaim waits for a starting run, and a Docker run holds its drive volumes); earlier: 4984 unchanged, measured: the mac_disk pointer is added and the migration and release narration removed
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
