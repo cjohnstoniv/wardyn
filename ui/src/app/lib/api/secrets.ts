@@ -7,6 +7,12 @@
 import type { SecretName } from "../types";
 import { asJson, errText, HttpError, wfetch } from "./core";
 
+// The namespace an explicit route names: the caller's own (/me/secrets) or the shared administrators' one
+// (/shared-secrets). Unlike /secrets, which places a write by the caller's role when it arrives, the server never
+// picks it, so a role change between reading a row and acting on it cannot move the act to another namespace.
+export type SecretScope = "personal" | "shared";
+const scopeBase = (scope?: SecretScope) => (scope === "personal" ? "/me/secrets" : scope === "shared" ? "/shared-secrets" : "/secrets");
+
 export const secrets = {
   // GET /api/v1/secrets -> { names: [...] }. Returns secret NAMES only; values
   // are write-only and never surfaced by the API. Unchanged by 0.7's `mine`
@@ -33,10 +39,17 @@ export const secrets = {
     };
   },
 
+  // GET /api/v1/me/secrets or /shared-secrets -> { names: [...] }: one namespace's names, the route naming which.
+  async listScoped(scope: SecretScope): Promise<SecretName[]> {
+    const res = await wfetch(scopeBase(scope), { method: "GET" });
+    const payload = await asJson<{ names?: unknown }>(res);
+    return Array.isArray(payload?.names) ? (payload.names as SecretName[]) : [];
+  },
+
   // PUT /api/v1/secrets/{name}  { value } -> 204. Stores or overwrites a named
-  // secret; the value is write-only.
-  async setSecret(name: string, value: string): Promise<void> {
-    const res = await wfetch(`/secrets/${encodeURIComponent(name)}`, {
+  // secret; the value is write-only. `scope` sends it to that namespace's route.
+  async setSecret(name: string, value: string, opts?: { scope?: SecretScope }): Promise<void> {
+    const res = await wfetch(`${scopeBase(opts?.scope)}/${encodeURIComponent(name)}`, {
       method: "PUT", asPerson: true,
       body: JSON.stringify({ value }),
     });
@@ -45,9 +58,16 @@ export const secrets = {
     }
   },
 
-  // DELETE /api/v1/secrets/{name} -> 204.
-  async deleteSecret(name: string): Promise<void> {
-    const res = await wfetch(`/secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
+  // DELETE /api/v1/secrets/{name} -> 204. The name is resolved in the namespace
+  // of whoever the session names when the request arrives, so it names a person:
+  // `person` is the one whose row was confirmed (getExpectedPrincipal, read when
+  // Delete was chosen), and the server refuses the delete (412, nothing removed)
+  // if someone else has signed in since. Without it, or with "" (Delete chosen
+  // before this tab knew who was signed in), the person this tab has confirmed
+  // by the time it is sent, as setSecret does. `scope` sends it to the route of
+  // the namespace the row was read from.
+  async deleteSecret(name: string, person?: string, scope?: SecretScope): Promise<void> {
+    const res = await wfetch(`${scopeBase(scope)}/${encodeURIComponent(name)}`, { method: "DELETE", asPerson: person || true });
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }

@@ -106,6 +106,10 @@ let _expectedPrincipal = "";
 export function setExpectedPrincipal(principal: string): void {
   _expectedPrincipal = principal;
 }
+/** The person this tab last confirmed; "" before /me has answered. */
+export function getExpectedPrincipal(): string {
+  return _expectedPrincipal;
+}
 
 // #483: while the console is signed out mid-page — the dialog or the
 // read-only bar — no write leaves this tab. Whoever holds a session by then
@@ -128,10 +132,12 @@ export function isSignedOutHold(): boolean {
  *  never a global release: a Save clicked during the logout stays held; and
  *  `asPerson` (DR-0034): the request submits a draft composed under the person
  *  this tab confirmed, so it names them and the server refuses it if the shared
- *  cookie now names someone else. */
+ *  cookie now names someone else. A string names the person a save of several
+ *  requests began under (getExpectedPrincipal, read before its first request):
+ *  a later step must not go out as whoever has signed in since. */
 // superseded: true once a newer request has taken over this one's question (a session probe, App.tsx), so its answer,
 // a 401 included, is nobody's to act on.
-export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true; superseded?: () => boolean };
+export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true | string; superseded?: () => boolean };
 
 // H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
 // serves index.html with no path cleaning, so `GET //evil.com` 200s and
@@ -373,6 +379,10 @@ export async function wfetch(
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
+  // Read before the hold below: a write held for an identity check names the person this tab had confirmed when it
+  // was made, not whoever is confirmed by the time it leaves. "" is a save begun before /me had answered: it names
+  // whoever is confirmed when this request is made, as `true` does, never nobody.
+  const madeAs = asPerson === true || asPerson === "" ? _expectedPrincipal : asPerson;
   // Already refused by the signed-out hold: no waiting on a check that cannot change that.
   if (refused.write && !endsSession && !_signedOutHold) {
     const held = writesMayLeave();
@@ -392,9 +402,8 @@ export async function wfetch(
     headers.set("Content-Type", "application/json");
   }
   headers.set("Accept", headers.get("Accept") ?? "application/json");
-  if (asPerson && _expectedPrincipal) {
-    headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(_expectedPrincipal));
-  }
+  const person = madeAs || (asPerson === undefined ? "" : _expectedPrincipal);
+  if (person) headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(person));
   if (recentlyActive()) headers.set(ACTIVITY_HEADER, "1");
 
   let res: Response;

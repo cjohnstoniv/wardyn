@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { WorkspaceProvidersSnapshot } from "../../lib/api/providers";
@@ -22,8 +22,15 @@ const listSecretsMock = vi.fn();
 const deleteSecretMock = vi.fn();
 const setSecretMock = vi.fn();
 const listSecretsMineMock = vi.fn();
+// The screen reads its own rows through the route that names their namespace. By default those reads answer from
+// the same fixtures as the legacy reads they replaced: the shared list from listSecretsMock, a member's own from
+// listSecretsMineMock's `mine`.
+const listScopedMock = vi.fn((scope: string) =>
+  scope === "shared" ? listSecretsMock() : Promise.resolve(listSecretsMineMock()).then((r: { mine: string[] }) => r.mine),
+);
 vi.mock("../../lib/api/secrets", () => ({
   secrets: {
+    listScoped: (scope: string) => listScopedMock(scope),
     listSecrets: () => listSecretsMock(),
     listSecretsMine: () => listSecretsMineMock(),
     deleteSecret: (...a: unknown[]) => deleteSecretMock(...a),
@@ -48,8 +55,11 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
 import { WRITE_ONLY } from "../wardyn/copy/door";
 import { STATES } from "../wardyn/states";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../lib/api/core";
+import { SECRETS_PAGE } from "../wardyn/copy/components";
 import { MemoryRouter } from "react-router-dom";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
+import type { SetupStatus } from "../../lib/types";
 import { LaggingRouter } from "../../../test/lagging-router";
 
 describe("SecretsScreen — delete error handling", () => {
@@ -228,8 +238,8 @@ describe("AddSecretDialog — provider chips", () => {
     const user = userEvent.setup();
     const nameInput = screen.getByLabelText(/name/i) as HTMLInputElement;
 
-    await user.click(screen.getByRole("button", { name: "anthropic-api-key" }));
-    expect(nameInput.value).toBe("anthropic-api-key");
+    await user.click(screen.getByRole("button", { name: "kubeconfig" }));
+    expect(nameInput.value).toBe("kubeconfig");
 
     await user.click(screen.getByRole("button", { name: /custom/i }));
     expect(nameInput.value).toBe("");
@@ -240,6 +250,32 @@ describe("AddSecretDialog — provider chips", () => {
       <AddSecretDialog open onOpenChange={() => {}} initialName="anthropic-api-key" />,
     );
     expect(screen.queryByRole("button", { name: "npm-token" })).toBeNull();
+  });
+
+  it("offers no model key name the API refuses, as a chip or as the example, and says where model keys go", () => {
+    render(
+      <MemoryRouter initialEntries={["/admin/secrets"]}>
+        <AddSecretDialog open onOpenChange={() => {}} />
+      </MemoryRouter>,
+    );
+    for (const refused of ["anthropic-api-key", "openai-api-key"]) {
+      expect(screen.queryByRole("button", { name: refused })).toBeNull();
+    }
+    const nameInput = screen.getByLabelText(/^name/i);
+    expect(nameInput).toHaveAttribute("placeholder", "npm-token");
+    expect(nameInput).toHaveAccessibleDescription(SECRETS_PAGE.MODEL_KEYS_HINT.ADMIN);
+  });
+
+  it("in the User view, says a model key goes under the person's own model connections", () => {
+    render(
+      <MemoryRouter initialEntries={["/secrets"]}>
+        {/* An empty provider block still shows the model connections card, so the pointer has somewhere to point. */}
+        <ModelAccessProvider status={{ model_providers: [] } as unknown as SetupStatus} onRefresh={() => {}}>
+          <AddSecretDialog open onOpenChange={() => {}} ownRows />
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByLabelText(/^name/i)).toHaveAccessibleDescription(SECRETS_PAGE.MODEL_KEYS_HINT.USER);
   });
 
   it("no longer suggests the legacy github-pat/gitlab-pat names (superseded by git-pat-<slug>)", () => {
@@ -592,7 +628,7 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
 
     await user.click(del);
     await user.click(await screen.findByRole("button", { name: /delete secret/i }));
-    await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("my-key"));
+    await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("my-key", "", "personal"));
   });
 
   it("member: Add secret stores the value under the name they typed", async () => {
@@ -606,7 +642,7 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
     fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: "acme-key" } });
     fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new-value" } });
     fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("acme-key", "sk-new-value"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("acme-key", "sk-new-value", { scope: "personal" }));
   });
 
   it("member: the empty page says what a member can do, not that an admin must", async () => {
@@ -780,5 +816,128 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
     expect(
       screen.getByText(/With the token broker off, a stored Git token is handed to git inside the sandbox\./),
     ).toBeInTheDocument();
+  });
+});
+
+describe("SecretsScreen — a delete names the person whose row was confirmed", () => {
+  const MISMATCH = "This page was opened as a different person than the one now signed in — reload and retry";
+  beforeEach(() => {
+    toastError.mockClear();
+    toastSuccess.mockClear();
+    listSecretsMock.mockReset().mockResolvedValue(["npm-token"]);
+    deleteSecretMock.mockReset().mockRejectedValue(new HttpError(412, MISMATCH));
+  });
+  afterEach(() => setExpectedPrincipal(""));
+
+  it("someone else signs in before the confirm: the delete still names the first person, and the refusal is said once", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <OperatorProvider operator principal="alice@example.com">
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await user.click(await screen.findByRole("button", { name: "Secret actions: npm-token" }));
+    await user.click(await screen.findByRole("menuitem", { name: /delete/i }));
+    setExpectedPrincipal("bob@example.com");
+    await user.click(await screen.findByRole("button", { name: /delete secret/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError.mock.calls[0][1]).toEqual({ description: MISMATCH });
+    expect(deleteSecretMock).toHaveBeenCalledTimes(1);
+    expect(deleteSecretMock).toHaveBeenCalledWith("npm-token", "alice@example.com", "shared");
+    expect(toastSuccess).not.toHaveBeenCalled();
+    // Nothing was removed: the confirm stays open and the list is not re-read as if it had been.
+    expect(screen.getByRole("button", { name: /delete secret/i })).toBeInTheDocument();
+    expect(listSecretsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SecretsScreen — a row's Delete and Rotate keep the namespace the row was read from", () => {
+  beforeEach(() => {
+    listSecretsMineMock.mockReset().mockResolvedValue({ names: ["shared-key"], mine: ["shared-key"] });
+    listSecretsMock.mockReset().mockResolvedValue(["shared-key"]);
+    deleteSecretMock.mockReset().mockResolvedValue(undefined);
+    setSecretMock.mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(() => setExpectedPrincipal(""));
+
+  it("the same person signs in again as an admin before the confirm: the delete still goes to their own namespace", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const tree = (operator: boolean) => (
+      <OperatorProvider operator={operator} principal="sam@example.com">
+        <SecretsScreen />
+      </OperatorProvider>
+    );
+    const { rerender } = render(tree(false));
+    await user.click(await screen.findByRole("button", { name: "Secret actions: shared-key" }));
+    await user.click(await screen.findByRole("menuitem", { name: /delete/i }));
+    // Same person, new authority: the shared namespace holds a secret of the same name.
+    rerender(tree(true));
+    await user.click(await screen.findByRole("button", { name: /delete secret/i }));
+    await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledTimes(1));
+    expect(deleteSecretMock).toHaveBeenCalledWith("shared-key", "sam@example.com", "personal");
+  });
+
+  it("a Rotate chosen on an administrator's row writes to the shared namespace, even after a role change", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const tree = (operator: boolean) => (
+      <OperatorProvider operator={operator} principal="sam@example.com">
+        <SecretsScreen />
+      </OperatorProvider>
+    );
+    const { rerender } = render(tree(true));
+    await user.click(await screen.findByRole("button", { name: "Secret actions: shared-key" }));
+    await user.click(await screen.findByRole("menuitem", { name: /rotate/i }));
+    rerender(tree(false));
+    fireEvent.change(await screen.findByLabelText(/^value$/i), { target: { value: "npm-new-value-123" } });
+    fireEvent.click(screen.getByRole("button", { name: /overwrites/i }));
+    fireEvent.click(screen.getByRole("button", { name: /overwrite secret/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("shared-key", "npm-new-value-123", { scope: "shared" }));
+  });
+});
+
+describe("SecretsScreen — Add waits until your secret names are known", () => {
+  beforeEach(() => {
+    listSecretsMock.mockReset();
+    setSecretMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("before this tab knows who is signed in, no list is read as theirs and Add secret stays off", async () => {
+    listSecretsMock.mockResolvedValue(["admin-shared"]);
+    listScopedMock.mockClear();
+    render(
+      <OperatorProvider operator operatorResolved={false} principal="…">
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(listScopedMock).not.toHaveBeenCalled();
+    expect(screen.queryByText("admin-shared")).toBeNull();
+    expect(screen.getByRole("button", { name: /add secret/i })).toBeDisabled();
+  });
+
+  it("Add secret is off while the list loads", () => {
+    listSecretsMock.mockReturnValue(new Promise(() => {}));
+    render(<SecretsScreen />);
+    expect(screen.getByRole("button", { name: /add secret/i })).toBeDisabled();
+  });
+
+  it("a failed list keeps Add secret off and says why; after Retry an existing name still asks before overwriting", async () => {
+    listSecretsMock.mockRejectedValueOnce(new HttpError(500, "The list could not be read.", "load_failed")).mockResolvedValue(["npm-token"]);
+    render(<SecretsScreen />);
+    await screen.findByText("The list could not be read.");
+    const add = screen.getByRole("button", { name: /add secret/i });
+    expect(add).toBeDisabled();
+    expect(add).toHaveAccessibleDescription(SECRETS_PAGE.ADD_WAITS_FOR_LIST);
+    fireEvent.click(add);
+    expect(screen.queryByLabelText(/^value$/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: STATES.RETRY }));
+    await screen.findByText("npm-token");
+    fireEvent.click(screen.getByRole("button", { name: /add secret/i }));
+    fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: "npm-token" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "npm-new-value-123" } });
+    fireEvent.click(screen.getByRole("button", { name: /overwrites/i }));
+    expect(setSecretMock).not.toHaveBeenCalled();
   });
 });
