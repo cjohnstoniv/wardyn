@@ -17,7 +17,7 @@ import { Chip } from "../../wardyn/primitives";
 import { useAgentName } from "../../wardyn/use-agent-name";
 import { AgentsPanel, agentLines } from "./agents-panel";
 import { useRunOutput, type Refusal } from "./use-run-output";
-import { EmptyState, ErrorState } from "../../wardyn/states";
+import { EmptyState, ErrorState, STATES } from "../../wardyn/states";
 
 // The empty busy body stays empty this long before a loading line shows.
 const LOADING_LINE_MS = 1000;
@@ -262,7 +262,18 @@ function refusalBody(
         />
       );
     case "mask":
-      return <EmptyState icon={Logs} title={RUN_OUTPUT.maskTitle} description={RUN_OUTPUT.maskUnavailable} />;
+      return (
+        <EmptyState
+          icon={Logs}
+          title={RUN_OUTPUT.maskTitle}
+          description={RUN_OUTPUT.maskUnavailable}
+          action={
+            <button type="button" onClick={retry} className="text-sm text-info hover:underline">
+              {STATES.RETRY}
+            </button>
+          }
+        />
+      );
     case "data_out":
       // The server's own sentence, with no action: nothing here can make the output readable.
       return <EmptyState icon={Logs} title={text} />;

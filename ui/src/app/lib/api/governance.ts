@@ -688,10 +688,11 @@ export const governance = {
 
   // POST /api/v1/governance/changes/{id}/approve -> 200 the change, applied. The server judges who may
   // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
-  // HttpError whose message is its own sentence.
-  async approveChange(id: string): Promise<GovernanceChange> {
+  // HttpError whose message is its own sentence. A role-mapping change that applied but could not revoke
+  // every token holding the old role adds tokens_revocation_failed and the remedy in detail.
+  async approveChange(id: string): Promise<GovernanceChange & { tokens_revocation_failed?: boolean; detail?: string }> {
     const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST", asPerson: true });
-    return asJson<GovernanceChange>(res);
+    return asJson<GovernanceChange & { tokens_revocation_failed?: boolean; detail?: string }>(res);
   },
 
   // POST /api/v1/governance/changes/{id}/reject -> 200 the change, rejected. The reason is optional and is

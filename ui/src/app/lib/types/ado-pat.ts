@@ -15,8 +15,16 @@ import type { SCMAccess } from "./setup";
  *  ADOPATAccess, embedded in SCMAccess). token_mode is SCMAccess's own field:
  *  "minted_pat" on a minted row, "own_pat" on an own-token row. */
 export interface ADOPATAccess {
-  /** minted_pat: the newest token Wardyn created for this person, for the card. */
-  last_token?: { created_at: string; revoked_at?: string };
+  /** minted_pat: the newest token Wardyn created for this person, for the card,
+   *  with ADORunToken's account of how it ended. */
+  last_token?: {
+    created_at: string;
+    valid_to: string;
+    revoked_at?: string;
+    revoke_reason?: string;
+    revoke_failed?: boolean;
+    revoke_pending?: boolean;
+  };
   /** What a run gets when its policy names nothing: the row's default profile. */
   default_profile?: string[];
 }
@@ -39,9 +47,12 @@ export interface ADORunToken {
   /** L2's reason as written: run_end, kill, pause, drift, disconnect, offboarding,
    *  upstream_401, sweep or expired. */
   revoke_reason?: string;
-  /** The record was closed with a failed revoke on it: the token lives to
-   *  valid_to on its own. */
+  /** The record was closed with a failed revoke on it, short of its expiry: the
+   *  token lives to valid_to on its own. */
   revoke_failed?: boolean;
+  /** The record is open with a failed revoke on it; the server tries again, so
+   *  whether the token still works is not known yet. */
+  revoke_pending?: boolean;
 }
 
 /** POST /workspace-providers/git/{id}/org-check's answer (internal/api

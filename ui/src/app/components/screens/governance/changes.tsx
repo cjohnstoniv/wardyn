@@ -405,9 +405,15 @@ export function ChangeDrawer({
     setBusy(true);
     setRefused(null);
     try {
-      if (approve) await api.approveChange(change.id);
-      else await api.rejectChange(change.id, reason.trim());
-      toast.success(approve ? CHANGES.TOAST_APPROVED : CHANGES.TOAST_REJECTED);
+      if (approve) {
+        const out = await api.approveChange(change.id);
+        // Applied, but a token may still hold the role it took away: say so until dismissed.
+        if (out.tokens_revocation_failed && out.detail) toast.warning(out.detail, { duration: Infinity });
+        else toast.success(CHANGES.TOAST_APPROVED);
+      } else {
+        await api.rejectChange(change.id, reason.trim());
+        toast.success(CHANGES.TOAST_REJECTED);
+      }
       onChanged();
       onClose();
     } catch (e) {

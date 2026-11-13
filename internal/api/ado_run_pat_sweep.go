@@ -38,17 +38,17 @@ const adoRunPATSweepEvery = 5 * time.Minute
 // revokeRunPATs revokes every token still recorded live for runID and drops
 // the run's cache entry, or, for a pause, empties it so the resume creates a
 // new one. Best-effort: a revoke that did not complete stays recorded for the
-// sweep.
-func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason string) {
+// sweep. It reports whether every token was revoked or had expired.
+func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason string) bool {
 	st, ok := s.cfg.Store.(store.RunPATStore)
 	if !ok {
-		return
+		return true
 	}
 	ctx, e, unlock, lerr := s.lockRunPAT(ctx, runID)
 	if lerr != nil {
 		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token lock could not be taken; its tokens are not revoked now; the sweep retries an ended or paused run, and a live run's next relayed resolve judges it again",
 			slog.String("run_id", runID.String()), slog.Any("err", lerr))
-		return
+		return false
 	}
 	defer unlock()
 	rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
@@ -56,8 +56,9 @@ func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason stri
 		slog.WarnContext(ctx, "wardynd: listing a run's Azure DevOps tokens to revoke failed; the sweep retries",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
+	all := err == nil
 	for _, p := range rows {
-		s.revokeRunPAT(ctx, st, p, reason)
+		all = s.revokeRunPAT(ctx, st, p, reason) && all
 	}
 	if reason == adoPATRevokePause {
 		e.cur, e.caps, e.paused = adoPAT{}, nil, true
@@ -68,44 +69,48 @@ func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason stri
 			slog.WarnContext(ctx, "wardynd: a paused run's Azure DevOps token state was not recorded; the next resolve may create a token the sweep then revokes",
 				slog.String("run_id", runID.String()), slog.Any("err", err))
 		}
-		return
+		return all
 	}
 	if err := s.dropRunPAT(ctx, runID); err != nil {
 		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token state was not dropped",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
+	return all
 }
 
 // revokeOwnerRunPATs revokes every live token created in owner's name, run by
-// run: a person disconnected, or an admin erased their credentials.
-func (s *Server) revokeOwnerRunPATs(ctx context.Context, owner, reason string) {
+// run: a person disconnected, or an admin erased their credentials. It reports
+// whether every one was revoked or had expired.
+func (s *Server) revokeOwnerRunPATs(ctx context.Context, owner, reason string) bool {
 	st, ok := s.cfg.Store.(store.RunPATStore)
 	if !ok || owner == "" {
-		return
+		return true
 	}
 	rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{Owner: owner})
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: listing a person's Azure DevOps tokens to revoke failed; the sweep retries",
 			slog.Any("err", err))
-		return
+		return false
 	}
-	done := map[uuid.UUID]bool{}
+	all, done := true, map[uuid.UUID]bool{}
 	for _, p := range rows {
 		if !done[p.RunID] {
 			done[p.RunID] = true
-			s.revokeRunPATs(ctx, p.RunID, reason)
+			all = s.revokeRunPATs(ctx, p.RunID, reason) && all
 		}
 	}
+	return all
 }
 
 // revokeRunPAT revokes one token and closes its row. A token past its validTo
 // has expired on its own and is only closed. A revoke Azure DevOps refused for
 // good is closed with the error (the token then lives to its validTo); one
-// that did not complete stays open for the sweep.
-func (s *Server) revokeRunPAT(ctx context.Context, st store.RunPATStore, p store.RunPAT, reason string) {
+// that did not complete stays open for the sweep. It reports whether the token
+// no longer works: revoked, or expired.
+func (s *Server) revokeRunPAT(ctx context.Context, st store.RunPATStore, p store.RunPAT, reason string) bool {
 	if !p.ValidTo.After(s.cfg.Now()) {
 		s.closeRunPAT(ctx, st, p, adoPATRevokeExpired, p.LastError)
-		return
+		return true
 	}
 	data := map[string]any{"reason": reason, "authorization_id": p.AuthorizationID, "owner": p.Owner,
 		"provider_row": p.ProviderRowID, "organisation": p.Org}
@@ -115,19 +120,20 @@ func (s *Server) revokeRunPAT(ctx context.Context, st store.RunPATStore, p store
 			s.recordAudit(ctx, s.auditEvent(&p.RunID, types.ActorSystem, "wardynd", adoPATAuditRevoke,
 				p.AuthorizationID.String(), "success", mustJSON(data)))
 		}
-		return
+		return true
 	}
 	data["error"], data["abandoned"] = err.Error(), !transient
 	s.recordAudit(ctx, s.auditEvent(&p.RunID, types.ActorSystem, "wardynd", adoPATAuditRevokeFailed,
 		p.AuthorizationID.String(), "failure", mustJSON(data)))
 	if !transient {
 		s.closeRunPAT(ctx, st, p, reason, err.Error())
-		return
+		return false
 	}
 	if nerr := st.NoteRunPATRevokeFailed(ctx, p.RunID, p.AuthorizationID, err.Error()); nerr != nil {
 		slog.WarnContext(ctx, "wardynd: recording an Azure DevOps token's failed revoke failed",
 			slog.String("run_id", p.RunID.String()), slog.Any("err", nerr))
 	}
+	return false
 }
 
 // closeRunPAT marks p's row closed and reports whether this call closed it.

@@ -63,6 +63,9 @@ export function AddMappingForm({
   // R1-F112: a demotion revokes outstanding tokens SILENTLY on the wire —
   // this is the one-line receipt for it, cleared on the next attempt.
   const [tokensRevoked, setTokensRevoked] = React.useState<number | null>(null);
+  // The save landed but some old-role tokens may still work: the server's
+  // remedy, kept until the next attempt.
+  const [revokeIncomplete, setRevokeIncomplete] = React.useState<string | null>(null);
 
   // #913: adopt a "Choose a type" prefill once, then tell the table it was
   // consumed — the same value re-submitted here is the natural upsert-in-place
@@ -82,6 +85,7 @@ export function AddMappingForm({
     setSaving(true);
     setError(null);
     setTokensRevoked(null);
+    setRevokeIncomplete(null);
     try {
       const res = await api.upsertMapping({
         value: value.trim(),
@@ -94,6 +98,7 @@ export function AddMappingForm({
       setGuardOpen(false);
       setAck(false);
       setTokensRevoked(res.tokensRevoked ?? null);
+      setRevokeIncomplete(res.tokensRevocationFailed ? (res.detail ?? "") : null);
       onHeld(null);
       onReload();
     } catch (e) {
@@ -191,6 +196,7 @@ export function AddMappingForm({
           renders when it's non-zero, so a fresh mapping (nothing to revoke)
           says nothing. */}
       {!error && !!tokensRevoked && <Note tone="plain">{PEOPLE.TOKENS_REVOKED_RECEIPT(tokensRevoked)}</Note>}
+      {!error && revokeIncomplete !== null && <Note tone="red">{revokeIncomplete}</Note>}
 
       <AlertDialog open={guardOpen} onOpenChange={(o) => !o && setGuardOpen(false)}>
         <AlertDialogContent>

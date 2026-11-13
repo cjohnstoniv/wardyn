@@ -42,10 +42,30 @@ type ADOPATAccess struct {
 }
 
 // adoLastToken is when a person's newest token was created and, once its
-// record is closed, when that was.
+// record is closed, when that was and how it ended: adoRunToken's fields, so
+// the card tells a revoked token from an expired one, one whose revoke failed
+// and one whose revoke is not confirmed yet.
 type adoLastToken struct {
-	CreatedAt time.Time  `json:"created_at"`
-	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ValidTo       time.Time  `json:"valid_to"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+	RevokeReason  string     `json:"revoke_reason,omitempty"`
+	RevokeFailed  bool       `json:"revoke_failed,omitempty"`
+	RevokePending bool       `json:"revoke_pending,omitempty"`
+}
+
+// adoTokenRevokeOutcome reads a token's record: failed when it was closed
+// with a failed revoke on it, short of its expiry (the token lives to
+// valid_to); pending when it is open with a failed revoke on it (the sweep
+// tries again, so whether it still works is not known yet).
+func adoTokenRevokeOutcome(p store.RunPAT) (failed, pending bool) {
+	if p.LastError == "" {
+		return false, false
+	}
+	if p.RevokedAt == nil {
+		return false, true
+	}
+	return p.RevokeReason != adoPATRevokeExpired, false
 }
 
 // adoPATAccessFor fills the token console's facts on out, the row's SCMAccess:
@@ -69,14 +89,22 @@ func (s *Server) adoPATAccessFor(ctx context.Context, pr perUserADORow, subject 
 		return
 	}
 	if found {
-		out.LastToken = &adoLastToken{CreatedAt: last.CreatedAt, RevokedAt: last.RevokedAt}
+		failed, pending := adoTokenRevokeOutcome(last)
+		out.LastToken = &adoLastToken{CreatedAt: last.CreatedAt, ValidTo: last.ValidTo, RevokedAt: last.RevokedAt,
+			RevokeReason: last.RevokeReason, RevokeFailed: failed, RevokePending: pending}
 	}
 }
+
+// adoDisconnectTokensNotRevoked is the disconnect's answer when a run token
+// it tried to revoke may still work.
+const adoDisconnectTokensNotRevoked = "Your sign-in is disconnected, but Wardyn could not confirm that every token it created for your runs is revoked. Revoke them in Azure DevOps under Personal access tokens."
 
 // handleADODisconnect is DELETE /scm/azure-devops/connection: the caller
 // disconnects their own Azure DevOps sign-in. It revokes every live run token
 // created in their name, forgets the stored sign-in, audits
-// ado_pat.disconnect and answers 204, also when nothing was stored. It
+// ado_pat.disconnect and answers 204, also when nothing was stored; 200 with
+// tokens_revocation_failed and a detail when a token it tried to revoke may
+// still work (Azure DevOps refused, or the revoke did not finish). It
 // forgets what they stored under every Azure DevOps row, the usable one and
 // any disabled or withdrawn from them; with no usable row and nothing held, it
 // answers the same 404 as a deployment with no per-user row (D-6).
@@ -120,9 +148,10 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	// A token created while this runs revokes itself (adoSignInEnds).
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
 	finish, err := s.beginADOSignInEnd(ctx, subject, adoPATRevokeDisconnect)
+	revoked := false
 	if err == nil {
 		defer finish()
-		s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
+		revoked = s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
 	}
 	for _, rowID := range rowIDs {
 		removed := false
@@ -144,6 +173,13 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeServerError(w, r, "forget the Azure DevOps sign-in", err)
+		return
+	}
+	if !revoked {
+		writeJSON(w, http.StatusOK, struct {
+			TokensRevocationFailed bool   `json:"tokens_revocation_failed"`
+			Detail                 string `json:"detail"`
+		}{true, adoDisconnectTokensNotRevoked})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -367,9 +403,12 @@ type adoRunToken struct {
 	// expired (the token reached valid_to; RevokedAt is then when its record
 	// was closed, not a revoke).
 	RevokeReason string `json:"revoke_reason,omitempty"`
-	// RevokeFailed: the record was closed with a failed revoke on it, so the
-	// token lives to ValidTo on its own.
+	// RevokeFailed: the record was closed with a failed revoke on it, short of
+	// its expiry, so the token lives to ValidTo on its own.
 	RevokeFailed bool `json:"revoke_failed,omitempty"`
+	// RevokePending: the record is open with a failed revoke on it; the sweep
+	// tries again, so whether the token still works is not known yet.
+	RevokePending bool `json:"revoke_pending,omitempty"`
 }
 
 // handleListRunADOTokens is GET /runs/{id}/ado-tokens: every token the run
@@ -396,9 +435,10 @@ func (s *Server) handleListRunADOTokens(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	for _, p := range rows {
+		failed, pending := adoTokenRevokeOutcome(p)
 		out = append(out, adoRunToken{
 			CreatedAt: p.CreatedAt, ValidTo: p.ValidTo, Scope: strings.Split(p.Scope, " "), RevokedAt: p.RevokedAt, RevokeReason: p.RevokeReason,
-			RevokeFailed: p.RevokedAt != nil && p.LastError != "",
+			RevokeFailed: failed, RevokePending: pending,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
