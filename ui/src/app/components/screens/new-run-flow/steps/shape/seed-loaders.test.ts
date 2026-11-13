@@ -22,6 +22,7 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
 const signal = new AbortController().signal;
 const T = "d1111111-1111-4111-8111-111111111111";
 const R = "e1111111-1111-4111-8111-111111111111";
+const CREATED = "2026-10-11T08:00:00Z"; // passthrough: a launch intent's created_at, never compared to the clock
 const document = { api_version: "wardyn/v1", kind: "RunTemplate", intent: { shape: "application", workload: { kind: "command", command: "make test" } } };
 
 beforeEach(() => wfetchMock.mockReset());
@@ -42,7 +43,7 @@ describe("seed loaders", () => {
   });
 
   it("reads a run's launch intent and seeds an again draft", async () => {
-    wfetchMock.mockResolvedValue(json({ run_id: R, created_at: "2026-10-11T08:00:00Z", document }));
+    wfetchMock.mockResolvedValue(json({ run_id: R, created_at: CREATED, document }));
     const seed = await seedLoaders.again(R, signal);
     expect(wfetchMock.mock.calls[0][0]).toBe(`/runs/${R}/launch-intent`);
     expect(seed).toMatchObject({ origin: { kind: "again", runId: R }, intent: document.intent });
@@ -52,7 +53,7 @@ describe("seed loaders", () => {
   // document is: beside the contract marker every console request sends, the server refuses the older fields.
   it("seeds Run again from a launch intent in the older fields, kept as the SDK wrote it, in the carriers", async () => {
     const legacy = { ...document, kind: "Run", intent: { agent: "codex-cli", task: "fix the flaky test" } };
-    wfetchMock.mockResolvedValue(json({ run_id: R, created_at: "2026-10-11T08:00:00Z", document: legacy }));
+    wfetchMock.mockResolvedValue(json({ run_id: R, created_at: CREATED, document: legacy }));
     const seed = await seedLoaders.again(R, signal);
     expect(seed.intent).toEqual({
       shape: "agent_task", experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: "fix the flaky test" },
@@ -96,7 +97,7 @@ describe("seed loaders", () => {
 
   // Only a template leaves its task for later: a kept launch intent with no task is not a whole background run.
   it("keeps a Run again intent with no task as written", async () => {
-    wfetchMock.mockResolvedValue(json({ run_id: R, created_at: "2026-10-11T08:00:00Z", document: { ...document, kind: "Run", intent: { agent: "codex-cli" } } }));
+    wfetchMock.mockResolvedValue(json({ run_id: R, created_at: CREATED, document: { ...document, kind: "Run", intent: { agent: "codex-cli" } } }));
     expect((await seedLoaders.again(R, signal)).intent).toEqual({ agent: "codex-cli" });
   });
 
