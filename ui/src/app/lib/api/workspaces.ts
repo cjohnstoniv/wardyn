@@ -16,7 +16,7 @@ import type {
   WorkspaceSourceInput,
   WorkspaceWriteResult,
 } from "../types";
-import { asJson, errText, HttpError, launchDeadlineMs, unwrapList, wfetch, withLimit } from "./core";
+import { asJson, errEnvelope, errText, HttpError, launchDeadlineMs, unwrapList, wfetch, withLimit } from "./core";
 import { setup } from "./setup";
 
 // The deadline for a launch call that blocks on CreateSandbox, read from the deployment's own
@@ -119,9 +119,14 @@ export const workspaces = {
   // The wizard's BUILD step. POST kicks the image build asynchronously
   // (202 building; 200 done / nothing_to_build / an honest none when this
   // host has no builder); GET polls it. A session launched after a
-  // successful build hits the cache and starts immediately.
-  async buildWorkspace(id: string): Promise<WorkspaceBuildState> {
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/build`, { method: "POST" });
+  // successful build hits the cache and starts immediately. refresh asks for
+  // a build from fresh inputs even when the image is done (the Rebuild
+  // button); without it a built workspace answers its cached done.
+  async buildWorkspace(id: string, refresh = false): Promise<WorkspaceBuildState> {
+    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/build`, {
+      method: "POST",
+      ...(refresh && { body: JSON.stringify({ refresh: true }) }),
+    });
     return asJson<WorkspaceBuildState>(res);
   },
   async getWorkspaceBuild(id: string): Promise<WorkspaceBuildState> {
@@ -209,9 +214,11 @@ export const workspaces = {
   // (allow-all-egress) recording sandbox for one task under the strongest available
   // confinement.
   //   202 -> { run_id }: recording started; poll the workspace for the outcome.
-  //   422 -> unknown task / no approved commands for an auto task
-  //   503 -> this control plane has no runner (can't record)
+  //   422 -> the agent is not enabled, or the person's Git sign-in is not connected
+  //   503 -> reason record_no_runner: this control plane has no runner; any other
+  //          reason is a read that failed just now (a credential, the providers)
   //   409 -> another import step (record/verify/…) is already running
+  // A refusal carries the server's sentence (detail) and its reason.
   // Same 422/503/409-inline pattern as this file's other governed-run kickoffs:
   // EXPECTED, actionable states the pane renders inline as { ok:false, status,
   // detail }; any OTHER non-2xx throws.
@@ -224,6 +231,7 @@ export const workspaces = {
     status: number;
     record_run_id?: string;
     detail?: string;
+    reason?: string;
     // The launched run's REAL confinement class (handleRecordWorkspace's own
     // `run.ConfinementClass`) — the caller's honest source for e.g. a CC1
     // open-egress banner, instead of guessing from the operator's persisted
@@ -259,7 +267,8 @@ export const workspaces = {
       };
     }
     if (res.status === 422 || res.status === 503 || res.status === 409) {
-      return { ok: false, status: res.status, detail: await errText(res) };
+      const env = await errEnvelope(res);
+      return { ok: false, status: res.status, detail: env.message, ...(env.reason && { reason: env.reason }) };
     }
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return { ok: true, status: res.status };

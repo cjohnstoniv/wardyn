@@ -17,6 +17,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Saving a role mapping that could not revoke every API token holding the old role now says so in the console, with the remedy, beside the count of tokens it did revoke.
+- Deleting a role mapping that could not revoke every API token holding the old role now says so: `DELETE /access/mappings/{id}` answers `200` with `tokens_revocation_failed` and the remedy in `detail` instead of `204`, approving a held role-mapping change adds the same two fields to the change it answers, and the console shows the remedy.
+- An Azure DevOps token whose revoke Azure DevOps refused, or whose revoke is not confirmed yet, is no longer shown as revoked: the Settings card and the run page say it may still work and until when. Disconnecting answers `200` with `tokens_revocation_failed` and a remedy when a token it tried to revoke may still work, and the console shows it.
+- The Output tab reads a run's output again a few times after the server cannot prove the run's secrets masked, and offers Retry, instead of stopping until the page is reloaded.
+- Rebuild on a workspace now asks for a fresh build and says what the server did: started, nothing to rebuild, or not rebuilt with the server's reason.
+- A refused recording launch now shows the server's sentence for a `422` and for a `503` other than no runner; only the no-runner answer says `-runner none` and disables the form, so a failed read can be retried.
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.

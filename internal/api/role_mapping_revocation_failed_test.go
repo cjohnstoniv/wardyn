@@ -41,8 +41,9 @@ func (s *outageTokenStore) RevokeAPIToken(ctx context.Context, id uuid.UUID, pri
 // #622: a demotion whose outstanding tokens cannot be listed (or revoked) has
 // already changed the mapping, so it is not undone, but it must not read as
 // "0 tokens revoked": the audit row says the change has not reached the tokens,
-// and so does the upsert's response (the delete's 204 has no body). A demotion
-// that does reach them says nothing of it.
+// and so does the response, the upsert's and the delete's alike (200 with the
+// remedy, where the delete otherwise answers 204). A demotion that does reach
+// them says nothing of it.
 func TestRoleMappingDemotion_SaysWhenTheTokensWereNotReached(t *testing.T) {
 	const demoted = "eng-team"
 	build := func(t *testing.T, listErr, revokeErr error) (*Server, uuid.UUID) {
@@ -80,9 +81,9 @@ func TestRoleMappingDemotion_SaysWhenTheTokensWereNotReached(t *testing.T) {
 		t.Run(name+", on delete", func(t *testing.T) {
 			srv, id := build(t, tc.listErr, tc.revokeErr)
 			w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+id.String()+"?acknowledge_access_change=true", adminToken, "")
-			// The delete's 204 has no body and keeps none: the audit row carries it.
-			if w.Code != http.StatusNoContent || w.Body.Len() != 0 {
-				t.Fatalf("delete = %d %q, want the unchanged 204", w.Code, w.Body.String())
+			// The admin who took the role away is told, not only the audit row.
+			if b := body(t, w.Body.Bytes()); w.Code != http.StatusOK || b["tokens_revocation_failed"] != true || b["detail"] != roleTokensNotReached {
+				t.Fatalf("delete = %d %q, want 200 saying tokens_revocation_failed with the remedy", w.Code, w.Body.String())
 			}
 			if d := auditData(t, srv, "access.role_mapping.delete"); d["tokens_revocation_failed"] != true || d["tokens_revoked"] != float64(0) {
 				t.Errorf("audit data = %v, want tokens_revocation_failed true and tokens_revoked 0", d)

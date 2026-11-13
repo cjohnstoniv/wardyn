@@ -271,11 +271,12 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - **Disconnecting revokes the tokens of the person's runs in progress**, and those runs lose Azure DevOps access.
 - The Settings card asks first: "Disconnecting revokes the tokens of any of your runs in progress. They lose Azure DevOps access."
 - `DELETE /api/v1/scm/azure-devops/connection` revokes every live token created in the person's name (each audited `ado_pat.revoke`, reason `disconnect`), then deletes their stored sign-in, writes `ado_pat.disconnect` and answers `204`, also when nothing was stored.
+- When a token it tried to revoke may still work (Azure DevOps refused, or the revoke did not finish), it answers `200` with `tokens_revocation_failed: true` and a `detail` naming the remedy instead.
 - It deletes the person's sign-in under every Azure DevOps row, disabled or withdrawn ones too, so a re-enabled row needs a fresh sign-in.
 - A connection captured at console sign-in is captured again at the person's next sign-in.
 - **Offboarding revokes the person's live tokens first.**
 - `DELETE /people/{principal}/credentials` revokes every live token created in their name (each audited `ado_pat.revoke`, reason `offboarding`), then deletes the stored grant.
-- `/me/scm-access` adds, on a row that creates tokens, `token_mode: minted_pat`, `last_token` (when the newest token was created and, once its record is closed, when that was) and `default_profile`.
+- `/me/scm-access` adds, on a row that creates tokens, `token_mode: minted_pat`, `last_token` (when the newest token was created and expires, once its record is closed when that was and why, and `revoke_failed` or `revoke_pending` when a revoke failed) and `default_profile`.
 
 That has two consequences:
 

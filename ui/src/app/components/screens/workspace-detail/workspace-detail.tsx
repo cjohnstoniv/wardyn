@@ -182,8 +182,13 @@ export function WorkspaceDetailScreen() {
     if (!ws) return;
     setRebuilding(true);
     try {
-      await workspacesApi.buildWorkspace(ws.id);
-      toast.success(`Rebuild started for "${ws.name}"`);
+      // The toast says what the server did: a 200 done or nothing_to_build
+      // built nothing, and none means this server has no image builder.
+      const res = await workspacesApi.buildWorkspace(ws.id, true);
+      if (res.state === "building") toast.success(`Rebuild started for "${ws.name}"`);
+      else if (res.state === "done" || res.state === "nothing_to_build") toast.info(`Nothing to rebuild for "${ws.name}".`, { description: res.detail });
+      else if (res.state === "none") toast.warning(`"${ws.name}" was not rebuilt.`, { description: res.detail });
+      else toast.error("Failed to start the rebuild", { description: res.detail });
       load(false);
     } catch (e) {
       toast.error("Failed to start the rebuild", { description: getErrorMessage(e) });
@@ -194,7 +199,7 @@ export function WorkspaceDetailScreen() {
 
   // ---------------- sessions (record / confined replay) ----------------
   const [recordBusyTask, setRecordBusyTask] = React.useState<string | null>(null);
-  const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string } | null>(null);
+  const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string; reason?: string } | null>(null);
   // The launch's own warnings (open-egress exfiltration window on weak
   // confinement, the masking caveat) + its REAL confinement class — the
   // server's own facts about THIS launch, never dropped and never guessed
@@ -218,7 +223,7 @@ export function WorkspaceDetailScreen() {
     try {
       const r = await workspacesApi.recordTask(ws.id, name, confined);
       if (!r.ok) {
-        setRecordNotice({ status: r.status, detail: r.detail });
+        setRecordNotice({ status: r.status, detail: r.detail, reason: r.reason });
       } else {
         setRecordLaunch({ warnings: r.warnings, confinementClass: r.confinement_class });
       }

@@ -229,6 +229,10 @@ export function AccessPanel({
   state: AccessLoadState;
   onReload: () => void;
 }) {
+  // A delete that went through but could not revoke every token holding the old role: the server's
+  // remedy, kept until the next delete. Held here, above the load state, so that a reload which fails
+  // (the same outage, often) does not drop it.
+  const [revokeIncomplete, setRevokeIncomplete] = React.useState<string | null>(null);
   if (state === "loading") {
     return <p className="text-sm text-muted-foreground">Loading role mappings…</p>;
   }
@@ -244,24 +248,32 @@ export function AccessPanel({
   }
   if (state === "fetch_failed" || !access) {
     return (
-      <EmptyState
-        size="compact"
-        icon={AlertTriangle}
-        title={ACCESS_STATE.FETCH_FAILED_TITLE}
-        description={ACCESS_STATE.FETCH_FAILED_BODY}
-        action={
-          <Button variant="outline" size="sm" onClick={onReload}>
-            <RotateCw className="size-3.5" />
-            {ACCESS_STATE.FETCH_FAILED_RETRY}
-          </Button>
-        }
-      />
+      <>
+        {revokeIncomplete !== null && <Note tone="red">{revokeIncomplete}</Note>}
+        <EmptyState
+          size="compact"
+          icon={AlertTriangle}
+          title={ACCESS_STATE.FETCH_FAILED_TITLE}
+          description={ACCESS_STATE.FETCH_FAILED_BODY}
+          action={
+            <Button variant="outline" size="sm" onClick={onReload}>
+              <RotateCw className="size-3.5" />
+              {ACCESS_STATE.FETCH_FAILED_RETRY}
+            </Button>
+          }
+        />
+      </>
     );
   }
 
   return (
     <div className="space-y-6">
-      <MappingsTable access={access} onReload={onReload} />
+      <MappingsTable
+        access={access}
+        onReload={onReload}
+        revokeIncomplete={revokeIncomplete}
+        setRevokeIncomplete={setRevokeIncomplete}
+      />
       <PreviewPanel mapEmpty={access.posture.map_empty} userTypes={access.user_types ?? []} />
       <p className="flex max-w-[82ch] items-start gap-2 text-body text-muted-foreground">
         <Info className="mt-0.5 size-3.5 shrink-0" />
@@ -272,7 +284,17 @@ export function AccessPanel({
 }
 
 // Role mappings table + add form + Defaults block
-function MappingsTable({ access, onReload }: { access: AccessResponse; onReload: () => void }) {
+function MappingsTable({
+  access,
+  onReload,
+  revokeIncomplete,
+  setRevokeIncomplete,
+}: {
+  access: AccessResponse;
+  onReload: () => void;
+  revokeIncomplete: string | null;
+  setRevokeIncomplete: (detail: string | null) => void;
+}) {
   const names: TypeNames = React.useMemo(
     () => new Map((access.user_types ?? []).map((t) => [t.id, t.name])),
     [access.user_types],
@@ -300,6 +322,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
 
   const openDelete = (m: AccessMapping) => {
     setToDelete(m);
+    setRevokeIncomplete(null);
     setAck(false);
     setDialogError(null);
     setReactiveGuard(null);
@@ -315,7 +338,8 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
     if (!toDelete?.id) return;
     setBusy(true);
     try {
-      await api.deleteMapping(toDelete.id, showDeleteGuard ? ack : false);
+      const res = await api.deleteMapping(toDelete.id, showDeleteGuard ? ack : false);
+      setRevokeIncomplete(res.tokensRevocationFailed ? (res.detail ?? "") : null);
       closeDelete();
       setSubmitted(null);
       onReload();
@@ -345,6 +369,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
         <p className="mt-0.5 text-body text-muted-foreground">{PEOPLE.TABLE_LEAD}</p>
         <Note>{PEOPLE.EFFECT_NOTE}</Note>
         {submitted && <SubmittedNote change={submitted} />}
+        {revokeIncomplete !== null && <Note tone="red">{revokeIncomplete}</Note>}
       </div>
 
       <div className="mt-4 flex flex-col gap-2">

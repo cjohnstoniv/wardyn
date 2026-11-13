@@ -90,9 +90,10 @@ export function RecordPane({
   onOpenProfile,
 }: {
   ws: Workspace;
-  // Inline notice from the last record/replay attempt (400 bad name; 503 no
-  // runner; 409 another session already running).
-  notice: { status: number; detail?: string } | null;
+  // Inline notice from the last record/replay attempt (400 bad name; 422 the
+  // server's refusal; 503 no runner, or a read that failed just now; 409
+  // another session already running). Cleared by the next attempt.
+  notice: { status: number; detail?: string; reason?: string } | null;
   // The last successful launch's own warnings + real confinement class
   // (handleRecordWorkspace's 202 body) — never dropped, and the
   // authoritative source for the CC1 banner below once a session has
@@ -167,6 +168,9 @@ export function RecordPane({
   // The workspace-wide roll-up — has the loop closed clean at
   // least once, for any session? Client-derived, no new WorkspaceStatus.
   const cleanReplay = lastCleanReplay(ws);
+  // Only the server's own no-runner reason disables the form: any other 503 is
+  // a read that failed just now, and the next attempt may work.
+  const noRunner = notice?.status === 503 && notice.reason === "record_no_runner";
 
   return (
     // Every control in this pane (record/replay/approve-host/promote-egress)
@@ -188,8 +192,9 @@ export function RecordPane({
 
       <OpenEgressBanner tier={tier} />
 
-      {/* 503: honest no-runner path. */}
-      {notice?.status === 503 && (
+      {/* 503 record_no_runner: honest no-runner path. Any other 503 is a read that
+          failed just now, and 422 a refusal: both in the server's own words. */}
+      {noRunner && (
         <div
           className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-warning"
           data-testid="record-no-runner"
@@ -199,6 +204,15 @@ export function RecordPane({
             Recording or replaying needs a runner (this control plane runs{" "}
             <span className="font-mono">-runner none</span>).
           </p>
+        </div>
+      )}
+      {(notice?.status === 422 || (notice?.status === 503 && !noRunner)) && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-warning"
+          data-testid="record-refused"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <p>{notice.detail}</p>
         </div>
       )}
       {notice?.status === 400 && (
@@ -283,7 +297,7 @@ export function RecordPane({
       )}
       <NewSessionForm
         existing={sessions.map((s) => s.label)}
-        disabled={isRecording(ws) || notice?.status === 503}
+        disabled={isRecording(ws) || noRunner}
         onRecord={onRecord}
       />
     </fieldset>
