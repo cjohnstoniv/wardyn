@@ -168,7 +168,7 @@ jobs:
         timeout-minutes: 3
         # Bounded retry of the module fetch only; go.sum verifies each module. Never wraps a test or build.
         run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -240,7 +240,7 @@ jobs:
         timeout-minutes: 3
         # Bounded retry of the module fetch only; go.sum verifies each module. Never wraps a test or build.
         run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -519,11 +519,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -595,11 +595,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -1081,7 +1081,7 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         if: github.event_name == 'workflow_dispatch' && inputs.publish
         with:
           registry: ghcr.io
@@ -1263,7 +1263,7 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1425,7 +1425,7 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1433,11 +1433,11 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -1609,7 +1609,7 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1617,11 +1617,11 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -1705,7 +1705,7 @@ jobs:
         timeout-minutes: 3
         # Bounded retry of the module fetch only; go.sum verifies each module. Never wraps a test or build.
         run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1789,11 +1789,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -1916,11 +1916,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Kubernetes runner kind conformance (${{ matrix.kubelet }}, ${{ matrix.suite }} suite)
@@ -1992,11 +1992,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: WardynWorkload end to end (kind v1.35.0, Dex sign-ins)
@@ -2100,11 +2100,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: unit
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Build the agent images the quickstart cluster needs
@@ -2174,11 +2174,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -2255,11 +2255,11 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Docker available
@@ -2395,11 +2395,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: unit
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: Vault + OpenBao dev servers
@@ -2450,11 +2450,11 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: k8s
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           install_only: "true"
       - name: WARDYN_DAEMON_PROXY_SECRET on kind, defaultMode 0440 + 0400
@@ -2785,7 +2785,7 @@ jobs:
       - name: Build the conformance agent image (busybox + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: wardyn-node-restart
           config: deploy/kind/conformance-kind-config.yaml
