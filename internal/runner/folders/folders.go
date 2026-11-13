@@ -62,6 +62,12 @@ var listBudget = 3 * time.Second
 // listChecked runs between a browse's check of its folder and its first read; tests change the folder there.
 var listChecked = func() {}
 
+// rootChecked runs between New's check of a root and its open; tests change the root there.
+var rootChecked = func() {}
+
+// folderChecked runs between the check of a folder's path and its open; tests change the path there.
+var folderChecked = func() {}
+
 // Server serves list_folders, sync_folder and sync_folder_wait.
 type Server struct {
 	ctx      context.Context
@@ -98,6 +104,13 @@ func New(ctx context.Context, roots []string, stateDir string) (*Server, error) 
 		return nil, errors.New("folders: no root folder")
 	}
 	s := &Server{ctx: ctx, stateDir: filepath.Join(stateDir, "folders"), passes: map[uint32]*pass{}, byRun: map[uuid.UUID]bool{}}
+	// A root refused below closes every root opened before it.
+	built := false
+	defer func() {
+		if !built {
+			s.closeRoots()
+		}
+	}()
 	for _, r := range roots {
 		if !filepath.IsAbs(r) {
 			return nil, fmt.Errorf("folders: root %q is not an absolute path", r)
@@ -110,19 +123,51 @@ func New(ctx context.Context, roots []string, stateDir string) (*Server, error) 
 			return nil, fmt.Errorf("folders: root %q is not a directory", r)
 		}
 		if seg := runner.DeniedUserSegment(real); seg != "" {
-			s.closeRoots()
 			return nil, fmt.Errorf("folders: root %q is inside %s, which holds credentials", r, seg)
 		}
-		h, err := os.OpenRoot(real)
+		rootChecked()
+		h, err := openRoot(real)
 		if err != nil {
-			s.closeRoots()
 			return nil, fmt.Errorf("folders: root %q: %w", r, err)
 		}
 		s.roots = append(s.roots, real)
 		s.handles = append(s.handles, h)
 	}
 	context.AfterFunc(ctx, s.closeRoots)
+	built = true
 	return s, nil
+}
+
+// openRoot opens real, a root New has resolved and checked, one directory at a time from the top of
+// its volume (foldersync.OpenDir). The handle kept for the server's life is then the directory that
+// path names with no link in it: a root renamed or replaced by a link between its check and its open
+// refuses the start, and is never opened through. Opening a directory needs read access to it, so a
+// folder on the way that the runner's user can pass through but not read refuses the start too, and
+// the refusal names that folder.
+func openRoot(real string) (*os.Root, error) {
+	top := filepath.VolumeName(real) + string(filepath.Separator)
+	rel, err := filepath.Rel(top, real)
+	if err != nil {
+		return nil, err
+	}
+	cur, err := os.OpenRoot(top)
+	if err != nil {
+		return nil, err
+	}
+	at := top
+	for _, name := range strings.Split(filepath.ToSlash(rel), "/") {
+		at = filepath.Join(at, name)
+		next, err := foldersync.OpenDir(cur, name)
+		_ = cur.Close()
+		if errors.Is(err, fs.ErrPermission) {
+			return nil, fmt.Errorf("the runner's user cannot read the folder %s; the runner opens each folder from the top of the drive down to a root, so make that folder readable, or choose another root", at)
+		}
+		if err != nil {
+			return nil, err
+		}
+		cur = next
+	}
+	return cur, nil
 }
 
 // closeRoots closes the roots' handles. A folder opened from one stays open until its own close.
@@ -203,6 +248,7 @@ func (s *Server) browsable(p string) (*os.Root, error) {
 	if err != nil {
 		return nil, runnerwire.Refuse("that folder is not under a folder this runner shares")
 	}
+	folderChecked()
 	dir, err := foldersync.OpenDir(s.handles[i], filepath.ToSlash(rel))
 	if errors.Is(err, foldersync.ErrLinkInPath) {
 		return nil, runnerwire.Refuse("that path goes through a symlink, which is never followed")

@@ -4,10 +4,12 @@
 package foldersync
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -168,5 +170,80 @@ func TestPass_ADirectorySwappedForALinkAfterItsCheckIsNeverWrittenThrough(t *tes
 	}
 	if !slices.Equal(names, []string{"credentials"}) {
 		t.Fatalf("the credential folder holds %v after the pass, want credentials alone", names)
+	}
+}
+
+// openTestRoot is dir opened as an os.Root, closed when the test ends.
+func openTestRoot(t *testing.T, dir string) *os.Root {
+	t.Helper()
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
+
+// A directory replaced by a link to a credential folder between openChild's look at it and its open:
+// the open is refused, never made through the link.
+func TestOpenChild_ADirectorySwappedForALinkAfterItsLookIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	putSyncFile(t, filepath.Join(dir, "sub", "keep.txt"), "the laptop's", 0o644)
+	putSyncFile(t, filepath.Join(dir, ".aws", "credentials"), "fixture: not a real key", 0o600)
+	var once sync.Once
+	old := childLooked
+	childLooked = func() { once.Do(linkSub(t, dir)) }
+	t.Cleanup(func() { childLooked = old })
+	child, err := openChild(openTestRoot(t, dir), "sub")
+	if err == nil {
+		_ = child.Close()
+		t.Fatal("openChild opened sub through the link swapped in after its look")
+	}
+	if !errors.Is(err, ErrLinkInPath) {
+		t.Fatalf("openChild = %v, want ErrLinkInPath", err)
+	}
+}
+
+// A link at a path's last name, to a credential file inside the same folder: openIn refuses it rather
+// than return the file the link names.
+func TestOpenIn_ALinkAtTheLastNameIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	putSyncFile(t, filepath.Join(dir, ".aws", "credentials"), "fixture: not a real key", 0o600)
+	if err := os.Symlink(filepath.Join(".aws", "credentials"), filepath.Join(dir, "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := openIn(openTestRoot(t, dir), "notes.txt", os.O_RDONLY, 0)
+	if err == nil {
+		b, _ := io.ReadAll(f)
+		_ = f.Close()
+		t.Fatalf("openIn read %q through the link at notes.txt", b)
+	}
+	if !errors.Is(err, ErrLinkInPath) {
+		t.Fatalf("openIn = %v, want ErrLinkInPath", err)
+	}
+}
+
+// Every laptop path the engine touches goes through nofollow.go's helpers: no other file calls an
+// os.Root method by a path, which would follow a link inside the folder. The scan reads every
+// system's files, so a Windows-only call is caught on Linux too.
+func TestEngine_EveryRootCallGoesThroughTheNoFollowHelpers(t *testing.T) {
+	direct := regexp.MustCompile(`(sy\.Root|\broot)\.(Open|OpenFile|OpenRoot|Lstat|Stat|Remove|RemoveAll|Rename|Link|Chtimes|Chmod|Mkdir|MkdirAll|ReadFile|WriteFile|Create|FS|Symlink|Readlink)\(`)
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no Go files found: %v", err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || f == "nofollow.go" {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if direct.MatchString(line) {
+				t.Errorf("%s:%d calls os.Root by a path: %s", f, i+1, strings.TrimSpace(line))
+			}
+		}
 	}
 }

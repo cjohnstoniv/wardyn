@@ -43,6 +43,9 @@ func OpenDir(root *os.Root, rel string) (*os.Root, error) {
 	return cur, nil
 }
 
+// childLooked runs in openChild between its look at an entry and its open; tests swap the entry there.
+var childLooked = func() {}
+
 // openChild opens the directory name inside dir: a plain directory when looked at, and the handle
 // opened is that same directory (os.Root would follow a link swapped in between the two).
 func openChild(dir *os.Root, name string) (*os.Root, error) {
@@ -56,6 +59,7 @@ func openChild(dir *os.Root, name string) (*os.Root, error) {
 	if li.Mode().Type() != fs.ModeDir {
 		return nil, &os.PathError{Op: "open", Path: name, Err: ErrLinkInPath}
 	}
+	childLooked()
 	child, err := dir.OpenRoot(name)
 	if err != nil {
 		return nil, err
@@ -93,8 +97,9 @@ func closeIn(root, dir *os.Root) {
 	}
 }
 
-// openIn is root.OpenFile with no link followed above name or at it: the file opened must be the
-// entry its directory holds under that name.
+// openIn is root.OpenFile with no link followed above name. A link at name itself is followed inside
+// its directory by the open, then refused: the file opened must be the entry its directory holds under
+// that name. No caller passes O_TRUNC, or O_CREATE without O_EXCL, so that open changes nothing.
 func openIn(root *os.Root, name string, flag int, perm os.FileMode) (*os.File, error) {
 	dir, leaf, err := inDir(root, name)
 	if err != nil {
@@ -124,7 +129,9 @@ func readFileIn(root *os.Root, name string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-// lstatIn, removeIn and chtimesIn act on name's last component inside its parent's handle.
+// lstatIn, removeIn and chtimesIn act on name's last component inside its parent's handle. chtimesIn
+// follows a link at that last name (os.Root.Chtimes does) within the parent's tree; callers pass only
+// names the engine has just created.
 func lstatIn(root *os.Root, name string) (os.FileInfo, error) {
 	dir, leaf, err := inDir(root, name)
 	if err != nil {
@@ -198,10 +205,19 @@ func mkdirAllIn(root *os.Root, name string, perm os.FileMode) error {
 }
 
 // FS is root as an fs.FS for fs.WalkDir that follows no link: each directory it lists is opened by
-// OpenDir and each file by openIn.
+// OpenDir, each file by openIn, and Stat looks at a name by lstatIn without opening it.
 func FS(root *os.Root) fs.FS { return linkFreeFS{root} }
 
 type linkFreeFS struct{ root *os.Root }
+
+// Stat lets fs.WalkDir look at its start without opening it: a link there is not walked, and a FIFO
+// there is not opened, which would wait for a writer.
+func (l linkFreeFS) Stat(name string) (fs.FileInfo, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+	}
+	return lstatIn(l.root, name)
+}
 
 func (l linkFreeFS) Open(name string) (fs.File, error) {
 	if !fs.ValidPath(name) {

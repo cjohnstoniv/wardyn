@@ -11,9 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The folder-only runner now opens every folder from the top of the drive down to each of its roots when it starts, and refuses to start when the runner's user cannot read one of them. The error names that folder: make it readable, or choose another root with `--folder-root`.
+
 ### Fixed
 
-- The folder-only runner now opens a shared folder once, when it checks it, and every browse and pass reads and writes through that opened folder one directory at a time, following no link. A folder renamed or replaced by a link after its check is no longer followed. `wardyn sync` reads and writes the same way.
+- The folder-only runner now opens each root when it starts, and each shared folder when it checks it, one folder at a time without following a link, and keeps that folder open until its browse or pass ends. A root or shared folder renamed or replaced by a link after its check is not followed. Inside a pass, the runner and `wardyn sync` reach each file through its folder opened the same way, and never read or write a file through a link, with three exceptions that still use a path or a link: on Windows, a file brought back is moved into place by its folder's path; if the pass's own new file is replaced by a link before its modified time is set, that time is set on the link's target; and `wardyn sync --git` and `--pull-commits` run git on the folder by its path.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
