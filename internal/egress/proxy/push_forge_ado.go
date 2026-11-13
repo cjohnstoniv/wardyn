@@ -36,7 +36,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
@@ -71,6 +70,7 @@ const (
 
 	whyForced     = "this push moves a branch other than forward from the tip it states, so the commit it builds on does not show what the branch loses"
 	whyHeldForced = "this push moves a branch other than forward from the tip it states, for: "
+	whyCutShort   = "this push names more history than the broker follows, so the broker stopped reading and takes no branch as moved forward from the tip it states"
 )
 
 // adoRepoAPIBase is the REST path of the repository a receive-pack path names:
@@ -293,15 +293,18 @@ func (f *forgeRepo) adoTree(ctx context.Context, tree string) ([]ghTreeEntry, er
 	return entries, nil
 }
 
-// fastForwards reports whether every ref res moves builds directly on the tip
-// it states, which the pack shows when that tip is one of its bases. A forward
-// move through a commit the forge already holds reads as not, so it stays strict.
-func fastForwards(res gitpack.Result) bool {
-	for _, c := range res.Commands {
+// fastForwards reports whether every ref cmds move goes forward from the tip it
+// states: the history the pack carries for that ref's own new commit names the
+// tip (named, from gitpack.Result.Reaches). A commit another ref sets, or one no
+// ref sets, says nothing about this ref's move. A forward move through a commit
+// the forge already holds reads as not, and so does any move once the walks were
+// cut short (whole false), so either stays strict.
+func fastForwards(cmds []gitpack.Command, named []map[string]bool, whole bool) bool {
+	for i, c := range cmds {
 		if strings.Trim(c.Old, "0") == "" || strings.Trim(c.New, "0") == "" {
 			continue
 		}
-		if !slices.Contains(res.Bases, c.Old) {
+		if !whole || !named[i][c.Old] {
 			return false
 		}
 	}

@@ -24,7 +24,10 @@ package proxy
 // branch this push updates or of the default branch (contains). An updated
 // branch counts only at the tip the forge reports, and only when that tip
 // is the old value the push states (updatedTip): neither the branch name
-// nor the old value the push asserts is taken on trust. A
+// nor the old value the push asserts is taken on trust. Nor does every
+// commit the pack carries count: one outside the history of every ref the
+// push sets builds on nothing the push builds on, so a base counts only when
+// the history the pack carries for some ref's new commit names it (Reaches). A
 // merge passes an entry matching ANY counted parent: demanding all would
 // refuse merging the default branch in after it changed a denied path, and
 // closes nothing a single-parent commit on the same base couldn't already.
@@ -58,6 +61,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -158,16 +162,27 @@ func (p *Proxy) patForge(host, rest string, g PATGrant) *forgeRepo {
 // deny_new_executables.
 type forgeClear func(f *forgeRepo, ctx context.Context, roots []string, c gitpack.Change) (bool, error)
 
+// packReaches is gitpack.Result.Reaches. A var so a test can cut a walk short.
+var packReaches = gitpack.Result.Reaches
+
 // unchanged returns the entries clear could NOT clear, and why.
 func (f *forgeRepo) unchanged(ctx context.Context, entries []gitpack.Change, res gitpack.Result, clear forgeClear) ([]gitpack.Change, string) {
 	if f == nil {
 		return entries, whyNoForgeReader
 	}
-	if f.ado != nil && !fastForwards(res) {
+	named, whole := packReaches(res)
+	if f.ado != nil && !fastForwards(res.Commands, named, whole) {
+		if !whole {
+			return entries, whyCutShort // a walk cut short shows no move either way
+		}
 		return entries, whyForced
 	}
 	var roots []string
 	for _, base := range res.Bases {
+		// A parent named only by a commit outside every pushed ref's history is nothing this push builds on.
+		if !slices.ContainsFunc(named, func(n map[string]bool) bool { return n[base] }) {
+			continue
+		}
 		root, err := f.vouch(ctx, base, res.Commands)
 		if err != nil {
 			return entries, f.unread(whyUnread, err)

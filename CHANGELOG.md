@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- On Azure DevOps, when a push moves a branch other than forward from the tip it states, what it does not carry is no longer compared with the commits it builds on for `require_review_paths`, `deny_paths`, `max_file_size_mib` and `deny_new_executables`, even when the push also carries a commit built on that tip. A path those rules could match is held or refused instead, as for any move other than forward. Before, such a commit made the move read as forward, whether no ref in the push pointed at it or another ref in the push set it. What the push left out was then compared with an older commit, so content the branch's tip had changed at a `require_review_paths` path could go back to an older version without a hold. On GitHub and Azure DevOps, a commit the push carries that is not part of the history of any ref it sets is no longer used to find the commits the push builds on. The Azure DevOps comparison came in 0.10.0-rc.10.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

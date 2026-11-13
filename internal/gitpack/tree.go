@@ -365,6 +365,60 @@ func (r Result) Settle(held func(commit string) (bool, error)) (Result, error) {
 	return out, nil
 }
 
+// maxAncestrySteps bounds the parent edges Reaches follows for one push, every
+// command's walk together, so many refs over one wide history cannot make the
+// walk cost a pass each. Past it the answer is cut short, which a caller reads
+// as unproved. A var so a test can shrink it.
+var maxAncestrySteps = 1_000_000
+
+// Reaches says, for each of r.Commands in order, which commit ids the history of
+// its new value names through the commits the pack carries: the commit it sets
+// (an annotated tag is peeled), each carried commit reached parent by parent,
+// and every parent id those commits name, carried or not. A commit's parents are
+// part of the bytes its id is computed over, so a named id is in that history.
+// One not named is unproved, not disproved: the walk stops at a commit the pack
+// does not carry. A delete names nothing. whole is false when the walks together
+// passed maxAncestrySteps and stopped, so a set may be short.
+func (r Result) Reaches() (named []map[string]bool, whole bool) {
+	named = make([]map[string]bool, len(r.Commands))
+	parents := map[string][]string{}
+	if r.idx != nil {
+		for oid, o := range r.idx.byOID {
+			if o.typ != objCommit {
+				continue
+			}
+			// Inspect refuses a pack holding a commit that does not parse.
+			if c, err := parseCommit(o.data, r.idx.format.size); err == nil {
+				parents[oid] = c.parents
+			}
+		}
+	}
+	steps := 0
+	for i, cmd := range r.Commands {
+		named[i] = map[string]bool{}
+		if r.idx == nil || isZeroOID(cmd.New) {
+			continue
+		}
+		tip, how := r.idx.peel(cmd.New)
+		if how != peeled {
+			continue
+		}
+		for stack := []string{tip}; len(stack) > 0; {
+			oid := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if named[i][oid] {
+				continue
+			}
+			named[i][oid] = true
+			if steps += len(parents[oid]); steps > maxAncestrySteps {
+				return named, false
+			}
+			stack = append(stack, parents[oid]...)
+		}
+	}
+	return named, true
+}
+
 // walker accumulates one pack's change set, deduplicated on the whole entry:
 // the same path at two modes is two answers, because a rule about executables
 // must see the executable one.

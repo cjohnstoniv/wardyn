@@ -183,7 +183,9 @@ type Result struct {
 	// Bases are the commits the push builds on: every parent a pack commit
 	// names that the pack doesn't carry, sorted and deduplicated. TRUST
 	// BOUNDARY: a commit may name ANY object id as its parent, so a caller
-	// must establish for itself that a base belongs to trusted history.
+	// must establish for itself that a base belongs to trusted history. The
+	// pack may also carry commits outside every command's history, and their
+	// parents are here too: Reaches says which ids each command's new value builds on.
 	Bases []string
 
 	// idx is the parsed pack, kept so Settle can answer again without

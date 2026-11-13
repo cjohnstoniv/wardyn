@@ -564,6 +564,30 @@ func TestPushRulesCountABranchOnlyAtTheTipTheForgeConfirms(t *testing.T) {
 	}
 }
 
+// TestPushRulesCountOnlyABaseARefBuildsOn: a pack may carry a commit no ref the
+// push sets. What that commit builds on is nothing the push builds on, so it
+// vouches for nothing the push leaves out: here it would have passed a denied
+// directory the run's own commit took back to an older revision.
+func TestPushRulesCountOnlyABaseARefBuildsOn(t *testing.T) {
+	r := newForgeRunVia(t, githubHost, ordinaryRepo, nil, ".github/workflows/**")
+	older := gitOut(t, r.work, "rev-parse", "HEAD")
+	writeFiles(t, r.work, map[string]string{".github/workflows/ci.yml": "on: reviewed\n"})
+	r.commit(t, "reviewed")
+	tip := gitOut(t, r.work, "rev-parse", "HEAD")
+	runGit(t, r.work, "push", "-q", r.bare, "HEAD:refs/heads/main")
+	runGit(t, r.work, "checkout", "-q", older, "--", ".github")
+	r.editMain(t, "older workflows")
+	commit := gitOut(t, r.work, "rev-parse", "HEAD")
+	runGit(t, r.work, "checkout", "-q", "--detach", older)
+	writeFiles(t, r.work, map[string]string{"src/stray.go": "package main\n"})
+	r.commit(t, "stray")
+	stray := gitOut(t, r.work, "rev-parse", "HEAD")
+	status, body := r.postCommands(t, commit+"\n"+stray+"\n^"+tip, [][3]string{{strings.Repeat("0", 40), commit, r.ref}})
+	if status != http.StatusForbidden || !strings.Contains(body, whyChanged) {
+		t.Errorf("status %d, body %q: want 403 saying %q", status, body, whyChanged)
+	}
+}
+
 // postCommands sends one receive-pack request through the git_pat lane with
 // the given commands (old, new, ref) and a pack of the objects `revs` selects.
 func (r *forgeRun) postCommands(t *testing.T, revs string, cmds [][3]string) (int, string) {
