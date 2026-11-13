@@ -283,8 +283,9 @@ func (f fileStore) save(items map[string]cliItem) error {
 // lockRefresh takes <dir>/cli.lock, waiting up to cliLockWait. Every write of a stored item happens under
 // it (a refresh, login, the admin step-up, logout), as one read-modify-write against the current item, so
 // two commands never refresh at once and look like a replay, and none writes back a rotated-past secret.
-// ok is false when another holder kept it that long.
-func lockRefresh(dir string) (unlock func(), ok bool, err error) {
+// ok is false when another holder kept it that long. A ctx that ends first stops the wait and is returned as
+// the error, so a command with a wait budget is not held past it by a lock another command holds.
+func lockRefresh(ctx context.Context, dir string) (unlock func(), ok bool, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, false, err
 	}
@@ -306,7 +307,12 @@ func lockRefresh(dir string) (unlock func(), ok bool, err error) {
 			_ = f.Close()
 			return nil, false, nil
 		}
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, false, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 }
 
@@ -356,7 +362,7 @@ func loadSession(ctx context.Context, origin string, want uuid.UUID) (storedSess
 	if why := s.item.endedWhy(cliNow()); why != "" {
 		return s, fmt.Errorf(errSessionEnded, origin, why)
 	}
-	unlock, locked, err := lockRefresh(dir)
+	unlock, locked, err := lockRefresh(ctx, dir)
 	if err != nil {
 		return s, fmt.Errorf(errRenew, origin, err)
 	}
@@ -428,7 +434,8 @@ func (t sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	tok, _, err := t.sess.bearer(req.Context())
 	if err != nil {
-		// The command's sign-in changed or could not be read: nothing is sent, under another sign-in or none.
+		// The command's sign-in changed or could not be read, or the request's context ended during the
+		// renewal: nothing is sent, under another sign-in or none.
 		if req.Body != nil {
 			_ = req.Body.Close()
 		}

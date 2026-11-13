@@ -81,7 +81,7 @@ func TestSyncGateway_GitHistoryCrossesAsABundleOnly(t *testing.T) {
 	if err := foldersync.PullCommits(ctx, &out, sy, c, g.runID, root); err != nil {
 		t.Fatal(err)
 	}
-	branch := "wardyn/sync-" + g.runID[:8]
+	branch := "wardyn/sync-" + g.runID
 	if got := gitIn(t, root, "log", "--format=%s", branch); got != "agent work\nfirst" {
 		t.Errorf("git log %s = %q", branch, got)
 	}

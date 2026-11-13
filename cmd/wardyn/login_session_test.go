@@ -1468,7 +1468,7 @@ func TestRunningCommandSendsNothingItCannotSign(t *testing.T) {
 			}
 			started := storedItem(t, f.srv.URL)
 			sess := &sessionState{}
-			sess.resolve(f.srv.URL)
+			sess.resolve(context.Background(), f.srv.URL)
 			_, origin, err := sess.bearer(context.Background())
 			if err != nil || origin == "" {
 				t.Fatalf("resolved sign-in: origin %q, %v", origin, err)
@@ -1591,7 +1591,7 @@ func TestSignInWithNoSessionIDIsNotUsed(t *testing.T) {
 			started := storedItem(t, f.srv.URL)
 			tc.before(t, f.srv.URL, started, advance)
 			sess := &sessionState{}
-			sess.resolve(f.srv.URL)
+			sess.resolve(context.Background(), f.srv.URL)
 			f.mu.Lock()
 			signInElsewhere(f, started, func(it cliItem) error { return (keychainStore{}).put(f.srv.URL, it) })
 			before := f.requests

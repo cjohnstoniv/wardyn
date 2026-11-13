@@ -256,14 +256,15 @@ type sessionState struct {
 }
 
 // resolve loads the stored sign-in for serverURL: the item is looked up by that URL alone, so it is only
-// ever sent to the organisation it was made for.
-func (st *sessionState) resolve(serverURL string) {
+// ever sent to the organisation it was made for. A renewal cut short by ctx still leaves the item it read
+// and its session as the command's, so a later request renews it.
+func (st *sessionState) resolve(ctx context.Context, serverURL string) {
 	st.once.Do(func() {
 		origin, err := cliprofile.Normalize(serverURL)
 		if err != nil {
 			return
 		}
-		st.s, st.err = loadSession(context.Background(), origin, uuid.Nil)
+		st.s, st.err = loadSession(ctx, origin, uuid.Nil)
 		if st.s.kind != "" {
 			st.pin = st.s.item.SessionID
 		}
@@ -287,7 +288,8 @@ func (st *sessionState) reset() {
 // stays ended. origin is the sign-in's organisation, "" when none was stored as the command started. A
 // renewal keeps the session the command started with (pin): once that session is signed out or replaced,
 // err is a *sessionRefusal wrapping errSessionChanged for this and every later request, and the
-// replacement's token is never used. A store that cannot be read refuses this request only.
+// replacement's token is never used. A store that cannot be read refuses this request only. A renewal cut
+// short by ctx returns ctx's error for this request only, so it is not sent, and nothing is stored or latched.
 func (st *sessionState) bearer(ctx context.Context) (token, origin string, err error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -306,6 +308,10 @@ func (st *sessionState) bearer(ctx context.Context) (token, origin string, err e
 	case errors.Is(err, errSessionChanged):
 		st.refused = &sessionRefusal{err}
 		return "", st.s.origin, st.refused
+	case err != nil && ctx.Err() != nil:
+		// The request's own context ended while it waited for the renewal lock or for the refresh: refuse it
+		// rather than send it with no bearer, and keep the state so a later request tries the renewal again.
+		return "", st.s.origin, ctx.Err()
 	case err != nil && (s.kind == "" || s.item.SessionID != st.pin):
 		// The stored sign-in could not be read: keep the one the command holds and send nothing this time.
 		return "", st.s.origin, &sessionRefusal{fmt.Errorf(errRenew, st.s.origin, err)}
@@ -374,11 +380,14 @@ func rootCmd() *cobra.Command {
 	client := func() *sdk.Client {
 		t, hc := token, orgClient(serverURL, 30*time.Second)
 		if t == "" {
-			sess.resolve(serverURL)
+			// The root's context never ends, unless the command put its own deadline there before this call
+			// (run wait-ready): then a wait for another command's renewal ends with that deadline.
+			ctx := root.Context()
+			sess.resolve(ctx, serverURL)
 			var origin string
 			// A changed or unreadable sign-in leaves t empty and origin set: sessionTransport then refuses
 			// the requests made through this client's HTTP client while it stays so.
-			if t, origin, _ = sess.bearer(context.Background()); t != "" && authHintFor.tokenFrom != tokenFromLogin {
+			if t, origin, _ = sess.bearer(ctx); t != "" && authHintFor.tokenFrom != tokenFromLogin {
 				authHintFor.tokenFrom = tokenFromLogin
 				warnPlaintextToken(root.ErrOrStderr(), serverURL, t)
 			}

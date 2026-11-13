@@ -59,7 +59,12 @@ sandbox to an external tool over the SSH gateway.
 			if err != nil {
 				return err
 			}
-			res, err := waitForRunReady(cmd.Context(), cmd.ErrOrStderr(), client(), id, timeout, expectGit)
+			// The budget starts before client() reads and renews the sign-in, so a wait for another
+			// command's renewal is inside it: client() takes the root's context.
+			ctx, cancel := context.WithDeadlineCause(cmd.Context(), time.Now().Add(timeout), errWaitTimeout)
+			defer cancel()
+			cmd.Root().SetContext(ctx)
+			res, err := waitForRunReady(ctx, cmd.ErrOrStderr(), client(), id, timeout, expectGit)
 			if err != nil {
 				return err
 			}

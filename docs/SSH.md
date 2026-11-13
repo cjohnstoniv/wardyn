@@ -181,7 +181,7 @@ ssh <run-id>@<advertise-host> -p <port>
   as-is):
 
 ```
-Host wardyn-<short-id>
+Host wardyn-<run-id>
   HostName <advertise-host>
   Port <port>
   User <run-id>
@@ -226,7 +226,7 @@ Host wardyn-<short-id>
   - With the gateway off they stop with one line saying the operator has not turned SSH on.
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
-  - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<short-id>` run it on your computer on every connection until you remove the block.
+  - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
 - When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
 
 ### Without SSH: `wardyn attach`
@@ -462,7 +462,7 @@ Interactive runs, background-only runs, exec-less (krun) runtimes and deployment
 rsync -rt --no-perms --no-links --exclude='.git/' --exclude='.envrc' --exclude='.direnv/' \
   --exclude='.vscode/tasks.json' --exclude='.vscode/launch.json' \
   --exclude='.idea/runConfigurations/' --exclude='.idea/workspace.xml' \
-  ./project/ wardyn-<short-id>:/home/agent/work/
+  ./project/ wardyn-<run-id>:/home/agent/work/
 ```
 
 ## 4. `-L` port forwarding

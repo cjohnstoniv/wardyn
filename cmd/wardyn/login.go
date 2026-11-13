@@ -234,7 +234,7 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		it = base.item
 	}
 	it.applyGrant(g)
-	prev, replacing, err := l.store(kind, it, base != nil)
+	prev, replacing, err := l.store(ctx, kind, it, base != nil)
 	// The browser hears "Signed in" only once the sign-in is stored.
 	finish(err == nil)
 	if err != nil {
@@ -262,8 +262,8 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 // replaces the item (and one another store held) and points the profile at kind; it returns the live item
 // it replaced. A step-up keeps the stored item, which a refresh may have rotated while the browser was
 // open, and adds only the cli_admin token to it.
-func (l *login) store(kind string, it cliItem, stepUp bool) (prev cliItem, replacing bool, err error) {
-	unlock, ok, err := lockRefresh(l.dir)
+func (l *login) store(ctx context.Context, kind string, it cliItem, stepUp bool) (prev cliItem, replacing bool, err error) {
+	unlock, ok, err := lockRefresh(ctx, l.dir)
 	if err != nil {
 		return prev, false, err
 	}
