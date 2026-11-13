@@ -16,6 +16,7 @@
 package groundtruth
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -82,6 +83,10 @@ type EventData struct {
 	Pod         string   `json:"pod,omitempty"`          // "namespace/name" of the pod the process ran in (absent on Compose)
 	Dst         string   `json:"dst,omitempty"`          // "ip:port" for network_connect events
 	Path        string   `json:"path,omitempty"`         // written file path for file_write events
+	// Arguments is an exec's raw argument string, as the sensor sends it: whole,
+	// so a secret in it can be masked before splitting cuts it into words.
+	// MaskData masks it, splits it onto Argv and clears it before recording.
+	Arguments string `json:"arguments,omitempty"`
 	// Loader is true when the exec'd binary is a dynamic linker (ld-linux /
 	// ld-musl): such an exec can load+run an arbitrary ELF the execve hook
 	// never named. Flagged, not blocked.
@@ -98,6 +103,42 @@ func (d EventData) marshal() json.RawMessage {
 		return json.RawMessage(`{"stream":"ebpf","correlation":"unmapped"}`)
 	}
 	return b
+}
+
+// MaskData masks a kernel event's data and finishes its argv: the raw arguments
+// an exec carries go through maskArgs as one string and are only then split
+// onto Argv, so a registered secret containing a space is hidden before the
+// split could cut it into words it no longer matches. The split cannot be
+// undone and no later masking can rejoin the words, so maskArgs is the one
+// chance to mask the arguments whole: a caller that cannot vouch for the
+// secrets it holds returns a placeholder for them instead. The whole result
+// then goes through mask, which covers every other field. Data that carries no
+// raw arguments, or does not decode, goes through mask as it is.
+//
+// A sensor older than this one split the arguments itself and sent them as
+// argv after the binary. Those words are joined back with single spaces and
+// handled the same way, so a secret whose only whitespace is single spaces
+// still matches; a tab, a line break or a run of spaces it held is lost.
+func MaskData(data json.RawMessage, mask, maskArgs func([]byte) []byte) json.RawMessage {
+	var ed EventData
+	if json.Unmarshal(data, &ed) != nil {
+		return mask(data)
+	}
+	if ed.Arguments == "" && len(ed.Argv) > 1 {
+		ed.Arguments = strings.Join(ed.Argv[1:], " ")
+		ed.Argv = ed.Argv[:1]
+	}
+	if ed.Arguments != "" {
+		ed.Argv = append(ed.Argv, strings.Fields(string(maskArgs([]byte(ed.Arguments))))...)
+		ed.Arguments = ""
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false) // keeps the placeholder in the bytes the masking recorder writes
+		if enc.Encode(ed) == nil {
+			data = bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+		}
+	}
+	return mask(data)
 }
 
 // Correlator resolves a container id to a Wardyn run. The ingest sidecar

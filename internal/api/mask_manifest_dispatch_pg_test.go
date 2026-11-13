@@ -10,11 +10,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -133,5 +136,53 @@ func TestMaskManifest_UnrecordableRunNeverLaunches(t *testing.T) {
 	dispatchOf(srv2, run2, types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantEnvSecret, Scope: scope}}})
 	if probe2.sawCreate {
 		t.Error("a run whose manifest is fenced was launched")
+	}
+}
+
+// An exec's raw arguments are split only once the server that takes them holds the run's whole
+// manifest. The run's env secret contains a space and was committed to the manifest by the server
+// that dispatched the run, which is the only place it is: a second server that has opened no door
+// for the run loads it before it splits, so the secret is hidden whole and the row keeps its run.
+func TestMaskManifest_ExecSplitWaitsOnTheRunsManifestOnAnotherReplica(t *testing.T) {
+	const secret = "alphaBravo charlieDelta"
+	l, srv, _, _, run := maskedDispatch(t, maskOwner)
+	ctx := context.Background()
+	if err := srv.cfg.Secrets.For(maskOwner).Put(ctx, "deploy-token", []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	scope, _ := json.Marshal(map[string]string{"name": "DEPLOY_TOKEN", "secret_name": "deploy-token"})
+	dispatchOf(srv, run, types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantEnvSecret, Scope: scope}}})
+
+	other := l.replica()
+	if other.srv.cfg.MaskManifests.Held(run.ID) {
+		t.Fatal("the second server holds the run's manifest before the batch; the rest proves nothing")
+	}
+	data, _ := json.Marshal(groundtruth.EventData{Stream: groundtruth.Stream, Subtype: groundtruth.SubtypeProcessExec,
+		Correlation: groundtruth.CorrelationMapped, Node: "node-a", Argv: []string{"/usr/bin/mysql"},
+		Arguments: "--password=" + secret + " --host db"})
+	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{{Action: groundtruth.ActionProcessExec, RunID: &run.ID,
+		Target: "/usr/bin/mysql", Outcome: "success", Data: data}}})
+	if w := do(t, other.srv, http.MethodPost, "/api/v1/internal/groundtruth", l.h.mintGroundtruthToken(t), string(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("batch code = %d, want 202: %s", w.Code, w.Body.String())
+	}
+
+	recorded := l.rec.snapshot()
+	i := slices.IndexFunc(recorded, func(ev types.AuditEvent) bool { return ev.Target == "/usr/bin/mysql" })
+	if i < 0 {
+		t.Fatalf("no recorded exec; events: %s", auditDump(recorded, run.ID))
+	}
+	got := recorded[i]
+	var ed groundtruth.EventData
+	if err := json.Unmarshal(got.Data, &ed); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/usr/bin/mysql", "--password=<secret-hidden>", "--host", "db"}; !slices.Equal(ed.Argv, want) || ed.Arguments != "" {
+		t.Errorf("argv = %q, arguments = %q, want %q and none", ed.Argv, ed.Arguments, want)
+	}
+	if got.RunID == nil || strings.Contains(string(got.Data), "mask_scope") {
+		t.Errorf("run = %v, data = %s, want the row kept on its run and carrying no mask_scope", got.RunID, got.Data)
+	}
+	if !other.srv.cfg.MaskManifests.Held(run.ID) {
+		t.Error("the second server does not hold the run's manifest after the batch")
 	}
 }

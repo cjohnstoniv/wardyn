@@ -8,16 +8,20 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -191,6 +195,139 @@ func TestGroundtruthPodEventAfterRunEndedDowngrades(t *testing.T) {
 				t.Fatalf("run=%v correlation=%q reason=%q, want run cleared, unmapped, %s", got.RunID, ed.Correlation, ed.Reason, tc.wantReason)
 			}
 		})
+	}
+}
+
+// TestGroundtruthExecMaskedWithItsRun: an exec's raw arguments carry a secret registered only for its
+// run, one containing a space. The row is masked with that run's secrets before the arguments are
+// split onto argv, both when the event keeps its run and when, for a run that ended over 15 minutes
+// ago, it loses it. An event naming no run is split all the same and leaves no entry for the unknown
+// id in the registry.
+func TestGroundtruthExecMaskedWithItsRun(t *testing.T) {
+	t.Setenv("WARDYN_K8S_NAMESPACE", "wardyn-runs")
+	const secret = "alphaBravo charlieDelta"
+	now := time.Now().UTC()
+	for name, tc := range map[string]struct {
+		endedAgo   time.Duration
+		noRun      bool // the event names a run the store does not have
+		wantReason string
+		wantArgv   []string
+	}{
+		"kept on its run": {endedAgo: 5 * time.Minute, wantArgv: []string{"/usr/bin/mysql", "--password=<secret-hidden>", "--host", "db"}},
+		"ended 16m ago":   {endedAgo: 16 * time.Minute, wantReason: "run_ended", wantArgv: []string{"/usr/bin/mysql", "--password=<secret-hidden>", "--host", "db"}},
+		"names no run":    {noRun: true, wantReason: "run_id_not_found", wantArgv: []string{"/usr/bin/mysql", "--password=alphaBravo", "charlieDelta", "--host", "db"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			ended := now.Add(-tc.endedAgo)
+			cfg := baseTestConfig(h, &nodeSensorStore{run: types.AgentRun{ID: runID, State: types.RunCompleted,
+				CreatedAt: now.Add(-time.Hour), UpdatedAt: now, EndedAt: &ended}})
+			cfg.Now = func() time.Time { return now }
+			cfg.MaskRegistry = secretmask.NewRegistry()
+			if err := cfg.MaskRegistry.Add(runID, []byte(secret)); err != nil {
+				t.Fatalf("register secret: %v", err)
+			}
+			named := runID
+			if tc.noRun {
+				named = uuid.New()
+			}
+			data, _ := json.Marshal(groundtruth.EventData{Stream: groundtruth.Stream, Subtype: groundtruth.SubtypeProcessExec,
+				Correlation: groundtruth.CorrelationMapped, Node: "node-a", Pod: "wardyn-runs/wardyn-agent-" + named.String(),
+				Argv: []string{"/usr/bin/mysql"}, Arguments: "--password=" + secret + " --host db"})
+			postBatch(t, h, New(cfg), types.AuditEvent{Action: groundtruth.ActionProcessExec, RunID: &named,
+				Target: "/usr/bin/mysql", Outcome: "success", Data: data})
+
+			got, ed := recordedByTarget(t, h, "/usr/bin/mysql")
+			if !slices.Equal(ed.Argv, tc.wantArgv) || ed.Arguments != "" {
+				t.Errorf("argv = %q, arguments = %q, want %q and none", ed.Argv, ed.Arguments, tc.wantArgv)
+			}
+			if tc.noRun {
+				if slices.Contains(cfg.MaskRegistry.RunIDs(), named) {
+					t.Errorf("the registry holds an entry for %s, a run id the store does not have", named)
+				}
+			} else if strings.Contains(string(got.Data), "alphaBravo") || strings.Contains(string(got.Data), "charlieDelta") {
+				t.Errorf("recorded data carries the run's secret: %s", got.Data)
+			}
+			if kept := tc.wantReason == ""; (got.RunID != nil) != kept || ed.Reason != tc.wantReason {
+				t.Errorf("run=%v reason=%q, want kept=%v reason=%q", got.RunID, ed.Reason, kept, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestGroundtruthExecSplitWaitsOnTheCorpus: the server that takes the batch has not read the run's secret yet, one
+// containing a space that another replica registered. The raw arguments are split only after one read of the shared
+// corpus for the batch. A read that brings the secret hides it whole; a read that fails stores the placeholder in
+// place of the arguments, since words split under a short corpus can never be masked afterwards.
+func TestGroundtruthExecSplitWaitsOnTheCorpus(t *testing.T) {
+	t.Setenv("WARDYN_K8S_NAMESPACE", "wardyn-runs")
+	const secret = "alphaBravo charlieDelta"
+	now := time.Now().UTC()
+	for name, tc := range map[string]struct {
+		down      bool
+		uncovered bool // the run's manifest cannot be proven here
+		wantArgv  []string
+	}{
+		"the read brings the secret":          {wantArgv: []string{"/usr/bin/mysql", "--password=<secret-hidden>", "--host", "db"}},
+		"the read fails":                      {down: true, wantArgv: []string{"/usr/bin/mysql", "<secret-hidden>"}},
+		"the run's manifest cannot be proven": {uncovered: true, wantArgv: []string{"/usr/bin/mysql", "<secret-hidden>"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			cfg := baseTestConfig(h, &nodeSensorStore{run: types.AgentRun{ID: runID, State: types.RunRunning,
+				CreatedAt: now.Add(-time.Hour), UpdatedAt: now}})
+			cfg.Now = func() time.Time { return now }
+			reg, backend := newReadBackend(0)
+			backend.stage(runID, secret)
+			backend.down = tc.down
+			cfg.MaskRegistry = reg
+			if tc.uncovered {
+				// A Postgres that refuses every connection (pgxpool dials lazily): Covered answers false.
+				pool, err := pgxpool.New(context.Background(), "postgres://wardyn@127.0.0.1:1/wardyn?connect_timeout=1&sslmode=disable")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(pool.Close)
+				cfg.MaskManifests = maskmanifest.New(pool, noKeys{}, reg)
+			}
+			data, _ := json.Marshal(groundtruth.EventData{Stream: groundtruth.Stream, Subtype: groundtruth.SubtypeProcessExec,
+				Correlation: groundtruth.CorrelationMapped, Node: "node-a", Pod: "wardyn-runs/wardyn-agent-" + runID.String(),
+				Argv: []string{"/usr/bin/mysql"}, Arguments: "--password=" + secret + " --host db"})
+			exec := types.AuditEvent{Action: groundtruth.ActionProcessExec, RunID: &runID, Target: "/usr/bin/mysql",
+				Outcome: "success", Data: data}
+			postBatch(t, h, New(cfg), exec, exec)
+
+			got, ed := recordedByTarget(t, h, "/usr/bin/mysql")
+			if !slices.Equal(ed.Argv, tc.wantArgv) || ed.Arguments != "" {
+				t.Errorf("argv = %q, arguments = %q, want %q and none", ed.Argv, ed.Arguments, tc.wantArgv)
+			}
+			if strings.Contains(string(got.Data), "alphaBravo") || strings.Contains(string(got.Data), "charlieDelta") {
+				t.Errorf("recorded data carries the run's secret: %s", got.Data)
+			}
+			if n := backend.readCount(); n != 1 {
+				t.Errorf("the shared corpus was read %d times for a batch of two execs, want once", n)
+			}
+		})
+	}
+}
+
+// TestGroundtruthHeartbeatLeftAsSent: a process-wide masked value that also occurs in a beat, here its node name, does not
+// rewrite the node its health row is written under. The handler leaves a heartbeat as the sensor sent it.
+func TestGroundtruthHeartbeatLeftAsSent(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &nodeSensorStore{}
+	cfg := baseTestConfig(h, st)
+	cfg.Now = func() time.Time { return now }
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	if err := cfg.MaskRegistry.AddGlobal(0, "", "a-credential", now, []byte("node-alpha-0001")); err != nil {
+		t.Fatalf("register a process-wide value: %v", err)
+	}
+	postBatch(t, h, New(cfg), groundtruth.HeartbeatEventForNode("node-alpha-0001", 3, 7, 2, map[string]uint64{groundtruth.ActionProcessExec: 7}))
+	if len(st.upserts) != 1 || st.upserts[0].Node != "node-alpha-0001" || st.upserts[0].ObservedTotal != 7 {
+		t.Fatalf("upserts = %+v, want one row for node-alpha-0001 with observed 7", st.upserts)
 	}
 }
 

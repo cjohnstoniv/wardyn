@@ -29,8 +29,9 @@ import (
 
 // TetragonEvent is one line of the Tetragon JSON export; exactly one
 // event-kind field is set. process_exec and process_kprobe are mapped; the
-// kprobe handler multiplexes file-writes and network connects by function
-// name + argument shape. Other kinds are ignored (ok=false).
+// kprobe handler maps file-writes and network connects by the hooked
+// function and its arguments, and drops a probe from any other hook. Other
+// kinds are ignored (ok=false).
 type TetragonEvent struct {
 	ProcessExec   *TetragonProcessExec   `json:"process_exec,omitempty"`
 	ProcessKprobe *TetragonProcessKprobe `json:"process_kprobe,omitempty"`
@@ -51,16 +52,21 @@ type TetragonProcessKprobe struct {
 	Process      *TetragonProcess `json:"process,omitempty"`
 	FunctionName string           `json:"function_name,omitempty"`
 	Args         []TetragonArg    `json:"args,omitempty"`
+	// Return is the hooked function's return value, present when the policy
+	// asks for it (return: true).
+	Return *TetragonArg `json:"return,omitempty"`
 }
 
 // TetragonArg is one kprobe argument: path-bearing shapes (file_arg.path,
-// path_arg.path, string_arg) and the socket shape (sock_arg) used for
-// connect detection.
+// path_arg.path, string_arg), the socket shape (sock_arg) used for connect
+// detection, and an int (int_arg): a file-permission hook's access mask, or a
+// return value.
 type TetragonArg struct {
 	FileArg   *TetragonFileArg `json:"file_arg,omitempty"`
 	PathArg   *TetragonFileArg `json:"path_arg,omitempty"`
 	StringArg string           `json:"string_arg,omitempty"`
 	SockArg   *TetragonSockArg `json:"sock_arg,omitempty"`
+	IntArg    *int32           `json:"int_arg,omitempty"`
 }
 
 // TetragonFileArg carries a path-bearing argument.
@@ -126,8 +132,9 @@ func (m *Mapper) WithNode(node string) *Mapper {
 }
 
 // Map converts ev into an AuditEvent. ok is false for an unrecorded event
-// kind or a non-sensitive file write (filtered noise). When ok is true, the
-// event has Action with the kernel. prefix and Data with stream="ebpf".
+// kind, a probe from a hook it does not map, or a non-sensitive file write
+// (filtered noise). When ok is true, the event has Action with the kernel.
+// prefix and Data with stream="ebpf".
 //
 // Events that can't be bound to a run are still returned (ok=true) with
 // RunID nil and correlation="unmapped" — blindness must be visible, never a
@@ -170,12 +177,22 @@ func (m *Mapper) mapExec(e *TetragonProcessExec, node string) (types.AuditEvent,
 		return types.AuditEvent{}, false
 	}
 	runID, correlation := m.correlate(p)
-	argv := buildArgv(p)
+	// argv carries the binary only. The raw arguments travel whole in
+	// Arguments: splitting them here would cut a secret containing a space
+	// into words the control plane's masking no longer matches, so it masks
+	// them first and splits them after (MaskData).
+	var argv []string
+	if p.Binary != "" {
+		argv = []string{p.Binary}
+	}
 	loader := IsDynamicLinker(p.Binary)
-	// ld-linux hides the real program in argv[1]; if argv[0] is itself a
-	// loader (invoked by basename), flag that too.
-	if !loader && len(argv) > 0 {
-		loader = IsDynamicLinker(argv[0])
+	// ld-linux hides the real program in argv[1]; with no binary field argv[0]
+	// is the first argument, and a loader there (invoked by basename) is
+	// flagged too.
+	if p.Binary == "" {
+		if args := strings.Fields(p.Arguments); len(args) > 0 {
+			loader = IsDynamicLinker(args[0])
+		}
 	}
 	data := EventData{
 		Stream:      Stream,
@@ -185,24 +202,30 @@ func (m *Mapper) mapExec(e *TetragonProcessExec, node string) (types.AuditEvent,
 		Node:        node,
 		Pod:         podOf(p),
 		Argv:        argv,
+		Arguments:   p.Arguments,
 		Loader:      loader,
 		Correlation: correlation,
 	}
 	return auditFor(runID, ActionProcessExec, p.Binary, "success", data), true
 }
 
-// mapKprobe multiplexes a process_kprobe into a connect or file-write audit
-// event. A connect kprobe is recognised by function name or by carrying a
-// sock_arg; everything else is a file write.
+// mapKprobe maps a process_kprobe from a hook whose meaning it knows: a
+// connect hook to a connect, the file-permission hook to a file write. A probe
+// from any other hook is dropped, never guessed at: an operator's own policy
+// may hook reads, opens or receives, and a socket or a path alone does not say
+// which.
 func (m *Mapper) mapKprobe(e *TetragonProcessKprobe, node string) (types.AuditEvent, bool) {
 	p := e.Process
 	if p == nil {
 		return types.AuditEvent{}, false
 	}
-	if sock := kprobeSock(e); sock != nil || isConnectKprobe(e.FunctionName) {
-		return m.mapConnect(p, sock, node)
+	switch {
+	case isConnectKprobe(e.FunctionName):
+		return m.mapConnect(p, kprobeSock(e), node)
+	case strings.TrimSpace(e.FunctionName) == filePermissionKprobe:
+		return m.mapFileWrite(p, e, node)
 	}
-	return m.mapFileWrite(p, e, node)
+	return types.AuditEvent{}, false
 }
 
 // mapConnect emits a kernel.network.connect from a connect kprobe's sock_arg.
@@ -236,8 +259,13 @@ func (m *Mapper) mapConnect(p *TetragonProcess, sock *TetragonSockArg, node stri
 	return auditFor(runID, ActionNetworkConnect, dst, outcome, data), true
 }
 
-// mapFileWrite emits a kernel.file.write for a sensitive-path kprobe.
+// mapFileWrite emits a kernel.file.write for a write the kernel let through to
+// a sensitive path. A read, a refused write, or a probe without the access mask
+// or the return value is dropped: a pathname alone is no evidence of a write.
 func (m *Mapper) mapFileWrite(p *TetragonProcess, e *TetragonProcessKprobe, node string) (types.AuditEvent, bool) {
+	if !permittedWrite(e) {
+		return types.AuditEvent{}, false
+	}
 	path := kprobePath(e)
 	if !IsSensitivePath(path) {
 		// Non-sensitive write: filtered noise, not recorded.
@@ -270,6 +298,29 @@ var connectKprobes = map[string]bool{
 // isConnectKprobe reports whether fn is a known connect-hook kernel function.
 func isConnectKprobe(fn string) bool {
 	return connectKprobes[strings.TrimSpace(fn)]
+}
+
+// filePermissionKprobe is the file-write hook, security_file_permission(file,
+// mask), as the shipped policy hooks it
+// (deploy/compose/tetragon-policies/wardyn-groundtruth.yaml): the file, the
+// access mask, and the return value.
+const filePermissionKprobe = "security_file_permission"
+
+// mayWrite is the kernel's MAY_WRITE bit in an access mask.
+const mayWrite = 2
+
+// permittedWrite reports whether a file-permission probe is a write the kernel
+// allowed: its access mask (the first int argument) has MAY_WRITE, and the hook
+// returned 0.
+func permittedWrite(e *TetragonProcessKprobe) bool {
+	var mask *int32
+	for i := range e.Args {
+		if e.Args[i].IntArg != nil {
+			mask = e.Args[i].IntArg
+			break
+		}
+	}
+	return mask != nil && *mask&mayWrite != 0 && e.Return != nil && e.Return.IntArg != nil && *e.Return.IntArg == 0
 }
 
 // kprobeSock returns the first sock_arg in a kprobe event, or nil.
@@ -336,27 +387,6 @@ func containerID(p *TetragonProcess) string {
 		return ""
 	}
 	return p.Docker
-}
-
-// buildArgv splits binary + arguments into an argv slice. Tetragon emits
-// arguments as a single space-separated string; a simple whitespace split is
-// fine since exact tokenisation of quoted args isn't load-bearing (the raw
-// binary is the authoritative field).
-func buildArgv(p *TetragonProcess) []string {
-	if p == nil {
-		return nil
-	}
-	argv := []string{}
-	if p.Binary != "" {
-		argv = append(argv, p.Binary)
-	}
-	if args := strings.Fields(p.Arguments); len(args) > 0 {
-		argv = append(argv, args...)
-	}
-	if len(argv) == 0 {
-		return nil
-	}
-	return argv
 }
 
 // connectDst extracts ip+port from a connect kprobe's sock_arg. A nil sock
