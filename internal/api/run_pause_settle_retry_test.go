@@ -37,10 +37,11 @@ func failNotes(f *pauseFixture, n int32) *noteFailingStore {
 	return ns
 }
 
-// TestPauseSettle_AFailedRecordIsWrittenAgain: a freeze or a thaw cut at its bound may still land, and a compensation
-// thaws nothing without its settle record. A record whose first write fails (every inline try) must still land, written
-// again in the background, so the pause sweep settles the run once the database answers; a run that is no longer
-// running stops the retries.
+// TestPauseSettle_AFailedRecordIsWrittenAgain: a freeze or a thaw cut at its bound may still land. A record whose first
+// write fails (every inline try) must still land, written again in the background, so the pause sweep settles the run
+// once the database answers; a run that is no longer running stops the retries. A freeze's record is first the one its
+// pause wrote before the freeze: a cut freeze still writes it again, and a compensation whose own write fails thaws
+// under it.
 func TestPauseSettle_AFailedRecordIsWrittenAgain(t *testing.T) {
 	oldCall, oldEvery := pauseRuntimeCallTimeout, pauseSettleRetryEvery
 	pauseRuntimeCallTimeout, pauseSettleRetryEvery = 50*time.Millisecond, 20*time.Millisecond
@@ -49,10 +50,13 @@ func TestPauseSettle_AFailedRecordIsWrittenAgain(t *testing.T) {
 	t.Run("a freeze cut at its bound", func(t *testing.T) {
 		f := newPauseFixture(t, pauseWaitingAfter+time.Minute)
 		f.st.open, f.st.waiting = true, true
-		failNotes(f, retryTries)
+		notes := failNotes(f, retryTries)
 		f.srv.cfg.Runner = &hungRuntime{pauseRunner: f.rn}
 		f.sweep(t)
-		waitFor(t, "the freeze's settle record, written again", func() bool { return f.st.owing() == 1 })
+		waitFor(t, "the cut freeze's settle record, written again in the background", func() bool { return notes.fails.Load() < 0 })
+		if n := f.st.owing(); n != 1 {
+			t.Fatalf("%d settle records, want 1", n)
+		}
 	})
 	t.Run("a thaw cut at its bound", func(t *testing.T) {
 		f, _, _ := pausedRunClock(t, 0)
@@ -63,31 +67,25 @@ func TestPauseSettle_AFailedRecordIsWrittenAgain(t *testing.T) {
 		}
 		waitFor(t, "the thaw's settle record, written again", func() bool { return f.st.owing() == 1 })
 	})
-	t.Run("a compensation that could not record its settle", func(t *testing.T) {
+	t.Run("a compensation that could not write its settle record again", func(t *testing.T) {
 		f := newPauseFixture(t, time.Hour)
 		f.st.run.RunLimits.PauseIdleAfterSec = 60
 		f.rn.cpu = pct(0)
-		// The freeze opens a request, so the mark fails and the compensation runs. The request stays open for the rest
-		// of the subtest; the settle below thaws because the run's row is not paused, not because it closed.
+		// The freeze opens a request, so the mark fails and the compensation runs. Its own write of the record fails,
+		// and the record the pause wrote before its freeze still stands, so it thaws and clears that one.
 		f.rn.onFreeze = func() { f.st.open = true }
 		failNotes(f, retryTries)
 		f.sweep(t)
-		if freezes, thaws := f.rn.counts(); freezes != 1 || thaws != 0 {
-			t.Fatalf("freezes %d thaws %d; want the freeze left in place, never thawed without its record", freezes, thaws)
-		}
-		waitFor(t, "the compensation's settle record, written again", func() bool { return f.st.owing() == 1 })
-		f.st.settleDue()
-		f.sweep(t)
-		if _, thaws := f.rn.counts(); thaws != 1 || f.st.owing() != 0 {
-			t.Fatalf("thaws %d, settle records %d; want the settle to thaw the unpaused run once and clear its record", thaws, f.st.owing())
+		if freezes, thaws := f.rn.counts(); freezes != 1 || thaws != 1 || f.st.owing() != 0 {
+			t.Fatalf("freezes %d thaws %d, settle records %d; want the unmarked freeze thawed under its pause's record and that record cleared",
+				freezes, thaws, f.st.owing())
 		}
 	})
 	t.Run("a run that is no longer running stops the retries", func(t *testing.T) {
-		f := newPauseFixture(t, pauseWaitingAfter+time.Minute)
-		f.st.open, f.st.waiting = true, true
+		f, _, _ := pausedRunClock(t, 0)
 		failNotes(f, 1<<30)
 		f.srv.cfg.Runner = &hungRuntime{pauseRunner: f.rn}
-		f.sweep(t)
+		_ = f.srv.markPresent(context.Background(), f.run.ID, types.ActorHuman, pauseOwner, "presence")
 		key := pauseSettleRetryKey{f.srv, f.run.ID}
 		if _, busy := pauseSettleRetries.Load(key); !busy {
 			t.Fatal("a settle record that could not be written is not written again")

@@ -67,6 +67,26 @@ func (s *pauseStore) ClearPauseSettle(_ context.Context, id uuid.UUID, due time.
 	return nil
 }
 
+func (s *pauseStore) NotePauseIntent(_ context.Context, id uuid.UUID, after time.Duration) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if due, ok := s.settles[id]; ok {
+		return due, false, nil
+	}
+	if s.settles == nil {
+		s.settles = map[uuid.UUID]time.Time{}
+	}
+	due := time.Now().Add(after)
+	s.settles[id] = due
+	return due, true, nil
+}
+
+func (s *pauseStore) PauseSettleFor(_ context.Context, id uuid.UUID) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.settles[id], nil
+}
+
 // owing is how many runs have a settle recorded.
 func (s *pauseStore) owing() int {
 	s.mu.Lock()

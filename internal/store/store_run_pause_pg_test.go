@@ -415,3 +415,38 @@ func TestPG_RunPauseSettles(t *testing.T) {
 		t.Errorf("settles left after the run's deletion = %d (%v), want 0", left, err)
 	}
 }
+
+// TestPG_RunPauseIntent pins the pause's intent write: it records a settle only
+// when none is held, never moves a due_at already there, and says whether it
+// wrote; PauseSettleFor reads the record, or the zero time when there is none.
+func TestPG_RunPauseIntent(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef = "ref-intent"
+	persistRun(t, ctx, pool, run)
+
+	if got, err := pg.PauseSettleFor(ctx, run.ID); err != nil || !got.IsZero() {
+		t.Fatalf("PauseSettleFor with no record = %v, %v; want the zero time", got, err)
+	}
+	first, wrote, err := pg.NotePauseIntent(ctx, run.ID, time.Hour)
+	if err != nil || !wrote {
+		t.Fatalf("an intent with no record held = %v, %v, %v; want it written", first, wrote, err)
+	}
+	if got, err := pg.PauseSettleFor(ctx, run.ID); err != nil || !got.Equal(first) {
+		t.Fatalf("PauseSettleFor = %v, %v; want %v", got, err, first)
+	}
+	if again, wrote, err := pg.NotePauseIntent(ctx, run.ID, 2*time.Hour); err != nil || wrote || !again.Equal(first) {
+		t.Errorf("a second intent = %v, %v, %v; want the held due_at %v returned and nothing written", again, wrote, err, first)
+	}
+	if err := pg.ClearPauseSettle(ctx, run.ID, first); err != nil {
+		t.Fatalf("ClearPauseSettle: %v", err)
+	}
+	if got, err := pg.PauseSettleFor(ctx, run.ID); err != nil || !got.IsZero() {
+		t.Fatalf("PauseSettleFor after the clear = %v, %v; want the zero time", got, err)
+	}
+	if _, wrote, err := pg.NotePauseIntent(ctx, uuid.New(), time.Hour); err == nil || wrote {
+		t.Errorf("an intent for a run that does not exist = %v, %v; want an error", wrote, err)
+	}
+}

@@ -373,6 +373,11 @@ func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType 
 	if resumed, err := s.stampPresence(ctx, run.ID, actorType, principal, reason); err != nil || resumed {
 		return err
 	}
+	// A row that is not paused does not prove a running agent: a pause that died between its freeze and its mark
+	// left only its settle record to say so (pauseRun).
+	if err := s.settleOwedPause(ctx, run.ID); err != nil {
+		return err
+	}
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok || run.PausedAt == nil {
 		return nil
@@ -552,7 +557,7 @@ func (s *Server) thawedSandboxRunning(ctx context.Context, ref string) error {
 }
 
 // sweepRunPauses is one pass of the pause over every live run: settle the ones
-// a pause compensation left unsettled (settlePauses), pause the ones nobody is
+// a pause or its compensation left unsettled (settlePauses), pause the ones nobody is
 // at, and resume a paused one whose requests have all closed. Every
 // write is a conditional UPDATE. With a SweeperLease only the elected leader
 // sweeps, its context ends when the lease is lost, and its epoch fences each
@@ -711,6 +716,15 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 // operation lock serializes freeze, mark and compensation across replicas, so a
 // pause that finds it held is skipped and retried by the next sweep; the
 // compensation proves it still holds that lock around its thaw (undoFreeze).
+//
+// A process that dies between the freeze and the mark leaves a frozen sandbox
+// under a row that is not paused, and nothing that reads the row finds it. So
+// the pause records its intent first, as the run's settle record, and freezes
+// nothing without it (notePauseIntent); the pause sweep (settlePauses), or a
+// person's thaw (thawForExec), then moves the sandbox to its row. The pause
+// deletes the record once the mark lands, and only when it wrote it: one
+// already there is another settle's. A freeze that fails leaves the record to
+// the sweep, since an error can hide a freeze that landed.
 func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun, reason types.PauseReason, quiet time.Duration) {
 	if !s.leaseCurrent(ctx) {
 		return
@@ -721,6 +735,10 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 		return
 	}
 	defer unlock()
+	intent, wrote, ok := s.notePauseIntent(ctx, run.ID)
+	if !ok {
+		return
+	}
 	f := s.cfg.Runner.(runner.Freezer)
 	fctx, fcancel := context.WithTimeout(ctx, pauseRuntimeCallTimeout)
 	ferr := f.FreezeSandbox(fctx, run.SandboxRef)
@@ -739,6 +757,7 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			s.notePauseSettleOrRetry(nctx, run.ID)
 			s.notePauseSettleLater(run.ID)
 		}
+		// Any other error keeps the record too: a reply lost on its way back can hide a freeze that landed.
 		return
 	}
 	applied, err := false, error(nil)
@@ -752,6 +771,9 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"reason": reason, "quiet_sec": int64(quiet.Seconds()), "active_at": run.ActiveAt,
 			})))
+		if wrote {
+			heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { s.clearPauseSettle(ctx, run.ID, intent) })
+		}
 		// A paused run holds no Azure DevOps token; its resume creates one.
 		// After the mark, so a resolve racing it sees the pause and creates none.
 		heldCall(ctx, heldRevokeBound, func(ctx context.Context) { s.revokeRunPATs(ctx, run.ID, adoPATRevokePause) })
@@ -761,7 +783,7 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 	// left behind because the sweep's context ended between freeze and thaw.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 	defer cancel()
-	s.undoFreeze(cctx, ctx, f, run, reason)
+	s.undoFreeze(cctx, ctx, f, run, reason, intent)
 }
 
 // handleResumeRun serves POST /runs/{id}/resume: the person presses Resume.
