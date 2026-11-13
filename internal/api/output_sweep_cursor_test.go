@@ -42,8 +42,9 @@ func pageAfter(ids []uuid.UUID, after *store.SweepCursor, limit int) ([]uuid.UUI
 // records the cursor each list was given.
 type pagedCastStore struct {
 	failingRunStore
-	ids    []uuid.UUID
-	afters []*store.SweepCursor
+	ids     []uuid.UUID
+	afters  []*store.SweepCursor
+	listErr error // when set, every list fails
 }
 
 func (*pagedCastStore) SetRunAgentCastOwed(context.Context, uuid.UUID) error { return nil }
@@ -53,6 +54,9 @@ func (*pagedCastStore) DeclineRunAgentCast(context.Context, uuid.UUID) (bool, er
 func (*pagedCastStore) ClearRunAgentCastOwed(context.Context, uuid.UUID, bool) error { return nil }
 func (p *pagedCastStore) ListRunsAgentCastOwed(_ context.Context, _ time.Duration, after *store.SweepCursor, limit int) ([]uuid.UUID, *store.SweepCursor, error) {
 	p.afters = append(p.afters, after)
+	if p.listErr != nil {
+		return nil, nil, p.listErr
+	}
 	return pageAfter(p.ids, after, limit)
 }
 
@@ -79,12 +83,16 @@ func TestSweepAgentCasts_ACursorReachesRunsPastAPageThatAlwaysFails(t *testing.T
 // method panics (embedded nil interface).
 type pagedPendingStore struct {
 	store.RunOutputStore
-	ids    []uuid.UUID
-	afters []*store.SweepCursor
+	ids     []uuid.UUID
+	afters  []*store.SweepCursor
+	listErr error // when set, every list fails
 }
 
 func (p *pagedPendingStore) ListStalePendingRunOutputs(_ context.Context, _ time.Duration, after *store.SweepCursor, limit int) ([]uuid.UUID, *store.SweepCursor, error) {
 	p.afters = append(p.afters, after)
+	if p.listErr != nil {
+		return nil, nil, p.listErr
+	}
 	return pageAfter(p.ids, after, limit)
 }
 
@@ -104,5 +112,65 @@ func TestSweepStalePending_ACursorReachesRowsPastAPageThatAlwaysFails(t *testing
 	}
 	if len(st.afters) != 3 || st.afters[0] != nil || st.afters[1] == nil || st.afters[1].ID != ids[staleOutputSweepPage-1] || st.afters[2] != nil {
 		t.Fatalf("cursors given = %v; want none, then the last row of the first page, then none again", st.afters)
+	}
+}
+
+// cursorIDs is what a list was given, as the last row's id of the page before ("" for no cursor).
+func cursorIDs(afters []*store.SweepCursor) []string {
+	out := make([]string, len(afters))
+	for i, a := range afters {
+		if a != nil {
+			out[i] = a.ID.String()
+		}
+	}
+	return out
+}
+
+// The agent cast sweep keeps its position when a list fails and when the pass's ctx ended: the pass after
+// either resumes after the same row, not from the oldest.
+func TestSweepAgentCasts_TheCursorIsKeptOnAFailedListAndAnEndedCtx(t *testing.T) {
+	ids := make([]uuid.UUID, agentCastSweepPage+1)
+	for i := range ids {
+		ids[i] = uuid.New()
+	}
+	st := &pagedCastStore{ids: ids}
+	s := &Server{cfg: Config{Store: st, RecordingStore: fsRecordingStore(t)}}
+	_ = s.sweepAgentCasts(t.Context()) // the first page: the cursor is now its last row
+	st.listErr = errors.New("list failed")
+	if err := s.sweepAgentCasts(t.Context()); !errors.Is(err, st.listErr) {
+		t.Fatalf("a failed list answered %v", err)
+	}
+	st.listErr = nil
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	_ = s.sweepAgentCasts(ended) // a short page, but the pass ended: the position stays
+	_ = s.sweepAgentCasts(t.Context())
+	last := ids[agentCastSweepPage-1].String()
+	if got, want := cursorIDs(st.afters), []string{"", last, last, last}; !slices.Equal(got, want) {
+		t.Fatalf("cursors given = %q; want %q", got, want)
+	}
+}
+
+// The stale pending sweep keeps its position when a list fails and when the pass's ctx ended.
+func TestSweepStalePending_TheCursorIsKeptOnAFailedListAndAnEndedCtx(t *testing.T) {
+	ids := make([]uuid.UUID, staleOutputSweepPage+1)
+	for i := range ids {
+		ids[i] = uuid.New()
+	}
+	st := &pagedPendingStore{ids: ids}
+	s := &Server{cfg: Config{Store: failingRunStore{}}}
+	_ = s.sweepStalePending(t.Context(), st) // the first page: the cursor is now its last row
+	st.listErr = errors.New("list failed")
+	if err := s.sweepStalePending(t.Context(), st); !errors.Is(err, st.listErr) {
+		t.Fatalf("a failed list answered %v", err)
+	}
+	st.listErr = nil
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	_ = s.sweepStalePending(ended, st) // a short page, but the pass ended: the position stays
+	_ = s.sweepStalePending(t.Context(), st)
+	last := ids[staleOutputSweepPage-1].String()
+	if got, want := cursorIDs(st.afters), []string{"", last, last, last}; !slices.Equal(got, want) {
+		t.Fatalf("cursors given = %q; want %q", got, want)
 	}
 }

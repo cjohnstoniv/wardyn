@@ -843,11 +843,6 @@ type Server struct {
 	runOutputDrainWaitOverride, runOutputRetryBaseOverride time.Duration
 	// runOutputRecoverWaitOverride shrinks runOutputRecoverWait for a test.
 	runOutputRecoverWaitOverride time.Duration
-	// outputSweepMu guards where the next pass of sweepAgentCasts and of sweepStalePending starts: the last
-	// row of the pass before, nil for the oldest. Carried between passes so rows that fail on every pass
-	// cannot hold the first page.
-	outputSweepMu                       sync.Mutex
-	agentCastCursor, stalePendingCursor *store.SweepCursor
 	// paneSnapshotTimeoutOverride shrinks the pane snapshot's bound for a test;
 	// zero uses paneSnapshotTimeout (run_output_snapshot.go).
 	paneSnapshotTimeoutOverride time.Duration

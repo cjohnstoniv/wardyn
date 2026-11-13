@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -664,6 +665,28 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	return firstErr
 }
 
+// outputSweepCursors holds where the next pass of sweepAgentCasts and of sweepStalePending starts: the last
+// row of the pass before, nil for the oldest. Carried between passes so rows that fail on every pass cannot
+// hold the first page. The zero value is ready.
+type outputSweepCursors struct {
+	mu                      sync.Mutex
+	agentCast, stalePending *store.SweepCursor
+}
+
+// get reads the cursor at slot under the lock.
+func (c *outputSweepCursors) get(slot **store.SweepCursor) *store.SweepCursor {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return *slot
+}
+
+// set stores the cursor at slot under the lock.
+func (c *outputSweepCursors) set(slot **store.SweepCursor, v *store.SweepCursor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	*slot = v
+}
+
 // staleOutputSweepPage is how many stale pending rows one sweep takes.
 const staleOutputSweepPage = 200
 
@@ -671,9 +694,7 @@ const staleOutputSweepPage = 200
 // A failed list keeps the position, as does a pass whose ctx ended; a short page starts the next pass from the
 // oldest. A tail this process still holds is the finisher's own, and is left alone.
 func (s *Server) sweepStalePending(ctx context.Context, st store.RunOutputStore) error {
-	s.outputSweepMu.Lock()
-	after := s.stalePendingCursor
-	s.outputSweepMu.Unlock()
+	after := s.execOutputs.sweep.get(&s.execOutputs.sweep.stalePending)
 	ids, next, err := st.ListStalePendingRunOutputs(ctx, runOutputPendingStale, after, staleOutputSweepPage)
 	if err != nil {
 		return err
@@ -684,9 +705,7 @@ func (s *Server) sweepStalePending(ctx context.Context, st store.RunOutputStore)
 		}
 	}
 	if ctx.Err() == nil {
-		s.outputSweepMu.Lock()
-		s.stalePendingCursor = next
-		s.outputSweepMu.Unlock()
+		s.execOutputs.sweep.set(&s.execOutputs.sweep.stalePending, next)
 	}
 	return nil
 }

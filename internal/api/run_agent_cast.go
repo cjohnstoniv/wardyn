@@ -389,9 +389,7 @@ func (s *Server) sweepAgentCasts(ctx context.Context) error {
 	if !ok || s.cfg.RecordingStore == nil {
 		return nil
 	}
-	s.outputSweepMu.Lock()
-	after := s.agentCastCursor
-	s.outputSweepMu.Unlock()
+	after := s.execOutputs.sweep.get(&s.execOutputs.sweep.agentCast)
 	ids, next, err := st.ListRunsAgentCastOwed(ctx, agentCastSweepAge, after, agentCastSweepPage)
 	if err != nil {
 		return err // the position is kept: the next sweep reads the same page
@@ -406,9 +404,7 @@ func (s *Server) sweepAgentCasts(ctx context.Context) error {
 		}
 	}
 	if ctx.Err() == nil {
-		s.outputSweepMu.Lock()
-		s.agentCastCursor = next
-		s.outputSweepMu.Unlock()
+		s.execOutputs.sweep.set(&s.execOutputs.sweep.agentCast, next)
 	}
 	return firstErr
 }
