@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // PersonErasureStore is what erasing a person reads and writes beyond the
@@ -180,8 +182,19 @@ func (s PG) RunIDsCreatedBy(ctx context.Context, createdBy string) ([]uuid.UUID,
 }
 
 func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
-	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET task = '', title = '', description = '', correlation_id = ''
-		WHERE created_by = $1 AND (task <> '' OR title <> '' OR description <> '' OR correlation_id <> '')`, createdBy)
+	// Marked before the blank: a promoted start holds the queue row it was promoted with, the task text
+	// included, and RequeuePromotedRun puts no marked run back.
+	waiting := []string{string(types.RunQueued), string(types.RunPending)}
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET tasks_erased_at = now()
+		WHERE created_by = $1 AND state = ANY($2) AND tasks_erased_at IS NULL`,
+		createdBy, waiting); err != nil {
+		return 0, fmt.Errorf("store: mark a person's waiting runs erased: %w", err)
+	}
+	// The blank marks what it blanks: a waiting run created between the mark's snapshot and this one is
+	// blanked and marked together, so a promoted start of it cannot put its text back.
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET task = '', title = '', description = '', correlation_id = '',
+			tasks_erased_at = CASE WHEN state = ANY($2) THEN COALESCE(tasks_erased_at, now()) ELSE tasks_erased_at END
+		WHERE created_by = $1 AND (task <> '' OR title <> '' OR description <> '' OR correlation_id <> '')`, createdBy, waiting)
 	if err != nil {
 		return 0, fmt.Errorf("store: blank a person's run tasks: %w", err)
 	}

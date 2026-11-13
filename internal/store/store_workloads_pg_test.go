@@ -298,6 +298,39 @@ func TestPG_Workload_StaleClaimRecordsNothing(t *testing.T) {
 	}
 }
 
+// A changed spec applied while a launch of the older one holds its claim releases that claim: the newer
+// spec's launch claims at once, the older launch's record and refusal are refused and write nothing, and the
+// newer run is recorded at the newer generation. An unchanged apply leaves a claim in flight alone.
+func TestPG_Workload_AChangedSpecReleasesALaunchClaimInFlight(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
+	older := mustClaim(t, st, w.ID)
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d2"))
+	if err := st.RecordWorkloadRefusal(ctx, w.ID, older, store.WorkloadRefusal{Generation: 1, Reason: "x"}); !errors.Is(err, store.ErrWorkloadSuperseded) {
+		t.Fatalf("older launch's refusal before the newer claim = %v, want ErrWorkloadSuperseded", err)
+	}
+	newer := mustClaim(t, st, w.ID)
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d2"))
+	if _, ok, err := st.ClaimWorkloadLaunch(ctx, w.ID); err != nil || ok {
+		t.Fatalf("claim after an unchanged apply = %v, %v; want the newer claim still held", ok, err)
+	}
+	if _, err := st.SetWorkloadRun(ctx, w.ID, older, 1, persistRun(t, ctx, pool, newRun(types.RunRunning)).ID); !errors.Is(err, store.ErrWorkloadSuperseded) {
+		t.Fatalf("older launch's record = %v, want ErrWorkloadSuperseded", err)
+	}
+	if err := st.RecordWorkloadRefusal(ctx, w.ID, older, store.WorkloadRefusal{Generation: 1, Reason: "x"}); !errors.Is(err, store.ErrWorkloadSuperseded) {
+		t.Fatalf("older launch's refusal = %v, want ErrWorkloadSuperseded", err)
+	}
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, newer, 2, run); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := st.GetWorkload(ctx, "sub-a", "svc"); err != nil || v.CurrentGeneration != 2 || v.CurrentRunID == nil || *v.CurrentRunID != run || v.LastRefusal != nil {
+		t.Fatalf("workload = %+v (%v), want generation 2 current with the newer run and no refusal", v.Workload, err)
+	}
+}
+
 // A late report of a resource at a lower metadata.generation than stored (a runner's cache behind
 // another's) writes nothing, even with another spec; a new uid at a lower generation is a new resource.
 func TestPG_Workload_LowerK8sGenerationIsIgnored(t *testing.T) {

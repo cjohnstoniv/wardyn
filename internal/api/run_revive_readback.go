@@ -44,7 +44,7 @@ func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.Agen
 		}
 		return gen, proxyStartRec{}, err
 	}
-	start, err := s.beginProxyStart(ctx, run, gen, fresh)
+	start, err := s.beginProxyStart(ctx, run, gen, fresh, false)
 	if err != nil {
 		noop, aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
 		switch {

@@ -218,7 +218,10 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 // eraseRunTasks blanks the task text, title, description and correlation id of every run the person created, and
 // clears the answers kept for the idempotency keys naming those runs (each key stays bound). A run of theirs still waiting
 // in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
-// snapshot included, and it would start under the very person being erased.
+// snapshot included, and it would start under the very person being erased. The blank also marks their
+// waiting and promoted runs so that no promoted start puts its copy of the queue row back
+// (RequeuePromotedRun), and the queue is cancelled again after it, for a start that put its run back
+// before the mark.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {
 	pe, err := s.personErasureStore()
 	if err != nil {
@@ -228,7 +231,13 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	s.queueRaceAt(queueRaceEraseAfterCancel)
 	n, err := pe.BlankRunTasks(ctx, person)
+	if err == nil {
+		var again int
+		again, err = s.cancelQueuedRunsOf(ctx, person, "person_erased")
+		cancelled += again
+	}
 	// After the blank: the answers kept for their idempotency keys carry the same text.
 	var cleared int64
 	if ks, ok := s.cfg.Store.(runCreateAnswerEraser); ok {
@@ -253,6 +262,10 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	}
 	return out, err
 }
+
+// queueRaceEraseAfterCancel is the point between eraseRunTasks' first cancel of the queue and its blank
+// where a test puts a promoted run back in its queue (Server.queueRace).
+const queueRaceEraseAfterCancel = "erase_after_cancel"
 
 // runCreateAnswerEraser is the store that keeps POST /runs Idempotency-Keys and their answers.
 type runCreateAnswerEraser interface {

@@ -563,6 +563,9 @@ type QueueStart struct {
 	ImageAdmission *types.ImageAdmissionVerdict
 	// WallPreset is the frozen copy of the wall preset the start's fold took, nil for none.
 	WallPreset *types.WallPresetOnRun
+	// Binding, set for a custom resource's run, is the namespace binding its launch was authorised under:
+	// the start holds only while that binding exists (ErrWorkloadBindingGone).
+	Binding *uuid.UUID
 }
 
 // StartQueuedRun writes the start's columns on a run that was promoted (PENDING, admitted_at set) and
@@ -571,13 +574,20 @@ type QueueStart struct {
 // runner's limits at the size it starts with (Reserved, written to the row in the same statement), the
 // run itself not counted, under the runner rows' locks: RunnerID when it has room (the promotion found
 // it room there), else the first of RunnerFallbacks that has, else RunnerAtCapacityError; a
-// remote-hosted run, RunnerPoolExecutor and then RemoteFallbacks, alike.
+// remote-hosted run, RunnerPoolExecutor and then RemoteFallbacks, alike. With st.Binding set the
+// transaction first locks that binding row FOR KEY SHARE: a delete that committed first refuses the start
+// (ErrWorkloadBindingGone, nothing written), and a later one waits for the start to commit.
 func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (run types.AgentRun, ok bool, err error) {
 	limits, err := json.Marshal(st.RunLimits)
 	if err != nil {
 		return types.AgentRun{}, false, fmt.Errorf("store: marshal run limits: %w", err)
 	}
 	err = s.inTx(ctx, func(q Querier) error {
+		if st.Binding != nil {
+			if err := lockWorkloadBinding(ctx, q, *st.Binding); err != nil {
+				return err
+			}
+		}
 		switch {
 		case st.RunnerID != nil:
 			keys := []string{st.RunnerID.String()}
@@ -655,13 +665,15 @@ func (s PG) SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail st
 // unchanged) and detail as its status_detail. Guarded: only a run still PENDING with admitted_at set and
 // no sandbox moves, so a kill or another end that moved it first keeps its outcome, and a kill after it
 // meets a QUEUED run. Its binding and size stay the promotion's; the next promotion sets them again.
-// false means the run had moved.
+// A run the person's run_tasks erasure marked (tasks_erased_at) never moves: e is the copy taken before
+// that erasure, task text included, and putting it back would restore what was erased.
+// false means the run had moved or was marked.
 func (s PG) RequeuePromotedRun(ctx context.Context, e RunQueueEntry, detail string) (bool, error) {
 	var moved int
 	if err := s.Pool.QueryRow(ctx, `
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=NULL, status_detail=$3
-			WHERE id=$1 AND state=$4 AND admitted_at IS NOT NULL AND sandbox_ref = '' RETURNING id),
+			WHERE id=$1 AND state=$4 AND admitted_at IS NOT NULL AND sandbox_ref = '' AND tasks_erased_at IS NULL RETURNING id),
 		back AS (
 			INSERT INTO run_queue (`+runQueueCols+`)
 			SELECT id, $5::uuid, $6::text, $7::timestamptz, $8::timestamptz, $9::jsonb, $10::jsonb, $11::jsonb, $12::timestamptz

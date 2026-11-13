@@ -170,8 +170,8 @@ func (s *Server) handleListWorkloadBindings(w http.ResponseWriter, r *http.Reque
 	}, nil)
 }
 
-// handleDeleteWorkloadBinding is DELETE /workload-bindings/{id}: 204. The runs it launched continue, and
-// its namespace's custom resources stop launching.
+// handleDeleteWorkloadBinding is DELETE /workload-bindings/{id}: 204. The runs it launched continue, except
+// one still starting, which is ended, and its namespace's custom resources stop launching.
 func (s *Server) handleDeleteWorkloadBinding(w http.ResponseWriter, r *http.Request) {
 	ws, ok := s.workloadStore(w)
 	if !ok {
