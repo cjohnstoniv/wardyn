@@ -106,14 +106,24 @@ func desktopConnRecorder(r *http.Request) *recording.RFBRecorder {
 	return nil
 }
 
-// stopRefusedRecording ends rec with a stop mark when the relay's filter refused a pixel format the replay
-// cannot read (rfbfilter.PixelFormatError): the stored recording then says where it stopped and why, and
-// its desktop.recording.write row carries stopped_ms, rather than the frames just ending. rec is nil on a
+// stopRefusedRecording ends rec with a stop mark when the relay's filter refused the stream, saying why in fixed
+// words: a pixel format the replay cannot read (rfbfilter.PixelFormatError) or what else it refused
+// (rfbfilter.Refusal). The stored recording then says where it stopped and why, and its desktop.recording.write
+// row carries stopped_ms, rather than the frames just ending. A refusal before the relay has read RFB from the
+// desktop has no such words and stops it without a reason: that recording keeps no frame, so nothing is stored,
+// unless the desktop sent its handshake ahead of the browser, as in one base64 text frame. rec is nil on a
 // connection that is not recorded.
 func stopRefusedRecording(rec *recording.RFBRecorder, err error) {
 	var pf *rfbfilter.PixelFormatError
-	if rec != nil && errors.As(err, &pf) {
+	var refusal *rfbfilter.Refusal
+	switch {
+	case rec == nil:
+	case errors.As(err, &pf):
 		rec.Stop(desktopStopPixels + pf.Refused())
+	case errors.As(err, &refusal):
+		rec.Stop(desktopStopRefused + refusal.Kind)
+	default:
+		rec.Stop("")
 	}
 }
 
@@ -183,7 +193,11 @@ const (
 )
 
 // desktopStopPixels starts the stop reason of a recording whose relay refused a pixel format; the format follows.
-const desktopStopPixels = "Wardyn refused a pixel format the replay cannot read: "
+// desktopStopRefused starts it for any other refusal; what the relay refused follows (rfbfilter.Refusal's Kind).
+const (
+	desktopStopPixels  = "Wardyn refused a pixel format the replay cannot read: "
+	desktopStopRefused = "Wardyn refused "
+)
 
 // saveDesktopRecording stores a closed connection's recording and writes desktop.recording.write.
 // A connection that carried no RFB frames (a static file, or one that never upgraded) stores nothing.
@@ -201,7 +215,7 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
 	}
-	// A recorder that met a message it could not follow, or whose relay refused a pixel format (Stop), stopped
+	// A recorder that met a message it could not follow, or whose relay refused the stream (Stop), stopped
 	// keeping frames: the stored cast is shorter than the session, so the write row says where it ends rather
 	// than reading as complete.
 	if stopped := rec.StoppedMS(); stopped > 0 {

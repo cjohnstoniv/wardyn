@@ -480,7 +480,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 	}
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
+	go func() { _ = relayViewer(r.Context(), ws, filtered); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
 	tick := time.NewTicker(cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck))
 	defer tick.Stop()
@@ -645,6 +645,29 @@ func (f wsFramer) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+// relayViewer hands the viewer's messages to the filter as they came: a binary message as its bytes (wsFramer), a
+// text message as an empty text frame, its text never relayed, which the filter refuses (or holds and then refuses)
+// as it does on a container desktop, so a recorded display's stop is marked with what was refused. NetConn's Read
+// would refuse a text message itself, unseen by the filter. It returns at the first error.
+func relayViewer(ctx context.Context, ws *websocket.Conn, filtered io.Writer) error {
+	for {
+		typ, msg, err := ws.Reader(ctx)
+		if err != nil {
+			return err
+		}
+		var dst io.Writer = wsFramer{filtered}
+		if typ != websocket.MessageBinary {
+			if _, err = filtered.Write([]byte{0x81, 0}); err != nil {
+				return err
+			}
+			dst = io.Discard
+		}
+		if _, err = io.Copy(dst, msg); err != nil {
+			return err
+		}
+	}
 }
 
 // wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers

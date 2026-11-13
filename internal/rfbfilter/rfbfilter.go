@@ -71,6 +71,39 @@ type Event struct {
 // ErrNotRFB is the server's first data frame not opening with an RFB ProtocolVersion.
 var ErrNotRFB = errors.New("rfb relay: the desktop socket does not speak RFB")
 
+// Refusal is a refused function's error for what the relay refused, a pixel format aside (PixelFormatError):
+// Kind says what in fixed words, which never quote the stream, so a stored recording can carry them, while
+// Error is the operator log's text, which can name bytes the browser or the desktop chose. ErrNotRFB and the
+// browser's bytes held too long or too many are not one: they come before the relay has read RFB from the desktop.
+// A recording has a frame then only when the desktop sent its handshake ahead of the browser, since the recorder
+// reads the desktop's bytes before the relay does and also reads a handshake sent in one base64 text frame, which
+// the relay answers with ErrNotRFB.
+type Refusal struct {
+	Kind string
+	Err  error
+}
+
+func (e *Refusal) Error() string { return e.Err.Error() }
+func (e *Refusal) Unwrap() error { return e.Err }
+
+// What a Refusal says the relay refused, by whether the desktop sent it (refuse's fromServer).
+var (
+	refusedFrame   = map[bool]string{false: "a WebSocket frame from the browser that it cannot read", true: "a WebSocket frame from the desktop that it cannot read"}
+	refusedSetup   = map[bool]string{false: "the browser's connection setup, which it cannot follow", true: "the desktop's connection setup, which it cannot follow"}
+	refusedMessage = map[bool]string{false: "a message from the browser that it cannot follow", true: "a message from the desktop that it cannot follow"}
+)
+
+const refusedViewOnly = "a control message from the browser on a view-only desktop"
+
+// refuse is err as a Refusal of the kind kinds names for its sender, unless err names what it refused itself.
+func refuse(err error, kinds map[bool]string, fromServer bool) error {
+	switch err.(type) {
+	case *PixelFormatError, *Refusal:
+		return err
+	}
+	return &Refusal{Kind: kinds[fromServer], Err: err}
+}
+
 // Sink receives the relayed bytes after the filter, as WebSocket frames: toBrowser is the
 // server's side as the browser gets it, otherwise the browser's side as the server gets it.
 // A dropped cut text never reaches it. It is called from the relaying goroutine, outside the
@@ -295,7 +328,7 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 	for {
 		f, n, err := readFrame(*pending)
 		if err != nil {
-			return nil, err
+			return nil, refuse(err, refusedFrame, fromServer)
 		}
 		if n == 0 {
 			return out, nil
@@ -312,7 +345,7 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 			c.mode = rfbMode
 		}
 		if f.opcode() == 1 {
-			return nil, errors.New("rfb relay: a text frame on an RFB socket")
+			return nil, refuse(errors.New("rfb relay: a text frame on an RFB socket"), refusedFrame, fromServer)
 		}
 		p := c.client
 		if fromServer {
@@ -320,7 +353,11 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 		}
 		filtered, err := p.feed(f.payload, events)
 		if err != nil {
-			return nil, err
+			kinds := refusedSetup
+			if p.ready {
+				kinds = refusedMessage
+			}
+			return nil, refuse(err, kinds, fromServer)
 		}
 		if len(filtered) == 0 && f.b0 == 0x82 {
 			continue // a whole binary message that was all a dropped cut text
@@ -450,6 +487,7 @@ type parser struct {
 	rects  int // rectangles left in a FramebufferUpdate
 	out    []byte
 	events *[]Event
+	ready  bool // the connection setup is over: msgNext has run
 }
 
 func (p *parser) expect(n int, next step) { p.want, p.next = n, next }
@@ -462,7 +500,7 @@ func (p *parser) more(n int, next step, have []byte) error {
 
 func (p *parser) forward(b []byte) { p.out = append(p.out, b...) }
 
-func (p *parser) msgNext() { p.expect(1, p.msg) }
+func (p *parser) msgNext() { p.ready = true; p.expect(1, p.msg) }
 
 func (p *parser) stream(n int64, drop bool, then func()) {
 	p.pass, p.drop, p.then = n, drop, then

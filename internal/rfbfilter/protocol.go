@@ -206,7 +206,7 @@ func (p *parser) serverMsg(b []byte) error {
 // Client-to-server message types the relay frames.
 func (p *parser) clientMsg(b []byte) error {
 	if p.s.rules.ViewOnly && (b[0] == 250 || b[0] == 251 || b[0] == 255) {
-		return fmt.Errorf("rfb relay: view only: client message type %d", b[0])
+		return &Refusal{Kind: refusedViewOnly, Err: fmt.Errorf("rfb relay: view only: client message type %d", b[0])}
 	}
 	switch b[0] {
 	case 0: // SetPixelFormat
