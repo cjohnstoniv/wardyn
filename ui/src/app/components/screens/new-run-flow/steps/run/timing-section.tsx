@@ -59,7 +59,7 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
     return (
       <QuestionBlock labelId={labelId} label={NR_RUN.TIMING_LABEL}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p aria-labelledby={labelId} role="status" className="text-sm text-danger">{startHeldText(held)}</p>
+          <p aria-labelledby={labelId} role="status" className="min-w-0 flex-[1_1_20rem] text-sm text-danger">{startHeldText(held)}</p>
           <Button
             type="button"
             variant="outline"
@@ -80,7 +80,7 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
   if (!on) {
     return (
       <QuestionBlock labelId={labelId} label={NR_RUN.TIMING_LABEL}>
-        <p ref={nowLine} tabIndex={-1} aria-labelledby={labelId} className="text-sm">
+        <p ref={nowLine} tabIndex={-1} aria-labelledby={labelId} className="text-sm outline-none">
           <strong className="font-medium">{NR_RUN.TIMING_NOW}</strong>
           <span className="text-muted-foreground"> · {NR_RUN.TIMING_NOW_BODY}</span>
         </p>

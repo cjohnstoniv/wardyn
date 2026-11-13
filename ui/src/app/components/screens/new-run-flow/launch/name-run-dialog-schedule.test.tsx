@@ -165,6 +165,8 @@ describe("Name this run: a start later", () => {
     await named(box);
     setStatus({});
     expect(within(box).getByText(SCHEDULE_REFUSAL.OFF())).toHaveAttribute("role", "status");
+    // The sentence gives way from 20rem, so Run now sits beside it in the dialog and wraps under it on a phone.
+    expect(within(box).getByText(SCHEDULE_REFUSAL.OFF())).toHaveClass("min-w-0", "flex-[1_1_20rem]");
     expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
     await userEvent.click(within(box).getByRole("button", { name: NR_RUN.TIMING_NOW }));
     await waitFor(() => expect(launchButton()).toHaveFocus());

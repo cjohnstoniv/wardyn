@@ -22,6 +22,8 @@ import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { useUIGateway } from "../../../../lib/hooks/use-ui-gateway";
+import { scheduledRuns } from "../../../../lib/schedule";
+import { useShellSetupStatus } from "../../../wardyn/model-access-context";
 import type { ElevationOffer } from "../../../../lib/types/governance-requests";
 import type { PreflightResult, SetupItem } from "../../../../lib/types/preflight";
 import { cn } from "../../../ui/utils";
@@ -30,6 +32,7 @@ import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/ty
 import { harnessIds } from "../lenses/lens-keys";
 import { intentToWire } from "../draft/intent-to-wire";
 import { launchGateOpen } from "../draft/launch-gate";
+import { startHeld } from "../draft/launch-start";
 import type { NewRunLocation } from "../draft/new-run-url";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { isServer } from "../lenses/apps-lens";
@@ -135,6 +138,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const template = useTemplateNeeds(draft.origin, draft.intent);
   const harnessNames = useHarnessNames();
   const gateway = useUIGateway();
+  const shell = useShellSetupStatus();
   // One read of the person's walls for the Access group and the policy card, so their host counts always agree.
   const walls = useWallsSpec();
   // The wall preset chosen on the Tools step; Open says nothing. One no longer available stays chosen, as an error.
@@ -184,6 +188,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const blockers = buildBlockers({ ...inputs, stale: !gate(0), expired });
   const hard = blockers.filter((b) => b.kind !== "stale");
   const open = gate(hard.length);
+  // A held start marks its row as needing attention (RunGroup), so the section says so too, never Complete.
+  const held = startHeld(draft, scheduledRuns(shell.status)) !== null;
   // Only age holds Launch: pressing it asks the server again instead of doing nothing.
   const recheckOnLaunch = !open && !hard.length && !issues.length && expired && !checks.preflighting;
 
@@ -281,7 +287,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
           <StepSection
             title={NR_REVIEW.SETUP_TITLE}
             description={setupTitle(draft.intent)}
-            marker={<SetupMark tone={hard.length ? "danger" : blockers.length ? "warning" : "success"} />}
+            marker={<SetupMark tone={hard.length || held ? "danger" : blockers.length ? "warning" : "success"} />}
             className="overflow-hidden"
             bodyClassName="p-0"
           >

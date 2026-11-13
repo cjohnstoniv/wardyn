@@ -662,10 +662,14 @@ describe("Run step: Schedule for later", () => {
   });
 
   it("says a start the draft still holds as held when the switch is off or not known, never as Run now, and Run now clears it", async () => {
-    for (const [status, text] of [[{} as SetupStatus, SCHEDULE_REFUSAL.OFF()], [null, NR_RUN.START_HELD_UNKNOWN]] as const) {
+    // Not known: no status yet (null), or the stand-in the console makes up when the server cannot be reached.
+    const unreachable = { unreachable: true } as SetupStatus;
+    for (const [status, text] of [[{} as SetupStatus, SCHEDULE_REFUSAL.OFF()], [null, NR_RUN.START_HELD_UNKNOWN], [unreachable, NR_RUN.START_HELD_UNKNOWN]] as const) {
       show(AUTONOMOUS, MEMBER, status, { date: "2026-10-21", time: "02:00", zone: "UTC" });
       await poolSelect();
       expect(screen.getByText(text)).toHaveAttribute("role", "status");
+      // The sentence gives way from 20rem, so Run now sits beside it on a wide row and wraps under it on a narrow one.
+      expect(screen.getByText(text)).toHaveClass("min-w-0", "flex-[1_1_20rem]");
       expect(screen.queryByText(NR_RUN.TIMING_NOW_BODY, { exact: false })).not.toBeInTheDocument();
       expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: NR_RUN.TIMING_NOW }));
@@ -673,6 +677,8 @@ describe("Run step: Schedule for later", () => {
       expect(screen.queryByText(text)).not.toBeInTheDocument();
       const now = screen.getByText(new RegExp(NR_RUN.TIMING_NOW_BODY)).closest("p");
       await waitFor(() => expect(now).toHaveFocus());
+      // Not a control: focus lands on it so it does not fall to the page, and no ring says "press this".
+      expect(now).toHaveClass("outline-none");
       cleanup();
     }
   });

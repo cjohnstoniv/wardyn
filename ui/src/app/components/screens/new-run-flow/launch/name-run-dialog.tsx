@@ -218,7 +218,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
         )}
         {held && (
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p id="name-run-start" role="status" className="text-sm text-danger">{startHeldText(held)}</p>
+            <p id="name-run-start" role="status" className="min-w-0 flex-[1_1_20rem] text-sm text-danger">{startHeldText(held)}</p>
             <Button
               type="button"
               variant="outline"
