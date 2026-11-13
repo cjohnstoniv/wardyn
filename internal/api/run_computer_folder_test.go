@@ -973,15 +973,14 @@ func agentWrites(t *testing.T, sb *folderSandboxRunner, names ...string) {
 	}
 }
 
-// A caller's ctx cancelled before finalize leaves no time to start the pass, which is recorded,
-// and the sandbox is stopped; one cancelled during a second cut pass in a row that saves nothing
-// stops it too. The pass's outcome is recorded and audited, and the caller hears its ctx ended.
+// A caller's ctx cancelled during a second cut pass in a row that saves nothing stops the sandbox: the pass's
+// outcome is recorded and audited, and the caller hears its ctx ended. One cancelled before finalize, which leaves
+// no time to start the pass, keeps a sandbox that can be held (TestFolderBack_NoTimeLeftKeepsAHoldableSandbox).
 func TestFinalizeRunEffects_TeardownRunsAfterTheCallersCtxIsCancelled(t *testing.T) {
 	cases := map[string]struct {
 		after time.Duration
 		want  string
 	}{
-		"before finalize":      {0, "no time was left for the sync"},
 		"during the pass back": {200 * time.Millisecond, "2 passes in a row brought nothing back"},
 	}
 	for name, tc := range cases {

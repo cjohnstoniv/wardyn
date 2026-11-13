@@ -217,23 +217,40 @@ const computerFolderStalls = 2
 // (quiesceKeptSandbox): a pass that was cut short after it saved files keeps it, and so does the
 // first of computerFolderStalls such passes in a row that saved nothing, the last of which gives
 // the rest up, and so does a pass that left changes behind or could not prove them kept
-// (folderBackVerdict). A pass that completes with nothing owed, fails on its first visit or does not
-// start does not, nor does a sandbox that cannot be quiesced. The runner's state file holds what each pass saved, so the next pass, from
+// (folderBackVerdict). A pass that completes with nothing owed, or fails on its first visit, does not, nor
+// does a sandbox that cannot be quiesced; a pass with no time left to start keeps a sandbox that can be held
+// (keepNoTime). An end that cannot read the folder's settings or its data_out rule keeps it only as the sweeps
+// would (keepUnreadFolder). The runner's state file holds what each pass saved, so the next pass, from
 // the tail owner (folderCleanupLoop), starts after it (#3466).
 func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) bool {
+	return s.bringComputerFolderBackAs(ctx, runID, ref, "run.revoke")
+}
+
+// bringComputerFolderBackAs is bringComputerFolderBack for an end that audits a failed teardown as action
+// (finalizeRunEffects): the failed cut of an end that cannot read its folder's settings is that row
+// (keepUnreadFolder). bringComputerFolderBack itself is the idle and max-age stop's, whose failed teardown the
+// reaper audits as run.revoke.
+func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID, ref, action string) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolders)
 	if !ok || ref == "" {
 		return false
 	}
-	// The reads, like the record, are on a teardownCtx: a caller already cancelled still gets the
-	// record that no time was left.
+	// The reads, like the record, are on a teardownCtx: a caller already cancelled still gets its
+	// record.
 	rctx, cancel := teardownCtx(ctx)
 	if ok, err := s.folderBackEligible(rctx, runID); err != nil || !ok {
 		cancel()
+		if err != nil {
+			return s.keepUnreadFolder(ctx, runID, ref, action, err)
+		}
 		return false
 	}
 	folder, _, err := st.RunLocalFolderSeed(rctx, runID)
-	if err != nil || folder == nil {
+	if err != nil {
+		cancel()
+		return s.keepUnreadFolder(ctx, runID, ref, action, err)
+	}
+	if folder == nil {
 		cancel()
 		return false
 	}
@@ -286,12 +303,18 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return false
 	}
 	gen := rec.Gen
-	rctx, cancel = teardownCtx(ctx)
-	defer cancel()
+	// Each record is written on a teardownCtx made as it is written, not before the quiesce and the pass: for a
+	// caller with no deadline that ctx is reconcileFinalizeTimeout, which a pass of up to computerFolderBackTimeout
+	// would outlast. Under an end hold it still ends at the hold's deadline (teardownCtxWithin).
+	record := func(settled bool, next *types.FolderResume, res runnerwire.FolderPass, errText string) bool {
+		wctx, wcancel := teardownCtx(ctx)
+		defer wcancel()
+		return s.recordFolderBackAt(wctx, runID, *folder, gen, settled, next, res, errText)
+	}
 	if unansweredStallsPast(prev, past) {
 		errText := folderBackGivenUp("the runner did not answer for its last pass back",
 			fmt.Sprintf("%d passes in a row brought nothing back", prev.Resume.Stalled), prev.Resume.Unsynced)
-		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
+		return record(true, nil, runnerwire.FolderPass{}, errText)
 	}
 	// Every pass back, the first included, runs with the agent stopped and no egress where the
 	// substrate can do that and keep the folder; where that fails, no pass runs. On a sandbox it
@@ -303,8 +326,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if errors.As(qerr, &cannot) {
 		if _, ok := bringBackBy(ctx); ok {
 			// The person ended the run to bring the folder back: where the sandbox cannot be quiesced
-			// (a runner's), nothing may write during the pass, so the agent is stopped first.
-			if err := s.stopAgentForPass(ctx, ref); err != nil {
+			// (a runner's), nothing may write during the pass, so the agent is stopped first (stopAgentOnTeardown).
+			if err := s.stopAgentOnTeardown(ctx, ref); err != nil {
 				slog.WarnContext(ctx, "wardynd: stop the agent before a bring-back", slog.String("run_id", runID.String()), slog.Any("err", err))
 				qerr = fmt.Errorf("the agent could not be stopped: %w", err)
 			}
@@ -319,7 +342,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 			errText = "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"
 		}
 		// Nothing was sent, so this generation is settled.
-		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
+		return record(true, nil, runnerwire.FolderPass{}, errText)
 	}
 	d := computerFolderBackTimeout
 	if dl, ok := ctx.Deadline(); ok {
@@ -335,13 +358,17 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		// The runner the pass was to go to turned out to be one that may still run the last: kept, as
 		// lastPassOpen keeps it, with nothing counted.
 		return s.keepUnconfirmed(ctx, run, *folder, gen, rec, prev.GenAt, qerr)
+	case out.noTime:
+		// No pass was sent, so the runner owes no answer and no stall is counted: kept owed for the tail owner
+		// where it can be held (keepNoTime).
+		return s.keepNoTime(ctx, run, *folder, gen, qerr)
 	}
 	res, passErr, cut := out.FolderPass, out.errText, out.cut
 	next, errText := s.folderBackVerdict(ctx, run, &res, passErr, cut, qerr)
 	if !out.settled {
 		next, errText = keptUnanswered(prev.Resume, next, errText, passErr, res.Unsynced, qerr)
 	}
-	return s.recordFolderBackAt(rctx, runID, *folder, gen, out.settled, next, res, errText)
+	return record(out.settled, next, res, errText)
 }
 
 // recordFolderBackAt records a pass back's outcome at the generation it owns, settled when the runner
@@ -468,39 +495,6 @@ const maxFolderReason = 300
 
 // boundReason is a pass back's reason as its record keeps it: one line of at most maxFolderReason runes.
 func boundReason(s string) string { return localFolderErrorText(s, maxFolderReason) }
-
-// keepAfterBumpMiss answers whether the sandbox stays up after a bump that did not land: only when another
-// owner moved the record on, which a fresh read proves; otherwise the miss is recorded and the sandbox stops.
-func (s *Server) keepAfterBumpMiss(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost, unread bool) bool {
-	if lost && !unread && s.folderGenTaken(ctx, id, gen) {
-		return true
-	}
-	s.recordFolderBumpMissed(ctx, id, folder, gen, lost)
-	return false
-}
-
-// recordFolderBumpMissed is what a pass back that ran no pass leaves when its record
-// could not be moved to the pass's generation (the sandbox is stopped after this, by the caller, and the stop is
-// reported on its own path): one failure row, and one try at the record on gen, the
-// generation it was read at. lost is a clean miss (another owner moved the record); otherwise the store
-// failed, and its error is in bumpComputerFolderGen's log. A write that does not land is logged and changes
-// nothing else.
-func (s *Server) recordFolderBumpMissed(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost bool) {
-	why := "its store could not write it"
-	if lost {
-		why = "another owner moved it"
-	}
-	errText := "no pass ran; the folder record could not be moved before its pass: " + boundReason(why) +
-		"; the changes were not copied back by this attempt, uncounted"
-	rctx, cancel := teardownCtx(ctx)
-	defer cancel()
-	s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, errText)
-	if !s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
-		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, errText, true)
-	}) {
-		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not say why its pass did not run", slog.String("run_id", id.String()))
-	}
-}
 
 // notQuiescable is quiesceKeptSandbox's answer for a sandbox whose substrate cannot stop its
 // agent and its egress and keep the folder, as opposed to one where that failed.
@@ -690,7 +684,7 @@ const computerFolderAccountTime = 5 * time.Second
 
 // computerFolderPassWithin is computerFolderPass under a deadline of d derived from ctx: the pass
 // ends by d, or by ctx's own deadline or cancel when that comes first. A pass with no time left
-// does not start. cut is a pass that started and was stopped by that end; a pass back stops
+// does not start (noTime). cut is a pass that started and was stopped by that end; a pass back stops
 // computerFolderAccountTime before it, for the runner's account. The caller records the outcome:
 // the seed on ctx (seedComputerFolder), the pass back on teardownCtx, since a finalizing caller's
 // ctx can end before d does (#3466).
@@ -706,7 +700,7 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 	passCtx, cancel := context.WithDeadline(ctx, stop)
 	defer cancel()
 	if err := passCtx.Err(); err != nil {
-		return folderPassOutcome{errText: "no time was left for the sync: " + err.Error(), settled: true}
+		return folderPassOutcome{errText: "no time was left for the sync: " + err.Error(), settled: true, noTime: true}
 	}
 	account, cancelAccount := context.WithDeadline(context.WithoutCancel(ctx), end)
 	defer cancelAccount()
@@ -730,11 +724,12 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 // answered for, or one that sent nothing; busy is a runner refusing it while it runs another pass for
 // the run (folder_pass_busy): a pass that did not start; unconfirmed is a pass not sent, as the runner
 // may still run the last one (errFolderPassUnconfirmed); away is a pass not sent because the computer's runner
-// is offline or not connected here (folderRunnerAway).
+// is offline or not connected here (folderRunnerAway); noTime is a pass not started because its deadline had already
+// passed: the caller's deadline was too near, or its ctx was cancelled.
 type folderPassOutcome struct {
 	runnerwire.FolderPass
-	errText                               string
-	cut, settled, busy, unconfirmed, away bool
+	errText                                       string
+	cut, settled, busy, unconfirmed, away, noTime bool
 }
 
 // folderRunnerAway is the refusal of a pass because the computer's runner is offline or not connected here: the

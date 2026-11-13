@@ -468,10 +468,16 @@ func (s *Server) tailRun(ctx context.Context, id uuid.UUID, step tailStep) (ran 
 	return true
 }
 
-// tailFinalize runs the run's tail on a bound of reconcileFinalizeTimeout, as the sweeps give a whole tail.
+// tailFinalize runs the run's tail on a bound of reconcileFinalizeTimeout, as the sweeps give a whole tail. A
+// give-up's tail runs only once giveUpFolderNoted has made the record final, and runs no pass: it stops the sandbox
+// as a forced end that keeps nothing does (forcedEndKey). A record or folder setting that still cannot be read would
+// otherwise keep the sandbox again on each confirmed cut (keepUnreadFolder), past the give-up, for ever.
 func (s *Server) tailFinalize(ctx context.Context, run types.AgentRun, step tailStep) {
 	fctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
+	if step == tailGiveUp {
+		fctx = context.WithValue(fctx, forcedEndKey{}, forcedEnd{keep: false})
+	}
 	if fn := s.tail.finalizeFn; fn != nil {
 		fn(fctx, run, step)
 		return
