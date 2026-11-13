@@ -128,13 +128,7 @@ func TestRelayConn_PumpsBothWaysAndClosesOnEitherSide(t *testing.T) {
 // closes the client and returns, so the sandbox sees a closed connection and
 // wardyn-proxy reports the failure.
 func TestRelayConn_UnreachableUpstreamClosesTheClient(t *testing.T) {
-	// Bind and immediately release, so the port is almost certainly dead.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	dead := l.Addr().String()
-	l.Close()
+	dead := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 
 	clientSide, relaySide := net.Pipe()
 	defer clientSide.Close()
@@ -217,36 +211,43 @@ func TestProxyRelay_WarningGoesToStderrNotStdout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Grab a free listen port up front (the command itself doesn't accept 0).
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	listenPort := strconv.Itoa(probe.Addr().(*net.TCPAddr).Port)
-	probe.Close()
-
-	cmd := setupProxyRelayCmd()
 	var out syncBuffer
 	var errOut bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&errOut)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd.SetContext(ctx)
-	cmd.SetArgs([]string{listenPort, proxyPort})
-
 	done := make(chan error, 1)
-	go func() { done <- cmd.Execute() }()
-	// Wait for the listener to actually bind and print, rather than sleeping a
-	// guessed duration: a slow CI host can make any fixed sleep flaky in
-	// either direction (too short to have bound yet, or long enough to mask a
-	// real regression).
-	deadline := time.Now().Add(3 * time.Second)
-	for !strings.Contains(out.String(), "relaying") && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !strings.Contains(out.String(), "relaying") {
-		t.Fatal("proxy-relay never printed its relaying line")
+	// The command takes a listen port, never 0, so the test picks a free one, and picks again when another
+	// process took it before the bind (the command then returns its listen error at once).
+	for try := 1; ; try++ {
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listenPort := strconv.Itoa(probe.Addr().(*net.TCPAddr).Port)
+		probe.Close()
+		cmd := setupProxyRelayCmd()
+		cmd.SetOut(&out)
+		cmd.SetErr(&errOut)
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{listenPort, proxyPort})
+		go func() { done <- cmd.Execute() }()
+		// Wait for the listener to actually bind and print, rather than sleeping a
+		// guessed duration: a slow CI host can make any fixed sleep flaky in
+		// either direction (too short to have bound yet, or long enough to mask a
+		// real regression).
+		deadline := time.Now().Add(3 * time.Second)
+		for !strings.Contains(out.String(), "relaying") && len(done) == 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if strings.Contains(out.String(), "relaying") {
+			break
+		}
+		if len(done) == 0 || try == 20 {
+			t.Fatal("proxy-relay never printed its relaying line")
+		}
+		if err := <-done; err == nil || !strings.Contains(err.Error(), "listen on") {
+			t.Fatalf("proxy-relay exited before it listened: %v", err)
+		}
 	}
 	cancel()
 

@@ -87,14 +87,9 @@ func TestSSHBindEarly(t *testing.T) {
 	})
 
 	t.Run("on, port free: the listener is returned and /healthz keeps ssh", func(t *testing.T) {
-		free, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := free.Addr().String()
-		_ = free.Close()
-		srv := newSrv(addr)
-		ln := bindSSHGatewayEarly(flags(addr, true), srv)
+		// Port 0: the kernel picks a free port at the bind, which no other process can take first.
+		srv := newSrv("127.0.0.1:0")
+		ln := bindSSHGatewayEarly(flags("127.0.0.1:0", true), srv)
 		if ln == nil {
 			t.Fatal("bindSSHGatewayEarly bound nothing on a free port")
 		}

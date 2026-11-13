@@ -361,7 +361,7 @@ func TestMachinesWaitBrieflyForTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(100 * time.Millisecond); unlock() }()
+	go func(release func()) { time.Sleep(100 * time.Millisecond); release() }(unlock)
 	var out bytes.Buffer
 	if err := deleteKept(&out, rows[0]); err != nil {
 		t.Fatalf("a brief holder refused the delete: %v", err)

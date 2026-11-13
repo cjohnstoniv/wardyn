@@ -389,12 +389,13 @@ func newSyncRig(t *testing.T) *syncRig {
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx"}
 	st := &syncStore{run: run, key: map[string]types.SSHPublicKey{}}
 	st.register(run.CreatedBy, signer.PublicKey())
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	// The rig binds port 0 itself and serves the gateway on that listener, so the port is never free for
+	// another process to take between a pick and the gateway's bind.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := probe.Addr().String()
-	_ = probe.Close()
+	addr := ln.Addr().String()
 	sandbox := t.TempDir()
 	audit := &syncAudit{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -405,15 +406,7 @@ func newSyncRig(t *testing.T) *syncRig {
 		Store: st, Audit: audit, Runner: rn, BaseCtx: ctx,
 		SSHListenAddr: addr, SSHAdvertiseAddr: addr, SSHHostKey: hostPriv,
 	})
-	go func() { _ = srv.ServeSSHGateway(ctx) }()
-	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if c, err := net.Dial("tcp", addr); err == nil {
-			_ = c.Close()
-			break
-		} else if time.Now().After(deadline) {
-			t.Fatalf("gateway never listened: %v", err)
-		}
-	}
+	go func() { _ = srv.ServeSSHGatewayOn(ctx, ln) }()
 	host, port := splitHostPort(addr)
 	return &syncRig{t: t, gw: sshGateway{host: host, port: port, fingerprint: ssh.FingerprintSHA256(hostSigner.PublicKey())},
 		runID: run.ID.String(), signer: signer, sandbox: sandbox, audit: audit, st: st, rn: rn}

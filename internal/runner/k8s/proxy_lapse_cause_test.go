@@ -157,17 +157,8 @@ func installProbedProxyReactor(h *runnerHarness, addr string, seen func(ready bo
 	})
 }
 
-// unusedAddr is a loopback address nothing listens on.
-func unusedAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	return addr
-}
+// unusedAddr is a loopback address nothing listens on. A port picked and freed could be taken by another process.
+func unusedAddr(*testing.T) string { return "127.0.0.1:1" }
 
 // probeSucceeds runs probe as a kubelet does against the proxy stand-in at addr: a TCP probe passes
 // once the listener accepts, an HTTP probe only on a 2xx or 3xx answer at its path.

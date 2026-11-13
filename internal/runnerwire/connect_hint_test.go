@@ -66,15 +66,10 @@ func TestConnectHintNamesPresentedIssuer(t *testing.T) {
 }
 
 func TestConnectHintNamesRefusingProxy(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	_ = l.Close() // nothing listens here now
+	addr := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 	proxy, _ := url.Parse("http://u:secret@" + addr)
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
-	_, err = DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), client)
+	_, err := DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), client)
 	if err == nil {
 		t.Fatal("a dial through a closed proxy succeeded")
 	}
@@ -177,14 +172,9 @@ func TestReachLinesNameProxyHostAndPortOnly(t *testing.T) {
 		}
 	}
 	t.Run("closed proxy", func(t *testing.T) {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := l.Addr().String()
-		_ = l.Close()
+		addr := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 		proxy, _ := url.Parse("http://u:p@" + addr + "/path?q=1")
-		_, err = DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}})
+		_, err := DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}})
 		if err == nil {
 			t.Fatal("a dial through a closed proxy succeeded")
 		}

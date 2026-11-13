@@ -584,10 +584,7 @@ func TestUnavailableCauses(t *testing.T) {
 		}
 	})
 	t.Run("unreachable", func(t *testing.T) {
-		l, _ := net.Listen("tcp", "127.0.0.1:0")
-		addr := l.Addr().String()
-		_ = l.Close()
-		_, p, _ := net.SplitHostPort(addr)
+		p := "1" // nothing listens there; a freed port could be taken by another process
 		c := newTestClient(t, nil, testGuard(), nil)
 		if un := mustUnavailable(t, c, "example.com:"+p); un.Cause != CauseUnreachable {
 			t.Errorf("got %+v", un)

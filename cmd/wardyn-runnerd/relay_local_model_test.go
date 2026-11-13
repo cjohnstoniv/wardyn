@@ -21,27 +21,13 @@ import (
 )
 
 // modelServer is an echo server on 127.0.0.2 standing in for the model server (on another loopback
-// address than the relay's 127.0.0.1 bind); accepted counts the connections that reached it. The relay
-// later binds 127.0.0.1 at the same port, so a port another process holds there is passed over (a
-// parallel package in the docker suite once held it: "bind: address already in use").
+// address than the relay's 127.0.0.1 bind); accepted counts the connections that reached it. Its
+// listener is held until the test ends.
 func modelServer(t *testing.T) (port uint16, accepted *atomic.Int32) {
 	t.Helper()
-	var ln net.Listener
-	for range 20 {
-		l, err := net.Listen("tcp", "127.0.0.2:0")
-		if err != nil {
-			t.Skipf("no 127.0.0.2 on this host: %v", err)
-		}
-		probe, err := net.Listen("tcp", netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(l.Addr().(*net.TCPAddr).Port)).String())
-		if err == nil {
-			_ = probe.Close()
-			ln = l
-			break
-		}
-		_ = l.Close()
-	}
-	if ln == nil {
-		t.Fatal("no port free at both 127.0.0.2 and 127.0.0.1 in 20 tries")
+	ln, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Skipf("no 127.0.0.2 on this host: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	accepted = new(atomic.Int32)
@@ -56,6 +42,26 @@ func modelServer(t *testing.T) (port uint16, accepted *atomic.Int32) {
 		}
 	}()
 	return uint16(ln.Addr().(*net.TCPAddr).Port), accepted
+}
+
+// openModel starts a model server and a relay that serves its port to run's proxy at peer, with the
+// relay's first-byte wait when firstByte is not zero. The relay binds 127.0.0.1 at the model server's
+// own port, so a port another process holds there fails that bind (a parallel package in the docker
+// suite once held it: "bind: address already in use"), and another model server's port is tried.
+func openModel(t *testing.T, run uuid.UUID, peer string, firstByte time.Duration) (r *localRelay, port uint16, accepted *atomic.Int32) {
+	t.Helper()
+	var err error
+	for range 20 {
+		port, accepted = modelServer(t)
+		r = modelRelay(port)
+		r.firstByte = firstByte
+		if err = r.OpenLocalModel(run, []uint16{port}, []netip.Addr{netip.MustParseAddr(peer)}); err == nil {
+			return r, port, accepted
+		}
+		_ = r.Close()
+	}
+	t.Fatalf("OpenLocalModel: %v", err)
+	return nil, 0, nil
 }
 
 // modelRelay is a relay whose person allows ports (--local-model-port).
@@ -86,10 +92,9 @@ func askModel(t *testing.T, src string, port uint16) (string, error) {
 // forwarded to the model server's address at that port alone. The organisation relay's own port is
 // refused, and where the bind is the model server's own address nothing is opened.
 func TestLocalModelRelayForwardsItsPortToTheModelServer(t *testing.T) {
-	port, _ := modelServer(t)
-	r := modelRelay(port)
-	defer r.Close()
 	run := uuid.New()
+	r, port, _ := openModel(t, run, "127.0.0.1", 0)
+	defer r.Close()
 	for range 2 {
 		if err := r.OpenLocalModel(run, []uint16{port}, []netip.Addr{netip.MustParseAddr("127.0.0.1")}); err != nil {
 			t.Fatalf("OpenLocalModel: %v", err)
@@ -121,12 +126,8 @@ func TestLocalModelRelayForwardsItsPortToTheModelServer(t *testing.T) {
 // Only a flagged run's proxy is relayed: a connection from any other address (another container on
 // the bridge, a process on this computer) is closed before a byte reaches the model server.
 func TestLocalModelRelayRefusesASourceThatIsNoFlaggedRunsProxy(t *testing.T) {
-	port, accepted := modelServer(t)
-	r := modelRelay(port)
+	r, port, accepted := openModel(t, uuid.New(), "127.0.0.3", 0)
 	defer r.Close()
-	if err := r.OpenLocalModel(uuid.New(), []uint16{port}, []netip.Addr{netip.MustParseAddr("127.0.0.3")}); err != nil {
-		t.Fatal(err)
-	}
 	if got, _ := askModel(t, "127.0.0.4", port); got != "" || accepted.Load() != 0 {
 		t.Fatalf("a connection from 127.0.0.4, no flagged run's proxy, reached the model server (%d connection(s), answer %q)", accepted.Load(), got)
 	}
@@ -138,14 +139,11 @@ func TestLocalModelRelayRefusesASourceThatIsNoFlaggedRunsProxy(t *testing.T) {
 // A port's listener lives while a flagged run uses it: a run that ends takes its proxy's connections
 // and admission with it, the last run's end closes the listener, and so does the runner's stop.
 func TestLocalModelRelayClosesWhenTheLastFlaggedRunEnds(t *testing.T) {
-	port, _ := modelServer(t)
-	r := modelRelay(port)
-	defer r.Close()
 	a, b := uuid.New(), uuid.New()
-	for run, peer := range map[uuid.UUID]string{a: "127.0.0.3", b: "127.0.0.5"} {
-		if err := r.OpenLocalModel(run, []uint16{port}, []netip.Addr{netip.MustParseAddr(peer)}); err != nil {
-			t.Fatal(err)
-		}
+	r, port, _ := openModel(t, a, "127.0.0.3", 0)
+	defer r.Close()
+	if err := r.OpenLocalModel(b, []uint16{port}, []netip.Addr{netip.MustParseAddr("127.0.0.5")}); err != nil {
+		t.Fatal(err)
 	}
 	r.CloseLocalModel(a)
 	if got, _ := askModel(t, "127.0.0.3", port); got != "" {
@@ -174,13 +172,8 @@ func TestLocalModelRelayClosesWhenTheLastFlaggedRunEnds(t *testing.T) {
 // The model server is dialled only once an admitted connection sends a first byte within the relay's
 // wait: one that sends nothing is closed and never reaches the server.
 func TestLocalModelRelayDialsOnlyAfterAFirstByte(t *testing.T) {
-	port, accepted := modelServer(t)
-	r := modelRelay(port)
-	r.firstByte = 50 * time.Millisecond
+	r, port, accepted := openModel(t, uuid.New(), "127.0.0.3", 50*time.Millisecond)
 	defer r.Close()
-	if err := r.OpenLocalModel(uuid.New(), []uint16{port}, []netip.Addr{netip.MustParseAddr("127.0.0.3")}); err != nil {
-		t.Fatal(err)
-	}
 	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.3")}}
 	c, err := d.Dial("tcp", netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port).String())
 	if err != nil {
