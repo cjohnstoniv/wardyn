@@ -286,10 +286,18 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 
 // ListPendingRunnerActions is the runner's PENDING payload: at most one page of
 // its oldest open bound actions, and whether more remain. A row from before the
-// binding is never delivered; it keeps fencing its run instead.
+// binding is never delivered; it keeps fencing its run instead. A retirement's
+// kill is held back while its run's sandbox is kept for its computer folder's
+// copy back (retirementFolderKeepSQL), and handed over once that keep ends: a
+// kill queued before the keep began is not delivered under it. The runner
+// applies what it is handed without asking again, so a keep that begins after
+// this read does not stop a kill it already returned.
 func (s PG) ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPendingAction, bool, error) {
-	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions
-		WHERE runner_id = $1 AND applied_at IS NULL AND settled_at IS NULL AND binding_version = 1 ORDER BY queue_seq LIMIT $2`
+	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions a
+		WHERE a.runner_id = $1 AND a.applied_at IS NULL AND a.settled_at IS NULL AND a.binding_version = 1
+			AND NOT (a.kind = 'kill' AND EXISTS (SELECT 1 FROM runner_retirements t JOIN agent_runs r ON r.id = t.run_id
+				WHERE t.run_id = a.run_id AND t.obligation_id = a.obligation_id AND t.state = 'kill' AND ` + retirementFolderKeepSQL + `))
+		ORDER BY a.queue_seq LIMIT $2`
 	page, err := collect(ctx, s.Pool, "list", "runner pending actions", q, []any{runnerID, runnerActionPageLimit + 1}, scanAction)
 	if err != nil || len(page) <= runnerActionPageLimit {
 		return page, false, err
