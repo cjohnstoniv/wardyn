@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A held governance change, or an elevation or image request, now belongs only to the sign-in that proposed it: that sign-in alone can read it without being one of its approvers, write its note or withdraw it. Before, a different sign-in showing the same email could do so even when sign-in did not check that email: an administrator outside the change's approvers could read, note and withdraw a held change, and any signed-in member could list and withdraw another person's request. Nobody could approve through it. A second sign-in with the same email still counts as the proposer when sign-in vouches for emails (`WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is set, or `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is on), and the same email still stops that sign-in from approving the change. Affects 0.10.0 prereleases only.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

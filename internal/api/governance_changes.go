@@ -164,12 +164,26 @@ func (s *Server) readRejectReason(w http.ResponseWriter, r *http.Request) (strin
 // sameGovernanceHuman reports whether the approver is the person who proposed the change: the same
 // principal, or the same non-empty email once case-folded. requireSecondHuman compares the principal
 // only; here one person holding two principals (an SSO session and an API token, or two identity
-// provider subjects with one mailbox) must not count as two humans.
+// provider subjects with one mailbox) must not count as two humans. It is the conservative test and
+// serves refusals only: an email that sign-in does not vouch for is reason enough to refuse a second
+// approval, never evidence that the caller owns the change (ownsGovernanceChange decides that).
 func sameGovernanceHuman(ch types.GovernanceChange, principal, email string) bool {
 	if principal != "" && principal == ch.ProposedBy {
 		return true
 	}
 	return email != "" && ch.ProposedByEmail != "" && strings.EqualFold(email, ch.ProposedByEmail)
+}
+
+// ownsGovernanceChange reports whether the caller holds the rights a proposer has over their own
+// change: read it, write its note, withdraw it. That is the same principal (an SSO session and the API
+// tokens it mints carry one), or the same non-empty email once case-folded only when sign-in vouches
+// for every caller's email (emailTrusted). An email sign-in does not vouch for can be anyone's claim,
+// so matching it would hand one principal's change to another, an admin of an unrelated unit included.
+func (s *Server) ownsGovernanceChange(ch types.GovernanceChange, principal, email string) bool {
+	if principal != "" && principal == ch.ProposedBy {
+		return true
+	}
+	return s.emailTrusted() && email != "" && ch.ProposedByEmail != "" && strings.EqualFold(email, ch.ProposedByEmail)
 }
 
 // secondApproverSentence is the refusal of a proposer approving their own change. With the switch off a
@@ -333,7 +347,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 	actorType, principal := actorFromRequest(r)
 	email := oidcEmailFromContext(ctx)
 	allowed := bypass || kind.approver.allowed(s, r)
-	withdraw := !allowed && !approve && sameGovernanceHuman(head, principal, email)
+	withdraw := !allowed && !approve && s.ownsGovernanceChange(head, principal, email)
 	if !allowed && !withdraw {
 		s.denyApprover(kind).write(w, r)
 		return
@@ -375,7 +389,7 @@ func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, 
 			if _, err := s.recheckLiveToken(ctx, q); err != nil {
 				return err
 			}
-			if !sameGovernanceHuman(ch, principal, email) {
+			if !s.ownsGovernanceChange(ch, principal, email) {
 				return s.denyApprover(kind)
 			}
 			return nil
@@ -436,7 +450,7 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 		if reason != "" {
 			data["reason"] = reason
 		}
-		withdrawn := sameGovernanceHuman(out, principal, email)
+		withdrawn := s.ownsGovernanceChange(out, principal, email)
 		if withdrawn {
 			data["withdrawn"] = true // the proposer rejected their own change
 		}

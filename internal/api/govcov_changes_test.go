@@ -163,6 +163,32 @@ func TestGovCovSameGovernanceHuman(t *testing.T) {
 	}
 }
 
+// Ownership, unlike the same-human refusal, follows a mailbox only when sign-in vouches for it.
+func TestGovCovOwnsGovernanceChange(t *testing.T) {
+	for _, c := range []struct {
+		name                     string
+		trusted                  bool
+		proposedBy, proposedMail string
+		principal, email         string
+		want                     bool
+	}{
+		{"the same principal owns it", false, "sub-a", "alice@corp.example", "sub-a", "other@corp.example", true},
+		{"an unvouched mailbox under another principal does not", false, "sub-a", "Alice@Corp.Example", "sub-b", "alice@corp.example", false},
+		{"a vouched mailbox under another principal does", true, "sub-a", "Alice@Corp.Example", "sub-b", "alice@corp.example", true},
+		{"two different people do not, vouched or not", true, "sub-a", "alice@corp.example", "sub-b", "bob@corp.example", false},
+		{"empty mailboxes never match, vouched or not", true, "sub-a", "", "sub-b", "", false},
+		{"empty principals never match", false, "", "alice@corp.example", "", "bob@corp.example", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := govCovServer(t, &govCovStore{}, func(cfg *Config) { cfg.AllowEmailMappings = c.trusted })
+			ch := types.GovernanceChange{ProposedBy: c.proposedBy, ProposedByEmail: c.proposedMail}
+			if got := s.ownsGovernanceChange(ch, c.principal, c.email); got != c.want {
+				t.Errorf("ownsGovernanceChange = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // govCovDecideThrough stands in for the decision transaction: it runs the handler's callback against
 // q with ch, and answers out or the callback's error.
 func govCovDecideThrough(q *govCovQuerier, ch, out types.GovernanceChange) func(store.GovernanceDecideFunc) (types.GovernanceChange, error) {
