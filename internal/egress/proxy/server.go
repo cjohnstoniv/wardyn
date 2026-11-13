@@ -53,6 +53,8 @@ type Server struct {
 	vm bool
 	// onListening, when set, runs once the main listener is bound (see OnListening).
 	onListening func()
+	// bound is the main listener's address, set just before onListening runs (see BoundAddr).
+	bound net.Addr
 	// stopped closes when the HTTP server is shut down, whenever ListenAndServe gets to look.
 	stopped chan struct{}
 	// live holds what a live egress edit needs: the client connections to drop and the report loop to replace.
@@ -448,6 +450,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	ln, err := s.listen(cmp.Or(s.http.Addr, ":http"))
 	if err == nil {
+		s.bound = ln.Addr()
 		if s.onListening != nil {
 			s.onListening()
 		}
@@ -470,6 +473,11 @@ const ReadyMarker = "wardyn-proxy: ready"
 // OnListening sets fn to run once the main listener is bound, before the first connection is
 // accepted. Call it before ListenAndServe.
 func (s *Server) OnListening(fn func()) { s.onListening = fn }
+
+// BoundAddr returns the main listener's address: for a listen address with port 0, the port the kernel chose
+// at the bind. It is set before the OnListening hook runs, so read it in the hook or after it fired; nil
+// before that.
+func (s *Server) BoundAddr() net.Addr { return s.bound }
 
 // listen opens addr, serving only AllowedPeers when they are set.
 func (s *Server) listen(addr string) (net.Listener, error) {

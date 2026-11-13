@@ -396,12 +396,7 @@ func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
 	}
 
 	t.Run("unreachable", func(t *testing.T) {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		hostPort := ln.Addr().String()
-		_ = ln.Close()
+		hostPort := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 		clock := &fakeBoot{}
 		g := newLapseGate(clock, testLapseTTL)
 		run(t, "http://user:hunter2@"+hostPort+"/?sig="+tok, http.DefaultClient, g)

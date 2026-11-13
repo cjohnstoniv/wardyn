@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,10 +46,9 @@ func bootToolGate(t *testing.T, spec runner.SandboxSpec) toolCallSite {
 		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalToolCall, State: types.ApprovalPending})
 	}))
 	t.Cleanup(cp.Close)
-	port := freeLoopbackPort(t)
 	pc := spec.ProxyConfig
 	pc.ControlPlaneURL = cp.URL
-	raw, err := runner.BuildProxyConfig(spec.RunID, pc, port)
+	raw, err := runner.BuildProxyConfig(spec.RunID, pc, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,18 +56,13 @@ func bootToolGate(t *testing.T, spec runner.SandboxSpec) toolCallSite {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
+	cfg.Listen = "127.0.0.1:0"
 	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
 	if err != nil {
 		t.Fatalf("proxy: %v", err)
 	}
-	go func() { _ = psrv.ListenAndServe() }()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = psrv.Shutdown(ctx)
-	})
-	return toolCallSite{url: "http://" + cfg.Listen + "/wardyn/v1/approvals", gated: spec.Env["WARDYN_TOOL_APPROVALS"] == "hold"}
+	addr := serveTestSidecar(t, psrv)
+	return toolCallSite{url: "http://" + addr + "/wardyn/v1/approvals", gated: spec.Env["WARDYN_TOOL_APPROVALS"] == "hold"}
 }
 
 // call is one tool call as the harness makes it: off the gated lane nothing

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -308,6 +309,11 @@ func (f *fake) serveMCP(w http.ResponseWriter, r *http.Request) {
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	flag.Parse()
-	log.Printf("gatewayfake listening on %s", *addr)
-	log.Fatal(http.ListenAndServe(*addr, (&fake{}).handler()))
+	// Bound before the log line, which names the bound address: with port 0 a caller learns the port from it.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("gatewayfake listening on %s", ln.Addr())
+	log.Fatal(http.Serve(ln, (&fake{}).handler()))
 }
