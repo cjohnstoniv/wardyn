@@ -11,7 +11,7 @@ import (
 )
 
 // A service or a host the scan sees many times takes one place in what it collects: one seen after
-// the repeats is still kept. A host past the collection room marks the scan incomplete.
+// the repeats is still kept. A host past the collection room marks the scan Truncated.
 func TestScan_RepeatsDoNotCrowdOutALaterServiceOrHost(t *testing.T) {
 	root := t.TempDir()
 	var compose, gradle strings.Builder

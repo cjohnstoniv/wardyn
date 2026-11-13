@@ -710,7 +710,7 @@ func detectDockerfileFrom(path string, facts *ScanFacts) {
 }
 
 // addSuggestedHost keeps one entry per host, so repeats do not use up the room
-// a later host needs; a host past that room marks the scan incomplete.
+// a later host needs; a host past that room marks the scan Truncated.
 func addSuggestedHost(facts *ScanFacts, host string) {
 	host = strings.ToLower(host)
 	if slices.Contains(facts.SuggestedEgress, host) {
