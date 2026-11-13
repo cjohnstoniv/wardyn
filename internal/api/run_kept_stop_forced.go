@@ -503,7 +503,10 @@ func (s *Server) reviveExpiryDue(ctx context.Context, id uuid.UUID) *reviveError
 		// A failed read, or a run no longer lost, is the claim's to refuse (reasonReviveRunChanged).
 		return nil
 	}
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "read the database's clock", err))
+	}
 	until, ok := s.keptUntil(cur)
 	past := ok && !now.Before(until)
 	switch {

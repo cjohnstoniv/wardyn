@@ -436,8 +436,11 @@ func (s *Server) sweepAgentCast(ctx context.Context, st store.RunAgentCastStore,
 	readErr := s.readSubstrateOutput(ctx, rec, run.SandboxRef, castCopy{c})
 	c.endRead(recoveryGapReason(readErr), readErr)
 	err = c.seal()()
-	if errors.Is(err, errAgentCastUnread) && s.cfg.Now().Sub(runEnded(run)) >= agentCastReadGiveUp {
-		return s.declineAgentOutput(ctx, run, "read_failed")
+	if errors.Is(err, errAgentCastUnread) {
+		// The give-up counts from ended_at on the database's clock; an unreadable clock keeps the obligation.
+		if now, cerr := s.dbNow(ctx); cerr == nil && now.Sub(runEnded(run)) >= agentCastReadGiveUp {
+			return s.declineAgentOutput(ctx, run, "read_failed")
+		}
 	}
 	return err
 }

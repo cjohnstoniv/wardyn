@@ -191,8 +191,9 @@ var killTailSettled = []store.AuditFilter{
 // concurrently. A KILLED row younger than the grace is left alone — it may
 // still have a live tail finishing on its own.
 func (s *Server) recoverAbandonedKillTail(ctx context.Context, run types.AgentRun) bool {
-	if s.cfg.Now().UTC().Sub(run.UpdatedAt) < killTailRecoveryGrace {
-		return false // may still be an in-flight tail — leave it alone
+	now, err := s.dbNow(ctx) // updated_at is the database's stamp
+	if err != nil || now.Sub(run.UpdatedAt) < killTailRecoveryGrace {
+		return false // may still be an in-flight tail, or the clock is unreadable: leave it, the next pass retries
 	}
 	matcher, ok := s.cfg.Store.(store.RunAuditMatcher)
 	if !ok {

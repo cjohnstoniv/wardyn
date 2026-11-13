@@ -169,7 +169,7 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 	if !ok {
 		return nil, nil, nil, false, reviveUnsupported()
 	}
-	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
+	if rerr := s.reviveEligible(ctx, run, startAgent); rerr != nil {
 		return nil, nil, nil, false, rerr
 	}
 	rebooted, rerr := s.reviveNeedsAgentStart(ctx, run)
@@ -400,14 +400,18 @@ func (s *Server) claimReviveOwing(ctx context.Context, reviver store.RunReviver,
 		return time.Time{}, rerr
 	}
 	var claimed bool
-	var err error
 	var owedAt time.Time
+	now, err := s.dbNow(ctx) // the claim compares endedKept with lost_at and ends_at, database times
+	if err != nil {
+		return time.Time{}, reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "read the database's clock", err))
+	}
+	kept := s.endedKept(run, now)
 	if ow, ok := reviver.(store.RunAgentStartOwed); ok && startsAgent {
-		owedAt, claimed, err = ow.MarkRunRevivedOwingStart(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, expected)
+		owedAt, claimed, err = ow.MarkRunRevivedOwingStart(ctx, run.ID, run.LostReason, kept, s.cfg.MaxConcurrentRuns, expected)
 	} else if at, ok := reviver.(store.RunReviverAtSlot); ok && expected.Generation > 0 {
-		claimed, err = at.MarkRunRevivedAtSlot(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent, expected)
+		claimed, err = at.MarkRunRevivedAtSlot(ctx, run.ID, run.LostReason, kept, s.cfg.MaxConcurrentRuns, startsAgent, expected)
 	} else {
-		claimed, err = reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
+		claimed, err = reviver.MarkRunRevived(ctx, run.ID, run.LostReason, kept, s.cfg.MaxConcurrentRuns, startsAgent)
 	}
 	if errors.Is(err, store.ErrRunCapReached) {
 		return time.Time{}, reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
@@ -722,8 +726,11 @@ func (s *Server) reviveLocalMCPRefusal(ctx context.Context, run types.AgentRun, 
 // its own end stopped, extended since and still inside its files grace (#1061).
 // The bulk restart never starts a stopped agent. The claim re-checks the grace
 // and the end (store.EndedKept); this is the answer a person can act on.
-func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveError {
-	now := s.cfg.Now()
+func (s *Server) reviveEligible(ctx context.Context, run types.AgentRun, startAgent bool) *reviveError {
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "read the database's clock", err))
+	}
 	ended := run.LostReason == types.LostEnded
 	switch {
 	case run.State != types.RunRunning || run.SandboxRef == "":

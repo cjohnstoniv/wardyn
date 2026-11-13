@@ -102,6 +102,11 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req runEndWaitRequest
+	now, err := s.dbNow(r.Context()) // one database time for the refusals and the plan this request decides
+	if err != nil {
+		writeServerError(w, r, "read the database's clock", err)
+		return
+	}
 	present, msg := decodeStrictKeys(w, r, &req)
 	switch {
 	case present == nil && msg == "":
@@ -115,7 +120,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	case present["wait_budget_sec"] && req.WaitBudgetSec == nil:
 		writeErrorReason(w, http.StatusBadRequest, reasonRunWaitBudgetNotANumber, "wait_budget_sec must be a number of seconds")
 		return
-	case s.endWaitRunRefusal(w, run):
+	case s.endWaitRunRefusal(w, run, now):
 		return
 	}
 	leaser, ok := s.cfg.Store.(store.RunLeaser)
@@ -128,7 +133,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	p := planRunEndWait(planned, req, present, exempt, s.cfg.Now(), s.cfg.ApprovalExpiryAfter)
+	p := planRunEndWait(planned, req, present, exempt, now, s.cfg.ApprovalExpiryAfter)
 	actorType, actor := actorFromRequest(r)
 	if p.status == http.StatusForbidden {
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, p.refusedAction, run.ID.String(),
@@ -156,8 +161,15 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 			writeLockRefused(w, r, err)
 			return
 		}
+		// The claim's grace test reads the database's clock after the lock wait, not the request's earlier read.
+		at, err := s.dbNow(lctx)
+		if err != nil {
+			unlock()
+			writeServerError(w, r, "read the database's clock", err)
+			return
+		}
 		applied, err := leaser.SetRunEndAndWait(lctx, run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
-			p.resp.EndsAt, p.resp.WaitBudgetSec, s.endedKept(run, s.cfg.Now()))
+			p.resp.EndsAt, p.resp.WaitBudgetSec, s.endedKept(run, at))
 		unlock()
 		if err != nil {
 			writeServerError(w, r, "set run end and wait", err)
@@ -189,16 +201,17 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 // endWaitRunRefusal answers a PATCH on a run whose state no longer lets its end
 // or wait move, and reports whether it did: a finished run; a run at or past
 // its lifetime cap, which the lease sweep is ending; a run kept by its end whose
-// files are gone. A run waiting in a pool's queue has no end yet: it is set when the run starts.
-func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun) bool {
+// files are gone, all at now, the database's time. A run waiting in a pool's queue has no end yet: it is set
+// when the run starts.
+func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun, now time.Time) bool {
 	switch {
 	case run.State == types.RunQueued:
 		writeErrorReason(w, http.StatusConflict, reasonRunQueued, "this run is waiting for a slot in its pool; its end is set when it starts")
 	case isTerminalRunState(run.State):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
-	case run.LifetimeCapAt != nil && !s.cfg.Now().Before(*run.LifetimeCapAt):
+	case run.LifetimeCapAt != nil && !now.Before(*run.LifetimeCapAt):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitMaxLifetime, "run has reached its maximum lifetime and is being ended; its end and wait cannot be changed")
-	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
+	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, now):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitFilesGone, "run has ended and its files are no longer kept; its end cannot be moved")
 	default:
 		return false
