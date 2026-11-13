@@ -152,8 +152,9 @@ func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, 
 // boundary makes such rows poison auto-granting, so discovery can never mint
 // a credential. The store REBUILDS the scan_seeded subset of the contract from
 // this seed on every successful scan (a name a rescan no longer finds is
-// dropped, not stuck forever); operator-edited/non-scan_seeded rows always win
-// regardless; a nil seed (a failed scan) leaves the contract untouched.
+// dropped, not stuck forever), except that an incomplete scan's seed keeps the
+// earlier scan_seeded rows (types.KeepScanSeeded); operator-edited/non-scan_seeded
+// rows always win regardless; a nil seed (a failed scan) leaves the contract untouched.
 func seedSourceRequirements(kind types.SourceKind, locator string, p workspacescan.WorkspaceProfile) map[string]types.WorkspaceRequirement {
 	seed := map[string]types.WorkspaceRequirement{}
 	for _, sec := range p.RequiredSecrets {
@@ -163,6 +164,11 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 		// (compose.go's normalize-to-storable rule), skip what nothing maps.
 		name := sanitizeSecretName(sec.Name)
 		if name == "" {
+			continue
+		}
+		// Two scanned names can map onto one stored name (SESSION_SECRET and
+		// session_secret): a required one holds the row whichever sorts later.
+		if seed["secret:"+name].Level == "required" {
 			continue
 		}
 		level := "required"
@@ -201,7 +207,11 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (prof
 	facts := workspacescan.CollectFacts(src.Locator)
 	profile = workspacescan.DeriveProfile(facts)
 	profile, aiRan, aiChanged = s.applyScanAIAdvisor(ctx, facts, profile)
-	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seedSourceRequirements(src.Kind, src.Locator, profile)); err != nil {
+	seed := seedSourceRequirements(src.Kind, src.Locator, profile)
+	if profile.Incomplete {
+		seed = types.KeepScanSeeded(seed, src.Requirements)
+	}
+	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seed); err != nil {
 		return workspacescan.WorkspaceProfile{}, false, false, "persist scan profile: " + err.Error(), false
 	}
 	return profile, aiRan, aiChanged, "", true

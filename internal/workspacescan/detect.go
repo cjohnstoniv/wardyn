@@ -486,15 +486,19 @@ func isDockerfile(name string) bool {
 }
 
 // eachLine opens path and calls fn for each line, bounded by maxDetectLines
-// and the package's 1 MiB read cap. Errors fail safe to "no lines". fn
-// returns false to stop early (per-file key cap hit).
+// and the package's 1 MiB read cap. Errors fail safe to "no lines". A file it
+// could not open, or read only up to the read cap, marks the scan Unread; the
+// line and key budgets, and an overlong line, mark it Truncated. fn returns
+// false to stop early (per-file key cap hit).
 func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
 	f, err := gitremote.OpenRegular(path)
 	if err != nil {
+		facts.Unread = true
 		return
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(io.LimitReader(f, maxFileBytes))
+	limited := &io.LimitedReader{R: f, N: maxFileBytes}
+	sc := bufio.NewScanner(limited)
 	sc.Buffer(make([]byte, 64*1024), 64*1024)
 	lines := 0
 	for sc.Scan() {
@@ -514,6 +518,16 @@ func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
 	if sc.Err() != nil {
 		facts.Truncated = true
 	}
+	// The read cap ends the reader like EOF: a file read to the cap is whole only when no byte follows.
+	if limited.N == 0 && moreBytes(f) {
+		facts.Unread = true
+	}
+}
+
+// moreBytes reports whether one more byte can be read from r.
+func moreBytes(r io.Reader) bool {
+	_, err := io.ReadFull(r, make([]byte, 1))
+	return err == nil
 }
 
 // keyBudget caps the number of keys a detectXxx scanner captures per file,
@@ -556,10 +570,20 @@ func detectDotenvTemplate(path string, facts *ScanFacts) {
 		// captured.
 		optional := commented
 		if !commented {
-			optional = strings.TrimSpace(line[idx[1]:]) != ""
+			optional = !emptyValue(line[idx[1]:])
 		}
 		return addNeed(facts, key, classifySecretKind(key), optional)
 	})
+}
+
+// emptyValue reports whether a template line's right side holds no value: nothing, an empty string
+// in double or single quotes, or only a comment. It looks at the bytes and keeps none of them.
+func emptyValue(rhs string) bool {
+	rhs = strings.TrimSpace(rhs)
+	if strings.HasPrefix(rhs, `""`) || strings.HasPrefix(rhs, "''") {
+		rhs = strings.TrimSpace(rhs[2:])
+	}
+	return rhs == "" || strings.HasPrefix(rhs, "#")
 }
 
 func detectPlaceholders(path string, facts *ScanFacts) {
@@ -583,7 +607,8 @@ func detectCompose(path string, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		if m := composeImageRE.FindStringSubmatch(line); m != nil {
 			if svc, ok := serviceByImagePrefix[imageBaseName(m[1])]; ok {
-				if len(facts.ServicesFound) < maxServices*collectSlack {
+				// One entry per service: repeats must not use up the room a later service needs.
+				if !slices.Contains(facts.ServicesFound, svc) && len(facts.ServicesFound) < maxServices*collectSlack {
 					facts.ServicesFound = append(facts.ServicesFound, svc)
 				}
 			}
@@ -684,10 +709,18 @@ func detectDockerfileFrom(path string, facts *ScanFacts) {
 	})
 }
 
+// addSuggestedHost keeps one entry per host, so repeats do not use up the room
+// a later host needs; a host past that room marks the scan incomplete.
 func addSuggestedHost(facts *ScanFacts, host string) {
-	if len(facts.SuggestedEgress) < maxSuggested*collectSlack {
-		facts.SuggestedEgress = append(facts.SuggestedEgress, strings.ToLower(host))
+	host = strings.ToLower(host)
+	if slices.Contains(facts.SuggestedEgress, host) {
+		return
 	}
+	if len(facts.SuggestedEgress) >= maxSuggested*collectSlack {
+		facts.Truncated = true
+		return
+	}
+	facts.SuggestedEgress = append(facts.SuggestedEgress, host)
 }
 
 // detectEnvAccess extracts env-var NAMES read from source code. Code refs are
@@ -1047,34 +1080,38 @@ func deriveSetupCommands(pkgMgrs, tools map[string]struct{}, scriptKeys, makeTar
 	return out
 }
 
-// xmxToMiB converts a -Xmx numeric+unit to MiB (k/m/g), bounded.
+// xmxToMiB converts a -Xmx numeric+unit to MiB (k/m/g), bounded. The number
+// is capped in its own unit, at the same ceiling, so a k value is divided
+// before the cap applies, not after.
 func xmxToMiB(numStr, unit string) int {
-	n := atoiBounded(numStr)
 	switch strings.ToLower(unit) {
 	case "k":
-		return n / 1024
+		return atoiCapped(numStr, maxBuildMemMiB*1024) / 1024
 	case "g":
-		if n > maxBuildMemMiB/1024 {
-			return maxBuildMemMiB
-		}
-		return n * 1024
+		return atoiCapped(numStr, maxBuildMemMiB/1024) * 1024
 	default: // m
-		return n
+		return atoiCapped(numStr, maxBuildMemMiB)
 	}
 }
 
-// atoiBounded parses a non-negative int (untrusted input), capping at
-// maxBuildMemMiB and failing safe to 0 on overflow/garbage.
-func atoiBounded(s string) int {
+// atoiBounded parses a non-negative MiB count (untrusted input), capping at
+// maxBuildMemMiB and failing safe to 0 on garbage.
+func atoiBounded(s string) int { return atoiCapped(s, maxBuildMemMiB) }
+
+// atoiCapped parses a non-negative int (untrusted input), returning max for
+// anything larger and 0 on garbage. It checks before each step, so no number
+// of digits overflows an int.
+func atoiCapped(s string, max int) int {
 	n := 0
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			return 0
 		}
-		n = n*10 + int(c-'0')
-		if n > maxBuildMemMiB {
-			return maxBuildMemMiB
+		d := int(c - '0')
+		if n > (max-d)/10 {
+			return max
 		}
+		n = n*10 + d
 	}
 	return n
 }
@@ -1084,7 +1121,8 @@ func atoiBounded(s string) int {
 // validateSecretNeeds drops non-conforming names, coerces unknown kinds to
 // "generic", dedupes by name (required beats optional; a real config kind
 // beats a weak ci/code/generic sighting), caps and sorts for determinism.
-func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
+// omitted counts the valid names the cap left out.
+func validateSecretNeeds(raw []SecretNeed) (out []SecretNeed, omitted int) {
 	byName := make(map[string]SecretNeed, len(raw))
 	for _, n := range raw {
 		name := strings.TrimSpace(n.Name)
@@ -1119,7 +1157,7 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 		byName[name] = SecretNeed{Name: name, Kind: kind, Optional: n.Optional}
 	}
 	if len(byName) == 0 {
-		return nil
+		return nil, 0
 	}
 	// Priority cap: credential-DECLARING secrets rank ahead of advisory code/CI
 	// references, so source-grep noise can never evict a real credential.
@@ -1132,17 +1170,13 @@ func validateSecretNeeds(raw []SecretNeed) []SecretNeed {
 			strong = append(strong, s)
 		}
 	}
-	out := strong
+	out = append(strong, weak...)
 	if len(out) > maxSecretNeeds {
+		omitted = len(out) - maxSecretNeeds
 		out = out[:maxSecretNeeds]
-	} else if room := maxSecretNeeds - len(out); room > 0 && len(weak) > 0 {
-		if len(weak) > room {
-			weak = weak[:room]
-		}
-		out = append(out, weak...)
 	}
 	slices.SortFunc(out, func(a, b SecretNeed) int { return strings.Compare(a.Name, b.Name) })
-	return out
+	return out, omitted
 }
 
 // validateServices keeps only ids from the fixed service map, plus those
@@ -1173,8 +1207,8 @@ func validateServices(raw []string, needs []SecretNeed) []string {
 }
 
 // validateSuggestedHosts normalizes/validates hosts, drops ones already in
-// the filename-keyed allowed set, and caps + sorts.
-func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) []string {
+// the filename-keyed allowed set, and caps + sorts; cut reports a cap drop.
+func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) (out []string, cut bool) {
 	set := map[string]struct{}{}
 	for _, h := range raw {
 		host := hostrules.HostOf(h) // normalize + validate; "" if invalid
@@ -1186,15 +1220,16 @@ func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) []s
 		}
 		set[host] = struct{}{}
 	}
-	out := gitremote.ToSorted(set)
+	out = gitremote.ToSorted(set)
 	if len(out) > maxSuggested {
-		out = out[:maxSuggested]
+		return out[:maxSuggested], true
 	}
-	return out
+	return out, false
 }
 
-// validateSecretFilePaths keeps pathSafe, bounded-length relative paths.
-func validateSecretFilePaths(raw []string) []string {
+// validateSecretFilePaths keeps pathSafe, bounded-length relative paths;
+// cut reports a cap drop.
+func validateSecretFilePaths(raw []string) (out []string, cut bool) {
 	set := map[string]struct{}{}
 	for _, p := range raw {
 		if p == "" || len(p) > maxSecretPathLn || !pathSafe(p) || strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
@@ -1202,11 +1237,11 @@ func validateSecretFilePaths(raw []string) []string {
 		}
 		set[p] = struct{}{}
 	}
-	out := gitremote.ToSorted(set)
+	out = gitremote.ToSorted(set)
 	if len(out) > maxSecretFiles {
-		out = out[:maxSecretFiles]
+		return out[:maxSecretFiles], true
 	}
-	return out
+	return out, false
 }
 
 // validateBuildMemoryMiB bounds an untrusted build heap to a sane ceiling

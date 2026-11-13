@@ -109,10 +109,11 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 
 	// Content-lane facts are untrusted (a sandboxed repo scan controls them):
 	// validate charset/caps, coerce unknown kinds, subtract already-allowed hosts.
-	p.RequiredSecrets = validateSecretNeeds(facts.SecretRequirements)
+	p.RequiredSecrets, p.RequiredSecretsOmitted = validateSecretNeeds(facts.SecretRequirements)
 	p.ServicesNeeded = validateServices(facts.ServicesFound, p.RequiredSecrets)
-	p.SuggestedEgress = validateSuggestedHosts(facts.SuggestedEgress, egress)
-	p.SecretFilesPresent = validateSecretFilePaths(facts.SecretFilesPresent)
+	var hostsCut, filesCut bool
+	p.SuggestedEgress, hostsCut = validateSuggestedHosts(facts.SuggestedEgress, egress)
+	p.SecretFilesPresent, filesCut = validateSecretFilePaths(facts.SecretFilesPresent)
 	p.BuildMemoryMiB = validateBuildMemoryMiB(facts.BuildMemoryMiB)
 	leaks, leaksTruncated := validateLeakFindings(facts.LeakFindings)
 	p.LeakFindings = leaks
@@ -125,7 +126,12 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 	// when the detected profile is otherwise identical.
 	p.ContextHash = contextHashOf(facts.BuildInputHashes)
 
-	lowConfidence := facts.Truncated || len(facts.UnrecognizedSamples) > 0
+	// A part of the tree the scan could not read, or a list cut at its cap, leaves the profile
+	// incomplete. A budget stop only lowers confidence: a repo past a budget meets it on every
+	// scan, and keeping earlier rows then would keep a removed name for good. Services need no
+	// flag: their ids come from a closed set smaller than their cap.
+	p.Incomplete = facts.Unread || p.RequiredSecretsOmitted > 0 || hostsCut || filesCut
+	lowConfidence := p.Incomplete || facts.Truncated || len(facts.UnrecognizedSamples) > 0
 	switch {
 	case lowConfidence:
 		p.Confidence = ConfidenceLow
@@ -159,7 +165,9 @@ func CollectFacts(root string) ScanFacts {
 
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
-			return nil // skip unreadable entries; keep walking siblings
+			// An entry the walk could not read: keep walking its siblings, but the scan is not complete.
+			facts.Unread = true
+			return nil
 		}
 		// Never descend or follow symlinks, except the already-canonicalised
 		// root (this arm still holds if that resolution failed).
