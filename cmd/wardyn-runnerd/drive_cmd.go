@@ -750,7 +750,7 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err erro
 	}
 	switch {
 	case err != nil:
-		// The folder holds the only copy of the changes that did not go back.
+		// The folder holds the local copy of changes that are not confirmed as written back.
 		fmt.Fprintf(j.out, "The folder %s is kept: it holds your local copy of the changes.\n", j.dest.shown)
 		return driveOpenBackFailed, err
 	case unsent > 0:
