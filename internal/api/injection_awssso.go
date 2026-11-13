@@ -516,6 +516,14 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
 		"credential.reauth.request", created.ID.String(), "success", mustJSON(data)))
 	s.metrics.credentialReauthRecorded(credentialReauthOutcomeRequested)
+	// A provider write that landed since this resolve read the provider could not end a request
+	// that did not exist yet: re-read the provider now it is raised, end the request no sign-in
+	// can answer, and refuse as the run's next resolve would.
+	if why := s.raisedSignInEndReason(ctx, snapshot); why != "" {
+		s.endSignInRequest(ctx, created.ID, why)
+		writeErrorReason(w, http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal)
+		return true
+	}
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
 }

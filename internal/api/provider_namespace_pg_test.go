@@ -65,7 +65,7 @@ func TestPG_ModelCredNeverFromOperatorNamespace(t *testing.T) {
 		{"custom endpoint token", endpoint, "claude-code", providerKeyPart, key, "key-of-", http.StatusFailedDependency},
 		{"claude subscription", subProvider("claude"), "claude-code", providerOAuthPart, oauth, "oat-of-", http.StatusFailedDependency},
 		{"bedrock bearer", brBearerProvider(), "claude-code", providerKeyPart, key, "key-of-", http.StatusFailedDependency},
-		{"bedrock sso", brSSOProviderAtSessions(), "claude-code", providerSSOPart, sso, "sso-of-", http.StatusLocked},
+		{"bedrock sso", brSSOProvider(), "claude-code", providerSSOPart, sso, "sso-of-", http.StatusLocked},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()

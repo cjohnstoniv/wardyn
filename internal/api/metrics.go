@@ -127,7 +127,7 @@ type metrics struct {
 	// credentialReauthOutcomes counts each mid-run credential re-auth WORKFLOW's
 	// outcome: requested when a lapsed credential opens a hold,
 	// resolved when a sign-in answers it, and expired/cancelled when the row was
-	// aged out or the run ended under it. timeout is the one the operator
+	// aged out or ended by a provider write, or the run ended under it. timeout is the one the operator
 	// actually tunes on — it means the sandbox's SDK was told to fail because
 	// nobody signed in inside WARDYN_CREDENTIAL_REAUTH_TIMEOUT, and a series that
 	// is mostly timeouts is a deployment whose people are not seeing the request.
@@ -137,8 +137,8 @@ type metrics struct {
 	//
 	// Every label is counted at its own transition, which is the whole
 	// correction: requested at the raise, resolved at the resolution, expired
-	// where the sweeper ages a row out, cancelled where a terminal run cancels
-	// one, timeout where the daemon ingests the sidecar's decision row. The
+	// where the sweeper ages a row out or a provider write's end moves one, cancelled
+	// where a terminal run cancels one, timeout where the daemon ingests the sidecar's decision row. The
 	// first shape bumped expired/cancelled at a later RESOLVE that happened to
 	// meet a terminal row, which counts retries rather than outcomes (with the
 	// measured ~30 s cadence, dozens per row) and never fired at all once the
@@ -696,10 +696,12 @@ func writeApprovalNotify(w io.Writer) {
 }
 
 // RecordCredentialReauthExpired counts credential_reauth rows the approval
-// sweeper aged out. Exported for cmd/wardynd's sweeper goroutine, which is the
-// ONLY place this transition happens: by the time a row expires the sidecar
+// sweeper aged out. Exported for cmd/wardynd's sweeper goroutine, the only
+// place a row ages out: by the time a row expires the sidecar
 // that held for it gave up hours ago, so no resolve will ever meet it and
-// counting at a resolve would count nothing at all.
+// counting at a resolve would count nothing at all. An AWS sign-in request a
+// provider write ends is counted in endSignInRequest, only by the end that
+// moved the row from PENDING.
 func (s *Server) RecordCredentialReauthExpired(n int) {
 	for i := 0; i < n; i++ {
 		s.metrics.credentialReauthRecorded(credentialReauthOutcomeExpired)

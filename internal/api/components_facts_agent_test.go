@@ -240,7 +240,7 @@ func TestComponentFacts_CapturedProviderAndRenewableLanes(t *testing.T) {
 				if slices.ContainsFunc(preview.Agent.Hosts, func(h client.AgentHostFact) bool { return h.Role == "login" }) {
 					t.Fatal("preview guessed unread session region")
 				}
-				if !slices.Contains(preflight.Agent.Hosts, client.AgentHostFact{Host: ssoPortalHost("us-east-1", ""), Role: "login"}) {
+				if !slices.Contains(preflight.Agent.Hosts, client.AgentHostFact{Host: ssoPortalHost(brSessionRegion, ""), Role: "login"}) {
 					t.Fatal("preflight lost already-resolved own login host")
 				}
 				var blob awsSSOBlob

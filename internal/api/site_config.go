@@ -819,6 +819,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "put site config", err)
 		return
 	}
+	s.endUnanswerableSignIns(r.Context(), existing.ModelProviders, saved.ModelProviders)
 	// The logo follows the document just saved (siteBrandingLogo's doc). The
 	// document is already stored; a failure here is a 500, and the same apply
 	// repeated finishes it. The 500 waits until the audit row below is written.

@@ -114,7 +114,8 @@ func sameStartURL(a, b string) bool {
 // refresh allows (dispatch alone: a dry run never spends a one-use refresh
 // token, and an expired-but-renewable session reads live there). A refusal a
 // fresh sign-in or a stored key repairs — no key, not signed in, a session for
-// another pinned account/role or another access portal, a renewal AWS refused —
+// another pinned account/role, another access portal or another region, a
+// renewal AWS refused —
 // is a credential one (connectDenial); an install with no store, the admin
 // token, a provider with no region or model, and a renewal AWS did not answer
 // are not. A store
@@ -152,13 +153,19 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	if !found {
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
 	}
-	// The pin and the portal before any renewal: a session the provider
+	// The pin, the portal and the region before any renewal: a session the provider
 	// would refuse is never worth spending a refresh token on.
 	if b.SSOAccountID != "" && (blob.AccountID != b.SSOAccountID || blob.RoleName != b.SSORoleName) {
 		return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRPinned, blob.AccountID, blob.RoleName, b.SSOAccountID, b.SSORoleName)))
 	}
 	if !sameStartURL(blob.StartURL, b.SSOStartURL) {
 		return refuse(connectDenial(p.ID, mpBRPortal))
+	}
+	// A sign-in stores a session for its provider's region only, so a session for another one (a
+	// secret store restored apart from the database, a direct write) is none for this provider: a
+	// run dispatched on it would be refused at its first session resolve, every time.
+	if blob.Region != b.Region {
+		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
 	}
 	if refresh {
 		rctx := context.WithValue(ctx, awsSSORenewalBaselineKey{scope}, baseline)

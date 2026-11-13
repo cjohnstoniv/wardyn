@@ -40,8 +40,9 @@ const (
 	brStartURL    = "https://acme.awsapps.com/start"
 	brModel       = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	brBaseURL     = "https://vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com"
-	// brSessionRegion is the region brBlob's sessions are for.
-	brSessionRegion = "us-east-1"
+	// brSessionRegion is brSSOProvider's region and so the region brBlob's sessions are for, as a
+	// sign-in stores them: every door refuses a session for another region than its provider's.
+	brSessionRegion = "us-west-2"
 )
 
 func brBearerProvider() types.ModelProvider {
@@ -52,17 +53,9 @@ func brBearerProvider() types.ModelProvider {
 
 func brSSOProvider() types.ModelProvider {
 	return types.ModelProvider{ID: "bedrock-prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
-		Bedrock: &types.BedrockSettings{Region: "us-west-2", SSOStartURL: brStartURL,
+		Bedrock: &types.BedrockSettings{Region: brSessionRegion, SSOStartURL: brStartURL,
 			SSOAccountID: "123456789012", SSORoleName: "BedrockUser"},
 		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: brModel}}}
-}
-
-// brSSOProviderAtSessions is brSSOProvider in the region of brBlob's sessions, as a sign-in stores
-// them: a run's grant records its session's region, and the resolve refuses a provider in another.
-func brSSOProviderAtSessions() types.ModelProvider {
-	p := brSSOProvider()
-	p.Bedrock.Region = brSessionRegion
-	return p
 }
 
 func brBlob(tok, account, role string, expires time.Time) []byte {
@@ -429,9 +422,9 @@ func brKeyScope(host, uid, owner string) json.RawMessage {
 }
 
 func TestProviderBedrockSSOSink(t *testing.T) {
-	const portal = "portal.sso.us-east-1.amazonaws.com"
+	const portal = "portal.sso.us-west-2.amazonaws.com"
 	t.Run("resolves the owner's own session", func(t *testing.T) {
-		h, st, _ := brAuthored(t, brSSOProviderAtSessions())
+		h, st, _ := brAuthored(t, brSSOProvider())
 		code, body := resolveBR(t, h, st, portal)
 		var resp injectionResponse
 		_ = json.Unmarshal([]byte(body), &resp)
@@ -461,7 +454,7 @@ func TestProviderBedrockSSOSink(t *testing.T) {
 		}, credentialReauthScopeChangedRefusal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := brSSOProviderAtSessions()
+			p := brSSOProvider()
 			h, st, sec := brAuthored(t, p)
 			tc.alter(st, sec, p)
 			code, body := resolveBR(t, h, st, portal)
