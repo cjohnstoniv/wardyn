@@ -234,19 +234,21 @@ func readRetirementTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (runnerRe
 }
 
 // retirementFolderKeepSQL is true for a run (r, its agent_runs row) whose sandbox retirement must not kill, as it is
-// kept for its computer folder's copy back (the server's keepsSandboxForFolder, read from the same columns): a
-// record holding a resume; or, while the run still holds its sandbox ref, folder settings that do not read as an
-// object, or a folder copied back both ways through a runner and seeded, on a run that was not killed, whose copy
-// back was not given up and either has no back that reads as one (it has not run) or is at a generation past the
-// settled one (a pass sent and not answered). It reads the stored JSON with no casts, so no record can fail the
-// statement, and an answer it cannot give (NULL) keeps the sandbox.
-const retirementFolderKeepSQL = `COALESCE((COALESCE(r.local_folder_status->'resume', 'null'::jsonb) <> 'null'::jsonb
-		OR (r.sandbox_ref <> '' AND r.local_folder IS NOT NULL AND (jsonb_typeof(r.local_folder) <> 'object'
+// kept for its computer folder's copy back (the server's keepsSandboxForFolder, read from the same columns): while
+// the run still holds its sandbox ref, a record holding a resume, folder settings that do not read as an object, or
+// a folder copied back both ways through a runner and seeded, on a run that was not killed, whose copy back was not
+// given up and either has no back that reads as one (it has not run) or is at a generation past the settled one (a
+// pass sent and not answered). A run with no ref is never kept: every ref clear follows a confirmed stop or kill,
+// and once the ref is gone nothing resumes or gives up its record (the tail owner and the give-up read only runs
+// that hold one), so a resume left behind would hold the retirement open for good. It reads the stored JSON with
+// no casts, so no record can fail the statement, and an answer it cannot give (NULL) keeps the sandbox.
+const retirementFolderKeepSQL = `COALESCE((r.sandbox_ref <> '' AND (COALESCE(r.local_folder_status->'resume', 'null'::jsonb) <> 'null'::jsonb
+		OR (r.local_folder IS NOT NULL AND (jsonb_typeof(r.local_folder) <> 'object'
 			OR (r.state <> 'KILLED' AND COALESCE(r.local_folder->>'direction', '') = 'both' AND COALESCE(r.local_folder->>'runner_id', '') <> ''
 				AND r.local_folder_seeded_at IS NOT NULL
 				AND COALESCE(jsonb_typeof(r.local_folder_status->'back'->'given_up_at'), 'null') <> 'string'
 				AND (COALESCE(jsonb_typeof(r.local_folder_status->'back'), 'null') <> 'object'
-					OR COALESCE(r.local_folder_status->'gen', '0'::jsonb) <> COALESCE(r.local_folder_status->'settled', '0'::jsonb)))))), true)`
+					OR COALESCE(r.local_folder_status->'gen', '0'::jsonb) <> COALESCE(r.local_folder_status->'settled', '0'::jsonb))))))), true)`
 
 // retirementFolderKeptTx is retirementFolderKeepSQL for runID, read in tx. Its caller holds the run's row lock
 // (lockRunnerActionRun), and every write of a run's folder record, ref or state updates that row, so none commits

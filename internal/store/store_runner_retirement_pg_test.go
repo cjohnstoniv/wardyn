@@ -594,8 +594,8 @@ func (f actionFixture) keepTestFolder() string {
 
 // Retirement leaves alone a sandbox kept for its computer folder's copy back, both in the candidate list and in the
 // step itself under the run's lock: a run that ended before its first copy back, one whose pass is in flight, one
-// whose record holds a resume (also once its ref is cleared), and one whose folder settings or copy back record do
-// not read. A settled or given-up copy back, and an owed record whose sandbox was already stopped, retire as before.
+// whose record holds a resume, and one whose folder settings or copy back record do not read. A settled or given-up
+// copy back, and an owed record or a resume left after its sandbox was stopped and its ref cleared, retire as before.
 func TestPG_Retirement_KeepsASandboxKeptForItsFolder(t *testing.T) {
 	f := newActionFixture(t)
 	f.reportRetireCapable(t)
@@ -606,7 +606,7 @@ func TestPG_Retirement_KeepsASandboxKeptForItsFolder(t *testing.T) {
 		{"terminal before the first pass", f.keepTestFolder(), keepTestOwed, false, false},
 		{"a pass in flight", f.keepTestFolder(), keepTestInFlight, false, false},
 		{"a persisted keep", f.keepTestFolder(), keepTestResume, false, false},
-		{"a persisted keep, its ref cleared", f.keepTestFolder(), keepTestResume, true, false},
+		{"a resume left after its ref was cleared", f.keepTestFolder(), keepTestResume, true, true},
 		{"a copy back record that does not read", f.keepTestFolder(), keepTestUnreadBack, false, false},
 		{"folder settings that do not read", `"x"`, keepTestSettled, false, false},
 		{"a settled copy back", f.keepTestFolder(), keepTestSettled, false, true},

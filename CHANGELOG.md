@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- An ended run's sandbox that is kept to copy changes back to your computer is no longer deleted by the run's automatic retirement on its runner: before the copy back has run, while a pass is under way, or while it waits to resume. Retirement now waits until the copy back has finished or been given up, and a deletion queued before the sandbox was kept is held back until then if the runner has not received it yet. Affects 0.10.0 prereleases only.
+- An ended run's sandbox that is kept to copy changes back to your computer is no longer deleted by the run's automatic retirement on its runner: before the copy back has run, while a pass is under way, or while it waits to resume. Retirement now waits until the copy back has finished, has been given up, or its sandbox has been stopped, and a deletion queued before the sandbox was kept is held back until then if the runner has not received it yet. Affects 0.10.0 prereleases only.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
