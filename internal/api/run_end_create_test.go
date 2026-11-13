@@ -341,3 +341,35 @@ func TestPlanEnd_PastLifetimeCapRefuses(t *testing.T) {
 		t.Fatalf("a later end past the lifetime cap = %+v, want the handler's own 409 %s", p, reasonRunEndWaitMaxLifetime)
 	}
 }
+
+// TestCreateEnd_NamesTheElevationThatBoundTheEnd: an end the insert stored at an elevation's cap was bound by
+// the elevation, whether the ask was inside the pool's maximum or the pool cut it first, and the asked end
+// was cut: the run.create row and the 201's sentence say so. A default end cut the same way names the
+// elevation and stays uncapped, as no end was asked for; an end inside the elevation's cap stays as decided.
+func TestCreateEnd_NamesTheElevationThatBoundTheEnd(t *testing.T) {
+	at := time.Now().UTC().Add(time.Hour)
+	later := at.Add(time.Hour)
+	cut := types.AgentRun{EndsAt: &at, LifetimeCapAt: &at, LifetimeCapSource: types.LimitSourceElevation}
+	inside := types.AgentRun{EndsAt: &at, LifetimeCapAt: &later, LifetimeCapSource: types.LimitSourceElevation}
+	sentence := "the end you asked for is past what your elevation allows, so the run ends at " + at.Format(time.RFC3339) + " instead"
+	for _, c := range []struct {
+		name string
+		end  createEnd
+	}{
+		{"an ask inside the pool's maximum", createEnd{askedSec: 7200, pool: "P"}},
+		{"an ask the pool cut first", createEnd{askedSec: 10800, capped: true, source: types.LimitSourcePool, pool: "P"}},
+	} {
+		a, w := c.end.audit(cut), c.end.warnings(cut)
+		if a["capped"] != true || a["source"] != "your elevation" || a["asked_sec"] != c.end.askedSec || len(w) != 1 || w[0] != sentence {
+			t.Errorf("%s, stored at the elevation's cap: end %v, warnings %q; want it capped by your elevation and %q", c.name, a, w, sentence)
+		}
+	}
+	byDefault := createEnd{source: types.LimitSourcePool, pool: "P"}
+	if a, w := byDefault.audit(cut), byDefault.warnings(cut); a["capped"] != false || a["source"] != "your elevation" || w != nil {
+		t.Errorf("a default end stored at the elevation's cap: end %v, warnings %q; want your elevation, uncapped and no sentence", a, w)
+	}
+	asked := createEnd{askedSec: 3600, pool: "P"}
+	if a, w := asked.audit(inside), asked.warnings(inside); a["capped"] != false || a["source"] != nil || w != nil {
+		t.Errorf("an end inside the elevation's cap: end %v, warnings %q; want it as decided", a, w)
+	}
+}

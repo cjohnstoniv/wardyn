@@ -317,6 +317,10 @@ type AgentRun struct {
 	// transaction when set. Never on the wire and never read back onto a listed run: the creator reads it by
 	// run id. On a created run it is set only when the store kept it.
 	LaunchIntent json.RawMessage `json:"-"`
+	// CapInputs are what the create decided EndsAt and LifetimeCapAt from, carried to the insert, which decides
+	// them again once created_at is on the database's clock (RunCapInputs). Never stored or on the wire; nil on
+	// a run read back.
+	CapInputs *RunCapInputs `json:"-"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.

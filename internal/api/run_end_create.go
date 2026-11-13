@@ -200,9 +200,22 @@ func (s *Server) resolveCreateEnd(r *http.Request, req createRunRequest, ceiling
 	return end, refusal
 }
 
+// stored is the decision as the stored run carries it. The insert picks the run's cap on the database's
+// clock (types.RunCapInputs), so an elevation that ends before the end decided here cuts it there: an end
+// stored at an elevation's cap was bound by that elevation, whichever limit cut the ask first, and an asked
+// end was cut by it. A run with no stored end (No end, or one still waiting in a queue) is as decided.
+func (e createEnd) stored(run types.AgentRun) createEnd {
+	if run.EndsAt != nil && run.LifetimeCapAt != nil && run.EndsAt.Equal(*run.LifetimeCapAt) &&
+		run.LifetimeCapSource == types.LimitSourceElevation {
+		e.capped, e.source = e.askedSec > 0, types.LimitSourceElevation
+	}
+	return e
+}
+
 // audit is the run.create row's `end` record: what was asked, what the run got
 // and which limit bound it. A source reads as the member sees it.
 func (e createEnd) audit(run types.AgentRun) map[string]any {
+	e = e.stored(run)
 	out := map[string]any{"asked_sec": e.askedSec, "no_end": e.noEnd, "applied": run.EndsAt, "capped": e.capped}
 	if e.source != "" {
 		out["source"] = endSourceLabel(e.source, e.pool)
@@ -212,7 +225,7 @@ func (e createEnd) audit(run types.AgentRun) map[string]any {
 
 // warnings is the 201's sentence for an end cut to the cap.
 func (e createEnd) warnings(run types.AgentRun) []string {
-	if !e.capped || run.EndsAt == nil {
+	if e = e.stored(run); !e.capped || run.EndsAt == nil {
 		return nil
 	}
 	return []string{fmt.Sprintf("the end you asked for is past what %s allows, so the run ends at %s instead",
