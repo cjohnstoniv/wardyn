@@ -33,3 +33,27 @@ func (s *Server) dbNow(ctx context.Context) (time.Time, error) {
 	}
 	return at.UTC(), nil
 }
+
+// untilOnDatabaseClock is how long until at on the database's clock, the clock that stamps ends_at and
+// lifetime_cap_at. ok is false when the clock cannot be read: the caller decides what bound, if any, it then
+// hands on, and the lease sweep still ends the run at its end.
+func (s *Server) untilOnDatabaseClock(ctx context.Context, at time.Time) (time.Duration, bool) {
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return 0, false
+	}
+	return at.Sub(now), true
+}
+
+// podLifetimeCap is the time a run's pods have left to its cap capAt, at least a second: the base of their
+// deadline (activeDeadlineSeconds), counted on the database's clock, which stamps lifetime_cap_at. The deadline
+// is a backstop behind the lease sweep's kill, and whether a pod carries one at all selects its quota scope
+// (Terminating or NotTerminating), the scope the create's fit check judged the run under. So an unreadable
+// database clock bounds it on this server's clock instead of sending none: a bound, not a decision.
+func (s *Server) podLifetimeCap(ctx context.Context, capAt time.Time) time.Duration {
+	left, ok := s.untilOnDatabaseClock(ctx, capAt)
+	if !ok {
+		left = capAt.Sub(s.cfg.Now())
+	}
+	return max(left, time.Second)
+}
