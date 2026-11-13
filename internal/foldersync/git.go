@@ -130,11 +130,7 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	if err := sy.UploadFile(tmp.Name(), remote); err != nil {
 		return fmt.Errorf("send the git bundle: %w", err)
 	}
-	b := shellQuote(remote)
-	out, err := sandboxGit(c, "set -eu; cd "+shellQuote(sy.Opts.Remote)+"; "+
-		"if [ -e .git ]; then git fetch -q --no-tags "+b+" "+shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch)+"; echo existing; "+
-		"else git init -q --template= && git fetch -q --no-tags "+b+" "+shellQuote("+refs/heads/"+branch+":refs/heads/"+branch)+
-		" && git symbolic-ref HEAD "+shellQuote("refs/heads/"+branch)+" && git reset -q; echo fresh; fi; rm -f "+b)
+	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch))
 	if err != nil {
 		return err
 	}
@@ -148,6 +144,22 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	}
 	fmt.Fprintf(w, "git: sent %s at %s to the sandbox as %s\n", branch, head[:12], where)
 	return nil
+}
+
+// sendGitScript is the sandbox side of SendGit: it fetches bundle's branch into
+// dir's repository, or makes one. The new repository's steps are an if
+// condition, not an AND-list: set -e ignores a failure anywhere in an AND-list
+// but its last command, so a failed init, fetch or symbolic-ref printed fresh,
+// SendGit recorded the commit as sent, and the next send found a .git with no
+// branch. A failed step now fails the send and takes that .git away, so a
+// retry starts fresh.
+func sendGitScript(dir, bundle, branch string) string {
+	b := shellQuote(bundle)
+	return "set -eu; cd " + shellQuote(dir) + "; " +
+		"if [ -e .git ]; then git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; " +
+		"elif git init -q --template= && git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/heads/"+branch) +
+		" && git symbolic-ref HEAD " + shellQuote("refs/heads/"+branch) + " && git reset -q; then echo fresh; " +
+		"else rm -rf .git; exit 1; fi; rm -f " + b
 }
 
 // pullCommits brings the sandbox's commits past what --git last sent back as a
