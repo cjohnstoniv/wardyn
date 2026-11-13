@@ -770,3 +770,51 @@ func TestFolderBack_NoTimeLeftStopsAnUnholdableSandbox(t *testing.T) {
 		t.Errorf("record %+v, want no resume, settled at gen 2", st)
 	}
 }
+
+// ctxExecSandbox is agentSandbox whose execs fail on a done ctx, as a runner's do.
+type ctxExecSandbox struct{ *agentSandbox }
+
+func (r ctxExecSandbox) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.agentSandbox.ExecStream(ctx, ref, spec)
+}
+
+// The keeps for a runner still busy with the last pass, and for one that may still run it, stop the agent of a
+// sandbox on a runner on a teardown ctx: a cancelled caller (a daemon shutdown) still gets the agent stopped and the
+// sandbox kept. Catches the agent stop asked on the caller's ctx, whose exec then fails, which stops the sandbox with
+// its changes in it.
+func TestFolderBack_BusyAndUnconfirmedKeepsStopTheAgentForACancelledCaller(t *testing.T) {
+	for name, keep := range map[string]func(*passFixture, context.Context, types.AgentRun) bool{
+		"busy": func(f *passFixture, ctx context.Context, run types.AgentRun) bool {
+			return f.s.keepBusy(ctx, run, *f.cs.folder, 1, notQuiescable("on a runner"))
+		},
+		"unconfirmed": func(f *passFixture, ctx context.Context, run types.AgentRun) bool {
+			rec := f.cs.folderStatus()
+			return f.s.keepUnconfirmed(ctx, run, *f.cs.folder, 1, rec, rec.GenAt, notQuiescable("on a runner"))
+		},
+		"no time": func(f *passFixture, ctx context.Context, run types.AgentRun) bool {
+			return f.s.keepNoTime(ctx, run, *f.cs.folder, 1, notQuiescable("on a runner"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 1, 1, nil)
+			ag := f.onARunner(t, false)
+			f.s.cfg.Runner = ctxExecSandbox{ag}
+			run, err := f.s.cfg.Store.GetRun(context.Background(), f.run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.SandboxRef = "sbx"
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if !keep(f, ctx, run) {
+				t.Error("not kept: the agent stop ran on the cancelled caller's ctx")
+			}
+			if ag.stops != 1 || f.sb.stopCount() != 0 {
+				t.Errorf("agent stops %d, sandbox stops %d; want the agent stopped once and the sandbox kept", ag.stops, f.sb.stopCount())
+			}
+		})
+	}
+}

@@ -174,9 +174,9 @@ func (s *Server) holdUnquiesced(ctx context.Context, run types.AgentRun, qerr er
 }
 
 // keepBusy keeps the sandbox of a pass back the runner refused as busy (recordFolderPassBusy), once it is
-// safe to keep (holdUnquiesced); one that is not is stopped with its changes not brought back.
+// safe to keep (holdOnTeardown); one that is not is stopped with its changes not brought back.
 func (s *Server) keepBusy(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
-	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+	if err := s.holdOnTeardown(ctx, run, qerr); err != nil {
 		return s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the runner is still running this run's last pass back", err)
 	}
 	return s.recordFolderPassBusy(ctx, run.ID, folder, gen)
@@ -239,11 +239,11 @@ func (s *Server) holdOnTeardown(ctx context.Context, run types.AgentRun, qerr er
 }
 
 // keepUnconfirmed keeps the sandbox of a pass back not sent because the runner may still run the last
-// (errFolderPassUnconfirmed), once it is safe to keep (holdUnquiesced), with the last pass's send time
+// (errFolderPassUnconfirmed), once it is safe to keep (holdOnTeardown), with the last pass's send time
 // (genAt) kept, so the wait does not start again. One not safe to keep is stopped with its changes not
 // brought back.
 func (s *Server) keepUnconfirmed(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus, genAt time.Time, qerr error) bool {
-	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+	if err := s.holdOnTeardown(ctx, run, qerr); err != nil {
 		return s.stopNotKept(ctx, run.ID, folder, gen, false, "no pass ran; the runner may still be running its last pass back", err)
 	}
 	return s.keepForResume(ctx, run.ID, folder, gen, rec, genAt)
