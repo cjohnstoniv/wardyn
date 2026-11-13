@@ -423,12 +423,12 @@ func appendFrame(dst []byte, f frame, p []byte) []byte {
 
 // session is the RFB state the two directions share.
 type session struct {
-	rules    Rules
-	version  int             // 33, 37 or 38 once the browser has chosen
-	secType  byte            // 1 (None) or 2 (VNC auth) once known
-	bpp      int             // bytes per pixel: ServerInit's, then SetPixelFormat's
-	playback bool            // the pixel format in force, ServerInit's then SetPixelFormat's, is playbackPixels
-	dropped  map[string]bool // the input kinds a view-only relay has reported
+	rules   Rules
+	version int             // 33, 37 or 38 once the browser has chosen
+	secType byte            // 1 (None) or 2 (VNC auth) once known
+	bpp     int             // bytes per pixel: ServerInit's, then SetPixelFormat's
+	pixels  [13]byte        // the pixel format in force: ServerInit's, then each SetPixelFormat that passed
+	dropped map[string]bool // the input kinds a view-only relay has reported
 }
 
 type step func(piece []byte) error

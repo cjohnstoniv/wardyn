@@ -543,6 +543,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	uiCallerHeaders(pr.Out.Header, sess)
 	if uiDesktopApp(sess.App) {
 		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
+		pr.Out = desktopConnTrace(pr.Out)
 	}
 }
 

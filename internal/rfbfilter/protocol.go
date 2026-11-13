@@ -139,7 +139,7 @@ func (p *parser) serverInit(b []byte) error {
 	if err := setBPP(p.s, b[4]); err != nil {
 		return err
 	}
-	p.s.playback = bytes.Equal(b[4:17], playbackPixels)
+	copy(p.s.pixels[:], b[4:17])
 	p.forward(b)
 	p.stream(u32(b[20:]), false, p.msgNext)
 	return nil
@@ -208,14 +208,13 @@ func (p *parser) clientMsg(b []byte) error {
 	switch b[0] {
 	case 0: // SetPixelFormat
 		return p.more(20, func(h []byte) error {
-			playback := bytes.Equal(h[4:17], playbackPixels)
-			if err := p.recordedPixels(playback); err != nil {
+			if err := p.recordedPixels(h[4:17]); err != nil {
 				return err
 			}
 			if err := setBPP(p.s, h[4]); err != nil {
 				return err
 			}
-			p.s.playback = playback
+			copy(p.s.pixels[:], h[4:17])
 			return p.fixed(h)
 		}, b)
 	case 2: // SetEncodings
@@ -258,21 +257,46 @@ func (p *parser) fence(h []byte) error {
 // 0, 8 and 16. It is the first 13 bytes of an RFB pixel format; the other 3 are padding.
 var playbackPixels = []byte{32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16}
 
-// recordedPixels refuses, under Rules.Recorded, a pixel format other than playbackPixels: the recorder
+// recordedPixels refuses, under Rules.Recorded, a pixel format f other than playbackPixels: the recorder
 // frames 32-bit pixels only, and in any other size it would keep the bytes after a rectangle, a
 // ServerCutText among them, as pixels; in any other 32-bit layout the replay shows wrong colours.
-func (p *parser) recordedPixels(playback bool) error {
-	if p.s.rules.Recorded && !playback {
-		return errors.New("rfb relay: a recorded desktop takes one pixel format only: 32 bits per pixel, depth 24, little-endian true colour, a maximum of 255 and shifts 0, 8 and 16 for red, green and blue")
+func (p *parser) recordedPixels(f []byte) error {
+	if p.s.rules.Recorded && !bytes.Equal(f, playbackPixels) {
+		e := &PixelFormatError{}
+		copy(e.Pixels[:], f)
+		return e
 	}
 	return nil
+}
+
+// PixelFormatError is the relay's refusal of a pixel format on a recorded desktop (Rules.Recorded). Pixels
+// is the refused format's 13 bytes: the browser's SetPixelFormat, or ServerInit's when the browser asked
+// for pixels in the desktop's own format.
+type PixelFormatError struct{ Pixels [13]byte }
+
+func (e *PixelFormatError) Error() string {
+	return "rfb relay: a recorded desktop takes one pixel format only: 32 bits per pixel, depth 24, little-endian true colour, a maximum of 255 and shifts 0, 8 and 16 for red, green and blue"
+}
+
+// Refused names the refused format in the words Error names the one a recorded desktop takes.
+func (e *PixelFormatError) Refused() string {
+	f := e.Pixels
+	order, colour := "little-endian", "true colour"
+	if f[2] != 0 {
+		order = "big-endian"
+	}
+	if f[3] == 0 {
+		colour = "colour map"
+	}
+	return fmt.Sprintf("%d bits per pixel, depth %d, %s %s, maxima of %d, %d and %d and shifts of %d, %d and %d for red, green and blue",
+		f[0], f[1], order, colour, u16(f[4:]), u16(f[6:]), u16(f[8:]), f[10], f[11], f[12])
 }
 
 // pixelsAsked forwards a FramebufferUpdateRequest or EnableContinuousUpdates, which ask the server for
 // pixels in the format in force: the browser's SetPixelFormat, or else ServerInit's, which
 // recordedPixels checks here.
 func (p *parser) pixelsAsked(b []byte) error {
-	if err := p.recordedPixels(p.s.playback); err != nil {
+	if err := p.recordedPixels(p.s.pixels[:]); err != nil {
 		return err
 	}
 	return p.fixed(b)

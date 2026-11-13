@@ -75,8 +75,10 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 	// read is taken as recorded: that only refuses pixels in a format the browser does not ask for.
 	run, rerr := s.cfg.Store.GetRun(ctx, sess.Run)
 	rules.Recorded = rerr != nil || s.recordsDesktopApp(run, sess)
+	rec := desktopConnRecorder(resp.Request)
 	filtered := rfbfilter.Wrap(body, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: ui relay closed a desktop socket it could not follow", "run_id", sess.Run, "app", sess.App, "err", err)
+		stopRefusedRecording(rec, err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {
 			s.auditUISession(sess, "ui.clipboard.transfer", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
 		}
