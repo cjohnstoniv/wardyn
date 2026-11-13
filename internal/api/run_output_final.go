@@ -317,9 +317,22 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 }
 
 // writeGapRow resolves runID's pending row (or writes the row) as a capture
-// gap with no bytes, never over a final row, and audits it.
+// gap with no bytes, never over a final row, and audits it. Chunks a gone
+// replica left are written into the row instead. A failed read of them writes
+// no gap, which would delete them unread: the chunks stay, with a pending row
+// (made here when there was none) that the stale-pending sweep tries again.
 func (s *Server) writeGapRow(ctx context.Context, st store.RunOutputStore, runID uuid.UUID, reason string) {
-	if s.saveRowFromChunks(ctx, runID, reason) {
+	switch s.saveRowFromChunks(ctx, runID, reason) {
+	case chunksDone:
+		return
+	case chunksFailed:
+		switch err := st.InsertPendingRunOutput(ctx, runID); {
+		case errors.Is(err, store.ErrRunOutputErased):
+			s.fenceRunOutput(runID)
+		case err != nil:
+			slog.WarnContext(ctx, "wardynd: could not keep a run's output pending after a failed read of its live chunks",
+				slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
 		return
 	}
 	wrote, err := st.SaveGapRunOutput(ctx, runID)
