@@ -141,6 +141,7 @@ func (w uiInterimWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter 
 func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	out.Header.Del("Authorization")
 	out.Header.Del("Proxy-Authorization")
+	uiStripIngressHeaders(out.Header)
 	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
 	// parser silently DROPS any cookie whose value is not RFC-6265-valid (a
 	// space, a comma, a quote), so re-serialising through it ate a sandbox
@@ -171,5 +172,31 @@ func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	if q := out.URL.Query(); q.Has("ticket") {
 		q.Del("ticket")
 		out.URL.RawQuery = q.Encode()
+	}
+}
+
+// uiIngressHeaderPrefixes and uiIngressHeaders are the names a front proxy or an access proxy uses
+// to tell its backend the browser's address or the person it signed in. httputil removes only
+// Forwarded and three X-Forwarded-* names, so every X-Forwarded-* name is listed by prefix.
+var (
+	uiIngressHeaderPrefixes = []string{"X-Forwarded-", "X-Auth-Request-", "X-Ms-Client-Principal", "X-Amzn-Oidc-", "Cf-Access-", "X-Goog-Authenticated-User-"}
+	uiIngressHeaders        = []string{"Forwarded", "X-Real-Ip", "True-Client-Ip", "Cf-Connecting-Ip", "Cf-Connecting-Ipv6", "Fastly-Client-Ip",
+		"X-Client-Ip", "X-Cluster-Client-Ip", "X-Original-Forwarded-For", "X-Azure-Clientip", "X-Azure-Socketip", "X-Envoy-External-Address",
+		"X-Goog-Iap-Jwt-Assertion"}
+)
+
+// uiStripIngressHeaders removes the caller's address and the front proxy's sign-in headers from a
+// request bound for sandbox-authored code: they are the operator's, and an inbound app learns its
+// caller from uiCallerHeaders, which runs after this. A front proxy that names the caller under a
+// header not listed here passes it on to the app.
+func uiStripIngressHeaders(h http.Header) {
+	for k := range h {
+		ck := http.CanonicalHeaderKey(k)
+		if slices.ContainsFunc(uiIngressHeaderPrefixes, func(p string) bool { return strings.HasPrefix(ck, p) }) {
+			delete(h, k)
+		}
+	}
+	for _, name := range uiIngressHeaders {
+		h.Del(name)
 	}
 }

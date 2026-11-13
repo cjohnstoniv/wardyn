@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A model call sent to a gateway with run identity on as a plain proxy request, not through a tunnel, now carries the run's identity and call id like the gateway's other calls, or is not sent when the identity cannot be had. Affects 0.10.0 prereleases only.
+- The UI relay no longer passes the common caller-address and front-proxy sign-in headers, such as `X-Real-IP` or any `X-Forwarded-*`, to the app in the sandbox. An inbound app still gets `X-Wardyn-Caller`.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
