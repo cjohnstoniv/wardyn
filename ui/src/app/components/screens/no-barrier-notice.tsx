@@ -13,9 +13,30 @@ import { Notice } from "../wardyn/notice";
 
 /**
  * The one place the console says no barrier can be built. Someone who can reach the Environment step gets the
- * command, Re-check and the link; everyone else gets who can fix it and nothing to click.
+ * command, Re-check and the link; everyone else gets who can fix it and nothing to click. `unknown`: the setup
+ * status read failed, so it says the barrier could not be checked, with Re-check for the same readers.
  */
-export function NoBarrierNotice({ canFix, onRecheck }: { canFix: boolean; onRecheck?: () => void }) {
+export function NoBarrierNotice({
+  canFix,
+  onRecheck,
+  unknown,
+}: {
+  canFix: boolean;
+  onRecheck?: () => void;
+  unknown?: boolean;
+}) {
+  const recheck = onRecheck && (
+    <Button size="sm" variant="outline" onClick={onRecheck}>
+      <RotateCw className="size-3.5" /> {NO_BARRIER.RECHECK}
+    </Button>
+  );
+  if (unknown) {
+    return (
+      <Notice tone="warning" live className="rounded-none border-0 bg-transparent p-0" actions={canFix && recheck}>
+        {NO_BARRIER.UNCHECKED}
+      </Notice>
+    );
+  }
   return (
     <Notice
       tone="danger"
@@ -33,11 +54,7 @@ export function NoBarrierNotice({ canFix, onRecheck }: { canFix: boolean; onRech
                 className="rounded p-0.5 text-muted-foreground hover:text-foreground"
               />
             </div>
-            {onRecheck && (
-              <Button size="sm" variant="outline" onClick={onRecheck}>
-                <RotateCw className="size-3.5" /> {NO_BARRIER.RECHECK}
-              </Button>
-            )}
+            {recheck}
             <Link to={NO_BARRIER.ADMIN_ROUTE} className="text-sm font-medium underline underline-offset-2">
               {NO_BARRIER.CTA}
             </Link>

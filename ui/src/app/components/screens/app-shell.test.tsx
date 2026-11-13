@@ -95,12 +95,12 @@ describe("AppShell (control plane unreachable)", () => {
 
   it("stays silent while the daemon answers", () => {
     renderShell(false);
-    expect(screen.queryByText(/Control plane unreachable/)).toBeNull();
+    expect(screen.queryByText(/Control plane not available/)).toBeNull();
   });
 
   it("banners the outage", () => {
     renderShell(true);
-    expect(screen.getByText(/Control plane unreachable/)).toBeInTheDocument();
+    expect(screen.getByText(/Control plane not available/)).toBeInTheDocument();
   });
 });
 

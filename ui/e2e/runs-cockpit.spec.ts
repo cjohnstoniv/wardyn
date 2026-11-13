@@ -601,7 +601,7 @@ test.describe("Focus mode — starts below the shell's banner", () => {
     });
 
     await page.goto(`/runs/${runId}`);
-    const banner = page.getByRole("status").filter({ hasText: /Control plane unreachable/ });
+    const banner = page.getByRole("status").filter({ hasText: /Control plane not available/ });
     await expect(banner).toBeVisible({ timeout: 15_000 });
     await page.getByRole("button", { name: RUN_COCKPIT.enterFocus }).click();
     const exit = page.getByRole("button", { name: RUN_COCKPIT.exitFocus });

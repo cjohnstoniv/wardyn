@@ -281,7 +281,7 @@ export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as Confinement
 // useMeta -> App.tsx's roleResolved), so one stalled read is a permanent
 // spinner with no error, no retry and nothing a reload changes. The deadline
 // turns that into the rejection every caller already handles: the shell's
-// "Control plane unreachable" banner, sign-in's "Could not reach the control
+// "Control plane not available" banner, sign-in's "Could not reach the control
 // plane.", a launch button that un-disables.
 //
 // 60s, not a snappy 5-10s: this bounds a HANG, it is not a latency budget, and

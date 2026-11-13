@@ -295,6 +295,7 @@ export function RunsScreen() {
         ) : (
           <RunsFirstRun
             readiness={readiness}
+            statusUnknown={!!setupStatus?.unreachable}
             confinementClasses={confinementClasses}
             secretNames={setupStatus?.secrets.present ?? []}
             onNewRun={() => navigate("/runs/new")}
