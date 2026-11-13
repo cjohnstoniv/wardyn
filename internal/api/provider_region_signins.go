@@ -47,10 +47,11 @@ func signInEndReason(mp *types.ModelProviders, held awsSSOScopeSnapshot) string 
 
 // endUnanswerableSignIns ends, as expired, every pending AWS sign-in request raised for a
 // bedrock_sso provider whose region, pinned account or pinned role this save changed, or that it
-// deleted or changed the kind of: signInEndReason, held as the provider was before the save,
-// since a dispatch takes no session for another region or pin (providerBedrockRefusal). A
-// provider pinned only now is read as a changed pin: the save does not know which account its
-// runs signed in for. Both write doors call it after the save and before their lock is
+// deleted or changed the kind of, when no sign-in can answer it any more: signInEndReason, held
+// as the request's run holds the provider (its grant), so a run already signed in for the account
+// and role pinned now keeps its request. A run whose grant cannot be read is held as the
+// provider was before the save, since a dispatch takes no session for another region or pin
+// (providerBedrockRefusal). Both write doors call it after the save and before their lock is
 // released, so a request raised between the purge and the save is ended too; one raised after
 // this list is ended by the resolve that raised it (raisedSignInEndReason). A request already answered is left
 // as it is. Best-effort: the save stands, and a request it could not end ends with its run or
@@ -89,8 +90,33 @@ func (s *Server) endUnanswerableSignIns(ctx context.Context, before, after *type
 			json.Unmarshal(ap.RequestedScope, &sc) != nil || sc.Lane != "" || ended[sc.ProviderUID] == "" {
 			continue
 		}
-		s.endSignInRequest(ctx, ap.ID, ended[sc.ProviderUID])
+		why := ended[sc.ProviderUID]
+		if held, ok := s.runSignInGrant(ctx, ap.RunID, sc.ProviderUID); ok {
+			why = signInEndReason(after, held)
+		}
+		if why != "" {
+			s.endSignInRequest(ctx, ap.ID, why)
+		}
 	}
+}
+
+// runSignInGrant is the dispatch-time snapshot of the run's AWS sign-in grant for the provider
+// uid, the account, role and region its session resolve compares (providerSSOScopeAt); false
+// when the run's grants cannot be read or none is for that provider.
+func (s *Server) runSignInGrant(ctx context.Context, runID uuid.UUID, uid string) (awsSSOScopeSnapshot, bool) {
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
+	if err != nil {
+		return awsSSOScopeSnapshot{}, false
+	}
+	for _, g := range grants {
+		var sc struct {
+			Snapshot awsSSOScopeSnapshot `json:"snapshot"`
+		}
+		if json.Unmarshal(g.Spec.Scope, &sc) == nil && sc.Snapshot.Mechanism == string(types.ModelProviderBedrockSSO) && sc.Snapshot.ProviderUID == uid {
+			return sc.Snapshot, true
+		}
+	}
+	return awsSSOScopeSnapshot{}, false
 }
 
 // raisedSignInEndReason is signInEndReason for the request a resolve has just raised, on the

@@ -155,17 +155,8 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	}
 	// The pin, the portal and the region before any renewal: a session the provider
 	// would refuse is never worth spending a refresh token on.
-	if b.SSOAccountID != "" && (blob.AccountID != b.SSOAccountID || blob.RoleName != b.SSORoleName) {
-		return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRPinned, blob.AccountID, blob.RoleName, b.SSOAccountID, b.SSORoleName)))
-	}
-	if !sameStartURL(blob.StartURL, b.SSOStartURL) {
-		return refuse(connectDenial(p.ID, mpBRPortal))
-	}
-	// A sign-in stores a session for its provider's region only, so a session for another one (a
-	// secret store restored apart from the database, a direct write) is none for this provider: a
-	// run dispatched on it would be refused at its first session resolve, every time.
-	if blob.Region != b.Region {
-		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
+	if state := sessionNotForProvider(blob, b); state != "" {
+		return refuse(connectDenial(p.ID, state))
 	}
 	if refresh {
 		rctx := context.WithValue(ctx, awsSSORenewalBaselineKey{scope}, baseline)
@@ -195,6 +186,23 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
 	}
 	return blob, providerDenial{}, nil
+}
+
+// sessionNotForProvider is why the stored session blob is none for a provider with the settings
+// b, "" when it is one: another account or role than the pin, then another access portal, then
+// another region. A sign-in stores a session for its provider's region only, so a session for
+// another one (a secret store restored apart from the database, a direct write) reads as not
+// signed in: a run dispatched on it would be refused at its first session resolve, every time.
+func sessionNotForProvider(blob awsSSOBlob, b types.BedrockSettings) string {
+	switch {
+	case b.SSOAccountID != "" && (blob.AccountID != b.SSOAccountID || blob.RoleName != b.SSORoleName):
+		return fmt.Sprintf(mpBRPinned, blob.AccountID, blob.RoleName, b.SSOAccountID, b.SSORoleName)
+	case !sameStartURL(blob.StartURL, b.SSOStartURL):
+		return mpBRPortal
+	case blob.Region != b.Region:
+		return mpBRNotSignedIn
+	}
+	return ""
 }
 
 // modelCredential is the model-credential fact both doors read for a run that

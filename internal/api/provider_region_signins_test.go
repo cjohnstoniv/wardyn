@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -38,6 +39,25 @@ func (a raiseHook) Request(ctx context.Context, req types.ApprovalRequest) (type
 	return ap, err
 }
 
+// grantSiteStore is the site-config fake that also answers each run's grants.
+type grantSiteStore struct {
+	*fakeSiteConfigStore
+	grants map[uuid.UUID][]types.CredentialGrant
+}
+
+func (s grantSiteStore) ListGrantsByRun(_ context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
+	return s.grants[runID], nil
+}
+
+// providerWriteDoors are the two doors that save model providers, each with its body's shape.
+var providerWriteDoors = []struct {
+	path string
+	wrap func(string) string
+}{
+	{"/api/v1/model-providers", func(b string) string { return b }},
+	{"/api/v1/site-config", func(b string) string { return `{"model_providers":` + b + `}` }},
+}
+
 // TestProviderWriteEndsPendingAWSSignIns: changing a bedrock_sso provider's region, pinned
 // account or pinned role, deleting it or changing its kind ends, in the save, every pending AWS
 // sign-in request raised for it, at both write doors, as the system's and with the reason. A
@@ -45,14 +65,7 @@ func (a raiseHook) Request(ctx context.Context, req types.ApprovalRequest) (type
 // at a save that does none of these (or only removes the pin, after which any account serves)
 // are left as they are.
 func TestProviderWriteEndsPendingAWSSignIns(t *testing.T) {
-	doors := []struct {
-		path string
-		wrap func(string) string
-	}{
-		{"/api/v1/model-providers", func(b string) string { return b }},
-		{"/api/v1/site-config", func(b string) string { return `{"model_providers":` + b + `}` }},
-	}
-	for _, d := range doors {
+	for _, d := range providerWriteDoors {
 		for _, tc := range []struct {
 			name   string
 			edit   func(*types.ModelProviders) // Providers[1] is bedrock-prod
@@ -71,7 +84,7 @@ func TestProviderWriteEndsPendingAWSSignIns(t *testing.T) {
 			t.Run(d.path+"/"+tc.name, func(t *testing.T) {
 				site := credentialSite(endpointProvider(), ssoProvider())
 				sso, _ := modelProviderByID(site.ModelProviders, "bedrock-prod")
-				srv, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{cfg: site})
+				srv := New(baseTestConfig(newHarness(t), grantSiteStore{&fakeSiteConfigStore{cfg: site}, nil}))
 				approvals := endRecorder{newFakeApprovals(), map[uuid.UUID][2]string{}}
 				srv.cfg.Approvals = approvals
 				ctx := context.Background()
@@ -117,6 +130,96 @@ func TestProviderWriteEndsPendingAWSSignIns(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestProviderWriteKeepsTheRequestOfARunOnTheNewPin: pinning an unpinned provider, or pinning it
+// to another account or role, ends a pending sign-in request only when its run's grant holds
+// another account or role than the new pin, at both write doors. A run dispatched for the pair
+// pinned now is served once its owner signs in, so its request stays pending and a sign-in for
+// that provider still answers it.
+func TestProviderWriteKeepsTheRequestOfARunOnTheNewPin(t *testing.T) {
+	for _, d := range providerWriteDoors {
+		for _, tc := range []struct {
+			name   string
+			before func(*types.BedrockSettings) // the provider as stored before the save, which pins 123456789012/BedrockUser
+		}{
+			{"a first pin", func(b *types.BedrockSettings) { b.SSOAccountID, b.SSORoleName = "", "" }},
+			{"a pin edit", func(b *types.BedrockSettings) { b.SSOAccountID = "210987654321" }},
+		} {
+			t.Run(d.path+"/"+tc.name, func(t *testing.T) {
+				old := ssoProvider()
+				tc.before(old.Bedrock)
+				site := credentialSite(endpointProvider(), old)
+				sso, _ := modelProviderByID(site.ModelProviders, "bedrock-prod")
+				st := grantSiteStore{&fakeSiteConfigStore{cfg: site}, map[uuid.UUID][]types.CredentialGrant{}}
+				srv := New(baseTestConfig(newHarness(t), st))
+				approvals := endRecorder{newFakeApprovals(), map[uuid.UUID][2]string{}}
+				srv.cfg.Approvals = approvals
+				ctx := context.Background()
+				scope := chosenProvider{provider: sso, owner: "alice@example.com"}.awsScope()
+				raise := func(account, role string) uuid.UUID {
+					t.Helper()
+					runID := uuid.New()
+					st.grants[runID] = []types.CredentialGrant{{RunID: runID, Spec: types.GrantSpec{Kind: types.GrantAPIKey,
+						Scope: mustJSON(map[string]any{"snapshot": awsSSOScopeSnapshot{
+							OwnerSubject: "alice@example.com", CredentialSource: awsSSOCredentialSourceLabel(scope),
+							Mechanism: string(types.ModelProviderBedrockSSO), SSOAccountID: account, SSORoleName: role,
+							Region: "us-east-1", ProviderUID: sso.UID,
+						}})}}}
+					ap, err := approvals.Request(ctx, types.ApprovalRequest{RunID: runID, Kind: types.ApprovalCredentialReauth,
+						RequestedScope: mustJSON(awsSSOReauthScopeBody{Mechanism: "sso", CredentialSource: awsSSOCredentialSourceLabel(scope),
+							Owner: "alice@example.com", Provider: "bedrock-prod", ProviderUID: sso.UID})})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return ap.ID
+				}
+				onPin, elsewhere := raise("123456789012", "BedrockUser"), raise("210987654321", "BedrockUser")
+
+				raw, _ := json.Marshal(normalizeModelProviders(providerBlock(endpointProvider(), ssoProvider())))
+				if w := do(t, srv, http.MethodPut, d.path, adminToken, d.wrap(string(raw))); w.Code != http.StatusOK {
+					t.Fatalf("PUT = %d; body=%s", w.Code, w.Body.String())
+				}
+
+				kept, _ := approvals.Get(ctx, onPin)
+				if kept.State != types.ApprovalPending {
+					t.Errorf("the request of the run on the new pin is %s after the save, want PENDING", kept.State)
+				}
+				if !reauthResolvableBy(kept, scope, types.AgentRun{CreatedAt: time.Now().Add(time.Minute)}) {
+					t.Errorf("a later sign-in for bedrock-prod does not answer the request of the run on the new pin")
+				}
+				if got, _ := approvals.Get(ctx, elsewhere); got.State != types.ApprovalExpired {
+					t.Errorf("the request of the run on another account is %s after the save, want EXPIRED", got.State)
+				}
+				if want := map[uuid.UUID][2]string{elsewhere: {"wardynd", "provider_sign_in_changed"}}; len(approvals.ends) != 1 || approvals.ends[elsewhere] != want[elsewhere] {
+					t.Errorf("ended (actor, reason by request) = %v, want %v", approvals.ends, want)
+				}
+			})
+		}
+	}
+}
+
+// TestResolveAWSSSOInjection_APinOnTheRunsOwnPairLeavesTheRaisedRequestOpen: a write that pins
+// the provider, while a resolve raises its request, to the account and role the run's grant holds
+// leaves the request pending (423), and the run is served once a session for that pair is stored.
+func TestResolveAWSSSOInjection_APinOnTheRunsOwnPairLeavesTheRaisedRequestOpen(t *testing.T) {
+	f := newReauthFixture(t, nil) // no session stored yet
+	unpinned := reauthProvider()
+	unpinned.Bedrock.SSOAccountID, unpinned.Bedrock.SSORoleName = "", ""
+	f.st.site = reauthProviderSite(unpinned)
+	approvals := raiseHook{endRecorder{f.st.approvals, map[uuid.UUID][2]string{}}, func() { f.st.site = reauthProviderSite(reauthProvider()) }}
+	f.srv.cfg.Approvals = approvals
+
+	if w := f.resolve(t); w.Code != http.StatusLocked {
+		t.Fatalf("resolve = %d %s, want 423 (the request stays open)", w.Code, w.Body.String())
+	}
+	if len(approvals.ends) != 0 {
+		t.Errorf("ended (actor, reason by request) = %v, want none", approvals.ends)
+	}
+	f.putBlob(t, "alice@example.com", liveSSOBlob())
+	if w := f.resolve(t); w.Code != http.StatusOK {
+		t.Errorf("resolve after the sign-in = %d %s, want 200", w.Code, w.Body.String())
 	}
 }
 
