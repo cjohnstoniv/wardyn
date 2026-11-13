@@ -90,6 +90,9 @@ type AuditSpool struct {
 	retireFailed bool
 	// retireBlocked counts the passes retireFailed has held back since the last probe pass.
 	retireBlocked int
+	// noted is the event noteRunEventSetAside last wrote its note for, so a line whose move keeps failing
+	// is noted once rather than on every pass. Guarded by mu.
+	noted uuid.UUID
 }
 
 // spoolPoisonAttempts is how many consecutive Drain attempts one line gets
@@ -426,7 +429,11 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 		// Only ever reached when something was actually blocked behind it. A
 		// suspect at the very END of the spool blocks nothing, cannot be proven
 		// against a live store, and is simply retried next tick.
-		if qerr := a.quarantineLine(ctx, lines[suspectIdx], suspect, replayErr); qerr != nil {
+		if nerr := a.noteRunEventSetAside(passCtx, rec, suspect); nerr != nil {
+			// The store refused the note as well: nothing moves, as in an outage.
+			replayErr = nerr
+			a.poisonProven = true
+		} else if qerr := a.quarantineLine(ctx, lines[suspectIdx], suspect, replayErr); qerr != nil {
 			// Moving it aside failed (read-only or full disk). Leaving it in
 			// place is the only honest option left: the alternative is dropping
 			// an audit event to unblock the queue.
@@ -703,10 +710,12 @@ func (a *AuditSpool) strikeLine(line []byte) int {
 // places at once rather than in none at any instant. Verbatim, so the file is a
 // valid JSONL spool an operator can move back once the cause is fixed; the
 // reason lives in the log line and the /metrics counter, not the payload.
-// Deliberately NOT recorded as an audit event through rec: the store just
-// refused a write from this spool, and a report written through the failing path
-// into the log it is about is the worst of both. The signals are the log line
-// below, wardyn_audit_spool_quarantined_total, and the file itself.
+// The move is not recorded as an audit event through rec: the store just refused
+// a write from this spool, and a report written through the failing path into the
+// log it is about is the worst of both. The signals are the log line below,
+// wardyn_audit_spool_quarantined_total, and the file itself. The one row Drain
+// does write first is the run's note (noteRunEventSetAside), and Drain keeps the
+// line when the store refuses that too.
 //
 // Caller must hold a.mu (Drain does).
 func (a *AuditSpool) quarantineLine(ctx context.Context, line []byte, ev types.AuditEvent, cause error) error {

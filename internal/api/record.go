@@ -126,6 +126,9 @@ type RecordTaskResult struct {
 	// couldn't reach the control plane, so no evidence landed).
 	FailureHint string   `json:"failure_hint,omitempty"`
 	Caveats     []string `json:"caveats,omitempty"`
+	// EvidenceSeq is the audit position a confined capture read its run's trail through (recordEvidenceSeq):
+	// recheckCleanReplays takes a clean verdict again when a row that can change it lands past it.
+	EvidenceSeq int64 `json:"evidence_seq,omitempty"`
 }
 
 // recordResultsMap decodes the workspace's opaque record_results blob. A
@@ -230,6 +233,8 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 			repaired = true
 		}
 	}
+	// A clean confined verdict whose run's trail has grown since the capture is taken again.
+	repaired = s.recheckCleanReplays(ctx, ws) || repaired
 	// Scan strand: the workspace is mid-import but its in-flight run has
 	// already terminated — settle it to a clear failure so the operator sees a
 	// reason instead of an endless spinner. reconcileWorkspaceRun re-fences on the

@@ -664,6 +664,8 @@ commands are the ones in "Back them up" and "Restore them", and in
     - fsync'd there before it leaves the spool, verbatim, so the file is a valid JSONL spool you can move back onto
       the spool path once the cause is fixed.
   - A store that is simply down accepts nothing, so nothing is ever quarantined during an outage.
+  - Before the move, the drain writes an `audit.spool.quarantine` row on the event's run, if any, so a confined
+    workspace replay of that run ends as failed, not clean; if the store refuses that row too, the line stays.
   - Each move logs at ERROR with the event's id and action and increments `wardyn_audit_spool_quarantined_total`:
     alert on it, because a spool that has drained back to 0 no longer implies the queryable trail is complete.
   - The counter is **re-read from the sidecar at startup**, so it survives a restart the way the condition it reports
