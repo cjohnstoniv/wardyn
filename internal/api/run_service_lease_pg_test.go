@@ -149,7 +149,7 @@ func TestPG_AServiceWithoutItsAuthorityIsNotRenewed(t *testing.T) {
 			if err := e.h.srv.sweepRunLeases(ctx); err != nil {
 				t.Fatalf("sweep: %v", err)
 			}
-			want := end
+			want := *run.EndsAt // the end as stored: the create re-anchors it on the database's clock (stampRunTimes)
 			if tc.renewed {
 				want = clock.Add(2 * time.Hour)
 			}

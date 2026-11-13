@@ -96,7 +96,7 @@ func TestPG_MarkRunEndingSoon(t *testing.T) {
 	end := time.Now().UTC().Add(50 * time.Minute).Truncate(time.Microsecond)
 	r := newRun(types.RunRunning)
 	r.EndsAt = &end
-	persistRun(t, ctx, pool, r)
+	end = *persistRun(t, ctx, pool, r).EndsAt // the end as stored (stampRunTimes)
 
 	later := end.Add(time.Hour)
 	for _, tc := range []struct {
@@ -140,8 +140,8 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	finished.EndsAt = &end
 	rebootLost := newRun(types.RunRunning)
 	rebootLost.EndsAt, rebootLost.WaitBudgetSec = &end, 600
-	for _, r := range []types.AgentRun{live, kept, finished, rebootLost} {
-		persistRun(t, ctx, pool, r)
+	for _, r := range []*types.AgentRun{&live, &kept, &finished, &rebootLost} {
+		*r = persistRun(t, ctx, pool, *r)
 	}
 	if _, err := pg.MarkRunEnded(ctx, kept.ID, end); err != nil {
 		t.Fatalf("MarkRunEnded: %v", err)
@@ -162,14 +162,14 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 		want       bool
 	}{
 		{"a stale end", live.ID, types.RunLimits{}, &later, 600, false},
-		{"a stale wait", live.ID, types.RunLimits{}, &end, 60, false},
+		{"a stale wait", live.ID, types.RunLimits{}, live.EndsAt, 60, false},
 		// The gate was read from limits a re-clamp has since tightened.
-		{"stale limits", live.ID, types.RunLimits{UserChangesLimits: true}, &end, 600, false},
-		{"a kept run", kept.ID, types.RunLimits{}, &end, 0, false},
-		{"a terminal run", finished.ID, types.RunLimits{}, &end, 0, false},
-		{"a reboot-lost run", rebootLost.ID, types.RunLimits{}, &end, 600, true},
-		{"the values read", live.ID, types.RunLimits{}, &end, 600, true},
-		{"the same values again", live.ID, types.RunLimits{}, &end, 600, false},
+		{"stale limits", live.ID, types.RunLimits{UserChangesLimits: true}, live.EndsAt, 600, false},
+		{"a kept run", kept.ID, types.RunLimits{}, kept.EndsAt, 0, false},
+		{"a terminal run", finished.ID, types.RunLimits{}, finished.EndsAt, 0, false},
+		{"a reboot-lost run", rebootLost.ID, types.RunLimits{}, rebootLost.EndsAt, 600, true},
+		{"the values read", live.ID, types.RunLimits{}, live.EndsAt, 600, true},
+		{"the same values again", live.ID, types.RunLimits{}, live.EndsAt, 600, false},
 	} {
 		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromLimits, tc.fromEnd, tc.fromWait, &later, 1200, nil)
 		if err != nil || got != tc.want {
@@ -246,7 +246,7 @@ func endedRun(t *testing.T, ctx context.Context, pg store.PG, now time.Time) (ty
 	end := now.Add(-time.Hour)
 	r := newRun(types.RunRunning)
 	r.EndsAt = &end
-	persistRun(t, ctx, pg.Pool, r)
+	r = persistRun(t, ctx, pg.Pool, r) // the row as stored: the create re-anchors its end on the database's clock (stampRunTimes)
 	endedAt := now.Add(-time.Minute)
 	if ok, err := pg.MarkRunEnded(ctx, r.ID, endedAt); err != nil || !ok {
 		t.Fatalf("MarkRunEnded = %v, %v", ok, err)
