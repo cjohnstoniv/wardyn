@@ -435,8 +435,11 @@ func (d *Driver) EndSandbox(ctx context.Context, ref string) (endErr error) {
 	wipeErr := d.wipeAWSCaches(ctx, ref)
 	if v := d.vmFor(ctx, ref); v != nil {
 		d.vmPowerdown(ctx, v, ref)
-		// A sidecar that would not go is answered, not only logged: the end is retried until it converges.
-		defer func() { endErr = errors.Join(endErr, d.removeVMSidecars(ctx, v.runID)) }()
+		// A sidecar that would not go, or a macOS VM helper still running, is answered, not only logged: the
+		// end is retried until it converges.
+		defer func() {
+			endErr = endAnswer(endErr, errors.Join(d.removeVMSidecars(ctx, v.runID), d.macVMStopUnconfirmed(v.runID)))
+		}()
 	}
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
@@ -575,8 +578,9 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // same run. The run id is recovered from the agent's run-id label, or — if missing OR corrupt —
 // from the deterministic agent container name, so the sibling proxy and network are never orphaned.
 // A found-and-removed agent whose run id cannot be resolved either way returns
-// errTeardownUnresolved (fail closed, no false success). Every step is idempotent.
-func (d *Driver) teardown(ctx context.Context, agentRef string) error {
+// errTeardownUnresolved (fail closed, no false success). A macOS VM whose helper outlived its kill
+// returns errMacVMHelperAlive, as the VM is not known to have stopped. Every step is idempotent.
+func (d *Driver) teardown(ctx context.Context, agentRef string) (tdErr error) {
 	// Drop any tracked agent exec for this ref: the container is going away, so a pending Wait (if
 	// any) will observe the inspect error/ctx and return. Dropping creating[agentRef] tells an
 	// in-flight runAsMainProcess that its ref was torn down mid-create, so IT must remove the
@@ -617,6 +621,9 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	defer func() {
 		if id != uuid.Nil {
 			d.teardownVM(ctx, agentRef, id)
+			if tdErr == nil {
+				tdErr = d.macVMStopUnconfirmed(id)
+			}
 		}
 	}()
 	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {

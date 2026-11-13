@@ -618,9 +618,19 @@ func removeKept(dir string, wait time.Duration) (bool, error) {
 }
 
 // removeKeptHeld deletes a kept machine whose lock the caller holds, and with it a tools update's staging
-// the update left (no update runs while the lock is held): the staging and its lock, the folder, then the
-// folder's lock file.
+// the update left (no update runs while the lock is held): the old generations an update moved aside
+// (macvm.RemoveOldGenerations), the staging and its lock, the folder, then the folder's lock file.
 func removeKeptHeld(dir string) (bool, error) {
+	if err := macvm.RemoveOldGenerations(dir); err != nil {
+		return false, err
+	}
+	return removeKeptFolderHeld(dir)
+}
+
+// removeKeptFolderHeld is removeKeptHeld that leaves the old generations an update moved aside. The sweep
+// of a folder with no record uses it: an update whose new copy has no record, and whose swap back failed,
+// leaves such a folder with the person's old disk moved aside beside it.
+func removeKeptFolderHeld(dir string) (bool, error) {
 	if err := removeKeptUpdate(dir); err != nil {
 		return false, err
 	}
@@ -789,7 +799,7 @@ func (c *MacVMConfig) sweepKeptDebris() error {
 			continue // held: a create or an update is in it
 		}
 		if !keptExists(filepath.Join(dir, macvm.KeptFile)) {
-			if _, err := removeKeptHeld(dir); err != nil {
+			if _, err := removeKeptFolderHeld(dir); err != nil {
 				errs = append(errs, fmt.Errorf("docker: remove a kept folder with no record %s: %w", de.Name(), err))
 			} else {
 				slog.Info("docker: removed a kept folder a create left with no record", slog.String("key", de.Name()))

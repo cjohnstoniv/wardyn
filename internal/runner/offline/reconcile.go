@@ -30,6 +30,7 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 	m.mu.Lock()
 	m.retryRetiredReleases(ctx)
 	m.mu.Unlock()
+	m.retryUnconfirmedTeardowns(ctx)
 	for _, a := range actions {
 		result, err := m.apply(ctx, a)
 		if err != nil {
@@ -197,6 +198,14 @@ func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction,
 		}
 		return m.refuseAction(ctx, a, err)
 	}
+	if unconfirmed := (*runner.TeardownUnconfirmedError)(nil); errors.As(err, &unconfirmed) {
+		// Held and refused for the same reason: the run keeps its sandbox and what it holds, and the
+		// runner reaches READY for its other runs.
+		if herr := m.holdTeardownLocked(a.RunID, a.Kind); herr != nil {
+			return runnerwire.ActionResult{}, herr
+		}
+		return m.refuseAction(ctx, a, err)
+	}
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
@@ -205,6 +214,9 @@ func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction,
 	r.ProxyStoppedAt = &at
 	// StopProxy returned nil only on completion evidence, so a pending report the tick held goes with it.
 	r.ContainmentPending = nil
+	if a.Kind == types.RunnerActionKill || a.Kind == types.RunnerActionEnd {
+		r.TeardownUnconfirmed = nil // this kill or end finished
+	}
 	outcome := "deferred"
 	if m.mutationsDrained(a.RunID) && (r.Containment.Contained || r.Containment.Operation == string(a.Kind)) {
 		outcome = "success"

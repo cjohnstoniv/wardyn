@@ -20,6 +20,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- On a Docker runner, ending a Linux VM run whose AWS credential caches could not be wiped was reported as finished even when one of the VM's helper containers could not be removed. That end now reports the removal failure, as it does when the wipe succeeds.
+- On a Mac runner, a stop, kill or end of a macOS VM run whose VM helper process outlived its kill was reported as done. It now fails with that reason; the run's disk and VM slot stay held as before, and stopping the run again finishes it once the helper has exited.
+- On a Mac runner, an update of a macOS base or kept machine whose new copy failed its file check, and whose swap back to the old copy failed too, deleted the old copy. The old copy is now moved aside, next to the base or kept machine, and the error names where it is. Deleting that kept machine, or its expiry, deletes the moved-aside copy with it, so move it back first to keep it.
+- On a Mac runner, two tools updates running at once that downloaded the same tool could push a copy other than the one whose checksum was checked, or fail. The second now waits for the first's download and reuses the checked file.
+- On a Docker runner, a Linux VM run ended because its audit spool was full, and whose AWS credential caches could not be wiped, kept being ended again on every pass, with a warning logged each minute. That end now counts as finished.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
