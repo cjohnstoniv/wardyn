@@ -859,3 +859,66 @@ func TestFolderBack_RecordCtxStartsAfterThePass(t *testing.T) {
 		t.Errorf("record deadline %v is before the pass's start %v plus %s: its ctx was made before the pass", last, passAt, reconcileFinalizeTimeout)
 	}
 }
+
+// stopDeadlineRunner is folderSandboxRunner noting each StopSandbox's ctx deadline. Its first stop fails, as a stop
+// cut short by its deadline does.
+type stopDeadlineRunner struct {
+	*folderSandboxRunner
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (r *stopDeadlineRunner) StopSandbox(ctx context.Context, ref string) error {
+	dl, _ := ctx.Deadline()
+	r.mu.Lock()
+	r.deadlines = append(r.deadlines, dl)
+	first := len(r.deadlines) == 1
+	r.mu.Unlock()
+	if first {
+		return context.DeadlineExceeded
+	}
+	return r.folderSandboxRunner.StopSandbox(ctx, ref)
+}
+
+// A macOS VM's stop cut short by its end hold (here at about 15 s, where the VM's stop needs up to
+// macOSVMTeardownBudget) leaves the sandbox and its ref. With the folder's record final, the next finalize (the tail
+// owner's, which holds no end hold) runs no pass and gives the stop the VM's full budget. No time is reserved for the
+// VM's stop out of the pass: the stop cut short is made whole on the next visit. Catches a later finalize that sends a
+// pass for a final record, or stops a VM on the ordinary teardown budget.
+func TestFolderBack_MacOSVMStopCutShortGetsItsFullBudgetNext(t *testing.T) {
+	f := newPassFixture(t, 2, 2, nil)
+	f.set(func(st *types.RunLocalFolderStatus) {
+		st.Back = folderPassRecord(f.s.cfg.Now(), runnerwire.FolderPass{}, "", true)
+	})
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.state = types.RunCompleted
+	ds.run.MachineKind = types.MachineMacOSVM
+	ds.mu.Unlock()
+	rn := &stopDeadlineRunner{folderSandboxRunner: f.sb}
+	f.s.cfg.Runner = rn
+	seen := passSeen(f.sb)
+	hold := time.Now().Add(15 * time.Second)
+	if err := f.s.finalizeRunEffects(withHoldDeadline(context.Background(), hold), f.run.ID, "sbx", "run.complete", nil, false, false); err == nil {
+		t.Error("the finalize whose stop was cut short reported no error")
+	}
+	before := time.Now()
+	_ = f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "sandbox.orphan.sweep", nil, false, false)
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	if len(rn.deadlines) != 2 {
+		t.Fatalf("StopSandbox called %d times, want 2", len(rn.deadlines))
+	}
+	if rn.deadlines[0].After(hold) {
+		t.Errorf("the first stop's deadline %v is past the end hold's %v", rn.deadlines[0], hold)
+	}
+	if rn.deadlines[1].Before(before.Add(macOSVMTeardownBudget)) {
+		t.Errorf("the next stop's deadline %v, want at least %s after %v", rn.deadlines[1], macOSVMTeardownBudget, before)
+	}
+	if seen.Load() {
+		t.Error("a pass was sent for a final record")
+	}
+	if st := f.cs.folderStatus(); !folderFinal(st) || st.Gen != 2 {
+		t.Errorf("record %+v, want it final and untouched at gen 2", st)
+	}
+}
