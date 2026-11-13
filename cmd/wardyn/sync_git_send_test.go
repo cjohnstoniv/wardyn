@@ -17,8 +17,8 @@ import (
 )
 
 // A --git into a sandbox directory with no repository whose fetch fails must
-// fail, record nothing as sent and leave no .git behind; the next --git then
-// makes the repository and checks the branch out.
+// fail, record nothing as sent, say so, and keep the .git it was setting up;
+// the next --git then finishes the repository and checks the branch out.
 func TestSyncGateway_FailedFreshGitSendIsNotRecordedAsSent(t *testing.T) {
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -46,14 +46,15 @@ func TestSyncGateway_FailedFreshGitSendIsNotRecordedAsSent(t *testing.T) {
 	ctx := context.Background()
 	c := g.dial()
 	var out strings.Builder
-	if err := foldersync.SendGit(ctx, &out, sy, c, g.runID, root); err == nil || !strings.Contains(err.Error(), "fetch refused") {
-		t.Fatalf("a --git whose fetch failed: err %v, out %q; want the sandbox's error", err, out.String())
+	if err := foldersync.SendGit(ctx, &out, sy, c, g.runID, root); err == nil || !strings.Contains(err.Error(), "fetch refused") ||
+		!strings.Contains(err.Error(), "it is kept, and the next --git carries on with it") {
+		t.Fatalf("a --git whose fetch failed: err %v, out %q; want the sandbox's error and what is kept", err, out.String())
 	}
 	if sy.State.GitSent != nil {
 		t.Errorf("a failed --git was recorded as sent: %+v", *sy.State.GitSent)
 	}
-	if _, err := os.Stat(filepath.Join(box, ".git")); err == nil {
-		t.Error("a failed --git left a .git in the sandbox")
+	if _, err := os.Stat(filepath.Join(box, ".git", "wardyn-setup-incomplete")); err != nil {
+		t.Errorf("a failed --git did not keep the .git it was setting up: %v", err)
 	}
 
 	if err := os.Remove(marker); err != nil {
