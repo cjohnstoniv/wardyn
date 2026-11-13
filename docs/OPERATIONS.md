@@ -1803,8 +1803,8 @@ drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`
     body or a relay's reply text.
   - Terminal rows older than 30 days are deleted, 500 per tick.
 
-**A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
-the one real approval under a flood of chat messages. A raise over the budget still creates its
+**A per-run budget.** One run creates at most 25 tier-0 outbox rows per hour per route, or one raise's
+where tier 0 names more channels, against chat floods. A raise over the budget still creates its
 approval and shows in the console, but enqueues nothing; it increments
 `wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
 per run per hour (per replica).

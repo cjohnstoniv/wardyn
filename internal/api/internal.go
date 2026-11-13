@@ -655,14 +655,16 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count
 	// error: an unbounded raise path is the thing being bounded, so "we could not
-	// tell how many this run has" must not read as "allow another one".
+	// tell how many this run has" must not read as "allow another one". The raise
+	// counts again under the run's cap lock in its own transaction, so two raises
+	// that both read the last free slot cannot both land.
 	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
 	if cerr != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalApprovalCountUnavailable, loggedMsg(r.Context(), "count approvals for run", cerr))
 		return
 	}
 	if n >= maxApprovalsPerRun {
-		writeErrorReason(w, http.StatusTooManyRequests, reasonInternalApprovalCapReached, "this run has raised too many approvals; no more will be accepted")
+		writeCapReached(w, store.ErrApprovalRunCap)
 		return
 	}
 
@@ -672,7 +674,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		Kind:           body.Kind,
 		RequestedScope: body.RequestedScope,
 	}
-	created, err := s.cfg.Approvals.Request(r.Context(), req)
+	created, err := s.cfg.Approvals.Request(store.WithAdmissionCap(r.Context(), maxApprovalsPerRun), req)
 	if err != nil {
 		writeServerError(w, r, "request approval", err)
 		return

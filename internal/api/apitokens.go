@@ -528,8 +528,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 		}
 	}
 	if live >= apiTokenMaxPerPrincipal {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAPITokenCapReached,
-			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))
+		writeCapReached(w, store.ErrAPITokenCap)
 		return true
 	}
 	return false
@@ -538,8 +537,10 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 // insertAPIToken is the store half of the self-service mint (its only caller,
 // pinned by apitoken_mint_sites_test.go): a fresh plaintext and the row. The returned token carries the plaintext, and the 201 that
 // writes it is the ONLY response that ever does — it is not stored, so a lost
-// token is re-minted, never recovered.
+// token is re-minted, never recovered. The insert counts the owner's live tokens
+// again under the owner's cap lock (store.WithAdmissionCap).
 func (s *Server) insertAPIToken(w http.ResponseWriter, r *http.Request, t types.APIToken) (types.APIToken, bool) {
+	r = r.WithContext(store.WithAdmissionCap(r.Context(), apiTokenMaxPerPrincipal))
 	plaintext := newBearer(apiTokenPrefix)
 	t.ID = uuid.New()
 	created, err := s.cfg.Store.CreateAPIToken(guardOwner(r.Context(), t.Principal), t, plaintext)

@@ -13,7 +13,6 @@ package api
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -119,8 +118,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(existing) >= sshMaxKeysPerPrincipal {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyCapReached,
-			fmt.Sprintf("too many registered keys (max %d) — remove one first", sshMaxKeysPerPrincipal))
+		writeCapReached(w, store.ErrSSHKeyCap)
 		return
 	}
 
@@ -185,7 +183,8 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:     authorizedAt,
 		RevSeq:        issue.Seq,
 	}
-	added, err := s.cfg.Store.AddSSHKey(guardOwner(r.Context(), principal), k)
+	// The insert counts the owner's keys again under the owner's cap lock.
+	added, err := s.cfg.Store.AddSSHKey(store.WithAdmissionCap(guardOwner(r.Context(), principal), sshMaxKeysPerPrincipal), k)
 	if errors.Is(err, store.ErrConflict) {
 		// Generic on purpose: the fingerprint PK is GLOBAL (correct — a key
 		// must map to exactly one principal), so this 409 can legitimately

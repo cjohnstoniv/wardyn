@@ -148,6 +148,46 @@ func TestPG_EnsureApproval_RunBudgetSuppressesThe26thRaise(t *testing.T) {
 	}
 }
 
+// TestPG_EnsureApproval_RunBudgetAdmitsAPlanOnlyIfItFits is the credential seam's half of the store test of
+// the same name: with two channels, a run at RunBudget-1 tier-0 rows gets an approval with no outbox row.
+func TestPG_EnsureApproval_RunBudgetAdmitsAPlanOnlyIfItFits(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	cfg, err := notify.Parse(`{"channels":[
+		{"id":"hook-a","type":"webhook","url":"http://127.0.0.1:9/a"},
+		{"id":"hook-b","type":"webhook","url":"http://127.0.0.1:9/b"}]}`)
+	if err != nil {
+		t.Fatalf("parse notify config: %v", err)
+	}
+	notify.SetActive(cfg, nil)
+	t.Cleanup(func() { notify.SetActive(nil, nil) })
+	runID := uuid.New()
+	seedRun(ctx, t, pool, runID)
+	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, nil)
+	raise := func() uuid.UUID {
+		grantID, spec := gatedGrant(ctx, t, pool, runID)
+		ap, err := b.ensureApproval(ctx, grantID, runID, spec)
+		if err != nil {
+			t.Fatalf("ensureApproval: %v", err)
+		}
+		return ap.ID
+	}
+	for range (notify.RunBudget - 1) / 2 {
+		raise()
+	}
+	if rows := outboxRows(ctx, t, pool, runID); rows != notify.RunBudget-1 {
+		t.Fatalf("outbox rows = %d, want %d", rows, notify.RunBudget-1)
+	}
+	over := raise()
+	if rows := outboxRows(ctx, t, pool, runID); rows != notify.RunBudget-1 {
+		t.Fatalf("outbox rows = %d after a two-channel raise at %d, want %d: the plan must not pass the budget", rows, notify.RunBudget-1, notify.RunBudget-1)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM approvals WHERE id = $1`, over).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the suppressed raise must still create its approval: count %d err %v", n, err)
+	}
+}
+
 // TestPG_EnsureApproval_NotifyOffWritesNoRows: with no config the statement is the old plain INSERT.
 func TestPG_EnsureApproval_NotifyOffWritesNoRows(t *testing.T) {
 	pool := pgPool(t)

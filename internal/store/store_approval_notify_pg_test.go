@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -126,6 +127,137 @@ func TestPG_CreateApproval_RunBudget(t *testing.T) {
 	later := raise(notify.RunBudget + 1)
 	if n := countRows(t, pool, `SELECT count(*) FROM approval_notifications WHERE approval_id = $1`, later.ID); n != 1 {
 		t.Fatalf("a raise after the window wrote %d rows, want 1", n)
+	}
+}
+
+// TestPG_CreateApproval_RunBudgetAdmitsAPlanOnlyIfItFits: with two channels a run at RunBudget-1 tier-0
+// rows gets its next approval with no outbox row, since its two rows would take the run past RunBudget.
+func TestPG_CreateApproval_RunBudgetAdmitsAPlanOnlyIfItFits(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	activateNotify(t)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	st := store.NewPG(pool)
+	raise := func(i int) types.ApprovalRequest {
+		a, err := st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalEgressDomain, `{"host":"h`+uuid.NewString()+`"}`))
+		if err != nil {
+			t.Fatalf("raise %d: %v", i, err)
+		}
+		return a
+	}
+	for i := range (notify.RunBudget - 1) / 2 {
+		raise(i)
+	}
+	if n := countRows(t, pool, outboxForRun, run.ID); n != notify.RunBudget-1 {
+		t.Fatalf("outbox rows = %d, want %d", n, notify.RunBudget-1)
+	}
+	over := raise(notify.RunBudget)
+	if n := countRows(t, pool, outboxForRun, run.ID); n != notify.RunBudget-1 {
+		t.Fatalf("outbox rows = %d after a two-channel raise at %d, want %d: the plan must not pass the budget", n, notify.RunBudget-1, notify.RunBudget-1)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM approvals WHERE id = $1`, over.ID); n != 1 {
+		t.Fatalf("the suppressed raise must still create its approval, found %d", n)
+	}
+}
+
+// TestPG_CreateApproval_RunBudgetStillSendsATierZeroWiderThanIt: a tier 0 of more channels than the
+// budget fits no hour, so it is admitted into an hour that holds none of the run's tier-0 rows. The first
+// raise of the hour reaches every channel and the next is suppressed: the route is never muted for good.
+func TestPG_CreateApproval_RunBudgetStillSendsATierZeroWiderThanIt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	chans := make([]map[string]string, notify.RunBudget+1)
+	for i := range chans {
+		chans[i] = map[string]string{"id": "hook-" + strconv.Itoa(i), "type": "webhook", "url": "http://127.0.0.1:9/" + strconv.Itoa(i)}
+	}
+	raw, err := json.Marshal(map[string]any{"channels": chans})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := notify.Parse(string(raw))
+	if err != nil {
+		t.Fatalf("parse notify config: %v", err)
+	}
+	notify.SetActive(cfg, nil)
+	t.Cleanup(func() { notify.SetActive(nil, nil) })
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	st := store.NewPG(pool)
+	raise := func(i int) types.ApprovalRequest {
+		a, err := st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalEgressDomain, `{"host":"h`+uuid.NewString()+`"}`))
+		if err != nil {
+			t.Fatalf("raise %d: %v", i, err)
+		}
+		return a
+	}
+	const rowsOf = `SELECT count(*) FROM approval_notifications WHERE approval_id = $1`
+	if n := countRows(t, pool, rowsOf, raise(0).ID); n != len(chans) {
+		t.Fatalf("the first raise of the hour wrote %d rows, want one per channel (%d): a valid config must not mute every approval", n, len(chans))
+	}
+	if n := countRows(t, pool, rowsOf, raise(1).ID); n != 0 {
+		t.Fatalf("the second raise of the hour wrote %d rows, want 0: the hour already holds more than the budget", n)
+	}
+	// One tier-0 row of the run left in the hour holds the wide tier back; an hour with none admits it again.
+	const age = `UPDATE approval_notifications SET created_at = now() - interval '2 hours'
+		WHERE approval_id IN (SELECT id FROM approvals WHERE run_id = $1) AND channel <> $2`
+	if _, err := pool.Exec(ctx, age, run.ID, "hook-0"); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, rowsOf, raise(2).ID); n != 0 {
+		t.Fatalf("a raise beside one tier-0 row of the hour wrote %d rows, want 0", n)
+	}
+	if _, err := pool.Exec(ctx, age, run.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, rowsOf, raise(3).ID); n != len(chans) {
+		t.Fatalf("the first raise of the next hour wrote %d rows, want %d", n, len(chans))
+	}
+}
+
+// TestPG_CreateApproval_RunBudgetCountsEachRouteApart: the budget is counted per route, so a route whose
+// tier 0 is wider than the budget never waits on another route's rows, nor that route on its rows, while
+// two kinds that share a route share its budget.
+func TestPG_CreateApproval_RunBudgetCountsEachRouteApart(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	wide := make([]string, notify.RunBudget+1)
+	chans := []map[string]string{{"id": "narrow", "type": "webhook", "url": "http://127.0.0.1:9/n"}}
+	for i := range wide {
+		wide[i] = "hook-" + strconv.Itoa(i)
+		chans = append(chans, map[string]string{"id": wide[i], "type": "webhook", "url": "http://127.0.0.1:9/" + wide[i]})
+	}
+	raw, err := json.Marshal(map[string]any{"channels": chans, "routes": []map[string]any{
+		{"kinds": []types.ApprovalKind{types.ApprovalEgressDomain}, "tiers": []map[string]any{{"after": "0s", "channels": []string{"narrow"}}}},
+		{"tiers": []map[string]any{{"after": "0s", "channels": wide}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := notify.Parse(string(raw))
+	if err != nil {
+		t.Fatalf("parse notify config: %v", err)
+	}
+	notify.SetActive(cfg, nil)
+	t.Cleanup(func() { notify.SetActive(nil, nil) })
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	st := store.NewPG(pool)
+	raise := func(kind types.ApprovalKind) int {
+		a, err := st.CreateApproval(ctx, pendingApproval(run.ID, kind, `{"host":"h`+uuid.NewString()+`"}`))
+		if err != nil {
+			t.Fatalf("raise %s: %v", kind, err)
+		}
+		return countRows(t, pool, `SELECT count(*) FROM approval_notifications WHERE approval_id = $1`, a.ID)
+	}
+	if n := raise(types.ApprovalEgressDomain); n != 1 {
+		t.Fatalf("the narrow route's first raise wrote %d rows, want 1", n)
+	}
+	if n := raise(types.ApprovalToolCall); n != len(wide) {
+		t.Fatalf("a wide raise beside another route's row wrote %d rows, want %d: no route may wait on another's for good", n, len(wide))
+	}
+	if n := raise(types.ApprovalEgressDomain); n != 1 {
+		t.Fatalf("a narrow raise beside the wide route's %d rows wrote %d rows, want 1", len(wide), n)
+	}
+	if n := raise(types.ApprovalPushContent); n != 0 {
+		t.Fatalf("a raise of another kind on the wide route wrote %d rows, want 0: kinds that share a route share its budget", n)
 	}
 }
 
