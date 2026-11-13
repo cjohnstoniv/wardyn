@@ -557,3 +557,155 @@ func TestFolderBack_OfflineFolderRunnerStopsAnUnholdableSandbox(t *testing.T) {
 		})
 	}
 }
+
+// seedReadAfterFirst is computerFolderStore whose folder seed reads after the first answer no folder and err: an
+// end's eligibility read answers, and its own read of the folder just after it does not, or finds none.
+type seedReadAfterFirst struct {
+	*computerFolderStore
+	err   error
+	reads atomic.Int32
+}
+
+func (s *seedReadAfterFirst) RunLocalFolderSeed(ctx context.Context, id uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if s.reads.Add(1) > 1 {
+		return nil, store.LocalFolderSeed{}, s.err
+	}
+	return s.computerFolderStore.RunLocalFolderSeed(ctx, id)
+}
+
+// statusReadFails is computerFolderStore whose pass record never reads.
+type statusReadFails struct{ *computerFolderStore }
+
+func (s statusReadFails) RunLocalFolderStatus(context.Context, uuid.UUID) (types.RunLocalFolderStatus, error) {
+	return types.RunLocalFolderStatus{}, errors.New("the record does not decode")
+}
+
+// An end that cannot read its computer folder's settings or its run's data_out rule has no answer on whether a pass
+// back is owed. It keeps the sandbox as the sweeps would (folderKeepVerdict): on a confirmed cut, with no pass run and
+// the record left as it was, so the tail owner runs the pass once the reads answer. Past the keep it is still kept: the
+// tail owner gives the changes up durably before anything stops it. A virtual machine, a sandbox whose cut fails
+// (audited under the end's own action), a killed run, a record whose pass already ran and a second read that finds no
+// folder are stopped as before. Catches the unreadable read taken as "no folder" at either of the end's two reads,
+// which stops the sandbox with the changes in it and nothing recorded.
+func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
+	down := errors.New("database down")
+	for name, tc := range map[string]struct {
+		setup func(*passFixture)
+		kept  bool
+	}{
+		"the folder seed cannot be read":  {func(f *passFixture) { f.cs.seedErr = down }, true},
+		"the data out rule is unreadable": {func(f *passFixture) { f.cs.policyErr = down }, true},
+		"the second seed read fails": {func(f *passFixture) {
+			f.s.cfg.Store = &seedReadAfterFirst{computerFolderStore: f.cs, err: down}
+		}, true},
+		"the second seed read finds no folder": {func(f *passFixture) {
+			f.s.cfg.Store = &seedReadAfterFirst{computerFolderStore: f.cs}
+		}, false},
+		"a virtual machine": {func(f *passFixture) {
+			f.cs.policyErr = down
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.run.MachineKind = types.MachineLinuxVM
+			ds.mu.Unlock()
+		}, false},
+		"a cut that fails": {func(f *passFixture) {
+			f.cs.policyErr = down
+			f.sb.proxyErr = errors.New("the proxy did not stop")
+		}, false},
+		"a killed run": {func(f *passFixture) {
+			f.cs.seedErr = down
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunKilled
+			ds.mu.Unlock()
+		}, false},
+		"past the keep": {func(f *passFixture) {
+			f.cs.seedErr = down
+			f.advance(f.s.pendingCap() + time.Minute)
+		}, true},
+		"a pass already recorded": {func(f *passFixture) {
+			f.cs.seedErr = down
+			f.set(func(st *types.RunLocalFolderStatus) {
+				st.Back = folderPassRecord(f.s.cfg.Now(), runnerwire.FolderPass{}, "an earlier pass's error", true)
+			})
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 1, 1, nil)
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunCompleted
+			ds.mu.Unlock()
+			tc.setup(f)
+			before := f.cs.folderStatus()
+			seen := passSeen(f.sb)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err := f.s.finalizeRunEffects(ctx, f.run.ID, "sbx", "sandbox.orphan.sweep", nil, false, false)
+			if kept := errors.Is(err, errComputerFolderResumes); kept != tc.kept {
+				t.Errorf("finalize = %v; want kept %v", err, tc.kept)
+			}
+			wantStops := 1
+			if tc.kept {
+				wantStops = 0
+			}
+			if n := f.sb.stopCount(); n != wantStops {
+				t.Errorf("StopSandbox called %d times, want %d", n, wantStops)
+			}
+			if tc.kept && !f.sb.proxyStopped.Load() {
+				t.Error("kept with its proxy not stopped: the cut was not confirmed")
+			}
+			if seen.Load() {
+				t.Error("a pass was sent with the folder's settings unread")
+			}
+			if st := f.cs.folderStatus(); !reflect.DeepEqual(st, before) {
+				t.Errorf("record %+v, want it unchanged from %+v", st, before)
+			}
+			if f.sb.proxyErr != nil {
+				ev := findAudit(f.audit.snapshot(), f.run.ID, "sandbox.orphan.sweep", "failure")
+				if ev == nil || !strings.Contains(string(ev.Data), "the proxy did not stop") {
+					t.Errorf("cut failure row %v, want one under the end's own action naming the proxy's error", ev)
+				}
+			}
+		})
+	}
+}
+
+// The tail owner's give-up tail, which runs only once giveUpFolderNoted has made the record final, stops the sandbox
+// and sends no pass, through the real finalizeRunEffects, even while the record and the folder's settings still
+// cannot be read. Any other tail with the same reads keeps the sandbox on its confirmed cut for the tail owner, which
+// gives the changes up durably before it stops it. Catches the give-up's finalize deciding the sandbox again from
+// reads that fail, which keeps it on each confirmed cut, past the give-up, for ever.
+func TestTailFinalize_AGiveUpStopsASandboxWhoseFolderCannotBeRead(t *testing.T) {
+	for name, tc := range map[string]struct {
+		step tailStep
+		kept bool
+	}{
+		"the give-up's tail":    {tailGiveUp, false},
+		"a folder visit's tail": {tailFolder, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 1, 1, nil)
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunCompleted
+			ds.mu.Unlock()
+			f.cs.seedErr = errors.New("database down")
+			f.s.cfg.Store = statusReadFails{f.cs}
+			seen := passSeen(f.sb)
+			run := f.run
+			run.State, run.SandboxRef = types.RunCompleted, "sbx"
+			f.s.tailFinalize(context.Background(), run, tc.step)
+			wantStops := 1
+			if tc.kept {
+				wantStops = 0
+			}
+			if n := f.sb.stopCount(); n != wantStops {
+				t.Errorf("StopSandbox called %d times, want %d", n, wantStops)
+			}
+			if seen.Load() {
+				t.Error("a pass was sent from a tail whose folder cannot be read")
+			}
+		})
+	}
+}

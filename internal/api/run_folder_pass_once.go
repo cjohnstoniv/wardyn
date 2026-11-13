@@ -414,3 +414,23 @@ func (s *Server) recordFolderBumpMissed(ctx context.Context, id uuid.UUID, folde
 		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not say why its pass did not run", slog.String("run_id", id.String()))
 	}
 }
+
+// keepUnreadFolder decides the sandbox of an end that could not read its computer folder's settings or its run's
+// data_out rule by the rule the sweeps keep a sandbox by (folderKeepVerdict): kept, with no pass run and nothing
+// written, only once the agent's cut is confirmed, or left in place while the run's runner is not here. The record
+// then still owes its pass back (folderOwedRecord), which the tail owner runs once those reads answer, or gives up
+// past the keep, durably, before its own finalize stops the sandbox with no pass (tailFinalize). A killed run, a run
+// that cannot be read and a sandbox that cannot be cut are stopped, as before. A cut that fails is audited as action.
+func (s *Server) keepUnreadFolder(ctx context.Context, runID uuid.UUID, ref, action string, readErr error) bool {
+	vctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	run, err := s.cfg.Store.GetRun(vctx, runID)
+	if err != nil || run.State == types.RunKilled {
+		return false
+	}
+	run.SandboxRef = ref
+	slog.WarnContext(ctx, "wardynd: an ended run's computer folder settings or data_out rule could not be read; its sandbox is kept only on a confirmed cut",
+		slog.String("run_id", runID.String()), slog.Any("err", readErr))
+	v, _, _ := s.folderKeepVerdict(vctx, run, action)
+	return v != folderKeepNone
+}

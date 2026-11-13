@@ -218,9 +218,17 @@ const computerFolderStalls = 2
 // first of computerFolderStalls such passes in a row that saved nothing, the last of which gives
 // the rest up, and so does a pass that left changes behind or could not prove them kept
 // (folderBackVerdict). A pass that completes with nothing owed, fails on its first visit or does not
-// start does not, nor does a sandbox that cannot be quiesced. The runner's state file holds what each pass saved, so the next pass, from
+// start does not, nor does a sandbox that cannot be quiesced. An end that cannot read the folder's settings or its data_out rule keeps it only as the sweeps would (keepUnreadFolder). The runner's state file holds what each pass saved, so the next pass, from
 // the tail owner (folderCleanupLoop), starts after it (#3466).
 func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) bool {
+	return s.bringComputerFolderBackAs(ctx, runID, ref, "run.revoke")
+}
+
+// bringComputerFolderBackAs is bringComputerFolderBack for an end that audits a failed teardown as action
+// (finalizeRunEffects): the failed cut of an end that cannot read its folder's settings is that row
+// (keepUnreadFolder). bringComputerFolderBack itself is the idle and max-age stop's, whose failed teardown the
+// reaper audits as run.revoke.
+func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID, ref, action string) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolders)
 	if !ok || ref == "" {
 		return false
@@ -230,10 +238,17 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	rctx, cancel := teardownCtx(ctx)
 	if ok, err := s.folderBackEligible(rctx, runID); err != nil || !ok {
 		cancel()
+		if err != nil {
+			return s.keepUnreadFolder(ctx, runID, ref, action, err)
+		}
 		return false
 	}
 	folder, _, err := st.RunLocalFolderSeed(rctx, runID)
-	if err != nil || folder == nil {
+	if err != nil {
+		cancel()
+		return s.keepUnreadFolder(ctx, runID, ref, action, err)
+	}
+	if folder == nil {
 		cancel()
 		return false
 	}

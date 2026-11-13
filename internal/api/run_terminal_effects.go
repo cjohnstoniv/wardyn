@@ -32,7 +32,7 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	if fe, forced := ctx.Value(forcedEndKey{}).(forcedEnd); forced {
 		keep = fe.keep // a forced end runs no pass: forcedKeepsSandbox decided
 	} else {
-		keep = s.bringComputerFolderBack(ctx, runID, ref)
+		keep = s.bringComputerFolderBackAs(ctx, runID, ref, action)
 	}
 	if keep {
 		errs = append(errs, errComputerFolderResumes)
@@ -103,7 +103,8 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 
 // forcedEndKey carries, on the ctx of a forced end's tail (forceKeptStop), the sandbox decision made without the
 // run's lock. The tail then runs no pass back: the run's lock is held by another operation, which may be running
-// one. keep is forcedKeepsSandbox's answer.
+// one. keep is forcedKeepsSandbox's answer. The tail owner's give-up (tailFinalize) carries keep false: its record
+// is final, so no pass is owed and the sandbox is stopped.
 type forcedEndKey struct{}
 
 type forcedEnd struct{ keep bool }
