@@ -36,8 +36,9 @@ type AuditReceiptQuery struct {
 // AuditReceipt fetches a signed receipt that the events are in the audit log unaltered. Security tier only.
 // GET /api/v1/audit/receipt. A refusal is an *APIError whose Reason is audit_receipt_pending (409: newer than
 // the last signed checkpoint; the returned header's Retry-After says when to ask again, and the header is
-// returned with an error too), audit_receipt_unchained (409: in no checkpoint, ever), audit_receipt_too_large
-// (413: ask for fewer events), audit_receipt_not_found (404) or audit_receipt_signing_off (503).
+// returned with an error too), audit_receipt_unchained (409: in no checkpoint, ever), audit_receipt_proof_unavailable
+// (409: its checkpoint's stored rows no longer match what was signed), audit_receipt_too_large (413: ask for
+// fewer events), audit_receipt_not_found (404) or audit_receipt_signing_off (503).
 func (c *Client) AuditReceipt(ctx context.Context, q AuditReceiptQuery) (AuditBundle, http.Header, error) {
 	byRun := q.RunID != uuid.Nil
 	if byRun == (len(q.EventIDs) > 0) {

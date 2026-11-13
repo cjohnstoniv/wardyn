@@ -892,6 +892,7 @@ const (
 	reasonAuditReceiptNotFound         = "audit_receipt_not_found"         // 404: no such audit event, or the run has no audit rows
 	reasonAuditReceiptPending          = "audit_receipt_pending"           // 409: newer than the last signed checkpoint; retry after Retry-After
 	reasonAuditReceiptUnchained        = "audit_receipt_unchained"         // 409: in no checkpoint and will never be (no row hash, or before signing began)
+	reasonAuditReceiptProofUnavailable = "audit_receipt_proof_unavailable" // 409: its checkpoint's stored rows no longer match what was signed
 	reasonAuditReceiptTooLarge         = "audit_receipt_too_large"         // 413: more events or checkpoints than one receipt carries
 	reasonAuditReceiptSigningOff       = "audit_receipt_signing_off"       // 503: checkpoint signing is off, or its key could not be loaded
 	reasonAuditReceiptStoreUnavailable = "audit_receipt_store_unavailable" // 501: needs the Postgres store

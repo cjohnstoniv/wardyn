@@ -174,6 +174,38 @@ func TestAssemble_Refusals(t *testing.T) {
 	}
 }
 
+// A checkpoint that also covered a partition retention has dropped (here seq 4 went with the older month)
+// no longer matches its signed statement. A receipt for an event in it is refused as ErrProofUnavailable,
+// because the bundle it would make is one the offline verifier rejects. A checkpoint retention left whole
+// still assembles into a receipt that verifies.
+func TestAssemble_RefusesACheckpointRetentionCut(t *testing.T) {
+	priv, pub := testKey(1)
+	cps, rows := threeCheckpoints(priv)
+	whole := hashLists(cps)
+	retained := func(lo, hi int64) ([]SeqHash, error) {
+		list, err := whole(lo, hi)
+		if lo == 4 && err == nil {
+			list = list[1:]
+		}
+		return list, err
+	}
+	if _, err := Assemble(AssembleInput{Events: evs(rows[1][1]), Checkpoints: signedAll(cps[1:]), Hashes: retained}); !errors.Is(err, ErrProofUnavailable) {
+		t.Fatalf("an event in the cut checkpoint: %v, want ErrProofUnavailable", err)
+	}
+	cut := cps[1]
+	cut.Seqs, cut.RowHashes, cut.Events = cut.Seqs[1:], cut.RowHashes[1:], []Event{{Index: 0, Row: rows[1][1]}}
+	if rep := VerifyBundle(Bundle{Format: ReceiptFormat, Checkpoints: []Checkpoint{cut}}, keysOf(pub)); rep.OK() || !hasReason(rep, ReasonRows) {
+		t.Fatalf("the bundle the cut checkpoint would make: failures %+v, want %s", rep.Failures, ReasonRows)
+	}
+	got, err := Assemble(AssembleInput{Events: evs(rows[2][0]), Checkpoints: signedAll(cps[1:]), Hashes: retained})
+	if err != nil {
+		t.Fatalf("an event in a whole checkpoint: %v", err)
+	}
+	if rep := VerifyBundle(got.Bundle, keysOf(pub)); !rep.Complete() {
+		t.Fatalf("the receipt from a whole checkpoint: failures %+v", rep.Failures)
+	}
+}
+
 // Past the event-checkpoint or header caps an explicit request is too large; a run page is cut there and
 // the cut is reported, always with progress.
 func TestAssemble_CapsRefuseOrCut(t *testing.T) {

@@ -960,6 +960,8 @@ This checks the signature, the two digests and so that each seq belongs to its r
 > **Known limitations.**
 > - History before the first checkpoint is covered by the chain, but it is not receiptable one row at a time.
 > - After a late forged checkpoint from a retired key, the rows between it and the new genesis are not covered by a receipt.
+> - After audit retention drops a month, the rows that shared a signed checkpoint with it are not receiptable: the receipt route refuses them with `audit_receipt_proof_unavailable`.
+> - Rows that audit retention drops before they were signed are never covered by a checkpoint; signing resumes at the first retained row.
 > - The metrics and the latch are per replica: the replica that signs a tick updates them.
 > - A checkpoint is evidence from the moment it is signed. Rows a database owner rewrote before it was signed are signed as rewritten; the off-box copy of earlier statements is the control.
 
