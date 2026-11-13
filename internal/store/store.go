@@ -882,34 +882,6 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 	return s.QueryRecentAuditEventsPage(ctx, Page{Limit: limit})
 }
 
-// LatestAuditEventByAction returns the most recent audit event whose action
-// equals the given action, or ErrNotFound when none exists. Used by /healthz
-// to find the latest kernel.sensor.ping driving the eBPF health state.
-//
-// Most recent by `time`, picked from a seq-ordered window: the audit spool
-// replays at-least-once while keeping each event's original ev.Time, so a beat
-// spooled through a DB blip could carry the highest seq but an hours-old time
-// and falsely mark the sensor degraded. The window orders by seq to keep using
-// the purpose-built (action, seq DESC) index; ordering by time directly would
-// sort the whole action's history on every probe. Twenty is a window, not a
-// proof — a longer replay backlog can push the fresh row out, bounding the
-// staleness to one heartbeat interval against /healthz's own TTL.
-func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
-	const q = `
-		SELECT ` + auditCols + ` FROM (
-			SELECT ` + auditCols + `, seq
-			FROM audit_events WHERE action=$1 ORDER BY seq DESC LIMIT 20
-		) recent ORDER BY time DESC, seq DESC LIMIT 1`
-	ev, err := scanAuditEvent(s.Pool.QueryRow(ctx, q, action))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return types.AuditEvent{}, ErrNotFound
-	}
-	if err != nil {
-		return types.AuditEvent{}, fmt.Errorf("store: latest audit event by action: %w", err)
-	}
-	return ev, nil
-}
-
 // auditCols is THE audit_events column list, in scanAuditEvent's order, shared
 // by the insert and every read here. internal/broker keeps its own copy since
 // it writes this table through its own pool without importing this package.

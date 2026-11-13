@@ -2582,7 +2582,7 @@ func (s *authzStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.
 func (s *authzStore) QueryRecentAuditEvents(context.Context, int) ([]types.AuditEvent, error) {
 	return nil, nil
 }
-func (s *authzStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (s *authzStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	return types.AuditEvent{}, store.ErrNotFound
 }
 
