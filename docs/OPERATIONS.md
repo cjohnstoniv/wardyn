@@ -261,6 +261,9 @@ copy is permanent.
       with what was read.
   - The sweep every minute resolves a terminal run's pending row, once its claim is five minutes old, the same way: by
     recovery under the same rules, or to a `capture_gap` row.
+    - A pending row that waits on the run's recording ends as a `capture_gap` row when the recording was erased, or
+      when one over-budget try (its 10-second read budget) is made 30 minutes or more after the run ended. A later
+      read of the recording that succeeds replaces that row.
   - Recording uploads commit their recovery obligation before a successful receipt.
     - A restarted leader immediately checks a bounded page of terminal work, then retries every minute; an abandoned
       claim is available after five minutes.

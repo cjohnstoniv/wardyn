@@ -308,7 +308,8 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 		}
 	case runIsUnrecordable(run), hasTail:
 	case s.recordingOutputEnabled(ctx, run):
-		s.finalizeRecordingOutput(ctx, st, run)
+		// Logged inside; a failure leaves the work durable for the sweep.
+		_ = s.finalizeRecordingOutput(ctx, st, run)
 	case s.execOutputUncaptured(ctx, run):
 	default:
 		s.recoverRunOutput(ctx, st, run, "no_tail")
@@ -727,7 +728,7 @@ func (s *Server) resolveStalePending(ctx context.Context, st store.RunOutputStor
 		return
 	}
 	if s.recordingOutputEnabled(ctx, run) {
-		s.finalizeRecordingOutput(ctx, st, run)
+		s.settleStaleRecordingOutput(ctx, st, run)
 		return
 	}
 	s.recoverRunOutput(ctx, st, run, "stale_pending")
