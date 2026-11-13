@@ -161,8 +161,8 @@ func TestInstallSh_AdminTokenDerivationFailsClosed(t *testing.T) {
 // that umask neither could do anything but re-assert the mode the file already
 // had, while their presence made T4 look satisfied by a chmod. An .env an older
 // install created 0644 is still fixed — the upgrade branch rewrites the file
-// through `.env.tmp` + `mv`, and that tmp is born 0600. T4 and T5 of
-// scripts/test-install-sh-trust.sh assert the resulting mode with a
+// through a new mktemp file + `mv`, and that file is born 0600. T4, T5 and T25
+// of scripts/test-install-sh-trust.sh assert the resulting mode with a
 // record-only chmod stub in place.
 func TestInstallSh_EnvWrittenUnderRestrictiveUmask(t *testing.T) {
 	if c := envUnderRestrictiveUmask(readInstallSh(t)); c != "" {
