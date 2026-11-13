@@ -233,6 +233,15 @@ func TestADORESTPushRulesSeeTheEffectiveMethod(t *testing.T) {
 			}
 		})
 	}
+	t.Run("ref update with the override named in Connection", func(t *testing.T) {
+		h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, caps...)
+		target := "/acme/proj/_apis/git/repositories/app/refs?filter=" + strings.TrimPrefix(h.branch(), "refs/") + "&api-version=7.1"
+		body := `[{"name":"` + h.branch() + `","oldObjectId":"` + zeroOID + `","newObjectId":"` + strings.Repeat("a", 40) + `"}]`
+		rec := h.do(t, http.MethodPost, target, body, map[string]string{"X-HTTP-Method-Override": http.MethodPatch, "Connection": "X-HTTP-Method-Override"})
+		if rec.Code != http.StatusForbidden || len(h.fake.Requests()) != 0 || !strings.Contains(h.log(), `"`+ruleSourceGitPackBlind+`"`) {
+			t.Fatalf("status = %d body %s, upstream %d; want a 403 %s and nothing forwarded", rec.Code, rec.Body.String(), len(h.fake.Requests()), ruleSourceGitPackBlind)
+		}
+	})
 	t.Run("pull request created with auto-complete", func(t *testing.T) {
 		h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, caps...)
 		rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pullrequests?api-version=7.1",
