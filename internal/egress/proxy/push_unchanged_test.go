@@ -324,18 +324,38 @@ func TestPushRulesCompareWithWhatTheRepositoryVouchesFor(t *testing.T) {
 		out, err := r.push()
 		r.wantRefused(t, out, err, ".github/workflows/deploy.yml")
 	})
-	t.Run("merging the default branch in after it changed a denied path", func(t *testing.T) {
-		r := newForgeRun(t, ordinaryRepo, []string{"--depth", "1"}, deny)
-		r.editMain(t, "first")
-		if out, err := r.push(); err != nil {
-			t.Fatalf("first push: %v\n%s", err, out)
-		}
-		r.asHuman(t, "main", "main", map[string]string{".github/workflows/ci.yml": "on: [push]\n"})
-		runGit(t, r.work, "fetch", "-q", "origin", "main")
-		runGit(t, r.work, "merge", "-q", "--no-edit", "FETCH_HEAD")
-		out, err := r.push()
-		r.wantAllowed(t, out, err)
-	})
+	// A branch the push creates has no tip of its own, so any counted parent
+	// vouches. One the run already pushed must keep what its tip holds at a
+	// denied path, so the same merge into it is refused (push_forge_tip.go);
+	// a change beside the denied path in the same directory is not.
+	for _, tc := range []struct {
+		name        string
+		pushedFirst bool
+		changed     string
+	}{
+		{"merging the default branch in after it changed a denied path, into a branch the push creates", false, ".github/workflows/ci.yml"},
+		{"merging the default branch in after it changed a denied path, into a branch the run already pushed", true, ".github/workflows/ci.yml"},
+		{"merging the default branch in after it changed a file beside a denied path, into a branch the run already pushed", true, ".github/dependabot.yml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newForgeRun(t, ordinaryRepo, []string{"--depth", "1"}, deny)
+			r.editMain(t, "first")
+			if tc.pushedFirst {
+				if out, err := r.push(); err != nil {
+					t.Fatalf("first push: %v\n%s", err, out)
+				}
+			}
+			r.asHuman(t, "main", "main", map[string]string{tc.changed: "on: [push]\n"})
+			runGit(t, r.work, "fetch", "-q", "origin", "main")
+			runGit(t, r.work, "merge", "-q", "--no-edit", "FETCH_HEAD")
+			out, err := r.push()
+			if tc.pushedFirst && strings.HasPrefix(tc.changed, ".github/workflows/") {
+				r.wantTipRefusal(t, out, err)
+				return
+			}
+			r.wantAllowed(t, out, err)
+		})
+	}
 	// The forge holds this exact tree at this exact path, on a branch outside
 	// the default branch's history, and the commit the push builds on does not
 	// hold it. git sends the tree again here, so the push is refused from its
@@ -586,6 +606,129 @@ func TestPushRulesCountOnlyABaseARefBuildsOn(t *testing.T) {
 	if status != http.StatusForbidden || !strings.Contains(body, whyChanged) {
 		t.Errorf("status %d, body %q: want 403 saying %q", status, body, whyChanged)
 	}
+}
+
+// TestPushRulesKeepWhatTheBranchTipHeld: a push that updates a branch must leave
+// it holding, at a denied path, what the branch's tip holds there, whichever
+// commits it builds on. A merge naming an older commit of the branch as a
+// parent, or a second branch the same push creates on one, would otherwise
+// bring that commit's workflows back. Each push is a stock git client's.
+func TestPushRulesKeepWhatTheBranchTipHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// push moves the run's branch from its tip b, over the older commit a.
+		push    func(t *testing.T, r *forgeRun, a, b string) (string, error)
+		allowed bool
+	}{
+		{"a merge whose other parent is an older commit of the branch", func(t *testing.T, r *forgeRun, a, b string) (string, error) {
+			r.mergeOlder(t, b, a)
+			return r.push()
+		}, false},
+		{"the same merge, after a commit on another branch the same push moves", func(t *testing.T, r *forgeRun, a, b string) (string, error) {
+			// "another" sorts before "work", so git sends this branch's command first.
+			side := strings.TrimPrefix(strings.TrimSuffix(r.ref, "work")+"another", "refs/heads/")
+			s := r.asHuman(t, "main", side, map[string]string{"README.md": "side\n"})
+			runGit(t, r.work, "fetch", "-q", "origin", side)
+			runGit(t, r.work, "checkout", "-q", "--detach", s)
+			r.editMain(t, "side")
+			clean := gitOut(t, r.work, "rev-parse", "HEAD")
+			r.mergeOlder(t, b, a)
+			return r.pushRefs(clean+":refs/heads/"+side, "HEAD:"+r.ref)
+		}, false},
+		{"a second branch the same push creates on an older commit", func(t *testing.T, r *forgeRun, a, b string) (string, error) {
+			runGit(t, r.work, "checkout", "-q", "--detach", a)
+			r.editMain(t, "older")
+			older := gitOut(t, r.work, "rev-parse", "HEAD")
+			runGit(t, r.work, "checkout", "-q", "--detach", b)
+			runGit(t, r.work, "checkout", "-q", a, "--", ".github")
+			r.editMain(t, "tip")
+			return r.pushRefs("HEAD:"+r.ref, older+":"+strings.TrimSuffix(r.ref, "work")+"older")
+		}, false},
+		{"a commit on the tip", func(t *testing.T, r *forgeRun, _, b string) (string, error) {
+			runGit(t, r.work, "checkout", "-q", "--detach", b)
+			r.editMain(t, "tip")
+			return r.push()
+		}, true},
+		{"a commit on an older base, merged with the tip", func(t *testing.T, r *forgeRun, a, b string) (string, error) {
+			runGit(t, r.work, "checkout", "-q", "--detach", a)
+			r.editMain(t, "older")
+			runGit(t, r.work, "merge", "-q", "--no-edit", b)
+			return r.push()
+		}, true},
+		{"merging the default branch in after it changed only other paths", func(t *testing.T, r *forgeRun, _, b string) (string, error) {
+			runGit(t, r.work, "checkout", "-q", "--detach", b)
+			r.editMain(t, "tip")
+			r.asHuman(t, "main", "main", map[string]string{"README.md": "hello\n"})
+			runGit(t, r.work, "fetch", "-q", "origin", "main")
+			runGit(t, r.work, "merge", "-q", "--no-edit", "FETCH_HEAD")
+			return r.push()
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newForgeRun(t, ordinaryRepo, nil, ".github/workflows/**")
+			a := gitOut(t, r.work, "rev-parse", "HEAD")
+			branch := strings.TrimPrefix(r.ref, "refs/heads/")
+			b := r.asHuman(t, "main", branch, map[string]string{".github/workflows/ci.yml": "on: reviewed\n"})
+			runGit(t, r.work, "fetch", "-q", "origin", branch)
+			out, err := tc.push(t, r, a, b)
+			if tc.allowed {
+				r.wantAllowed(t, out, err)
+				return
+			}
+			r.wantTipRefusal(t, out, err)
+		})
+	}
+}
+
+// TestPushRulesJudgeATagMoveAsBefore: moving a tag is not compared with what
+// the tag pointed at. Deleting it and creating it again on any commit would
+// pass, so the comparison covers branches only. git_pat, which confines no refs.
+func TestPushRulesJudgeATagMoveAsBefore(t *testing.T) {
+	r := newForgeRunVia(t, githubHost, ordinaryRepo, nil, ".github/workflows/**")
+	runGit(t, r.bare, "tag", "v1", "main")
+	r.editMain(t, "tagged")
+	out, err := r.pushRefs("+HEAD:refs/tags/v1")
+	if err != nil {
+		t.Fatalf("moving the tag was refused: %v\n%s\n%s", err, out, r.lastRefusal())
+	}
+	if got, want := gitOut(t, r.bare, "rev-parse", "refs/tags/v1"), gitOut(t, r.work, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("the forge's tag is at %s, want %s", got, want)
+	}
+}
+
+// mergeOlder checks out a merge, made with git commit-tree, of the branch's tip
+// and an older commit whose .github it takes, as a person resolving the merge
+// toward the older side would.
+func (r *forgeRun) mergeOlder(t *testing.T, tip, older string) {
+	t.Helper()
+	runGit(t, r.work, "checkout", "-q", "--detach", tip)
+	runGit(t, r.work, "checkout", "-q", older, "--", ".github")
+	writeFiles(t, r.work, map[string]string{"src/merge.go": "package main\n"})
+	runGit(t, r.work, "add", "-A")
+	merge := gitOut(t, r.work, "commit-tree", gitOut(t, r.work, "write-tree"), "-p", tip, "-p", older, "-m", "merge")
+	runGit(t, r.work, "checkout", "-q", "--detach", merge)
+}
+
+// wantTipRefusal asserts a push was refused because it leaves the run's branch
+// holding something else than its tip at .github/workflows/ci.yml, a path the
+// branch already has, so wantRefused's check of the forge cannot tell.
+func (r *forgeRun) wantTipRefusal(t *testing.T, out string, err error) {
+	t.Helper()
+	if err == nil || r.landed(t) {
+		t.Fatalf("git push landed, want it refused:\n%s", out)
+	}
+	if body := r.lastRefusal(); !strings.Contains(body, ".github/workflows/ci.yml") || !strings.Contains(body, whyTipChanged) {
+		t.Errorf("refusal %q does not name .github/workflows/ci.yml and say %q", body, whyTipChanged)
+	}
+}
+
+// pushRefs runs `git push origin <refspecs>` and reports what git said and
+// whether it succeeded.
+func (r *forgeRun) pushRefs(refspecs ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"push", "origin"}, refspecs...)...)
+	cmd.Dir, cmd.Env = r.work, gitEnv()
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 // postCommands sends one receive-pack request through the git_pat lane with

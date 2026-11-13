@@ -205,30 +205,37 @@ func (rs *pushRuleSet) compile(pats []string) [][]string {
 func match(pats [][]string, changes []gitpack.Change) (hits []string, unknown []gitpack.Change, err error) {
 	budget := maxGlobOps
 	for _, c := range changes {
-		var segs []string // the root is zero segments, not one empty one
-		if c.Path != "" {
-			segs = strings.Split(c.Path, "/")
-		}
-		opaque := c.Opaque()
-		for _, pat := range pats {
-			ok, err := matchSegments(pat, segs, &budget)
-			if err == nil && !ok && opaque {
-				ok, err = matchesBeneath(pat, segs, &budget)
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			if ok {
-				if c.Carried() {
-					hits = append(hits, shownPath(c))
-				} else {
-					unknown = append(unknown, c)
-				}
-				break
-			}
+		ok, err := claims(pats, c, &budget)
+		switch {
+		case err != nil:
+			return nil, nil, err
+		case !ok:
+		case c.Carried():
+			hits = append(hits, shownPath(c))
+		default:
+			unknown = append(unknown, c)
 		}
 	}
 	return hits, unknown, nil
+}
+
+// claims reports whether one of pats claims c, as match reads a pattern.
+func claims(pats [][]string, c gitpack.Change, budget *int) (bool, error) {
+	var segs []string // the root is zero segments, not one empty one
+	if c.Path != "" {
+		segs = strings.Split(c.Path, "/")
+	}
+	opaque := c.Opaque()
+	for _, pat := range pats {
+		ok, err := matchSegments(pat, segs, budget)
+		if err == nil && !ok && opaque {
+			ok, err = matchesBeneath(pat, segs, budget)
+		}
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
 }
 
 // sampleOf is the capped slice of paths the structured log carries.
@@ -517,6 +524,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				" every object it deltifies against")
 		return nil, pushReview{}, noRelease, false
 	}
+	if ref := namedTwice(res.Commands); ref != "" {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			"wardyn: cannot enforce push content rules on this push: it names "+ref+" more than once"+
+				"\nsend one update for each ref")
+		return nil, pushReview{}, noRelease, false
+	}
 	denied, why, err := p.matchedPaths(r, rules.deny, res, forge.forRule(adoClears.denyPaths), subject)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -550,15 +563,30 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				"\nask an operator to shorten push_rules.require_review_paths")
 		return nil, pushReview{}, noRelease, false
 	}
-	review.unresolved = review.why != "" && review.why != whyChanged
+	review.unresolved = review.why != "" && review.why != whyChanged && review.why != whyTipChanged && review.why != whyBranchDeleted
 	// The buffer outlives the slot, forwarded or held from here, and stays charged.
 	kept = true
 	return buf, review, release, true
 }
 
+// namedTwice is the first ref a push names in two commands, or "". git sends
+// one command for each ref; two would let a delete hide the tip a create
+// beside it replaces.
+func namedTwice(cmds []gitpack.Command) string {
+	seen := map[string]bool{}
+	for _, c := range cmds {
+		if seen[c.Ref] {
+			return c.Ref
+		}
+		seen[c.Ref] = true
+	}
+	return ""
+}
+
 // matchedPaths is the verdict of one pattern list on one inspected push:
-// every path it claims, and why when the forge was asked (a push the pack
-// alone passes is never asked).
+// every path it claims, and why when the forge was asked. A push the pack
+// alone passes is still asked what the tip of each branch it updates holds
+// (tipChanges).
 func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo,
 	subject slog.Attr) (paths []string, why string, err error) {
 	if len(pats) == 0 {
@@ -567,8 +595,28 @@ func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Resul
 	paths, left, why, err := p.claimedEntries(r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
 		return match(pats, cs)
 	}, (*forgeRepo).heldAtAny, res, forge, subject)
+	// Also when the first comparison found something: a held push must name
+	// every path. The first comparison's reason for what it left stands unless
+	// this one could not finish, which leaves the push unresolved.
+	if err == nil && (why == "" || why == whyChanged) {
+		more, tipWhy, err := p.tipChanges(r, pats, res, forge)
+		if err != nil {
+			return nil, "", err
+		}
+		first := len(left) > 0
+		if left = append(left, more...); len(more) > 0 && (!first || tipWhy != whyTipChanged) {
+			why = tipWhy
+		}
+	}
+	named := make(map[string]bool, len(paths))
+	for _, pth := range paths {
+		named[pth] = true
+	}
 	for _, c := range left {
-		paths = append(paths, shownPath(c))
+		if s := shownPath(c); !named[s] {
+			named[s] = true
+			paths = append(paths, s)
+		}
 	}
 	return paths, why, err
 }
@@ -593,9 +641,13 @@ func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]
 		if hits, unknown, err = claim(res.Changes); err != nil {
 			return nil, nil, "", err
 		}
+		// A forge that can be read is asked even when the pack also carries a
+		// match: a held push names every path.
 		left = nil
-		if len(hits) == 0 && len(unknown) > 0 {
-			left, why = forge.unchanged(ctx, unknown, res, clear)
+		if len(unknown) > 0 && (len(hits) == 0 || forge != nil) {
+			if left, why = forge.unchanged(ctx, unknown, res, clear); len(left) == 0 {
+				why = ""
+			}
 		}
 	}
 	if forge != nil && forge.reads > 0 {
@@ -765,7 +817,7 @@ func (p *Proxy) refusePush(w http.ResponseWriter, r *http.Request, subject slog.
 // capped, why the forge did not clear them when it was asked, and what to do.
 func deniedPathsBody(paths []string, why string) string {
 	return pathsBody("wardyn: this push is refused by the run's push content rules", paths, "denied", why,
-		"remove these paths from the push, or ask an operator to widen push_rules.deny_paths")
+		cmp.Or(tipRemedy(why), "remove these paths from the push, or ask an operator to widen push_rules.deny_paths"))
 }
 
 // pathsBody is the shape every path-naming push refusal shares: a headline, at

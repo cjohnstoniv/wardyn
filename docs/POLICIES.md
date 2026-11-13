@@ -1394,7 +1394,9 @@ So an entry a pattern matches is judged one of two ways:
 - A parent counts only when GitHub's compare API places it in the **current** history of
   - the repository's default branch, or
   - a branch the push updates (for the run's own branch, that is the run's earlier pushes).
-- A merge passes an entry that matches any counted parent, so merging the default branch in after it changed a workflow is not refused.
+- A merge passes an entry matching any counted parent, so a branch the push creates may merge a default branch that changed a workflow.
+- On a branch the push updates, an entry at a `deny_paths` or `require_review_paths` path must be the one its tip holds, with or without commits in the push. A merge that takes another version is refused or held, and so is deleting a branch.
+- `max_file_size_mib` and `deny_new_executables` still take any counted parent, so a merge can restore older files or executable bits.
 
 **History the push re-sends.**
 

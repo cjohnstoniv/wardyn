@@ -770,3 +770,92 @@ func TestADOPushCutShortWalkSaysSo(t *testing.T) {
 	rec := postEntraPush(t, r.p, r.record(t, map[string]string{"lib/c.txt": "c\n"}))
 	r.wantHeld(t, rec, []string{adoWorkedOut, whyCutShort}, "other than forward")
 }
+
+// TestADOPushKeepsWhatTheBranchTipHeld: a push that moves the run's branch must
+// leave it holding, at a review path, what the branch's tip holds there. A merge
+// naming an older commit of the branch as a parent, or a second branch the same
+// push creates on one, no longer brings that commit's version back without a
+// hold. Each push is a stock git client's. Building on an older commit and then
+// merging the tip back in leaves the tip's version, and passes.
+func TestADOPushKeepsWhatTheBranchTipHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// push builds on the branch's tip b over the older commit a and returns what git sent.
+		push     func(t *testing.T, r *adoPushRun, a, b string) []byte
+		wants    []string // nil: the push is forwarded
+		unwanted string
+		// broken, when set, names the tree whose listing the forge fails.
+		broken func(t *testing.T, r *adoPushRun, a string) string
+	}{
+		{"a merge whose other parent is an older commit of the branch is held", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			return r.gitPush(t, adoMergeWith(t, r, b, a)+":"+r.ref)
+		}, []string{adoTouches, ".github/workflows/ci.yml", whyTipChanged}, adoWorkedOut, nil},
+		{"a second branch the same push creates on an older commit is held", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			c, d := adoCommitOn(t, r, b, a, "lib/c.txt"), adoCommitOn(t, r, a, "", "lib/d.txt")
+			return r.gitPush(t, c+":"+r.ref, d+":"+BranchNSPrefix(r.p.runID)+"older")
+		}, []string{adoTouches, ".github/workflows/ci.yml", whyTipChanged}, adoWorkedOut, nil},
+		{"a comparison the forge cannot finish holds the push", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			return r.gitPush(t, adoMergeWith(t, r, b, a)+":"+r.ref)
+		}, []string{adoWorkedOut, ".github/", whyTipUnread}, adoTouches, func(t *testing.T, r *adoPushRun, a string) string {
+			return gitOut(t, r.work, "rev-parse", a+":.github")
+		}},
+		{"a push stating a tip the forge does not show is held", func(t *testing.T, r *adoPushRun, a, _ string) []byte {
+			c := adoCommitOn(t, r, a, "", "lib/c.txt")
+			return adoHandPush(t, r, [][3]string{{a, c, r.ref}}, c+"\n^"+a)
+		}, []string{adoWorkedOut, ".github/", whyNoTip}, adoTouches, nil},
+		{"a commit on the tip passes", func(t *testing.T, r *adoPushRun, _, b string) []byte {
+			return r.gitPush(t, adoCommitOn(t, r, b, "", "lib/c.txt")+":"+r.ref)
+		}, nil, "", nil},
+		{"a commit on an older base, merged with the tip, passes", func(t *testing.T, r *adoPushRun, a, b string) []byte {
+			adoCommitOn(t, r, a, "", "lib/e.txt")
+			runGit(t, r.work, "merge", "-q", "--no-edit", b)
+			return r.gitPush(t, "HEAD:"+r.ref)
+		}, nil, "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newADOPushRun(t, adoReview(), true)
+			a := gitOut(t, r.work, "rev-parse", "HEAD")
+			r.record(t, map[string]string{".github/workflows/ci.yml": "on: reviewed\n"})
+			b := gitOut(t, r.work, "rev-parse", "HEAD")
+			r.snapshot(t)
+			if tc.broken != nil {
+				tree := "/trees/" + tc.broken(t, r, a)
+				fail := func(w http.ResponseWriter, req *http.Request) bool {
+					if !strings.HasSuffix(req.URL.Path, tree) {
+						return false
+					}
+					http.Error(w, "unavailable", http.StatusServiceUnavailable)
+					return true
+				}
+				r.rest.hook.Store(&fail)
+			}
+			rec := postEntraPush(t, r.p, tc.push(t, r, a, b))
+			if tc.wants == nil {
+				r.wantPassed(t, rec)
+				r.finish(t)
+				return
+			}
+			r.wantHeld(t, rec, tc.wants, tc.unwanted)
+		})
+	}
+}
+
+// gitPush pushes refspecs with a stock git client, no deltas as pushHead, and
+// returns the bytes it sent.
+func (r *adoPushRun) gitPush(t *testing.T, refspecs ...string) []byte {
+	t.Helper()
+	runGit(t, r.work, append([]string{"-c", "pack.window=0", "push", "-q", r.f.srv.URL + "/octocat/hello-world.git"}, refspecs...)...)
+	return r.f.pushBody()
+}
+
+// adoMergeWith commits, with git commit-tree, a merge of the branch's tip and an
+// older commit whose tree takes .github from the older one, as a person
+// resolving such a merge by hand would, and returns it.
+func adoMergeWith(t *testing.T, r *adoPushRun, tip, older string) string {
+	t.Helper()
+	runGit(t, r.work, "checkout", "-q", "--detach", tip)
+	runGit(t, r.work, "checkout", "-q", older, "--", ".github")
+	writeFiles(t, r.work, map[string]string{"lib/m.txt": "m\n"})
+	runGit(t, r.work, "add", "-A")
+	return gitOut(t, r.work, "commit-tree", gitOut(t, r.work, "write-tree"), "-p", tip, "-p", older, "-m", "merge")
+}

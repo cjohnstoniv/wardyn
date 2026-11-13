@@ -29,8 +29,10 @@ package proxy
 // push sets builds on nothing the push builds on, so a base counts only when
 // the history the pack carries for some ref's new commit names it (Reaches). A
 // merge passes an entry matching ANY counted parent: demanding all would
-// refuse merging the default branch in after it changed a denied path, and
-// closes nothing a single-parent commit on the same base couldn't already.
+// refuse merging the default branch into a branch the push creates after it
+// changed a denied path. A counted parent can be older than the tip of a
+// branch the push updates, so for deny_paths and require_review_paths that
+// branch is also compared with its own tip (push_forge_tip.go).
 //
 // WHAT THE PACK RE-SENDS. git leaves out of a pack only what is reachable
 // from the tips the forge advertises that the client also has. A clone
