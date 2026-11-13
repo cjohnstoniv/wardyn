@@ -360,7 +360,8 @@ var ErrIdentityRebound = errors.New("store: the identity was bound since the sus
 // the session cutoff for every sub and email form, deactivates the identity rows and bumps their
 // authority epoch, stamps the people rows, records the step done (pending under a Partial plan) and the
 // plan's pending steps. A
-// suspension of an active identity first clears the ledger of any earlier one.
+// suspension of an active identity first clears the ledger of any earlier one. Another row it deactivates
+// keeps its ledger, less that ledger's record of a deactivation.
 func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -408,8 +409,16 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		return SuspendResult{}, ErrNotFound
 	}
 	// A sign-in that held a row finished before this, so the cut below draws a greater revocation
-	// sequence than the one its cookie recorded.
+	// sequence than the one its cookie recorded. The same statement drops the record of an earlier deactivation
+	// from the ledger of each row it deactivates: the identity's own is reset and recorded again below, and another
+	// row's is otherwise kept, so a tail bound to that earlier deactivation closes no step a pass bound to this one
+	// may have worked, also once the person is active again (FinishSuspensionJobAt). Recording this deactivation
+	// there instead would prove it that row's own suspension's (ownSuspension).
 	if _, err = tx.Exec(ctx, `
+		WITH unrecorded AS (
+			UPDATE deprovision_jobs SET detail = detail - 'deactivated_at_us'
+			 WHERE kind = 'suspend' AND step = 'cutoff' AND target = '' AND identity_id IN (
+			       SELECT id FROM principal_identities WHERE (id = $1 OR principal = ANY($2::text[])) AND deactivated_at IS NULL))
 		UPDATE principal_identities
 		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1,
 		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 AND (id = $1 OR principal = ANY($4::text[]))

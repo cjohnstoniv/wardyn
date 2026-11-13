@@ -86,10 +86,10 @@ func (s PG) SubCutSince(ctx context.Context, sub string, at time.Time) (bool, er
 // ledger's cutoff step still records at as the deactivation it left (SuspendIdentity writes the record in the
 // transaction that resets the ledger, and a reactivation keeps it). Only a reactivation lets a later suspension
 // reset the ledger, and that suspension records its own deactivation, so a tail bound to an earlier one closes
-// none of its steps, also once the person is active again. Nor does it close one while the identity is
-// deactivated at another instant, which a suspension of another identity can leave without resetting this
-// ledger: a pass bound to that instant owes more than this tail did. A step the tail may not close, or whose row
-// a later suspension replaced, is ErrSuperseded.
+// none of its steps, also once the person is active again. Nor does it close one, while the identity stays
+// deactivated or once it is active again, after a suspension of another identity deactivated it at another
+// instant: that suspension keeps this ledger but drops its record, and a pass bound to that instant owes more than
+// this tail did. A step the tail may not close, or whose row a later suspension replaced, is ErrSuperseded.
 func (s PG) FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, detail map[string]int, at time.Time) error {
 	if detail == nil {
 		detail = map[string]int{}

@@ -196,8 +196,8 @@ func TestPG_SuspensionBounds_TheBoundItselfIsOwed(t *testing.T) {
 // with the person active. A ledger whose cutoff step holds no record of its deactivation (an earlier release
 // wrote it) is closed while the identity is still deactivated at the tail's bound, and not once it is active.
 // A suspension of another identity that names this one's principal deactivates it again without resetting its
-// ledger: a tail bound to the deactivation the ledger records then closes nothing and a failed row keeps its
-// failure, while a tail bound to the later deactivation closes it.
+// ledger, and drops the ledger's record: a tail bound to the deactivation the ledger recorded then closes nothing
+// and a failed row keeps its failure, while a tail bound to the later deactivation closes it.
 func TestPG_SuspensionBounds_AFinishClosesOnlyItsOwnSuspensionsLedger(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
@@ -289,6 +289,113 @@ func TestPG_SuspensionBounds_AFinishClosesOnlyItsOwnSuspensionsLedger(t *testing
 		t.Errorf("the row under the later deactivation = %+v, want pending with its failure", j)
 	}
 	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, nil, *alongside.DeactivatedAt); err != nil || !row().Done {
-		t.Errorf("a finish bound to the later deactivation, ledger recording the earlier one = %v, row done %v; want it done", err, row().Done)
+		t.Errorf("a finish bound to the later deactivation, the ledger's record dropped = %v, row done %v; want it done", err, row().Done)
+	}
+}
+
+// A suspension of another identity that names this one's principal while this one is active deactivates it, keeps
+// its ledger and drops that ledger's record of the earlier deactivation. A pass bound to the later deactivation
+// fails a row, and the person is reactivated again: a tail bound to the recorded deactivation then closes nothing,
+// so the row keeps its failure. The later deactivation is not counted the identity's own suspension's. An identity
+// that was already deactivated by its own suspension keeps its record: it is still counted its own, and once it is
+// active again a tail bound to that deactivation still closes its step. The naming suspension is a repeat step 1
+// of an identity already deactivated, so its own ledger is not reset.
+func TestPG_SuspensionBounds_AnotherIdentitysSuspensionDropsTheRecordOfARowItDeactivates(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	leaver := signedIn(t, st, "sub-dropped", "dropped@corp.example", leaverOID)
+	held := signedIn(t, st, "sub-held", "held@corp.example", "")
+	other := signedIn(t, st, "sub-naming", "naming@corp.example", "")
+	key := store.JobKey{Step: "kill_run", Target: uuid.NewString()}
+	suspend := func(id uuid.UUID, principal string) time.Time {
+		t.Helper()
+		res, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: id, Principal: principal, Principals: []string{principal}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.EnsureDeprovisionJobs(ctx, id, store.JobKindSuspend, []store.JobKey{key}); err != nil {
+			t.Fatal(err)
+		}
+		return res.DeactivatedAt
+	}
+	reactivate := func(id uuid.UUID) {
+		t.Helper()
+		if _, err := st.ApplyIdentityUpdate(ctx, id, store.IdentityUpdate{Reactivate: true}, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ledger := func(id uuid.UUID) (cutoff, row store.DeprovisionJob) {
+		t.Helper()
+		jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range jobs {
+			switch {
+			case j.Step == store.JobStepCutoff:
+				cutoff = j
+			case j.Step == key.Step && j.Target == key.Target:
+				row = j
+			}
+		}
+		return cutoff, row
+	}
+
+	suspend(other.ID, "sub-naming")
+	first := suspend(leaver.ID, "sub-dropped")
+	reactivate(leaver.ID)
+	heldAt := suspend(held.ID, "sub-held")
+	names := []string{"sub-naming", "sub-dropped", "sub-held"}
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: other.ID, Principal: "sub-naming", Principals: names,
+		PurgeAfter: time.Microsecond, PurgePrincipals: names}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetIdentity(ctx, leaver.ID); err != nil || got.DeactivatedAt == nil || got.DeactivatedAt.Equal(first) {
+		t.Fatalf("control: the identity after another identity's suspension = %+v (%v), want it deactivated at a later instant", got, err)
+	}
+	if got, err := st.GetIdentity(ctx, held.ID); err != nil || got.DeactivatedAt == nil || !got.DeactivatedAt.Equal(heldAt) {
+		t.Fatalf("control: the identity already deactivated = %+v (%v), want its own deactivation kept", got, err)
+	}
+	if c, _ := ledger(leaver.ID); !c.Done {
+		t.Fatalf("control: the cutoff of the identity deactivated alongside = %+v, want it kept, done", c)
+	}
+	if c, _ := ledger(leaver.ID); c.Detail["deactivated_at_us"] != 0 || len(c.Detail) == 0 {
+		t.Errorf("the cutoff of the identity deactivated alongside = %+v, want its counts kept and no deactivation recorded", c)
+	}
+	if c, _ := ledger(held.ID); c.Detail["deactivated_at_us"] != int(heldAt.UnixMicro()) {
+		t.Errorf("the ledger of the identity already deactivated = %+v, want its record of %v kept", c, heldAt)
+	}
+	due, err := st.PurgeDueIdentities(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := map[uuid.UUID]bool{}
+	for _, d := range due {
+		own[d.ID] = d.Suspended
+	}
+	if s, ok := own[leaver.ID]; !ok || s {
+		t.Errorf("the identity deactivated alongside: due %v, counted its own suspension's %v; want due and not counted", ok, s)
+	}
+	if s, ok := own[held.ID]; !ok || !s {
+		t.Errorf("the identity already deactivated by its own suspension: due %v, counted its own suspension's %v; want both", ok, s)
+	}
+
+	if err := st.FailDeprovisionJob(ctx, leaver.ID, store.JobKindSuspend, key, errors.New("teardown failed")); err != nil {
+		t.Fatal(err)
+	}
+	reactivate(leaver.ID)
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, map[string]int{"runs_killed": 0}, first); !errors.Is(err, store.ErrSuperseded) {
+		t.Errorf("a finish bound to the recorded deactivation, after another identity's suspension and a reactivation = %v, want ErrSuperseded", err)
+	}
+	if _, j := ledger(leaver.ID); j.Done || j.LastError != "teardown failed" {
+		t.Errorf("the row the later pass failed = %+v, want pending with its failure", j)
+	}
+	reactivate(held.ID)
+	if err := st.FinishSuspensionJobAt(ctx, held.ID, key, nil, heldAt); err != nil {
+		t.Errorf("a finish bound to the kept record, person active again = %v, want it closed", err)
+	}
+	if _, j := ledger(held.ID); !j.Done {
+		t.Errorf("the row of the identity already deactivated = %+v, want done", j)
 	}
 }
