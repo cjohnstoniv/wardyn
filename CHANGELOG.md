@@ -17,6 +17,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A syslog collector that accepts the connection but stops reading no longer piles up blocked writes in `wardynd`. One write waits on it at a time; while that write is blocked, each later event waits out the write timeout and is then dropped and counted in `wardyn_audit_sink_drops_total{sink="syslog"}`, as a timed-out event already was.
+- When the audit `file` sink cannot rotate its log, for example because the log's directory is not writable, it now refuses the event, counts it in `wardyn_audit_sink_drops_total{sink="file"}`, logs the error and tries the rotation again on a later event. Before, it reported the event written and kept appending past `max_bytes`.
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
