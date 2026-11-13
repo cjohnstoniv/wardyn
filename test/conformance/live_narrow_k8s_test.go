@@ -491,6 +491,7 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 	node := s.pod.Spec.NodeName
 	oldNodeIP := dockerNodeIP(t, node)
 
+	restartedAt := time.Now()
 	// 2. Reboot the node with the pod still bound to it.
 	if out, err := exec.Command("docker", "restart", node).CombinedOutput(); err != nil {
 		t.Fatalf("docker restart %s: %v\n%s", node, err, out)
@@ -504,9 +505,15 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 		pointKubeconfigAt(t, newIP, node)
 		rebuild = true
 	}
+	// One driver build runs k8s.New's boot canary, which can take up to seven minutes, and waitFor checks
+	// its bound only between attempts: a rebuild must not start without that much time left.
+	const rebuildBudget = 8 * time.Minute
 	lastBuildErr := ""
 	waitFor(t, 5*time.Minute, "the API, the node and the proxy pod to be ready", func() bool {
 		if rebuild {
+			if d, ok := t.Deadline(); ok && time.Until(d) < rebuildBudget {
+				t.Fatalf("no time left before the test's -timeout for another driver rebuild after the node restart (last error: %s)", lastBuildErr)
+			}
 			nr, ncs, nns, err := build()
 			if err != nil {
 				if err.Error() != lastBuildErr {
@@ -555,15 +562,20 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 	}
 
 	// 7. The agent-side check needs a live agent to exec into. The agent pod has RestartPolicy Never, so a
-	// node reboot usually leaves it dead; the verdict above stands without it.
+	// node reboot leaves it dead, so after a real reboot this check is skipped and the verdict above stands
+	// without it. A phase alone can still read Running from before the node went down, so the skip reads
+	// whether a container started after the restart.
 	agent, err := cs.CoreV1().Pods(ns).Get(ctx, "wardyn-agent-"+s.spec.RunID.String(), metav1.GetOptions{})
 	if err != nil {
 		t.Logf("agent-side check skipped: read the agent pod: %v", err)
 		return
 	}
-	if agent.Status.Phase != corev1.PodRunning {
-		t.Logf("agent-side check skipped: the agent pod is %s, not Running, after the node restart", agent.Status.Phase)
+	if !startedSince(agent, restartedAt) {
+		t.Logf("agent-side check skipped: no agent container started after the node restart (pod phase %s)", agent.Status.Phase)
 		return
+	}
+	if pod, err = cs.CoreV1().Pods(ns).Get(ctx, s.pod.Name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("read the proxy pod again: %v", err)
 	}
 	if pod.Status.PodIP == ip {
 		assertNarrowed(t, r, s.sb.Ref)
@@ -581,6 +593,17 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 		}
 	}
 	t.Log("the proxy pod came back on a new address; the agent reaches none, which is narrower")
+}
+
+// startedSince reports whether one of p's containers is running and started after at. A phase alone can
+// still be the pod's status from before the node went down, when its agent is already dead.
+func startedSince(p *corev1.Pod, at time.Time) bool {
+	for _, c := range p.Status.ContainerStatuses {
+		if c.State.Running != nil && c.State.Running.StartedAt.Time.After(at) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitFor(t *testing.T, bound time.Duration, what string, ok func() bool) {
