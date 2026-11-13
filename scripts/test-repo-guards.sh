@@ -986,7 +986,7 @@ fi
 # A go 1.27 go line makes macOS and Windows builds load roots from SSL_CERT_FILE or SSL_CERT_DIR instead of
 # the system store; the doctor's fix text and wardyn-runnerd's own wording describe the go 1.26 behaviour.
 # Nothing else fails when the line goes: the build stays green and only `go version -m` shows the change.
-if [ "$(grep -cE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=' go.mod)" = 1 ] && grep -qE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=0[[:space:]]*(//.*)?$' go.mod && ! git grep -q '^//go:debug x509sslcertoverrideplatform' -- '*.go'; then
+if [ "$(grep -cE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=' go.mod)" = 1 ] && grep -qE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=0[[:space:]]*(//.*)?$' go.mod && ! git grep -qE '^[[:space:]]*//go:debug[[:space:]]+x509sslcertoverrideplatform=' -- '*.go'; then
     ok "go.mod sets godebug x509sslcertoverrideplatform=0 once and no //go:debug line sets it"
 else
     bad "go.mod must set godebug x509sslcertoverrideplatform=0 exactly once, and no //go:debug line may set it: otherwise macOS and Windows builds stop using the system trust store when SSL_CERT_FILE or SSL_CERT_DIR is set"
