@@ -1543,6 +1543,9 @@ func TestWaitStopsAtAChangedSignIn(t *testing.T) {
 			_, err := waitForRunReady(context.Background(), io.Discard, c, fakeRunID, 50*time.Millisecond, false)
 			return err
 		},
+		"apply --wait": func() error {
+			return waitForRunRunning(context.Background(), io.Discard, c, fakeRunID, 50*time.Millisecond)
+		},
 	} {
 		if err := wait(); !errors.Is(err, errSessionChanged) || exitCodeFor(err) != 1 {
 			t.Errorf("%s: err %v (exit %d), want the changed sign-in and exit 1", name, err, exitCodeFor(err))
@@ -1550,5 +1553,58 @@ func TestWaitStopsAtAChangedSignIn(t *testing.T) {
 	}
 	if n := sent.Load(); n != 0 {
 		t.Errorf("%d requests were sent", n)
+	}
+}
+
+// TestSignInWithNoSessionIDIsNotUsed: resolve pins the session it read. A stored item with no session id, or
+// one signed out between resolve's two reads, gives no pin: the command sends no bearer and never reads the
+// store again, so a sign-in stored later is not adopted.
+func TestSignInWithNoSessionIDIsNotUsed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		before func(t *testing.T, origin string, started cliItem, advance func(time.Duration))
+	}{
+		{"stored with no session id", func(t *testing.T, origin string, started cliItem, _ func(time.Duration)) {
+			started.SessionID = uuid.Nil
+			if err := (keychainStore{}).put(origin, started); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"signed out between the two reads", func(_ *testing.T, origin string, _ cliItem, advance func(time.Duration)) {
+			advance(intoMargin)
+			reads := 0
+			keychainReady = func() error {
+				if reads++; reads == 2 {
+					_ = keyring.Delete(cliKeyringService, origin)
+				}
+				return nil
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSignInOrg(t)
+			cliEnv(t, approveInBrowser(t, f, nil))
+			advance := skewClock(t)
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			started := storedItem(t, f.srv.URL)
+			tc.before(t, f.srv.URL, started, advance)
+			sess := &sessionState{}
+			sess.resolve(f.srv.URL)
+			f.mu.Lock()
+			signInElsewhere(f, started, func(it cliItem) error { return (keychainStore{}).put(f.srv.URL, it) })
+			before := f.requests
+			f.mu.Unlock()
+			advance(intoMargin)
+			if tok, origin, err := sess.bearer(context.Background()); tok != "" || origin != "" || err != nil {
+				t.Fatalf("bearer %q for %q, %v: want none, and the later sign-in not adopted", tok, origin, err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.requests != before {
+				t.Errorf("%d requests reached the server, want none", f.requests-before)
+			}
+		})
 	}
 }

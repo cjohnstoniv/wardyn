@@ -144,6 +144,9 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 					wantGit = true
 				}
 				files, ferr := c.RunFiles(waitCtx, runID)
+				if errors.Is(ferr, errSessionChanged) {
+					return res, ferr // the command's sign-in changed: the next poll would be refused too
+				}
 				if ferr != nil && context.Cause(waitCtx) == errWaitTimeout {
 					return res, timedOut()
 				}
