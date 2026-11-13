@@ -70,6 +70,8 @@ type Server struct {
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
+	// startProc starts an exec's process; nil is cmd.Start (tests hold it).
+	startProc func(*exec.Cmd) error
 
 	mu      sync.Mutex
 	fence   PauseFence // the order of pauses and resumes, as the marker directory keeps it
@@ -81,6 +83,8 @@ type Server struct {
 
 	// stopping is set by the stop scrub: the run's settings are gone, so no Init or exec starts.
 	stopping bool
+	// starts holds every exec's process start against the stop scrub, which closes it before it removes anything.
+	starts startFence
 	// stopCtx ends with the stop scrub, so the GUI settings step does not outlive the run's settings.
 	stopOnce   sync.Once
 	stopCtx    context.Context
@@ -280,6 +284,9 @@ func (s *Server) handleScrub(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.stopping = true
 	s.mu.Unlock()
+	// An exec admitted before stopping may not have started its process yet: wait for one already
+	// starting, and refuse the rest, so none begins on the scrubbed guest and writes back what it removed.
+	s.starts.close(errStopping)
 	s.sessionCtx()
 	s.stopCancel()
 	writeJSON(w, s.Scrub(r.Context(), ScrubAtStop))
@@ -565,6 +572,24 @@ func (f *frameWriter) stream(typ byte, r io.Reader) {
 	}
 }
 
+// start starts an attached exec's process through the stop fence (Server.starts): handleExec answers 200
+// before the start, so an exec admitted before the stop scrub can reach here after it.
+func (s *Server) start(cmd *exec.Cmd) error {
+	if err := s.starts.enter(); err != nil {
+		return err
+	}
+	defer s.starts.leave()
+	return s.startProcess(cmd)
+}
+
+// startProcess starts cmd; the caller holds the stop fence.
+func (s *Server) startProcess(cmd *exec.Cmd) error {
+	if s.startProc != nil {
+		return s.startProc(cmd)
+	}
+	return cmd.Start()
+}
+
 // runAttached runs cmd with the session's stdin and streams its output; a cancelled session (the
 // runner closed it, or the connection went) kills the process group.
 func (s *Server) runAttached(r *http.Request, cmd *exec.Cmd, er ExecRequest, out *frameWriter) (int, error) {
@@ -580,7 +605,7 @@ func (s *Server) runAttached(r *http.Request, cmd *exec.Cmd, er ExecRequest, out
 		defer master.Close()
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 		cmd.SysProcAttr.Setctty = true
-		err = cmd.Start()
+		err = s.start(cmd)
 		slave.Close()
 		if err != nil {
 			return 0, err
@@ -601,7 +626,7 @@ func (s *Server) runAttached(r *http.Request, cmd *exec.Cmd, er ExecRequest, out
 		if err != nil {
 			return 0, err
 		}
-		if err := cmd.Start(); err != nil {
+		if err := s.start(cmd); err != nil {
 			return 0, err
 		}
 		stdin = in
@@ -669,8 +694,14 @@ func exitCode(cmd *exec.Cmd, err error) (int, error) {
 	return cmd.ProcessState.ExitCode(), nil
 }
 
-// startDetached starts cmd with its output (stdout and stderr together) in a file of OutDir.
+// startDetached starts cmd with its output (stdout and stderr together) in a file of OutDir. It holds the
+// stop fence from before the file is made until the exec is recorded: the stop scrub removes every exec's
+// output, so neither the file nor the process may begin after it.
 func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
+	if err := s.starts.enter(); err != nil {
+		return "", err
+	}
+	defer s.starts.leave()
 	s.mu.Lock()
 	s.counter++
 	id := strconv.Itoa(s.counter)
@@ -686,7 +717,7 @@ func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
 		return "", err
 	}
 	cmd.Stdout, cmd.Stderr = pw, pw
-	if err := cmd.Start(); err != nil {
+	if err := s.startProcess(cmd); err != nil {
 		f.Close()
 		pr.Close()
 		pw.Close()

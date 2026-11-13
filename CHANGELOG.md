@@ -21,6 +21,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
 
+### Security
+
+- macOS kept machines: a command sent to a run just as it stopped could start after the stop scrub had finished, and write back what the scrub removed, such as the AWS CLI's sign-in cache, while the machine's record said it was scrubbed. The guest agent now refuses a command that has not started by the time the stop scrub begins, and the scrub waits for one that is already starting. Run the tools update once to get the new guest agent. Not yet tried on a real Mac.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added
