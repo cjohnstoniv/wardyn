@@ -572,7 +572,7 @@ func ownValues(own [][]byte, shared map[string]struct{}) [][]byte {
 // so the cost follows the corpus size, not globals times run values.
 func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
 	perRun, globals := r.perRun[runID], r.globals
-	out := make([][]byte, 0, len(perRun)+len(globals))
+	out := make([][]byte, 0, len(globals))
 	held := make(map[string]struct{}, len(perRun))
 	for _, v := range perRun {
 		out = append(out, bytes.Clone(v))
@@ -626,7 +626,7 @@ func (r *Registry) RunIDs() []uuid.UUID {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]uuid.UUID, 0, len(r.perRun)+len(r.cached))
+	out := make([]uuid.UUID, 0, len(r.cached))
 	for id := range r.perRun {
 		out = append(out, id)
 	}
@@ -650,9 +650,9 @@ func (r *Registry) RunIDs() []uuid.UUID {
 // run's corpus carries every person's global values, so it grows with the
 // organisation, not the run.
 func JSONEscapedVariants(snap [][]byte) [][]byte {
-	out := make([][]byte, len(snap), len(snap)*3)
+	out := make([][]byte, len(snap))
 	copy(out, snap)
-	seen := make(map[string]struct{}, len(snap)*3)
+	seen := make(map[string]struct{}, len(snap))
 	for _, s := range snap {
 		seen[string(s)] = struct{}{}
 	}
@@ -748,7 +748,7 @@ func NewMasker(secrets [][]byte) Masker {
 // built over one shared set hold it once. A value of own that shared holds is left out.
 func newMaskerOver(own [][]byte, shared [][]byte, sharedSet map[string]struct{}) Masker {
 	mine := NewMasker(ownValues(own, sharedSet)).secrets
-	merged := make([][]byte, 0, len(mine)+len(shared))
+	merged := make([][]byte, 0, len(shared))
 	i, j := 0, 0
 	for i < len(mine) || j < len(shared) {
 		if j == len(shared) || (i < len(mine) && len(mine[i]) > len(shared[j])) {
