@@ -655,7 +655,26 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	if s.cfg.RunOutputPersistOff {
 		return firstErr
 	}
-	ids, err := st.ListStalePendingRunOutputs(ctx, runOutputPendingStale, 200)
+	if err := s.sweepStalePending(ctx, st); err != nil {
+		return err
+	}
+	if err := s.sweepRecordingOutputs(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// staleOutputSweepPage is how many stale pending rows one sweep takes.
+const staleOutputSweepPage = 200
+
+// sweepStalePending resolves one page of terminal runs' stale pending rows, from where the last pass stopped.
+// A failed list keeps the position, as does a pass whose ctx ended; a short page starts the next pass from the
+// oldest. A tail this process still holds is the finisher's own, and is left alone.
+func (s *Server) sweepStalePending(ctx context.Context, st store.RunOutputStore) error {
+	s.outputSweepMu.Lock()
+	after := s.stalePendingCursor
+	s.outputSweepMu.Unlock()
+	ids, next, err := st.ListStalePendingRunOutputs(ctx, runOutputPendingStale, after, staleOutputSweepPage)
 	if err != nil {
 		return err
 	}
@@ -664,10 +683,12 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.resolveStalePending(ctx, st, id)
 		}
 	}
-	if err := s.sweepRecordingOutputs(ctx, st); err != nil && firstErr == nil {
-		firstErr = err
+	if ctx.Err() == nil {
+		s.outputSweepMu.Lock()
+		s.stalePendingCursor = next
+		s.outputSweepMu.Unlock()
 	}
-	return firstErr
+	return nil
 }
 
 // resolveStalePending resolves a terminal run's abandoned pending row: by
