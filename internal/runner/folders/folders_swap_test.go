@@ -134,7 +134,7 @@ func TestNew_ARootSwappedForALinkAfterItsCheckIsRefused(t *testing.T) {
 	put(t, filepath.Join(shared, "sso", "notes.txt"), "n")
 	put(t, filepath.Join(h, ".aws", "sso", "cache.json"), "fixture: not a real token")
 	old := rootChecked
-	rootChecked = func() { swapForLink(t, shared, filepath.Join(h, ".aws")) }
+	rootChecked = func() { swapForLink(t, shared, ".aws") }
 	t.Cleanup(func() { rootChecked = old })
 	if s, err := New(context.Background(), []string{shared}, t.TempDir()); err == nil {
 		s.closeRoots()
