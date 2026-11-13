@@ -109,6 +109,7 @@ export function AddMcpDialog({ names, namesFailure, localServers, residentAllowe
           value={tab}
           onChange={(t) => { setTab(t); setSubmitted(false); }}
           options={[{ value: "remote", label: NR_TOOLS.MCP_REMOTE }, { value: "local", label: NR_TOOLS.MCP_TAB_LOCAL }]}
+          stackOnPhone
         />
       )}
       firstField={local ? field("where") : field("name")}
