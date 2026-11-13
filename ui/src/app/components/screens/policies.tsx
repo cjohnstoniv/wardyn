@@ -617,12 +617,13 @@ function PolicyEditor({
       if (editing) {
         await api.updatePolicy(editing.id, name.trim(), spec, editing.updated_at);
       } else {
+        // Sent: from here no setup status may replace the person's spec, answered or refused.
+        landed.current = true;
         const created = await api.createPolicy(name.trim(), spec);
         try {
           await writeAvailability("policy", created.id, audience);
         } catch (e) {
           initial.current = { name, specText };
-          landed.current = true;
           setPartial({ policy: created, message: getErrorMessage(e) });
           setSaving(false);
           return;

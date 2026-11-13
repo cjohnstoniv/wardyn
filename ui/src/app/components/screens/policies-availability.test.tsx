@@ -231,4 +231,93 @@ describe("New policy asks who gets it (decision 4)", () => {
     );
     expect(spec.value).toBe(saved);
   });
+
+  it("a setup status that answers between the create and its refused list leaves the saved policy's spec alone", async () => {
+    let settle!: (v: unknown) => void;
+    let refuse!: (e: unknown) => void;
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    createPolicyMock.mockResolvedValue(POLICY);
+    upsertGrantMock.mockReturnValue(new Promise((_, rej) => (refuse = rej)));
+    const dialog = await openNew();
+    const spec = dialog.querySelector("textarea") as HTMLTextAreaElement;
+    const saved = spec.value;
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
+    await act(async () =>
+      settle({ model_providers: [{ id: "p1", kind: "bedrock_sso", host: "bedrock-runtime.us-east-1.amazonaws.com", harnesses: ["claude-code"] }] }),
+    );
+    await act(async () => refuse(new HttpError(400, UNKNOWN_TYPE)));
+    expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
+    expect(spec.value).toBe(saved);
+  });
+
+  it("a setup status that answers while the create is in flight leaves the sent spec alone", async () => {
+    let settle!: (v: unknown) => void;
+    let answer!: (v: unknown) => void;
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    createPolicyMock.mockReturnValue(new Promise((r) => (answer = r)));
+    upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
+    const dialog = await openNew();
+    const spec = dialog.querySelector("textarea") as HTMLTextAreaElement;
+    const saved = spec.value;
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
+    await waitFor(() => expect(createPolicyMock).toHaveBeenCalled());
+    await act(async () =>
+      settle({ model_providers: [{ id: "p1", kind: "bedrock_sso", host: "bedrock-runtime.us-east-1.amazonaws.com", harnesses: ["claude-code"] }] }),
+    );
+    expect(spec.value).toBe(saved);
+    await act(async () => answer(POLICY));
+    expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
+    expect(spec.value).toBe(saved);
+  });
+
+  it("a refused create keeps the person's draft when a setup status then answers", async () => {
+    let settle!: (v: unknown) => void;
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    createPolicyMock.mockRejectedValue(new HttpError(400, "The spec was refused."));
+    const dialog = await openNew();
+    const spec = dialog.querySelector("textarea") as HTMLTextAreaElement;
+    const saved = spec.value;
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
+    await waitFor(() => expect(createPolicyMock).toHaveBeenCalled());
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: /create policy/i })).toBeEnabled());
+    await act(async () =>
+      settle({ model_providers: [{ id: "p1", kind: "bedrock_sso", host: "bedrock-runtime.us-east-1.amazonaws.com", harnesses: ["claude-code"] }] }),
+    );
+    expect(spec.value).toBe(saved);
+    expect(within(dialog).queryByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("a second New policy after a create that landed still follows the providers", async () => {
+    createPolicyMock.mockResolvedValue(POLICY);
+    upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
+    const dialog = await openNew();
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
+    expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    getSetupStatusMock.mockResolvedValue({ model_providers: [{ id: "p1", kind: "bedrock_sso", host: "bedrock-runtime.us-east-1.amazonaws.com", harnesses: ["claude-code"] }] });
+    await userEvent.click(screen.getAllByRole("button", { name: /new policy/i })[0]);
+    const spec = (await screen.findByRole("dialog")).querySelector("textarea") as HTMLTextAreaElement;
+    await waitFor(() => expect(spec.value).toContain("bedrock-runtime.us-east-1.amazonaws.com"));
+  });
 });
