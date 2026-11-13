@@ -51,12 +51,12 @@ const (
 	// egress-allowlisted host, and this sink hands back a LIVE session token.
 	credentialReauthHostPinRefusal = "The AWS SSO access token may only be injected to this " +
 		"credential's own sso portal host"
-	// credentialReauthScopeChangedRefusal is the I3 drift refusal. It is
-	// deliberately vague about WHICH field drifted: the caller is a sidecar, the
-	// reader is an audit row, and the field names are identity.
-	credentialReauthScopeChangedRefusal = "This run's model credential is no longer the one it was " +
-		"dispatched with — the roster changed while the run was working, and Wardyn will not resolve a " +
-		"different principal's credential for a run already in flight. Relaunch the run."
+	// credentialReauthScopeChangedRefusal is the I3 drift refusal. It names the
+	// kinds of thing that drift, never WHICH field or its value: the caller is a
+	// sidecar, the reader is an audit row, and the field names are identity.
+	credentialReauthScopeChangedRefusal = "This run's AWS sign-in is no longer the one it was dispatched with — " +
+		"its model provider or AWS CLI component, its principal or its region changed while the run was working, " +
+		"and Wardyn will not resolve a different AWS sign-in for a run already in flight. Relaunch the run."
 	// credentialReauthTooManyRefusal bounds the raise path. A run that has
 	// already asked its owner to sign in eight times is not going to be fixed by
 	// a ninth row.
