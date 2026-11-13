@@ -132,7 +132,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 				if !applied {
 					// Already terminal (e.g. killed concurrently) — nothing further to
 					// do, but this process may hold the tail the winner does not.
-					s.finishRunOutput(ctx, runID)
+					heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 					return
 				}
 				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
@@ -211,7 +211,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			// Run already terminal (e.g. KILLED by a user mid-run). The kill path
 			// already tore the sandbox down; only this process's tail is left, and
 			// finishing it is a no-op when the winner already did.
-			s.finishRunOutput(ctx, runID)
+			heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 			return
 		}
 		// We won the RUNNING->terminal transition, so this is the authoritative end
@@ -221,7 +221,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// reconciler runs the IDENTICAL sequence via finalizeRunTail. A non-zero exit
 		// carries no reason of its own; the agent's recording may (noteModelAccessFromRecording).
 		if terminal == types.RunFailed {
-			s.noteModelAccessFromRecording(ctx, runID)
+			heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { s.noteModelAccessFromRecording(ctx, runID) })
 		}
 		s.finalizeRunTail(ctx, runID, ref, "run.complete", outcome, map[string]any{
 			"exit_code": exitCode, "state": terminal,
@@ -283,10 +283,14 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 		return true
 	}
 	if s.auditFirstTeardownFailure(ctx, runID, action, serr) {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-			ref, "failure", mustJSON(map[string]any{
-				"sandbox_ref": ref, "teardown_error": serr.Error(),
-			})))
+		// The row gets a bound of its own (settleAfterTeardown), not the stop's: a stop cut at its caller's bound is
+		// exactly the failure this row records, and it is written once per process.
+		settleAfterTeardown(ctx, func(ctx context.Context) {
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+				ref, "failure", mustJSON(map[string]any{
+					"sandbox_ref": ref, "teardown_error": serr.Error(),
+				})))
+		})
 	}
 	return false
 }
@@ -535,8 +539,10 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 // end): an interactive run's pane is then snapshotted, after the revocations
 // and before StopSandbox.
 func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any, finishAfterStop, gracefulStop bool) {
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-		runID.String(), outcome, mustJSON(data)))
+	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+			runID.String(), outcome, mustJSON(data)))
+	})
 	_ = s.finalizeRunEffects(ctx, runID, ref, action, data, finishAfterStop, gracefulStop)
 }
 

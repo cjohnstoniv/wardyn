@@ -80,8 +80,9 @@ const (
 	leaseWait        = leaseSendTimeout + time.Second
 )
 
-// reviveRunnerTimeout bounds everything a revive of a run on a runner does under the run's lock, so a
-// runner that stops answering cannot hold the lock or a lock connection past it.
+// reviveRunnerTimeout bounds what a revive does under the run's lock before its claim, on any run, and its
+// runner calls after it, on a run on a runner, so a substrate that stops answering cannot hold the lock or a
+// lock connection past it.
 var reviveRunnerTimeout = 3 * time.Minute
 
 // withRunnerDeadline bounds ctx by deadline for a run on a runner; any other run is left as it is.

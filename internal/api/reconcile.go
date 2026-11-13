@@ -387,7 +387,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		return fmt.Errorf("reconcile orphaned sandboxes: list runs: %w", err)
 	}
 	for _, run := range runs {
-		s.revokeRunCascade(ctx, run.ID)
+		heldCall(ctx, heldRevokeBound, func(ctx context.Context) { s.revokeRunCascade(ctx, run.ID) })
 		// An end still running its computer folder's pass back holds the run's lock (lockRunEnd).
 		if lctx, unlock, free := s.tryLockRunOp(ctx, run.ID); free {
 			s.reconcileOrphanedRun(lctx, run)
@@ -426,7 +426,9 @@ func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
 	if !torn {
 		return // still stuck; audited above, ref stays set for the next boot
 	}
-	if serr := s.clearSandboxRef(ctx, run.ID); serr != nil {
+	var serr error
+	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { serr = s.clearSandboxRef(ctx, run.ID) })
+	if serr != nil {
 		slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
 			slog.String("run_id", run.ID.String()), slog.Any("err", serr))
 	}
@@ -471,7 +473,11 @@ func (s *Server) lastRunnerTeardown(ctx context.Context, run types.AgentRun) (ty
 	if !ok || run.RunnerID == nil || s.cfg.Runner == nil {
 		return "", "", false
 	}
-	kind, outcome, answered, err := st.LastRunnerTeardown(ctx, run.ID, run.SandboxRef)
+	// Read under the run's lock on a bound of its own, so a store that never answers cannot hold the lock,
+	// or boot past its bound for each run.
+	rctx, cancel := context.WithTimeout(ctx, heldStoreCallBound)
+	defer cancel()
+	kind, outcome, answered, err := st.LastRunnerTeardown(rctx, run.ID, run.SandboxRef)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: orphan sweep could not read the runner's last teardown answer",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

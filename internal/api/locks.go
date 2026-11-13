@@ -173,3 +173,22 @@ func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID, b time.Duration) 
 func (s *Server) LockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
 	return s.lockRunEnd(ctx, id, endHoldReaper)
 }
+
+// heldStoreCallBound bounds one store call, or one audit row, that a holder of a run's lock makes on a context that
+// may have no deadline of its own; a variable only so a test can shorten it.
+var heldStoreCallBound = runTeardownBudget
+
+// heldRevokeBound bounds a revoke of a run's credentials made under the run's lock: the boot pass's budget for one
+// teardown call. A revoke cut at it stays owed for the revoke queue once its owed mark is written;
+// otherwise it is retried only while the run holds a sandbox (settleRevokeOwed). A variable only so a test can
+// shorten it.
+var heldRevokeBound = reconcileFinalizeTimeout
+
+// heldCall runs fn on ctx bounded by d: one call a holder of a run's lock makes under it. Without a bound of its own,
+// a call that never answers, on a holder whose context has no deadline (the completion watcher, a person's
+// bring-back, an operator's sweep, the boot pass), would hold the lock until it does.
+func heldCall(ctx context.Context, d time.Duration, fn func(context.Context)) {
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	fn(ctx)
+}

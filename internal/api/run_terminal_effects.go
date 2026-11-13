@@ -20,10 +20,20 @@ import (
 // finalizeRunEffects is shared by ordinary finalization and durable runner exit
 // receipts, whose success audit already committed with their state transition.
 func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, action string, data map[string]any, finishAfterStop, gracefulStop bool) error {
-	errs := []error{s.revokeRunCascade(ctx, runID), s.cancelRunApprovals(ctx, runID)}
+	// Each of these runs on a bound of its own (heldCall), not the end hold's deadline: a holder's ctx may have none
+	// (the completion watcher, a person's bring-back), and the run's lock is released only when they return. The
+	// revoke runs first and is never cut at the hold's deadline; one cut at its own bound stays owed for the revoke
+	// queue once its owed mark is written, otherwise it is retried only while the run holds a sandbox
+	// (settleRevokeOwed). The output keeps the bound a kill gives it (finishRunOutputDetached).
+	var revokeErr, approvalsErr error
+	heldCall(ctx, heldRevokeBound, func(ctx context.Context) { revokeErr = s.revokeRunCascade(ctx, runID) })
+	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { approvalsErr = s.cancelRunApprovals(ctx, runID) })
+	errs := []error{revokeErr, approvalsErr}
 	if !finishAfterStop {
-		s.prepareRunOutput(ctx, runID, gracefulStop)
-		s.finishRunOutput(ctx, runID)
+		heldCall(ctx, killCascadeTimeout, func(ctx context.Context) {
+			s.prepareRunOutput(ctx, runID, gracefulStop)
+			s.finishRunOutput(ctx, runID)
+		})
 	}
 	// A computer folder's changes come back while the sandbox still holds them (run_computer_folder.go).
 	// A pass cut short can keep the sandbox for a resume, its agent stopped and its egress closed:
