@@ -445,6 +445,7 @@ const (
 	reasonSecretValueTooShort     = "secret_value_too_short"     // the value is below the mask's minimum length
 	reasonSecretCapReached        = "secret_cap_reached"         // the owner already holds the maximum number of secrets
 	reasonSecretNotFound          = "secret_not_found"           // that owner holds no secret by that name
+	reasonSecretExists            = "secret_exists"              // a create-only write named a secret its namespace already holds
 
 	// /api/v1/people.
 	reasonPeopleStoreUnavailable  = "people_store_unavailable"  // pre-created people require the Postgres store backend

@@ -56,6 +56,21 @@ describe("deleteSecret names a person", () => {
     ]);
   });
 
+  it("a create-only write sends If-None-Match: *, and a name already stored rejects with its reason, sent once", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "a secret with this name already exists", reason: "secret_exists" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(secrets.setSecret("npm-token", "npm-value-123456", { createOnly: true })).rejects.toMatchObject({ status: 409, reason: "secret_exists" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get("If-None-Match")).toBe("*");
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await secrets.setSecret("npm-token", "npm-value-123456");
+    expect(new Headers(fetchMock.mock.calls[1][1].headers).get("If-None-Match")).toBeNull();
+  });
+
   it("a 412 rejects with the server's sentence and is not sent again", async () => {
     const sentence = "This page was opened as a different person than the one now signed in — reload and retry";
     fetchMock.mockResolvedValue(

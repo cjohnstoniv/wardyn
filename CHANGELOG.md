@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
+- `PUT /secrets/{name}`, `/me/secrets/{name}` and `/shared-secrets/{name}` take `If-None-Match: *` to store a name only if it is new: a name the namespace already holds answers `409` with reason `secret_exists` and nothing is stored. Without the header the PUT replaces the value as before.
 
 ### Fixed
 
@@ -24,6 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Deleting a secret on the Secrets page now names the person this tab was signed in as when Delete was chosen. If someone else has signed in on the browser since, the server refuses the delete instead of removing that person's secret of the same name, and the refusal is shown; nothing is removed and nothing is sent again.
 - A Delete or Rotate chosen on a Secrets page row now acts on the namespace the row was listed from, your own secrets or the administrators' shared ones, through the route that names it. Before, it went to whichever namespace the session's role picked when the request arrived, so the same person signing in again with a different role could delete or replace the other namespace's secret of the same name.
 - Add secret on the Secrets page stays off until the tab knows who is signed in and the list of your secrets has loaded, and says why when the list fails. Before, a failed list, or a list read before the tab knew whose it was, let a save replace an existing secret without asking first.
+- Add secret on the Secrets page, and the proxy setup's Save of a proxy address that carries a password, no longer replace a secret someone else stored under the same name after the list was read: the write is create-only, and a name the server already holds shows the overwrite warning and stores nothing until the person chooses to overwrite it.
 - The Model provider only policy template no longer grants an API key stored as `anthropic-api-key` or `openai-api-key`, and the policy editor's grant example names `npm-token` instead; the server cannot store either name and drops such a grant when a run starts.
 
 ## [0.10.0-rc.20] — 2026-11-12

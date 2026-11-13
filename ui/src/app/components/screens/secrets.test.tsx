@@ -149,6 +149,36 @@ describe("SecretsScreen — delete error handling", () => {
   });
 });
 
+describe("AddSecretDialog — a name the list did not have but the server did", () => {
+  beforeEach(() => {
+    setSecretMock
+      .mockReset()
+      .mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists"))
+      .mockResolvedValue(undefined);
+  });
+
+  it("a name the list did not have but the server did: the first save writes nothing and asks", async () => {
+    const onSaved = vi.fn();
+    render(<AddSecretDialog open onOpenChange={() => {}} existingNames={[]} onSaved={onSaved} />);
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "npm-token" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "npm-new-value-123" } });
+    expect(screen.queryByText(/already exists/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledTimes(1));
+    expect(setSecretMock).toHaveBeenLastCalledWith("npm-token", "npm-new-value-123", { scope: undefined, createOnly: true });
+    // Refused unwritten: the dialog now asks exactly as for a listed name, and nothing counts as saved.
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /overwrites/i }));
+    expect(setSecretMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: /^overwrite secret$/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledTimes(2));
+    expect(setSecretMock).toHaveBeenLastCalledWith("npm-token", "npm-new-value-123", { scope: undefined, createOnly: false });
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith("npm-token"));
+  });
+});
+
 describe("AddSecretDialog — overwrite warning", () => {
   beforeEach(() => {
     setSecretMock.mockReset();
@@ -178,7 +208,7 @@ describe("AddSecretDialog — overwrite warning", () => {
     // Second click (now "Overwrite secret") commits.
     const overwrite = await screen.findByRole("button", { name: /^overwrite secret$/i });
     fireEvent.click(overwrite);
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("anthropic-api-key", "sk-new"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("anthropic-api-key", "sk-new", { scope: undefined, createOnly: false }));
   });
 
   it("saves immediately (no warning) for a new, non-colliding name", async () => {
@@ -195,7 +225,7 @@ describe("AddSecretDialog — overwrite warning", () => {
     expect(screen.queryByText(/already exists/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-other"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-other", { scope: undefined, createOnly: true }));
   });
 });
 
@@ -424,7 +454,7 @@ describe("AddSecretDialog — locked, host-aware mode", () => {
     expect(screen.getByText("ghes.corp.internal")).toBeInTheDocument();
     fireEvent.click(overwrite);
     await waitFor(() =>
-      expect(setSecretMock).toHaveBeenCalledWith("git-pat-ghes-corp-internal", "sk-new"),
+      expect(setSecretMock).toHaveBeenCalledWith("git-pat-ghes-corp-internal", "sk-new", { scope: undefined, createOnly: false }),
     );
   });
 
@@ -642,7 +672,7 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
     fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: "acme-key" } });
     fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new-value" } });
     fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("acme-key", "sk-new-value", { scope: "personal" }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("acme-key", "sk-new-value", { scope: "personal", createOnly: true }));
   });
 
   it("member: the empty page says what a member can do, not that an admin must", async () => {
@@ -675,7 +705,7 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "openai-api-key" } });
     fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new" } });
     fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-new"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-new", { scope: undefined, createOnly: true }));
   });
 });
 
@@ -892,7 +922,7 @@ describe("SecretsScreen — a row's Delete and Rotate keep the namespace the row
     fireEvent.change(await screen.findByLabelText(/^value$/i), { target: { value: "npm-new-value-123" } });
     fireEvent.click(screen.getByRole("button", { name: /overwrites/i }));
     fireEvent.click(screen.getByRole("button", { name: /overwrite secret/i }));
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("shared-key", "npm-new-value-123", { scope: "shared" }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("shared-key", "npm-new-value-123", { scope: "shared", createOnly: false }));
   });
 });
 

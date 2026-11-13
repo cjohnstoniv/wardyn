@@ -6,8 +6,9 @@
 import * as React from "react";
 import { useInRouterContext } from "react-router-dom";
 import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch, Eye, EyeOff } from "lucide-react";
-import { getExpectedPrincipal } from "../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../lib/api/core";
 import { secrets as secretsApi, type SecretScope } from "../../lib/api/secrets";
+import { SECRET_EXISTS_REASON } from "../../lib/secret-refusals";
 import { providers as providersApi } from "../../lib/api/providers";
 import { getErrorMessage } from "../../lib/format";
 import { useMyCapabilities } from "../../lib/capabilities";
@@ -451,9 +452,13 @@ export function AddSecretDialog({
   // Require an explicit confirm-overwrite click when the typed name
   // already exists, so a save never silently clobbers a secret in use by runs.
   const [confirmOverwrite, setConfirmOverwrite] = React.useState(false);
+  // A name the server already held although existingNames did not have it (the list was read before someone else
+  // stored it): the save asks before replacing it, exactly as for a listed name.
+  const [foundExisting, setFoundExisting] = React.useState("");
 
   React.useEffect(() => {
     if (open) {
+      setFoundExisting("");
       setName(initialName);
       setValue("");
       setReveal(false);
@@ -466,7 +471,7 @@ export function AddSecretDialog({
   // PUT is an upsert server-side: storing a name that already exists overwrites
   // its value. Detect that case (exact match on the trimmed name) so we can warn.
   const trimmed = name.trim();
-  const isOverwrite = existingNames.includes(trimmed);
+  const isOverwrite = existingNames.includes(trimmed) || (!!foundExisting && foundExisting === trimmed);
   const resolvedLane: Lane = lane ?? laneOfName(trimmed);
   // A blank-name open offers suggestions; it also says where model keys go, since those names are refused here.
   const suggest = !initialName && !lockName;
@@ -504,12 +509,18 @@ export function AddSecretDialog({
     }
     setSaving(true);
     try {
-      await (scope ? secretsApi.setSecret(n, value, { scope }) : secretsApi.setSecret(n, value));
+      // Create-only unless the person has said to replace: the list behind isOverwrite can be stale.
+      await secretsApi.setSecret(n, value, { scope, createOnly: !confirmOverwrite });
       // Clear the value immediately — never retain or echo it.
       setValue("");
       onOpenChange(false);
       onSaved?.(n);
     } catch (e) {
+      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) {
+        setFoundExisting(n);
+        setSaving(false);
+        return;
+      }
       setError(getErrorMessage(e, "Failed to store secret."));
       setSaving(false);
     }
@@ -610,15 +621,7 @@ export function AddSecretDialog({
           </Field>
           {/* Warn when the name already exists so the operator
               doesn't silently overwrite a secret currently referenced by runs. */}
-          {isOverwrite && !error && (
-            <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              <span>
-                A secret named <span className="font-mono">{trimmed}</span> already exists. Saving
-                will overwrite its value for every run that references it. This cannot be undone.
-              </span>
-            </div>
-          )}
+          {isOverwrite && !error && <SecretOverwriteWarning name={trimmed} />}
           {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
               plus wiring into the Save button's aria-describedby below —
               this fires on every rejected save, a far more common path than
@@ -659,6 +662,20 @@ export function AddSecretDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// The warning before a save replaces a stored secret's value. Exported for the proxy setup's direct save, which asks
+// the same question when the server finds its secret name already taken.
+export function SecretOverwriteWarning({ name }: { name: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <span>
+        A secret named <span className="font-mono">{name}</span> already exists. Saving
+        will overwrite its value for every run that references it. This cannot be undone.
+      </span>
+    </div>
   );
 }
 

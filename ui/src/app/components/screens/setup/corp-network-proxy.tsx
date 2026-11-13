@@ -15,6 +15,8 @@ import { ChevronDown, Loader2, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import type { HostProxyDetection, HostProxySetting, SetupCheck, SiteConfig } from "../../../lib/types";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
+import { SECRET_EXISTS_REASON } from "../../../lib/secret-refusals";
+import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { T } from "../../../lib/integrations";
 import { Button } from "../../ui/button";
@@ -25,7 +27,7 @@ import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { SITE } from "../../wardyn/copy";
-import { AddSecretDialog } from "../secrets";
+import { AddSecretDialog, SecretOverwriteWarning } from "../secrets";
 import type { ProbeUiState } from "./corp-network-egress";
 import { ProxyTestBlock } from "./corp-network-proxy-probe";
 
@@ -279,6 +281,8 @@ export function HostProxyTab({
   const [disclosureOpen, setDisclosureOpen] = React.useState(false);
   const [secretName, setSecretName] = React.useState("upstream-proxy-url");
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
+  // The secret name a save found already stored: the next Save replaces it only once the person has seen the warning.
+  const [takenName, setTakenName] = React.useState("");
   const [selected, setSelected] = React.useState(0);
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
@@ -323,13 +327,20 @@ export function HostProxyTab({
     }
   };
 
+  // Create-only until the person has seen the overwrite warning for this name: the name may already hold an
+  // unrelated secret, and a plain PUT would replace it without a word.
   const saveAsSecret = async (rawUrl: string, name: string) => {
     try {
-      await secretsApi.setSecret(name, rawUrl);
+      await secretsApi.setSecret(name, rawUrl, { createOnly: takenName !== name });
     } catch (e) {
+      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) {
+        setTakenName(name);
+        return;
+      }
       toast.error("Failed to store the proxy credential", { description: getErrorMessage(e) });
       return;
     }
+    setTakenName("");
     if (
       await mutate(
         { ...(siteConfig ?? {}), upstream_proxy_secret_ref: name, upstream_proxy_url: undefined },
@@ -475,8 +486,14 @@ export function HostProxyTab({
                   </Chip>
                   <p className="text-meta text-muted-foreground">{T.WRITE_ONLY}</p>
                 </div>
-                <Button size="sm" disabled={!canEdit || saving} onClick={() => saveAsSecret(url, secretName)}>
-                  {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
+                {takenName === secretName && <SecretOverwriteWarning name={secretName} />}
+                <Button
+                  size="sm"
+                  disabled={!canEdit || saving}
+                  variant={takenName === secretName ? "destructive" : "default"}
+                  onClick={() => saveAsSecret(url, secretName)}
+                >
+                  {saving ? <Loader2 className="size-3.5 animate-spin" /> : takenName === secretName ? "Overwrite secret" : "Save"}
                 </Button>
               </>
             ) : (

@@ -5,7 +5,7 @@
 
 // Platform secrets — NAMES only on read; values are write-only.
 import type { SecretName } from "../types";
-import { asJson, errText, HttpError, wfetch } from "./core";
+import { asJson, errEnvelope, errText, HttpError, wfetch } from "./core";
 
 // The namespace an explicit route names: the caller's own (/me/secrets) or the shared administrators' one
 // (/shared-secrets). Unlike /secrets, which places a write by the caller's role when it arrives, the server never
@@ -48,13 +48,18 @@ export const secrets = {
 
   // PUT /api/v1/secrets/{name}  { value } -> 204. Stores or overwrites a named
   // secret; the value is write-only. `scope` sends it to that namespace's route.
-  async setSecret(name: string, value: string, opts?: { scope?: SecretScope }): Promise<void> {
+  // `createOnly` sends If-None-Match: *, so a name the namespace already holds is
+  // refused (409, lib/secret-refusals.ts) instead of replaced: a list read earlier
+  // can be stale, and only the server knows what is stored now.
+  async setSecret(name: string, value: string, opts?: { scope?: SecretScope; createOnly?: boolean }): Promise<void> {
     const res = await wfetch(`${scopeBase(opts?.scope)}/${encodeURIComponent(name)}`, {
       method: "PUT", asPerson: true,
+      headers: opts?.createOnly ? { "If-None-Match": "*" } : undefined,
       body: JSON.stringify({ value }),
     });
     if (!res.ok) {
-      throw new HttpError(res.status, await errText(res));
+      const env = await errEnvelope(res);
+      throw new HttpError(res.status, env.message, env.reason);
     }
   },
 
