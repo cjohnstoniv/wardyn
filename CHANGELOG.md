@@ -20,6 +20,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- The Go SDK now sends an empty `requirements` map on `CreateSource` as `{}`, so re-adding an existing source with one clears its contract, while leaving `requirements` unset keeps it. Before, the empty map was dropped and the server kept the old contract while answering 200.
+- A governance document's empty `deciders` section now stays in the document when the SDK encodes it, so `wardyn governance set --prune` of a file written from it still clears every unit's rules. Before, the section was dropped and the prune cleared nothing.
+- `ApplyGovernance` no longer changes the document it is given, so the same document can be applied again after a success or a failure part way. Before, a second apply sent memberships naming ids the server did not hold.
+- `wardyn governance plan` and `set` now refuse a document with two units of one name or one id. Before, the apply matched entries to whichever of them came last.
+- `wardyn governance set --under --prune` now reads the subtree again just before it prunes and stops, pruning nothing, when a unit it read inside has been moved out by then. Before, it pruned from its first read alone. A unit moved out after the second read, while the prune's own requests run, is still pruned.
+- `wardyn person erase`, the Go SDK and the console's erase dialog now show the principals an erasure left alone (`not_erased`). Before, all three dropped them, `--json` too.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

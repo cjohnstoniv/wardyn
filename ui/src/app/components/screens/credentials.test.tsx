@@ -249,6 +249,21 @@ describe("erasing a listed person (design F-5)", () => {
     expect(screen.getByText(ERASE.DONE_AUDIT)).toBeInTheDocument();
   });
 
+  it("names the principals the credentials erase left alone", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockResolvedValue({ count: 1, not_erased: { subjects: ["iss2|alice"], note: "not erased: erase by subject" } });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(await screen.findByText("Erased 1 credential for alice@corp.example.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Not erased: iss2|alice. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   // #2499: Escape or an outside click while the erase runs must not hide the result the admin is waiting for.
   it("stays open through Escape while the erase runs, then shows the result", async () => {
     let finish!: (v: { count: number }) => void;

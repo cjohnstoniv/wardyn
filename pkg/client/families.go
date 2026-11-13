@@ -165,8 +165,10 @@ type SourceRequest struct {
 	Ref  string `json:"ref,omitempty"`
 	Name string `json:"name,omitempty"`
 	// Requirements seeds the source's own contract (secret:/egress:/write:
-	// keys; integration: keys are tier-3-only and rejected here).
-	Requirements map[string]types.WorkspaceRequirement `json:"requirements,omitempty"`
+	// keys; integration: keys are tier-3-only and rejected here). On an
+	// existing source, nil keeps its contract and an empty map clears it, so
+	// the empty map is sent as {} (omitzero), never dropped.
+	Requirements map[string]types.WorkspaceRequirement `json:"requirements,omitzero"`
 }
 
 // ListSources returns the whole library. GET /api/v1/sources.
@@ -603,6 +605,16 @@ type ErasePersonResult struct {
 	Outcome map[string]string `json:"outcome"`
 	// Detail is each scope's counts.
 	Detail map[string]any `json:"detail"`
+	// NotErased lists the other principals that share the person's tenant and object id (another
+	// issuer's sign-in, for one): the erasure leaves them alone. Erase each by its subject when it is
+	// the same person. nil when there are none.
+	NotErased *ErasureNotErased `json:"not_erased,omitempty"`
+}
+
+// ErasureNotErased is an erasure answer's not_erased: the principals left alone and the server's note.
+type ErasureNotErased struct {
+	Subjects []string `json:"subjects"`
+	Note     string   `json:"note"`
 }
 
 // ErasePerson erases one person's retained records by scope (mask_copies,
