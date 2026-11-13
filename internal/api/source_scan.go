@@ -68,7 +68,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 
 	switch src.Kind {
 	case types.SourceLocalDir:
-		profile, aiRan, aiChanged, detail, ok := s.scanLocalDirSource(r.Context(), src)
+		profile, aiRan, aiChanged, detail, ok := s.scanLocalDirSource(r.Context(), src, nil)
 		if !ok {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
@@ -196,15 +196,21 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 // also fires for a local_dir source, since the flag's own help text makes no
 // such distinction between source kinds. aiRan/aiChanged mirror uploadSourceScanResult's own
 // audit discriminator for the caller to record.
-func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool) {
-	fi, serr := os.Stat(src.Locator)
-	if serr != nil || !fi.IsDir() {
+//
+// dir is a member's source as openMemberSource checked and opened it, and the
+// scan reads only through it; nil reads an operator's source by its path.
+func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source, dir *os.Root) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool) {
+	var facts workspacescan.ScanFacts
+	if dir != nil {
+		facts = workspacescan.CollectFactsIn(dir)
+	} else if fi, serr := os.Stat(src.Locator); serr != nil || !fi.IsDir() {
 		detail := localDirScanFailureDetail(src.Locator, serr == nil && !fi.IsDir(),
 			os.Getenv("WARDYN_WORKSPACES_ROOT"), runningInContainer())
 		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, types.WorkspaceError, nil)
 		return workspacescan.WorkspaceProfile{}, false, false, detail, false
+	} else {
+		facts = workspacescan.CollectFacts(src.Locator)
 	}
-	facts := workspacescan.CollectFacts(src.Locator)
 	profile = workspacescan.DeriveProfile(facts)
 	profile, aiRan, aiChanged = s.applyScanAIAdvisor(ctx, facts, profile)
 	seed := seedSourceRequirements(src.Kind, src.Locator, profile)
@@ -512,13 +518,20 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			}
 			// The member mount gate the run door re-runs (validateWorkspaceSources):
 			// a scan reads the directory host-side, so roots narrowed after
-			// onboarding, or a source repointed since, refuse it here too.
-			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, types.WorkspaceMount{Source: src.Locator}); err != nil {
+			// onboarding, or a source repointed since, refuse it here too. A
+			// member's directory is opened at that check and read only through
+			// the handle, so a link swapped in after the check is not read through.
+			dir, err := openMemberSource(s.cfg.UserMounts, ws.OwnedBy, src.Locator)
+			if err != nil {
 				partialAudit(id, err.Error())
 				writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err.Error())
 				return
 			}
-			if _, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
+			_, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src, dir)
+			if dir != nil {
+				_ = dir.Close()
+			}
+			if !ok {
 				partialAudit(id, detail)
 				writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
 				return

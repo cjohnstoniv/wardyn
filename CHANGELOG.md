@@ -27,6 +27,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A build heap given in kibibytes, such as `-Xmx1048576k`, now reads as 1024 MiB. Before, the number was capped before its unit was applied, so it read as 256 MiB.
 - The folder-only runner now opens each root when it starts, and each shared folder when it checks it, one folder at a time without following a link, and keeps that folder open until its browse or pass ends. A root or shared folder renamed or replaced by a link after its check is not followed. Inside a pass, the runner and `wardyn sync` reach each file through its folder opened the same way, and never read or write a file through a link, with three exceptions that still use a path or a link: on Windows, a file brought back is moved into place by its folder's path; if the pass's own new file is replaced by a link before its modified time is set, that time is set on the link's target; and `wardyn sync --git` and `--pull-commits` run git on the folder by its path.
 
+### Security
+
+- A scan of a member's workspace now opens each of its folders when it checks the folder against the member's workspace roots, one folder at a time from the top of the drive without following a link, and reads the folder only through that open handle. Before, the scan read the folder again by its path after the check, so a folder, or a folder above it, replaced by a link between the check and the read could put a folder outside the member's roots into the scan's results: its repository remotes, host names, secret names and secret-file paths, not secret values. Every folder scan now also lists and reads the files inside the folder without following a link at any folder on the way. The server needs read access to each folder from the top of the drive down to a member's folder; where it can only pass through one, the scan is refused as outside the member's roots, and the server log says why.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

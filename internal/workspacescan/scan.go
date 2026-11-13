@@ -10,10 +10,11 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"path/filepath"
+	"os"
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
 )
 
@@ -155,55 +156,61 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 // re-derives the untrusted facts into a WorkspaceProfile, never trusting them
 // on faith (see DeriveProfile).
 func CollectFacts(root string) ScanFacts {
+	// Canonicalise before the open, so a locator that is itself a symlink (e.g.
+	// a WSL drive shortcut) is scanned as the folder it names.
+	dir, err := os.OpenRoot(gitremote.ResolveRoot(root))
+	if err != nil {
+		return ScanFacts{Unread: true} // nothing could be read: not a complete scan
+	}
+	defer dir.Close()
+	return CollectFactsIn(dir)
+}
+
+// CollectFactsIn is CollectFacts over an open directory: it lists and reads
+// only through dir and follows no link at any component (foldersync.FS,
+// gitremote.OpenRegularIn), so a folder swapped for a link after the walk saw
+// it, or dir's own path pointed elsewhere, is not read through.
+func CollectFactsIn(dir *os.Root) ScanFacts {
 	var facts ScanFacts
 	st := &collectState{facts: &facts} // per-scan content-lane budgets
-	// Canonicalise before the walk: WalkDir lstats the root like any other
-	// entry, so a locator that is itself a symlink (e.g. a WSL drive shortcut)
-	// would hit the "never follow a symlink" arm and return an empty profile.
-	root = gitremote.ResolveRoot(root)
-	seen := map[string]struct{}{} // dedup guard for ManifestsFound
+	seen := map[string]struct{}{}      // dedup guard for ManifestsFound
 
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(foldersync.FS(dir), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
 			// An entry the walk could not read: keep walking its siblings, but the scan is not complete.
 			facts.Unread = true
 			return nil
 		}
-		// Never descend or follow symlinks, except the already-canonicalised
-		// root (this arm still holds if that resolution failed).
-		if p != root && d.Type()&fs.ModeSymlink != 0 {
+		// Never descend or follow symlinks.
+		if rel != "." && d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		if d.IsDir() {
-			if _, skip := skipDirNames[d.Name()]; skip && p != root {
+			if _, skip := skipDirNames[d.Name()]; skip && rel != "." {
 				return fs.SkipDir
 			}
-			if depthUnder(root, p) > maxDepth {
+			if depthUnder(rel) > maxDepth {
 				return fs.SkipDir
 			}
 			return nil
 		}
 
-		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
 		if !pathSafe(rel) {
 			return nil // a hostile control-char filename — drop, fail safe
 		}
 		name := d.Name()
+		file := scanFile{dir, rel}
 
 		// Content lane (detect.go): names-only extraction from well-known
 		// files. Runs before the marker lookup because compose and Dockerfile
 		// are both marker rows and detector targets — the marker lane's
 		// `return nil` below must not starve the detector.
-		detectContent(rel, name, p, st)
+		detectContent(rel, name, file, st)
 
 		// Hash devcontainer.json/Dockerfile content so a build-input change
 		// busts the image cache even when the detected profile is unchanged.
 		if isBuildInputFile(rel, name) {
-			if h := hashFileContent(p); h != "" {
+			if h := hashFileContent(file); h != "" {
 				if facts.BuildInputHashes == nil {
 					facts.BuildInputHashes = map[string]string{}
 				}
@@ -238,13 +245,13 @@ func CollectFacts(root string) ScanFacts {
 			}
 			facts.UnrecognizedSamples = append(facts.UnrecognizedSamples, UnrecognizedSample{
 				Path:    rel,
-				Content: scrub(string(readCapped(p))),
+				Content: scrub(string(readCapped(file))),
 			})
 		}
 		return nil
 	})
 
-	gh, other := gitremote.DetectGitHubRepos(root)
+	gh, other := gitremote.DetectGitHubReposIn(dir)
 	facts.GitRemotes = GitRemotes{GitHub: gh, OtherHosts: other}
 
 	slices.SortFunc(facts.ManifestsFound, func(a, b ManifestHit) int {
@@ -290,15 +297,25 @@ func lookupMarker(rel, name string) (marker, bool) {
 	return marker{}, false
 }
 
-// depthUnder returns how many path segments p is below root (see
-// gitremote.depthUnder — duplicated rather than exported, it's three lines).
-func depthUnder(root, p string) int {
-	rel, err := filepath.Rel(root, p)
-	if err != nil || rel == "." {
+// depthUnder returns how many path segments the slash-separated rel is below
+// the walk's root (see gitremote.depthUnder — duplicated rather than exported,
+// it's three lines).
+func depthUnder(rel string) int {
+	if rel == "." {
 		return 0
 	}
-	return len(strings.Split(rel, string(filepath.Separator)))
+	return strings.Count(rel, "/") + 1
 }
+
+// scanFile is one walked file: its slash-separated path inside the scan's
+// directory handle. Every read opens it through that handle, never by a path on
+// the host.
+type scanFile struct {
+	dir *os.Root
+	rel string
+}
+
+func (f scanFile) open() (*os.File, error) { return gitremote.OpenRegularIn(f.dir, f.rel) }
 
 // maxHashBytes bounds streaming content-hashing of a build-input file.
 const maxHashBytes = 16 << 20
@@ -314,8 +331,8 @@ func isBuildInputFile(rel, name string) bool {
 }
 
 // hashFileContent streams a hex sha256 of p's content (bounded), "" on error.
-func hashFileContent(p string) string {
-	f, err := gitremote.OpenRegular(p)
+func hashFileContent(p scanFile) string {
+	f, err := p.open()
 	if err != nil {
 		return ""
 	}
@@ -345,11 +362,11 @@ func contextHashOf(m map[string]string) string {
 
 // readCapped reads at most maxFileBytes from p, failing safe to nil.
 //
-// Uses gitremote.OpenRegular, not os.Open: this walk runs on an HTTP handler
-// goroutine with no ctx over an untrusted tree, so a FIFO would block open(2)
-// forever otherwise.
-func readCapped(p string) []byte {
-	f, err := gitremote.OpenRegular(p)
+// Opens through gitremote.OpenRegularIn, not os.Open: this walk runs on an HTTP
+// handler goroutine with no ctx over an untrusted tree, so a FIFO would block
+// open(2) forever otherwise.
+func readCapped(p scanFile) []byte {
+	f, err := p.open()
 	if err != nil {
 		return nil
 	}

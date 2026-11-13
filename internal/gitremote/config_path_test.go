@@ -4,16 +4,19 @@
 package gitremote
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 )
 
 // resolveConfigPath maps a .git entry to the config file to read: a directory
 // to its own config, a "gitdir:" pointer to the target's config only while the
 // target stays inside the workspace root, and anything else to "" (skipped).
 func TestResolveConfigPath(t *testing.T) {
-	root := t.TempDir()
+	root := ResolveRoot(t.TempDir())
 	outside := t.TempDir()
 	write := func(name, content string) string {
 		p := filepath.Join(root, name)
@@ -22,20 +25,30 @@ func TestResolveConfigPath(t *testing.T) {
 		}
 		return p
 	}
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dir.Close() })
 	resolve := func(p string) string {
 		t.Helper()
-		fi, err := os.Lstat(p)
+		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return resolveConfigPath(p, fi, root)
+		rel = filepath.ToSlash(rel)
+		fi, err := fs.Stat(foldersync.FS(dir), rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resolveConfigPath(dir, rel, fi)
 	}
 
-	dir := filepath.Join(root, "repo", ".git")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	gitDir := filepath.Join(root, "repo", ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := resolve(dir), filepath.Join(dir, "config"); got != want {
+	if got, want := resolve(gitDir), "repo/.git/config"; got != want {
 		t.Errorf("directory = %q, want %q", got, want)
 	}
 
@@ -52,8 +65,8 @@ func TestResolveConfigPath(t *testing.T) {
 		content string
 		want    string
 	}{
-		"relative pointer":          {"gitdir: modules/rel\n", filepath.Join(root, "modules", "rel", "config")},
-		"absolute pointer inside":   {"gitdir: " + abs + "\n", filepath.Join(abs, "config")},
+		"relative pointer":          {"gitdir: modules/rel\n", "modules/rel/config"},
+		"absolute pointer inside":   {"gitdir: " + abs + "\n", "modules/abs/config"},
 		"pointer climbing out":      {"gitdir: ../../../etc\n", ""},
 		"pointer through a link":    {"gitdir: modules/out\n", ""},
 		"pointer to a missing dir":  {"gitdir: modules/missing\n", ""},
@@ -78,22 +91,4 @@ func TestResolveConfigPath(t *testing.T) {
 			t.Errorf("resolveConfigPath through a symlink = %q, want empty", got)
 		}
 	})
-}
-
-func TestWithin(t *testing.T) {
-	for _, tc := range []struct {
-		root, p string
-		want    bool
-	}{
-		{"/w", "/w", true},
-		{"/w", "/w/a/b", true},
-		{"/w", "/w/..hidden", true},
-		{"/w", "/x", false},
-		{"/w", "/w/../x", false},
-		{"/w", "/", false},
-	} {
-		if got := within(tc.root, tc.p); got != tc.want {
-			t.Errorf("within(%q, %q) = %v, want %v", tc.root, tc.p, got, tc.want)
-		}
-	}
 }

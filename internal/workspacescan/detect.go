@@ -338,7 +338,7 @@ func classifySecretKind(name string) string {
 // detectContent dispatches a walked file to its content detector(s); a
 // non-target file just costs a few string checks. rel is slash-separated and
 // pathSafe-checked.
-func detectContent(rel, name, path string, st *collectState) {
+func detectContent(rel, name string, path scanFile, st *collectState) {
 	facts := st.facts
 	switch {
 	case isDotenvTemplate(name):
@@ -490,8 +490,8 @@ func isDockerfile(name string) bool {
 // could not open, or read only up to the read cap, marks the scan Unread; the
 // line and key budgets, and an overlong line, mark it Truncated. fn returns
 // false to stop early (per-file key cap hit).
-func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
-	f, err := gitremote.OpenRegular(path)
+func eachLine(path scanFile, facts *ScanFacts, fn func(line string) bool) {
+	f, err := path.open()
 	if err != nil {
 		facts.Unread = true
 		return
@@ -552,7 +552,7 @@ func addNeed(facts *ScanFacts, name, kind string, optional bool) bool {
 	return true
 }
 
-func detectDotenvTemplate(path string, facts *ScanFacts) {
+func detectDotenvTemplate(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		idx := dotenvKeyRE.FindStringSubmatchIndex(line)
@@ -586,7 +586,7 @@ func emptyValue(rhs string) bool {
 	return rhs == "" || strings.HasPrefix(rhs, "#")
 }
 
-func detectPlaceholders(path string, facts *ScanFacts) {
+func detectPlaceholders(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range placeholderRE.FindAllStringSubmatch(line, -1) {
@@ -602,7 +602,7 @@ func detectPlaceholders(path string, facts *ScanFacts) {
 	})
 }
 
-func detectCompose(path string, facts *ScanFacts) {
+func detectCompose(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		if m := composeImageRE.FindStringSubmatch(line); m != nil {
@@ -644,7 +644,7 @@ func imageBaseName(ref string) string {
 // detectSealedSecret extracts the KEY names under spec.encryptedData of a
 // kubeseal SealedSecret manifest. The values are ciphertext (and never
 // captured regardless). Keys are deploy-time needs: kind "deploy", optional.
-func detectSealedSecret(path string, facts *ScanFacts) {
+func detectSealedSecret(path scanFile, facts *ScanFacts) {
 	inBlock := false
 	blockIndent := -1
 	var kb keyBudget
@@ -681,7 +681,7 @@ func detectSealedSecret(path string, facts *ScanFacts) {
 // detectDockerfileFrom records base-image registry hosts as SUGGESTED egress
 // only — a content-derived host must never auto-widen an allowlist. Skips
 // multi-stage `FROM <alias>` lines via the stage-alias set.
-func detectDockerfileFrom(path string, facts *ScanFacts) {
+func detectDockerfileFrom(path scanFile, facts *ScanFacts) {
 	stages := map[string]struct{}{}
 	eachLine(path, facts, func(line string) bool {
 		m := dockerFromRE.FindStringSubmatch(line)
@@ -727,7 +727,7 @@ func addSuggestedHost(facts *ScanFacts, host string) {
 // lower-confidence than a declared config key (a fallback may exist), so they
 // are advisory (kind "code", optional): they enrich the needs panel but never
 // a required-secret row.
-func detectEnvAccess(path string, facts *ScanFacts) {
+func detectEnvAccess(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range envAccessRE.FindAllStringSubmatch(line, -1) {
@@ -752,7 +752,7 @@ func detectEnvAccess(path string, facts *ScanFacts) {
 // detectSecretRef extracts k8s Secret DATA KEYS from secretKeyRef/secretRef
 // blocks (multi-line or inline flow YAML): the `key:` value is the need name;
 // the Secret's `name:` is deliberately not captured. Deploy-time, optional.
-func detectSecretRef(path string, facts *ScanFacts) {
+func detectSecretRef(path scanFile, facts *ScanFacts) {
 	armed := false // saw a secretKeyRef/secretRef token; next key: is a data key
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
@@ -789,7 +789,7 @@ func detectSecretRef(path string, facts *ScanFacts) {
 // detectCISecrets extracts `secrets.NAME` refs from a GitHub Actions workflow,
 // kind "ci", optional — never a dev-required row. Dedupe keeps a real config
 // detector's stronger classification if the same name appears there too.
-func detectCISecrets(path string, facts *ScanFacts) {
+func detectCISecrets(path scanFile, facts *ScanFacts) {
 	var kb keyBudget
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range ciSecretRE.FindAllStringSubmatch(line, -1) {
@@ -810,7 +810,7 @@ func detectCISecrets(path string, facts *ScanFacts) {
 // detectMavenRepos extracts artifact-repository URLs from a pom.xml — SUGGESTED
 // egress only, scoped to <repository>/<pluginRepository> elements so pom
 // license/SCM/project/organization <url>s never leak in.
-func detectMavenRepos(path string, facts *ScanFacts) {
+func detectMavenRepos(path scanFile, facts *ScanFacts) {
 	depth := 0 // >0 while inside a <repository>/<pluginRepository> element
 	eachLine(path, facts, func(line string) bool {
 		l := strings.ToLower(line)
@@ -836,7 +836,7 @@ func detectMavenRepos(path string, facts *ScanFacts) {
 // detectGradleRepos extracts maven { url '...' } repository hosts from a Gradle
 // build/settings file, SUGGESTED egress only. Gradle repo blocks have no
 // license-URL noise, so a plain `url "http..."` match is safe enough.
-func detectGradleRepos(path string, facts *ScanFacts) {
+func detectGradleRepos(path scanFile, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range gradleRepoURLRE.FindAllStringSubmatch(line, -1) {
 			if h := hostrules.HostOf(m[1]); h != "" {
@@ -849,7 +849,7 @@ func detectGradleRepos(path string, facts *ScanFacts) {
 
 // detectHeap records the largest build-heap ceiling seen, normalized to MiB.
 // Advisory only.
-func detectHeap(path string, facts *ScanFacts) {
+func detectHeap(path scanFile, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		for _, m := range heapXmxRE.FindAllStringSubmatch(line, -1) {
 			if mib := xmxToMiB(m[1], m[2]); mib > facts.BuildMemoryMiB {
@@ -868,7 +868,7 @@ func detectHeap(path string, facts *ScanFacts) {
 // detectLeaks runs the leaked-value catalog over a file's content: it reads
 // VALUES to recognize a secret-shaped token but records only path/kind/line,
 // never the matched bytes.
-func detectLeaks(rel, path string, facts *ScanFacts) {
+func detectLeaks(rel string, path scanFile, facts *ScanFacts) {
 	line := 0
 	eachLine(path, facts, func(text string) bool {
 		line++
@@ -895,8 +895,8 @@ var makeTargetRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)\s*:`)
 
 // detectPackageJSON records which conventional script KEYS a package.json
 // declares, never the bodies. Parse failure is safe (no keys recorded).
-func detectPackageJSON(path string, facts *ScanFacts) {
-	f, err := gitremote.OpenRegular(path)
+func detectPackageJSON(path scanFile, facts *ScanFacts) {
+	f, err := path.open()
 	if err != nil {
 		return
 	}
@@ -920,7 +920,7 @@ func detectPackageJSON(path string, facts *ScanFacts) {
 
 // detectMakefile records which conventional TARGETS a Makefile defines —
 // names only, never recipe bodies.
-func detectMakefile(path string, facts *ScanFacts) {
+func detectMakefile(path scanFile, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		if m := makeTargetRE.FindStringSubmatch(line); m != nil {
 			t := m[1]
