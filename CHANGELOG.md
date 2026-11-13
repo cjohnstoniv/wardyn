@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- Content inspection: with `inspect_forward_egress` on, the remote MCP broker now scans each POST body it forwards, before it adds the server's credential. A body the policy blocks is not sent: each request in it is answered with a JSON-RPC error, and the refusal is recorded as a `scan:blocked` decision. A forwarded body's findings or skips ride on its decision. A custom detector in Wardyn's own format must now answer with exactly one JSON object holding a `findings` field: any other 200 answer, such as `null`, `{}` or an error object, is a sidecar error (`sidecar_error`) instead of a clean scan, so `on_scanner_error=block` refuses the request in `block` mode. `{"findings":null}` is still a clean answer. A finding's field path now masks an email address, US Social Security number, Luhn-valid card number, IBAN or E.164 phone number used as a JSON key, whether or not `detect_pii` is on.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

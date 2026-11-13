@@ -377,10 +377,17 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 		return false
 	}
 	x.emit(egress.Deny, ruleSourceMCPToolDeny)
+	answerMCPRefused(w, msgs, batch, mcpBlockedMessage)
+	return true
+}
+
+// answerMCPRefused answers every request of a refused body with the JSON-RPC error msg, a batch
+// as one array.
+func answerMCPRefused(w http.ResponseWriter, msgs []mcpMessage, batch bool, msg string) {
 	var out []map[string]any
 	for _, m := range msgs {
 		if m.id != nil {
-			out = append(out, jsonRPCError(m.id, mcpBlockedCode, mcpBlockedMessage))
+			out = append(out, jsonRPCError(m.id, mcpBlockedCode, msg))
 		}
 	}
 	switch {
@@ -391,7 +398,6 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 	default:
 		writeJSONRPC(w, out[0])
 	}
-	return true
 }
 
 // identToolNameRE is what Codex CLI's code mode replaces with "_" when it
@@ -523,6 +529,10 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		p.httpError(w, "MCP upstream vet failed", err, http.StatusBadGateway)
 		return
 	}
+	scan, ok := x.scanBody(w, body)
+	if !ok {
+		return
+	}
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -568,7 +578,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
-		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID}, s.host, "MCP upstream error")
+		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID, Scan: scan}, s.host, "MCP upstream error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -576,7 +586,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		// The server was sent the id, so its log and this row join on it.
 		if p.sink != nil {
 			denied := decisionLog(x.req, egress.Deny, ruleSourceMCPRedirect)
-			denied.GatewayCallID = callID
+			denied.GatewayCallID, denied.Scan = callID, scan
 			p.sink.emit(denied)
 		}
 		http.Error(w, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
@@ -586,7 +596,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	if x.approvalID != nil {
 		allow.RuleSource, allow.ApprovalID = ruleSourceMCPApproved, x.approvalID
 	}
-	allow.GatewayCallID, allow.Cause = callID, mcpToolCause(body)
+	allow.GatewayCallID, allow.Cause, allow.Scan = callID, mcpToolCause(body), scan
 	p.emitDialledAllow(allow, s.host)
 	if listActive && !x.filterToolLists(w, resp, callID) {
 		return
