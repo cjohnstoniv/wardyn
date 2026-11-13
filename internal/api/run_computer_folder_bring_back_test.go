@@ -527,8 +527,13 @@ func TestBringComputerFolderBack_AShutdownAfterTheEndKeepsTheChangesOwed(t *test
 			stops := 0
 			sb.stopped = func() { stops++ }
 			res := bringBack(t, s, bringBackOwnerSession(t), run)
-			if res.code != http.StatusOK || res.json["sandbox_removed"] != stopFails {
-				t.Fatalf("bring-back = %d %s, want 200 with sandbox_removed %v", res.code, res.body, stopFails)
+			if res.code != http.StatusOK {
+				t.Fatalf("bring-back = %d %s, want 200", res.code, res.body)
+			}
+			// The route reads the run back on the cancelled ctx, which the store refuses, so its answer cannot say
+			// the sandbox was removed: the stored ref does.
+			if cur, err := cs.GetRun(context.Background(), run.ID); err != nil || (cur.SandboxRef == "") != stopFails {
+				t.Fatalf("stored sandbox ref %q, %v: want it cleared only when the agent cannot be stopped (%v)", cur.SandboxRef, err, stopFails)
 			}
 			if base.Err() == nil {
 				t.Fatal("the daemon's ctx was not cancelled: the agent stop never reached the sandbox")
