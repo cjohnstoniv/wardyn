@@ -2150,6 +2150,14 @@ jobs:
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
           # The pairing key's root-only mode, proven with a sudo-made file: a skip here is a failure.
           grep -q -- '^--- PASS: TestDarwinPairKeyIsReadableByRootOnly' "$RUNNER_TEMP/guestagent.out"
+          # The sign-in hold's macOS pieces as root: the console owner, the IOPlatformUUID read, auto-login
+          # written to and read back from the loginwindow file, and the carry's copy as another account. They
+          # restore what they change; a skip here is a failure. No guest boots: order and the pane are unproven.
+          go test -c -o "$RUNNER_TEMP/guestagent.test" ./internal/vm/guestagent/
+          sudo env TMPDIR="$TMPDIR" WARDYN_LOGINWINDOW_PIN=1 "$RUNNER_TEMP/guestagent.test" -test.count=1 -test.v -test.run '^TestDarwinLoginHold' | tee "$RUNNER_TEMP/loginhold-root.out"
+          for t in ConsoleOwner IoregUUID AutoLoginWriteAndReadBack CarryCopiesAsAnotherAccount; do
+            grep -q -- "^--- PASS: TestDarwinLoginHold$t " "$RUNNER_TEMP/loginhold-root.out"
+          done
       - name: Live suite self-tests (its P-rows skip on a hosted Mac)
         if: ${{ !cancelled() }}
         run: |

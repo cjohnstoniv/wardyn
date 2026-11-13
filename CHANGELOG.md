@@ -11,9 +11,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- macOS VM bases: a second opt-in switch, `/Library/Wardyn/carry-before-login`, beside `/Library/Wardyn/setup-assistant-carry`, which alone never turns it on. The base then rests with auto-login off: at each boot the guest agent runs the per-host settings carry with nobody at the console, writes auto-login back only after it, and restarts the guest once. The boot after that restart writes `/Library/Wardyn/run/login-hold.status`, and a run starts one restart later. Off by default; not yet tried on a real Mac.
+
 ### Fixed
 
 - macOS VM runs: a guest agent that restarts after the run's setup now refuses each command with "the guest agent restarted and lost the run's environment; end this run and start a new one", as a Linux VM's agent does. Before, such a command ran without the run's proxy settings, CA or secrets. Run the tools update once to get the new guest agent. Not yet tried on a real Mac.
+
+### Known issues
+
+- macOS VM bases with `/Library/Wardyn/carry-before-login`: not yet known on a real Mac are whether a restart started inside the guest keeps the VM running, whether macOS then keeps `agent` at the login window until the carry is done, and whether the carried settings keep Setup Assistant's Apple Account pane closed. If runs on a test base fail as stopped while booting, remove the two items from its list.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
