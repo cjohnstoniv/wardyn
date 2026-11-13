@@ -534,6 +534,10 @@ func (f *forgeRepo) read(ctx context.Context, host, path string, authorize func(
 		return 0, none, fmt.Errorf("the comparison needs more than %d reads of the forge", maxForgeReads)
 	}
 	f.reads++
+	// This read carries the forge's credential and never the run's identity (gatewayUnsignedCause).
+	if cause := f.p.gatewayUnsignedCause(host, 443); cause != "" {
+		return 0, none, errors.New(cause)
+	}
 	target, _, err := f.p.egressTarget(host, 443)
 	if err != nil {
 		return 0, none, err

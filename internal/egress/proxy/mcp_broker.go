@@ -222,6 +222,25 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		x.deny(w, ruleSourceMCPRequest, "unsupported MCP request method", http.StatusMethodNotAllowed)
 		return
 	}
+	// A server on the host and port of an identity route that does not cover it is not sent, as on the
+	// other lanes (gatewayOffRouteRefused): there the proxy sends only what carries the token. It is
+	// refused before the body is read, so no call to it is held for a person first (holdApproveEach).
+	if cause := p.gatewayOffRouteCause(x.server.host, x.server.port, x.server.path); cause != "" {
+		if p.sink != nil {
+			log := decisionLog(x.req, egress.Deny, ruleSourceMCPCredential)
+			log.Cause = cause
+			p.sink.emit(log)
+		}
+		http.Error(w, cause, http.StatusBadRequest)
+		return
+	}
+	// A route there that covers the server but is another destination's is refused here as forward
+	// refuses it, before the body is read: no person is asked and no credential is resolved first.
+	if rt := p.gatewayRouteFor(x.server.host, x.server.port, x.server.path); rt != nil && rt.MCPKey != x.server.key {
+		x.emit(egress.Deny, ruleSourceMCPCredential)
+		p.httpError(w, "the MCP server's gateway identity route is not its own", errors.New("another destination's route covers this server"), http.StatusBadGateway)
+		return
+	}
 	var body []byte
 	if r.Method == http.MethodPost {
 		var ok bool

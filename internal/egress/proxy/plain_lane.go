@@ -218,6 +218,15 @@ func (p *Proxy) forwardPlainGatewayRoute(w http.ResponseWriter, r, outReq *http.
 // plainRefusedAfterPolicy is handlePlain's refusals once the policy allows the host, and reports whether
 // it answered. The request it returns is the one to forward (hostRuleRefused).
 func (p *Proxy) plainRefusedAfterPolicy(w http.ResponseWriter, r *http.Request, host string, port int, log *egress.DecisionLog) (*http.Request, bool) {
+	ruleSource := ""
+	if log != nil {
+		ruleSource = log.RuleSource
+	}
+	// A route's host and port is sent only what a route covers (gatewayOffRouteRefused), and this
+	// runs before a hold can ask anyone about a call that will not be sent.
+	if p.gatewayOffRouteRefused(w, r, host, port, r.URL.Path, ruleSource) {
+		return r, true
+	}
 	// A request the host rules hold asks a person only now, once the policy allows the host (host_call_hold.go).
 	r, refused := p.hostRuleRefused(w, r, host, port)
 	if refused {

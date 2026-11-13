@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The proxy no longer sends a call to the host and port of a model gateway or MCP server with run identity on when no identity route's path prefix there covers the path, or the path has a dot segment or a backslash. This holds for a plain proxy request, a request in a tunnel the proxy terminates, the brokered model route and the MCP broker. The Git brokers, the push check's reads of the forge and the GitHub, Azure, Kubernetes and git_pat API doors and the AWS door on a host AWS serves never carry the identity, so they send such a host and port nothing at all. A tunnel the proxy does not terminate is not read, as before. The 400 answer names the route and says to remove any dot segments or backslashes, or, for a path outside the routes, to widen the intended route's path prefix or give the other service its own host and port. Before, most such calls were sent without the identity. Affects 0.10.0 prereleases only.
+- A plain proxy request whose host name has a character outside ASCII is answered 400 and not sent. A client sends an international name in its `xn--` form.
+
 ### Fixed
 
 - A model call sent to a gateway with run identity on as a plain proxy request, not through a tunnel, now carries the run's identity and call id like the gateway's other calls, or is not sent when the identity cannot be had. Affects 0.10.0 prereleases only.
