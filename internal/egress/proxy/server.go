@@ -167,6 +167,14 @@ func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*ups
 		for _, v := range up.maskValues() {
 			procMaskFor(maskKey, v)
 		}
+		// A run with no network dials nothing (literalIPGuard, noNetworkDial), so it has no upstream hop: no
+		// relaxation for newProxy to record and no route to keep. The URL can still arrive, from a Docker runner
+		// that adds its own upstream proxy to every run or from an older server; its credential is masked above,
+		// so this return stays below the mask loop.
+		if cfg.NoNetwork {
+			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy not used: this run has no network")
+			return nil, nil
+		}
 		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
 			slog.String("upstream_addr", up.addr))
 		// Say LOUDLY and EXHAUSTIVELY what is NOT chained: the deployment's

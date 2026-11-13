@@ -535,9 +535,8 @@ func newProxy(opts Options) *Proxy {
 	// resolve at the token-expiry boundary is not failed closed early.
 	p.localClient = &http.Client{Transport: p.controlTransport, Timeout: controlPlaneCallTimeout}
 
-	// Audit the deliberate private-IP-guard relaxation for the operator-
-	// configured upstream proxy hop (one record per run; each real destination
-	// still gets its own per-request decision).
+	// Audit the private-IP-guard relaxation for the operator-configured upstream proxy hop (one record per run;
+	// each real destination still gets its own per-request decision). A no-network run has no hop, so none.
 	if p.upstream != nil && p.sink != nil {
 		req := egress.Request{
 			RunID:  p.runID,

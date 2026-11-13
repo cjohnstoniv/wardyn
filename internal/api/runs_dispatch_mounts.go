@@ -130,7 +130,15 @@ func boundRunnerOf(member userMountPosture, src string) string {
 // exiting at container start would take the run's whole egress path with it
 // instead of degrading to this audited fallback.
 // Extracted verbatim from dispatchRun.
-func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
+//
+// noHop is why the run has no upstream hop whatever the site config holds (upstreamNoHopReason), or "": none is
+// resolved, no secret is read, and the row says so with that reason.
+func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error, noHop string) string {
+	if noHop != "" {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
+			runID.String(), "success", mustJSON(map[string]any{"in_effect": false, "reason": noHop})))
+		return ""
+	}
 	if siteCfgErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 			runID.String(), "failure", mustJSON(map[string]any{"in_effect": false, "reason": "site-config-read-error"})))

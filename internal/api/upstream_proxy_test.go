@@ -125,7 +125,7 @@ func TestUpstreamProxy_MemberRowNeverChangesURL(t *testing.T) {
 	h.srv.cfg.Secrets = sec
 	siteCfg := types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}
 
-	got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), siteCfg, nil)
+	got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), siteCfg, nil, "")
 	if got != "http://legit-proxy.corp:8080" {
 		t.Fatalf("resolveRunUpstreamProxy = %q, want the operator's URL — "+
 			"a member row named as the site-config ref must never change it", got)
@@ -141,7 +141,7 @@ func TestUpstreamProxy_SecretLaneResolvesThroughTheAuditedStore(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = secretstore.Audited(sec, &recRecorder{})
 	siteCfg := types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}
-	if got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), siteCfg, nil); got != "http://legit-proxy.corp:8080" {
+	if got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), siteCfg, nil, ""); got != "http://legit-proxy.corp:8080" {
 		t.Fatalf("resolveRunUpstreamProxy through the audited store = %q, want the secret's URL", got)
 	}
 }
@@ -196,7 +196,7 @@ func TestUpstreamProxyURL_PortIsGatedByTheSidecarsOwnLoader(t *testing.T) {
 func TestResolveRunUpstreamProxy_NotConfiguredIsAudited(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
-	if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, types.SiteConfig{}, nil); got != "" {
+	if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, types.SiteConfig{}, nil, ""); got != "" {
 		t.Fatalf("resolveRunUpstreamProxy = %q, want \"\" (direct egress)", got)
 	}
 	ev := findAudit(h.audit.events, runID, "run.upstream_proxy.resolve", "success")
@@ -212,5 +212,77 @@ func TestResolveRunUpstreamProxy_NotConfiguredIsAudited(t *testing.T) {
 	}
 	if data.InEffect == nil || *data.InEffect || data.Reason != "not-configured" {
 		t.Errorf("event data = %s, want in_effect false and reason not-configured", ev.Data)
+	}
+}
+
+// TestResolveRunUpstreamProxy_NoHopReasons: a run with a reason to have no upstream proxy hop (No network, or a
+// person's runner, which is never sent the organisation's upstream) gets none even when the site configures one,
+// and its run.upstream_proxy.resolve row says so (in_effect false, the reason), so its audit never records a hop
+// the run does not have. The same site config with no reason still resolves the hop.
+func TestResolveRunUpstreamProxy_NoHopReasons(t *testing.T) {
+	siteCfg := types.SiteConfig{UpstreamProxyURL: "http://proxy.corp.internal:3128"}
+	for _, reason := range []string{upstreamNoHopNoNetwork, upstreamNoHopNotSent} {
+		t.Run(reason, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, siteCfg, nil, reason); got != "" {
+				t.Fatalf("resolveRunUpstreamProxy = %q, want \"\"", got)
+			}
+			ev := findAudit(h.audit.events, runID, "run.upstream_proxy.resolve", "success")
+			if ev == nil {
+				t.Fatalf("no run.upstream_proxy.resolve success event; events=%s", auditDump(h.audit.events, runID))
+			}
+			if string(ev.Data) != `{"in_effect":false,"reason":"`+reason+`"}` {
+				t.Errorf("event data = %s, want in_effect false and reason %s", ev.Data, reason)
+			}
+		})
+	}
+	h := newHarness(t)
+	if got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), siteCfg, nil, ""); got != "http://proxy.corp.internal:3128" {
+		t.Errorf("resolveRunUpstreamProxy with no reason = %q, want the site's upstream proxy", got)
+	}
+}
+
+// TestUpstreamNoHopReason: No network wins over a person's runner, a person's runner has no hop, and a run on the
+// organisation's own executor (remote, or stored before placements) keeps the site's hop.
+func TestUpstreamNoHopReason(t *testing.T) {
+	nn := &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Scope: types.WallPresetScopeBuiltin}
+	for _, tc := range []struct {
+		name string
+		run  types.AgentRun
+		want string
+	}{
+		{"remote", types.AgentRun{Placement: types.PlacementRemote}, ""},
+		{"stored before placements", types.AgentRun{}, ""},
+		{"a person's runner", types.AgentRun{Placement: types.PlacementLocal}, upstreamNoHopNotSent},
+		{"No network on a person's runner", types.AgentRun{Placement: types.PlacementLocal, WallPreset: nn}, upstreamNoHopNoNetwork},
+		{"No network, remote", types.AgentRun{Placement: types.PlacementRemote, WallPreset: nn}, upstreamNoHopNoNetwork},
+	} {
+		if got := upstreamNoHopReason(tc.run); got != tc.want {
+			t.Errorf("%s: upstreamNoHopReason = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestDispatchLocalRunHasNoUpstreamHop: dispatching a run placed on a person's runner records
+// run.upstream_proxy.resolve as in_effect false, reason not-sent-to-runner, though the site configures an
+// upstream proxy: the organisation's upstream is never sent to a person's runner.
+func TestDispatchLocalRunHasNoUpstreamHop(t *testing.T) {
+	srv, ls, rec, run := localDispatchFixture(t, types.PlacementLocal)
+	runnerID := uuid.New()
+	run.RunnerID = &runnerID
+	ls.dispatchTestStore.run, ls.dispatchTestStore.state = run, types.RunPending
+	sc := types.SiteConfig{UpstreamProxyURL: "http://proxy.corp.internal:3128"}
+	srv.cfg.Store = siteConfigDispatchStore{localDispatchStore: ls, sc: &sc}
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "busybox:latest", Interactive: true,
+		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
+	})
+	ev := findAudit(rec.snapshot(), run.ID, "run.upstream_proxy.resolve", "success")
+	if ev == nil {
+		t.Fatalf("no run.upstream_proxy.resolve success event; events=%s", auditDump(rec.snapshot(), run.ID))
+	}
+	if string(ev.Data) != `{"in_effect":false,"reason":"not-sent-to-runner"}` {
+		t.Errorf("event data = %s, want in_effect false and reason not-sent-to-runner", ev.Data)
 	}
 }

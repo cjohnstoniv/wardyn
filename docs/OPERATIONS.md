@@ -2392,6 +2392,8 @@ Three things in a run's audit trail say which hop its connections took and why o
   - It is written on every dispatch that gets as far as building the run's proxy config, and again when a revived run's proxy config is refreshed from the deployment.
   - `in_effect: true` (outcome `success`) means the run's proxy config carries an upstream URL.
   - `in_effect: false` with `reason: not-configured` (outcome `success`) means none is configured, so an absent row now means the dispatch failed before that point, not "none configured".
+  - `in_effect: false` with `reason: no-network` (outcome `success`) means the run has the No network preset, so it never uses an upstream, whatever is configured.
+  - `in_effect: false` with `reason: not-sent-to-runner` (outcome `success`) means the run is on a person's runner. The organisation's upstream is never sent there; a Docker runner's own `--upstream-proxy`, if set, shows as the proxy's `builtin:upstream-proxy` row.
   - `in_effect: false` with outcome `failure` means the run's egress is direct although it may not have been meant to be.
     - `site-config-read-error` says the site config could not be read, so whether an upstream is configured is unknown; `unsupported-scheme`, `unloadable-upstream-url`, `reserved-secret-name`, `no-secret-store` and `secret-not-found` say one was configured and was dropped.
   - `in_effect` says what the run was given.
