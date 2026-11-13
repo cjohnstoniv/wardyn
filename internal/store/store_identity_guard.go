@@ -28,6 +28,13 @@ var ErrIdentityDeactivated = errors.New("store: identity deactivated")
 type IdentityGuard struct {
 	Principal string
 	Epoch     int64
+	// CutAfter, above zero, also refuses the write when a session cut or a revocation of Principal, of Email
+	// or of everyone drew a revocation sequence above it. A new API token passes the sequence it records:
+	// token use never reads a sessions-only cut, so a group removal's cut that lands after the mint's last
+	// session check would otherwise leave a token carrying the group the person left.
+	CutAfter int64
+	// Email is the owner's address, which a cut may be keyed by. Read only with CutAfter.
+	Email string
 }
 
 type identityGuardKey struct{}
@@ -47,7 +54,7 @@ func identityGuardFrom(ctx context.Context) (IdentityGuard, bool) {
 
 // checkIdentityGuard locks every identity row bound to g.Principal FOR SHARE and refuses when one
 // is deactivated, purged, past g.Epoch, or when g.Principal was cut after since, the revocation
-// sequence (ReadRevocationSeq) read before this transaction began.
+// sequence (ReadRevocationSeq) read before this transaction began, or, with g.CutAfter, after that.
 func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard, since int64) error {
 	rows, err := tx.Query(ctx, `
 		SELECT deactivated_at IS NOT NULL OR purged_at IS NOT NULL, authority_epoch
@@ -77,6 +84,25 @@ func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard, since i
 	var cut bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM oidc_session_revocations
 		WHERE sub = $1 AND seq > $2)`, g.Principal, since).Scan(&cut); err != nil {
+		return fmt.Errorf("store: identity guard: %w", err)
+	}
+	if cut {
+		return ErrIdentityDeactivated
+	}
+	if g.CutAfter <= 0 {
+		return nil
+	}
+	// Ordered against every cut, as CreateCLISession is: the shared revocation-order lock comes after the row
+	// locks above and is held to commit, so a cut either committed before the read below, which refuses this
+	// write, or waits for this commit, and the sweep that follows the cut finds the row. The read is its own
+	// statement, so its snapshot is taken after the lock is granted.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass); err != nil {
+		return fmt.Errorf("store: lock revocation order: %w", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM (
+			SELECT sub, seq FROM oidc_session_revocations UNION ALL SELECT sub, seq FROM oidc_session_cuts) c
+		WHERE (c.sub = $1 OR lower(c.sub) = lower($2) OR c.sub = '') AND c.seq > $3)`,
+		g.Principal, g.Email, g.CutAfter).Scan(&cut); err != nil {
 		return fmt.Errorf("store: identity guard: %w", err)
 	}
 	if cut {

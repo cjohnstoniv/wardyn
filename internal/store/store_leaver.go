@@ -28,6 +28,11 @@ var ErrIdentityPurged = errors.New("store: identity purged")
 // deactivation and epoch checks. Nothing is written.
 var ErrIdentityBindingMismatch = errors.New("store: identity bound to another principal")
 
+// ErrSuperseded is a write bound to one occurrence of leaver work that found a newer one in its place: a
+// ledger write naming its row's id (JobKey.ID) whose row a reopened group removal replaced. Nothing is
+// written.
+var ErrSuperseded = errors.New("store: a newer occurrence replaced the one this write was bound to")
+
 // Job kinds and the one step name every kind shares.
 const (
 	JobKindSuspend = "suspend"
@@ -86,6 +91,8 @@ type SuspendResult struct {
 
 // DeprovisionJob is one row of the step ledger.
 type DeprovisionJob struct {
+	// ID is the row's own id. A group removal opened again replaces its rows, so a new id is a new occurrence.
+	ID         uuid.UUID
 	IdentityID uuid.UUID
 	Kind       string
 	Step       string
@@ -100,8 +107,21 @@ type DeprovisionJob struct {
 	EventAt time.Time
 }
 
-// JobKey names a ledger row within one identity and kind.
-type JobKey struct{ Step, Target string }
+// JobKey names a ledger row within one identity and kind. ID, when set, is the row's own id
+// (DeprovisionJob.ID): a finish or a failure then applies to that occurrence only, and one whose row a newer
+// occurrence replaced is ErrSuperseded.
+type JobKey struct {
+	Step, Target string
+	ID           uuid.UUID
+}
+
+// occurrence is k.ID as a statement argument: nil, which matches any row, when k names no occurrence.
+func (k JobKey) occurrence() *uuid.UUID {
+	if k.ID == uuid.Nil {
+		return nil
+	}
+	return &k.ID
+}
 
 // LeaverStore is optional, like PrincipalIdentityStore: callers type-assert it.
 type LeaverStore interface {
@@ -478,14 +498,14 @@ func (s PG) EnsureDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kin
 // ListDeprovisionJobs is the ledger of one identity and kind, oldest first.
 func (s PG) ListDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind string) ([]DeprovisionJob, error) {
 	return collect(ctx, s.Pool, "list", "deprovision jobs", `
-		SELECT identity_id, kind, step, target, state = 'done', attempts, last_error, detail, audit_event_id, audit_event_at
+		SELECT id, identity_id, kind, step, target, state = 'done', attempts, last_error, detail, audit_event_id, audit_event_at
 		  FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2 ORDER BY created_at, step, target`,
 		[]any{identityID, kind}, func(r pgx.Row) (DeprovisionJob, error) {
 			var j DeprovisionJob
 			var raw []byte
 			var eventID *uuid.UUID
 			var eventAt *time.Time
-			if err := r.Scan(&j.IdentityID, &j.Kind, &j.Step, &j.Target, &j.Done, &j.Attempts, &j.LastError, &raw, &eventID, &eventAt); err != nil {
+			if err := r.Scan(&j.ID, &j.IdentityID, &j.Kind, &j.Step, &j.Target, &j.Done, &j.Attempts, &j.LastError, &raw, &eventID, &eventAt); err != nil {
 				return DeprovisionJob{}, err
 			}
 			if eventID != nil && eventAt != nil {
@@ -502,10 +522,15 @@ func (s PG) FinishDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind
 		detail = map[string]int{}
 	}
 	raw, _ := json.Marshal(detail)
-	if _, err := s.Pool.Exec(ctx, `
+	tag, err := s.Pool.Exec(ctx, `
 		UPDATE deprovision_jobs SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5, updated_at = now()
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4`, identityID, kind, k.Step, k.Target, raw); err != nil {
+		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`,
+		identityID, kind, k.Step, k.Target, raw, k.occurrence())
+	if err != nil {
 		return fmt.Errorf("store: finish deprovision job: %w", err)
+	}
+	if k.ID != uuid.Nil && tag.RowsAffected() == 0 {
+		return ErrSuperseded
 	}
 	return nil
 }
@@ -516,10 +541,15 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 	if len(msg) > 512 {
 		msg = strings.ToValidUTF8(msg[:512], "")
 	}
-	if _, err := s.Pool.Exec(ctx, `
+	tag, err := s.Pool.Exec(ctx, `
 		UPDATE deprovision_jobs SET attempts = attempts + 1, last_error = $5, updated_at = now()
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4`, identityID, kind, k.Step, k.Target, msg); err != nil {
+		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`,
+		identityID, kind, k.Step, k.Target, msg, k.occurrence())
+	if err != nil {
 		return fmt.Errorf("store: fail deprovision job: %w", err)
+	}
+	if k.ID != uuid.Nil && tag.RowsAffected() == 0 {
+		return ErrSuperseded
 	}
 	return nil
 }
