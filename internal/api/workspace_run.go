@@ -405,9 +405,18 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 		return // a newer recording superseded this run, or already finalized
 	}
 
+	// An audit event whose store write failed waits in this replica's spool until the drain lands it, and a
+	// capture read before then misses it: a deny among them would leave the replay stamped clean, and a
+	// second finalization is refused. So the capture is taken only while the spool holds nothing and takes
+	// nothing during the read; otherwise the entry stays `recording` and a later reconcile (a workspace
+	// read's repair, a kill, a restart) takes it once the spool has drained.
+	spooled := s.cfg.AuditSpool.Appends()
+	if s.cfg.AuditSpool.Lines() > 0 {
+		return
+	}
 	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, maxCaptureAuditEvents)
-	if err != nil {
-		return // transient store failure: leave `recording`; a later reconcile retries
+	if err != nil || s.cfg.AuditSpool.Appends() != spooled {
+		return // a transient store failure, or an event spooled meanwhile: leave `recording`; a later reconcile retries
 	}
 	obs := recordmode.Capture(events, res.Confined, s.kernelWindow(ctx, run))
 	now := s.cfg.Now().UTC()

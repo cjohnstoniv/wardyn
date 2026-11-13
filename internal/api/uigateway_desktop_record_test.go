@@ -4,9 +4,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http/httptest"
 	"strings"
@@ -303,6 +305,103 @@ func TestMacOSVMDesktopRecording_FollowsTheLevel(t *testing.T) {
 			}
 			if rows := h.audit.auditRows("desktop.recording.write", "success"); len(rows) != tc.want {
 				t.Errorf("desktop.recording.write rows = %d, want %d", len(rows), tc.want)
+			}
+		})
+	}
+}
+
+// rfbPixelFormat8 is a SetPixelFormat of 8 bits per pixel, a format a recorded desktop's recorder cannot frame.
+var rfbPixelFormat8 = []byte{0, 0, 0, 0, 8, 8, 0, 1, 0, 7, 0, 7, 0, 3, 5, 2, 0, 0, 0, 0}
+
+// TestVMDesktopRecording_RefusesAPixelFormatItCannotFrame: on a recorded VM desktop the relay's filter is
+// told the display is recorded, so a SetPixelFormat the recorder cannot frame closes the viewer's socket
+// and never reaches the display. Unrecorded, the same message reaches the display.
+func TestVMDesktopRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
+	for name, recorded := range map[string]bool{"recorded": true, "unrecorded": false} {
+		t.Run(name, func(t *testing.T) {
+			h, dr, send, got := vmDesktopRun(t)
+			if !recorded {
+				h.run.RecordingLevel = ""
+				h.store.putRun(h.run)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			v := openVMDesktop(t, ctx, h, dr)
+			v.write(rfbPixelFormat8)
+			if !recorded {
+				var reached []byte
+				for len(reached) < len(rfbPixelFormat8) {
+					select {
+					case b := <-got:
+						reached = append(reached, b...)
+					case <-ctx.Done():
+						t.Fatalf("the VM got %x of the viewer's %x", reached, rfbPixelFormat8)
+					}
+				}
+				if !bytes.Equal(reached, rfbPixelFormat8) {
+					t.Fatalf("the VM got %x, want the viewer's %x", reached, rfbPixelFormat8)
+				}
+				endVMDesktop(t, h, v, send)
+				return
+			}
+			rctx, rcancel := context.WithTimeout(ctx, 5*time.Second)
+			_, _, err := v.ws.Read(rctx)
+			open := rctx.Err() != nil
+			rcancel()
+			if err == nil || open {
+				t.Fatalf("the viewer's socket stayed open after an 8-bit SetPixelFormat on a recorded desktop: %v", err)
+			}
+			endVMDesktop(t, h, v, send)
+			select {
+			case b := <-got:
+				t.Fatalf("the VM read %x: the refused format reached it", b)
+			default:
+			}
+		})
+	}
+}
+
+// TestDesktopAppRecording_RefusesAPixelFormatItCannotFrame is the same for a container's noVNC app, whose
+// filter goes on in uiFilterUpgrade: recorded, the SetPixelFormat closes the browser's socket and never
+// reaches the desktop; unrecorded, it reaches the desktop.
+func TestDesktopAppRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
+	for name, recorded := range map[string]bool{"recorded": true, "unrecorded": false} {
+		t.Run(name, func(t *testing.T) {
+			offered, pasted := make(chan string, 1), make(chan []byte, 1)
+			h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+			if recorded {
+				h.run.RecordingLevel = types.RecordingScreenActions
+				h.store.putRun(h.run)
+				h.srv.cfg.RecordingStore = fsRecordingStore(t)
+			}
+			ds := openDesktop(t, h, desktopApp)
+			<-offered
+			if next, err := readWSFrame(ds.br); err != nil || !bytes.Equal(next, []byte{2}) {
+				t.Fatalf("after ServerInit the browser got %q (err %v), want the Bell", next, err)
+			}
+			if _, err := ds.conn.Write(wsFrame(rfbPixelFormat8, true)); err != nil {
+				t.Fatalf("SetPixelFormat write: %v", err)
+			}
+			if !recorded {
+				select {
+				case b := <-pasted:
+					if !bytes.Equal(b, rfbPixelFormat8) {
+						t.Fatalf("the desktop got %x, want the browser's %x", b, rfbPixelFormat8)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("an unrecorded desktop's SetPixelFormat never reached it")
+				}
+				return
+			}
+			var ne net.Error
+			if _, err := readWSFrame(ds.br); err == nil || errors.As(err, &ne) && ne.Timeout() {
+				t.Fatalf("the browser's socket stayed open after an 8-bit SetPixelFormat on a recorded desktop: %v", err)
+			}
+			storedVMRecording(t, h) // the relay closed and stored its recording
+			select {
+			case b := <-pasted:
+				t.Fatalf("the desktop read %x: the refused format reached it", b)
+			default:
 			}
 		})
 	}

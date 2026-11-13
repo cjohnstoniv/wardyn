@@ -20,6 +20,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- A recording whose later part could not be read is no longer served as a shorter, complete recording: its replay now fails part-way, and a run's output recovered from it is a capture gap, which is read again later.
+- A UI app is now refused at most 30 seconds after its run ended or was kept after an outage; before, its requests kept reaching the app for as long as the server's connection to the app stayed open. A stream that is already open is not re-checked by this change.
+- The recorder now also retries its last upload when the server answers 500, within the same 30-second retry window, so a short run's recording is not lost to one failed write of the recording store.
+- A desktop clipboard paste is now audited as relayed (`ui.clipboard.transfer` `success`) only once it was written to the desktop; a paste in a message the relay refused, or whose write to the desktop failed, is no longer recorded as relayed.
+- A confined workspace replay is no longer finalized as clean while the server that finalizes it still holds one of its audit events in the audit spool after a failed write; the replay stays recording until that spool has drained, and a later read of the workspace finalizes it.
+
+### Security
+
+- A recorded desktop now refuses every pixel format but the one its replay reads: 32 bits per pixel, depth 24, little-endian true colour, a maximum of 255 and shifts 0, 8 and 16 for red, green and blue. Before, a viewer that set 8 or 16 bits per pixel could make the desktop recording keep the desktop's clipboard text, which recordings leave out, and a viewer that set another 32-bit layout could make the replay show wrong colours.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

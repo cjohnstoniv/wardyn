@@ -4,6 +4,7 @@
 package rfbfilter
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -138,6 +139,7 @@ func (p *parser) serverInit(b []byte) error {
 	if err := setBPP(p.s, b[4]); err != nil {
 		return err
 	}
+	p.s.playback = bytes.Equal(b[4:17], playbackPixels)
 	p.forward(b)
 	p.stream(u32(b[20:]), false, p.msgNext)
 	return nil
@@ -206,15 +208,20 @@ func (p *parser) clientMsg(b []byte) error {
 	switch b[0] {
 	case 0: // SetPixelFormat
 		return p.more(20, func(h []byte) error {
+			playback := bytes.Equal(h[4:17], playbackPixels)
+			if err := p.recordedPixels(playback); err != nil {
+				return err
+			}
 			if err := setBPP(p.s, h[4]); err != nil {
 				return err
 			}
+			p.s.playback = playback
 			return p.fixed(h)
 		}, b)
 	case 2: // SetEncodings
 		return p.more(4, p.setEncodings, b)
 	case 3: // FramebufferUpdateRequest
-		return p.more(10, p.fixed, b)
+		return p.more(10, p.pixelsAsked, b)
 	case 4: // KeyEvent
 		return p.more(8, p.input(InputKey), b)
 	case 5: // PointerEvent
@@ -222,7 +229,7 @@ func (p *parser) clientMsg(b []byte) error {
 	case 6: // ClientCutText
 		return p.more(8, func(h []byte) error { return p.cutText(PasteIn, h) }, b)
 	case 150: // EnableContinuousUpdates
-		return p.more(10, p.fixed, b)
+		return p.more(10, p.pixelsAsked, b)
 	case 248: // ClientFence
 		return p.more(9, p.fence, b)
 	case 250: // xvp
@@ -243,6 +250,32 @@ func (p *parser) clientMsg(b []byte) error {
 func (p *parser) fence(h []byte) error {
 	p.trailer(h, int64(h[8]))
 	return nil
+}
+
+// playbackPixels is the pixel format a recording replays in (noVNC's playback, which decodes the pixels
+// as noVNC asks for them), and the one noVNC and the console's own viewer ask for: 32 bits per pixel,
+// depth 24, little-endian, true colour, a maximum of 255 for each colour and red, green and blue at shifts
+// 0, 8 and 16. It is the first 13 bytes of an RFB pixel format; the other 3 are padding.
+var playbackPixels = []byte{32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16}
+
+// recordedPixels refuses, under Rules.Recorded, a pixel format other than playbackPixels: the recorder
+// frames 32-bit pixels only, and in any other size it would keep the bytes after a rectangle, a
+// ServerCutText among them, as pixels; in any other 32-bit layout the replay shows wrong colours.
+func (p *parser) recordedPixels(playback bool) error {
+	if p.s.rules.Recorded && !playback {
+		return errors.New("rfb relay: a recorded desktop takes one pixel format only: 32 bits per pixel, depth 24, little-endian true colour, a maximum of 255 and shifts 0, 8 and 16 for red, green and blue")
+	}
+	return nil
+}
+
+// pixelsAsked forwards a FramebufferUpdateRequest or EnableContinuousUpdates, which ask the server for
+// pixels in the format in force: the browser's SetPixelFormat, or else ServerInit's, which
+// recordedPixels checks here.
+func (p *parser) pixelsAsked(b []byte) error {
+	if err := p.recordedPixels(p.s.playback); err != nil {
+		return err
+	}
+	return p.fixed(b)
 }
 
 // setEncodings keeps only the encodings whose rectangles the relay can frame,

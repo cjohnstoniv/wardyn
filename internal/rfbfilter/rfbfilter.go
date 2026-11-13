@@ -41,8 +41,10 @@ const (
 
 // Rules says which clipboard directions the relay lets through. ViewOnly also keeps every
 // input message from the desktop: keys and pointer moves are dropped, paste in is blocked
-// whatever PasteIn says, and any other control message ends the connection.
-type Rules struct{ PasteIn, CopyOut, ViewOnly bool }
+// whatever PasteIn says, and any other control message ends the connection. Recorded says the
+// desktop's side is recorded, by a recorder that frames 32-bit pixels only and a replay that reads
+// one layout of them, so pixels in any other format are never asked for (recordedPixels).
+type Rules struct{ PasteIn, CopyOut, ViewOnly, Recorded bool }
 
 func (r Rules) allows(d Direction) bool {
 	if d == PasteIn {
@@ -135,7 +137,8 @@ func (c *Conn) Read(p []byte) (int, error) {
 	for len(c.rout) == 0 {
 		n, err := c.backend.Read(c.rbuf[:])
 		if n > 0 {
-			out, ferr := c.filter(&c.rin, c.rbuf[:n], true)
+			out, events, ferr := c.filter(&c.rin, c.rbuf[:n], true)
+			c.report(events, ferr == nil)
 			if ferr != nil {
 				c.backend.Close()
 				return 0, ferr
@@ -219,18 +222,21 @@ func (c *Conn) forward(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	out, err := c.filter(&c.win, p, false)
+	out, events, err := c.filter(&c.win, p, false)
 	if err != nil {
+		c.report(events, false)
 		c.backend.Close()
 		return err
 	}
 	if len(out) == 0 {
+		c.report(events, true)
 		return nil
 	}
 	if c.sink != nil {
 		c.sink(false, out)
 	}
 	_, err = c.backend.Write(out)
+	c.report(events, err == nil)
 	return err
 }
 
@@ -260,18 +266,27 @@ func (c *Conn) Close() error {
 	return c.backend.Close()
 }
 
-func (c *Conn) filter(pending *[]byte, in []byte, fromServer bool) ([]byte, error) {
+// filter filters in and returns the events it saw, which the caller reports once it knows whether the
+// bytes went on (report).
+func (c *Conn) filter(pending *[]byte, in []byte, fromServer bool) ([]byte, []Event, error) {
 	var events []Event
 	c.mu.Lock()
 	out, err := c.filterLocked(pending, in, fromServer, &events)
 	c.mu.Unlock()
-	for _, ev := range events {
-		c.audit(ev)
-	}
 	if err != nil {
 		c.once.Do(func() { c.refused(err) })
 	}
-	return out, err
+	return out, events, err
+}
+
+// report audits events once their bytes have gone on (sent), and otherwise only the refusals among them:
+// a cut text allowed through whose bytes were then refused or not written was never relayed.
+func (c *Conn) report(events []Event, sent bool) {
+	for _, ev := range events {
+		if sent || !ev.Allowed {
+			c.audit(ev)
+		}
+	}
 }
 
 func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events *[]Event) ([]byte, error) {
@@ -408,11 +423,12 @@ func appendFrame(dst []byte, f frame, p []byte) []byte {
 
 // session is the RFB state the two directions share.
 type session struct {
-	rules   Rules
-	version int             // 33, 37 or 38 once the browser has chosen
-	secType byte            // 1 (None) or 2 (VNC auth) once known
-	bpp     int             // bytes per pixel: ServerInit's, then SetPixelFormat's
-	dropped map[string]bool // the input kinds a view-only relay has reported
+	rules    Rules
+	version  int             // 33, 37 or 38 once the browser has chosen
+	secType  byte            // 1 (None) or 2 (VNC auth) once known
+	bpp      int             // bytes per pixel: ServerInit's, then SetPixelFormat's
+	playback bool            // the pixel format in force, ServerInit's then SetPixelFormat's, is playbackPixels
+	dropped  map[string]bool // the input kinds a view-only relay has reported
 }
 
 type step func(piece []byte) error

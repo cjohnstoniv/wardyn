@@ -386,6 +386,31 @@ func TestDesktopStreamOnAnEndedRunIsToldSo(t *testing.T) {
 	}
 }
 
+// A desktop session's re-check leaves a stopped or kept run to its stream's own check (desktopRunCheck),
+// whose close code tells the viewer the run ended. Refused before the upgrade, the viewer would retry.
+func TestDesktopSessionReassertLeavesAGoneRunToItsStream(t *testing.T) {
+	for name, end := range map[string]func(run *types.AgentRun){
+		"ended": func(run *types.AgentRun) { run.State = types.RunCompleted },
+		"kept":  func(run *types.AgentRun) { at := time.Now(); run.LostAt = &at },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := newDesktopHarness(t)
+			c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+			req := httptest.NewRequest(http.MethodGet, desktopPath(h, uiDesktopRFB), nil)
+			req.AddCookie(c)
+			sess, ok := h.srv.decodeUISession(req, h.srv.cfg.Now())
+			if !ok || !sess.Desktop {
+				t.Fatalf("the fresh desktop cookie decoded to %+v, %v", sess, ok)
+			}
+			end(&h.run)
+			h.store.putRun(h.run)
+			if de := h.srv.uiReassertRelay(context.Background(), sess); de != nil {
+				t.Fatalf("the re-check of a desktop session on a %s run = %+v, want it left to the stream", name, de)
+			}
+		})
+	}
+}
+
 // The VM display rides CTL-A's clipboard filter: a ServerCutText from the VM's side is dropped when
 // the run's desktop rules block copy out and passed when they allow it, a ClientCutText is passed or
 // dropped by paste in, and each is audited by direction, size and hash, never by its text.

@@ -62,6 +62,8 @@ type AuditSpool struct {
 	// rather than a per-scrape recount of the file, because /metrics must not
 	// queue behind a drain pass - see Lines().
 	lines atomic.Int64
+	// appends counts the Appends that put bytes in the spool since it was opened (Appends).
+	appends atomic.Int64
 	// consumed is the byte offset of the first un-replayed line: everything
 	// before it is already in the durable store and is waiting only to be
 	// reclaimed. Drain advances it instead of rewriting the whole file on every
@@ -230,6 +232,7 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 		// line (a tail with no newline is a line), and the separator only
 		// terminates it.
 		a.lines.Add(1)
+		a.appends.Add(1)
 	}
 	return werr
 }
@@ -771,6 +774,16 @@ func (a *AuditSpool) Lines() int {
 		return 0
 	}
 	return int(n)
+}
+
+// Appends is how many events this spool has taken since it was opened. A reader of the audit store that
+// finds Lines at 0 before its read and Appends unchanged after it knows that no event of this replica
+// was waiting in the spool while it read. A nil spool reports 0.
+func (a *AuditSpool) Appends() int64 {
+	if a == nil {
+		return 0
+	}
+	return a.appends.Load()
 }
 
 // TornDrops reports how many spool lines Drain has dropped as unparseable (a
