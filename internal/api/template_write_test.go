@@ -111,6 +111,37 @@ func TestTemplateRevisionConflictChangesNothing(t *testing.T) {
 	}
 }
 
+// A key written twice in a save request is refused and nothing is stored, as the import refuses the
+// same text: decoding into the typed request keeps only the last, at any depth, so the save would
+// keep the egress intent and drop the deny list written first.
+func TestTemplateSaveRefusesAKeyWrittenTwice(t *testing.T) {
+	e := newTemplateEnv(t)
+	alice := templateCookie(t, "alice", oidc.RoleUser, false, []string{}, false)
+	const denied = `{"inline_policy":{"denied_domains":["example.com"]}}`
+	doc := templateDocBody(`{"inline_policy":{"denied_domains":["example.com"],"denied_domains":[]}}`)
+	intentTwice := strings.TrimSuffix(templateDocBody(denied), "}") + `,"intent":` + templateIntentEgress + `}`
+	for key, req := range map[string]string{
+		"denied_domains": `{"scope":"person","name":"twice","document":` + doc + `}`,
+		"intent":         `{"scope":"person","name":"twice","document":` + intentTwice + `}`,
+		"document":       `{"scope":"person","name":"twice","document":` + templateDocBody(denied) + `,"document":` + templateDocBody(templateIntentEgress) + `}`,
+	} {
+		status, body := e.call(alice, http.MethodPost, "/api/v1/templates", req)
+		if want := `has the key \"` + key + `\" twice`; status != http.StatusBadRequest || !strings.Contains(body, want) {
+			t.Errorf("save with %s twice = %d %s, want 400 naming the repeated key", key, status, body)
+		}
+	}
+	e.ts.mu.Lock()
+	stored := len(e.ts.rows)
+	e.ts.mu.Unlock()
+	if stored != 0 {
+		t.Errorf("%d templates stored, want none", stored)
+	}
+	imp, _ := json.Marshal(client.TemplateImportRequest{Format: client.TemplateFormatJSON, Source: doc})
+	if status, body := e.call(alice, http.MethodPost, "/api/v1/templates/import", string(imp)); status != http.StatusOK || !strings.Contains(body, `has the key \"denied_domains\" twice`) {
+		t.Errorf("import = %d %s, want the same key refused", status, body)
+	}
+}
+
 // TestTemplateNameTakenAndLimitReached: a name is unique per audience,
 // case-insensitively, and an audience holds at most its limit.
 func TestTemplateNameTakenAndLimitReached(t *testing.T) {

@@ -200,9 +200,15 @@ func (i TemplateIntent) MarshalJSON() ([]byte, error) {
 // every object's keys sorted, so the same document written as YAML or as JSON,
 // in any key order, holds the same bytes (revisions and diffs stay stable).
 // Whether each is a field a template may carry is the server's decoder's to say.
+// A key written twice in one object is refused, at any depth.
 func (i *TemplateIntent) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	// After the Unmarshal, which checks the syntax and the depth: the map kept only the last of a
+	// repeated key, a document the server's import refuses.
+	if err := types.RefuseRepeatedJSONKeys(data, "intent"); err != nil {
 		return err
 	}
 	i.fields = make(map[string]json.RawMessage, len(fields))
