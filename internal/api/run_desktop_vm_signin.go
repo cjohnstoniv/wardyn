@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"github.com/go-chi/chi/v5"
@@ -711,6 +712,7 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 	}
 	ctx, end, ok := s.beginLeaderSweep(ctx)
 	if !ok {
+		sweephealth.NotOwner(ctx)
 		return nil
 	}
 	defer end()

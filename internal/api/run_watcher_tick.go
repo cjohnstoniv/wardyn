@@ -42,7 +42,9 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 					}
 				}()
 				// One tick, recorded as the run_watcher sweep: the first sub-pass
-				// error is the tick's, so an attempt that failed has no success.
+				// error is the tick's, so an attempt that failed has no success, and a
+				// follower's tick, which skips the leader's sub-passes, records its
+				// attempt only (sweephealth.NotOwner).
 				_ = s.cfg.SweepHealth.Tick(ctx, sweephealth.RunWatcher, func(ctx context.Context) error {
 					return s.runWatcherTick(ctx, &lastUndispatched)
 				})
