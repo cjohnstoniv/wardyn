@@ -170,8 +170,9 @@ function WidgetBox({ host }: { host: HTMLElement }) {
 // from the bottom, so a daemon banner stays whole above it. It grows with its widget up to that height and scrolls inside it. No exit animation:
 // the widget is back in its tile in the commit that closes the view, and a fade would show an empty box.
 // --expand-min is the tallest it has been (set below); min-h can't outgrow the window, so a smaller window wins.
+// bottom-auto: with DialogContent's inset-y-0 the box would no longer start at this top.
 const EXPAND_DIALOG =
-  "top-[calc(var(--shell-banner-h,3.5rem)_+_0.5rem)] flex h-auto max-h-[calc(100dvh_-_var(--shell-banner-h,3.5rem)_-_3.25rem)] min-h-[min(var(--expand-min,0px),calc(100dvh_-_var(--shell-banner-h,3.5rem)_-_3.25rem))] translate-y-0 flex-col gap-0 overflow-hidden p-0 data-[state=closed]:animate-none sm:max-w-5xl";
+  "top-[calc(var(--shell-banner-h,3.5rem)_+_0.5rem)] flex h-auto max-h-[calc(100dvh_-_var(--shell-banner-h,3.5rem)_-_3.25rem)] min-h-[min(var(--expand-min,0px),calc(100dvh_-_var(--shell-banner-h,3.5rem)_-_3.25rem))] bottom-auto flex-col gap-0 overflow-hidden p-0 data-[state=closed]:animate-none sm:max-w-5xl";
 
 const sameLayout = (a: { widget: string; x: number; y: number; w: number; h: number }[], b: typeof a) =>
   a.length === b.length && a.every((w, n) => w.widget === b[n].widget && w.x === b[n].x && w.y === b[n].y && w.w === b[n].w && w.h === b[n].h);
