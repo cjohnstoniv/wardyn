@@ -340,6 +340,7 @@ describe("Review: Add a secret that is not stored (#2108)", () => {
   it("saving stores the secret under the item's name, announces it, and asks the server again; Launch stays shut until it answers", async () => {
     checks.current = answered(withItems([NPM]));
     setSecretMock.mockResolvedValue(undefined);
+    vi.spyOn(health, "whoami").mockResolvedValue(null);
     const user = userEvent.setup();
     open(AGENT);
     await ready();
@@ -348,7 +349,7 @@ describe("Review: Add a secret that is not stored (#2108)", () => {
     setField(within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL), "s3cret");
     await user.click(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
 
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret", { scope: "personal", createOnly: true }));
     expect(await screen.findByText(NR_TOOLS.TOKEN_SAVED)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(preflight).toHaveBeenCalledTimes(1);

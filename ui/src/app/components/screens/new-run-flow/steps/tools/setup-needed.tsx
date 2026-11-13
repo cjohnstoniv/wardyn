@@ -11,7 +11,10 @@ import * as React from "react";
 import { Check, TriangleAlert } from "lucide-react";
 import { ADO } from "../../../../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
-import { secrets } from "../../../../../lib/api/secrets";
+import { HttpError } from "../../../../../lib/api/core";
+import { health } from "../../../../../lib/api/health";
+import { secrets, type SecretScope } from "../../../../../lib/api/secrets";
+import { SECRET_EXISTS_REASON } from "../../../../../lib/secret-refusals";
 import { useAdoConnect } from "../../../../../lib/hooks/use-ado-connect";
 import { getErrorMessage } from "../../../../../lib/format";
 import type { SetupItem } from "../../../../../lib/types/preflight";
@@ -21,6 +24,8 @@ import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { cn } from "../../../../ui/utils";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
+import { useOperator, useOperatorResolved } from "../../../../wardyn/operator-context";
+import { SecretOverwriteWarning } from "../../../secrets";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { Chip } from "../../../../wardyn/primitives";
@@ -41,15 +46,29 @@ export function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; on
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const name = item.fix?.secret_name ?? "";
+  // The namespace this tab knows to be the person's: the shared one for an administrator, their own otherwise, named
+  // by the route so a role change since cannot move the write. Before /me answers the role is a default, not known,
+  // and the write keeps the route that places it by role on arrival.
+  const operator = useOperator();
+  const known: SecretScope | undefined = useOperatorResolved() ? (operator ? "shared" : "personal") : undefined;
+  // The name the server already held: the next save replaces it only once the person has seen the warning.
+  const [takenName, setTakenName] = React.useState("");
+  const taken = takenName === name;
 
   const save = async () => {
     setBusy(true);
     setError("");
     try {
-      await secrets.setSecret(name, value);
+      // The role read at load can be out of date: after a promotion the token would go to the person's own namespace
+      // while their preflight, now an administrator's, reads the shared one. Ask /me again first; if that read
+      // fails, keep the namespace the tab knows.
+      const me = await health.whoami();
+      const scope = me ? (me.operator ? "shared" : "personal") : known;
+      await secrets.setSecret(name, value, { scope, createOnly: !taken });
       onSaved();
     } catch (e) {
-      setError(getErrorMessage(e));
+      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) setTakenName(name);
+      else setError(getErrorMessage(e));
       setBusy(false);
     }
   };
@@ -70,13 +89,16 @@ export function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; on
             value={value}
             aria-invalid={error ? true : undefined}
             onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && value.trim() && !busy) void save(); }}
+            // Once the warning shows, only the button replaces the stored secret: a second Enter meant for the
+            // refused save must not.
+            onKeyDown={(e) => { if (e.key === "Enter" && value.trim() && !busy && !taken) void save(); }}
           />
           {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+          {taken && <SecretOverwriteWarning name={name} />}
         </div>
         <DialogFooter>
           <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>{NR_SHARED.CANCEL}</Button>
-          <Button type="button" className={DISABLED_FILL} disabled={busy || !value.trim()} onClick={() => void save()}>{NR_TOOLS.TOKEN_CONFIRM}</Button>
+          <Button type="button" className={DISABLED_FILL} variant={taken ? "destructive" : "default"} disabled={busy || !value.trim()} onClick={() => void save()}>{taken ? "Overwrite secret" : NR_TOOLS.TOKEN_CONFIRM}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

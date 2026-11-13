@@ -283,6 +283,9 @@ export function HostProxyTab({
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
   // The secret name a save found already stored: the next Save replaces it only once the person has seen the warning.
   const [takenName, setTakenName] = React.useState("");
+  // The secret's own PUT, which `saving` (the site-config write) does not cover: a second click while it is in
+  // flight would send a second create-only PUT, answered "already exists" for the secret the first one just stored.
+  const [storing, setStoring] = React.useState(false);
   const [selected, setSelected] = React.useState(0);
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
@@ -328,10 +331,19 @@ export function HostProxyTab({
   };
 
   // Create-only until the person has seen the overwrite warning for this name: the name may already hold an
-  // unrelated secret, and a plain PUT would replace it without a word.
+  // unrelated secret, and a plain PUT would replace it without a word. Only an administrator edits this, so the
+  // secret goes to the shared namespace by that route, which a role change since refuses rather than moves.
   const saveAsSecret = async (rawUrl: string, name: string) => {
+    setStoring(true);
     try {
-      await secretsApi.setSecret(name, rawUrl, { createOnly: takenName !== name });
+      await storeAsSecret(rawUrl, name);
+    } finally {
+      setStoring(false);
+    }
+  };
+  const storeAsSecret = async (rawUrl: string, name: string) => {
+    try {
+      await secretsApi.setSecret(name, rawUrl, { scope: "shared", createOnly: takenName !== name });
     } catch (e) {
       if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) {
         setTakenName(name);
@@ -489,11 +501,11 @@ export function HostProxyTab({
                 {takenName === secretName && <SecretOverwriteWarning name={secretName} />}
                 <Button
                   size="sm"
-                  disabled={!canEdit || saving}
+                  disabled={!canEdit || saving || storing}
                   variant={takenName === secretName ? "destructive" : "default"}
                   onClick={() => saveAsSecret(url, secretName)}
                 >
-                  {saving ? <Loader2 className="size-3.5 animate-spin" /> : takenName === secretName ? "Overwrite secret" : "Save"}
+                  {saving || storing ? <Loader2 className="size-3.5 animate-spin" /> : takenName === secretName ? "Overwrite secret" : "Save"}
                 </Button>
               </>
             ) : (
@@ -613,6 +625,7 @@ export function HostProxyTab({
         // silently clobbers whatever that secret already held, no different
         // from every other AddSecretDialog caller that does pass this.
         existingNames={secretNames}
+        scope="shared"
         onSaved={(name) => {
           setAddSecretOpen(false);
           void saveSecretRef(name);
