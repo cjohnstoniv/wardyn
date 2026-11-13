@@ -469,39 +469,6 @@ const maxFolderReason = 300
 // boundReason is a pass back's reason as its record keeps it: one line of at most maxFolderReason runes.
 func boundReason(s string) string { return localFolderErrorText(s, maxFolderReason) }
 
-// keepAfterBumpMiss answers whether the sandbox stays up after a bump that did not land: only when another
-// owner moved the record on, which a fresh read proves; otherwise the miss is recorded and the sandbox stops.
-func (s *Server) keepAfterBumpMiss(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost, unread bool) bool {
-	if lost && !unread && s.folderGenTaken(ctx, id, gen) {
-		return true
-	}
-	s.recordFolderBumpMissed(ctx, id, folder, gen, lost)
-	return false
-}
-
-// recordFolderBumpMissed is what a pass back that ran no pass leaves when its record
-// could not be moved to the pass's generation (the sandbox is stopped after this, by the caller, and the stop is
-// reported on its own path): one failure row, and one try at the record on gen, the
-// generation it was read at. lost is a clean miss (another owner moved the record); otherwise the store
-// failed, and its error is in bumpComputerFolderGen's log. A write that does not land is logged and changes
-// nothing else.
-func (s *Server) recordFolderBumpMissed(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost bool) {
-	why := "its store could not write it"
-	if lost {
-		why = "another owner moved it"
-	}
-	errText := "no pass ran; the folder record could not be moved before its pass: " + boundReason(why) +
-		"; the changes were not copied back by this attempt, uncounted"
-	rctx, cancel := teardownCtx(ctx)
-	defer cancel()
-	s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, errText)
-	if !s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
-		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, errText, true)
-	}) {
-		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not say why its pass did not run", slog.String("run_id", id.String()))
-	}
-}
-
 // notQuiescable is quiesceKeptSandbox's answer for a sandbox whose substrate cannot stop its
 // agent and its egress and keep the folder, as opposed to one where that failed.
 type notQuiescable string
