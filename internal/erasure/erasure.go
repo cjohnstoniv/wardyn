@@ -114,6 +114,8 @@ type IncompleteError struct {
 	Remaining []Scope
 	Done      []Scope
 	Cause     error
+	// Detail is what the failed scope's step reported before it failed; nil when it reported nothing.
+	Detail any
 }
 
 func (e *IncompleteError) Error() string {
@@ -158,7 +160,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, person string, scopes []
 		}
 		detail, err := step(ctx, person)
 		if err != nil {
-			return rep, &IncompleteError{Remaining: todo[i:], Done: rep.Done, Cause: err}
+			return rep, &IncompleteError{Remaining: todo[i:], Done: rep.Done, Cause: err, Detail: detail}
 		}
 		rep.Done = append(rep.Done, s)
 		rep.Details[s] = detail

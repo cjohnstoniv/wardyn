@@ -151,7 +151,7 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	revoked := false
 	if err == nil {
 		defer finish()
-		revoked = s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
+		revoked = s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect) == adoRevoked
 	}
 	for _, rowID := range rowIDs {
 		removed := false

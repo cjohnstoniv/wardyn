@@ -143,6 +143,10 @@ type GovernanceChange struct {
 	// Approvers is who could decide the change, the proposer left out (GET
 	// /governance/changes/{id} only).
 	Approvers []GovernanceChangeApprover `json:"approvers,omitempty"`
+	// TokensRevocationFailed is set on an approval's answer only: the change is applied, but it could
+	// not revoke every API token that may still hold the role it took away. Detail is the server's remedy.
+	TokensRevocationFailed bool   `json:"tokens_revocation_failed,omitempty"`
+	Detail                 string `json:"detail,omitempty"`
 }
 
 // GovernanceChangeNote is what the proposer wrote on a held change: why it is wanted, and an optional

@@ -5,12 +5,17 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
+
+// personEraseTokenLeft is the error `wardyn person erase` exits 1 with when the erasure finished but an
+// Azure DevOps token it tried to revoke may still work; the server's sentence is the warning above it.
+const personEraseTokenLeft = "the erasure finished, but an Azure DevOps token may still work"
 
 // personCmd returns `wardyn person`: acts on a person's records that need the
 // security tier.
@@ -47,7 +52,9 @@ func personEraseCmd(client clientFn) *cobra.Command {
 
 The scopes always run in the order above. The command exits non-zero unless every
 scope finished; a failure names the scopes left, and running it again with the same
-scopes finishes them. You cannot erase yourself except --scope credentials.`,
+scopes finishes them. It also exits 1, after printing the result (and, without --json, a
+warning), when the credentials scope could not confirm that every Azure DevOps token of
+the person's runs is revoked. You cannot erase yourself except --scope credentials.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(scopes) == 0 {
@@ -57,8 +64,18 @@ scopes finishes them. You cannot erase yourself except --scope credentials.`,
 			if err != nil {
 				return err
 			}
+			// A token that may still work is a partial result: the erasure is printed, then the command
+			// exits 1, as `wardyn apply` does for a stored spec whose run was refused.
+			detail, tokensLeft := res.TokensNotRevoked()
+			var partial error
+			if tokensLeft {
+				partial = &exitError{code: 1, err: errors.New(personEraseTokenLeft)}
+			}
 			if asJSON {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+				if err := json.NewEncoder(cmd.OutOrStdout()).Encode(res); err != nil {
+					return err
+				}
+				return partial
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "erased %s for %s\n", strings.Join(res.Scopes, ", "), res.Person)
 			if ne := res.NotErased; ne != nil && len(ne.Subjects) > 0 {
@@ -69,7 +86,10 @@ scopes finishes them. You cannot erase yourself except --scope credentials.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: not erased: %s; each is a principal of its own that has, or had, this person's tenant and object id. If one is the same person, erase it by that name too\n",
 					strings.Join(quoted, ", "))
 			}
-			return nil
+			if tokensLeft {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", detail)
+			}
+			return partial
 		},
 	}
 	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "scope to erase (repeatable): mask_copies, run_outputs, recordings, run_tasks, components, run_setups, runner_pools, member_drives, audit_personal_fields, credentials")

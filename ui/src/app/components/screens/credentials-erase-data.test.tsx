@@ -201,6 +201,21 @@ describe("Erase someone's data (M4)", () => {
     ).toBeInTheDocument();
   });
 
+  it("says beside the result when an Azure DevOps token the erasure tried to revoke may still work", async () => {
+    const detail = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked.";
+    erasePersonMock.mockResolvedValue({
+      person: "sub-ana",
+      scopes: [],
+      outcome: {},
+      detail: { credentials: { count: 1, tokens_revocation_failed: true, detail } },
+    });
+    const dialog = await openDialog();
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "ana@example.com");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Erase data" }));
+    expect(await within(dialog).findByText("Erased the chosen data for ana@example.com.")).toBeInTheDocument();
+    expect(within(dialog).getByText(detail)).toBeInTheDocument();
+  });
+
   it("with recordings: ticking it sends the scope and lists it in the result", async () => {
     erasePersonMock.mockResolvedValue({ person: "sub-ana", scopes: [], outcome: {} });
     const dialog = await openDialog();

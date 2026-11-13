@@ -716,6 +716,8 @@ const (
 	// The Azure DevOps sign-in's configuration could not be read, so the erase
 	// could not take the sign-in's lock and refused (#1478).
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
+	// Revoking a token of the person's runs did not finish, so nothing was erased; POST /erasure too.
+	reasonCredentialEraseRevokeUnfinished = "credential_erase_revoke_unfinished"
 )
 
 // /me/secrets and /shared-secrets (secrets_explicit.go): the caller has no personal namespace to name

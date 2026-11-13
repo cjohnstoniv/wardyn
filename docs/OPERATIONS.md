@@ -1347,6 +1347,8 @@ erases one person's retained records by explicit scope, in one audited act
 - A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and `remaining`, the
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
+- An Azure DevOps token revoke that did not finish fails `credentials` the same way, with `503`
+  `credential_erase_revoke_unfinished`: that scope erased nothing, so the retry can still revoke the token.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.

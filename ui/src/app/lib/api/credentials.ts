@@ -73,6 +73,15 @@ export interface EraseResult {
   purged?: boolean;
   recoverable_days?: number;
   not_erased?: NotErased;
+  /** An Azure DevOps token the erase tried to revoke may still work (Azure DevOps refused the revoke); detail says so. */
+  tokens_revocation_failed?: boolean;
+  detail?: string;
+}
+
+/** The credentials scope's sentence that an Azure DevOps token may still work, from either erase answer's credentials data. */
+export function tokensNotRevoked(data: unknown): string | undefined {
+  const c = data as { tokens_revocation_failed?: unknown; detail?: unknown } | undefined;
+  return c?.tokens_revocation_failed === true && typeof c.detail === "string" ? c.detail : undefined;
 }
 
 /** The scopes POST /people/{principal}/erasure takes (internal/erasure). */

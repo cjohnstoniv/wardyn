@@ -11,6 +11,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -47,6 +49,26 @@ func TestCreateSourceSendsAnEmptyRequirementsMap(t *testing.T) {
 	}
 }
 
+// An erasure whose Azure DevOps token revoke was refused says so through
+// TokensNotRevoked, with the server's sentence; one that revoked every token says nothing.
+func TestErasePersonSaysATokenMayStillWork(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"person":"p","scopes":["credentials"],"outcome":{"credentials":"done"},"detail":{"credentials":{"count":1,"tokens_revocation_failed":true,"detail":"remedy"}}}`: "remedy",
+		`{"person":"p","scopes":["credentials"],"outcome":{"credentials":"done"},"detail":{"credentials":{"count":1}}}`:                                                   "",
+		`{"person":"p","scopes":["run_tasks"],"outcome":{"run_tasks":"done"},"detail":{"run_tasks":{"runs":0}}}`:                                                          "",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+		res, err := newTestClient(srv).ErasePerson(context.Background(), "p", []string{"credentials"})
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, failed := res.TokensNotRevoked(); got != want || failed != (want != "") {
+			t.Errorf("TokensNotRevoked() = %q, %v for %s; want %q", got, failed, body, want)
+		}
+	}
+}
+
 // An erasure that left other principals alone says so in its result.
 func TestErasePersonKeepsNotErased(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -66,5 +88,25 @@ func TestErasePersonKeepsNotErased(t *testing.T) {
 	_ = json.Unmarshal(out, &back)
 	if _, ok := back["not_erased"]; !ok {
 		t.Errorf("encoded result %s lost not_erased", out)
+	}
+}
+
+// An approval whose role-mapping change could not revoke every token says so on the change it answers;
+// one that reached them, and every other read of a change, carries neither field.
+func TestApproveGovernanceChangeSaysWhenTokensWereNotRevoked(t *testing.T) {
+	id := uuid.New()
+	for body, want := range map[string]string{
+		`{"id":"` + id.String() + `","state":"applied","tokens_revocation_failed":true,"detail":"remedy"}`: "remedy",
+		`{"id":"` + id.String() + `","state":"applied"}`:                                                   "",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+		ch, err := newTestClient(srv).ApproveGovernanceChange(context.Background(), id)
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.ID != id || ch.Detail != want || ch.TokensRevocationFailed != (want != "") {
+			t.Errorf("approve = %+v for %s; want detail %q", ch, body, want)
+		}
 	}
 }

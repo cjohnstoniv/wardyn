@@ -617,12 +617,27 @@ type ErasureNotErased struct {
 	Note     string   `json:"note"`
 }
 
+// TokensNotRevoked reports the credentials scope's tokens_revocation_failed: an Azure DevOps token the
+// erasure tried to revoke may still work until it expires, because Azure DevOps refused the revoke. It
+// returns the server's sentence (its detail), or false when every token was revoked.
+func (r ErasePersonResult) TokensNotRevoked() (string, bool) {
+	c, _ := r.Detail["credentials"].(map[string]any)
+	if failed, _ := c["tokens_revocation_failed"].(bool); !failed {
+		return "", false
+	}
+	detail, _ := c["detail"].(string)
+	return detail, true
+}
+
 // ErasePerson erases one person's retained records by scope (mask_copies,
 // run_outputs, recordings, run_tasks, components, audit_personal_fields,
 // credentials) in one audited act. principal is the person's subject (or an email the deployment
 // knows them by) and is percent-encoded here. A scope that fails part way is a
-// 500 whose reason is erasure_incomplete: retry with the same scopes. Security
-// tier. POST /api/v1/people/{principal}/erasure.
+// 500 whose reason is erasure_incomplete: retry with the same scopes. A revoke of
+// an Azure DevOps token of the person's runs that did not finish is a 503 whose
+// reason is credential_erase_revoke_unfinished: the credentials scope erased
+// nothing, and the same retry finishes it. Security tier.
+// POST /api/v1/people/{principal}/erasure.
 func (c *Client) ErasePerson(ctx context.Context, principal string, scopes []string) (ErasePersonResult, error) {
 	var out ErasePersonResult
 	err := c.do(ctx, http.MethodPost, "/api/v1/people/"+url.PathEscape(principal)+"/erasure", map[string]any{"scopes": scopes}, &out)

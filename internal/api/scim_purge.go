@@ -219,6 +219,9 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 	rep, err := orch.Orchestrate(ctx, principal, scopes)
 	if m, ok := rep.Details[erasure.Credentials].(map[string]any); ok {
 		detail["credentials_erased"], _ = m["count"].(int)
+		if m["tokens_revocation_failed"] == true {
+			detail["tokens_revocation_failed"] = 1
+		}
 	}
 	if m, ok := rep.Details[erasure.MaskCopies].(map[string]any); ok {
 		detail["masks_fenced"], _ = m["runs_fenced"].(int)
@@ -539,6 +542,9 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	}
 	if ne, ok := notErasedDetail(forms.notErased); ok {
 		data["not_erased"] = ne
+	}
+	if counts["tokens_revocation_failed"] > 0 {
+		data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))
 	if err := s.recordAuditStrict(ctx, ev); err != nil {
