@@ -8,8 +8,10 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -315,10 +317,59 @@ func TestPG_WorkloadFromRunner_ABindingDeletedWhileItsRunStartsRecordsNoRun(t *t
 	if err != nil || launch.State != client.WorkloadRefused || launch.Reason != reasonWorkloadBindingInactive || launch.Message != workloadBindingGoneMsg {
 		t.Fatalf("launch = %+v (%v), want refused %s with the binding-gone sentence", launch, err, reasonWorkloadBindingInactive)
 	}
-	wantKilledFor(t, e.svcEnv, newAgentRun(t, e.svcEnv, before), workloadKillBindingDeleted)
+	ended := newAgentRun(t, e.svcEnv, before)
+	wantKilledFor(t, e.svcEnv, ended, workloadKillBindingDeleted)
+	// endUntakenWorkloadRun only logs a refused owe, so the kill passes whatever the reason's CHECK admits:
+	// the owed end's own write is what needs migration 0280, and the CHECK still refuses any other reason.
+	owe := func(reason string) error {
+		return e.st.OweWorkloadRunEnd(ctx, store.WorkloadRunEnd{RunID: ended, Owner: wl.Owner, Name: wl.Name, Generation: wl.Generation, Reason: reason})
+	}
+	var pgErr *pgconn.PgError
+	if err := owe("not_a_reason"); !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("owe an end with an unknown reason = %v, want the CHECK's refusal (23514)", err)
+	}
+	if err := owe(workloadKillBindingDeleted); err != nil {
+		t.Fatalf("owe an end with %s = %v, want migration 0280 to admit it", workloadKillBindingDeleted, err)
+	}
 	v := e.wlRow(t, "web")
 	if v.CurrentRunID == nil || *v.CurrentRunID != run || v.LastRefusal == nil || v.LastRefusal.Reason != reasonWorkloadBindingInactive {
 		t.Fatalf("workload = %+v, refusal %+v; want run %s kept and refused %s", v.Workload, v.LastRefusal, run, reasonWorkloadBindingInactive)
 	}
 	wantRunLive(t, e.svcEnv, run, "the workload's run")
+}
+
+// A custom resource's launch that waits in its pool's queue stores the namespace binding it was authorised
+// under in its queued run's authority, the binding its start then holds to (StartQueuedRun).
+func TestPG_WorkloadFromRunner_AQueuedLaunchStoresItsBindingInItsAuthority(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	e.k8sWorkloadWithRun(t, "web", "uid-web")
+	e.placeRunsOnTheRunner(t)
+	wl := e.putK8sWorkload(t, "web", "uid-web", "t2") // a changed spec owes a launch
+	// The pool's one runner takes one run at once and already holds one, so the launch waits in the queue.
+	if _, err := e.pool.Exec(ctx, `UPDATE runners SET max_runs = 1 WHERE id = $1`, e.runner); err != nil {
+		t.Fatal(err)
+	}
+	rp, err := e.st.GetRunnerPool(ctx, e.rp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, now := uuid.New(), time.Now().UTC()
+	if _, err := e.st.CreateRun(ctx, types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: "occupant", Agent: "claude-code",
+		ConfinementClass: types.CC2, State: types.RunRunning, SPIFFEID: "spiffe://wardyn.local/agent-run/" + id.String(), RunnerTarget: "docker",
+		RunnerID: &e.runner, RunnerPoolID: &rp.ID, RunnerPoolRevision: rp.Revision, RunnerPoolSelection: types.RunnerPoolSelectedExplicit}); err != nil {
+		t.Fatalf("occupy the runner: %v", err)
+	}
+	b, si, sr := e.boundLaunch(t)
+	launch, err := e.h.srv.launchUnderBinding(sr, e.st, b, true, si, wl)
+	if err != nil || launch.State != client.WorkloadLaunched || launch.RunID == nil {
+		t.Fatalf("launch = %+v (%v), want launched", launch, err)
+	}
+	var binding string
+	if err := e.pool.QueryRow(ctx, `SELECT COALESCE(authority->>'binding', '') FROM run_queue WHERE run_id = $1`, *launch.RunID).Scan(&binding); err != nil {
+		t.Fatalf("the launched run's queue row: %v; want the run waiting in its pool's queue", err)
+	}
+	if binding != b.ID.String() {
+		t.Fatalf("the queued run's stored binding = %q, want %s", binding, b.ID)
+	}
 }

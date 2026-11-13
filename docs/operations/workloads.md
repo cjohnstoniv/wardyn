@@ -177,7 +177,7 @@ The binding stops being authority when any of these happens. The spec is still r
 | The sponsor's access is revoked (a sign-out that keeps their tokens does not count) | The same |
 | The identity is retired | Its bindings are deleted |
 
-To bind the namespace again, delete the binding and create it again with the identity's current sponsor. `wardyn workload binding delete ID` ends the namespace's launching; the runs it started continue. A run that was still starting when the delete answered is ended (`run.kill` reason `workload_binding_deleted`), and its launch is refused `workload_binding_inactive`. A run still waiting in its pool's queue never starts: it ends `FAILED` with `workload_binding_inactive`.
+To bind the namespace again, delete the binding and create it again with the identity's current sponsor. `wardyn workload binding delete ID` ends the namespace's launching; the runs it started continue. A run that was still starting when the delete answered is ended (`run.kill` reason `workload_binding_deleted`), and its launch is refused `workload_binding_inactive`. A run still waiting in its pool's queue does not start, unless it was queued before the upgrade to this version finished: it ends `FAILED` with `workload_binding_inactive`.
 
 ### What the runner reports
 
