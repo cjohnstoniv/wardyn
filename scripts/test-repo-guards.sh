@@ -98,8 +98,8 @@
 #      broke every PR's compose job, so each job names the image its runs were proven on.
 #  31. release.yml's runner-pkg job reads the release stamp back from the packaged guest agent with
 #      scripts/check-release-stamp.sh, and that script's test refuses an unstamped binary (#3636).
-#  32. go.mod keeps `godebug x509sslcertoverrideplatform=0`, so macOS and Windows builds keep the system
-#      trust store when SSL_CERT_FILE or SSL_CERT_DIR is set, as under go 1.26.
+#  32. go.mod sets `godebug x509sslcertoverrideplatform=0` exactly once and no //go:debug line sets it, so
+#      macOS and Windows builds keep the system trust store when SSL_CERT_FILE or SSL_CERT_DIR is set.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -986,10 +986,10 @@ fi
 # A go 1.27 go line makes macOS and Windows builds load roots from SSL_CERT_FILE or SSL_CERT_DIR instead of
 # the system store; the doctor's fix text and wardyn-runnerd's own wording describe the go 1.26 behaviour.
 # Nothing else fails when the line goes: the build stays green and only `go version -m` shows the change.
-if grep -qx 'godebug x509sslcertoverrideplatform=0' go.mod; then
-    ok "go.mod keeps godebug x509sslcertoverrideplatform=0"
+if [ "$(grep -cE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=' go.mod)" = 1 ] && grep -qE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=0[[:space:]]*(//.*)?$' go.mod && ! git grep -q '^//go:debug x509sslcertoverrideplatform' -- '*.go'; then
+    ok "go.mod sets godebug x509sslcertoverrideplatform=0 once and no //go:debug line sets it"
 else
-    bad "go.mod lacks the line 'godebug x509sslcertoverrideplatform=0': macOS and Windows builds would stop using the system trust store when SSL_CERT_FILE or SSL_CERT_DIR is set"
+    bad "go.mod must set godebug x509sslcertoverrideplatform=0 exactly once, and no //go:debug line may set it: otherwise macOS and Windows builds stop using the system trust store when SSL_CERT_FILE or SSL_CERT_DIR is set"
 fi
 
 # Guards 26-29 and 31 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they
