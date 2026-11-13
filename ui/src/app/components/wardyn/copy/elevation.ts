@@ -57,6 +57,7 @@ export const ELEV = {
   NOT_OFFERED_ANY: "No unit offers you elevation.",
   UNITS_FAILED_TITLE: "Couldn't load your units",
   UNITS_FAILED_BODY: "Wardyn isn't answering. Try again.",
+  UNITS_LOAD_FAILED: "Wardyn couldn't load your units.",
   LOADING_UNITS: "Loading units…",
 
   LIST_TITLE: "Your requests",

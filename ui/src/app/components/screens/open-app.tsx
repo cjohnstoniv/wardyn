@@ -48,7 +48,15 @@ export function OpenAppScreen() {
     void (async () => {
       try {
         const h = await health.health();
-        if (h.status !== "ok") throw new Error(STATES.ERROR_DEFAULT);
+        if (h.status !== "ok") {
+          // No answer keeps the default sentence; a 2xx body that does not parse says so; any other answer says
+          // the app couldn't open.
+          const failed = h.failedStatus ?? 0;
+          const couldnt = failed >= 500 ? `${T.OPEN_FAILED} ${STATES.TRY_AGAIN}` : T.OPEN_FAILED;
+          const text = failed === 0 ? STATES.ERROR_DEFAULT : failed < 300 ? STATES.ANSWER_UNREADABLE : couldnt;
+          setPhase({ kind: "refused", text });
+          return;
+        }
         if (!h.ui_sandbox?.enabled) {
           setPhase({ kind: "refused", text: T.GATEWAY_OFF });
           return;

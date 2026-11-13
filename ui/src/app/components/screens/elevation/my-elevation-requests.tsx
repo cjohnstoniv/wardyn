@@ -17,7 +17,7 @@ import { Button } from "../../ui/button";
 import { ELEV } from "../../wardyn/copy/elevation";
 import { IMG } from "../../wardyn/copy/image-request";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { answeredSentence, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { weekdayClock } from "../run-detail/run-ends-row";
 import { shortDigest, splitImageRef } from "./image-ref";
 import { decidersPhrase, lengthWords } from "./request-phrases";
@@ -107,9 +107,12 @@ function Row({ r, onReload }: { r: GovernanceRequest; onReload: () => void }) {
 
 export function MyElevationRequests({
   list,
+  error,
   onReload,
 }: {
   list: GovernanceRequestList | null | "loading" | "error";
+  /** What the failed read threw, for the "error" state's sentence. */
+  error?: unknown;
   onReload: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -151,7 +154,14 @@ export function MyElevationRequests({
         )}
       </div>
       {list === "loading" && <TableSkeleton rows={2} cols={3} />}
-      {list === "error" && <ErrorState size="compact" title={IMG.LIST_FAILED_TITLE} message={IMG.LIST_FAILED_BODY} onRetry={onReload} />}
+      {list === "error" && (
+        <ErrorState
+          size="compact"
+          title={IMG.LIST_FAILED_TITLE}
+          message={answeredSentence(error, IMG.LIST_LOAD_FAILED) ?? IMG.LIST_FAILED_BODY}
+          onRetry={onReload}
+        />
+      )}
       {ready && rows.length === 0 && <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{IMG.LIST_EMPTY}</p>}
       {rows.map((r) => (
         <Row key={r.id} r={r} onReload={onReload} />

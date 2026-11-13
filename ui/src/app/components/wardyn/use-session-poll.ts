@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { HttpError, identityCheckSettled, isSignedOutHold, onAuthChange, setToken, wfetch } from "../../lib/api/core";
+import { HttpError, identityCheckSettled, isSignedOutHold, onAuthChange, serverSentence, setToken, wfetch } from "../../lib/api/core";
 import type { Me } from "../../lib/api/health";
 
 type Session = Me | "unauthed" | "unreachable";
@@ -17,21 +17,36 @@ interface Wait {
   keepPolling?: boolean;
 }
 
-async function readSession(signal: AbortSignal): Promise<Session> {
+/** Why the last /me read gave no session: the status Wardyn answered (0 when nothing answered) and the
+ *  sentence its answer named ("" when none). */
+export type Outage = { status: number; said: string };
+const NO_ANSWER: Outage = { status: 0, said: "" };
+
+async function readSession(signal: AbortSignal, heard: (outage: Outage) => void): Promise<Session> {
+  let res: Response;
   try {
-    const res = await wfetch("/me", { signal });
-    if (res.ok) return (await res.json()) as Me;
-    await res.text().catch(() => "");
-    return "unreachable";
+    res = await wfetch("/me", { signal });
   } catch (e) {
     return e instanceof HttpError && e.status === 401 ? "unauthed" : "unreachable";
   }
+  if (res.ok) {
+    try {
+      return (await res.json()) as Me;
+    } catch (e) {
+      // Only a body that does not parse is an answer; a body read that broke off or ran out of time is none.
+      if (e instanceof SyntaxError) heard({ status: res.status, said: "" });
+      return "unreachable";
+    }
+  }
+  heard({ status: res.status, said: await serverSentence(res) });
+  return "unreachable";
 }
 
 /** Serialize the layer's /me reads across renewal, cancellation and token checks. */
 export function useSessionPoll(accept: (me: Me) => boolean) {
   const [status, setStatus] = React.useState<Status>("idle");
   const [busy, setBusy] = React.useState(false);
+  const [outage, setOutage] = React.useState<Outage>(NO_ANSWER);
   const acceptRef = React.useRef(accept);
   acceptRef.current = accept;
   const interval = React.useRef<number | undefined>(undefined);
@@ -59,8 +74,10 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     const controller = new AbortController();
     inFlight.current = controller;
     const started = generation.current;
-    void readSession(controller.signal).then((session) => {
+    let heard = NO_ANSWER;
+    void readSession(controller.signal, (o) => (heard = o)).then((session) => {
       if (started !== generation.current) return;
+      if (session === "unreachable") setOutage(heard);
       receive(session);
       // A write held for this check goes (or is refused) once /me has said who is signed in, or that no one
       // is. An error is not an answer: it leaves the write to the hold's bound, which refuses it.
@@ -172,5 +189,5 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     tickRef.current();
   };
 
-  return { status, setStatus, busy, startPoll, stopPoll, checkOnce, recheck, submitToken };
+  return { status, setStatus, busy, outage, startPoll, stopPoll, checkOnce, recheck, submitToken };
 }

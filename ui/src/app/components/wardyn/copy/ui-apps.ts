@@ -68,4 +68,6 @@ export const OPEN_APP = {
   SHARED_HOST:
     "This deployment serves apps from one shared host, so only the run's owner can open them in a browser. Ask an administrator to set per-run hosts.",
   GATEWAY_OFF: "The app gateway is turned off on this deployment.",
+  // /healthz answered with something other than a readable 2xx body, before the app could be opened.
+  OPEN_FAILED: "Wardyn couldn't open this app.",
 } as const;

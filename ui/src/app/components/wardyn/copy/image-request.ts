@@ -28,6 +28,7 @@ export const IMG = {
   LIST_EMPTY: "You have no requests.",
   LIST_FAILED_TITLE: "Couldn't load your requests",
   LIST_FAILED_BODY: "Wardyn isn't answering. Try again.",
+  LIST_LOAD_FAILED: "Wardyn couldn't load your requests.",
   STATE_STALE: "Not applied",
   STATE_WITHDRAWN: "Withdrawn",
   LINE_WAITING: (when: string) => `Requested ${when} · waiting for a decision`,

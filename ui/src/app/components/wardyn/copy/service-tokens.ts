@@ -121,6 +121,8 @@ export const OWN_TOKENS = {
 } as const;
 
 export const TOKEN_DIALOG = {
+  // The mint or claim (POST) failed with an answer that named no sentence.
+  CREATE_FAILED: "Wardyn couldn't create the token.",
   CLAIM_TITLE: "Claim your token",
   CLAIM_LEDE: "This invitation is for you alone. The token acts as you, with your role, and is shown once.",
   CLAIM_WARNING_LEAD: "Claiming also revokes",

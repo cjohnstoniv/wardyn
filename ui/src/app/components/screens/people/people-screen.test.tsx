@@ -345,11 +345,20 @@ describe("the person drawer", () => {
 
   // #1815: the token read used to swallow its rejection, so the section showed the count with no
   // names under it — indistinguishable from a person who holds none, with no way back.
+  it.each([
+    ["a timeout", new HttpError(0, "Could not reach the control plane."), "Wardyn isn't answering. Try again."],
+    ["a 403 with no sentence", Object.assign(new HttpError(403, "Forbidden"), { said: "" }), "Wardyn couldn't load this person's tokens."],
+  ])("a token read that fails with %s says so", async (_name, error, text) => {
+    tokensMock.mockRejectedValueOnce(error);
+    const { drawer } = await openAna();
+    expect(await within(drawer).findByText(text)).toBeInTheDocument();
+  });
+
   it("says the token read failed instead of showing an empty list, and Retry refetches", async () => {
-    tokensMock.mockRejectedValueOnce(new HttpError(503, "tokens store down"));
+    tokensMock.mockRejectedValueOnce(Object.assign(new HttpError(503, "Service Unavailable"), { said: "" }));
     const { user, drawer } = await openAna();
     expect(await within(drawer).findByRole("button", { name: /retry/i })).toBeInTheDocument();
-    expect(within(drawer).getByText("Wardyn isn't answering. Try again.")).toBeInTheDocument();
+    expect(within(drawer).getByText("Wardyn couldn't load this person's tokens. Try again.")).toBeInTheDocument();
     expect(within(drawer).queryByText("ci-bot")).toBeNull();
     await user.click(within(drawer).getByRole("button", { name: /retry/i }));
     expect(await within(drawer).findByText("ci-bot")).toBeInTheDocument();
