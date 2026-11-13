@@ -874,19 +874,27 @@ func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Reque
 	if !ok || refuseDefaultUnitWrite(w, id) {
 		return
 	}
+	under, ok := pruneUnder(w, r)
+	if !ok {
+		return
+	}
 	if s.isUnitAdminCaller(r.Context()) {
-		s.deleteUnitInScope(w, r, id)
+		s.deleteUnitInScope(w, r, id, under)
 		return
 	}
 	if mode == govQueue {
 		// A delete is never exempt: it widens everything its profile bound, and the store refuses
 		// an assigned profile only after the fact.
-		s.holdUnitDelete(w, r, id)
+		s.holdUnitDelete(w, r, id, under)
 		return
 	}
 	var data map[string]any
 	var err error
-	if named, ok := s.cfg.Store.(interface {
+	if under != nil {
+		var name string
+		name, err = s.deleteUnitUnder(r.Context(), id, *under)
+		data = map[string]any{"name": name}
+	} else if named, ok := s.cfg.Store.(interface {
 		DeleteGovernanceUnitNamed(context.Context, uuid.UUID) (string, error)
 	}); ok {
 		// The name is read in the delete's own transaction, so the audit row names the row removed.
@@ -902,7 +910,7 @@ func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Reque
 			err = s.cfg.Store.DeleteGovernanceUnit(r.Context(), id)
 		}
 	}
-	if s.writeUnitDeleteError(w, r, err) {
+	if answerNotUnder(w, err) || s.writeUnitDeleteError(w, r, err) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

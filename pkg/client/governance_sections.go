@@ -257,11 +257,12 @@ func widerThanParent(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity && apiErr.Reason == "decider_rule_wider_than_parent"
 }
 
-// pruneUnitDeciders clears the rules of every unit the section omits, children first. It stops at the
-// first clear the server holds (recorded in res.Pending) and reports skipped.
-func (c *Client) pruneUnitDeciders(ctx context.Context, p deciderPlan, res *GovernanceApplyResult) (skipped bool, err error) {
+// pruneUnitDeciders clears the rules of every unit the section omits, children first, each with
+// underQuery (pruneAll). It stops at the first clear the server holds (recorded in res.Pending) and
+// reports skipped.
+func (c *Client) pruneUnitDeciders(ctx context.Context, p deciderPlan, underQuery string, res *GovernanceApplyResult) (skipped bool, err error) {
 	for _, w := range p.clears {
-		_, pending, err := c.PutUnitDeciders(ctx, w.id, nil)
+		_, pending, err := c.putUnitDeciders(ctx, w.id, nil, underQuery)
 		if err != nil {
 			err = fmt.Errorf("prune deciders of %q: %w", w.name, err)
 		}
@@ -291,11 +292,11 @@ func (c *Client) applyUnitSections(ctx context.Context, admins adminPlan, docAdm
 // deciders rules, before any membership or unit delete, so a unit about to be pruned is cleared first. It
 // reports skipped at the first write the server holds, as pruneUnitAdmins does.
 func (c *Client) pruneUnitSections(ctx context.Context, admins adminPlan, docAdmins map[string][]GovernanceAdminSubject, deciders deciderPlan,
-	res *GovernanceApplyResult) (skipped bool, err error) {
-	if skipped, err = c.pruneUnitAdmins(ctx, admins, docAdmins, res); skipped || err != nil {
+	underQuery string, res *GovernanceApplyResult) (skipped bool, err error) {
+	if skipped, err = c.pruneUnitAdmins(ctx, admins, docAdmins, underQuery, res); skipped || err != nil {
 		return skipped, err
 	}
-	return c.pruneUnitDeciders(ctx, deciders, res)
+	return c.pruneUnitDeciders(ctx, deciders, underQuery, res)
 }
 
 // PlanGovernanceUnder and ApplyGovernanceResultUnder are PlanGovernance and ApplyGovernanceResult narrowed to
@@ -325,7 +326,7 @@ func (c *Client) ApplyGovernanceResultUnder(ctx context.Context, doc GovernanceD
 		return GovernanceApplyResult{}, err
 	}
 	sub, _ := subtreeOf(current, under) // narrowUnder resolved it
-	res, err := c.applyGovernanceTo(ctx, narrowed, doc, prune, c.stillUnder(narrowed, sub.root))
+	res, err := c.applyGovernanceTo(ctx, narrowed, doc, prune, c.stillUnder(narrowed, sub.root), "?under="+sub.root.ID.String())
 	if sub, serr := subtreeOf(res.Document, under); serr == nil { // the read after the apply, narrowed as `get --under` prints it
 		res.Document = sub.narrow(res.Document)
 	}
@@ -335,9 +336,11 @@ func (c *Client) ApplyGovernanceResultUnder(ctx context.Context, doc GovernanceD
 // pruneAll is an apply's prune, in order: the unit sections, then units and memberships, then restrictions,
 // each stopping at the first delete the server holds (res.PruneSkipped). A pending write means the state the
 // prune would compare against is not final, so no delete is issued after one (ApplyGovernance's doc).
-// beforePrune, when set, runs before the first prune write.
+// beforePrune, when set, runs before the first prune write. underQuery ("?under=<unit id>" for an Under
+// apply, else "") goes on every unit, membership, grant and deciders prune write; the server refuses one
+// whose unit is no longer at or below that unit.
 func (c *Client) pruneAll(ctx context.Context, current, doc GovernanceDocument, admins adminPlan, deciders deciderPlan,
-	beforePrune func(context.Context) error, res *GovernanceApplyResult) (err error) {
+	beforePrune func(context.Context) error, underQuery string, res *GovernanceApplyResult) (err error) {
 	if res.PruneSkipped = len(res.Pending) > 0; res.PruneSkipped {
 		return nil
 	}
@@ -346,10 +349,10 @@ func (c *Client) pruneAll(ctx context.Context, current, doc GovernanceDocument, 
 			return err
 		}
 	}
-	if res.PruneSkipped, err = c.pruneUnitSections(ctx, admins, doc.Admins, deciders, res); err != nil || res.PruneSkipped {
+	if res.PruneSkipped, err = c.pruneUnitSections(ctx, admins, doc.Admins, deciders, underQuery, res); err != nil || res.PruneSkipped {
 		return err
 	}
-	if res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, res); err != nil || res.PruneSkipped {
+	if res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, underQuery, res); err != nil || res.PruneSkipped {
 		return err
 	}
 	res.PruneSkipped, err = c.pruneRestrictions(ctx, current, doc, res)
@@ -357,9 +360,10 @@ func (c *Client) pruneAll(ctx context.Context, current, doc GovernanceDocument, 
 }
 
 // stillUnder is an Under prune's check just before its first write. Every delete and clear was planned
-// from the first read, and the server deletes by id, so the subtree is read again: a unit of read that is
-// now outside it (moved while the writes ran) stops the prune before anything is pruned. A unit that is
-// gone is no concern of this check. A move between this read and a delete is not caught.
+// from the first read, so the subtree is read again: a unit of read that is now outside it (moved while
+// the writes ran) stops the prune before anything is pruned. A unit that is gone is no concern of this
+// check. A move after this read is refused by the server on the write itself (pruneAll's underQuery);
+// a server that predates that check ignores the query, and this read is then the only check.
 func (c *Client) stillUnder(read GovernanceDocument, root GovernanceUnit) func(context.Context) error {
 	return func(ctx context.Context) error {
 		fresh, err := c.GetGovernance(ctx)

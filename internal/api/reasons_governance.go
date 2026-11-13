@@ -16,6 +16,8 @@ const (
 	reasonGovernanceUnitDefaultReadonly = "governance_unit_default_readonly"
 	// reasonGovernanceMembershipDefaultUnit: a membership added to, changed into or moved into the Default unit.
 	reasonGovernanceMembershipDefaultUnit = "governance_membership_default_unit"
+	// reasonGovernanceUnitNotUnder: a prune write naming ?under= whose unit is no longer at or below that unit (409).
+	reasonGovernanceUnitNotUnder = "governance_unit_not_under"
 	// reasonUnitKnobLocked: a unit write changes a knob the boundary or a unit above locks, or a unit or
 	// boundary write locks a knob a unit below states with another value (governance_locks.go).
 	reasonUnitKnobLocked = "unit_knob_locked"
