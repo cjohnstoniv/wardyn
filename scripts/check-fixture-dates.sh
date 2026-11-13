@@ -80,7 +80,7 @@ declare -A ALLOWLIST=(
   ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
   ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=24 # passthrough only: audit rows' time, a gap's start/end, a playback's started_at (also in the failed action-feed case) and the stopped-at time read from it, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
-  ["cmd/wardyn/commands_test.go"]=6
+  ["cmd/wardyn/commands_test.go"]=10 # the last four: the policy updated_at sent back verbatim as expected_updated_at and compared to the same literal, never to the clock
   ["cmd/wardyn/runner_limits_test.go"]=2 # display only: runner list prints LastSeenAt as given, never compared to the clock
   ["cmd/wardyn/drive_test.go"]=1 # passthrough only: the member drive list's created_at, never compared to the clock
   ["cmd/wardyn/people_test.go"]=3 # display only: personDay formats LastSignedInAt, never compared to the clock
@@ -121,7 +121,7 @@ declare -A ALLOWLIST=(
   ["internal/notify/render_test.go"]=1 # display only: the golden body prints RequestedAt, never compared to the clock
   ["internal/runner/k8s/drives_test.go"]=2
   ["internal/types/types_test.go"]=1
-  ["pkg/client/client_more_test.go"]=2
+  ["pkg/client/client_more_test.go"]=4 # passthrough only: an SSH key's created_at, a device token's expires_at and the policy updated_at sent back as expected_updated_at, each compared to the same literal, never to the clock
   ["test/adofake/adofake_test.go"]=3
   ["ui/e2e/drives.spec.ts"]=3
   ["ui/e2e/people-access.spec.ts"]=10
@@ -212,6 +212,10 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run-flow/steps/shape/seed-loaders.test.ts"]=1 # passthrough: a launch intent's created_at, never compared to the clock
   ["ui/src/app/components/screens/templates/rename-template-dialog.test.tsx"]=1 # display only: a template's updated_at
   ["ui/src/app/components/screens/templates/templates-screen.test.tsx"]=1 # display only: a template's updated_at
+  ["ui/src/app/components/screens/policies.test.tsx"]=7 # passthrough only: the updated_at the editor opened with, sent back verbatim as expected_updated_at and compared to the same literal, never to the clock
+  ["ui/src/app/lib/api/policies.test.ts"]=3 # passthrough only: the updated_at sent back verbatim as expected_updated_at and compared to the same literal, never to the clock
+  ["internal/api/policies_requirements_test.go"]=2 # passthrough only: expected_updated_at in a request body, never compared to the clock
+  ["internal/api/policies_update_conflict_test.go"]=1 # passthrough only: expected_updated_at in a request body, never compared to the clock
   # 0.10 W4d: the scheduled-runs (SCHED), kept and team drive (KEEP, TEAM) and runner-health (RDIAG-B) tests. Each date is a fixed
   # instant passed in as the clock (NOW, now) or stubbed row data the code under test only echoes or compares to that
   # injected clock; none is compared to the wall clock.
