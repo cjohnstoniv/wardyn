@@ -282,6 +282,10 @@ func (c *Conn) holdExpired() {
 	}
 }
 
+// Refuse ends the stream for what a door refused in front of the filter (ClientFrames), as the filter ends it
+// for its own refusals: refused gets err, unless the filter refused first, and the backend closes.
+func (c *Conn) Refuse(err error) { _ = c.fail(err) }
+
 // fail reports err (once) and closes the backend, which ends both directions.
 func (c *Conn) fail(err error) error {
 	c.once.Do(func() { c.refused(err) })

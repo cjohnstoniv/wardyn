@@ -19,6 +19,8 @@
 package api
 
 import (
+	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -29,6 +31,7 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -393,7 +396,8 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 	defer signIn.stop()
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
+	viewer := &viewerHijack{ResponseWriter: w}
+	ws, err := websocket.Accept(viewer, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request
 	}
@@ -480,7 +484,13 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 	}
 	done := make(chan struct{}, 2)
-	go func() { _ = relayViewer(r.Context(), ws, filtered); done <- struct{}{} }()
+	go func() {
+		_ = relayViewer(r.Context(), ws, filtered)
+		if err := viewer.frames.Refused(); err != nil {
+			filtered.Refuse(err) // a frame the library would have refused unnamed
+		}
+		done <- struct{}{}
+	}()
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
 	tick := time.NewTicker(cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck))
 	defer tick.Stop()
@@ -669,6 +679,34 @@ func relayViewer(ctx context.Context, ws *websocket.Conn, filtered io.Writer) er
 		}
 	}
 }
+
+// viewerHijack is the viewer's ResponseWriter for websocket.Accept. The connection it hijacks reads the viewer
+// through rfbfilter.ClientFrames, the bytes net/http already buffered first, so a frame the library would refuse
+// with an error like a dropped connection's is named (frames.Refused).
+type viewerHijack struct {
+	http.ResponseWriter
+	frames *rfbfilter.ClientFrames
+}
+
+func (v *viewerHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(v.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	buffered, _ := brw.Reader.Peek(brw.Reader.Buffered())
+	v.frames = rfbfilter.CheckClientFrames(io.MultiReader(bytes.NewReader(bytes.Clone(buffered)), conn))
+	checked := checkedConn{conn, v.frames}
+	brw.Reader.Reset(checked)
+	return checked, brw, nil
+}
+
+// checkedConn is a hijacked connection whose reads are checked (viewerHijack).
+type checkedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c checkedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers
 // made, re-encoded by the filter, so no mask is ever set.
