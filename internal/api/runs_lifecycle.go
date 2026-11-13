@@ -665,6 +665,9 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 			"run is already terminal (state="+string(run.State)+"); not re-killing")
 		return
 	}
+	// ?not_started=true is the console's cancel of a run that has not started, whose confirm says nothing was set
+	// up: it ends a run that is still QUEUED and refuses one that has moved on, rather than tear down a live sandbox.
+	notStarted := r.URL.Query().Get("not_started") == "true"
 
 	// Run the teardown/revocation cascade and the terminal state write on a
 	// context DETACHED from the request: once a kill begins it must complete even
@@ -674,7 +677,11 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 
-	applied, killData, serr := s.killLiveRun(cascadeCtx, run, killerType, killer)
+	applied, killData, serr := s.killLiveRun(cascadeCtx, run, killerType, killer, notStarted)
+	if errors.Is(serr, errKillRunStarted) {
+		writeErrorReason(w, http.StatusConflict, reasonRunKillStarted, "run has started; a cancel of a run that has not started does not end it")
+		return
+	}
 	if serr != nil {
 		writeServerError(w, r, "update run state", serr)
 		return
@@ -712,8 +719,14 @@ const killCASAttempts = 4
 // promotion, a dispatch claim, the sandbox coming up) is re-read and claimed from the state the run now
 // holds, sandbox ref included, because the run the caller asked to end is still live. A run that ended
 // under the kill, or that another kill took, is left as it is: applied is false and nothing is revoked.
-func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string) (bool, map[string]any, error) {
+// With notStarted, a run read in any state but QUEUED (or KILLED, a cancel already done) is refused with
+// errKillRunStarted, before its first claim and after each lost one: a promotion that wins the CAS is never
+// followed into the run it started.
+func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, notStarted bool) (bool, map[string]any, error) {
 	for attempt := 1; ; attempt++ {
+		if notStarted && run.State != types.RunQueued && run.State != types.RunKilled {
+			return false, nil, errKillRunStarted
+		}
 		applied, killData, err := s.killRunCascade(ctx, run, killerType, killer, nil)
 		if err != nil || applied || attempt == killCASAttempts {
 			return applied, killData, err
@@ -723,6 +736,9 @@ func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType
 		}
 	}
 }
+
+// errKillRunStarted is killLiveRun's refusal of a cancel of a run that has not started, once the run has.
+var errKillRunStarted = errors.New("run has started")
 
 // killRunCascade is the kill itself, with no HTTP in it: the CAS, the approval
 // cancellation, the runner teardown, both revocations and the run.kill row, in

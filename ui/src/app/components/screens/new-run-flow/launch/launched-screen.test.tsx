@@ -5,8 +5,9 @@
 
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { runs } from "../../../../lib/api/runs";
@@ -167,7 +168,50 @@ describe("Launched: a scheduled run", () => {
     expect(confirm).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
     expect(within(confirm).queryByRole("button", { name: "End run" })).toBeNull();
     await userEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
-    await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
+    await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID, { notStarted: true }));
+  });
+
+  // The run started after this screen last read it: the cancel asked the server to end it only while it had not
+  // started, the server refused, and the screen says it started rather than showing a failure.
+  it("says the run started, and shows no failure, when the server refuses the cancel because it has", async () => {
+    const info = vi.spyOn(toast, "info");
+    killRun.mockRejectedValue(new HttpError(409, "run has started", "run_kill_started"));
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Cancel nightly build?" });
+    const reads = getRun.mock.calls.length;
+    await userEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await waitFor(() => expect(info).toHaveBeenCalledWith(CANCEL_NOT_STARTED.STARTED("nightly build"), { description: CANCEL_NOT_STARTED.STARTED_NEXT }));
+    await waitFor(() => expect(getRun.mock.calls.length).toBeGreaterThan(reads));
+    expect(killRun).toHaveBeenCalledWith(ID, { notStarted: true });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // The screen reads again every few seconds while the run waits. A read that finds the run started while the
+  // confirm is open must not turn "Cancel nightly build?" into End run: the confirm keeps the question it opened with.
+  it("keeps the cancel question open, and sends the flag, when a read finds the run started under it", async () => {
+    vi.useFakeTimers();
+    getRun
+      .mockResolvedValueOnce(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }))
+      .mockResolvedValue(run({ state: "RUNNING" }));
+    open();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    fireEvent.click(screen.getByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    expect(screen.getByRole("alertdialog", { name: "Cancel nightly build?" })).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4100);
+    });
+    expect(getRun).toHaveBeenCalledTimes(2);
+    const confirm = screen.getByRole("alertdialog", { name: "Cancel nightly build?" });
+    expect(within(confirm).queryByRole("button", { name: "End run" })).toBeNull();
+    fireEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(killRun).toHaveBeenCalledWith(ID, { notStarted: true });
   });
 });
 

@@ -237,6 +237,7 @@ const (
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run ended or kept moving between the read and the write
+	reasonRunKillStarted                       = "run_kill_started"                         // a kill with not_started=true found the run past QUEUED: nothing was ended
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
 	// Watching a background macOS run's desktop (run_background_watch.go, run_background_watch_limit.go). A

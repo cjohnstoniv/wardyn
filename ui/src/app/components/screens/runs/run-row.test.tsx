@@ -263,7 +263,42 @@ describe("RunRow — a scheduled run", () => {
     expect(dialog).not.toHaveTextContent(/sandbox|credentials/i);
     expect(screen.queryByRole("button", { name: "End run" })).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
-    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9"));
+    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9", { notStarted: true }));
+  });
+
+  // The run starts while its Cancel confirm is open: the confirm said nothing was set up, so it closes, and the toast
+  // says the run started and was not cancelled. Nothing is sent: ending a started run is the End run confirm's.
+  it("closes the Cancel confirm and says so when the same row's run starts while it is open", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const view = renderRow(queued("scheduled"));
+    await user.click(screen.getByRole("button", { name: /^Cancel run/ }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    view.rerender(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <RunRow run={queued("scheduled", { state: "RUNNING", queue: undefined })} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByText(CANCEL_NOT_STARTED.BODY)).toBeNull();
+    expect(toastInfoMock).toHaveBeenCalledWith(CANCEL_NOT_STARTED.STARTED("Nightly dependency bump"), { description: CANCEL_NOT_STARTED.STARTED_NEXT });
+    expect(killRunMock).not.toHaveBeenCalled();
+  });
+
+  // The run ended while its Cancel confirm was open: it has no End run to point to, so the confirm closes with no
+  // "has started" toast, and nothing is sent.
+  it("closes the Cancel confirm without the started toast when the same row's run ended while it is open", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const view = renderRow(queued("scheduled"));
+    await user.click(screen.getByRole("button", { name: /^Cancel run/ }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    view.rerender(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <RunRow run={queued("scheduled", { state: "KILLED", queue: undefined })} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(toastInfoMock).not.toHaveBeenCalled();
+    expect(killRunMock).not.toHaveBeenCalled();
   });
 
   it("reads Waiting for sign-in with was due {when}, and a Sign in button that goes to the run", async () => {

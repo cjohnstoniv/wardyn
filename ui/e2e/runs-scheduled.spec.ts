@@ -52,8 +52,9 @@ test.describe("Runs list: scheduled runs", () => {
   test("a scheduled run reads Scheduled with starts {when}, and Cancel run asks before it kills", async ({ page }) => {
     await mockRunsList(page, [baseRun("s1", "Nightly dependency bump", { queue: queue("scheduled") })]);
     const kills: string[] = [];
-    await page.route("**/api/v1/runs/s1/kill", (route) => {
-      kills.push(route.request().method());
+    // The cancel of a run that has not started carries ?not_started=true, so the route matches the path with its query.
+    await page.route(/\/api\/v1\/runs\/s1\/kill(\?.*)?$/, (route) => {
+      kills.push(`${route.request().method()} ${new URL(route.request().url()).search}`);
       return route.fulfill({ status: 200, json: {} });
     });
     await gotoConsole(page);
@@ -65,7 +66,7 @@ test.describe("Runs list: scheduled runs", () => {
     await row.getByRole("button", { name: SCHEDULED_RUN.CANCEL_RUN }).click();
     expect(kills).toEqual([]);
     await page.getByRole("alertdialog").getByRole("button", { name: "Cancel run", exact: true }).click();
-    await expect.poll(() => kills).toEqual(["POST"]);
+    await expect.poll(() => kills).toEqual(["POST ?not_started=true"]);
   });
 
   test("a due run reads Waiting for sign-in with was due {when} and a Sign in button", async ({ page }) => {

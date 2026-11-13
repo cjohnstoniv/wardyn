@@ -251,7 +251,7 @@ The Launched screen opens at `?launched=<run id>`. It refreshes every 4 seconds 
 - A waiting run says why: none of your runners is online (`runner_pool_no_runner_free`), every runner is at its limit (`runner_pool_runners_at_capacity`), or the pool is running its limit.
 - When every runner is at a limit, the waiting card names the limit and a runner, for example "dev-mac is at a limit: Runs at once: 2 running of 2. This run starts when it has room." It falls back to "Every runner in {pool} is at its limit" when the limit cannot be worked out.
 - A run also waits when recording is required and the organisation keeps no session recordings (`runner_pool_recording_store_off`).
-- **Cancel run** asks you to confirm, then calls `POST /api/v1/runs/{id}/kill`. The run leaves the queue and ends as killed. A failure shows under the waiting card.
+- **Cancel run** asks you to confirm, then calls `POST /api/v1/runs/{id}/kill`. The run leaves the queue and ends as killed. A failure shows under the waiting card. For a scheduled run it sends `?not_started=true`: if the run has started since the screen last read it, the server answers `run_kill_started`, nothing is ended, and the screen says the run started.
 - The owner, an admin or, for a service identity's run, its sponsor can cancel. A run that already ended otherwise answers `run_kill_already_terminal`.
 - **View run** opens the run's page. **Start another run** returns to the Start screen.
 

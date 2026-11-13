@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- Cancel run on a scheduled run, or on one waiting for your sign-in, no longer ends the run when it has started since the page last read it: the console asks `POST /runs/{id}/kill?not_started=true`, the server refuses a started run with `run_kill_started` and ends nothing, and the console says the run started and points to End run. An open Cancel confirm on the Runs list now closes, and says so, when the run starts.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

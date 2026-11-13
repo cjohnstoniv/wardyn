@@ -14,7 +14,9 @@
 // shares the word).
 import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import type { AgentRun } from "../../../lib/types";
+import { isTerminalRunState } from "../../../lib/types/runs";
 import { formatDuration, relativeTime } from "../../../lib/format";
 import { OpenInUserViewMenu, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
@@ -29,7 +31,8 @@ import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { serviceBadge } from "../../wardyn/copy/run-service";
 import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
 import { scheduledMeta, signInTimedOut } from "./scheduled-state";
-import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
+import { REVIVE, REVIVING, toastRunName } from "../../wardyn/copy/run-lifetime";
+import { CANCEL_NOT_STARTED } from "../../wardyn/copy/cancel-not-started";
 import { reviveWithToasts } from "./revive-run";
 import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-copy";
 
@@ -102,6 +105,16 @@ export function RunRow({ run }: { run: AgentRun }) {
     }
   };
   const [cancelling, setCancelling] = React.useState(false);
+  // The Cancel confirm says nothing was set up, which holds only while the run waits: a poll that finds it started closes
+  // the confirm and says so, and the End run confirm on its page is the one that warns what ending it tears down. A run
+  // that ended while the confirm was open has no End run: the confirm closes and the row says how it ended.
+  const waiting = run.state === "QUEUED";
+  const ended = isTerminalRunState(run.state);
+  React.useEffect(() => {
+    if (!cancelling || waiting) return;
+    setCancelling(false);
+    if (!ended) toast.info(CANCEL_NOT_STARTED.STARTED(toastRunName({ title })), { description: CANCEL_NOT_STARTED.STARTED_NEXT });
+  }, [cancelling, waiting, ended, title]);
   const actionLabel =
     p.action === "review"
       ? RUNS_ROW_ACTION.REVIEW
@@ -196,7 +209,7 @@ export function RunRow({ run }: { run: AgentRun }) {
           </Button>
         )}
       </div>
-      {cancelling && (
+      {cancelling && waiting && (
         <React.Suspense fallback={null}>
           <CancelRunDialog runId={run.id} title={title} onClose={() => setCancelling(false)} />
         </React.Suspense>
