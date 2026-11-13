@@ -127,6 +127,8 @@ chart can read.
 {{- $eff := dict -}}
 {{- range $k, $v := .Values.env }}{{ $_ := set $eff $k (toString $v) }}{{ end -}}
 {{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $eff (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $eff (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
+{{- $xeLast := dict -}}
+{{- range $i, $e := .Values.extraEnv }}{{ $_ := set $xeLast ($e.name | toString) $i }}{{ end -}}
 {{- if hasKey $eff "WARDYN_HA" -}}
 {{- fail "wardyn: WARDYN_HA is set through env or extraEnv. Do not set it by hand: the chart's multi-replica guards read ha.enabled, so a hand-set WARDYN_HA would lift the daemon's single-instance lock without them. Set ha.enabled=true instead." -}}
 {{- end -}}
@@ -168,6 +170,21 @@ env.WARDYN_DEFAULT_POLICY) without pinning a matching RuntimeClass still fails
 closed exactly as before, just at dispatch (resolveEnforcedConfinement) rather
 than at render — the fail-closed invariant lives there now, not here.
 */ -}}
+{{- if and .Values.k8s.enabled (include "wardyn.groundtruthEnabled" .) (hasKey $eff "WARDYN_GROUNDTRUTH_TOKEN_FILE") -}}
+{{- fail "wardyn: groundtruth.k8s.enabled delivers the sensor token through a Secret, so WARDYN_GROUNDTRUTH_TOKEN_FILE must not be set in env or extraEnv: wardynd refuses to boot with both." -}}
+{{- end -}}
+{{- /*
+One entry per env name. `helm upgrade` patches a Deployment's env by name, and an
+upgrade that takes one of two same-named entries away deletes the name outright.
+Precedence is the chart's old render order, keeping the later entry (the one the
+chart documents as winning): an env or extraEnv entry over a chart entry above them
+(each tests $eff), extraEnv over env, and the entries after extraEnv
+(wardyn.envAfterExtra) over both.
+$late holds the names that block renders, read from its own output.
+*/ -}}
+{{- $afterExtra := include "wardyn.envAfterExtra" . -}}
+{{- $late := dict -}}
+{{- range regexFindAll `(?m)^ *- name: \S+` $afterExtra -1 }}{{ $_ := set $late (regexReplaceAll `^ *- name: ` . "") true }}{{ end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -266,55 +283,71 @@ spec:
             # secretFiles.enabled: every chart-wired secret below is a PATH into
             # the read-only boot-secrets volume, never a value in the pod spec
             # or the process environment.
+            {{- if not (hasKey $eff "WARDYN_PG_DSN_FILE") }}
             - name: WARDYN_PG_DSN_FILE
               value: {{ printf "%s/pg-dsn" $filesDir | quote }}
+            {{- end }}
             {{- else if $chartDSN }}
             # DSN is the only required input; pulled from the (external or
             # chart-created) Secret so it never appears in the pod spec.
+            {{- if not (hasKey $eff "WARDYN_PG_DSN") }}
             - name: WARDYN_PG_DSN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: {{ .Values.postgres.dsn.key }}
             {{- end }}
+            {{- end }}
             {{- if and $chartToken $sf.enabled }}
+            {{- if not (hasKey $eff "WARDYN_ADMIN_TOKEN_FILE") }}
             - name: WARDYN_ADMIN_TOKEN_FILE
               value: {{ printf "%s/admin-token" $filesDir | quote }}
+            {{- end }}
             {{- else if $chartToken }}
             # Admin bearer token. Unset (and no OIDC) => every API route 401s
             # while /healthz still reports Ready, so secret.yaml fails the render
             # instead of shipping a control plane that serves nothing.
+            {{- if not (hasKey $eff "WARDYN_ADMIN_TOKEN") }}
             - name: WARDYN_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
             {{- end }}
+            {{- end }}
             {{- $scim := .Values.scim | default dict }}
             {{- if $scim.enabled }}
             # SCIM leaver deprovisioning (secret.yaml refuses a second source in env/extraEnv). The
             # bearer rides a secretKeyRef, never a literal; the rotation token is optional.
+            {{- if not (hasKey $eff "WARDYN_SCIM_TOKEN") }}
             - name: WARDYN_SCIM_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ $scim.tokenSecretRef | quote }}
                   key: scim-token
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_SCIM_TOKEN_NEXT") }}
             - name: WARDYN_SCIM_TOKEN_NEXT
               valueFrom:
                 secretKeyRef:
                   name: {{ $scim.tokenSecretRef | quote }}
                   key: scim-token-next
                   optional: true
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_SCIM_PURGE_AFTER") }}
             - name: WARDYN_SCIM_PURGE_AFTER
               value: {{ ternary "720h" $scim.purgeAfter (kindIs "invalid" $scim.purgeAfter) | toString | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_SCIM_LEAVER_WORKSPACES") }}
             - name: WARDYN_SCIM_LEAVER_WORKSPACES
               value: {{ $scim.leaverWorkspaces | quote }}
+            {{- end }}
             {{- end }}
             {{- if and .Values.basePath (not (hasKey $eff "WARDYN_BASE_PATH")) }}
             - name: WARDYN_BASE_PATH
               value: {{ .Values.basePath | quote }}
             {{- end }}
-            {{- if and .Values.auth.ssoOnly (not (hasKey .Values.env "WARDYN_SSO_ONLY")) }}
+            {{- if and .Values.auth.ssoOnly (not (hasKey $eff "WARDYN_SSO_ONLY")) }}
             # Declare SSO the only way into the console (validateSSOOnlyPosture,
             # cmd/wardynd/boot_posture.go). secret.yaml's render-time refusal
             # above only proves auth.ssoOnly is consistent with the REST of
@@ -326,175 +359,251 @@ spec:
               value: "true"
             {{- end }}
             {{- if and $ageSecret $sf.enabled }}
+            {{- if not (hasKey $eff "WARDYN_AGE_KEY_FILE") }}
             - name: WARDYN_AGE_KEY_FILE
               value: {{ printf "%s/age-key" $filesDir | quote }}
+            {{- end }}
             {{- else if $ageRef.name }}
             # age secret-store identity, wired from a SEPARATE Secret this
             # chart never creates or otherwise references — for an operator-
             # owned Secret (e.g. one a Postgres operator manages and would
             # reject an extra "age-key" key on) that isn't postgres.dsn's own.
+            {{- if not (hasKey $eff "WARDYN_AGE_KEY") }}
             - name: WARDYN_AGE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ $ageRef.name }}
                   key: {{ $ageRef.key | default "age-key" }}
+            {{- end }}
             {{- else if or .Values.secrets.ageKeyFromSecret (and .Values.secrets.ageKey (not .Values.postgres.dsn.secretRef.name)) }}
             # age secret-store identity (optional). Injected only when the Secret
             # we reference is KNOWN to carry an "age-key" entry — the chart wrote
             # it (inline mode) or the operator says so (ageKeyFromSecret).
             # Otherwise wardynd self-generates an ephemeral one.
+            {{- if not (hasKey $eff "WARDYN_AGE_KEY") }}
             - name: WARDYN_AGE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: age-key
             {{- end }}
+            {{- end }}
             {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
             {{- $awskek := ($.Values.kek | default dict).awskms | default dict }}
             {{- with .Values.secretStore }}
             {{- if and .backend (ne .backend "pg") }}
+            {{- if not (hasKey $eff "WARDYN_SECRET_STORE") }}
             - name: WARDYN_SECRET_STORE
               value: {{ .backend | quote }}
             {{- end }}
+            {{- end }}
             {{- if and .vault .vault.addr }}
             # Store mode's Vault client (docs/operations/secrets-and-keys.md "Store mode").
+            {{- if not (hasKey $eff "WARDYN_VAULT_ADDR") }}
             - name: WARDYN_VAULT_ADDR
               value: {{ .vault.addr | quote }}
+            {{- end }}
             {{- with .vault.namespace }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_NAMESPACE") }}
             - name: WARDYN_VAULT_NAMESPACE
               value: {{ . | quote }}
             {{- end }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_AUTH") }}
             - name: WARDYN_VAULT_AUTH
               value: {{ .vault.auth | quote }}
+            {{- end }}
             {{- if eq .vault.auth "kubernetes" }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_AUTH_MOUNT") }}
             - name: WARDYN_VAULT_AUTH_MOUNT
               value: {{ .vault.authMount | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_ROLE") }}
             - name: WARDYN_VAULT_ROLE
               value: {{ .vault.role | quote }}
+            {{- end }}
             {{- with .vault.rolePlatform }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_ROLE_PLATFORM") }}
             - name: WARDYN_VAULT_ROLE_PLATFORM
               value: {{ . | quote }}
             {{- end }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_K8S_TOKEN_FILE") }}
             - name: WARDYN_VAULT_K8S_TOKEN_FILE
               value: "/var/run/secrets/wardyn-vault/token"
+            {{- end }}
             {{- else }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_TOKEN_FILE") }}
             - name: WARDYN_VAULT_TOKEN_FILE
               value: {{ .vault.tokenFile | quote }}
             {{- end }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_KV_MOUNT") }}
             - name: WARDYN_VAULT_KV_MOUNT
               value: {{ .vault.kvMount | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_KV_PREFIX") }}
             - name: WARDYN_VAULT_KV_PREFIX
               value: {{ .vault.kvPrefix | default $.Release.Namespace | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_KV_MAX_VERSIONS") }}
             - name: WARDYN_VAULT_KV_MAX_VERSIONS
               value: {{ .vault.maxVersions | quote }}
+            {{- end }}
             {{- end }}
             {{- with .vault }}
             {{- with .transitKeyPlatform }}
             # A second Transit key, reached as rolePlatform, wraps wardynd's own
             # signing, session and SSH host keys (docs/operations/secrets-and-keys.md
             # "Two Vault roles"); kek.transit.key then wraps only the credentials.
+            {{- if not (hasKey $eff "WARDYN_VAULT_TRANSIT_KEY_PLATFORM") }}
             - name: WARDYN_VAULT_TRANSIT_KEY_PLATFORM
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- end }}
             {{- /* kek is read on its own: a release with no secretStore key still gets it. */}}
             {{- if ($.Values.kek | default dict).required }}
+            {{- if not (hasKey $eff "WARDYN_KEK_REQUIRED") }}
             - name: WARDYN_KEK_REQUIRED
               value: "true"
+            {{- end }}
             {{- end }}
             {{- /* An unquoted on in a values file is YAML's boolean true: render it as on. */}}
             {{- $pkeys := ($.Values.kek | default dict).principalKeys | default "off" }}
             {{- if kindIs "bool" $pkeys }}{{ $pkeys = ternary "on" "off" $pkeys }}{{ end }}
             {{- if ne (toString $pkeys) "off" }}
+            {{- if not (hasKey $eff "WARDYN_PRINCIPAL_KEYS") }}
             - name: WARDYN_PRINCIPAL_KEYS
               value: {{ $pkeys | toString | quote }}
+            {{- end }}
             {{- end }}
             {{- if ($.Values.kek | default dict).domains }}
             # The key domains kek.domains declares, rendered into a ConfigMap
             # and mounted read-only; wardynd builds and proves each at boot.
+            {{- if not (hasKey $eff "WARDYN_KEY_DOMAINS_FILE") }}
             - name: WARDYN_KEY_DOMAINS_FILE
               value: "/etc/wardyn/key-domains/domains.json"
+            {{- end }}
             {{- end }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}
             # Data keys wrapped by Vault Transit (docs/operations/secrets-and-keys.md "Key
             # service: Vault Transit").
+            {{- if not (hasKey $eff "WARDYN_KEK") }}
             - name: WARDYN_KEK
               value: "transit"
             {{- end }}
+            {{- end }}
             {{- if and .transit .transit.key }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_TRANSIT_MOUNT") }}
             - name: WARDYN_VAULT_TRANSIT_MOUNT
               value: {{ .transit.mount | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_VAULT_TRANSIT_KEY") }}
             - name: WARDYN_VAULT_TRANSIT_KEY
               value: {{ .transit.key | quote }}
+            {{- end }}
             {{- end }}
             {{- if eq .provider "azurekv" }}
             # Data keys wrapped by Azure Key Vault (docs/operations/secrets-and-keys.md
             # "Key service: Azure Key Vault").
+            {{- if not (hasKey $eff "WARDYN_KEK") }}
             - name: WARDYN_KEK
               value: "azurekv"
             {{- end }}
+            {{- end }}
             {{- if $azkek.key }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_KEK_KEY") }}
             - name: WARDYN_AZURE_KEK_KEY
               value: {{ $azkek.key | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_KEK_SIGNING_KEY") }}
             - name: WARDYN_AZURE_KEK_SIGNING_KEY
               value: {{ $azkek.signingKey | quote }}
+            {{- end }}
             {{- end }}
             {{- if $azkek.keyPlatform }}
             # A second Key Vault key pair, reached as secretStore.azure.clientIdPlatform,
             # wraps and signs wardynd's own signing, session and SSH host keys
             # (docs/operations/secrets-and-keys.md "Key service: Azure Key Vault");
             # kek.azurekv.key then wraps only the credentials.
+            {{- if not (hasKey $eff "WARDYN_AZURE_KEK_KEY_PLATFORM") }}
             - name: WARDYN_AZURE_KEK_KEY_PLATFORM
               value: {{ $azkek.keyPlatform | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM") }}
             - name: WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM
               value: {{ $azkek.signingKeyPlatform | quote }}
+            {{- end }}
             {{- end }}
             {{- if eq .provider "awskms" }}
             # Data keys wrapped by AWS KMS (docs/operations/secrets-and-keys.md "Key
             # service: AWS KMS").
+            {{- if not (hasKey $eff "WARDYN_KEK") }}
             - name: WARDYN_KEK
               value: "awskms"
             {{- end }}
+            {{- end }}
             {{- if $awskek.key }}
+            {{- if not (hasKey $eff "WARDYN_AWS_KMS_KEY") }}
             - name: WARDYN_AWS_KMS_KEY
               value: {{ $awskek.key | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- with .Values.secretStore }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/operations/secrets-and-keys.md "Store mode:
             # credentials in Azure Key Vault").
+            {{- if not (hasKey $eff "WARDYN_AZURE_KV_URL") }}
             - name: WARDYN_AZURE_KV_URL
               value: {{ .azure.vaultUrl | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_KV_PREFIX") }}
             - name: WARDYN_AZURE_KV_PREFIX
               value: {{ .azure.prefix | default $.Release.Namespace | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_KV_MAX_VERSIONS") }}
             - name: WARDYN_AZURE_KV_MAX_VERSIONS
               value: {{ .azure.maxVersions | quote }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_KV_PURGE") }}
             - name: WARDYN_AZURE_KV_PURGE
               value: {{ .azure.purge | quote }}
+            {{- end }}
             {{- end }}
             {{- if and .azure (include "wardyn.azureConsumer" $) }}
             # The Entra identity the Key Vault store and KEK share. With workload
             # identity the webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
+            {{- if not (hasKey $eff "WARDYN_AZURE_AUTH") }}
             - name: WARDYN_AZURE_AUTH
               value: {{ .azure.auth | quote }}
+            {{- end }}
             {{- with .azure.tenantId }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_TENANT_ID") }}
             - name: WARDYN_AZURE_TENANT_ID
               value: {{ . | quote }}
             {{- end }}
+            {{- end }}
             {{- with .azure.clientId }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_CLIENT_ID") }}
             - name: WARDYN_AZURE_CLIENT_ID
               value: {{ . | quote }}
             {{- end }}
+            {{- end }}
             {{- if $azkek.keyPlatform }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_CLIENT_ID_PLATFORM") }}
             - name: WARDYN_AZURE_CLIENT_ID_PLATFORM
               value: {{ .azure.clientIdPlatform | quote }}
             {{- end }}
+            {{- end }}
             {{- with .azure.authorityHost }}
+            {{- if not (hasKey $eff "WARDYN_AZURE_AUTHORITY_HOST") }}
             - name: WARDYN_AZURE_AUTHORITY_HOST
               value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- end }}
@@ -503,10 +612,12 @@ spec:
             # refuse to boot unless the runner is Kubernetes and the recording
             # store is pg or off. The render guards above are the first half; this
             # is the half that still holds after `kubectl scale`.
+            {{- if not (hasKey $eff "WARDYN_HA") }}
             - name: WARDYN_HA
               value: "true"
             {{- end }}
-            {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}
+            {{- end }}
+            {{- if not (hasKey $eff "WARDYN_RECORDING_STORE") }}
             # persistence.enabled is the SINGLE recording switch it is documented
             # to be: on => the per-pod `fs` store on the persistent volume (path
             # below); off => `off`, no recording and no replay. Spelled out rather
@@ -524,14 +635,14 @@ spec:
             - name: WARDYN_RECORDING_STORE
               value: {{ if .Values.persistence.enabled }}"fs"{{ else }}"off"{{ end }}
             {{- end }}
-            {{- if and .Values.persistence.enabled (not (hasKey .Values.env "WARDYN_RECORDING_DIR")) }}
+            {{- if and .Values.persistence.enabled (not (hasKey $eff "WARDYN_RECORDING_DIR")) }}
             # wardynd's own default (./data/recordings) lands on the read-only
             # root FS — point the fs store at the persistent mount instead. An
             # .Values.env entry overrides.
             - name: WARDYN_RECORDING_DIR
               value: {{ printf "%s/recordings" .Values.persistence.mountPath | quote }}
             {{- end }}
-            {{- if not (hasKey .Values.env "WARDYN_AUDIT_SPOOL") }}
+            {{- if not (hasKey $eff "WARDYN_AUDIT_SPOOL") }}
             # wardynd's own default (./data/audit-spool.jsonl) is the audit
             # fallback spool (C1: a Postgres write that fails is fsync'd here
             # instead of silently lost) — and it lands on the read-only root FS
@@ -545,37 +656,36 @@ spec:
             - name: WARDYN_AUDIT_SPOOL
               value: {{ if .Values.persistence.enabled }}{{ printf "%s/audit-spool.jsonl" .Values.persistence.mountPath | quote }}{{ else }}"/tmp/audit-spool.jsonl"{{ end }}
             {{- end }}
-            {{- /* .Values.env only, not extraEnv: an extraEnv entry of the same
-            name renders AFTER this one and wins (k8s env: last-defined-wins),
-            so it needs no guard — a duplicate line, not a wrong value. */ -}}
-            {{- if and .Values.defaultPolicy (not (hasKey .Values.env "WARDYN_DEFAULT_POLICY")) }}
+            {{- /* Each chart entry above extraEnv tests $eff, so an env or extraEnv
+            entry of the same name replaces it instead of rendering beside it. */ -}}
+            {{- if and .Values.defaultPolicy (not (hasKey $eff "WARDYN_DEFAULT_POLICY")) }}
             # Points wardynd at the policy baked into the ConfigMap below,
             # mounted read-only. An .Values.env entry overrides (e.g. to pick
             # one of the image's own /examples/policies/ files instead).
             - name: WARDYN_DEFAULT_POLICY
               value: {{ "/etc/wardyn/default-policy/policy.json" | quote }}
             {{- end }}
-            {{- if and (.Values.siteConfigSeed | default dict) (not (hasKey .Values.env "WARDYN_SITE_CONFIG_SEED_FILE")) }}
+            {{- if and (.Values.siteConfigSeed | default dict) (not (hasKey $eff "WARDYN_SITE_CONFIG_SEED_FILE")) }}
             # Points wardynd at the site-config seed baked into the ConfigMap
             # below, mounted read-only. An .Values.env entry overrides.
             - name: WARDYN_SITE_CONFIG_SEED_FILE
               value: {{ "/etc/wardyn/site-config-seed/seed.json" | quote }}
             {{- end }}
-            {{- if and .Values.trustedCA (not (hasKey .Values.env "WARDYN_TRUSTED_CA_FILE")) }}
+            {{- if and .Values.trustedCA (not (hasKey $eff "WARDYN_TRUSTED_CA_FILE")) }}
             # Points wardynd at the corp CA bundle baked into the ConfigMap
             # below, mounted read-only. An .Values.env entry overrides (e.g. a
             # path your own volume/extraEnv mounts the PEM at instead).
             - name: WARDYN_TRUSTED_CA_FILE
               value: {{ "/etc/wardyn/trusted-ca/ca.pem" | quote }}
             {{- end }}
-            {{- if and (.Values.imageAdmission | default dict).registryAuthSecret (not (hasKey .Values.env "WARDYN_REGISTRY_AUTH_FILE")) }}
+            {{- if and (.Values.imageAdmission | default dict).registryAuthSecret (not (hasKey $eff "WARDYN_REGISTRY_AUTH_FILE")) }}
             # Points wardynd at the registry credentials of the named
             # kubernetes.io/dockerconfigjson Secret, mounted read-only below.
             # Image signature checks read them; nothing else does.
             - name: WARDYN_REGISTRY_AUTH_FILE
               value: {{ "/etc/wardyn/registry-auth/config.json" | quote }}
             {{- end }}
-            {{- if and $dps.existingSecret (not (hasKey .Values.env "WARDYN_DAEMON_PROXY_SECRET")) }}
+            {{- if and $dps.existingSecret (not (hasKey $eff "WARDYN_DAEMON_PROXY_SECRET")) }}
             # Points wardynd at the operator-managed Secret mounted below — a
             # Secret this chart never creates, since the value is a
             # credentialed forward-proxy URL. An .Values.env entry overrides
@@ -586,7 +696,7 @@ spec:
             - name: WARDYN_DAEMON_PROXY_SECRET
               value: {{ printf "%s/%s" ($dps.mountPath | default "/etc/wardyn/daemon-proxy-secret") ($dps.existingSecretKey | default "proxy-url") | quote }}
             {{- end }}
-            {{- if and .Values.awsSSOProxyInject (not (hasKey .Values.env "WARDYN_AWS_SSO_PROXY_INJECT")) }}
+            {{- if and .Values.awsSSOProxyInject (not (hasKey $eff "WARDYN_AWS_SSO_PROXY_INJECT")) }}
             # AWS sign-in lane value ("on" or empty; "off" was removed in 0.10.0,
             # docs/OPERATIONS.md "Removed in 0.10.0").
             # An .Values.env entry overrides — scripts/kind-sso-walk.sh pins
@@ -596,35 +706,37 @@ spec:
               value: {{ .Values.awsSSOProxyInject | quote }}
             {{- end }}
             {{- range $k, $v := .Values.env }}
+            {{- if not (or (hasKey $xeLast $k) (hasKey $late $k)) }}
             - name: {{ $k }}
               value: {{ $v | quote }}
+            {{- end }}
             {{- end }}
             {{- /* `default dict`: a `--reuse-values` upgrade from before 0.8.6 carries no runner block. An absent
             value renders no env, so wardynd keeps its compiled-in sizes (2000m/4096Mi agent, the proxy defaults). */}}
             {{- $sb := ((.Values.runner | default dict).sandbox | default dict) }}
             {{- $dr := $sb.defaultResources | default dict }}
             {{- $pr := $sb.proxyResources | default dict }}
-            {{- if and $dr.cpuMillis (not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS")) }}
+            {{- if and $dr.cpuMillis (not (hasKey $eff "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS")) }}
             - name: WARDYN_SANDBOX_DEFAULT_CPU_MILLIS
               value: {{ $dr.cpuMillis | quote }}
             {{- end }}
-            {{- if and $dr.memoryMiB (not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB")) }}
+            {{- if and $dr.memoryMiB (not (hasKey $eff "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB")) }}
             - name: WARDYN_SANDBOX_DEFAULT_MEMORY_MIB
               value: {{ $dr.memoryMiB | quote }}
             {{- end }}
-            {{- if and $sb.requestRatio (not (hasKey .Values.env "WARDYN_SANDBOX_REQUEST_RATIO")) }}
+            {{- if and $sb.requestRatio (not (hasKey $eff "WARDYN_SANDBOX_REQUEST_RATIO")) }}
             - name: WARDYN_SANDBOX_REQUEST_RATIO
               value: {{ $sb.requestRatio | quote }}
             {{- end }}
-            {{- if and $pr.cpuMillis (not (hasKey .Values.env "WARDYN_PROXY_CPU_MILLIS")) }}
+            {{- if and $pr.cpuMillis (not (hasKey $eff "WARDYN_PROXY_CPU_MILLIS")) }}
             - name: WARDYN_PROXY_CPU_MILLIS
               value: {{ $pr.cpuMillis | quote }}
             {{- end }}
-            {{- if and $pr.memoryMiB (not (hasKey .Values.env "WARDYN_PROXY_MEMORY_MIB")) }}
+            {{- if and $pr.memoryMiB (not (hasKey $eff "WARDYN_PROXY_MEMORY_MIB")) }}
             - name: WARDYN_PROXY_MEMORY_MIB
               value: {{ $pr.memoryMiB | quote }}
             {{- end }}
-            {{- if and (gt (int .Values.maxConcurrentRuns) 0) (not (hasKey .Values.env "WARDYN_MAX_CONCURRENT_RUNS")) }}
+            {{- if and (gt (int .Values.maxConcurrentRuns) 0) (not (hasKey $eff "WARDYN_MAX_CONCURRENT_RUNS")) }}
             - name: WARDYN_MAX_CONCURRENT_RUNS
               value: {{ .Values.maxConcurrentRuns | int | quote }}
             {{- end }}
@@ -641,122 +753,18 @@ spec:
             - name: GOMEMLIMIT
               value: {{ .Values.goMemLimit | quote }}
             {{- end }}
-            {{- with .Values.extraEnv }}
+            {{- $xeKeep := list }}
+            {{- range $i, $e := .Values.extraEnv }}
+            {{- $n := $e.name | toString }}
+            {{- if and (eq (get $xeLast $n) $i) (not (hasKey $late $n)) }}{{ $xeKeep = append $xeKeep $e }}{{ end }}
+            {{- end }}
+            {{- with $xeKeep }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
             # composer API key, audit-sink JSON) ride a secretKeyRef instead of
             # rendering as a literal in the Deployment object like .Values.env.
             {{- toYaml . | nindent 12 }}
             {{- end }}
-            {{- if .Values.k8s.enabled }}
-            # k8s runner wiring (internal/runner/k8s, `-tags k8s`). Placed AFTER
-            # .Values.env/.extraEnv above so it always wins on a duplicate key
-            # (k8s env: last-defined-wins) — WARDYN_RUNNER especially must never
-            # be silently skipped: the registry defaults to `docker`, and
-            # forgetting it on a cluster (no Docker daemon at all) is a boot-time
-            # connection error, not a helpful message.
-            - name: WARDYN_RUNNER
-              value: "k8s"
-            - name: WARDYN_K8S_NAMESPACE
-              value: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
-            {{- if include "wardyn.groundtruthEnabled" . }}
-            {{- /* Not WARDYN_GROUNDTRUTH_TOKEN_FILE: wardynd refuses to boot with both. */}}
-            {{- if hasKey $eff "WARDYN_GROUNDTRUTH_TOKEN_FILE" }}
-            {{- fail "wardyn: groundtruth.k8s.enabled delivers the sensor token through a Secret, so WARDYN_GROUNDTRUTH_TOKEN_FILE must not be set in env or extraEnv: wardynd refuses to boot with both." }}
-            {{- end }}
-            - name: WARDYN_GROUNDTRUTH_TOKEN_SECRET
-              value: {{ printf "%s/%s" (include "wardyn.groundtruthNamespace" .) (include "wardyn.groundtruthSecret" .) | quote }}
-            {{- end }}
-            - name: WARDYN_PROXY_IMAGE
-              value: {{ .Values.k8s.proxyImage | quote }}
-            {{- if .Values.k8s.imagePullSecret }}
-            - name: WARDYN_K8S_IMAGE_PULL_SECRET
-              value: {{ .Values.k8s.imagePullSecret | quote }}
-            {{- end }}
-            {{- $placement := dict -}}
-            {{- $k8sSandbox := (.Values.k8s.sandbox | default dict) -}}
-            {{- range $key := list "nodeSelector" "tolerations" "affinity" "priorityClassName" "podAnnotations" "podLabels" -}}
-            {{- with index $k8sSandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
-            {{- end }}
-            {{- /* A bare `--set key=true` is a YAML bool; annotation and label values are strings. */ -}}
-            {{- range $key := list "podAnnotations" "podLabels" -}}
-            {{- if hasKey $placement $key }}
-            {{- $strs := dict -}}
-            {{- range $k, $v := get $placement $key }}{{- $_ := set $strs $k (toString $v) -}}{{- end -}}
-            {{- $_ := set $placement $key $strs -}}
-            {{- end -}}
-            {{- end }}
-            {{- if $placement }}
-            # One JSON value for the agent, proxy and canary pods (internal/runner/k8s/placement.go).
-            - name: WARDYN_K8S_SANDBOX_PLACEMENT
-              value: {{ toJson $placement | quote }}
-            {{- end }}
-            {{- if .Values.k8s.readNodes }}
-            # The node-size advisory (internal/runner/k8s/fit_nodes.go); rbac.yaml grants the matching nodes list.
-            - name: WARDYN_K8S_READ_NODES
-              value: "true"
-            {{- end }}
-            {{- if (.Values.k8s.agentSandbox | default dict).enabled }}
-            # Experimental (#3863): internal/runner/k8s creates the agent pod through a Sandbox object.
-            - name: WARDYN_K8S_AGENT_SANDBOX
-              value: "true"
-            {{- with .Values.k8s.agentSandbox.template }}
-            - name: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE
-              value: {{ . | quote }}
-            {{- end }}
-            {{- end }}
-            {{- $rtc := list -}}
-            {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}
-            {{- with .Values.k8s.runtimeClasses.CC3 }}{{- $rtc = append $rtc (printf "CC3=%s" .) -}}{{- end }}
-            {{- if $rtc }}
-            - name: WARDYN_CONFINEMENT_MAP
-              value: {{ join ";" $rtc | quote }}
-            {{- end }}
-            # The Service's in-cluster FQDN, not a bare name: correct whether
-            # sandbox proxy pods run in THIS namespace or in a different
-            # k8s.runsNamespace (a bare Service name only resolves within the
-            # SAME namespace's DNS search path). https on the internal port:
-            # wardynd certifies exactly this host with its internal CA, and
-            # refuses to boot on an http:// value that is not loopback.
-            - name: WARDYN_CONTROL_PLANE_URL
-              value: {{ printf "https://%s.%s.svc.%s:%d" (include "wardyn.fullname" .) .Release.Namespace (.Values.k8s.clusterDomain | default "cluster.local") $internalPort | quote }}
-            # A No network run's proxy pod may reach only these pods: wardynd's own, by the labels its
-            # own NetworkPolicy selects (run pods can carry extra labels, so the component label is part of it).
-            - name: WARDYN_K8S_CONTROL_PLANE_NAMESPACE
-              value: {{ .Release.Namespace | quote }}
-            - name: WARDYN_K8S_CONTROL_PLANE_POD_LABELS
-              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/name=%s,app.kubernetes.io/component=control-plane" .Release.Name (include "wardyn.name" .) | quote }}
-            {{- end }}
-            {{- if $ssh.enabled }}
-            - name: WARDYN_SSH_LISTEN
-              value: {{ printf ":%d" (int ($ssh.port | default 2222)) | quote }}
-            - name: WARDYN_SSH_ADVERTISE
-              value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" $ssh.advertiseHost) (int ($ssh.port | default 2222)) | quote }}
-            {{- with $ssh.proxyCommand }}
-            - name: WARDYN_SSH_PROXY_COMMAND
-              value: {{ . | quote }}
-            {{- end }}
-            {{- end }}
-            {{- if $ui.enabled }}
-            - name: WARDYN_UI_SANDBOX_LISTEN
-              value: {{ printf ":%d" (int ($ui.port | default 8081)) | quote }}
-            - name: WARDYN_UI_SANDBOX_ADVERTISE
-              value: {{ required "wardyn: uiSandbox.advertiseURL is required when uiSandbox.enabled=true (the externally-reachable base URL of the gateway — the console's Open button opens it, and it must be a DIFFERENT host than the console)" $ui.advertiseURL | quote }}
-            {{- with $ui.originTemplate }}
-            - name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE
-              value: {{ . | quote }}
-            {{- end }}
-            {{- if and (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_OIDC_ISSUER")) (not $ui.originTemplate) (not (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE"))) (not (include "wardyn.allowUISharedOrigin" $)) }}
-            {{- fail "wardyn: uiSandbox.originTemplate is required when uiSandbox.enabled=true and SSO (WARDYN_OIDC_ISSUER) is configured: without it every run's apps share one origin, so a page one run serves can reach another run's app. Set uiSandbox.originTemplate (e.g. https://run-{run}.ui.example.com, needs wildcard DNS and a wildcard certificate), or set uiSandbox.acceptSharedOrigin=true to accept the shared origin" }}
-            {{- end }}
-            {{- if and $ui.acceptSharedOrigin (not $ui.originTemplate) }}
-            - name: WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN
-              value: "true"
-            {{- end }}
-            {{- end }}
-            {{- if $ml.enabled }}
-            - name: WARDYN_METRICS_LISTEN
-              value: {{ printf ":%d" (int ($ml.port | default 9464)) | quote }}
-            {{- end }}
+            {{- $afterExtra }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -1023,3 +1031,122 @@ spec:
   storageClassName: {{ . }}
   {{- end }}
 {{- end }}
+{{- /*
+The container env entries that render after extraEnv: the k8s runner wiring, ssh, uiSandbox and the
+metrics listener. They win a name over env and extraEnv, which drop it (deployment.yaml reads this
+block's names from its output into $late before the env list). Called with the root context, so
+$ is the root here too.
+*/ -}}
+{{- define "wardyn.envAfterExtra" -}}
+{{- $ssh := .Values.ssh | default dict -}}
+{{- $ui := .Values.uiSandbox | default dict -}}
+{{- $ml := (.Values.metrics | default dict).listener | default dict -}}
+{{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
+            {{- if .Values.k8s.enabled }}
+            # k8s runner wiring (internal/runner/k8s, `-tags k8s`). Placed AFTER
+            # .Values.env/.extraEnv above so it always wins on a duplicate key
+            # (k8s env: last-defined-wins) — WARDYN_RUNNER especially must never
+            # be silently skipped: the registry defaults to `docker`, and
+            # forgetting it on a cluster (no Docker daemon at all) is a boot-time
+            # connection error, not a helpful message.
+            - name: WARDYN_RUNNER
+              value: "k8s"
+            - name: WARDYN_K8S_NAMESPACE
+              value: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+            {{- if include "wardyn.groundtruthEnabled" . }}
+            {{- /* Not WARDYN_GROUNDTRUTH_TOKEN_FILE: wardynd refuses to boot with both. */}}
+            - name: WARDYN_GROUNDTRUTH_TOKEN_SECRET
+              value: {{ printf "%s/%s" (include "wardyn.groundtruthNamespace" .) (include "wardyn.groundtruthSecret" .) | quote }}
+            {{- end }}
+            - name: WARDYN_PROXY_IMAGE
+              value: {{ .Values.k8s.proxyImage | quote }}
+            {{- if .Values.k8s.imagePullSecret }}
+            - name: WARDYN_K8S_IMAGE_PULL_SECRET
+              value: {{ .Values.k8s.imagePullSecret | quote }}
+            {{- end }}
+            {{- $placement := dict -}}
+            {{- $k8sSandbox := (.Values.k8s.sandbox | default dict) -}}
+            {{- range $key := list "nodeSelector" "tolerations" "affinity" "priorityClassName" "podAnnotations" "podLabels" -}}
+            {{- with index $k8sSandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
+            {{- end }}
+            {{- /* A bare `--set key=true` is a YAML bool; annotation and label values are strings. */ -}}
+            {{- range $key := list "podAnnotations" "podLabels" -}}
+            {{- if hasKey $placement $key }}
+            {{- $strs := dict -}}
+            {{- range $k, $v := get $placement $key }}{{- $_ := set $strs $k (toString $v) -}}{{- end -}}
+            {{- $_ := set $placement $key $strs -}}
+            {{- end -}}
+            {{- end }}
+            {{- if $placement }}
+            # One JSON value for the agent, proxy and canary pods (internal/runner/k8s/placement.go).
+            - name: WARDYN_K8S_SANDBOX_PLACEMENT
+              value: {{ toJson $placement | quote }}
+            {{- end }}
+            {{- if .Values.k8s.readNodes }}
+            # The node-size advisory (internal/runner/k8s/fit_nodes.go); rbac.yaml grants the matching nodes list.
+            - name: WARDYN_K8S_READ_NODES
+              value: "true"
+            {{- end }}
+            {{- if (.Values.k8s.agentSandbox | default dict).enabled }}
+            # Experimental (#3863): internal/runner/k8s creates the agent pod through a Sandbox object.
+            - name: WARDYN_K8S_AGENT_SANDBOX
+              value: "true"
+            {{- with .Values.k8s.agentSandbox.template }}
+            - name: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- $rtc := list -}}
+            {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}
+            {{- with .Values.k8s.runtimeClasses.CC3 }}{{- $rtc = append $rtc (printf "CC3=%s" .) -}}{{- end }}
+            {{- if $rtc }}
+            - name: WARDYN_CONFINEMENT_MAP
+              value: {{ join ";" $rtc | quote }}
+            {{- end }}
+            # The Service's in-cluster FQDN, not a bare name: correct whether
+            # sandbox proxy pods run in THIS namespace or in a different
+            # k8s.runsNamespace (a bare Service name only resolves within the
+            # SAME namespace's DNS search path). https on the internal port:
+            # wardynd certifies exactly this host with its internal CA, and
+            # refuses to boot on an http:// value that is not loopback.
+            - name: WARDYN_CONTROL_PLANE_URL
+              value: {{ printf "https://%s.%s.svc.%s:%d" (include "wardyn.fullname" .) .Release.Namespace (.Values.k8s.clusterDomain | default "cluster.local") $internalPort | quote }}
+            # A No network run's proxy pod may reach only these pods: wardynd's own, by the labels its
+            # own NetworkPolicy selects (run pods can carry extra labels, so the component label is part of it).
+            - name: WARDYN_K8S_CONTROL_PLANE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: WARDYN_K8S_CONTROL_PLANE_POD_LABELS
+              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/name=%s,app.kubernetes.io/component=control-plane" .Release.Name (include "wardyn.name" .) | quote }}
+            {{- end }}
+            {{- if $ssh.enabled }}
+            - name: WARDYN_SSH_LISTEN
+              value: {{ printf ":%d" (int ($ssh.port | default 2222)) | quote }}
+            - name: WARDYN_SSH_ADVERTISE
+              value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" $ssh.advertiseHost) (int ($ssh.port | default 2222)) | quote }}
+            {{- with $ssh.proxyCommand }}
+            - name: WARDYN_SSH_PROXY_COMMAND
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $ui.enabled }}
+            - name: WARDYN_UI_SANDBOX_LISTEN
+              value: {{ printf ":%d" (int ($ui.port | default 8081)) | quote }}
+            - name: WARDYN_UI_SANDBOX_ADVERTISE
+              value: {{ required "wardyn: uiSandbox.advertiseURL is required when uiSandbox.enabled=true (the externally-reachable base URL of the gateway — the console's Open button opens it, and it must be a DIFFERENT host than the console)" $ui.advertiseURL | quote }}
+            {{- with $ui.originTemplate }}
+            - name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if and (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_OIDC_ISSUER")) (not $ui.originTemplate) (not (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE"))) (not (include "wardyn.allowUISharedOrigin" $)) }}
+            {{- fail "wardyn: uiSandbox.originTemplate is required when uiSandbox.enabled=true and SSO (WARDYN_OIDC_ISSUER) is configured: without it every run's apps share one origin, so a page one run serves can reach another run's app. Set uiSandbox.originTemplate (e.g. https://run-{run}.ui.example.com, needs wildcard DNS and a wildcard certificate), or set uiSandbox.acceptSharedOrigin=true to accept the shared origin" }}
+            {{- end }}
+            {{- if and $ui.acceptSharedOrigin (not $ui.originTemplate) }}
+            - name: WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- if $ml.enabled }}
+            - name: WARDYN_METRICS_LISTEN
+              value: {{ printf ":%d" (int ($ml.port | default 9464)) | quote }}
+            {{- end }}
+{{- end -}}
