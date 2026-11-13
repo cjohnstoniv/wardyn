@@ -121,6 +121,8 @@ var isOperatorCensus = map[string]int{
 	"runner_registration.go:handleRunnerTokenSelf": 1,
 	// The predicate itself.
 	"govern_admin.go:runUngoverned": 1,
+	// An owner who is not an operator reads the requirement rows a workspace inherits from a source as a member does.
+	"workspace_inherited_rows.go:withholdInheritedRows": 1,
 }
 
 // TestIsOperatorCensus scans every production file in internal/api for calls to

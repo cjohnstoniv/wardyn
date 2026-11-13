@@ -84,6 +84,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"helpers.go:ownsWorkspaceOrAdmin":                          {1, "authz-only: workspace reach"},
 	"helpers.go:ownsWorkspaceOrSecurityAdmin":                  {1, "authz-only: workspace reach"},
 	"helpers.go:workspaceReadTierFor":                          {2, "authz-only: workspace read tier"},
+	"workspace_inherited_rows.go:withholdInheritedRows":        {1, "authz-only: which inherited requirement rows a workspace owner reads"},
 	"http.go:requireOperator":                                  {1, "authz-only: the route tier"},
 	"http.go:requireSecurityOperator":                          {1, "authz-only: the route tier"},
 	"inline_policy_bounds.go:boundEnvSecretPosture":            {1, "R: the admin-only env-secret drop; the grants left meet the boundary's eligible_grants at resolve"},

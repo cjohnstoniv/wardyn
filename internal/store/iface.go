@@ -105,7 +105,7 @@ type Store interface {
 	ListSources(ctx context.Context) ([]types.Source, error)
 	UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error)
 	WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error)
-	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error
+	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) ([]string, error)
 	ClaimSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error)
@@ -125,7 +125,7 @@ type Store interface {
 	FinishImageCheck(ctx context.Context, id uuid.UUID, image string, attempt uuid.UUID, status, reason string, arches []string) (types.BaseImageEntry, error)
 	LiveImageCheckAttempts(ctx context.Context) (map[uuid.UUID]bool, error)
 	WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error)
-	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error
+	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) ([]string, error)
 
 	// CredentialGrant.
 	CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error)

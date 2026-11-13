@@ -2510,7 +2510,9 @@ func (s *authzStore) UpdateSourceConfig(context.Context, uuid.UUID, string, map[
 func (s *authzStore) WorkspacesAttaching(context.Context, uuid.UUID) ([]string, error) {
 	return nil, nil
 }
-func (s *authzStore) DeleteSource(context.Context, uuid.UUID, bool) error              { return nil }
+func (s *authzStore) DeleteSource(context.Context, uuid.UUID, bool) ([]string, error) {
+	return []string{}, nil
+}
 func (s *authzStore) ClaimSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (s *authzStore) ClearSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (s *authzStore) SetSourceScanResult(context.Context, uuid.UUID, []byte, types.WorkspaceStatus, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Source, error) {
@@ -2533,7 +2535,9 @@ func (s *authzStore) ListBaseImages(context.Context) ([]types.BaseImageEntry, er
 func (s *authzStore) WorkspacesUsingBaseImage(context.Context, uuid.UUID) ([]string, error) {
 	return nil, nil
 }
-func (s *authzStore) DeleteBaseImage(context.Context, uuid.UUID, bool) error { return nil }
+func (s *authzStore) DeleteBaseImage(context.Context, uuid.UUID, bool) ([]string, error) {
+	return []string{}, nil
+}
 func (s *authzStore) GetBaseImage(context.Context, uuid.UUID) (types.BaseImageEntry, error) {
 	return types.BaseImageEntry{}, store.ErrNotFound
 }
