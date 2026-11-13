@@ -180,7 +180,7 @@ func TestPG_StopKeptRunForcedIf_OneWinnerAndTheMarkLandsWithTheEnd(t *testing.T)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			stamp, ok, err := pg.StopKeptRunForcedIf(ctx, r.ID, types.RunStopped, r.LostAt, r.LostReason, r.EndsAt)
+			stamp, ok, err := pg.StopKeptRunForcedIf(ctx, r.ID, types.RunStopped, r.LostAt, r.LostReason, r.EndsAt, true, 0)
 			if err != nil {
 				t.Errorf("StopKeptRunForcedIf: %v", err)
 				return
@@ -223,7 +223,7 @@ func TestPG_StopKeptRunForcedIf_OneWinnerAndTheMarkLandsWithTheEnd(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			moved := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
-			if _, ok, err := pg.StopKeptRunForcedIf(ctx, moved.ID, types.RunStopped, tc.lostAt, tc.lostReason, tc.endsAt); err != nil || ok {
+			if _, ok, err := pg.StopKeptRunForcedIf(ctx, moved.ID, types.RunStopped, tc.lostAt, tc.lostReason, tc.endsAt, true, 0); err != nil || ok {
 				t.Fatalf("a stale claim = %v, %v; want refused", ok, err)
 			}
 			if at := forcedStopAt(t, ctx, pool, moved.ID); at != nil {
@@ -246,7 +246,7 @@ func TestPG_ClearForcedStop_ClearsOnlyTheStampItRead(t *testing.T) {
 	lostAt := time.Now().UTC().Add(-time.Hour)
 	endsAt := time.Now().UTC().Add(-time.Minute)
 	r := keepRun(t, ctx, pool, &lostAt, types.LostOutage, &endsAt)
-	stamp, ok, err := pg.StopKeptRunForcedIf(ctx, r.ID, types.RunStopped, r.LostAt, r.LostReason, r.EndsAt)
+	stamp, ok, err := pg.StopKeptRunForcedIf(ctx, r.ID, types.RunStopped, r.LostAt, r.LostReason, r.EndsAt, true, 0)
 	if err != nil || !ok {
 		t.Fatalf("StopKeptRunForcedIf = %v, %v; want applied", ok, err)
 	}

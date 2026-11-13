@@ -335,17 +335,31 @@ func TestPG_RunContainmentError(t *testing.T) {
 		return r
 	}
 
+	before, err := pg.DatabaseNow(ctx)
+	if err != nil {
+		t.Fatalf("DatabaseNow: %v", err)
+	}
+	var first *time.Time
 	for _, msg := range []string{"first", "second"} {
-		if err := pg.SetRunContainmentError(ctx, kept.ID, msg, now.Add(time.Duration(len(msg))*time.Second)); err != nil {
+		if err := pg.SetRunContainmentError(ctx, kept.ID, msg); err != nil {
 			t.Fatalf("SetRunContainmentError(%s): %v", msg, err)
 		}
-		if err := pg.SetRunContainmentError(ctx, live.ID, msg, now); err != nil {
+		if err := pg.SetRunContainmentError(ctx, live.ID, msg); err != nil {
 			t.Fatalf("SetRunContainmentError(live): %v", err)
 		}
+		if first == nil {
+			first = read(kept.ID).ContainmentErrorAt
+		}
 	}
-	if r := read(kept.ID); r.ContainmentError != "second" || r.ContainmentErrorAt == nil || !r.ContainmentErrorAt.Equal(now.Add(5*time.Second)) {
-		t.Errorf("kept run = %q at %v; want the latest error at the first failure's time %v",
-			r.ContainmentError, r.ContainmentErrorAt, now.Add(5*time.Second))
+	after, err := pg.DatabaseNow(ctx)
+	if err != nil {
+		t.Fatalf("DatabaseNow: %v", err)
+	}
+	// The stamp is the database's now() at the first failure, kept by the second.
+	if r := read(kept.ID); r.ContainmentError != "second" || r.ContainmentErrorAt == nil || first == nil ||
+		!r.ContainmentErrorAt.Equal(*first) || r.ContainmentErrorAt.Before(before) || r.ContainmentErrorAt.After(after) {
+		t.Errorf("kept run = %q at %v; want the latest error at the first failure's time %v, inside [%v, %v] on the database's clock",
+			r.ContainmentError, r.ContainmentErrorAt, first, before, after)
 	}
 	if r := read(live.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
 		t.Errorf("live run = %q at %v; want nothing — only a kept run's containment is unresolved", r.ContainmentError, r.ContainmentErrorAt)
@@ -365,7 +379,7 @@ func TestPG_RunContainmentError(t *testing.T) {
 	if _, err := pg.MarkRunLost(ctx, lost.ID, types.LostOutage, now, 0); err != nil {
 		t.Fatalf("MarkRunLost: %v", err)
 	}
-	if err := pg.SetRunContainmentError(ctx, lost.ID, "boom", now); err != nil {
+	if err := pg.SetRunContainmentError(ctx, lost.ID, "boom"); err != nil {
 		t.Fatalf("SetRunContainmentError(lost): %v", err)
 	}
 	if got, err := pg.MarkRunRevived(ctx, lost.ID, types.LostOutage, nil, 0, false); err != nil || !got {

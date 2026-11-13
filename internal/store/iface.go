@@ -379,6 +379,11 @@ type PG struct {
 	// difference of two readings, carrying no skew) measured after a successful DB-clock read. See db.CaptureAppClock.
 	Now func() time.Time
 
+	// DBNow, when set (tests only), is what DatabaseNow answers in place of the database's clock: an api
+	// test that moves its own clock to reach a run's end moves the decisions with it, and one that returns an
+	// error stands for a read that failed. Nil reads Postgres.
+	DBNow func() (time.Time, error)
+
 	// SIEM, when set, receives the audit rows this store writes in its own transaction (the retention
 	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
 	// nowhere.

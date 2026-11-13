@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +74,8 @@ func newLifetimeFixture(t *testing.T) *lifetimeFixture {
 		now:   time.Now().UTC().Truncate(time.Second),
 	}
 	f.srv = h.srv
+	st.DBNow = func() (time.Time, error) { return f.now, nil } // the lease sweep decides on the database's clock; this fixture moves it with f.now
+	f.st = st
 	f.srv.cfg.Store = st
 	f.srv.cfg.Runner = f.rn
 	f.srv.cfg.Broker = f.brk
@@ -274,7 +277,7 @@ func TestLease_AKilledRunIsNotKilledTwice(t *testing.T) {
 	if ok, err := f.st.UpdateRunStateIf(context.Background(), run.ID, types.RunRunning, types.RunCompleted); err != nil || !ok {
 		t.Fatalf("complete the run: %v %v", ok, err)
 	}
-	f.srv.killRunAtLifetime(context.Background(), run, types.RunEndEndReached)
+	f.srv.killRunAtLifetime(context.Background(), run, types.RunEndEndReached, f.now)
 	got := f.get(t, run.ID)
 	if got.State != types.RunCompleted || got.StatusDetail != "" || f.rn.killCount() != 0 || f.idp.count() != 0 {
 		t.Fatalf("state=%s detail=%q kills=%d revokes=%d; want a completed run untouched", got.State, got.StatusDetail, f.rn.killCount(), f.idp.count())
@@ -446,5 +449,29 @@ func TestLease_KillAtTheCapOfAPoolNamesThePool(t *testing.T) {
 	}
 	if data := leaseAuditData(t, kills[0]); data["source"] != "Night shift" {
 		t.Errorf("run.kill source = %v, want the pool's name", data["source"])
+	}
+}
+
+// The lease sweep ends a background run on the database's clock (store.PG's DatabaseNow, which this fixture
+// moves with f.now), and the kill's compare-and-set takes the same instant, so this server's clock changes
+// nothing: a run 1 minute past its end is killed and one 1 minute inside it is left alone, whatever the server's
+// clock reads. Before, both read the server's clock.
+func TestPG_LeaseRun_TheEndIsTheDatabasesClock(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		endIn  time.Duration
+		killed bool
+	}{{"1 min inside its end", time.Minute, false}, {"1 min past its end", -time.Minute, true}} {
+		for _, skew := range oneClockSkews {
+			t.Run(fmt.Sprintf("%s, server %v", c.name, skew), func(t *testing.T) {
+				f := newLifetimeFixture(t)
+				run := f.run(t, types.ExperienceBackground, dur(c.endIn), nil)
+				f.srv.cfg.Now = func() time.Time { return f.now.Add(skew) }
+				f.srv.leaseRun(context.Background(), f.st, run)
+				if got := f.get(t, run.ID); (got.State == types.RunKilled) != c.killed {
+					t.Errorf("state = %s, want killed = %v", got.State, c.killed)
+				}
+			})
+		}
 	}
 }

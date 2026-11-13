@@ -28,8 +28,8 @@ const keptEndHoldOffLimit = 5 * time.Minute
 
 // forceKeptStop is stopKeptRun's answer to a lock it found held (a refusal to take it is not that, and
 // does not reach here). Until the run's due end is keptEndHoldOffLimit past, it does nothing, and the next
-// pass retries the end. Whether the limit has passed is the database's answer (ForcedStopper's
-// KeptHoldOffPassed on now()), never this server's clock. The due end is read from the run's fresh row,
+// pass retries the end. Whether the limit has passed is the database's answer (the forced claim,
+// StopKeptRunForcedIf, compares it with now()), never this server's clock. The due end is read from the run's fresh row,
 // so neither a slow sweep, a chain of lock holders nor a restart moves it; only a change to the stored end
 // does (an extension, or a revive that claimed before expiry). A gone run, or a lost one with no end, is due when it was lost.
 //
@@ -53,8 +53,8 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	}
 	// An end that cannot be kept (data says kept: false) is held off from its end, not from its keep grace.
 	// The hold-off is counted on the database's clock: the due end is the stored time it counts from (lost_at,
-	// or ends_at for a lost run kept until its end plus the grace) plus the offset to it, and ForcedStopper
-	// asks the database whether that, plus keptEndHoldOffLimit, is past now().
+	// or ends_at for a lost run kept until its end plus the grace) plus the offset to it, and the forced claim
+	// (StopKeptRunForcedIf) lands only when that, plus keptEndHoldOffLimit, is past now() in the same statement.
 	until, ok := s.keptUntil(cur)
 	from, fromLostAt := *cur.LostAt, true
 	switch {
@@ -63,18 +63,10 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	case cur.LostReason != types.LostEnded:
 		from, fromLostAt = *cur.EndsAt, false // keptUntil's ends_at branch
 	}
-	past, err := fs.KeptHoldOffPassed(ctx, run.ID, fromLostAt, until.Sub(from)+keptEndHoldOffLimit)
-	if err != nil {
-		slog.WarnContext(ctx, "wardynd: reading a kept run's hold-off failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return
-	}
-	if !past {
-		return
-	}
 	// past_due_sec below is a report, not a decision: it may read this server's clock.
 	now := s.cfg.Now()
-	stamp, applied, err := fs.StopKeptRunForcedIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	stamp, applied, err := fs.StopKeptRunForcedIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt,
+		fromLostAt, until.Sub(from)+keptEndHoldOffLimit)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: forcing a kept run's end failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

@@ -214,6 +214,16 @@ type computerFolderStore struct {
 	runnerState string
 }
 
+// DatabaseNow implements store.DatabaseClock on the same fake database clock as RunDueFlags (dbNow), so the
+// server's decisions and this fake database's compares read one clock. Zero while dbNow is nil, so the server's
+// own clock (Config.Now) stands in, as it does for a store without the read.
+func (s *computerFolderStore) DatabaseNow(context.Context) (time.Time, error) {
+	if s.dbNow != nil {
+		return s.dbNow(), nil
+	}
+	return time.Time{}, nil
+}
+
 func (s *computerFolderStore) dueNow() time.Time {
 	if s.dbNow != nil {
 		return s.dbNow()

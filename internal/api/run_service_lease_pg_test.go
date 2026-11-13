@@ -20,6 +20,7 @@ func newServiceLeasePG(t *testing.T, clock *time.Time, leaseSec int, endsIn time
 	t.Helper()
 	st := store.NewPG(throwawayPGPool(t))
 	h := newHarness(t)
+	st.DBNow = func() (time.Time, error) { return *clock, nil } // the renewal reads the database's clock; this test moves it with the server's
 	h.srv.cfg.Store = st
 	h.srv.cfg.Runner = &leaseRunner{finalizeTailRunner: &finalizeTailRunner{fakeRunner: &fakeRunner{}}}
 	h.srv.cfg.Now = func() time.Time { return *clock }
@@ -125,6 +126,7 @@ func TestPG_AServiceWithoutItsAuthorityIsNotRenewed(t *testing.T) {
 			clock := time.Now().UTC().Add(-time.Second).Truncate(time.Second)
 			e.h.srv.cfg.Runner = &leaseRunner{finalizeTailRunner: &finalizeTailRunner{fakeRunner: &fakeRunner{}}}
 			e.h.srv.cfg.Now = func() time.Time { return clock }
+			moveDBClock(t, e.h.srv, e.h.srv.cfg.Now)
 			end, capAt := clock.Add(30*time.Minute), clock.Add(24*time.Hour)
 			run, err := e.st.CreateRun(ctx, types.AgentRun{
 				ID: uuid.New(), CreatedAt: clock, UpdatedAt: clock,

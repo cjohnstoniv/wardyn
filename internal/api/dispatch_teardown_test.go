@@ -40,23 +40,46 @@ type dispatchTestStore struct {
 	failureHint string
 	grants      []types.CredentialGrant // what ListGrantsByRun returns
 	grantsErr   error                   // when set, ListGrantsByRun fails with it
-	// endsNow is the fake database's clock for RunEndsOpen; nil is the real one. endsErr, when set, fails it.
-	endsNow func() time.Time
-	endsErr error
+	// dbNow is the fake database's clock: what now() answers for RunEndsOpen and the forced claim's hold-off,
+	// and what DatabaseNow (store.DatabaseClock) answers. Nil is the real clock for those reads, and
+	// DatabaseNow then answers zero, so the server's own clock (Config.Now) stands in. endsErr, when set, fails
+	// RunEndsOpen; clockErr, when set, fails DatabaseNow.
+	dbNow    func() time.Time
+	endsErr  error
+	clockErr error
+}
+
+// clockNow is the fake database's now() (dbNow), or the real clock. The caller may hold s.mu.
+func (s *dispatchTestStore) clockNow() time.Time {
+	if s.dbNow != nil {
+		return s.dbNow()
+	}
+	return time.Now()
+}
+
+// DatabaseNow implements store.DatabaseClock over dbNow: clockErr, when set, fails the read; zero while dbNow is
+// nil, so Server.dbNow falls back to the server's clock, as it does for a store without the read.
+func (s *dispatchTestStore) DatabaseNow(context.Context) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.clockErr != nil {
+		return time.Time{}, s.clockErr
+	}
+	if s.dbNow == nil {
+		return time.Time{}, nil
+	}
+	return s.dbNow(), nil
 }
 
 // RunEndsOpen implements store.RunEndsReader over the fixture's run, as the database does: the run's end
-// and its end plus grace against the fake database's clock (endsNow), never the server's.
+// and its end plus grace against the fake database's clock (dbNow), never the server's.
 func (s *dispatchTestStore) RunEndsOpen(_ context.Context, _ uuid.UUID, grace time.Duration) (bool, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.endsErr != nil {
 		return false, false, s.endsErr
 	}
-	now := time.Now()
-	if s.endsNow != nil {
-		now = s.endsNow()
-	}
+	now := s.clockNow()
 	end := s.run.EndsAt
 	return end == nil || end.After(now), end == nil || end.Add(grace).After(now), nil
 }
