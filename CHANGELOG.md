@@ -17,7 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now says the changes have not come back yet, instead of saying they could not come back.
+- When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

@@ -56,7 +56,7 @@ export function ComputerFolderRows({ run }: { run: RunDetail }) {
       {ended && f.back && !f.back.error && <p className="col-span-2 text-meta text-muted-foreground">{C.BACK_AT(shortTime(f.back.at), count(f.back.files))}</p>}
       {f.back?.error &&
         (f.back.error.startsWith(FORCED_KEEP_PREFIX) ? (
-          <p className="col-span-2 text-meta text-muted-foreground">{C.BACK_KEPT_FORCED}</p>
+          <p className="col-span-2 text-meta text-muted-foreground">{f.back.error}</p>
         ) : (
           <p role="alert" className="col-span-2 text-meta text-danger">{C.BACK_FAILED(f.back.error)}</p>
         ))}
