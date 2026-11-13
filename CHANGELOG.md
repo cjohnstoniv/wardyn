@@ -13,11 +13,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- Helm chart: a `WARDYN_BASE_PATH` or `WARDYN_MIGRATE_TIMEOUT` set in `extraEnv` through `valueFrom` now fails the render, because the chart sets the probes from both. Set a literal value, or `basePath` for the base path. Before, the chart ignored such an entry when it set the probes.
+- Helm chart: with `basePath` set and a `WARDYN_BASE_PATH` in `extraEnv`, the chart now writes only the `extraEnv` entry, where before it also wrote its own from `basePath`. A release that set both before this chart can lose `WARDYN_BASE_PATH` from the Deployment on a `helm upgrade` that leaves one entry where there were two, because the upgrade removes the entry by name. That is the first upgrade to this chart, or an upgrade on an earlier chart that drops one of the two settings, so setting the base path in one place first does not avoid it. After such an upgrade, check that the Deployment still sets `WARDYN_BASE_PATH`. Without it wardynd serves at the root while the probes ask under the base path, and the pod is restarted until the variable is set again.
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
 
 ### Fixed
 
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
+- Helm chart: the liveness, readiness and startup probes and the ServiceMonitor path now follow a `WARDYN_BASE_PATH` set in `extraEnv`. Before, they followed only `basePath` or `env`, so with a different base path in `extraEnv` the probes failed and the pod was restarted.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
 

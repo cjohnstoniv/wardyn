@@ -201,8 +201,9 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Postgres. By default allow to any destination on the DB port (managed
-    # Postgres is commonly out-of-cluster); restrict with networkPolicy.egress.extra.
+    # Postgres: any destination on the DB port, because managed Postgres is
+    # commonly out of the cluster. networkPolicy.egress.extra only adds rules,
+    # so it cannot narrow this one.
     - ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.postgres.port }}

@@ -48,21 +48,26 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
 {{- /* basePath (WARDYN_BASE_PATH): wardynd serves /healthz and /readyz under it,
-so the probes must follow whatever the CONTAINER actually gets — an explicit
-env.WARDYN_BASE_PATH wins, even an empty one (the WARDYN_BASE_PATH entry below is
-added from basePath only when env has no such key), basePath otherwise. Same
-precedence both places, so the probes and the daemon can never disagree. */ -}}
-{{- $basePath := ternary (get .Values.env "WARDYN_BASE_PATH") (.Values.basePath | default "") (hasKey .Values.env "WARDYN_BASE_PATH") -}}
+so the probes follow whatever the CONTAINER actually gets (wardyn.basePath). The
+chart reads WARDYN_BASE_PATH and WARDYN_MIGRATE_TIMEOUT at render to aim and size
+the probes, so an extraEnv entry that sets either through valueFrom is refused:
+the probes would follow a value the pod does not get. */ -}}
+{{- range list "WARDYN_BASE_PATH" "WARDYN_MIGRATE_TIMEOUT" -}}
+{{- if eq (include "wardyn.envValue" (dict "ctx" $ "name" .)) "<valueFrom>" -}}
+{{- fail (printf "wardyn: extraEnv sets %s through valueFrom, which the chart cannot read at render. The liveness, readiness and startup probes follow WARDYN_BASE_PATH, and the startup window is sized from WARDYN_MIGRATE_TIMEOUT, so a value the chart cannot see leaves them wrong. Set it as a literal value in env or extraEnv, or use basePath for the base path." .) -}}
+{{- end -}}
+{{- end -}}
+{{- $basePath := include "wardyn.basePath" . -}}
 {{- /*
 startupProbe budget: wardynd's /healthz binds only after its fixed 30s connect and its migration
 (WARDYN_MIGRATE_TIMEOUT, default 5m) finish, so the probe window must outlast both or the kubelet
-kills the pod mid-migration. The timeout is read the way the container gets it: an extraEnv entry
-(rendered later, so it wins) over env, else wardynd's own 5m. Only h, m and s units are accepted, so
-the sum is exact; a spelling this cannot read fails the render rather than guessing a window.
+kills the pod mid-migration. The timeout is read the way the container gets it (wardyn.envValue: an
+extraEnv entry, rendered later, wins over env; unset or empty is wardynd's own 5m). Only h, m and s
+units are accepted, so the sum is exact; a spelling this cannot read fails the render rather than
+guessing a window.
 failureThreshold = (30s connect + migrate + 120s slack) / the 5s probe period, rounded up; the default 5m gives 90.
 */ -}}
-{{- $migrateTimeout := (get .Values.env "WARDYN_MIGRATE_TIMEOUT") | default "5m" | toString -}}
-{{- range .Values.extraEnv }}{{ if and (eq (.name | toString) "WARDYN_MIGRATE_TIMEOUT") .value }}{{ $migrateTimeout = .value | toString }}{{ end }}{{ end -}}
+{{- $migrateTimeout := include "wardyn.envValue" (dict "ctx" . "name" "WARDYN_MIGRATE_TIMEOUT") | default "5m" -}}
 {{- if not (regexMatch `^([0-9]+(\.[0-9]+)?[hms])+$` $migrateTimeout) -}}
 {{- fail (printf "wardyn: WARDYN_MIGRATE_TIMEOUT %q is not readable by the chart; spell it with h, m and s only, e.g. 5m, 90s or 1h30m, so the startupProbe window can follow it" $migrateTimeout) -}}
 {{- end -}}
@@ -299,7 +304,7 @@ spec:
             - name: WARDYN_SCIM_LEAVER_WORKSPACES
               value: {{ $scim.leaverWorkspaces | quote }}
             {{- end }}
-            {{- if and .Values.basePath (not (hasKey .Values.env "WARDYN_BASE_PATH")) }}
+            {{- if and .Values.basePath (not (hasKey $eff "WARDYN_BASE_PATH")) }}
             - name: WARDYN_BASE_PATH
               value: {{ .Values.basePath | quote }}
             {{- end }}

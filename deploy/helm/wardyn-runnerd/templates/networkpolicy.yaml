@@ -1,8 +1,9 @@
 {{/*
 runnerd's own policy, default-deny both ways. Ingress: only the proxy pods of its runs namespaces, on the relay
 and sink ports, so an agent pod (wardyn.component=agent) cannot reach runnerd. The substrate refuses a run's
-extra labels that would set wardyn.component. Egress: DNS, the apiserver and the organisation; the default
-organisation rule excludes the private ranges pods use, so runnerd has no route to sandbox pods.
+extra labels that would set wardyn.component. Egress: DNS, the apiserver and the organisation. The default
+organisation rule excludes the private ranges pods use, but the apiserver rule does not: with apiServer.peers
+empty it opens its ports to any address, the pod network included. egress.extra only adds rules.
 
 The runs namespace gets no chart default-deny: the boot canary's phase A would read it as an ambient deny.
 */}}

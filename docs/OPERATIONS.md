@@ -2517,7 +2517,7 @@ grep 'daemon egress proxy configured' <logs>
   - Register and set `WARDYN_OIDC_REDIRECT_URL` under the base (`https://host.example.com/wardyn/auth/callback`); boot refuses one outside it, naming both variables.
   - The Azure DevOps callback is derived from it and carries the base itself.
 - **Health checks** move with the prefix: `/wardyn/healthz`, `/wardyn/readyz`.
-  - The chart's probes follow `basePath` (or an `env.WARDYN_BASE_PATH`); a compose or external health check has to be edited by hand.
+  - The chart's probes follow `basePath` or a `WARDYN_BASE_PATH` in `env`/`extraEnv`; a compose or external health check has to be edited by hand.
 - **What stays at the root.**
   - The proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`, the default `https` `WARDYN_CONTROL_PLANE_URL`) is not behind your reverse proxy, so runs keep dialling it at the root.
   - A plain `http://` loopback control-plane URL reaches the console listener instead, so it has to end in the base (`http://127.0.0.1:8080/wardyn`); boot refuses one that does not.
@@ -3855,7 +3855,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 | Install | How |
 |---|---|
 | Compose | Set it in `.env`. Compose passes it on. The override file below also works: name it with a second `-f` if you pass `-f` yourself |
-| Helm | `--set env.WARDYN_MIGRATE_TIMEOUT=30m`, or an `extraEnv` entry of that name. The startup probe follows it. Give `helm upgrade --timeout` more than the migration needs |
+| Helm | `--set env.WARDYN_MIGRATE_TIMEOUT=30m`, or a literal `extraEnv` entry. The startup probe follows it. Give `helm upgrade --timeout` more than the migration needs |
 
 ```yaml
 # docker-compose.override.yaml
