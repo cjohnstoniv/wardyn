@@ -159,6 +159,7 @@ copy is permanent.
     for a full window of its own.
   - So such a row can outlive the run's end by more than the window.
   - For a row that holds output the excess is small in normal operation.
+  - A row recovered from live output a stopped server left is written at its recovery, which can be any time inside the window.
   - Recovering bytes needs the run's masking manifest, which the run-secret sweep removes about an hour after the
     run's last change (`api.RunSecretGrace`, checked every 15 minutes).
   - A `capture_gap` row holds no output.

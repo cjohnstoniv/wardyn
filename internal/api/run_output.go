@@ -445,7 +445,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	v, kept := s.readExecOutput(id, limit, run.State.IsTerminal())
 	// No tail in this process: the replica that holds it has been writing it to run_output_chunks.
-	if !kept && s.readSharedOutput(w, r, id, limit) {
+	if !kept && s.readSharedOutput(w, r, run, limit) {
 		return
 	}
 	if kept {

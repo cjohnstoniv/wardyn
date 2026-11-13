@@ -545,7 +545,7 @@ func TestMiscCovReadSharedOutput(t *testing.T) {
 	read := func(t *testing.T, srv *Server, id uuid.UUID, limit int) (*httptest.ResponseRecorder, bool) {
 		t.Helper()
 		w := httptest.NewRecorder()
-		ok := srv.readSharedOutput(w, httptest.NewRequest(http.MethodGet, "/", nil), id, limit)
+		ok := srv.readSharedOutput(w, httptest.NewRequest(http.MethodGet, "/", nil), types.AgentRun{ID: id}, limit)
 		return w, ok
 	}
 

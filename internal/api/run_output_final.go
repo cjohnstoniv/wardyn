@@ -671,9 +671,11 @@ func withFinalizeStep(data map[string]any) map[string]any {
 }
 
 // SweepRunOutputs is one pass of the retention sweeper: it deletes final rows
-// older than the retention window, then resolves the pending rows of terminal
-// runs whose claim went stale to capture-gap rows (when persistence is on, the
-// only time pending rows are written). A tail this process still holds is the
+// older than the retention window and the live chunks of runs that ended
+// before it, gives chunks that have no row the pending row they were owed
+// (adoptOrphanChunks), then resolves the pending rows of terminal runs whose
+// claim went stale to capture-gap rows (when persistence is on, the only time
+// pending rows are written). A tail this process still holds is the
 // finisher's own, and is left alone.
 func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	st, _ := s.cfg.Store.(store.RunOutputStore)
@@ -690,12 +692,19 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/run-output-sweeper", "run.output.retention.sweep",
 				"run_outputs", "success", mustJSON(map[string]any{"deleted": n, "retention_days": int(retention.Hours() / 24)})))
 		}
+		// A run's live chunks expire with it, whatever row it has: a fault can leave chunks no row ages.
+		if err := s.deleteEndedRunOutputChunks(ctx, retention); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if err := s.sweepAgentCasts(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if s.cfg.RunOutputPersistOff {
 		return firstErr
+	}
+	if err := s.adoptOrphanChunks(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if err := s.sweepStalePending(ctx, st); err != nil {
 		return err
