@@ -110,7 +110,7 @@ func TestRunPolicyGeneration_AdvanceOnAStaleGenerationChangesNothing(t *testing.
 	if _, _, err := pg.RetireRunTokenLineage(ctx, r.ID, "jti-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.BeginProxyStart(ctx, r.ID, 1, "jti-1", store.ProxyStartExpected); err != nil {
+	if _, err := pg.BeginProxyStart(ctx, r.ID, 1, "jti-1", store.ProxyStartExpected, false); err != nil {
 		t.Fatal(err)
 	}
 	if gen, err := pg.AdvanceRunPolicyGeneration(ctx, r.ID, store.PolicySlot{Generation: 1}, "d2", nil, "jti-2", []byte("sealed-2")); err != nil || gen != 2 {
