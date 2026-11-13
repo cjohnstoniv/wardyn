@@ -21,8 +21,8 @@ import { DESKTOP_FILES as C } from "../src/app/components/wardyn/copy/desktop-fi
 const RUN_TASK = "e2e fixture 2";
 const SHA = "9f2c" + "0".repeat(56) + "41ab";
 
-// The page clock is pinned to this instant, so "asked an hour ago" prints a time of day, never a date.
-const NOW = Date.parse("2026-06-15T12:00:00Z");
+// The page clock is pinned to noon UTC today, so "asked an hour ago" prints a time of day, never a date.
+const NOW = new Date().setUTCHours(12, 0, 0, 0);
 
 interface Req {
   id: string;
