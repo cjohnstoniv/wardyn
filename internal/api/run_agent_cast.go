@@ -377,18 +377,22 @@ const agentCastReadGiveUp = 30 * time.Minute
 // never raced.
 const agentCastSweepAge = runOutputPendingStale
 
+// agentCastSweepPage is how many owed runs one sweep takes.
+const agentCastSweepPage = 200
+
 // sweepAgentCasts settles every terminal run that still owes its agent output cast, whatever its output
 // row says: a cast already stored gets its row and settles it (settleStoredAgentCasts); else the
 // runner's copy is re-read into an agent-recovered cast; else the run is marked runner_declined with the
-// failure row. A run this process still holds a tail for is left to that tail. The first error is returned; the obligation stays for the next sweep.
+// failure row. A run this process still holds a tail for is left to that tail. One page per pass, from where the last pass stopped (the page wraps to the oldest after a short one). The first error is returned; the obligation stays for the next sweep.
 func (s *Server) sweepAgentCasts(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.RunAgentCastStore)
 	if !ok || s.cfg.RecordingStore == nil {
 		return nil
 	}
-	ids, err := st.ListRunsAgentCastOwed(ctx, agentCastSweepAge, 200)
+	after := s.execOutputs.sweep.get(&s.execOutputs.sweep.agentCast)
+	ids, next, err := st.ListRunsAgentCastOwed(ctx, agentCastSweepAge, after, agentCastSweepPage)
 	if err != nil {
-		return err
+		return err // the position is kept: the next sweep reads the same page
 	}
 	var firstErr error
 	for _, id := range ids {
@@ -398,6 +402,9 @@ func (s *Server) sweepAgentCasts(ctx context.Context) error {
 		if err := s.sweepAgentCast(ctx, st, id); err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+	if ctx.Err() == nil {
+		s.execOutputs.sweep.set(&s.execOutputs.sweep.agentCast, next)
 	}
 	return firstErr
 }

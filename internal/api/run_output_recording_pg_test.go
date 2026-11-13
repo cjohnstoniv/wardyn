@@ -380,3 +380,129 @@ func TestRecordingOutputPG_SweepDeadlineInsideAReadIsNotAGapOrAFailedPass(t *tes
 		t.Fatal("a read over its budget lost its durable work")
 	}
 }
+
+// finalizeReasonCount is how many run.output.finalize rows the lab recorded with reason.
+func (l *maskLab) finalizeReasonCount(reason string) int {
+	n := 0
+	for _, ev := range l.recEvents("run.output.finalize") {
+		if strings.Contains(string(ev.Data), `"reason":"`+reason+`"`) {
+			n++
+		}
+	}
+	return n
+}
+
+// stalePendingRecordingRun is an ended recording run with a stdout pending row claimed ten minutes ago (stale for
+// the sweep) and its recording recovery queued, as a run whose finalisation never settled leaves it.
+func (l *maskLab) stalePendingRecordingRun(secret string) types.AgentRun {
+	l.t.Helper()
+	a := l.recordingReplica()
+	run := l.run()
+	a.dispatch(l.t, run, secret)
+	run = l.recordingRunEnded(run)
+	if _, err := l.pool.Exec(l.t.Context(), `INSERT INTO run_outputs (run_id, source, claimed_at)
+		VALUES ($1, 'stdout', now() - interval '10 minutes')`, run.ID); err != nil {
+		l.t.Fatal(err)
+	}
+	if err := store.NewPG(l.pool).QueueRecordingRunOutput(l.t.Context(), run.ID, 0, time.Minute, true); err != nil {
+		l.t.Fatal(err)
+	}
+	return run
+}
+
+const staleRecordingGapRows = `SELECT count(*) FROM run_outputs
+	WHERE run_id=$1 AND source='stdout' AND capture_gap AND captured_at IS NOT NULL`
+
+// A stale pending row whose recording was erased ends as a capture gap on the next sweep, with its reason on the
+// run.output.finalize row, instead of staying pending for good.
+func TestRecordingOutputPG_StalePendingOnAnErasedRecordingEndsAsAGap(t *testing.T) {
+	l := newMaskLab(t)
+	run := l.stalePendingRecordingRun("erased-stale-secret-value")
+	b := l.recordingReplica()
+	b.srv.cfg.RecordingStore = &outputRecordingStore{Store: b.srv.cfg.RecordingStore, open: func(context.Context, string) (io.ReadCloser, error) {
+		return nil, recording.ErrErased
+	}}
+	if err := b.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if l.count(staleRecordingGapRows, run.ID) != 1 {
+		t.Fatal("a stale pending row on an erased recording did not end as a capture gap")
+	}
+	if l.count(`SELECT count(*) FROM run_output_recording_recovery WHERE run_id=$1 AND erased_at IS NOT NULL`, run.ID) != 1 {
+		t.Fatal("the erased recording was not fenced")
+	}
+	if n := l.finalizeReasonCount("recording_erased"); n != 1 {
+		t.Fatalf("run.output.finalize rows with reason recording_erased = %d, want 1", n)
+	}
+}
+
+// A stale pending row whose recording read runs over its budget stays pending while the run ended recently, and
+// becomes a capture gap, reason recording_over_budget, once the run ended longer ago than the give-up.
+func TestRecordingOutputPG_StalePendingOverBudgetEndsAsAGapAfterTheGiveUp(t *testing.T) {
+	l := newMaskLab(t)
+	run := l.stalePendingRecordingRun("slow-stale-secret-value")
+	b := l.recordingReplica()
+	b.srv.runOutputRecoverWaitOverride = 50 * time.Millisecond
+	b.srv.cfg.RecordingStore = &outputRecordingStore{Store: b.srv.cfg.RecordingStore, open: func(ctx context.Context, _ string) (io.ReadCloser, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	if err := b.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if l.count(`SELECT count(*) FROM run_outputs WHERE run_id=$1 AND captured_at IS NULL`, run.ID) != 1 ||
+		l.finalizeReasonCount("recording_over_budget") != 0 {
+		t.Fatal("a read over its budget just after the run ended was settled; it must stay pending for a later try")
+	}
+	if _, err := l.pool.Exec(t.Context(), `UPDATE agent_runs SET ended_at = now() - interval '1 hour' WHERE id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Past the claim's cooldown, so the next sweep may read again.
+	if _, err := l.pool.Exec(t.Context(), `UPDATE run_output_recording_recovery SET claimed_at = now() - interval '10 minutes' WHERE run_id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if l.count(staleRecordingGapRows, run.ID) != 1 {
+		t.Fatal("a stale pending row over its read budget past the give-up did not end as a capture gap")
+	}
+	if n := l.finalizeReasonCount("recording_over_budget"); n != 1 {
+		t.Fatalf("run.output.finalize rows with reason recording_over_budget = %d, want 1", n)
+	}
+}
+
+// The give-up is answered on the database's clock: a run whose stored end is 31 minutes old by now() has given up,
+// one whose end is 29 minutes old has not, whatever this process's clock says; ended_at absent falls back to
+// updated_at, and a run that is not there has not given up.
+func TestRecordingOutputPG_GiveUpReadsTheDatabaseClock(t *testing.T) {
+	l := newMaskLab(t)
+	b := l.recordingReplica()
+	b.srv.cfg.Now = func() time.Time { return time.Now().Add(24 * time.Hour) } // a far-ahead process clock is ignored
+	st := b.srv.runOutputStore()
+	set := func(run types.AgentRun, q string) {
+		t.Helper()
+		if _, err := l.pool.Exec(t.Context(), q, run.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old, recent, noEnd := l.run(), l.run(), l.run()
+	set(old, `UPDATE agent_runs SET state='COMPLETED', ended_at = now() - interval '31 minutes' WHERE id=$1`)
+	set(recent, `UPDATE agent_runs SET state='COMPLETED', ended_at = now() - interval '29 minutes' WHERE id=$1`)
+	set(noEnd, `UPDATE agent_runs SET state='COMPLETED', ended_at = NULL, updated_at = now() - interval '31 minutes' WHERE id=$1`)
+	for _, c := range []struct {
+		name string
+		id   uuid.UUID
+		want bool
+	}{{"ended 31 minutes ago", old.ID, true}, {"ended 29 minutes ago", recent.ID, false},
+		{"no ended_at, updated 31 minutes ago", noEnd.ID, true}, {"no such run", uuid.New(), false}} {
+		if got := b.srv.recordingReadGaveUp(t.Context(), st, c.id); got != c.want {
+			t.Errorf("%s: gave up = %v, want %v", c.name, got, c.want)
+		}
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if b.srv.recordingReadGaveUp(cancelled, st, old.ID) {
+		t.Error("a failed read gave up; it must leave the row pending")
+	}
+}

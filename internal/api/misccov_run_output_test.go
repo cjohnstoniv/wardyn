@@ -133,15 +133,15 @@ func (s *miscCovOutStore) DeleteRunOutputsOlderThan(context.Context, time.Durati
 	return s.deleteN, s.deleteErr
 }
 
-func (s *miscCovOutStore) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, limit int) ([]uuid.UUID, error) {
+func (s *miscCovOutStore) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, after *store.SweepCursor, limit int) ([]uuid.UUID, *store.SweepCursor, error) {
 	s.mu.Lock()
 	s.listed++
 	err := s.listErr
 	s.mu.Unlock()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return s.memRunOutputs.ListStalePendingRunOutputs(ctx, age, limit)
+	return s.memRunOutputs.ListStalePendingRunOutputs(ctx, age, after, limit)
 }
 
 func (s *miscCovOutStore) SaveFinalRunOutput(ctx context.Context, o store.RunOutput) error {
