@@ -11,6 +11,7 @@ package pg
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -201,8 +202,8 @@ func TestPG_ConvertV0_ACommitFailureReturnsEveryOpenedRow(t *testing.T) {
 	s, _ := New(pool, id)
 
 	converted, err := s.ConvertV0(ctx, id)
-	if err == nil || !strings.Contains(err.Error(), "convert commit") {
-		t.Fatalf("ConvertV0 = %v, want a commit failure", err)
+	if err == nil || !strings.Contains(err.Error(), "convert commit") || !errors.Is(err, ErrCommitOutcomeUnknown) {
+		t.Fatalf("ConvertV0 = %v, want a commit failure whose outcome it calls unknown", err)
 	}
 	if len(converted) != 2 || converted[0].Name != "a-first" || converted[1].Name != "b-second" {
 		t.Fatalf("returned rows = %+v, want a-first and b-second", converted)
@@ -211,6 +212,55 @@ func TestPG_ConvertV0_ACommitFailureReturnsEveryOpenedRow(t *testing.T) {
 		if r.version != 0 {
 			t.Errorf("%s is enc_version %d after a failed commit, want 0", k, r.version)
 		}
+	}
+}
+
+// A COMMIT that lands but whose reply is lost is an error to the conversion
+// while every row is already v1. The error must call the outcome unknown and
+// never say nothing was committed; every row then reads under the same key,
+// and the next boot's conversion finds nothing left to do.
+func TestPG_ConvertV0_ACommitWhoseReplyIsLostIsUnknownAndEveryRowStillReads(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id := mustIdentity(t)
+	for _, f := range v0Fixture {
+		seedV0(t, pool, id, f.owner, f.name, f.value)
+	}
+	lost := errors.New("injected: the commit's reply was lost")
+	prev := convertCommitResult
+	t.Cleanup(func() { convertCommitResult = prev })
+	convertCommitResult = func(err error) error {
+		if err != nil {
+			t.Errorf("the real commit failed before the injected error: %v", err)
+		}
+		return lost
+	}
+	s, err := New(pool, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	converted, err := s.ConvertV0(ctx, id)
+	if !errors.Is(err, lost) || !errors.Is(err, ErrCommitOutcomeUnknown) || strings.Contains(err.Error(), "nothing committed") {
+		t.Fatalf("ConvertV0 = %v, want the injected commit error, called unknown, with no claim that nothing was committed", err)
+	}
+	if len(converted) != len(v0Fixture) {
+		t.Fatalf("returned %d rows, want every opened row (%d)", len(converted), len(v0Fixture))
+	}
+	convertCommitResult = prev
+	after := rawRows(t, pool)
+	for _, f := range v0Fixture {
+		if r := after[rowRef(f.owner, f.name)]; r.version != encVersion {
+			t.Errorf("%s is enc_version %d after the commit landed, want %d", rowRef(f.owner, f.name), r.version, encVersion)
+		}
+		got, err := s.For(f.owner).Get(ctx, f.name)
+		if err != nil || string(got) != f.value {
+			t.Errorf("Get %s after the lost reply = (%q, %v), want the original value", rowRef(f.owner, f.name), got, err)
+		}
+	}
+	again, err := s.ConvertV0(ctx, id)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("the next conversion = (%d, %v), want (0, nil)", len(again), err)
 	}
 }
 

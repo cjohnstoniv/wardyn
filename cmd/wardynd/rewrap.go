@@ -180,6 +180,16 @@ func retireStep(id, v string) string {
 	return fmt.Sprintf("%s version %s; raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v)
 }
 
+// failureReason is a maintenance mode's audit reason for a failed run: unknown
+// when the error came from a COMMIT (secretstorepg.ErrCommitOutcomeUnknown),
+// whose reply can be lost after the commit landed, and aborted otherwise.
+func failureReason(err error) string {
+	if errors.Is(err, secretstorepg.ErrCommitOutcomeUnknown) {
+		return "unknown"
+	}
+	return "aborted"
+}
+
 // optionalIdentity is the platform identity as the interface the store takes:
 // nil stays an untyped nil, never a typed nil that reads as "a key is set".
 func optionalIdentity(id *age.X25519Identity) age.Identity {
@@ -197,11 +207,13 @@ const rewrapAbortAuditTimeout = 5 * time.Second
 // boot keys now sit under a separate platform key, how many principal keys
 // moved with them, and, when a key service wraps every write, its kek_id and the
 // key version every row and principal key is now under.
-// An aborted run's event is outcome failure, reason aborted: its count is
-// what was committed (0 — the rewrap is one transaction), and it carries no
-// key_version, since no row moved to it. A run refused over its boot keys is
-// reason refused with refusal mixed_boot_keys or adopt_not_requested, so a
-// rule can fire on the tamper signal. Like secret.rekey it names no secret.
+// A failed run's event is outcome failure, reason aborted, or reason unknown
+// when its commit returned an error (failureReason). Its count is 0 either
+// way: an abort committed nothing (the rewrap is one transaction), and after a
+// commit error the count is not known. It carries no key_version. A run
+// refused over its boot keys is reason refused with refusal mixed_boot_keys or
+// adopt_not_requested, so a rule can fire on the tamper signal. Like
+// secret.rekey it names no secret.
 func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool, failure error) {
 	fields := map[string]any{"secrets": res.Rewrapped, "principal_keys": res.PrincipalKeys, "platform_key_separate": separate}
 	if res.Rotated {
@@ -217,7 +229,7 @@ func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.
 	case errors.Is(failure, secretstorepg.ErrAdoptNotRequested):
 		outcome, fields["reason"], fields["refusal"] = "failure", "refused", "adopt_not_requested"
 	case failure != nil:
-		outcome, fields["reason"] = "failure", "aborted"
+		outcome, fields["reason"] = "failure", failureReason(failure)
 	case res.KeyVersion != "":
 		fields["key_version"] = res.KeyVersion
 	}

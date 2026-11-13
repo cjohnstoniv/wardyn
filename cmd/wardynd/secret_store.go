@@ -374,8 +374,9 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 		return nil
 	}
 	converted, err := ps.ConvertV0(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), id)
-	// An aborted conversion still opened the rows it returns: each is a read
-	// with outcome failure, since nothing it did was committed.
+	// A failed conversion still opened the rows it returns: each is a read with
+	// outcome failure, since the boot refuses to start. Only after a commit
+	// error can the conversion itself have landed (ErrCommitOutcomeUnknown).
 	for _, row := range converted {
 		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, err)
 	}

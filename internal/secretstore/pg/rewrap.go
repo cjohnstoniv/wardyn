@@ -356,10 +356,15 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 	// A COMMIT error does not prove a rollback: the reply can be lost after the
 	// server committed, so this error claims neither outcome.
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, fmt.Errorf("pg secretstore: %s commit (%d rows, %d principal keys) returned an error, so whether it took effect is UNKNOWN — a commit whose reply is lost can still have landed: %w", op, n, pk, err)
+		return 0, 0, fmt.Errorf("pg secretstore: %s commit (%d rows, %d principal keys): %w — a commit whose reply is lost can still have landed: %w", op, n, pk, ErrCommitOutcomeUnknown, err)
 	}
 	return n, pk, nil
 }
+
+// ErrCommitOutcomeUnknown marks an error returned by a transaction's COMMIT.
+// It does not prove a rollback: a commit whose reply is lost can still have
+// landed. A maintenance mode records it as reason unknown, never as aborted.
+var ErrCommitOutcomeUnknown = errors.New("the commit returned an error, so whether it took effect is unknown")
 
 // rewrap moves one row's data key from the KEK source names for it to to.
 func rewrap(ctx context.Context, source func(envelope) (kek.KEK, error), to kek.KEK, e envelope) ([]byte, error) {
