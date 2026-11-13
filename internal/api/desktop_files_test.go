@@ -14,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -257,6 +259,73 @@ func TestDesktopFiles_NoSandboxRefRefusesEveryEndpoint(t *testing.T) {
 	}
 	if e.folder.execs != 0 {
 		t.Fatalf("%d execs reached the sandbox", e.folder.execs)
+	}
+}
+
+// A run that ends after desktopRun read it takes no list, upload or download: whether the end landed while the
+// door waited for the run's lock (an end that keeps the sandbox for its computer folder's pass back holds it) or
+// during a transfer's thaw (the stamp answers false, nil), each answers the ended run's 409 attach_not_running and
+// nothing reaches its sandbox. Catches: a desktop exec admitted on desktopRun's read alone, and no read after the thaw.
+func TestDesktopFiles_ARunThatEndsBeforeItsExecTakesNoExec(t *testing.T) {
+	allowed := &types.DesktopControls{Upload: types.TransferAllowed, Download: types.TransferAllowed}
+	for _, c := range []struct{ when, method, name, body string }{
+		{"lock", http.MethodGet, "", ""},
+		{"lock", http.MethodPut, "notes.csv", "x"},
+		{"lock", http.MethodGet, "agent-report.csv", ""},
+		{"thaw", http.MethodPut, "notes.csv", "x"},
+		{"thaw", http.MethodGet, "agent-report.csv", ""},
+	} {
+		e := newDesktopFilesEnv(t, allowed)
+		ast := e.srv.cfg.Store.(*envelopeStore).Store.(*touchCountingStore).authzStore
+		end := func() { endRun(ast, e.run.ID, func(r *types.AgentRun) { r.State = types.RunCompleted }) }
+		if c.when == "lock" {
+			lockEndsRun(e.srv, e.run.ID, end)
+		} else {
+			e.srv.cfg.Store = &endsAtTheStamp{Store: e.srv.cfg.Store, end: end}
+		}
+		w := doSSO(t, e.srv, c.method, e.path(c.name), e.ses["owner"], c.body)
+		if w.Code != http.StatusConflict || reasonOf(t, w) != reasonAttachNotRunning || e.folder.execs != 0 {
+			t.Errorf("%s %q into a run that ended at its %s: %d %s, %d execs; want 409 %s and no exec",
+				c.method, c.name, c.when, w.Code, w.Body.String(), e.folder.execs, reasonAttachNotRunning)
+		}
+	}
+}
+
+// TestDesktopFiles_HoldsTheRunLockOnlyToStart: a download holds the run's operation lock while its exec starts and
+// gives it back once the exec has started, while the file is still moving, so an end never waits out a transfer.
+// The exec's output stays open until the test has seen the lock free. Catches: a desktop exec that keeps the lock
+// for the whole transfer, and one that lets it go before its exec starts.
+func TestDesktopFiles_HoldsTheRunLockOnlyToStart(t *testing.T) {
+	e := newDesktopFilesEnv(t, &types.DesktopControls{Download: types.TransferAllowed})
+	outR, outW := io.Pipe()
+	_, inW := io.Pipe()
+	heldAtStart := &atomic.Bool{}
+	started := make(chan struct{})
+	e.srv.cfg.Runner = &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+		_, unlock, ok := e.srv.tryLockRunOp(context.Background(), e.run.ID)
+		if ok {
+			unlock()
+		}
+		heldAtStart.Store(!ok)
+		close(started)
+		return &runner.ExecSession{Stdin: inW, Stdout: outR, Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { return 0, nil }, Close: func() error { return outW.Close() }}, nil
+	}}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- doSSO(t, e.srv, http.MethodGet, e.path("agent-report.csv"), e.ses["owner"], "") }()
+	<-started
+	free := runLockFreeWithin(e.srv, e.run.ID, 10*time.Second)
+	_, _ = outW.Write([]byte(fileSentinel))
+	_ = outW.Close()
+	w := <-done
+	if !heldAtStart.Load() {
+		t.Error("the run's lock was free while the download's exec was starting")
+	}
+	if !free {
+		t.Error("the run's lock was still held 10 s into a download whose exec had started")
+	}
+	if w.Code != http.StatusOK || w.Body.String() != fileSentinel {
+		t.Errorf("download = %d %q, want 200 with the file", w.Code, w.Body.String())
 	}
 }
 

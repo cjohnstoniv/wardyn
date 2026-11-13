@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -115,14 +116,10 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	if s.refuseBackgroundOnly(w, r, run, "desktop") {
 		return run, types.DesktopControls{}, false
 	}
-	switch {
-	case run.State != types.RunRunning || run.SandboxRef == "":
-		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; no files can move (state="+string(run.State)+")")
+	if refuseDesktopNotLive(w, run) {
 		return run, types.DesktopControls{}, false
-	case runIsKept(run):
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; no files can move")
-		return run, types.DesktopControls{}, false
-	case s.cfg.Runner == nil:
+	}
+	if s.cfg.Runner == nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonUIGatewayNoRunner, "no runner configured; the desktop's files are unavailable")
 		return run, types.DesktopControls{}, false
 	}
@@ -144,9 +141,69 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	return run, rules, true
 }
 
-// desktopExec runs one in-sandbox half with stdin as its input, streaming its stdout to out.
-func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, script string, stdin io.Reader, out func(io.Reader) error, args ...string) (int, error) {
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: append([]string{"sh", "-c", script, "sh"}, args...)})
+// refuseDesktopNotLive answers a run with no live sandbox to move files to: not RUNNING, no sandbox, or kept.
+// True when it has answered.
+func refuseDesktopNotLive(w http.ResponseWriter, run types.AgentRun) bool {
+	switch {
+	case run.State != types.RunRunning || run.SandboxRef == "":
+		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; no files can move (state="+string(run.State)+")")
+	case runIsKept(run):
+		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; no files can move")
+	default:
+		return false
+	}
+	return true
+}
+
+// desktopAdmit reads run again under its operation lock before a desktop exec, so nothing is sent into a run that
+// ended after desktopRun read it: every end that keeps the sandbox for its computer folder's pass back holds that
+// lock through its terminal write (lockRunEnd). A transfer (thaw) thaws the fresh row and reads it once more, since
+// a stamp that found the run ended is no thaw owed; a list, which never thaws, refuses it paused (runPausedReadMsg).
+// The lock stays held until admitted, which startAdmitted calls once ExecStream has returned or execStartBudget has
+// passed, so no such end lands between the last read and the exec; it is never held for the transfer. The lock's
+// context is not handed on: it ends at admitted, and the exec outlives it. ok=false: the refusal is written.
+func (s *Server) desktopAdmit(w http.ResponseWriter, r *http.Request, run types.AgentRun, thaw bool) (fresh types.AgentRun, admitted func(), ok bool) {
+	lctx, unlock, err := s.lockRunOp(r.Context(), run.ID)
+	if err != nil {
+		writeLockRefused(w, r, err)
+		return types.AgentRun{}, nil, false
+	}
+	read := func() (types.AgentRun, bool) {
+		cur, err := s.cfg.Store.GetRun(lctx, run.ID)
+		if err != nil {
+			writeServerError(w, r, "get run", err)
+			return cur, false
+		}
+		return cur, !refuseDesktopNotLive(w, cur)
+	}
+	fresh, ok = read()
+	switch {
+	case !ok:
+	case thaw:
+		at, principal := actorFromRequest(r)
+		if err := s.thawForExec(lctx, fresh, at, principal, "presence"); err != nil {
+			writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+			ok = false
+		} else {
+			fresh, ok = read()
+		}
+	case fresh.PausedAt != nil:
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
+		ok = false
+	}
+	if !ok {
+		unlock()
+		return types.AgentRun{}, nil, false
+	}
+	return fresh, sync.OnceFunc(unlock), true
+}
+
+// desktopExec runs one in-sandbox half with stdin as its input, streaming its stdout to out. startAdmitted releases
+// desktopAdmit's lock (admitted) beside the exec once ExecStream has returned, as for runExec.
+func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, admitted func(), script string, stdin io.Reader, out func(io.Reader) error, args ...string) (int, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sess, err := s.startAdmitted(ctx, cancel, run.SandboxRef, runner.ExecSpec{Argv: append([]string{"sh", "-c", script, "sh"}, args...)}, admitted)
 	if err != nil {
 		return -1, err
 	}
@@ -194,13 +251,15 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 	view := desktopFilesView{Folder: desktopTransferFolder, Rules: rules, Files: []desktopFile{}}
 	if rules.Download == types.TransferAllowed || rules.Download == types.TransferReview { // a reviewed download lists what may be asked for
 		// Reading the folder is an exec, which a paused run refuses, and a look is not a person, so it
-		// never thaws (runPausedReadMsg). With download blocked no exec runs and the rules still answer.
-		if run.PausedAt != nil {
-			writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
+		// never thaws (desktopAdmit refuses it with runPausedReadMsg). With download blocked no exec runs and
+		// the rules still answer.
+		fresh, admitted, ok := s.desktopAdmit(w, r, run, false)
+		if !ok {
 			return
 		}
+		defer admitted()
 		var listing bytes.Buffer
-		if code, err := s.desktopExec(r.Context(), run, desktopListScript, nil, func(o io.Reader) error {
+		if code, err := s.desktopExec(r.Context(), fresh, admitted, desktopListScript, nil, func(o io.Reader) error {
 			_, err := io.Copy(&listing, io.LimitReader(o, 64<<10))
 			return err
 		}, strconv.Itoa(maxDesktopListed)); err != nil || code != 0 {
@@ -251,14 +310,14 @@ func (s *Server) handleUploadDesktopFile(w http.ResponseWriter, r *http.Request)
 			fmt.Sprintf("the file is over the %d MiB limit for a desktop upload. Nothing was sent.", maxDesktopUploadBytes>>20))
 		return
 	}
-	at, principal := actorFromRequest(r)
-	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+	run, admitted, ok := s.desktopAdmit(w, r, run, true)
+	if !ok {
 		return
 	}
+	defer admitted()
 	sum := sha256.New()
 	body := io.TeeReader(io.LimitReader(r.Body, r.ContentLength), sum)
-	code, err := s.desktopExec(r.Context(), run, desktopUploadScript, body, nil, name, strconv.FormatInt(r.ContentLength, 10))
+	code, err := s.desktopExec(r.Context(), run, admitted, desktopUploadScript, body, nil, name, strconv.FormatInt(r.ContentLength, 10))
 	digest := hex.EncodeToString(sum.Sum(nil))
 	if err != nil || code != 0 {
 		s.auditDesktopTransfer(r, run, "upload", "failure", r.ContentLength, "")
@@ -292,15 +351,15 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopTransferBlocked, "this run's desktop rules block downloading files. Nothing was sent.")
 		return
 	}
-	at, principal := actorFromRequest(r)
-	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+	run, admitted, ok := s.desktopAdmit(w, r, run, true)
+	if !ok {
 		return
 	}
+	defer admitted()
 	var sent int64
 	var sum hash.Hash
 	started := false
-	code, err := s.desktopExec(r.Context(), run, desktopDownloadScript, nil, func(o io.Reader) error {
+	code, err := s.desktopExec(r.Context(), run, admitted, desktopDownloadScript, nil, func(o io.Reader) error {
 		br := bufio.NewReader(o)
 		if _, err := br.Peek(1); err != nil {
 			return nil // an empty file, or the script refused it: the exit code says which

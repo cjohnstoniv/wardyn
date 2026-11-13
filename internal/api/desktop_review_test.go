@@ -163,6 +163,30 @@ func wantNothingSent(t *testing.T, name string, w *httptest.ResponseRecorder, co
 	}
 }
 
+// TestDesktopReview_ARunThatEndsAtItsLockTakesNoExec: the two review doors, an ask and a reviewed download, admit
+// their exec as the Files panel's other doors do: a run that ends while the door waits for its lock (an end that
+// keeps the sandbox for its computer folder's pass back holds it) answers 409 attach_not_running, and nothing
+// reaches the sandbox or leaves it. Catches: a review door that thaws and execs on desktopRun's read alone.
+func TestDesktopReview_ARunThatEndsAtItsLockTakesNoExec(t *testing.T) {
+	for _, door := range []string{"ask", "release"} {
+		e := newReviewEnv(t, types.TransferReview)
+		id := e.seed(types.ApprovalFileDownload, e.run.ID, reviewFile, types.ApprovalApproved)
+		ast := e.spend.Store.(*envelopeStore).Store.(*touchCountingStore).authzStore
+		lockEndsRun(e.srv, e.run.ID, func() { endRun(ast, e.run.ID, func(r *types.AgentRun) { r.State = types.RunCompleted }) })
+		var w *httptest.ResponseRecorder
+		if door == "ask" {
+			w = e.ask(t, reviewFile)
+		} else {
+			w = e.release(t, reviewFile, id)
+		}
+		if w.Code != http.StatusConflict || reasonOf(t, w) != reasonAttachNotRunning || e.folder.execs != 0 {
+			t.Errorf("%s on a run that ended at its lock: %d %s, %d execs; want 409 %s and no exec",
+				door, w.Code, w.Body.String(), e.folder.execs, reasonAttachNotRunning)
+		}
+		wantNothingSent(t, door, w, string(e.folder.files[reviewFile]))
+	}
+}
+
 // TestDesktopReviewHoldThenReleasesExactlyThatFile: under review the folder is listed; a plain download is
 // refused; the ask raises one file_download row naming the file's name, size and hash and who asked; nothing is
 // released before the approval; the approval releases the file once and the second try is refused.
