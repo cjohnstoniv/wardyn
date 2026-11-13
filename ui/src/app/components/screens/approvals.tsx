@@ -404,12 +404,17 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // An answer lands unless a read of the same list that started after it has landed already: a poll read that started
   // before a decision must not put the decided request back, with Approve and Deny live, after the refresh that
   // shows it gone. A read still out holds no older answer back, so a list is never marked ready without one.
+  // A view switch keeps this screen mounted, so a read asked for the other view neither lands nor marks a list ready or
+  // failed here: its rows, or the ones shown before the switch, are not this view's. A decision sent before the switch
+  // asks for such a read after it.
+  const viewRef = React.useRef(view);
+  viewRef.current = view;
   const pendingAsked = React.useRef(0);
   const pendingLanded = React.useRef(0);
   const fetchPending = React.useCallback(() => {
     const read = ++pendingAsked.current;
     return api.listApprovals("PENDING", "", view).then((items) => {
-      if (read < pendingLanded.current) return;
+      if (read < pendingLanded.current || viewRef.current !== view) return;
       pendingLanded.current = read;
       setPendingItems(items);
     });
@@ -451,7 +456,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       api.listApprovals("EXPIRED", "", view),
       api.listApprovals("CANCELLED", "", view),
     ]).then(([approved, denied, expired, cancelled]) => {
-      if (read < decidedLanded.current) return;
+      if (read < decidedLanded.current || viewRef.current !== view) return;
       decidedLanded.current = read;
       // Each state is its own capped fetch, so the truncation test is per list:
       // the merged decidedItems length would false-positive on three large but
@@ -466,8 +471,6 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // the one on screen (#2487: it is up to four capped lists, and only grows).
   const filterRef = React.useRef(filter);
   filterRef.current = filter;
-  const viewRef = React.useRef(view);
-  viewRef.current = view;
   // A refresh that loads the decided lists for the view still on screen also heals a failed first load of the tab.
   // The Waiting on you list rides every refresh while the tab is possible; its failure is its own, never the screen's.
   const fetchAll = React.useCallback(() => {
@@ -509,12 +512,15 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const loadDecided = React.useCallback(() => {
     setDecidedStatus((st) => (st === "ready" ? st : "loading"));
     fetchDecided()
-      .then(() => setDecidedStatus("ready"))
+      .then(() => {
+        if (viewRef.current === view) setDecidedStatus("ready");
+      })
       .catch((e) => {
+        if (viewRef.current !== view) return;
         setDecidedMessage(failureSentence(e));
         setDecidedStatus((st) => (st === "ready" ? st : "error"));
       });
-  }, [fetchDecided]);
+  }, [fetchDecided, view]);
   // A view switch keeps this screen mounted: the other view's decided rows are not "ready" for this one.
   React.useEffect(() => setDecidedStatus("idle"), [view]);
   React.useEffect(() => {
@@ -543,12 +549,15 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const load = React.useCallback(() => {
     setStatus("loading");
     fetchPending()
-      .then(() => setStatus("ready"))
+      .then(() => {
+        if (viewRef.current === view) setStatus("ready");
+      })
       .catch((e) => {
+        if (viewRef.current !== view) return;
         setPendingMessage(failureSentence(e));
         setStatus("error");
       });
-  }, [fetchPending]);
+  }, [fetchPending, view]);
   React.useEffect(load, [load]);
 
   // A HITL queue is blocking — newly-arrived requests must surface
@@ -568,7 +577,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   usePoll(() => {
     return fetchAll()
       .then(() => {
-        setStatus("ready");
+        if (viewRef.current === view) setStatus("ready");
         onChanged?.();
       })
       .catch(() => {
