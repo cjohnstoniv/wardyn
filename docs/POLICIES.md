@@ -31,6 +31,8 @@
 
 - The console has three places a policy gets written, and all three resolve to this same JSON through this same validator — there is no separate UI schema.
 - **The [`/admin/policies`](../ui) editor.** Operator-gated. Writes a stored, named, reusable policy (`POST`/`PUT /policies`).
+  - A `PUT` must send the `updated_at` it read as `expected_updated_at`. When the policy has been saved since, it answers `409` `policy_stale` and writes nothing. Without the field it answers `400` `policy_revision_required`.
+  - `wardyn policy set <id> -f` sends the `updated_at` of the file `wardyn policy get` printed; `--overwrite` replaces the policy as it is now.
 - **The run screen's Custom policy.** An `inline_policy` on the create-run request, member-authored — this editor carries no operator gate.
   - `composer.Clamp` is the enforcement net, and a member's clamp warnings are visible before launch.
   - Preflight (`POST /runs/preflight`) runs on its own as the run is edited, and the **Check again** button runs it on demand.

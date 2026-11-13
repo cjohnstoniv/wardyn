@@ -11,6 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- `PUT /api/v1/policies/{id}` now requires `expected_updated_at`, the `updated_at` the caller read. A `PUT` without it is refused `400` with reason `policy_revision_required` and writes nothing. The console, `wardyn policy set <id> -f` and the Go client's `UpdatePolicy` (`PolicyRequest.ExpectedUpdatedAt`) send it. `wardyn policy set <id> -f` refuses a file with no `updated_at` before it sends anything: start from `wardyn policy get <id>`, or pass `--overwrite`.
+
+### Security
+
+- A save from an older copy of a stored policy no longer overwrites a newer save. Before, a second tab or a second admin saving the policy as they first opened it put back an allowed host that had since been removed. `PUT /api/v1/policies/{id}` now answers `409` with reason `policy_stale`, writing nothing, when the policy was saved after the `updated_at` the caller sent as `expected_updated_at`. The console keeps the refused edit on screen to copy, and **Discard mine and reload** loads the saved policy. `wardyn policy set <id> -f` sends the `updated_at` from a file that `wardyn policy get` printed, and `--overwrite` replaces the policy as it is now.
+
+### Before you upgrade
+
+- An older `wardyn` CLI or Go SDK can no longer save a change to a stored policy. Its `PUT /api/v1/policies/{id}` carries no `expected_updated_at`, so this server refuses it `400` `policy_revision_required`. Creating, reading and deleting policies still work. Update the CLI, and anything built on the SDK, when you update the server. A script that calls the route itself must send the `updated_at` it read as `expected_updated_at`.
+- Update the server before the CLI. A CLI from this release sends `expected_updated_at` when it replaces a policy, or creates one from a file that carries `updated_at`, which an older server refuses as an unknown field.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

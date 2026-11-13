@@ -19,12 +19,14 @@ import { aheadByHours } from "../../lib/test-clock";
 const listPoliciesMock = vi.fn();
 const createPolicyMock = vi.fn();
 const updatePolicyMock = vi.fn();
+const getPolicyMock = vi.fn();
 const getDefaultPolicyMock = vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error("not mocked")));
 vi.mock("../../lib/api/policies", () => ({
   policies: {
     listPolicies: () => listPoliciesMock(),
     createPolicy: (...a: unknown[]) => createPolicyMock(...a),
     updatePolicy: (...a: unknown[]) => updatePolicyMock(...a),
+    getPolicy: (...a: unknown[]) => getPolicyMock(...a),
     deletePolicy: vi.fn(),
     getDefaultPolicy: () => getDefaultPolicyMock(),
   },
@@ -58,6 +60,7 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { BOUNDARY } from "../../lib/boundary-copy";
 import { STATES } from "../wardyn/states";
 import { HttpError } from "../../lib/api/core";
+import { PROVIDERS, PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -361,9 +364,12 @@ describe("PoliciesScreen — reading a policy never writes it", () => {
 });
 
 describe("PoliciesScreen — the editor opens in YAML and saves what it parses to", () => {
+  // The updated_at the editor opened with, at the server's microsecond precision: the save sends it back verbatim.
+  const OPENED_AT = "2026-11-13T03:00:00.123456Z";
   beforeEach(() => {
     listPoliciesMock.mockReset();
-    listPoliciesMock.mockResolvedValue([policy()]);
+    listPoliciesMock.mockResolvedValue([policy({ updated_at: OPENED_AT })]);
+    getPolicyMock.mockReset();
     createPolicyMock.mockReset();
     updatePolicyMock.mockReset();
     updatePolicyMock.mockResolvedValue(policy());
@@ -385,10 +391,44 @@ describe("PoliciesScreen — the editor opens in YAML and saves what it parses t
     fireEvent.change(box, { target: { value: "# tightened\nallowed_domains: []\nmin_confinement_class: CC3\n" } });
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updatePolicyMock).toHaveBeenCalledTimes(1));
-    expect(updatePolicyMock).toHaveBeenCalledWith("pol-1", "payments-strict", {
-      allowed_domains: [],
-      min_confinement_class: "CC3",
-    });
+    expect(updatePolicyMock).toHaveBeenCalledWith(
+      "pol-1",
+      "payments-strict",
+      {
+        allowed_domains: [],
+        min_confinement_class: "CC3",
+      },
+      OPENED_AT,
+    );
+  });
+
+  it("a save refused because the policy was saved since keeps the draft, and Discard reloads the stored policy", async () => {
+    const box = await openEdit();
+    const draft = "allowed_domains:\n  - api.anthropic.com\n  - removed.example.com\nmin_confinement_class: CC2\n";
+    fireEvent.change(box, { target: { value: draft } });
+    updatePolicyMock.mockRejectedValueOnce(
+      new HttpError(409, "Someone saved this policy since you opened it. Reload it, then apply your edit again.", "policy_stale"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+    expect(box.value).toBe(draft);
+    expect(screen.queryByText(/Someone saved this policy since you opened it/)).not.toBeInTheDocument();
+
+    const stored = policy({ updated_at: "2026-11-13T03:05:00.654321Z", spec: { ...policy().spec, allowed_domains: ["api.anthropic.com"] } });
+    getPolicyMock.mockResolvedValueOnce(stored);
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(box.value).toBe(`${toYaml(stored.spec)}\n`));
+    expect(getPolicyMock).toHaveBeenCalledWith("pol-1");
+    expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updatePolicyMock).toHaveBeenCalledTimes(2));
+    expect(updatePolicyMock).toHaveBeenLastCalledWith(
+      "pol-1",
+      "payments-strict",
+      expect.objectContaining({ allowed_domains: ["api.anthropic.com"] }),
+      "2026-11-13T03:05:00.654321Z",
+    );
   });
 
   it("an invalid source cannot be saved: nothing is sent, least of all the last valid policy", async () => {

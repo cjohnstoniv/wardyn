@@ -41,8 +41,18 @@ describe("policy save client methods", () => {
 
   it("updatePolicy() returns the requirements the server listed", async () => {
     fetchMock.mockResolvedValueOnce(reply(200));
-    const res = await policies.updatePolicy("pol-1", "payments", spec);
+    const res = await policies.updatePolicy("pol-1", "payments", spec, "2026-11-13T03:00:00.123456Z");
     expect(res.requirements.map((r) => r.status)).toEqual(["missing", "present"]);
     expect(fetchMock.mock.calls[0][1]?.method).toBe("PUT");
+  });
+
+  it("updatePolicy() sends the updated_at it was given verbatim as expected_updated_at", async () => {
+    fetchMock.mockResolvedValueOnce(reply(200));
+    await policies.updatePolicy("pol-1", "payments", spec, "2026-11-13T03:00:00.123456Z");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      name: "payments",
+      spec,
+      expected_updated_at: "2026-11-13T03:00:00.123456Z",
+    });
   });
 });

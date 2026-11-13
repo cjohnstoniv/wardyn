@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
-import { LIST_LIMIT } from "../../lib/api/core";
+import { HttpError, LIST_LIMIT } from "../../lib/api/core";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -78,6 +78,7 @@ import {
 } from "../wardyn/availability-control";
 import { AVAILABILITY } from "../../lib/availability-copy";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
+import { SavedElsewhereBanner } from "../wardyn/saved-elsewhere-banner";
 import { ADOAccessSummary } from "../wardyn/ado-access-summary";
 import { setup as setupApi } from "../../lib/api/setup";
 import { scmAccess as scmAccessApi } from "../../lib/api/scm-access";
@@ -520,7 +521,11 @@ function PolicyEditor({
   // on the saved policy, which stays available to everyone meanwhile.
   const [audience, setAudience] = React.useState<AvailabilityDraftValue>({ restricted: false, audiences: [] });
   const [partial, setPartial] = React.useState<{ policy: RunPolicy; message: string } | null>(null);
-  const editing = partial?.policy ?? (editor?.mode === "edit" ? editor.policy : undefined);
+  // A save refused because the policy was saved since it opened (409 policy_stale): the draft stays in the
+  // editor, the shared saved-elsewhere banner offers a copy of it, and Discard reloads the stored policy.
+  const [stale, setStale] = React.useState(false);
+  const [reloaded, setReloaded] = React.useState<RunPolicy | null>(null);
+  const editing = reloaded ?? partial?.policy ?? (editor?.mode === "edit" ? editor.policy : undefined);
   // Once the create landed, closing must re-read even without another save.
   const close = partial ? onSaved : onClose;
 
@@ -529,6 +534,8 @@ function PolicyEditor({
     setError(null);
     setSaving(false);
     setPartial(null);
+    setStale(false);
+    setReloaded(null);
     setAudience({ restricted: false, audiences: [] });
     const seedName = editor.mode === "edit" && editor.policy ? editor.policy.name : "";
     const seedSpec = specToSource(editor.mode === "edit" && editor.policy ? editor.policy.spec : STARTER_SPEC);
@@ -597,7 +604,7 @@ function PolicyEditor({
     setSaving(true);
     try {
       if (editing) {
-        await api.updatePolicy(editing.id, name.trim(), spec);
+        await api.updatePolicy(editing.id, name.trim(), spec, editing.updated_at);
       } else {
         const created = await api.createPolicy(name.trim(), spec);
         try {
@@ -611,9 +618,31 @@ function PolicyEditor({
       }
       onSaved();
     } catch (e) {
+      setSaving(false);
+      if (e instanceof HttpError && e.status === 409 && e.reason === "policy_stale") {
+        setStale(true);
+        return;
+      }
       // Surface the server's validation message (HttpError carries the body).
       setError(getErrorMessage(e, "Failed to save policy."));
-      setSaving(false);
+    }
+  };
+
+  // Discard mine and reload: the stored policy replaces the draft, and the next save is made against it.
+  const reload = async () => {
+    if (!editing) return;
+    try {
+      const fresh = await api.getPolicy(editing.id);
+      const seedSpec = specToSource(fresh.spec);
+      setReloaded(fresh);
+      setName(fresh.name);
+      setSpecText(seedSpec);
+      setFormat("yaml");
+      initial.current = { name: fresh.name, specText: seedSpec };
+      setStale(false);
+      setError(null);
+    } catch (e) {
+      setError(getErrorMessage(e));
     }
   };
 
@@ -693,6 +722,7 @@ function PolicyEditor({
               )}
             </div>
           )}
+          {stale && <SavedElsewhereBanner documentText={specText} onDiscard={() => void reload()} />}
           {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
               plus wiring into the Save button's aria-describedby below — a
               rejected save previously only ever showed visually. */}

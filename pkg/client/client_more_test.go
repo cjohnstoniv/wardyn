@@ -399,13 +399,18 @@ func TestUpdatePolicy_Success(t *testing.T) {
 		if body["name"] != "renamed" {
 			t.Errorf("got name %v, want renamed", body["name"])
 		}
+		if body["expected_updated_at"] != "2026-11-13T03:00:00.123456Z" {
+			t.Errorf("got expected_updated_at %v, want the UpdatedAt the caller read, to the microsecond", body["expected_updated_at"])
+		}
 		writeJSON(w, http.StatusOK, want)
 	}))
 	defer srv.Close()
 
+	seen := time.Date(2026, 11, 13, 3, 0, 0, 123456000, time.UTC)
 	got, err := newTestClient(srv).UpdatePolicy(context.Background(), id, client.PolicyRequest{
-		Name: "renamed",
-		Spec: client.RunPolicySpec{MinConfinementClass: client.CC3},
+		Name:              "renamed",
+		ExpectedUpdatedAt: &seen,
+		Spec:              client.RunPolicySpec{MinConfinementClass: client.CC3},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

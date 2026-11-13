@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -94,12 +95,14 @@ func policyCmd(client clientFn) *cobra.Command {
 	}
 
 	var setFile, setName string
-	var setJSON bool
+	var setJSON, setOverwrite bool
 	set := &cobra.Command{
 		Use:   "set [policy-id] -f <file.json>",
 		Short: "Create a policy (no id) or replace one by id, from a JSON file ({\"name\":..., \"spec\":{...}})",
 		Long: "One upsert verb, like `secret set` and `site-config set`: no positional argument\n" +
-			"creates a new policy; a <policy-id> replaces that policy's name and spec.",
+			"creates a new policy; a <policy-id> replaces that policy's name and spec.\n" +
+			"A replace sends the file's updated_at (as `policy get` prints it) and is refused\n" +
+			"if the policy was saved since; --overwrite replaces whatever is stored now.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate a given id BEFORE reading/parsing the file: a malformed
@@ -123,7 +126,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			verb := "created"
 			if hasID {
 				verb = "updated"
-				p, err = client().UpdatePolicy(cmd.Context(), id, body)
+				p, err = replacePolicy(cmd.Context(), client(), id, body, setOverwrite)
 			} else {
 				p, err = client().CreatePolicy(cmd.Context(), body)
 			}
@@ -141,6 +144,7 @@ func policyCmd(client clientFn) *cobra.Command {
 	set.Flags().StringVarP(&setFile, "file", "f", "", "path to a JSON or YAML policy body (use '-' for stdin)")
 	set.Flags().StringVar(&setName, "name", "", "policy name (overrides/supplies the name in the file)")
 	set.Flags().BoolVar(&setJSON, "json", false, "emit the resulting policy as JSON")
+	set.Flags().BoolVar(&setOverwrite, "overwrite", false, "replace the stored policy whatever it holds now, instead of only the version whose updated_at the file carries")
 	_ = set.MarkFlagRequired("file")
 
 	del := &cobra.Command{
@@ -219,15 +223,35 @@ func policyRenderCmd() *cobra.Command {
 	return render
 }
 
+// replacePolicy replaces policy id with body, guarded by the updated_at the file
+// carried, so a file from before a later save is refused. With overwrite the
+// guard is the stored updated_at, read just before, so it replaces whatever the
+// policy holds now.
+func replacePolicy(ctx context.Context, c *sdk.Client, id uuid.UUID, body sdk.PolicyRequest, overwrite bool) (sdk.PolicySaved, error) {
+	if overwrite {
+		cur, err := c.GetPolicy(ctx, id)
+		if err != nil {
+			return sdk.PolicySaved{}, err
+		}
+		body.ExpectedUpdatedAt = &cur.UpdatedAt
+	}
+	if body.ExpectedUpdatedAt == nil {
+		return sdk.PolicySaved{}, fmt.Errorf("the file has no updated_at: start from `wardyn policy get %s`, or pass --overwrite to replace the stored policy whatever it holds now", id)
+	}
+	return c.UpdatePolicy(ctx, id, body)
+}
+
 // readPolicyFile parses a JSON policy body from path ("-" means stdin). The file
 // may contain a full body ({"name":..., "spec":{...}}) or a bare spec object;
 // when the top-level "spec" key is absent the whole document is treated as the
 // spec. A non-empty nameOverride always wins over any name in the file. The
 // enclosing body is parsed loosely (a `policy get --json` dump carries stray
-// top-level keys like "id"/"updated_at" that a round-trip edit should tolerate),
-// but the spec itself is decoded STRICT — see decodeSpecStrict — so a
+// top-level keys like "id" that a round-trip edit should tolerate), but the spec
+// itself is decoded STRICT — see decodeSpecStrict — so a
 // misspelled/unknown spec field fails here, at authoring time, instead of
-// silently vanishing into a policy the operator believes enforces it.
+// silently vanishing into a policy the operator believes enforces it. A
+// top-level "updated_at" becomes ExpectedUpdatedAt, so a replace from an older
+// dump is refused instead of undoing a later save.
 func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 	var raw []byte
 	var err error
@@ -251,14 +275,16 @@ func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 		// Full body shape: pull out the name loosely and isolate the spec bytes
 		// for strict decoding below.
 		var probe struct {
-			Name string          `json:"name"`
-			Spec json.RawMessage `json:"spec"`
+			Name      string          `json:"name"`
+			Spec      json.RawMessage `json:"spec"`
+			UpdatedAt *time.Time      `json:"updated_at"`
 		}
 		if perr := json.Unmarshal(raw, &probe); perr != nil {
 			return sdk.PolicyRequest{}, fmt.Errorf("parse policy body: %w", perr)
 		}
 		body.Name = probe.Name
 		specBytes = probe.Spec
+		body.ExpectedUpdatedAt = probe.UpdatedAt
 	}
 	spec, serr := decodeSpecStrict(specBytes)
 	if serr != nil {

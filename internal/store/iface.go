@@ -51,7 +51,9 @@ type Store interface {
 	CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error)
 	GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error)
 	ListPolicies(ctx context.Context) ([]types.RunPolicy, error)
-	UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error)
+	// UpdatePolicy writes only while updated_at equals seen, the updated_at the caller read
+	// (ErrPolicyStale otherwise), so a save from an older copy cannot undo a later one.
+	UpdatePolicy(ctx context.Context, id uuid.UUID, seen time.Time, name string, spec types.RunPolicySpec) (types.RunPolicy, error)
 	DeletePolicy(ctx context.Context, id uuid.UUID) error
 
 	// Workspace.
