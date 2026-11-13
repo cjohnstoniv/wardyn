@@ -398,9 +398,10 @@ func (s *Server) cutSub(ctx context.Context, sub string) error {
 	return s.cfg.SessionRevocations.RevokeSub(ctx, sub)
 }
 
-// finishStep marks a suspension step done. A bound tail (withSuspensionBound) marks it only while the identity
-// is not deactivated at another instant: a suspension begun after a reactivation owns the ledger, and this tail
-// did less than that one owes. That refusal is store.ErrSuperseded, and the tail stops (runSuspension).
+// finishStep marks a suspension step done. A bound tail (withSuspensionBound) marks it only while the identity is
+// still deactivated at its bound or, once the person is active again, while the ledger is still its own
+// suspension's: a suspension begun after a reactivation owns the ledger, and this tail did less than that one
+// owes. That refusal is store.ErrSuperseded, and the tail stops (runSuspension).
 func finishStep(ctx context.Context, st scimStore, id uuid.UUID, key store.JobKey, detail map[string]int) error {
 	b, bound := suspensionBound(ctx)
 	if sb, can := st.(store.SuspensionBounds); bound && can {

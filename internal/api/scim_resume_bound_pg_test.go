@@ -364,6 +364,49 @@ func TestSCIMEarlierSuspensionClosesNoStepOfALaterOne(t *testing.T) {
 	}
 }
 
+// A request's suspension spares a run its probe read as made after a reactivation; before it closes that run's kill
+// row the person is suspended again, that suspension's kill of the run fails, and the person is reactivated again.
+// The earlier pass reads the person active, as when it spared the run, but the ledger records the later
+// deactivation: that suspension's kill row stays pending with its failure, and the earlier pass writes no audit row
+// from it. Guarded by WARDYN_TEST_PG (newSCIMEnv).
+func TestSCIMEarlierSuspensionLeavesALaterOnesFailedKillAfterAnotherReactivation(t *testing.T) {
+	e := newSCIMEnv(t)
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	var later uuid.UUID
+	paused := &pausedSuspension{PG: e.st}
+	paused.afterStep1 = func() {
+		if w := e.patch(e.b, f.id, patchOf("true")); w.Code != http.StatusOK {
+			t.Errorf("reactivate = %d %s", w.Code, w.Body.String())
+		}
+		later = e.seedRun(purgeSub, types.RunRunning)
+	}
+	paused.afterRunProbe = func() {
+		e.b.runner.setFailKills(1000)
+		if w := e.patch(e.b, f.id, patchOf("false")); w.Code != http.StatusInternalServerError {
+			t.Errorf("the later suspension with a failing runner = %d %s, want 5xx", w.Code, w.Body.String())
+		}
+		if w := e.patch(e.b, f.id, patchOf("true")); w.Code != http.StatusOK {
+			t.Errorf("reactivate again = %d %s", w.Code, w.Body.String())
+		}
+	}
+	n := e.node(func(c *Config) { c.Store = paused })
+	if w := e.patch(n, f.id, patchOf("false")); w.Code != http.StatusOK {
+		t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
+	}
+	if later == uuid.Nil {
+		t.Fatal("step 1 never ran")
+	}
+	if e.identity(f.id).DeactivatedAt != nil {
+		t.Error("the second reactivation did not stand")
+	}
+	if j, ok := jobByKey(e.ledger(f.id), jobStepKillRun, later.String()); !ok || j.Done || j.LastError == "" {
+		t.Errorf("the later suspension's kill row of %s = %+v (found %v), want pending with its failure", later, j, ok)
+	}
+	if rows := e.rows(n, "person.deprovision"); len(rows) != 0 {
+		t.Errorf("the earlier pass wrote %d person.deprovision rows from the later suspension's ledger, want none", len(rows))
+	}
+}
+
 // A person is reactivated and suspended again right after an earlier request's step 1, and the later suspension's
 // request dies after its own step 1. The earlier pass still revokes and kills, which the later suspension owes
 // too, but closes none of its steps: the sweep and kill rows stay pending for the sweeper, the answer is 200 and

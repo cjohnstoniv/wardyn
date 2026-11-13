@@ -189,3 +189,106 @@ func TestPG_SuspensionBounds_TheBoundItselfIsOwed(t *testing.T) {
 		t.Errorf("a finish bound to the current deactivation = %v, row done %v; want it done", err, done())
 	}
 }
+
+// A finish closes a step only for the suspension whose ledger it is. A tail bound to a first deactivation closes
+// nothing once a second suspension reset the ledger, also after the person is reactivated again, and the second
+// suspension's failed row keeps its failure; a tail bound to the second deactivation still closes its own step
+// with the person active. A ledger whose cutoff step holds no record of its deactivation (an earlier release
+// wrote it) is closed while the identity is still deactivated at the tail's bound, and not once it is active.
+// A suspension of another identity that names this one's principal deactivates it again without resetting its
+// ledger: a tail bound to the deactivation the ledger records then closes nothing and a failed row keeps its
+// failure, while a tail bound to the later deactivation closes it.
+func TestPG_SuspensionBounds_AFinishClosesOnlyItsOwnSuspensionsLedger(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	leaver := signedIn(t, st, "sub-twice", "twice@corp.example", leaverOID)
+	plan := store.SuspendPlan{IdentityID: leaver.ID, Principal: "sub-twice", Principals: []string{"sub-twice"}}
+	key := store.JobKey{Step: "kill_run", Target: uuid.NewString()}
+	suspend := func() time.Time {
+		t.Helper()
+		res, err := st.SuspendIdentity(ctx, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.EnsureDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend, []store.JobKey{key}); err != nil {
+			t.Fatal(err)
+		}
+		return res.DeactivatedAt
+	}
+	reactivate := func() {
+		t.Helper()
+		if _, err := st.ApplyIdentityUpdate(ctx, leaver.ID, store.IdentityUpdate{Reactivate: true}, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := func() store.DeprovisionJob {
+		t.Helper()
+		jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range jobs {
+			if j.Step == key.Step && j.Target == key.Target {
+				return j
+			}
+		}
+		t.Fatalf("no ledger row %+v", key)
+		return store.DeprovisionJob{}
+	}
+
+	first := suspend()
+	reactivate()
+	second := suspend()
+	if err := st.FailDeprovisionJob(ctx, leaver.ID, store.JobKindSuspend, key, errors.New("teardown failed")); err != nil {
+		t.Fatal(err)
+	}
+	reactivate()
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, map[string]int{"runs_killed": 0}, first); !errors.Is(err, store.ErrSuperseded) {
+		t.Errorf("a finish bound to the first deactivation, person active again = %v, want ErrSuperseded", err)
+	}
+	if j := row(); j.Done || j.LastError != "teardown failed" {
+		t.Errorf("the second suspension's row = %+v, want pending with its failure", j)
+	}
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, nil, second); err != nil || !row().Done {
+		t.Errorf("a finish bound to the second deactivation, person active again = %v, row done %v; want it done", err, row().Done)
+	}
+
+	third := suspend()
+	if _, err := pool.Exec(ctx, `UPDATE deprovision_jobs SET detail = detail - 'deactivated_at_us' WHERE identity_id = $1 AND step = 'cutoff'`, leaver.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, nil, third); err != nil || !row().Done {
+		t.Errorf("a finish over an unrecorded cutoff, identity deactivated at the bound = %v, row done %v; want it done", err, row().Done)
+	}
+	if err := st.ReopenDeprovisionJob(ctx, leaver.ID, store.JobKindSuspend, key); err != nil {
+		t.Fatal(err)
+	}
+	reactivate()
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, nil, third); !errors.Is(err, store.ErrSuperseded) || row().Done {
+		t.Errorf("a finish over an unrecorded cutoff, person active again = %v, row done %v; want ErrSuperseded and pending", err, row().Done)
+	}
+
+	fourth := suspend()
+	reactivate()
+	other := signedIn(t, st, "sub-alongside", "alongside@corp.example", "")
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: other.ID, Principal: "sub-alongside", Principals: []string{"sub-alongside", "sub-twice"}}); err != nil {
+		t.Fatal(err)
+	}
+	alongside, err := st.GetIdentity(ctx, leaver.ID)
+	if err != nil || alongside.DeactivatedAt == nil || alongside.DeactivatedAt.Equal(fourth) {
+		t.Fatalf("control: the identity after another identity's suspension = %+v (%v), want it deactivated at a later instant", alongside, err)
+	}
+	if err := st.FailDeprovisionJob(ctx, leaver.ID, store.JobKindSuspend, key, errors.New("teardown failed again")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, map[string]int{"runs_killed": 0}, fourth); !errors.Is(err, store.ErrSuperseded) {
+		t.Errorf("a finish bound to the recorded deactivation, identity deactivated at a later instant = %v, want ErrSuperseded", err)
+	}
+	if j := row(); j.Done || j.LastError != "teardown failed again" {
+		t.Errorf("the row under the later deactivation = %+v, want pending with its failure", j)
+	}
+	if err := st.FinishSuspensionJobAt(ctx, leaver.ID, key, nil, *alongside.DeactivatedAt); err != nil || !row().Done {
+		t.Errorf("a finish bound to the later deactivation, ledger recording the earlier one = %v, row done %v; want it done", err, row().Done)
+	}
+}

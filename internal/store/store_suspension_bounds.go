@@ -81,10 +81,15 @@ func (s PG) SubCutSince(ctx context.Context, sub string, at time.Time) (bool, er
 	return cut, nil
 }
 
-// FinishSuspensionJobAt is FinishDeprovisionJob for a suspension tail bound at at: it closes the step only
-// while the identity is not deactivated at another instant, in one statement. A suspension begun after a
-// reactivation owns the ledger from its first step, and a tail bound to the earlier deactivation did less than
-// that one owes: a step it may not close, or whose row that suspension replaced, is ErrSuperseded.
+// FinishSuspensionJobAt is FinishDeprovisionJob for a suspension tail bound at at: in one statement, it closes the
+// step only while the identity is still deactivated at at or, once the identity is active again, while the
+// ledger's cutoff step still records at as the deactivation it left (SuspendIdentity writes the record in the
+// transaction that resets the ledger, and a reactivation keeps it). Only a reactivation lets a later suspension
+// reset the ledger, and that suspension records its own deactivation, so a tail bound to an earlier one closes
+// none of its steps, also once the person is active again. Nor does it close one while the identity is
+// deactivated at another instant, which a suspension of another identity can leave without resetting this
+// ledger: a pass bound to that instant owes more than this tail did. A step the tail may not close, or whose row
+// a later suspension replaced, is ErrSuperseded.
 func (s PG) FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, detail map[string]int, at time.Time) error {
 	if detail == nil {
 		detail = map[string]int{}
@@ -93,8 +98,9 @@ func (s PG) FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k Job
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE deprovision_jobs SET state = 'done', attempts = attempts + 1, last_error = '', detail = $4, updated_at = now()
 		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3
-		   AND NOT EXISTS (SELECT 1 FROM principal_identities i WHERE i.id = $1
-		                    AND i.deactivated_at IS NOT NULL AND i.deactivated_at IS DISTINCT FROM $5)`,
+		   AND EXISTS (SELECT 1 FROM principal_identities i WHERE i.id = $1 AND (i.deactivated_at = $5 OR (i.deactivated_at IS NULL
+		                AND EXISTS (SELECT 1 FROM deprovision_jobs c WHERE c.identity_id = $1 AND c.kind = 'suspend' AND c.step = 'cutoff' AND c.target = ''
+		                             AND c.detail->'deactivated_at_us' = to_jsonb((extract(epoch FROM $5::timestamptz) * 1000000)::bigint)))))`,
 		identity, k.Step, k.Target, raw, at)
 	if err != nil {
 		return fmt.Errorf("store: finish suspension job: %w", err)
