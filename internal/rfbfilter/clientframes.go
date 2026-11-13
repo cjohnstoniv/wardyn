@@ -19,7 +19,8 @@ import (
 // a message and no new message inside one, and a 64-bit length with its top bit clear. A read that holds a bad
 // frame returns its Refusal instead, the frames before it in that read too, as the filter drops a refused read
 // whole, and so does every read after it; Refused returns it. After a close frame it checks nothing, as the
-// library reads no further.
+// library reads no further. A container desktop's relay makes the same checks on the browser's writes
+// (CheckBrowserFrames).
 type ClientFrames struct {
 	r io.Reader
 
@@ -36,6 +37,31 @@ type ClientFrames struct {
 
 // CheckClientFrames reads r through ClientFrames's checks.
 func CheckClientFrames(r io.Reader) *ClientFrames { return &ClientFrames{r: r} }
+
+// CheckBrowserFrames is c with each write checked first as ClientFrames checks a read, for the container door,
+// which relays the browser's own WebSocket frames to a server inside the sandbox: the relay names a bad frame
+// itself rather than leave it to that server. A write that holds a bad frame is refused whole through Refuse,
+// before the filter holds or reads any of it, and so is every write after it. The VM door's frames into the
+// filter are its own and unmasked, so it checks the viewer in front of its WebSocket library instead.
+func (c *Conn) CheckBrowserFrames() *CheckedConn { return &CheckedConn{Conn: c} }
+
+// CheckedConn is a Conn whose writes are checked (CheckBrowserFrames).
+type CheckedConn struct {
+	*Conn
+	frames ClientFrames
+}
+
+// Write checks p, then hands it to the Conn.
+func (b *CheckedConn) Write(p []byte) (int, error) {
+	if err := b.frames.Refused(); err != nil {
+		return 0, err
+	}
+	if err := b.frames.check(p); err != nil {
+		b.Refuse(err)
+		return 0, err
+	}
+	return b.Conn.Write(p)
+}
 
 // Read reads r, or returns the Refusal of a bad frame.
 func (c *ClientFrames) Read(p []byte) (int, error) {
