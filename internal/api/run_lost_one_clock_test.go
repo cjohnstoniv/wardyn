@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -285,5 +286,36 @@ func TestLoseRunStopped_AnUnknownEndStillCutsTheProxyWithEveryEndHoldTaken(t *te
 				t.Errorf("run is %s, lost %v %q; want RUNNING with its outage mark (kept, revivable)", cur.State, lostAt, reason)
 			}
 		})
+	}
+}
+
+// A lost run whose end could not be read and whose proxy cut is queued on its runner is audited as pending
+// on the runner and keeps the read's error, on one line, on its run.lost row. A plain queued cut keeps no
+// lost_error (TestLostLocalHeadlessQueuesContainmentWithoutTearingDown). Catches the read's error dropped
+// from the row.
+func TestLoseRunStopped_AQueuedCutAndAnUnreadEndRecordTheReadError(t *testing.T) {
+	errRead := errors.New("database down")
+	f := newLostFixture(t)
+	run := oneClockRun(f, f.now.Add(time.Minute))
+	run.LostAt, run.LostReason = nil, ""
+	f.ls.lapsed = true // a token-lapse visit: the mark is refused otherwise
+	f.st.endsErr, f.lr.proxyErr = errRead, runner.ErrPendingOnRunner
+	o, err := f.srv.loseRunStopped(context.Background(), f.ls, f.ls, run, types.LostOutage, types.RunFailed, time.Hour, f.now, 0)
+	if o != loseApplied {
+		t.Fatalf("outcome = %v, want loseApplied", o)
+	}
+	if !errors.Is(err, errRead) || !errors.Is(err, runner.ErrPendingOnRunner) {
+		t.Errorf("err = %v; want the read's error and the queued cut", err)
+	}
+	rows := f.audit.eventsFor(run.ID, "run.lost")
+	if len(rows) != 1 {
+		t.Fatalf("run.lost rows = %v, want 1", rows)
+	}
+	data := leaseAuditData(t, rows[0])
+	if data["containment"] != "pending_runner" {
+		t.Errorf("containment = %v, want pending_runner", data["containment"])
+	}
+	if msg, _ := data["lost_error"].(string); !strings.Contains(msg, "database down") || strings.Contains(msg, "\n") {
+		t.Errorf("lost_error = %q, want the read's error on one line", data["lost_error"])
 	}
 }

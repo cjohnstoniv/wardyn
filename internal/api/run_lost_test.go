@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -388,8 +389,9 @@ func TestLostRun_TheStopFollowsTheRowReadUnderTheLock(t *testing.T) {
 // renewStampStore is renewStore plus the token stamp.
 type renewStampStore struct {
 	*renewStore
-	stamps   int
-	stampErr error
+	stamps     int
+	stampErr   error
+	endAtStamp bool // the run ends while the stamp waits: the stamp answers a lineage miss, a fresh read sees the end
 }
 
 func (s *renewStampStore) RetireRunTokenLineage(context.Context, uuid.UUID, string) (string, string, error) {
@@ -403,6 +405,10 @@ func (s *renewStampStore) RestoreRunTokenLineage(context.Context, uuid.UUID, str
 func (s *renewStampStore) StampRunTokenRenewed(context.Context, uuid.UUID, string, string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.endAtStamp {
+		s.state = types.RunStopped // renewStore.GetRun answers this state; s.mu is already held
+		return false, store.ErrRunTokenLineage
+	}
 	if s.stampErr != nil {
 		return false, s.stampErr
 	}
@@ -536,5 +542,38 @@ func TestLostRun_ATransientStopProxyErrorKeepsTheRun(t *testing.T) {
 	}
 	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
 		t.Errorf("after the resolution: state %s, StopSandbox %d; want RUNNING, 0", f.st.State(), f.rn.stopCount())
+	}
+}
+
+// A run that ends between the renewal's run read and its stamp gets no token, whether the stamp sees the end
+// (RunTokenRunEndedError) or the end commits while the stamp waits (a lineage miss its fresh read explains):
+// the answer is the terminal run's 403 with its denied audit row. A lineage miss on a live run stays the 503
+// TestLostRun_RenewStampsAndRefusesAKeptRun's neighbours pin. Catches a token, or a retryable answer, for an
+// ended run.
+func TestLostRun_RenewRefusedWhenTheRunEndedBeforeTheStamp(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(st *renewStampStore)
+	}{
+		{"the stamp sees the end", func(st *renewStampStore) { st.stampErr = store.RunTokenRunEndedError{State: types.RunStopped} }},
+		{"the end commits while the stamp waits", func(st *renewStampStore) { st.endAtStamp = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, rs, runID := newRenewHarness(t)
+			st := &renewStampStore{renewStore: rs}
+			tc.setup(st)
+			srv := New(baseTestConfig(h, st))
+			tok := h.mintRunToken(t, runID)
+			w := do(t, srv, "POST", "/api/v1/internal/token/renew", tok, "")
+			if w.Code != 403 || !strings.Contains(w.Body.String(), string(authz.ReasonRunTerminal)) {
+				t.Fatalf("renew: code %d body %s; want 403 %s", w.Code, w.Body.String(), authz.ReasonRunTerminal)
+			}
+			if strings.Contains(w.Body.String(), `"token"`) {
+				t.Fatalf("a renew refused at the stamp handed out a token: %s", w.Body.String())
+			}
+			if !hasAudit(h, "identity.renew", "denied") {
+				t.Error("no identity.renew/denied audit row for a run that ended before the stamp")
+			}
+		})
 	}
 }
