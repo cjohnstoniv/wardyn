@@ -158,7 +158,11 @@ describe("Name this run: the fresh check (U12)", () => {
     const box = await dialog();
     await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
     expect(launchButton()).toBeDisabled();
-    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "  ");
+    const field = within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL);
+    expect(field).toBeRequired();
+    await userEvent.type(field, "{Enter}");
+    expect(create).not.toHaveBeenCalled();
+    await userEvent.type(field, "  ");
     expect(launchButton()).toBeDisabled();
   });
 

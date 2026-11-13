@@ -132,12 +132,30 @@ describe("CallersEditor", () => {
     expect(await screen.findByText(NR_RUN.CALLERS_NO_SERVICES)).toBeInTheDocument();
   });
 
-  it("says nothing about a list that failed to load", async () => {
-    api.caps.mockRejectedValue(new Error("down"));
+  it("says nothing about a list that failed to load, and asks for it again the next time the menu opens", async () => {
+    api.caps.mockRejectedValueOnce(new Error("down"));
     render(<Harness first={[]} />);
     await open();
-    await waitFor(() => expect(api.mine).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "billing" })).toBeInTheDocument());
     expect(screen.queryByText(NR_RUN.CALLERS_NO_GROUPS)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "platform" })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await open();
+    await waitFor(() => expect(screen.getByRole("button", { name: "platform" })).toBeInTheDocument());
+    expect(api.caps).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a list it has read when the other list fails again, and does not read it twice", async () => {
+    api.mine.mockRejectedValue(new Error("down"));
+    render(<Harness first={[]} />);
+    await open();
+    await waitFor(() => expect(screen.getByRole("button", { name: "platform" })).toBeInTheDocument());
+    await userEvent.keyboard("{Escape}");
+    await open();
+    await waitFor(() => expect(api.mine).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "platform" })).toBeInTheDocument();
+    expect(screen.queryByText(NR_RUN.CALLERS_NO_SERVICES)).not.toBeInTheDocument();
+    expect(api.caps).toHaveBeenCalledTimes(1);
   });
 
   it("adds a person by email as user:, lower-cased, and refuses a half address with the board's sentence", async () => {

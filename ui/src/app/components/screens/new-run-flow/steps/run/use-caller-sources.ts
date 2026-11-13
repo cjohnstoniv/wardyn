@@ -15,21 +15,31 @@ export interface CallerSources {
   services: string[] | null;
 }
 
-/** Reads the two lists the first time the menu opens, and keeps them for the life of the picker. */
+/**
+ * Reads each list the first time the menu opens and keeps it once read. A read that failed is asked again the next
+ * time the menu opens, so a passing outage does not hide the list for the life of the picker.
+ */
 export function useCallerSources(open: boolean): CallerSources {
   const [sources, setSources] = React.useState<CallerSources>({ groups: null, services: null });
-  const asked = React.useRef(false);
+  // Per list: not read yet (or its read failed), being read, or read.
+  const state = React.useRef<Record<keyof CallerSources, "unread" | "reading" | "read">>({ groups: "unread", services: "unread" });
   React.useEffect(() => {
-    if (!open || asked.current) return;
-    asked.current = true;
-    permissions.getMyCapabilities().then(
-      (caps) => setSources((s) => ({ ...s, groups: caps.session_groups })),
-      () => {},
-    );
-    serviceIdentities.listMine().then(
-      (list) => setSources((s) => ({ ...s, services: list.filter((i) => i.state === "active").map((i) => i.name) })),
-      () => {},
-    );
+    if (!open) return;
+    const read = (key: keyof CallerSources, get: () => Promise<string[]>) => {
+      if (state.current[key] !== "unread") return;
+      state.current[key] = "reading";
+      get().then(
+        (list) => {
+          state.current[key] = "read";
+          setSources((s) => ({ ...s, [key]: list }));
+        },
+        () => {
+          state.current[key] = "unread";
+        },
+      );
+    };
+    read("groups", () => permissions.getMyCapabilities().then((caps) => caps.session_groups));
+    read("services", () => serviceIdentities.listMine().then((list) => list.filter((i) => i.state === "active").map((i) => i.name)));
   }, [open]);
   return sources;
 }
