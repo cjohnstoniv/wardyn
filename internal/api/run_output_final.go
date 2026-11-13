@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -307,7 +308,8 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 		}
 	case runIsUnrecordable(run), hasTail:
 	case s.recordingOutputEnabled(ctx, run):
-		s.finalizeRecordingOutput(ctx, st, run)
+		// Logged inside; a failure leaves the work durable for the sweep.
+		_ = s.finalizeRecordingOutput(ctx, st, run)
 	case s.execOutputUncaptured(ctx, run):
 	default:
 		s.recoverRunOutput(ctx, st, run, "no_tail")
@@ -655,7 +657,46 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	if s.cfg.RunOutputPersistOff {
 		return firstErr
 	}
-	ids, err := st.ListStalePendingRunOutputs(ctx, runOutputPendingStale, 200)
+	if err := s.sweepStalePending(ctx, st); err != nil {
+		return err
+	}
+	if err := s.sweepRecordingOutputs(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// outputSweepCursors holds where the next pass of sweepAgentCasts and of sweepStalePending starts: the last
+// row of the pass before, nil for the oldest. Carried between passes so rows that fail on every pass cannot
+// hold the first page. The zero value is ready.
+type outputSweepCursors struct {
+	mu                      sync.Mutex
+	agentCast, stalePending *store.SweepCursor
+}
+
+// get reads the cursor at slot under the lock.
+func (c *outputSweepCursors) get(slot **store.SweepCursor) *store.SweepCursor {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return *slot
+}
+
+// set stores the cursor at slot under the lock.
+func (c *outputSweepCursors) set(slot **store.SweepCursor, v *store.SweepCursor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	*slot = v
+}
+
+// staleOutputSweepPage is how many stale pending rows one sweep takes.
+const staleOutputSweepPage = 200
+
+// sweepStalePending resolves one page of terminal runs' stale pending rows, from where the last pass stopped.
+// A failed list keeps the position, as does a pass whose ctx ended; a short page starts the next pass from the
+// oldest. A tail this process still holds is the finisher's own, and is left alone.
+func (s *Server) sweepStalePending(ctx context.Context, st store.RunOutputStore) error {
+	after := s.execOutputs.sweep.get(&s.execOutputs.sweep.stalePending)
+	ids, next, err := st.ListStalePendingRunOutputs(ctx, runOutputPendingStale, after, staleOutputSweepPage)
 	if err != nil {
 		return err
 	}
@@ -664,10 +705,10 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.resolveStalePending(ctx, st, id)
 		}
 	}
-	if err := s.sweepRecordingOutputs(ctx, st); err != nil && firstErr == nil {
-		firstErr = err
+	if ctx.Err() == nil {
+		s.execOutputs.sweep.set(&s.execOutputs.sweep.stalePending, next)
 	}
-	return firstErr
+	return nil
 }
 
 // resolveStalePending resolves a terminal run's abandoned pending row: by
@@ -687,7 +728,7 @@ func (s *Server) resolveStalePending(ctx context.Context, st store.RunOutputStor
 		return
 	}
 	if s.recordingOutputEnabled(ctx, run) {
-		s.finalizeRecordingOutput(ctx, st, run)
+		s.settleStaleRecordingOutput(ctx, st, run)
 		return
 	}
 	s.recoverRunOutput(ctx, st, run, "stale_pending")
