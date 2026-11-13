@@ -12,9 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrWorkloadBindingGone is returned by SetBoundWorkloadRun when the namespace binding the launch was
-// authorised under no longer exists: deleted by hand, with its service identity's retirement or with its
-// pool. Nothing is written, so the launch's claim still holds for its refusal.
+// ErrWorkloadBindingGone is returned by SetBoundWorkloadRun, and by StartQueuedRun for a run that waited in
+// its queue, when the namespace binding the launch was authorised under no longer exists: deleted by hand,
+// with its service identity's retirement or with its pool. Nothing is written, so the launch's claim still
+// holds for its refusal.
 var ErrWorkloadBindingGone = errors.New("store: the namespace binding the launch was authorised under was deleted")
 
 // SetBoundWorkloadRun is SetWorkloadRun for a custom resource's launch, authorised under the namespace binding

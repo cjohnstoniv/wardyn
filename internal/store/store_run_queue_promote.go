@@ -563,6 +563,9 @@ type QueueStart struct {
 	ImageAdmission *types.ImageAdmissionVerdict
 	// WallPreset is the frozen copy of the wall preset the start's fold took, nil for none.
 	WallPreset *types.WallPresetOnRun
+	// Binding, set for a custom resource's run, is the namespace binding its launch was authorised under:
+	// the start holds only while that binding exists (ErrWorkloadBindingGone).
+	Binding *uuid.UUID
 }
 
 // StartQueuedRun writes the start's columns on a run that was promoted (PENDING, admitted_at set) and
@@ -571,13 +574,20 @@ type QueueStart struct {
 // runner's limits at the size it starts with (Reserved, written to the row in the same statement), the
 // run itself not counted, under the runner rows' locks: RunnerID when it has room (the promotion found
 // it room there), else the first of RunnerFallbacks that has, else RunnerAtCapacityError; a
-// remote-hosted run, RunnerPoolExecutor and then RemoteFallbacks, alike.
+// remote-hosted run, RunnerPoolExecutor and then RemoteFallbacks, alike. With st.Binding set the
+// transaction first locks that binding row FOR KEY SHARE: a delete that committed first refuses the start
+// (ErrWorkloadBindingGone, nothing written), and a later one waits for the start to commit.
 func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (run types.AgentRun, ok bool, err error) {
 	limits, err := json.Marshal(st.RunLimits)
 	if err != nil {
 		return types.AgentRun{}, false, fmt.Errorf("store: marshal run limits: %w", err)
 	}
 	err = s.inTx(ctx, func(q Querier) error {
+		if st.Binding != nil {
+			if err := lockWorkloadBinding(ctx, q, *st.Binding); err != nil {
+				return err
+			}
+		}
 		switch {
 		case st.RunnerID != nil:
 			keys := []string{st.RunnerID.String()}

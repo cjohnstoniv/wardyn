@@ -343,6 +343,9 @@ func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed 
 		gone := &runnerpool.Refusal{Reason: runnerpool.ReasonNotFound}
 		return s.refuseWorkloadLaunch(r, ws, claimed, string(gone.Reason), gone.Message())
 	}
+	if binding != nil {
+		r = r.WithContext(withLaunchBinding(ctx, *binding)) // a run that waits in its queue starts only while it exists
+	}
 	cr, err := workloadCreateRequest(r, claimed)
 	if err != nil {
 		return none, err

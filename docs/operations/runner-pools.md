@@ -131,7 +131,7 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 - A run waits at most `86400` seconds (24 hours) as a background task and `3600` seconds (1 hour) as an interactive environment. `max_wait_sec` (`wardyn run --max-wait`) changes that, up to `604800` seconds (7 days).
 - A run that waits too long ends `FAILED` with `queue_timeout`. Killing a waiting run cancels it.
 - A waiting run also ends when its pool is deleted (`runner_pool_removed`) or its owner's sessions are revoked.
-- It ends too when, while it waited, its owner's governance profile changed (`queue_profile_changed`), its policy changed (`queue_policy_changed`) or the portal that launched it was removed (`queue_portal_revoked`).
+- It ends too when, while it waited, its owner's governance profile changed (`queue_profile_changed`), its policy changed (`queue_policy_changed`) or the portal that launched it was removed (`queue_portal_revoked`). A custom resource's run ends `workload_binding_inactive` when its namespace binding was deleted.
 - One person may have `100` runs waiting for one pool; the next launch is refused `runner_pool_queue_full`. A revive into a pool at its limit, or with others waiting, is refused `runner_pool_full`.
 - A pool with no runner online that can take the run does not queue the launch. It is refused: `runner_offline` in a user pool, `runner_pool_no_eligible_member` in an organization pool.
 

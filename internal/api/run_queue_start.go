@@ -519,8 +519,12 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		ImageInput:     &imageInput,
 		ImageAdmission: f.admission, // the start checked the image again; it dispatches under this verdict
 		WallPreset:     f.source.wallPreset,
+		Binding:        st.auth.Binding,
 	})
 	switch {
+	case errors.Is(err, store.ErrWorkloadBindingGone):
+		// A custom resource's run whose namespace binding was deleted while it waited never starts.
+		return &queueEnd{token: reasonWorkloadBindingInactive, hint: workloadBindingGoneMsg}
 	case errors.Is(err, store.ErrRunnerAtCapacity):
 		// Every runner the run could start on filled between the promotion and this start.
 		return &queueEnd{token: string(placement.ReasonRunnerAtCapacity), hint: runnerpool.RunnerAtCapacityMsg(f.place.pool.Name)}

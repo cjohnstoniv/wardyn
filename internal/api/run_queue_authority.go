@@ -60,6 +60,9 @@ type queueAuthority struct {
 	// BreakGlass is the reason an admin-token launch carried as a break-glass run, so the start
 	// resolves as the break-glass run it was tagged at launch.
 	BreakGlass string `json:"break_glass_reason,omitempty"`
+	// Binding is the namespace binding a custom resource's launch was authorised under: the start holds
+	// only while that binding exists (store.QueueStart.Binding).
+	Binding *uuid.UUID `json:"binding,omitempty"`
 }
 
 // captureQueueAuthority reads the launch's identity off the request context.
@@ -83,6 +86,9 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 		a.Device = &d.ID
 	}
 	a.BreakGlass = breakGlassReason(ctx)
+	if b, ok := launchBindingFrom(ctx); ok {
+		a.Binding = &b
+	}
 	return a
 }
 
