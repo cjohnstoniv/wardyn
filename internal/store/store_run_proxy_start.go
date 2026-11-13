@@ -32,10 +32,12 @@ const (
 
 // ProxyStart is one row of run_proxy_starts.
 type ProxyStart struct {
-	RunID          uuid.UUID
-	Generation     int
-	JTI            string
-	Mode           string
+	RunID      uuid.UUID
+	Generation int
+	JTI        string
+	Mode       string
+	// InPlace is a start a live egress edit applied by narrowing the run's running proxy, not by replacing it.
+	InPlace        bool
 	StartedAt      time.Time
 	Deadline       *time.Time
 	ExpectedSHA256 string
@@ -64,8 +66,9 @@ type ProxyStartChange struct {
 // token renewals are stamped with.
 type RunProxyStarts interface {
 	// BeginProxyStart records a pending start under generation gen on the fresh token jti, before its
-	// proxy starts. A start already recorded under gen is reset to it.
-	BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string) (ProxyStart, error)
+	// proxy starts. A start already recorded under gen is reset to it. inPlace says a live egress edit
+	// applies it by narrowing the running proxy in place.
+	BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string, inPlace bool) (ProxyStart, error)
 	// AnswerProxyStart records the driver's successful answer for gen: its hash (empty when it sent
 	// none) and a report deadline grace from now. It lands only while gen is the active pending start;
 	// older pending starts are then superseded.
@@ -108,27 +111,27 @@ func SettleProxyStart(p ProxyStart, now time.Time) (types.ProxyStartState, strin
 	}
 }
 
-const proxyStartCols = `run_id, generation, jti, mode, started_at, deadline, COALESCE(expected_sha256, ''),
+const proxyStartCols = `run_id, generation, jti, mode, in_place, started_at, deadline, COALESCE(expected_sha256, ''),
 	COALESCE(reported_sha256, ''), state, confirmed_at, contained_at, COALESCE(containment_error, '')`
 
 func scanProxyStart(row pgx.Row, extra ...any) (ProxyStart, error) {
 	var p ProxyStart
 	var state string
-	err := row.Scan(append([]any{&p.RunID, &p.Generation, &p.JTI, &p.Mode, &p.StartedAt, &p.Deadline,
+	err := row.Scan(append([]any{&p.RunID, &p.Generation, &p.JTI, &p.Mode, &p.InPlace, &p.StartedAt, &p.Deadline,
 		&p.ExpectedSHA256, &p.ReportedSHA256, &state, &p.ConfirmedAt, &p.ContainedAt, &p.ContainmentError}, extra...)...)
 	p.State = types.ProxyStartState(state)
 	return p, err
 }
 
 // BeginProxyStart — see RunProxyStarts.
-func (s PG) BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string) (ProxyStart, error) {
+func (s PG) BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, mode string, inPlace bool) (ProxyStart, error) {
 	p, err := scanProxyStart(s.Pool.QueryRow(ctx, `
-		INSERT INTO run_proxy_starts (run_id, generation, jti, mode, started_at, state)
-		VALUES ($1, $2, $3, $4, now(), 'pending')
-		ON CONFLICT (run_id, generation) DO UPDATE SET jti = EXCLUDED.jti, mode = EXCLUDED.mode,
+		INSERT INTO run_proxy_starts (run_id, generation, jti, mode, in_place, started_at, state)
+		VALUES ($1, $2, $3, $4, $5, now(), 'pending')
+		ON CONFLICT (run_id, generation) DO UPDATE SET jti = EXCLUDED.jti, mode = EXCLUDED.mode, in_place = EXCLUDED.in_place,
 			started_at = now(), deadline = NULL, expected_sha256 = NULL, reported_sha256 = NULL,
 			state = 'pending', confirmed_at = NULL, contained_at = NULL, containment_error = NULL
-		RETURNING `+proxyStartCols, runID, gen, jti, mode))
+		RETURNING `+proxyStartCols, runID, gen, jti, mode, inPlace))
 	if err != nil {
 		return ProxyStart{}, fmt.Errorf("store: begin proxy start: %w", err)
 	}

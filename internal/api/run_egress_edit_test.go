@@ -682,7 +682,7 @@ func TestEgressEdit_SupersededStartStopsNothing(t *testing.T) {
 		t.Fatalf("revive: %d, want 200", code)
 	}
 	gen := f.active(t).Generation
-	if _, err := f.rb.BeginProxyStart(context.Background(), f.run.ID, gen+1, "newer-jti", store.ProxyStartExpected); err != nil {
+	if _, err := f.rb.BeginProxyStart(context.Background(), f.run.ID, gen+1, "newer-jti", store.ProxyStartExpected, false); err != nil {
 		t.Fatal(err)
 	}
 	stops := f.lr.proxyStopCount()
@@ -1161,7 +1161,7 @@ func (s *supersedeOnAbandonStore) AbandonProxyStart(ctx context.Context, runID u
 	if err := s.readbackStore.AbandonProxyStart(ctx, runID, gen); err != nil {
 		return err
 	}
-	_, err := s.BeginProxyStart(ctx, runID, gen+1, "newer-jti", store.ProxyStartExpected)
+	_, err := s.BeginProxyStart(ctx, runID, gen+1, "newer-jti", store.ProxyStartExpected, false)
 	return err
 }
 

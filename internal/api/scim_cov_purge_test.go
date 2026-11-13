@@ -590,7 +590,7 @@ func TestSCIMCovSweeperResumesSuspensionsAndPurges(t *testing.T) {
 		&store.DeprovisionJob{IdentityID: half.ID, Kind: store.JobKindPurge, Step: store.JobStepAuditDeprovision})
 	st.mu.Unlock()
 	st.workspaces = []types.Workspace{{ID: scimCovWsSub, Name: "w", OwnedBy: "sub-half"}}
-	st.pending = []store.PendingLeaver{{ID: stuck.ID}, {ID: half.ID, Purged: true}}
+	st.pending = []store.PendingLeaver{{ID: stuck.ID, DeactivatedAt: stuck.DeactivatedAt}, {ID: half.ID, Purged: true}}
 	e := newSCIMCovEnv(t, st)
 
 	if err := e.srv.SweepSCIMPurge(context.Background()); err != nil {

@@ -209,8 +209,8 @@ func TestWorkloadStatusSweep_PushesWhatMovedToItsOnlineRunner(t *testing.T) {
 }
 
 // standingFaultStore is the in-memory store whose identity check cannot be answered, with one launch claim
-// that ClaimWorkloadLaunch takes and then holds until released; every other workload call is unset and would
-// panic.
+// that ClaimWorkloadLaunch takes and then holds until released, and the binding always still there; every
+// other workload call is unset and would panic.
 type standingFaultStore struct {
 	*authzStore
 	store.WorkloadStore
@@ -230,6 +230,10 @@ func (f *standingFaultStore) ClaimWorkloadLaunch(_ context.Context, id uuid.UUID
 	f.held = true
 	return store.Workload{ID: id, Owner: "service:ci-bot", Name: "web", Source: store.WorkloadSourceK8s, Generation: 2,
 		CurrentGeneration: 1, ClaimToken: uuid.New()}, true, nil
+}
+
+func (f *standingFaultStore) GetWorkloadBinding(_ context.Context, id uuid.UUID) (store.WorkloadBinding, error) {
+	return store.WorkloadBinding{ID: id}, nil
 }
 
 func (f *standingFaultStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
