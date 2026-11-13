@@ -7,12 +7,12 @@ COMPOSE_FILE := deploy/compose/docker-compose.yaml
 # so a bump here is the ONLY place a version changes — no more drift between the
 # Makefile and the workflow. Override on the CLI for a one-off (e.g.
 # `make govulncheck GOVULNCHECK_VERSION=v1.7.0`).
-GOVULNCHECK_VERSION  ?= v1.6.0
-STATICCHECK_VERSION  ?= v0.7.0
+GOVULNCHECK_VERSION  ?= v1.9.0
+STATICCHECK_VERSION  ?= v0.8.2
 GITLEAKS_VERSION     ?= v8.30.1
 GO_LICENSES_VERSION  ?= v1.6.0
 SYFT_VERSION         ?= v1.46.0
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 ACTIONLINT_VERSION    ?= v1.7.12
 # Throwaway local registry for the real-daemon envbuild smoke test (U064). Pinned
 # by tag like the other daemon images CI pulls (postgres:17, alpine:latest).

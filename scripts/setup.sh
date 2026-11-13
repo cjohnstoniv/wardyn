@@ -283,10 +283,10 @@ say "  an API key, or AWS Bedrock)."
 # Ensure the local binaries + UI are built (host mode serves ./bin/wardynd + ui/dist).
 if local_build_needed; then
   hd "Building wardynd + UI (first run, or the sources changed)"
-  # go.mod pins `toolchain go1.26.4`, so the default GOTOOLCHAIN=auto tries to
+  # go.mod pins `toolchain go1.27.4`, so the default GOTOOLCHAIN=auto tries to
   # FETCH that toolchain — which a corporate proxy that blocks the public Go
   # proxy denies, even though the locally-installed Go already satisfies the
-  # `go 1.26` directive. Retry with GOTOOLCHAIN=local (use the installed Go, no
+  # `go 1.27.0` directive. Retry with GOTOOLCHAIN=local (use the installed Go, no
   # download) so a proxied/offline host still builds.
   if ! (go build -tags docker -o bin/wardynd ./cmd/wardynd && go build -o bin/wardyn ./cmd/wardyn); then
     warn "go build failed (a proxy may be blocking the pinned toolchain fetch) — retrying with the locally-installed Go (GOTOOLCHAIN=local)…"
