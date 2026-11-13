@@ -25,7 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run scheduled for later no longer refuses the revive of a kept run into a pool with a free slot; only a waiting run that is due does.
 - A run promoted from a runner pool's queue now starts before the queue records the waits of the runs it passed over, and that record gives up at the pass's time limit, so a slow record no longer leaves the promoted run to be failed as a lost start.
 - A promoted run sent back to wait for its owner's sign-in after its pool was deleted now ends with `runner_pool_removed` instead of waiting in the deleted pool until its deadline.
-- A queue pass now reads a runner pool's runners once for one person's waiting runs, not once for each run it judges, so many runs of one person that each wait for a runner of their own (one they name or, since the fix above, the one kind they need) no longer use up the pass's time on those reads while another person's run further back waits. Runs the person queued under another unit or sign-in identity, or that ask for another placement or named runner, are read once more each.
+- A queue pass now reads a runner pool's runners once for one person's waiting runs, not once for each run it judges, so many runs of one person that each wait for a runner of their own (one they name or, since the fix for a run that waits for the one kind of runner it needs, that one kind) no longer use up the pass's time on those reads while another person's run further back waits. Runs the person queued under another unit or sign-in identity, or that ask for another placement or named runner, are read once more each.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
