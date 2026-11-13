@@ -103,6 +103,62 @@ func TestMiscCovMarkLateIncomplete(t *testing.T) {
 	})
 }
 
+// A late byte after the commit owes the row an incomplete mark, and a mark that fails is tried again on the
+// daemon's context until it lands: the committed row ends incomplete and audited once, not only a warning
+// in the log. An erased output ends the retries with no mark.
+func TestMiscCovLateMarkIsRetriedUntilItLands(t *testing.T) {
+	commit := func(t *testing.T) (*outputFixture, *miscCovOutStore, func(...string)) {
+		t.Helper()
+		f, cs := miscCovOutFixture(t)
+		w := f.open(t)
+		writeExecOutput(t, w, "all of it\n")
+		f.srv.FinishRunOutput(t.Context(), f.run.ID)
+		if row := f.finalRow(t); row.Incomplete {
+			t.Fatal("the row was incomplete before any late byte")
+		}
+		return f, cs, func(s ...string) { writeExecOutput(t, w, s...) }
+	}
+	marks := func(cs *miscCovOutStore) int {
+		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		return cs.markCalls
+	}
+	t.Run("a mark that fails twice lands on the third try", func(t *testing.T) {
+		f, cs, late := commit(t)
+		cs.mu.Lock()
+		cs.markFails = 2
+		cs.mu.Unlock()
+		late("one more\n")
+		waitFor(t, "the row to turn incomplete", func() bool {
+			r, _ := f.mem.row(f.run.ID)
+			return r.Incomplete
+		})
+		f.srv.WaitBackground()
+		if n := marks(cs); n != 3 {
+			t.Errorf("%d marks, want two failures and the one that landed", n)
+		}
+		if got := miscCovFinalizeData(t, f); len(got) != 1 || got[0]["late_write"] != true || got[0]["incomplete"] != true {
+			t.Errorf("audit = %v, want one row flagged late_write and incomplete", got)
+		}
+	})
+	t.Run("an erased output ends the retries without a mark", func(t *testing.T) {
+		f, cs, late := commit(t)
+		cs.mu.Lock()
+		cs.markFails = 1
+		cs.markErr = store.ErrRunOutputErased
+		cs.mu.Unlock()
+		late("one more\n")
+		waitFor(t, "the second mark", func() bool { return marks(cs) >= 2 })
+		f.srv.WaitBackground()
+		if r, _ := f.mem.row(f.run.ID); r.Incomplete || marks(cs) != 2 {
+			t.Errorf("incomplete=%v after %d marks, want the erasure to end the retries at the second", r.Incomplete, marks(cs))
+		}
+		if got := miscCovFinalizeData(t, f); len(got) != 0 {
+			t.Errorf("audit = %v, want no late_write row for an erased output", got)
+		}
+	})
+}
+
 // A final write that keeps failing past the inline attempts is audited as persist_failing and carried on
 // by a tracked retry, which a cancelled request does not shorten and a shutting-down daemon ends.
 func TestMiscCovFinalWriteRetryOutlivesTheRequestAndEndsWithTheDaemon(t *testing.T) {

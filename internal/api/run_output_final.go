@@ -486,7 +486,9 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 		e.fmu.Unlock()
 		s.releaseRunOutput(row.RunID, e)
 		if lateSince {
-			s.markLateIncomplete(ctx, row.RunID)
+			// Owed whatever becomes of ctx, which may be a request's that is ending: the daemon's retries settle it.
+			id := row.RunID
+			s.goBackground(func() { s.markLateIncompleteOwed(id) })
 		}
 		return persistDone
 	case errors.Is(err, store.ErrRunOutputErased):
@@ -571,18 +573,41 @@ func (s *Server) lateRunOutput(runID uuid.UUID, e *execOutputTail) {
 	if !committed || fenced {
 		return
 	}
-	s.goBackground(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.cfg.BaseCtx), 10*time.Second)
-		defer cancel()
-		s.markLateIncomplete(ctx, runID)
-	})
+	s.goBackground(func() { s.markLateIncompleteOwed(runID) })
 }
 
-// markLateIncomplete flips the committed row to incomplete and audits it.
-func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) {
+// lateMarkAttemptWait bounds one try of the incomplete mark a committed row owes.
+const lateMarkAttemptWait = 10 * time.Second
+
+// markLateIncompleteOwed settles the incomplete mark a committed row owes for a byte dropped after its
+// commit. Each try runs on the daemon's context, bounded by lateMarkAttemptWait, with the final write's
+// backoff (outputRetryBase doubling to runOutputRetryMax) between tries, until the mark lands or the output is erased: one failed write must not leave a
+// capture that lost bytes labelled complete, and nothing else re-reads a committed row for this. Only the
+// daemon's shutdown ends it early. Run it on a tracked goroutine.
+func (s *Server) markLateIncompleteOwed(runID uuid.UUID) {
+	base := s.cfg.BaseCtx
+	for backoff := s.outputRetryBase(); ; backoff = min(backoff*2, runOutputRetryMax) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(base), lateMarkAttemptWait)
+		settled := s.markLateIncomplete(ctx, runID)
+		cancel()
+		if settled {
+			return
+		}
+		select {
+		case <-base.Done():
+			return
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// markLateIncomplete flips the committed row to incomplete and audits it. It reports whether the mark is
+// settled: written, nothing committed to mark, no store, or the output erased (the tail is fenced). false
+// is a failed write, which markLateIncompleteOwed tries again.
+func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) bool {
 	st := s.runOutputStore()
 	if st == nil {
-		return
+		return true
 	}
 	marked, err := st.MarkRunOutputIncomplete(ctx, runID)
 	switch {
@@ -591,9 +616,11 @@ func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) {
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: could not mark a run's output row incomplete",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
 	case marked:
 		s.auditOutputFinalize(ctx, runID, map[string]any{"incomplete": true, "late_write": true})
 	}
+	return true
 }
 
 // auditOutputFinalize records a capture that was not clean: its flags, never

@@ -65,6 +65,8 @@ type miscCovOutStore struct {
 	refreshFn      func(call int) error
 	refreshCalls   int
 	markErr        error
+	markFails      int // the next N MarkRunOutputIncomplete calls fail
+	markCalls      int
 	eraseErr       error
 	gapCalls       int
 }
@@ -171,8 +173,19 @@ func (s *miscCovOutStore) RefreshRunOutputClaim(ctx context.Context, id uuid.UUI
 }
 
 func (s *miscCovOutStore) MarkRunOutputIncomplete(ctx context.Context, id uuid.UUID) (bool, error) {
-	if s.markErr != nil {
-		return false, s.markErr
+	s.mu.Lock()
+	s.markCalls++
+	fail := s.markFails > 0
+	if fail {
+		s.markFails--
+	}
+	markErr := s.markErr
+	s.mu.Unlock()
+	if fail {
+		return false, errors.New("postgres is down")
+	}
+	if markErr != nil {
+		return false, markErr
 	}
 	return s.memRunOutputs.MarkRunOutputIncomplete(ctx, id)
 }
