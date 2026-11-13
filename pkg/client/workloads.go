@@ -355,15 +355,23 @@ func (c *Client) GetWorkload(ctx context.Context, name, owner string) (Workload,
 	return out, err
 }
 
-// WorkloadHistory reads the workload's audit rows, newest first. GET /api/v1/workloads/{name}/history.
-func (c *Client) WorkloadHistory(ctx context.Context, name, owner string, opts ...ListOpts) ([]WorkloadEvent, error) {
-	var out []WorkloadEvent
+// WorkloadHistoryPage is WorkloadHistory plus the server's X-Wardyn-Truncated signal: truncated=true
+// means a further page exists.
+func (c *Client) WorkloadHistoryPage(ctx context.Context, name, owner string, opts ...ListOpts) (events []WorkloadEvent, truncated bool, err error) {
 	path := "/api/v1/workloads/" + url.PathEscape(name) + "/history"
 	if owner != "" {
 		path += "?owner=" + url.QueryEscape(owner)
 	}
-	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
-	return out, err
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &events, &hdr)
+	return events, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
+// WorkloadHistory reads the workload's audit rows, newest first. GET /api/v1/workloads/{name}/history.
+// Prefer WorkloadHistoryPage, which also returns the server's truncation signal.
+func (c *Client) WorkloadHistory(ctx context.Context, name, owner string, opts ...ListOpts) ([]WorkloadEvent, error) {
+	events, _, err := c.WorkloadHistoryPage(ctx, name, owner, opts...)
+	return events, err
 }
 
 // DeleteWorkload ends the workload's run and deletes it. DELETE /api/v1/workloads/{name}.

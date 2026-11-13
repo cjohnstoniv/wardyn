@@ -146,10 +146,21 @@ type MemberDriveCreateRequest struct {
 
 // MyDriveDeleteResult is the body of a disk drive's delete that did not finish on its Mac: 202
 // member_drive_delete_deferred while the Mac is offline, 200 member_drive_record_only once it is no
-// longer registered. A delete that finished answers 204 with no body.
+// longer registered. A delete that finished answers 204 with no body, which DeleteMyDriveResult
+// returns as a result with an empty Reason.
 type MyDriveDeleteResult struct {
 	Reason  string `json:"reason"`
 	Message string `json:"message"`
+}
+
+// MyDriveDeleteUnfinishedError is DeleteMyDrive's error when the server took the delete but the
+// drive's files were not removed: Result says why, in the server's words.
+type MyDriveDeleteUnfinishedError struct {
+	Result MyDriveDeleteResult
+}
+
+func (e *MyDriveDeleteUnfinishedError) Error() string {
+	return "drive delete not finished (" + e.Result.Reason + "): " + e.Result.Message
 }
 
 // CreateMyDrive creates the caller's own drive (POST /api/v1/me/drives).
@@ -159,8 +170,21 @@ func (c *Client) CreateMyDrive(ctx context.Context, name string) (MeDrive, error
 	return out, err
 }
 
-// DeleteMyDrive deletes the caller's own drive and its files
-// (DELETE /api/v1/me/drives/{id}).
+// DeleteMyDriveResult deletes the caller's own drive and its files (DELETE /api/v1/me/drives/{id}).
+// An empty Reason means the files are gone. A disk drive on a Mac may answer otherwise: deferred
+// until the Mac reconnects, or record only, when the Mac is no longer registered and the disk stays on it.
+func (c *Client) DeleteMyDriveResult(ctx context.Context, id uuid.UUID) (MyDriveDeleteResult, error) {
+	var out MyDriveDeleteResult
+	err := c.do(ctx, http.MethodDelete, "/api/v1/me/drives/"+id.String(), nil, &out)
+	return out, err
+}
+
+// DeleteMyDrive is DeleteMyDriveResult that returns nil only when the drive's files are gone. A delete
+// the server took without removing them (deferred or record only) is a *MyDriveDeleteUnfinishedError.
 func (c *Client) DeleteMyDrive(ctx context.Context, id uuid.UUID) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/me/drives/"+id.String(), nil, nil)
+	res, err := c.DeleteMyDriveResult(ctx, id)
+	if err == nil && res.Reason != "" {
+		return &MyDriveDeleteUnfinishedError{Result: res}
+	}
+	return err
 }
