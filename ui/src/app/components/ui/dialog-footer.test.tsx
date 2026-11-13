@@ -26,7 +26,8 @@ describe("DialogFooter", () => {
     const footer = screen.getByRole("button", { name: "Save" }).parentElement!;
     expect(footer).toHaveAttribute("data-slot", "dialog-footer");
     expect(footer.className).toContain("sticky");
-    expect(footer.className).toContain("bottom-0");
+    // Pinned at the dialog's border, not its padding, so no scrolled field shows under the bar.
+    expect(footer.className).toContain("-bottom-6");
   });
 });
 

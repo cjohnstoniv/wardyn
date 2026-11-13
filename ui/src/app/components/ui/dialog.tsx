@@ -110,7 +110,9 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
       className={cn(
         // Pinned to the bottom of the scrolling dialog so the primary action never leaves the screen; the
         // negative side margins stretch the bar over DialogContent's p-6 so scrolled fields don't show beside it.
-        "bg-background sticky bottom-0 -mx-6 flex flex-col-reverse gap-2 border-t border-border px-6 py-4 sm:flex-row sm:justify-end",
+        // -bottom-6 as the header's -top-6: a sticky box is clamped to the scroll container's content edge, which
+        // would leave a 24px strip under the bar where the scrolled body shows.
+        "bg-background sticky -bottom-6 -mx-6 flex flex-col-reverse gap-2 border-t border-border px-6 py-4 sm:flex-row sm:justify-end",
         className,
       )}
       {...props}
