@@ -70,7 +70,8 @@ type QueueVerdict struct {
 
 // QueueAdmit judges one waiting run before the pass takes any lock (pool-queue.md section 7 step 4), so it
 // may read the store and ask the substrate. It must not write to the queue. An error leaves that run in
-// its place and the pass judges the next.
+// its place and the pass judges the next. A pass asks every verdict before it promotes any run, so what
+// one verdict reads about the runners may answer the pass's later verdicts.
 type QueueAdmit func(ctx context.Context, pool types.RunnerPool, e RunQueueEntry) (QueueVerdict, error)
 
 // PromotedRun is a run the pass moved to PENDING, with the queue row it carried.
