@@ -49,12 +49,12 @@ export interface RunModeBody extends LegacyRunMode {
  * Whether the server would refuse the body beside carriers. Mirrors the server's
  * runModeRunWideRules (run-wide tool and push rules, which belong to each tool and Git
  * entry under the contract) and experienceConflictRefusal (a background task has no idle
- * stop and no web application gateway). Such a body keeps the older fields.
+ * stop, and no web application gateway but an inbound one). Such a body keeps the older fields.
  */
 function carriersRefused(body: RunModeBody, experience: Experience): boolean {
   const policy = body.inline_policy;
   if (policy?.tool_rules?.length || policy?.push_rules != null || body.overrides?.agent?.tool_rules?.length) return true;
-  return experience === "background" && Boolean(policy?.auto_stop_after_sec || policy?.ui_apps?.length);
+  return experience === "background" && Boolean(policy?.auto_stop_after_sec || policy?.ui_apps?.some((a) => !a.inbound));
 }
 
 /**

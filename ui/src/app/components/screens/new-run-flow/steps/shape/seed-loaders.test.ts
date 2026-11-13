@@ -94,6 +94,12 @@ describe("seed loaders", () => {
     for (const field of LEGACY_RUN_MODE_FIELDS) expect(body).not.toHaveProperty(field);
   });
 
+  // Only a template leaves its task for later: a kept launch intent with no task is not a whole background run.
+  it("keeps a Run again intent with no task as written", async () => {
+    wfetchMock.mockResolvedValue(json({ run_id: R, created_at: "2026-10-11T08:00:00Z", document: { ...document, kind: "Run", intent: { agent: "codex-cli" } } }));
+    expect((await seedLoaders.again(R, signal)).intent).toEqual({ agent: "codex-cli" });
+  });
+
   it("lets a refused read reach the seed-failed screen with the server's sentence", async () => {
     wfetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "That template does not exist.", reason: "template_not_found" }), { status: 404, headers: { "content-type": "application/json" } }));
     await expect(seedLoaders.template({ id: T, revision: 1 }, signal)).rejects.toBeInstanceOf(HttpError);

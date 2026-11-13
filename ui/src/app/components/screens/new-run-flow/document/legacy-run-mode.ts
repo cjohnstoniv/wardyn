@@ -36,3 +36,20 @@ export function withLegacyRunModeInCarriers(intent: RunIntent, textLater = false
   const { experience, workload, tools, startup } = carriers;
   return withKeys(intent, { ...NO_LEGACY, shape: shapeOf(carriers), experience, workload, tools, startup });
 }
+
+/**
+ * At the ask: a draft that still holds older run-mode fields and no `interactive` (a template leaves the run mode
+ * to the person) is converted with what the person's choice in Guided setup says, as a template that states its
+ * run mode is when it is seeded. Only the fields the draft leaves out are taken from the choice. The run-mode
+ * fields Guided wrote for the draft so far are written again; the draft is kept as it is when it holds tools, or
+ * when mapRunMode cannot say the run.
+ */
+export function withAskedRunMode(intent: RunIntent, asked: Pick<RunModeBody, "interactive" | "interactive_start" | "task_mode">): RunIntent {
+  const record = intent as Record<string, unknown>;
+  // An empty or false older field says nothing, and the server takes it beside the run-mode fields (the SDK writes an empty `agent`).
+  const says = (v: unknown) => v !== undefined && v !== "" && v !== false;
+  if (intent.interactive !== undefined || !LEGACY_RUN_MODE_FIELDS.some((k) => says(record[k]))) return intent;
+  const said = withKeys({ ...asked, ...intent } as RunIntent, { experience: undefined, workload: undefined, startup: undefined });
+  const carried = withLegacyRunModeInCarriers(said, true);
+  return carried.experience === undefined ? intent : carried;
+}

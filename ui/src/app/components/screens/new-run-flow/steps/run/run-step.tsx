@@ -55,9 +55,10 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
   const agent = intent.shape === "agent_task";
   // The server never infers a mode, so an agent run that has not chosen one gets one and the draft says so. A task
-  // already in the draft (the Runs composer's) is the Autonomous carrier, so the draft is named Autonomous and keeps it.
+  // already in the draft (the Runs composer's, or a template's in the older `task` field) is the Autonomous carrier, so
+  // the draft is named Autonomous and keeps it. A draft that states `interactive: true` beside its task is not.
   const unnamed = agent && intent.experience === undefined;
-  const fallback: RunMode = intent.workload?.kind === "agent_task" ? "autonomous" : "interactive";
+  const fallback: RunMode = intent.workload?.kind === "agent_task" || (!intent.interactive && intent.task?.trim()) ? "autonomous" : "interactive";
   React.useEffect(() => {
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);

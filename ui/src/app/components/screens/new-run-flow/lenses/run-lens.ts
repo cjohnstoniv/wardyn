@@ -9,6 +9,7 @@
 import type { MachineKind } from "../../../../lib/types/machine-kind";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { RunnerPoolScope } from "../../../../lib/types/runner-pools";
+import { withAskedRunMode } from "../document/legacy-run-mode";
 import type { RunIntent } from "../draft/run-intent";
 import { appIssues, commandOf } from "./apps-lens";
 import { withKeys } from "./lens-keys";
@@ -19,8 +20,15 @@ import { issue, type StepIssue, type StepValidator } from "./step-issues";
 export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
   // Only an interactive run keeps or resumes a machine.
   const machine = mode === "interactive" ? {} : { machine: undefined };
-  if (intent.shape) return withKeys(intent, { ...shapeCarriers(intent.shape, mode, intent), ...machine });
-  return withKeys(intent, { experience: mode === "interactive" ? "interactive" : "background", ...machine });
+  // A draft still in the older run-mode fields (a template that leaves its run mode to the person) is converted with
+  // the mode the person names. An interactive agent task starts its harness, so an older task is its first message.
+  const start = intent.shape === "agent_task" && intent.agent ? { interactive_start: "agent" as const } : {};
+  const asked = withAskedRunMode(intent, mode === "interactive" ? { interactive: true, ...start } : { interactive: false });
+  // Carriers converted to the draft's shape are the run as written; another shape says them again.
+  if (asked !== intent && (!intent.shape || asked.shape === intent.shape)) return withKeys(asked, machine);
+  const from = withKeys(asked, { shape: intent.shape });
+  if (from.shape) return withKeys(from, { ...shapeCarriers(from.shape, mode, from), ...machine });
+  return withKeys(from, { experience: mode === "interactive" ? "interactive" : "background", ...machine });
 }
 
 /** Organization pools and User pools: the wire's scope is the console's word for the two kinds of pool. */
