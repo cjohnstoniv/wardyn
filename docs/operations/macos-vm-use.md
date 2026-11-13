@@ -104,12 +104,12 @@ A kept disk keeps the guest agent and harness tools it was made with. When they 
 
 ## Watching a background run's desktop
 
-A background run has no terminal, SSH or web door. This is the one exception: the person who started a background macOS VM run can watch its desktop from the run page, view only.
+A background run has no terminal, SSH or web door, though a command can run in it through the API (`POST /runs/{id}/exec`). Watching is the one exception among the doors: the person who started a background macOS VM run can watch its desktop from the run page, view only.
 
 - **What a watch can do.** It shows the picture and nothing else. Keys, pointer moves, paste and clipboard copy are dropped by three separate things: the helper for that boot, the Mac's desktop mode and the gateway's own filter.
   - A watch does not wake a paused run, mark the run as in use or keep it alive.
   - It opens through `POST /runs/{id}/desktop/watch-ticket`. A declared noVNC app, the desktop's files, a sign-in and a terminal stay refused ([Errors](../sdk.md#reason-branch-on-this-never-on-errors-prose)).
-- **The exposure.** A background run has no terminal, so what a person sees of it is its logs and audit trail. A screen can show what those keep out: a secret in a GUI app, a document, anything the run puts on screen.
+- **The exposure.** A background run has no terminal. A person sees its logs and audit trail, and the output of any command they may run in it through the API, which is neither masked nor recorded. A screen can also show what the run puts on it: a secret in a GUI app, a document.
   - Turn the site switch off, or set the profile limit, where that is not acceptable.
 - **macOS 27.** Its prepare flow creates only the setup account, and Wardyn's own prepare steps set the run user's first-login settings on 27 as on 26. Pane names change by version, so nothing beyond macOS 26 is promised as tested.
 - **Recording.** A watch is recorded when the run is at Screen and actions ([Recording](#recording)).

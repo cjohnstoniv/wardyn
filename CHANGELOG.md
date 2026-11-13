@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `POST /api/v1/runs/{id}/exec` (SDK `ExecRun`) now takes a background run (`experience: background`), so a pipeline step can run commands in its own headless run. Before, it answered `409 run_exec_unavailable`. A background run still has no SSH access, so `wardyn run exec` still refuses it, and a command does not keep the run going. Each command and its exit code are audited (`run.command.exec`); its output is neither masked nor recorded.
+
+### Changed
+
+- `POST /api/v1/runs/{id}/exec` answers a governance profile's refusal as `403 governance_unit` at target `runs.exec`, with its own error naming the limit: `deny_interactive` on any run, and now `deny_task_mode_exec` on a background run. Before, `deny_interactive` was recorded at target `runs.attach` with the terminal's error. Its `409 run_exec_unavailable` errors no longer say "ssh unavailable", and a Docker sandbox whose runtime runs only the task (libkrun) answers `501 run_inspect_exec_stream_unsupported` instead of `502 run_exec_failed`.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

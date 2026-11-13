@@ -172,7 +172,7 @@ const (
 	reasonRunModeInvalid     = "run_mode_invalid"     // a run-mode carrier is malformed
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
-	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, interactive exec, SSH, UI gateway, desktop
 	// Several agents in one background run (run_multi_agent.go).
 	reasonMultiAgentTasksOff = "multi_agent_tasks_off" // tools[].task while WARDYN_MULTI_AGENT_TASKS is off
 	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
@@ -803,7 +803,7 @@ const (
 // POST /runs/{id}/exec (run_exec.go) and strict audit (audit_strict.go).
 const (
 	reasonRunExecInvalid     = "run_exec_invalid"     // command is empty or over 128 KiB, or timeout_sec is outside 1 to 300
-	reasonRunExecUnavailable = "run_exec_unavailable" // the run cannot take a command now: no runner, not running, ended, a background task, or paused and not resumed
+	reasonRunExecUnavailable = "run_exec_unavailable" // the run cannot take a command now: no runner, not running, ended, or paused and not resumed
 	reasonRunExecFailed      = "run_exec_failed"      // the runner could not start the command, or lost it before it ended
 	reasonRunExecBusy        = "run_exec_busy"        // 429: the run already holds its most SSH channels and commands at once (WARDYN_SSH_MAX_SESSIONS_PER_RUN)
 	reasonAuditUnavailable   = "audit_unavailable"    // strict audit is on and the change's intent row could not be written first; nothing was changed

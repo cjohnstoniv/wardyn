@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -284,29 +285,141 @@ func TestRunExecRefusals(t *testing.T) {
 	}
 }
 
-// TestRunExecBackgroundRunIsRefused: POST /exec is the SSH access door (backgroundDoors), so a background
-// task refuses a command as SSH does, and the runner is never called. The 409 says exec needs an interactive
-// run (experience: interactive) and does not say "no SSH access"; it catches the SSH-only sentence
-// (runBackgroundOnlyMsg) reaching an exec caller again.
-func TestRunExecBackgroundRunIsRefused(t *testing.T) {
-	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil })
+// background makes the harness's run a background task (experience: background).
+func (e *execHarness) background() {
 	e.ast.mu.Lock()
+	defer e.ast.mu.Unlock()
 	run := e.ast.runs[e.id]
 	run.Experience = types.ExperienceBackground
 	e.ast.runs[e.id] = run
+}
+
+// underProfile launches the harness's run under a governance profile named "ci" that carries limits.
+func (e *execHarness) underProfile(limits types.GovernanceLimits) {
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: limits}
+	e.ast.mu.Lock()
+	run := e.ast.runs[e.id]
+	run.UnitID = &profile.ID
+	e.ast.runs[e.id] = run
 	e.ast.mu.Unlock()
-	w := e.exec(t, `{"command":"id"}`)
-	if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || !strings.Contains(w.Body.String(), "interactive run") ||
-		!strings.Contains(w.Body.String(), "experience: interactive") || strings.Contains(w.Body.String(), "no SSH access") {
-		t.Errorf("a background run = %d %s, want 409 %s naming an interactive run", w.Code, w.Body, reasonRunExecUnavailable)
+	e.srv.cfg.Store = &profileListStore{authzStore: e.ast, profiles: []types.GovernanceUnit{profile}}
+}
+
+// execError is the error sentence of a refused POST /exec.
+func execError(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s: %v", w.Body, err)
 	}
-	if n := e.execs.Load(); n != 0 {
-		t.Errorf("ExecStream was called %d times for a background run", n)
+	return body.Error
+}
+
+// TestRunExecBackgroundRunTakesACommand: a background task takes a command through this route, though it has
+// no SSH access (TestSSHFreshRun_BackgroundRunRefusesEveryChannel): the runner is called once and the
+// run.command.exec row holds the command and its exit code.
+func TestRunExecBackgroundRunTakesACommand(t *testing.T) {
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("uid=1000", "", 0), nil })
+	e.background()
+	res := execResult(t, e.execWithin(t, `{"command":"id"}`, 10*time.Second))
+	if res.ExitCode != 0 || res.Stdout != "uid=1000" {
+		t.Errorf("result = %+v, want exit 0 and the command's output", res)
 	}
-	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "failure" ||
-		!strings.Contains(string(rows[0].Data), `"error":`) || strings.Contains(string(rows[0].Data), `"command":`) {
-		t.Errorf("run.command.exec rows = %v, want one failure carrying the refusal and no command", rows)
+	if n := e.execs.Load(); n != 1 {
+		t.Errorf("ExecStream was called %d times, want 1", n)
 	}
+	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "success" ||
+		!strings.Contains(string(rows[0].Data), `"command":"id"`) {
+		t.Errorf("run.command.exec rows = %v, want one success row naming the command", rows)
+	}
+}
+
+// TestRunExecBackgroundRunKeepsTheDoors: a background run's command meets every door an interactive run's does,
+// before the runner is called, and is answered in words a pipeline step can read: the governance profile
+// (deny_interactive on any run, deny_task_mode_exec on a background run alone), the data_out rule, the channel
+// cap and the run's state. A sandbox with nothing to exec into answers 501 in this route's own words.
+func TestRunExecBackgroundRunKeepsTheDoors(t *testing.T) {
+	ok := func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil }
+	refusedFirst := func(t *testing.T, e *execHarness, w *httptest.ResponseRecorder, code int, reason string) {
+		t.Helper()
+		if w.Code != code || wireReason(t, w) != reason {
+			t.Errorf("POST /exec = %d %s, want %d %s", w.Code, w.Body, code, reason)
+		}
+		if n := e.execs.Load(); n != 0 {
+			t.Errorf("ExecStream was called %d times; the door is before the runner", n)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		limits types.GovernanceLimits
+		msg    string
+	}{
+		{"deny_interactive", types.GovernanceLimits{DenyInteractive: true}, runExecDenyInteractiveMsg},
+		{"deny_task_mode_exec", types.GovernanceLimits{DenyTaskModeExec: true}, runExecDenyTaskModeExecMsg},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecHarness(t, ok)
+			e.background()
+			e.underProfile(tc.limits)
+			w := e.exec(t, `{"command":"id"}`)
+			refusedFirst(t, e, w, http.StatusForbidden, string(authz.ReasonGovernanceUnit))
+			if got, want := execError(t, w), fmt.Sprintf(tc.msg, "ci"); got != want {
+				t.Errorf("error = %q, want %q", got, want)
+			}
+			if !recHasRefusal(e.h.audit, authz.ReasonGovernanceUnit, "runs.exec") {
+				t.Error("no authz.denied governance_unit row for runs.exec")
+			}
+		})
+	}
+	t.Run("deny_task_mode_exec leaves an interactive run's command alone", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.underProfile(types.GovernanceLimits{DenyTaskModeExec: true})
+		execResult(t, e.exec(t, `{"command":"id"}`))
+		if n := e.execs.Load(); n != 1 {
+			t.Errorf("ExecStream was called %d times, want 1", n)
+		}
+	})
+	t.Run("data_out", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.background()
+		e.withDataOut(types.TransferBlocked, nil)
+		refusedFirst(t, e, e.exec(t, `{"command":"id"}`), http.StatusConflict, reasonDataOutBlocked)
+	})
+	t.Run("channel cap", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.background()
+		e.srv.cfg.SSHMaxSessionsPerRun = 1
+		if !e.srv.sshAcquireSession(e.id) {
+			t.Fatal("could not hold the run's one channel slot")
+		}
+		defer e.srv.sshReleaseSession(e.id)
+		refusedFirst(t, e, e.exec(t, `{"command":"id"}`), http.StatusTooManyRequests, reasonRunExecBusy)
+	})
+	t.Run("ended", func(t *testing.T) {
+		e := newExecHarness(t, ok)
+		e.background()
+		e.ast.mu.Lock()
+		run := e.ast.runs[e.id]
+		run.State = types.RunCompleted
+		e.ast.runs[e.id] = run
+		e.ast.mu.Unlock()
+		w := e.exec(t, `{"command":"id"}`)
+		refusedFirst(t, e, w, http.StatusConflict, reasonRunExecUnavailable)
+		if got, want := execError(t, w), fmt.Sprintf(execLiveRunWords.notRunning, types.RunCompleted); got != want {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
+	t.Run("a sandbox with nothing to exec into", func(t *testing.T) {
+		e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, runner.ErrExecStreamUnsupported })
+		e.background()
+		w := e.exec(t, `{"command":"id"}`)
+		if w.Code != http.StatusNotImplemented || wireReason(t, w) != reasonRunInspectExecStreamUnsupported || execError(t, w) != runExecUnsupportedMsg {
+			t.Errorf("POST /exec = %d %s, want 501 %s saying %q", w.Code, w.Body, reasonRunInspectExecStreamUnsupported, runExecUnsupportedMsg)
+		}
+		if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "failure" {
+			t.Errorf("run.command.exec rows = %v, want one failure row", rows)
+		}
+	})
 }
 
 // TestRunExecForeignRunIsMissing: a member who does not own the run gets the missing run's 404 and the

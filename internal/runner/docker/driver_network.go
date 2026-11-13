@@ -189,6 +189,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg, managed: spec.ManagedFiles}
 		d.mu.Unlock()
 		d.keepExecOutput(name, spec.ExecOutput)
+		d.execLess.Store(name, runtimeName)
 		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced, ProxyConfigSHA256: proxySHA, ProxyAddr: proxyIP}, nil
 	}
 
@@ -589,6 +590,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	d.mu.Unlock()
 	d.execOutputs.Delete(agentRef)
 	d.notVMs.Delete(agentRef)
+	d.execLess.Delete(agentRef)
 
 	var id uuid.UUID
 	res, err := d.cli.ContainerInspect(ctx, agentRef, client.ContainerInspectOptions{})

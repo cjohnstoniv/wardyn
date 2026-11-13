@@ -156,8 +156,8 @@ type ExecResult struct {
 
 // ExecRun runs one command in a running run and waits for it to end, so an
 // HTTPClient with a Timeout needs one longer than the command's. The run's
-// owner may call it. A run whose data_out rule is review or blocked answers
-// 409 data_out_blocked, as SSH commands are refused there.
+// owner may call it, on a background run too. A run whose data_out rule is
+// review or blocked answers 409 data_out_blocked, as SSH commands are refused there.
 func (c *Client) ExecRun(ctx context.Context, id uuid.UUID, req ExecRequest) (ExecResult, error) {
 	var out ExecResult
 	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/exec", req, &out)

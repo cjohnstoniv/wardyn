@@ -251,6 +251,7 @@ type Driver struct {
 	macCfg   atomic.Pointer[MacVMConfig] // EnableMacVM: macOS VM sandboxes, whose refs vms holds too
 	vms      sync.Map
 	notVMs   sync.Map
+	execLess sync.Map // ref -> runtime name: a container whose runtime has no exec (runtimeSupportsExec); ExecStream refuses it
 	macDisks sync.Map // run id -> runner.MacOSVMDisk: each macOS VM run's disk report (macvm_disk.go)
 	vmDial   func(ctx context.Context, path string) (net.Conn, error)
 }

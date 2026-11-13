@@ -216,7 +216,7 @@ Host wardyn-<short-id>
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
   - With no SSH key, or with the gateway off, `POST /api/v1/runs/{id}/exec` runs one command over HTTP ([sdk.md](sdk.md#running-a-command-in-a-run)).
     - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset.
-    - The per-run controls are SSH exec's: a `data_out` rule other than `allowed`, `deny_interactive` and a background-only run each refuse it.
+    - Its per-run controls are a `data_out` rule other than `allowed` and `deny_interactive`, which each refuse it, and `deny_task_mode_exec`, which refuses it on a background-only run. Unlike SSH exec, it takes a background-only run, though that run has no SSH access.
     - Like SSH exec, its output is neither masked nor recorded.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
 - `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH. Keep that `Include` outside any `Host` or `Match` block, or ssh will not find the run's host.

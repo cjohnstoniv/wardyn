@@ -228,6 +228,32 @@ func TestRunPause_SSHChannelThawsFirst(t *testing.T) {
 	}
 }
 
+// TestRunPause_ExecThawsABackgroundRun: POST /runs/{id}/exec's fresh read (execFreshRun) thaws a paused run
+// before its command execs, a background run included, while sshFreshRun refuses that run before any thaw.
+func TestRunPause_ExecThawsABackgroundRun(t *testing.T) {
+	srv, st, fr, run := newWiredPauseServer(t)
+	run.Experience = types.ExperienceBackground
+	st.authzStore.mu.Lock()
+	st.authzStore.runs[run.ID] = run
+	st.authzStore.mu.Unlock()
+	st.paused = true
+	if _, msg := srv.sshFreshRun(context.Background(), run.ID, holderOwner); msg == "" {
+		t.Fatal("sshFreshRun took a background run")
+	}
+	if n := fr.thawCount(); n != 0 {
+		t.Fatalf("thaws after a refused ssh channel = %d, want 0", n)
+	}
+	if _, msg := srv.execFreshRun(context.Background(), run.ID, holderOwner); msg != "" {
+		t.Fatalf("execFreshRun refused: %s", msg)
+	}
+	if n := fr.thawCount(); n != 1 {
+		t.Fatalf("thaws = %d, want 1 before the command execs", n)
+	}
+	if paused, _ := st.state(); paused {
+		t.Error("the run is still marked paused after a command thawed it")
+	}
+}
+
 // TestRunPause_SSHKeystrokesArePresence: bytes a person sends on an ssh shell
 // and on an ssh exec's stdin move the presence clock.
 func TestRunPause_SSHKeystrokesArePresence(t *testing.T) {

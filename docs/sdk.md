@@ -311,12 +311,17 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 `POST /api/v1/runs/{id}/exec` takes `{"command": "...", "timeout_sec": 60}` and answers `200 {"exit_code", "stdout", "stderr", "truncated", "timed_out"}` once the command ends.
 
 - It is the SSH gateway's exec, over HTTP: the command runs through `/bin/sh -c` from the sandbox user's home directory, with no TTY and no added environment.
-- It is on whether or not the SSH gateway is (`WARDYN_SSH_LISTEN`), and the per-run controls below apply either way: `deny_interactive`, the `data_out` rule and background-only runs.
+- It is on whether or not the SSH gateway is (`WARDYN_SSH_LISTEN`), and the per-run controls below apply either way: `deny_interactive`, `deny_task_mode_exec` on a background run, and the `data_out` rule.
 - As with SSH exec, the output is neither masked nor recorded.
 - Only the person who may enter the run may call it, as for the terminal; a profile's `deny_interactive` closes it too. A super admin is the exception on their own run or an operator-owned one, unless `WARDYN_GOVERN_ADMIN_RUNS` is on, when only an operator-owned run is.
 - A run whose `data_out` rule is `review` or `blocked`, or whose rule cannot be read, answers `409 data_out_blocked`.
   The command never reaches the sandbox, and a `run.data_out.deny` row with `path` `exec` is written, as for an SSH command.
-- A background run (`experience: background`) answers `409 run_exec_unavailable`; create the run with `experience: interactive` to use exec. Exec is for interactive runs: a background run's only way in is its task. A run that cannot take a command now (not running, ended, or paused and not resumed) answers it too.
+- A background run (`experience: background`) takes a command too, so a pipeline step can run commands in its own headless run.
+  It has no SSH access, so `wardyn run exec`, which goes over SSH, refuses it: call this route or the SDK's `ExecRun`.
+  A command does not keep the run going: it ends when its task exits, at its end time or when killed, and a command still running then answers `409 run_exec_unavailable` or `502 run_exec_failed`.
+- The governance profile the run was launched under, as it stands now, can refuse a command with `403 governance_unit` (target `runs.exec`). `deny_interactive` refuses one into any run, and `deny_task_mode_exec` refuses one into a background run, which nobody supervises. The error names the profile and the limit.
+- A run that cannot take a command now (not running, ended, or paused and not resumed) answers `409 run_exec_unavailable`, and its error says which. A paused run is resumed first.
+- A sandbox with no way to run a second command answers `501 run_inspect_exec_stream_unsupported`. On Docker, a runtime with no exec (libkrun) runs the task as the sandbox's only process; a runner older than this release answers `502 run_exec_failed` there.
 - The command may be up to 128 KiB, the most Linux execs as one argument; a longer one answers `400 run_exec_invalid`.
 - `timeout_sec` defaults to 60 and may be 1 to 300.
   When it passes, the command's stream is closed, and the reply says `timed_out` with `exit_code` `-1`.
@@ -327,7 +332,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
   Its `run.command.exec` audit row names the command (its first 4 KiB) and the exit code, never output.
   A caller who leaves before the command ends gets a `failure` row saying so.
 - A command holds one of the run's SSH channels while it runs (`WARDYN_SSH_MAX_SESSIONS_PER_RUN`, shared with SSH); with all in use the answer is `429 run_exec_busy`.
-  While it runs, the run does not count as idle.
+  While it runs, the run does not count as idle; a background run has no idle stop.
 - The call waits for the command, so an `http.Client` with a `Timeout` needs a longer one.
 
 ## Finding a waiting sign-in
@@ -984,7 +989,7 @@ start.
 | `mac_window_offline` / `mac_window_runner_too_old` / `mac_window_not_here` / `mac_window_desktop_control` / `mac_window_paused` / `mac_window_preparing` / `mac_window_open` / `mac_window_not_at_mac` / `mac_window_lock_unknown` / `mac_window_failed` | `409` (`502` for `mac_window_failed`): the runner is offline, cannot open a window, or is connected through another server (use a single replica or sticky runner routing); a browser desktop with control did not close in time; the run is paused, still being prepared, or already has a window; the person is not signed in at the unlocked Mac; the Mac can't tell whether its screen is locked, so the window stays closed; the runner could not open it. `GET /runs/{id}` has `macos_preparing: true` while setup runs. |
 | `mac_window_revoked` | `403`: the caller's session was cut off; at a re-check it closes the window as `revoked`. |
 | `desktop_window_invalid` | `400`: `desktop_window` is not `at_start`, or the run is not a macOS VM run. |
-| `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. The one exception is the built-in desktop of a background macOS VM run, which its owner can watch view only through `POST /runs/{id}/desktop/watch-ticket` (the `run_background_watch_*` rows above). `POST /runs/{id}/attach/ticket`, with `?purpose=ui` too, answers `run_background_only` for a background run: use the watch-ticket call. A declared noVNC app, the desktop's files and a desktop sign-in still answer this. |
+| `run_background_only` | `409`: an interactive door of a background task (terminal, interactive exec, SSH, web gateway, desktop). `POST /runs/{id}/exec` is not interactive and takes a background run. Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. The one exception is the built-in desktop of a background macOS VM run, which its owner can watch view only through `POST /runs/{id}/desktop/watch-ticket` (the `run_background_watch_*` rows above). `POST /runs/{id}/attach/ticket`, with `?purpose=ui` too, answers `run_background_only` for a background run: use the watch-ticket call. A declared noVNC app, the desktop's files and a desktop sign-in still answer this. |
 | `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
 | `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |

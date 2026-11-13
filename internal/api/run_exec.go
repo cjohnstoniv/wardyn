@@ -17,6 +17,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -25,11 +28,14 @@ import (
 
 // POST /runs/{id}/exec runs one command in a running run and answers with its output: the SSH
 // gateway's exec channel (bridgeSSHExec) over plain HTTP, and no wider. Before the runner is called it
-// checks, in order, who may enter the run (getRunForEntry), the profile's deny_interactive (as SSH
-// authentication does), the run's data_out rule (as an SSH exec channel does), the run's state
-// (sshFreshRun) and the run's SSH channel cap, which a command shares with SSH (sshAcquireSession). The command runs as an SSH exec runs it (sshExecArgv), with no TTY and no added
-// environment, and is never recorded: its run.command.exec row names the command (its first
-// runExecAuditCommandCap bytes) and its exit code, never its output.
+// checks, in order, who may enter the run (getRunForEntry), the governance profile the run was launched
+// under (refuseExecGovernance: deny_interactive, and deny_task_mode_exec on a background run), the run's
+// data_out rule (as an SSH exec channel does), the run's state (execFreshRun) and the run's SSH channel
+// cap, which a command shares with SSH (sshAcquireSession). A background run takes a command too, though it
+// has no SSH access, so a pipeline step can run commands in its own headless run. The command runs as an SSH
+// exec runs it (sshExecArgv), with no TTY and no added environment, and its output is neither masked nor
+// recorded: its run.command.exec row names the command (its first runExecAuditCommandCap bytes) and its exit
+// code, never its output.
 
 const (
 	// runExecDefaultTimeout is a request's timeout when it names none; runExecMaxTimeoutSec the most it may name.
@@ -53,9 +59,14 @@ const (
 	runExecBusyMsg = "This run already has %d SSH channels or commands open, the most it may; try again when one ends."
 	// runExecFailedMsg answers a runner that could not start the command or lost it; the cause goes to the log.
 	runExecFailedMsg = "The runner could not run the command, or lost it before it ended."
-	// runExecBackgroundMsg answers a background task: exec is not an SSH-only door, but a background run takes no
-	// command at all, so the sentence says what to create instead of naming SSH.
-	runExecBackgroundMsg = "This run is a background task, so it cannot take a command. Exec needs an interactive run: create the run with experience: interactive. Its logs, audit trail and status stay available."
+	// runExecUnsupportedMsg answers a sandbox with nothing to exec into: an exec-less runtime (libkrun) runs the
+	// task as the sandbox's only process, and a runner without exec streaming runs no second command.
+	runExecUnsupportedMsg = "This run's sandbox cannot take a command: its runtime or runner runs only the task, with no way to run another command beside it."
+	// runExecDenyInteractiveMsg answers a command under a profile that denies interactive sessions.
+	runExecDenyInteractiveMsg = "Commands are not allowed in this run: the governance profile %q it was launched under denies interactive sessions (deny_interactive)."
+	// runExecDenyTaskModeExecMsg answers a command into a background run under a profile that refuses commands
+	// nobody supervises.
+	runExecDenyTaskModeExecMsg = "Commands are not allowed in this background run: the governance profile %q it was launched under refuses commands nobody supervises (deny_task_mode_exec)."
 )
 
 func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
@@ -67,9 +78,10 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// sshAuth's deny_interactive door: a super admin is past getRunForEntry only on their own run or
-	// an operator-owned one, so the exemption cannot reach a person's run.
-	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r, run) {
+	// The governance door, exempt for a super admin as sshAuth's deny_interactive door is: a super admin is
+	// past getRunForEntry only on their own run or an operator-owned one, so the exemption cannot reach a
+	// person's run.
+	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && s.refuseExecGovernance(w, r, run) {
 		return
 	}
 	var req client.ExecRequest
@@ -86,12 +98,8 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	at, actor := actorFromRequest(r)
-	fresh, msg := s.sshFreshRun(ctx, run.ID, actor)
+	fresh, msg := s.execFreshRun(ctx, run.ID, actor)
 	if msg != "" {
-		// A background run's own answer; a state refusal (not running, ended) keeps sshFreshRun's words.
-		if run.BackgroundOnly() && msg == runBackgroundOnlyMsg("SSH access") {
-			msg = runExecBackgroundMsg
-		}
 		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).
 		s.auditRunExec(ctx, run, at, actor, "failure", map[string]any{"error": msg})
 		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, msg)
@@ -109,8 +117,61 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	s.runExec(w, r, fresh, req.Command, timeout)
 }
 
+// execLiveRunWords are this route's refusals for a run that cannot take a command now, written for a pipeline
+// step that reads them: they name the command, not SSH.
+var execLiveRunWords = liveRunWords{
+	noRunner:   "This server runs no sandboxes, so the run cannot take a command.",
+	notFound:   "The run was not found.",
+	notRunning: "The run is not running (state %s), so it cannot take a command. A background run ends when its task exits.",
+	ended:      "The run has ended, so it cannot take a command. Its logs, audit trail and status stay available.",
+}
+
+// execFreshRun is sshFreshRun for this route, less its background refusal: a background run takes a command
+// here (the contract's third exception, run_mode_doors.go), while its SSH channels still refuse. A paused run is
+// thawed first.
+func (s *Server) execFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, string) {
+	run, msg := s.liveRunForExec(ctx, runID, execLiveRunWords)
+	if msg != "" {
+		return types.AgentRun{}, msg
+	}
+	if msg := s.thawForCommand(ctx, run, principal); msg != "" {
+		return types.AgentRun{}, msg
+	}
+	return run, ""
+}
+
+// refuseExecGovernance is this route's governance door, read from the profile the run was launched under as it
+// stands now (runUnit), so a limit set later reaches runs already going: deny_interactive refuses a command into
+// any run, as it refuses SSH, and deny_task_mode_exec refuses one into a background run, where nobody supervises
+// it, as it refuses an exec run at create. True when it has answered. The harness sign-in run is exempt, as
+// interactiveDeniedBy exempts it. Callers skip it for a super admin, as sshAuth does.
+func (s *Server) refuseExecGovernance(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
+	if run.Task == harnessLoginTask {
+		return false
+	}
+	ctx := r.Context()
+	p, err := s.runUnit(ctx, run)
+	if err != nil {
+		return s.refuseRunUnitError(w, r, "runs.exec", "exec", run, err)
+	}
+	if p == nil {
+		return false
+	}
+	if p.Limits.DenyInteractive {
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.exec", fmt.Sprintf(runExecDenyInteractiveMsg, p.Name)).
+			OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(ctx, p)).OnKnob(s.runLockOf(ctx, p, "deny_interactive")))
+	}
+	if run.BackgroundOnly() && p.Limits.DenyTaskModeExec {
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.exec", fmt.Sprintf(runExecDenyTaskModeExecMsg, p.Name)).
+			OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(ctx, p)).OnKnob(s.runLockOf(ctx, p, "deny_task_mode_exec")))
+	}
+	return false
+}
+
 // runExec runs command in fresh and answers its result. While it runs, the run's idle clock is kept
 // reset (TouchRun and attachKeepalive), as for an SSH exec, so auto_stop does not end a long command.
+// A background run has no idle stop, so the touch changes nothing for it: it still ends when its task
+// exits, at its end or when killed, and a command running then loses its sandbox.
 func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.AgentRun, command string, timeout time.Duration) {
 	ctx := r.Context()
 	at, actor := actorFromRequest(r)
@@ -187,7 +248,7 @@ func (s *Server) refuseExecDataOut(w http.ResponseWriter, r *http.Request, run t
 func writeExecStartError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, runner.ErrExecStreamUnsupported):
-		writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectExecStreamUnsupported, sshExecStreamUnsupportedMsg)
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectExecStreamUnsupported, runExecUnsupportedMsg)
 	case errors.Is(err, runner.ErrSandboxGone):
 		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, runExecSandboxGoneMsg)
 	default:
