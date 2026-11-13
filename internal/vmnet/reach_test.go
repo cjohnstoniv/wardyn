@@ -101,7 +101,7 @@ func TestStdioRelayReach(t *testing.T) {
 		allowed = append(allowed, ipPort(tg))
 	}
 	f := startFakeProxy(t, allowed...)
-	rl, err := New(Config{Proxy: f.addr, DHCP: true})
+	rl, err := New(Config{Proxy: f.addr, DHCP: true, Dial: ownResolverDial})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -100,7 +100,7 @@ func directDial(guestSide string, calls *atomic.Int64) func(context.Context, str
 		if addr == guestProxyAddr {
 			addr = guestSide
 		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+		return (&net.Dialer{Resolver: &net.Resolver{}}).DialContext(ctx, network, addr)
 	}
 }
 
