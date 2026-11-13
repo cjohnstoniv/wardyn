@@ -23,9 +23,9 @@ import (
 // d plus skew, with run as the stored row.
 func reviveClockServer(d time.Time, skew time.Duration, run types.AgentRun, clockErr error) *Server {
 	return &Server{cfg: Config{
-		Store:         &dispatchTestStore{run: run, state: types.RunRunning, dbNow: func() time.Time { return d }, clockErr: clockErr},
-		Now:           func() time.Time { return d.Add(skew) },
-		EndedRunGrace: 7 * 24 * time.Hour,
+		Store:          &dispatchTestStore{run: run, state: types.RunRunning, dbNow: func() time.Time { return d }, clockErr: clockErr},
+		Now:            func() time.Time { return d.Add(skew) },
+		RunLeaseConfig: RunLeaseConfig{EndedRunGrace: 7 * 24 * time.Hour},
 	}}
 }
 
