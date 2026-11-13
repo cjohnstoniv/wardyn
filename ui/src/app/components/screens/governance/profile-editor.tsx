@@ -687,6 +687,7 @@ export function ProfileEditor({
         onSave={save}
         saving={saving}
         saveDisabled={disabled || decidersDirty || !name.trim() || ceiling?.ok === false || narrowsToNothing}
+        saveNote={decidersDirty ? DECIDERS.PROFILE_SAVE_HELD : undefined}
         saveLabel={GOV.SAVE}
         cancelLabel={PEOPLE.CANCEL}
       />

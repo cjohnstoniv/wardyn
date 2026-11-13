@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useLayoutEffect } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ProfileProposal } from "../../lib/types";
@@ -300,5 +301,31 @@ describe("ProfileReview: the run it shows changes while it stays mounted", () =>
     await act(async () => failA(new Error("offline")));
     expect(screen.getByText("Overall risk")).toBeInTheDocument();
     expect(screen.queryByText("Couldn't synthesize a profile for this run.")).toBeNull();
+  });
+
+  it("shown for another run while still mounted, its first frame is loading, never the run shown before", async () => {
+    profileRunMock.mockReset().mockImplementation((runId: string) =>
+      runId === "run-a" ? Promise.resolve(proposal()) : new Promise<ProfileProposal>(() => {}),
+    );
+    // What is on the page at each commit, read before the load effect runs.
+    const frames: boolean[] = [];
+    function Frame() {
+      useLayoutEffect(() => {
+        frames.push(screen.queryByText("Overall risk") !== null);
+      });
+      return null;
+    }
+    const sheet = (runId: string) => (
+      <>
+        <ProfileReview runId={runId} onClose={() => {}} />
+        <Frame />
+      </>
+    );
+    const { rerender } = render(sheet("run-a"));
+    await screen.findByText("Overall risk");
+    frames.length = 0;
+    rerender(sheet("run-b"));
+    expect(screen.getByText("run-b")).toBeInTheDocument();
+    expect(frames).toEqual([false]);
   });
 });

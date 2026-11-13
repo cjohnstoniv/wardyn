@@ -499,4 +499,15 @@ describe("ProfileEditor: the Deciders section", () => {
     expect(screen.queryByRole("option")).toBeNull();
     update.mockRestore();
   });
+
+  it("says beside the held Save profile why it waits, and drops the line once the change is discarded", async () => {
+    editor();
+    expect(screen.queryByText(DECIDERS.PROFILE_SAVE_HELD)).toBeNull();
+    await userEvent.click(section().getAllByRole("button", { name: DECIDERS.REMOVE })[0]);
+    expect(within(screen.getByTestId("form-actions")).getByText(DECIDERS.PROFILE_SAVE_HELD)).toBeInTheDocument();
+    expect(button(GOV.SAVE)).toHaveAccessibleDescription(DECIDERS.PROFILE_SAVE_HELD);
+    await userEvent.click(section().getByRole("button", { name: DECIDERS.DISCARD }));
+    expect(screen.queryByText(DECIDERS.PROFILE_SAVE_HELD)).toBeNull();
+    expect(button(GOV.SAVE)).not.toHaveAttribute("aria-describedby");
+  });
 });
