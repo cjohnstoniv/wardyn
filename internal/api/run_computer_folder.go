@@ -311,13 +311,10 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		}
 	}
 	if qerr != nil && !errors.As(qerr, &cannot) {
-		errText := folderBackGivenUp("no pass ran", "its agent and egress could not be stopped first: "+qerr.Error(), 0)
-		if _, ok := bringBackBy(ctx); ok {
-			errText = bringBackAgentRunningMsg
+		if s.giveUpKeptUnquiesced(ctx, run, rec) {
+			return false
 		}
-		if errors.Is(qerr, errSandboxStopped) {
-			errText = "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"
-		}
+		errText := folderUnquiescedText(ctx, qerr)
 		// Nothing was sent, so this generation is settled.
 		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
 	}
