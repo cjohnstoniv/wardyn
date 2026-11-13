@@ -610,6 +610,29 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it("Discard mine and reload: the rows are read-only until the reload lands, so a switch flipped then is not replaced", async () => {
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code" }] }, etag: '"v1"' });
+    putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
+    let me: ((v: unknown) => void) | undefined;
+    whoamiMock.mockReturnValue(new Promise((done) => (me = done)));
+    withProviders([GATEWAY, ANTHROPIC_KEY]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(whoamiMock).toHaveBeenCalledTimes(1);
+    expect(within(row).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — ${HARNESSES[0].display}` })).toBeDisabled();
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+    await userEvent.click(within(row).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — ${HARNESSES[0].display}` }));
+    expect(screen.queryByRole("option")).toBeNull();
+    await act(async () => me?.(null));
+    await waitFor(() => expect(getAgentProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(within(screen.getByTestId("agent-row-claude-code")).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — ${HARNESSES[0].display}` })).toBeEnabled(),
+    );
+  });
+
   it("Discard mine and reload: no answer from /me reloads only the agents", async () => {
     const assign = vi.fn();
     vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });

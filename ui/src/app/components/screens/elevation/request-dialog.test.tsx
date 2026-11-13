@@ -5,7 +5,7 @@
 
 // One dialog for both kinds: the choice shows only when both are offered, and each kind opens its own dialog.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ElevationOffer, GovernanceRequest } from "../../../lib/types/governance-requests";
 
@@ -91,6 +91,25 @@ describe("RequestDialog: both kinds offered", () => {
     await userEvent.click(screen.getByRole("button", { name: "Request image" }));
     await screen.findByText("Request sent");
     expect(onSent).toHaveBeenCalledWith(r);
+  });
+});
+
+describe("RequestDialog: a request that is out", () => {
+  it.each([
+    ["image", "Request image", "Elevation"],
+    ["elevation", "Request elevation", "Image"],
+  ] as const)("keeps the %s dialog and its kind until the answer shows", async (initialKind, send, other) => {
+    let answer: ((r: GovernanceRequest) => void) | undefined;
+    createMock.mockReturnValue(new Promise((done) => (answer = done)));
+    setup({ initialKind });
+    if (initialKind === "image") await userEvent.type(screen.getByLabelText("Image", { selector: "textarea" }), `x@sha256:${"a".repeat(64)}`);
+    await userEvent.type(screen.getByLabelText("Why do you need it?"), "for the build");
+    await userEvent.click(screen.getByRole("button", { name: send }));
+    expect(kind(other)).toBeDisabled();
+    await userEvent.click(kind(other));
+    expect(screen.getByRole("button", { name: /Sending/ })).toBeInTheDocument();
+    await act(async () => answer?.({ id: "c1", kind: initialKind, deciders: [], expires_at: new Date().toISOString() } as unknown as GovernanceRequest));
+    expect(await screen.findByText("Request sent")).toBeInTheDocument();
   });
 });
 

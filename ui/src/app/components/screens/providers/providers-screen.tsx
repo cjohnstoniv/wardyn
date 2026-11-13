@@ -107,6 +107,8 @@ export function ProvidersScreen() {
   // Segmented option the same way the Git/Storage draft chips its own.
   const [agentsDirty, setAgentsDirty] = React.useState(false);
   const onAgentsDirtyChange = React.useCallback((dirty: boolean) => setAgentsDirty(dirty), []);
+  // Discard reads /me and then the providers, whose answer replaces the draft: the tabs stay read-only until it lands.
+  const [reloading, setReloading] = React.useState(false);
 
   const load = React.useCallback(() => {
     setSavedElsewhere(false);
@@ -121,13 +123,19 @@ export function ProvidersScreen() {
       })
       // GET /workspace-providers is operatorOnly — a 403 is the tier, not the
       // network (the same reading drives-screen.tsx makes of a member's 403).
-      .catch((e) => setStatus(loadFailStatus(e)));
+      .catch((e) => setStatus(loadFailStatus(e)))
+      .finally(() => setReloading(false));
   }, []);
   React.useEffect(() => {
     if (adminReads) load();
   }, [load, adminReads]);
 
-  const discard = useDiscardReload(load);
+  const discardReload = useDiscardReload(load);
+  const discard = () => {
+    if (reloading) return; // a second reload's earlier answer would end the read-only window while the other is still out
+    setReloading(true);
+    discardReload();
+  };
 
   // The Agents tab's own Save re-fires only this — never `load` (A-01): a
   // successful agent save needs `setupStatus` refreshed (modelAccess/
@@ -323,7 +331,7 @@ export function ProvidersScreen() {
           {/* Git and Storage are read-only while their save is in flight: its answer becomes the draft, so an
               edit made meanwhile would be dropped. */}
           {tab === "git" && (
-            <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
+            <fieldset disabled={saving || reloading} className="m-0 min-w-0 border-0 p-0">
               <AdoRowsContext.Provider value={{ refusal: saveError, saveAndEnable, saveBlocked: saving || invalidGitRow }}>
                 <GitTab
                   git={draft.git ?? []}
@@ -339,7 +347,7 @@ export function ProvidersScreen() {
             </fieldset>
           )}
           {tab === "storage" && (
-            <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
+            <fieldset disabled={saving || reloading} className="m-0 min-w-0 border-0 p-0">
               <StorageTab
                 storage={draft.storage ?? {}}
                 onChange={(storage) => setDraft((d) => ({ ...d, storage }))}
@@ -402,7 +410,7 @@ export function ProvidersScreen() {
                   {REAUTH_DIALOG.WRITE_DROPPED}
                 </span>
               )}
-              <Button disabled={!operator || saving || invalidGitRow} onClick={() => void save()}>
+              <Button disabled={!operator || saving || reloading || invalidGitRow} onClick={() => void save()}>
                 {PROVIDERS.SAVE_CTA}
               </Button>
             </div>

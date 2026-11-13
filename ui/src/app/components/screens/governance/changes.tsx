@@ -353,7 +353,9 @@ export function ChangesTab({
         // Keyed by change so a reason typed for one never carries to the next.
         key={open?.id ?? ""}
         change={open}
-        onClose={() => setOpen(null)}
+        // Closes only the change this drawer was opened for: a note save or decision that answers after its
+        // drawer was closed must not close the one opened since.
+        onClose={() => setOpen((cur) => (cur?.id === open?.id ? null : cur))}
         onChanged={onChanged}
       />
     </section>
@@ -420,8 +422,9 @@ export function ChangeDrawer({
     }
   };
 
+  // While a decision is out the drawer stays: its answer closes the drawer, which would otherwise be the next one opened.
   return (
-    <Sheet open={!!change} onOpenChange={(o) => !o && onClose()}>
+    <Sheet open={!!change} onOpenChange={(o) => !o && !busy && onClose()}>
       <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]">
         {change && (
           <>

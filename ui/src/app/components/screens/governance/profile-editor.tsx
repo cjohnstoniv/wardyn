@@ -88,7 +88,7 @@ const specText = (spec: RunPolicySpec): string => specToSource(spec);
 export function ProfileEditor({
   profile,
   profiles = [],
-  disabled,
+  disabled: readOnly,
   onCancel,
   onSaved,
   onSubmitted,
@@ -109,7 +109,7 @@ export function ProfileEditor({
   deciders?: GovernanceDeciders[];
   decidersSupported?: boolean;
   unitNames?: Record<string, string>;
-  onDecidersChanged?: () => void;
+  onDecidersChanged?: () => void | Promise<unknown>;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
@@ -146,6 +146,8 @@ export function ProfileEditor({
   const [limitsMoved, setLimitsMoved] = React.useState(false);
   const [limitsFolded, setLimitsFolded] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  // Read-only while the save is in flight as well: its answer closes the editor, so an edit made meanwhile would vanish.
+  const disabled = readOnly || saving;
   // The four access-request fields (M3 S5), kept as typed; save trims them.
   const [contact, setContact] = React.useState<Required<PolicyContact>>({
     owner: profile?.contact?.owner ?? "",
@@ -372,6 +374,8 @@ export function ProfileEditor({
         {/* #1200 §3a's "Allowed barriers" control (the same min_confinement_class
             floor the source carries), then the ceiling itself: read first,
             edited on "Edit policy". */}
+        {/* The policy's own editor takes no disabled flag: the fieldset keeps it read-only while the save is in flight. */}
+        <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
         <ProfileCeilingPolicy
           source={spec}
           format={format}
@@ -380,6 +384,7 @@ export function ProfileEditor({
           disabled={disabled}
           modelProviders={modelProviders}
         />
+        </fieldset>
         <p className="mt-2 text-xs text-muted-foreground">{GOV.GRADE_NOTE}</p>
           </>
         )}
@@ -607,7 +612,7 @@ export function ProfileEditor({
       {/* Read-only, as of the last save: a composed profile's binding policy is its base, narrowed. */}
       {profile?.overlay && composed && <EffectiveView profile={profile} />}
 
-      <UnitDeciders profile={profile} profiles={profiles} deciders={deciders} supported={decidersSupported} unitNames={unitNames} disabled={disabled} onChanged={onDecidersChanged} />
+      <UnitDeciders profile={profile} profiles={profiles} deciders={deciders} supported={decidersSupported} unitNames={unitNames} disabled={readOnly} onChanged={onDecidersChanged} />
       <section id="governance-section-contact" className="mt-6 scroll-mt-4" data-testid="governance-profile-contact">
         <h4 className="text-body font-medium text-foreground">{GOV.CONTACT_TITLE}</h4>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{GOV.CONTACT_LEAD}</p>

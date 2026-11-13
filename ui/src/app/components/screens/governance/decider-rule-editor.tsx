@@ -77,6 +77,7 @@ function DurationRow({
   error,
   value,
   onValue,
+  disabled,
 }: {
   id: string;
   label: string;
@@ -84,6 +85,7 @@ function DurationRow({
   error: string | null;
   value: string | undefined;
   onValue: (go: string | undefined) => void;
+  disabled?: boolean;
 }) {
   const [{ count, unit }, setState] = React.useState(() => initialDuration(value));
   const emit = (c: string, u: DurationUnit) => {
@@ -106,6 +108,7 @@ function DurationRow({
           emit(count, u as DurationUnit);
         }}
         unitLabel={RL.UNIT_PICKER_LABEL(label)}
+        disabled={disabled}
         invalid={error !== null}
         describedBy={error !== null ? `${id}-error` : undefined}
         inputClassName="max-w-[8rem] font-mono"
@@ -185,6 +188,7 @@ export function DeciderRuleEditor({
   onChange,
   onDone,
   onRemove,
+  disabled,
 }: {
   index: number;
   rule: DeciderRule;
@@ -195,6 +199,8 @@ export function DeciderRuleEditor({
   onChange: (rule: DeciderRule) => void;
   onDone: () => void;
   onRemove: () => void;
+  /** While the rules are being saved. A disabled fieldset around the editor does not reach the unit pickers. */
+  disabled?: boolean;
 }) {
   const id = (s: string) => `decider-${index}-${s}`;
   const patch = (p: Patch) => onChange(withPatch(rule, p));
@@ -297,6 +303,7 @@ export function DeciderRuleEditor({
             error={problems.includes("elev_max") ? DECIDERS.ELEV_MAX_ERROR : null}
             value={rule.max_elevation}
             onValue={(go) => patch({ max_elevation: go })}
+            disabled={disabled}
           />
           <div>
             <SubHeading>{DECIDERS.ASK_LABEL}</SubHeading>
@@ -317,6 +324,7 @@ export function DeciderRuleEditor({
             error={problems.includes("renew") ? DECIDERS.RENEW_ERROR : null}
             value={rule.renew_after}
             onValue={(go) => patch({ renew_after: go })}
+            disabled={disabled}
           />
           <Field label={DECIDERS.TICKET_PATTERN_LABEL} htmlFor={id("ticket")} hint={DECIDERS.TICKET_PATTERN_HINT} className="max-w-[28rem]">
             <Input id={id("ticket")} className="font-mono" maxLength={256} value={rule.ticket_pattern ?? ""} onChange={(e) => patch({ ticket_pattern: e.target.value })} />

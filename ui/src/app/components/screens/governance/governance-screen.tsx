@@ -118,8 +118,9 @@ export function GovernanceScreen() {
   // refresh, and flipping back to loading would unmount the add form under
   // whoever just typed in it — the skeleton belongs to the FIRST read, which is
   // what the initial state already says.
-  const load = React.useCallback(() => {
-    api
+  // Resolves once the snapshot read has landed or failed, for a caller that waits on it.
+  const read = React.useCallback(() => {
+    const snapshot = api
       .getGovernance()
       .then((s) => {
         // The console hides the Default unit until the tree screen lands: it is the deployment root, not a
@@ -142,7 +143,9 @@ export function GovernanceScreen() {
         setChangesError(null);
       })
       .catch((e) => setChangesError(getErrorMessage(e)));
+    return snapshot;
   }, []);
+  const load = React.useCallback(() => void read(), [read]);
   React.useEffect(load, [load]);
   // A link to one profile (the run page's allowed-models card) opens its editor once the profiles are read.
   const askedProfile = searchParams.get("profile");
@@ -452,7 +455,7 @@ export function GovernanceScreen() {
                 deciders={snap.deciders}
                 decidersSupported={snap.envelopes !== undefined}
                 unitNames={snap.unit_names}
-                onDecidersChanged={load}
+                onDecidersChanged={read}
                 onCancel={() => setEditing(null)}
                 onSaved={(warnings) => {
                   setEditing(null);

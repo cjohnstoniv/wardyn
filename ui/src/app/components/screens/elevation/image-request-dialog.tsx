@@ -123,7 +123,12 @@ function RequestForm({
         <DialogDescription className={sent ? "sr-only" : undefined}>{IMG.LEAD}</DialogDescription>
       </DialogHeader>
 
-      {!sent && kindChoice}
+      {/* Picking the other kind while a request is out would close this form before its answer shows. */}
+      {!sent && kindChoice && (
+        <fieldset disabled={sending} className="m-0 min-w-0 border-0 p-0">
+          {kindChoice}
+        </fieldset>
+      )}
 
       {sent ? (
         <div className="flex items-start gap-3">

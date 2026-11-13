@@ -523,6 +523,28 @@ describe("ProvidersScreen", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it("Discard mine and reload: the tabs are read-only until the reload lands, so an edit typed then is not replaced", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
+    let me: ((v: unknown) => void) | undefined;
+    whoamiMock.mockReturnValue(new Promise((done) => (me = done)));
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    // A second click starts no second reload, whose earlier answer would end the read-only window.
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(whoamiMock).toHaveBeenCalledTimes(1);
+    expect(within(row).getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+    await act(async () => me?.(null));
+    await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(screen.getByTestId("provider-row-github")).getByRole("textbox")).toBeEnabled());
+  });
+
   it("Discard mine and reload: no answer from /me reloads only the providers", async () => {
     const assign = vi.fn();
     vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });

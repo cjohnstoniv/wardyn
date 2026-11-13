@@ -759,11 +759,11 @@ export function AddGrantForm({
       // No success toast, ever: a grant is not an achievement. The row landing
       // in the table above is the whole confirmation.
       setDuplicate(res.updated);
-      setValue("");
+      setValue((v) => (v === value ? "" : v));
       onAdded();
     } catch (e) {
       if (e instanceof PendingChangeError) {
-        setValue("");
+        setValue((v) => (v === value ? "" : v));
         setSubmitted(e.change);
         onSubmitted?.();
         return;
@@ -793,18 +793,18 @@ export function AddGrantForm({
                   if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
                   setSubjectType(v);
                 }}
-                disabled={disabled}
+                disabled={disabled || saving}
                 options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
               />
               {subjectType === "user_type" ? (
-                <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+                <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled || saving} />
               ) : (
                 subjectType !== "all" && (
                   <Input
                     aria-label={PERM.FIELD_WHO}
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
-                    disabled={disabled}
+                    disabled={disabled || saving}
                     className="font-mono"
                     autoComplete="off"
                   />
@@ -820,7 +820,7 @@ export function AddGrantForm({
               {KIND[fixed.kind].label}
             </div>
           ) : (
-            <Select value={kind} onValueChange={(v) => setKind(v as CapabilityKind)} disabled={disabled}>
+            <Select value={kind} onValueChange={(v) => setKind(v as CapabilityKind)} disabled={disabled || saving}>
               <SelectTrigger id="grant-capability">
                 <SelectValue />
               </SelectTrigger>
@@ -845,7 +845,7 @@ export function AddGrantForm({
                   setEnterId(true);
                 } else setValue(v);
               }}
-              disabled={disabled}
+              disabled={disabled || saving}
             >
               <SelectTrigger id="grant-value">
                 <SelectValue placeholder={PERM_EXTRA.PICKER_PLACEHOLDER} />
@@ -869,7 +869,7 @@ export function AddGrantForm({
                 // Typed text stays a typed id even if the list arrives afterwards.
                 setEnterId(true);
               }}
-              disabled={disabled}
+              disabled={disabled || saving}
               className="font-mono"
               autoComplete="off"
               spellCheck={false}
@@ -887,7 +887,7 @@ export function AddGrantForm({
           <Segmented
             value={effect}
             onChange={(v) => setEffect(v)}
-            disabled={disabled}
+            disabled={disabled || saving}
             options={[
               { value: "allow", label: PERM.EFFECT_ALLOW },
               { value: "deny", label: PERM.EFFECT_DENY },

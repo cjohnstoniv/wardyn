@@ -313,7 +313,7 @@ function AddAssignmentForm({
                 if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
                 setSubjectType(v);
               }}
-              disabled={disabled}
+              disabled={disabled || saving}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
             {/* Free text with suggestions ON TOP, never instead of: the kind
@@ -324,7 +324,7 @@ function AddAssignmentForm({
                 doc comment) — it is a bounded, admin-authored set, so it gets
                 a closed picker instead. */}
             {subjectType === "user_type" ? (
-              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled || saving} />
             ) : (
               subjectType !== "all" && (
                 <DirectoryCombobox
@@ -332,7 +332,7 @@ function AddAssignmentForm({
                   value={subject}
                   onChange={setSubject}
                   kind={subjectType}
-                  disabled={disabled}
+                  disabled={disabled || saving}
                 />
               )
             )}
@@ -340,7 +340,7 @@ function AddAssignmentForm({
         </Field>
 
         <Field label={GOV.FIELD_PROFILE} htmlFor="governance-assignment-profile">
-          <Select value={profileID} onValueChange={setProfileID} disabled={disabled || profiles.length === 0}>
+          <Select value={profileID} onValueChange={setProfileID} disabled={disabled || saving || profiles.length === 0}>
             <SelectTrigger id="governance-assignment-profile">
               <SelectValue placeholder={GOV.PROFILE_PLACEHOLDER} />
             </SelectTrigger>
@@ -363,7 +363,7 @@ function AddAssignmentForm({
             type="number"
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
-            disabled={disabled}
+            disabled={disabled || saving}
             className="font-mono"
           />
         </Field>

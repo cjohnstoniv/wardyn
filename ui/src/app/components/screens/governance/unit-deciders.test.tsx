@@ -4,7 +4,7 @@
  */
 
 // The Deciders section of a profile: who besides security admins decides each kind of hold.
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -25,7 +25,7 @@ vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unkno
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { DeciderRule, GovernanceDeciders } from "../../../lib/api/deciders";
 import type { GovernanceUnit } from "../../../lib/api/governance";
-import { CHANGES, GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { CHANGES, GOVERNANCE as GOV, RUN_LIMITS as RL } from "../../../lib/governance-copy";
 import { aheadByHours } from "../../../lib/test-clock";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { DECIDERS, DECIDER_KIND_LABEL } from "../../wardyn/copy/deciders";
@@ -417,6 +417,33 @@ describe("UnitDeciders: Save", () => {
     expect(await screen.findByText(DECIDERS.TRANSIT_BODY)).toBeInTheDocument();
     expect(screen.getByText(DECIDERS.REFUSED_TITLE)).toBeInTheDocument();
     expect(button(DECIDERS.SAVE)).toBeEnabled();
+  });
+
+  it("is read-only while the save is in flight, so an edit made then is not dropped by the reload", async () => {
+    putMock.mockReturnValue(new Promise(() => {}));
+    mount();
+    await userEvent.click(screen.getAllByRole("button", { name: DECIDERS.REMOVE })[0]);
+    // The elevation rule, third now, stays open in its editor while the save is out.
+    await userEvent.click(screen.getAllByRole("button", { name: DECIDERS.EDIT })[2]);
+    await userEvent.click(button(DECIDERS.SAVE));
+    for (const edit of screen.getAllByRole("button", { name: DECIDERS.EDIT })) expect(edit).toBeDisabled();
+    expect(button(DECIDERS.ADD)).toBeDisabled();
+    // The unit picker is not a native control: a disabled fieldset alone leaves it openable.
+    await userEvent.click(within(editorBox(2)).getByRole("combobox", { name: RL.UNIT_PICKER_LABEL(DECIDERS.ELEV_MAX_LABEL) }));
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  it("stays read-only after the save answers until the reload has landed", async () => {
+    putMock.mockResolvedValue(undefined);
+    let landed: (() => void) | undefined;
+    const onChanged = vi.fn(() => new Promise<void>((done) => (landed = done)));
+    mount({ onChanged });
+    await userEvent.click(screen.getAllByRole("button", { name: DECIDERS.REMOVE })[0]);
+    await userEvent.click(button(DECIDERS.SAVE));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    for (const edit of screen.getAllByRole("button", { name: DECIDERS.EDIT })) expect(edit).toBeDisabled();
+    await act(async () => landed?.());
+    await waitFor(() => expect(screen.getAllByRole("button", { name: DECIDERS.EDIT })[0]).toBeEnabled());
   });
 });
 
