@@ -341,6 +341,10 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 	}
 	defer unlock()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err == nil && !runLive(run) {
+		s.pause.thawDone(runID) // ended or kept since the stamp: no thaw owed (runLive)
+		return false, nil
+	}
 	if err == nil {
 		err = s.resumeRun(ctx, pauser, run, actorType, principal, reason)
 	}
@@ -354,7 +358,11 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 
 // thawForExec is markPresent for a path about to exec into the sandbox, given
 // the run it just read: a paused run is thawed whatever the stamp debounce
-// says, because the daemon refuses an exec into a paused container.
+// says, because the daemon refuses an exec into a paused container. A run that
+// reads paused is read again under the lock first, and thawed only while it is
+// still paused and live (runLive), as stampPresence's own resume is. A run no
+// longer live is no thaw owed (nil): the caller's read under the run's start
+// lock (lockStart) refuses it.
 //
 // The thaw takes the run's operation lock, as a pause does (pauseRun), so a
 // person's thaw never lands inside a pause's freeze, mark or compensation. Its
@@ -374,8 +382,16 @@ func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType 
 	if !ok || run.PausedAt == nil {
 		return nil
 	}
+	if run, err = s.cfg.Store.GetRun(ctx, run.ID); err != nil || run.PausedAt == nil || !runLive(run) {
+		return err
+	}
 	return s.resumeRun(ctx, pauser, run, actorType, principal, reason)
 }
+
+// runLive reports whether run, read under its operation lock, is one a person's presence may resume: RUNNING and not
+// kept. resumeRun thaws the sandbox with no state check of its own, and a run that ended, or was kept, since an
+// earlier read may keep its sandbox for a computer folder's pass back.
+func runLive(run types.AgentRun) bool { return run.State == types.RunRunning && !runIsKept(run) }
 
 // noteAgentActive moves the presence clock for the agent's own activity: an
 // egress decision, or the proxy reporting bytes moved. It never thaws.

@@ -37,6 +37,8 @@ type lockState struct {
 	// held replaces db.LockHeld. Set by tests only, to lose a hold the
 	// in-process locker never loses.
 	held func(context.Context) error
+	// starts is the per-run turn a command start takes before it asks for its start lock (run_admit.go).
+	starts startGates
 }
 
 // lockHeld is db.LockHeld: nil only while every lock ctx carries is held.

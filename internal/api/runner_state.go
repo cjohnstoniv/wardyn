@@ -186,7 +186,7 @@ func (s *Server) endGoneRun(ctx context.Context, st store.PG, run types.AgentRun
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
 	at := s.cfg.Now()
-	applied, err := claim(ctx, at)
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) { return claim(ctx, at) })
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a gone runner run lost failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

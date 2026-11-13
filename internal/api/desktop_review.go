@@ -90,14 +90,14 @@ func (s *Server) handleRequestDesktopReview(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	_, principal := actorFromRequest(r)
-	run, admitted, ok := s.desktopAdmit(w, r, run, true)
+	run, start, ok := s.desktopAdmit(w, r, run, true)
 	if !ok {
 		return
 	}
-	defer admitted()
+	defer start.release()
 	sum := sha256.New()
 	var n int64
-	code, err := s.desktopExec(r.Context(), run, admitted, desktopDownloadScript, nil, func(o io.Reader) error {
+	code, err := s.desktopExec(r.Context(), run, start, desktopDownloadScript, nil, func(o io.Reader) error {
 		var cerr error
 		n, cerr = io.Copy(sum, io.LimitReader(o, desktopReviewMaxBytes+1))
 		return cerr
@@ -184,11 +184,11 @@ func (s *Server) serveReviewedDownload(w http.ResponseWriter, r *http.Request, r
 		writeReviewUnavailable(w, r, "spent", errors.New("the store has no review spend"))
 		return
 	}
-	run, admitted, ok := s.desktopAdmit(w, r, run, true)
+	run, start, ok := s.desktopAdmit(w, r, run, true)
 	if !ok {
 		return
 	}
-	defer admitted()
+	defer start.release()
 	tmp, err := os.CreateTemp("", "wardyn-review-*")
 	if err != nil {
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "could not hold the file to check it; nothing was sent")
@@ -197,7 +197,7 @@ func (s *Server) serveReviewedDownload(w http.ResponseWriter, r *http.Request, r
 	defer func() { _ = tmp.Close(); _ = os.Remove(tmp.Name()) }()
 	sum := sha256.New()
 	var n int64
-	code, err := s.desktopExec(ctx, run, admitted, desktopDownloadScript, nil, func(o io.Reader) error {
+	code, err := s.desktopExec(ctx, run, start, desktopDownloadScript, nil, func(o io.Reader) error {
 		var cerr error
 		n, cerr = io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(o, desktopReviewMaxBytes+1))
 		return cerr

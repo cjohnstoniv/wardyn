@@ -323,7 +323,7 @@ func (s *Server) reviveLostHoldRestore(ctx context.Context, run types.AgentRun, 
 	if !ok || fate == nil || gen <= 0 {
 		return s.reviveFailedAfterClaim(ctx, run, gen, data, actorType, actor, reasonReviveProxyReplaceFailedLost, lostMsg, err)
 	}
-	applied, werr := fl.RestoreRunLostFateAtGeneration(ctx, run.ID, gen, *fate)
+	applied, werr := s.fenced(ctx, run.ID, func() (bool, error) { return fl.RestoreRunLostFateAtGeneration(ctx, run.ID, gen, *fate) })
 	switch {
 	case werr != nil:
 		data["error"] = err.Error() + "; restoring its lost mark failed: " + werr.Error()

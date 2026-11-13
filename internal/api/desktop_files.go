@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -155,59 +156,56 @@ func refuseDesktopNotLive(w http.ResponseWriter, run types.AgentRun) bool {
 	return true
 }
 
-// desktopAdmit reads run again under its operation lock before a desktop exec, so nothing is sent into a run that
-// ended after desktopRun read it: every end that keeps the sandbox for its computer folder's pass back holds that
-// lock through its terminal write (lockRunEnd). A transfer (thaw) thaws the fresh row and reads it once more, since
-// a stamp that found the run ended is no thaw owed; a list, which never thaws, refuses it paused (runPausedReadMsg).
-// The lock stays held until admitted, which startAdmitted calls once ExecStream has returned or execStartBudget has
-// passed, so no such end lands between the last read and the exec; it is never held for the transfer. The lock's
-// context is not handed on: it ends at admitted, and the exec outlives it. ok=false: the refusal is written.
-func (s *Server) desktopAdmit(w http.ResponseWriter, r *http.Request, run types.AgentRun, thaw bool) (fresh types.AgentRun, admitted func(), ok bool) {
-	lctx, unlock, err := s.lockRunOp(r.Context(), run.ID)
+// desktopAdmit admits a desktop exec into run, as desktopRun read it. A transfer (thaw) thaws it first: thawForExec
+// reads it again under the run's operation lock, so a run that ended since is not thawed. The run is then read once
+// more under its start lock (lockStart), which every write that ends the run or marks it kept takes around that
+// write, so nothing is sent into a run ended before this read, and an end after it waits until desktopExec's start
+// has returned, at most execStartBudget. A list, which never thaws, refuses it paused (runPausedReadMsg). The hold is
+// never kept for the transfer. ok=false: the refusal is written.
+func (s *Server) desktopAdmit(w http.ResponseWriter, r *http.Request, run types.AgentRun, thaw bool) (fresh types.AgentRun, h startHold, ok bool) {
+	if thaw {
+		at, principal := actorFromRequest(r)
+		switch err := s.thawForExec(r.Context(), run, at, principal, "presence"); {
+		case db.LockRefused(err):
+			writeLockRefused(w, r, err)
+			return types.AgentRun{}, startHold{}, false
+		case err != nil:
+			writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+			return types.AgentRun{}, startHold{}, false
+		}
+	}
+	h, err := s.lockStart(r.Context(), run.ID)
 	if err != nil {
 		writeLockRefused(w, r, err)
-		return types.AgentRun{}, nil, false
+		return types.AgentRun{}, startHold{}, false
 	}
-	read := func() (types.AgentRun, bool) {
-		cur, err := s.cfg.Store.GetRun(lctx, run.ID)
-		if err != nil {
-			writeServerError(w, r, "get run", err)
-			return cur, false
-		}
-		return cur, !refuseDesktopNotLive(w, cur)
-	}
-	fresh, ok = read()
+	fresh, err = s.cfg.Store.GetRun(h.ctx, run.ID)
 	switch {
-	case !ok:
-	case thaw:
-		at, principal := actorFromRequest(r)
-		if err := s.thawForExec(lctx, fresh, at, principal, "presence"); err != nil {
-			writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
-			ok = false
-		} else {
-			fresh, ok = read()
-		}
-	case fresh.PausedAt != nil:
+	case err != nil:
+		writeServerError(w, r, "get run", err)
+	case refuseDesktopNotLive(w, fresh):
+	case !thaw && fresh.PausedAt != nil:
 		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
-		ok = false
+	default:
+		return fresh, h, true
 	}
-	if !ok {
-		unlock()
-		return types.AgentRun{}, nil, false
-	}
-	return fresh, sync.OnceFunc(unlock), true
+	h.release()
+	return types.AgentRun{}, startHold{}, false
 }
 
-// desktopExec runs one in-sandbox half with stdin as its input, streaming its stdout to out. startAdmitted releases
-// desktopAdmit's lock (admitted) beside the exec once ExecStream has returned, as for runExec.
-func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, admitted func(), script string, stdin io.Reader, out func(io.Reader) error, args ...string) (int, error) {
+// desktopExec runs one in-sandbox half with stdin as its input, streaming its stdout to out. execAdmitted lets
+// desktopAdmit's start lock go beside the exec once ExecStream has returned, as for runExec. The exec is closed when
+// it ends or when its caller leaves, whichever is first, so a caller gone mid-transfer leaves no exec open.
+func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, start startHold, script string, stdin io.Reader, out func(io.Reader) error, args ...string) (int, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	sess, err := s.startAdmitted(ctx, cancel, run.SandboxRef, runner.ExecSpec{Argv: append([]string{"sh", "-c", script, "sh"}, args...)}, admitted)
+	sess, err := s.execAdmitted(ctx, start, run.SandboxRef, runner.ExecSpec{Argv: append([]string{"sh", "-c", script, "sh"}, args...)})
 	if err != nil {
 		return -1, err
 	}
-	defer func() { _ = sess.Close() }()
+	closeSess := sync.OnceFunc(func() { _ = sess.Close() })
+	defer closeSess()
+	context.AfterFunc(ctx, closeSess)
 	go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	copyErr := make(chan error, 1)
 	go func() {
@@ -253,13 +251,13 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 		// Reading the folder is an exec, which a paused run refuses, and a look is not a person, so it
 		// never thaws (desktopAdmit refuses it with runPausedReadMsg). With download blocked no exec runs and
 		// the rules still answer.
-		fresh, admitted, ok := s.desktopAdmit(w, r, run, false)
+		fresh, start, ok := s.desktopAdmit(w, r, run, false)
 		if !ok {
 			return
 		}
-		defer admitted()
+		defer start.release()
 		var listing bytes.Buffer
-		if code, err := s.desktopExec(r.Context(), fresh, admitted, desktopListScript, nil, func(o io.Reader) error {
+		if code, err := s.desktopExec(r.Context(), fresh, start, desktopListScript, nil, func(o io.Reader) error {
 			_, err := io.Copy(&listing, io.LimitReader(o, 64<<10))
 			return err
 		}, strconv.Itoa(maxDesktopListed)); err != nil || code != 0 {
@@ -310,14 +308,14 @@ func (s *Server) handleUploadDesktopFile(w http.ResponseWriter, r *http.Request)
 			fmt.Sprintf("the file is over the %d MiB limit for a desktop upload. Nothing was sent.", maxDesktopUploadBytes>>20))
 		return
 	}
-	run, admitted, ok := s.desktopAdmit(w, r, run, true)
+	run, start, ok := s.desktopAdmit(w, r, run, true)
 	if !ok {
 		return
 	}
-	defer admitted()
+	defer start.release()
 	sum := sha256.New()
 	body := io.TeeReader(io.LimitReader(r.Body, r.ContentLength), sum)
-	code, err := s.desktopExec(r.Context(), run, admitted, desktopUploadScript, body, nil, name, strconv.FormatInt(r.ContentLength, 10))
+	code, err := s.desktopExec(r.Context(), run, start, desktopUploadScript, body, nil, name, strconv.FormatInt(r.ContentLength, 10))
 	digest := hex.EncodeToString(sum.Sum(nil))
 	if err != nil || code != 0 {
 		s.auditDesktopTransfer(r, run, "upload", "failure", r.ContentLength, "")
@@ -351,15 +349,15 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopTransferBlocked, "this run's desktop rules block downloading files. Nothing was sent.")
 		return
 	}
-	run, admitted, ok := s.desktopAdmit(w, r, run, true)
+	run, start, ok := s.desktopAdmit(w, r, run, true)
 	if !ok {
 		return
 	}
-	defer admitted()
+	defer start.release()
 	var sent int64
 	var sum hash.Hash
 	started := false
-	code, err := s.desktopExec(r.Context(), run, admitted, desktopDownloadScript, nil, func(o io.Reader) error {
+	code, err := s.desktopExec(r.Context(), run, start, desktopDownloadScript, nil, func(o io.Reader) error {
 		br := bufio.NewReader(o)
 		if _, err := br.Peek(1); err != nil {
 			return nil // an empty file, or the script refused it: the exit code says which

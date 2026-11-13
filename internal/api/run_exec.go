@@ -98,17 +98,17 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	at, actor := actorFromRequest(r)
-	fresh, admitted, msg := s.execFreshRun(ctx, run.ID, actor)
+	fresh, start, msg := s.execFreshRun(ctx, run.ID, actor)
 	if msg != "" {
 		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).
 		s.auditRunExec(ctx, run, at, actor, "failure", map[string]any{"error": msg})
 		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, msg)
 		return
 	}
-	defer admitted() // a no-op once runExec has called it
+	defer start.release() // a no-op once runExec has started the command
 	// One of the run's SSH channel slots, the same per-run cap an SSH exec draws from.
 	if !s.sshAcquireSession(run.ID) {
-		admitted()
+		start.release()
 		limit := s.cfg.SSHMaxSessionsPerRun
 		// Nothing ran, so the row names the refusal and not the command.
 		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"error": fmt.Sprintf("%s (max %d)", sshCapReasonChannels, limit)})
@@ -116,7 +116,7 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.sshReleaseSession(run.ID)
-	s.runExec(w, r, fresh, req.Command, timeout, admitted)
+	s.runExec(w, r, fresh, req.Command, timeout, start)
 }
 
 // execLiveRunWords are this route's refusals for a run that cannot take a command now, written for a pipeline
@@ -130,37 +130,31 @@ var execLiveRunWords = liveRunWords{
 
 // execFreshRun is sshFreshRun for this route, less its background refusal: a background run takes a command
 // here (the contract's third exception, run_mode_doors.go), while its SSH channels still refuse. A paused run is
-// thawed first.
+// thawed first (thawForExec reads it again under the run's operation lock, so a run that ended since this first read
+// is not thawed).
 //
-// The first read refuses a run already ended without waiting for its lock. The run is then read again under its
-// operation lock, which every end that keeps the sandbox for its computer folder's pass back holds through its
-// terminal write (lockRunEnd), so a run that ended after the first read is refused and never thawed. It is read
-// once more after the thaw: a stamp that found the run ended (StampRunActive's false, nil) is no thaw owed, so
-// thawForCommand passes it. The lock stays held until admitted, which startAdmitted calls once ExecStream has
-// returned or execStartBudget has passed, so no such end lands between the last read and the command's start; it
-// is never held while the command runs. An end that takes no lock (a run with no pass back to run, or a kill) can
-// still land between the last read and the start: that command starts in a sandbox about to be stopped and is lost
-// with it. The lock's context is not handed on: it ends at admitted, and the command outlives it.
-func (s *Server) execFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, func(), string) {
-	if _, msg := s.liveRunForExec(ctx, runID, execLiveRunWords); msg != "" {
-		return types.AgentRun{}, nil, msg
-	}
-	lctx, unlock, err := s.lockRunOp(ctx, runID)
-	if err != nil {
-		return types.AgentRun{}, nil, lockUnavailableMsg
-	}
-	run, msg := s.liveRunForExec(lctx, runID, execLiveRunWords)
+// The first read refuses a run already ended without waiting for any lock. The run is then read again under its
+// start lock (lockStart), which every write that ends the run or marks it kept takes around that write
+// (FenceRunStarts), so a run ended before this last read is refused, and an end that comes after it waits until
+// startAdmitted has had the command started, at most execStartBudget. The hold is returned for runExec's start; it
+// is never held while the command runs.
+func (s *Server) execFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, startHold, string) {
+	run, msg := s.liveRunForExec(ctx, runID, execLiveRunWords)
 	if msg == "" {
-		msg = s.thawForCommand(lctx, run, principal)
-	}
-	if msg == "" {
-		run, msg = s.liveRunForExec(lctx, runID, execLiveRunWords)
+		msg = s.thawForCommand(ctx, run, principal)
 	}
 	if msg != "" {
-		unlock()
-		return types.AgentRun{}, nil, msg
+		return types.AgentRun{}, startHold{}, msg
 	}
-	return run, sync.OnceFunc(unlock), ""
+	h, err := s.lockStart(ctx, runID)
+	if err != nil {
+		return types.AgentRun{}, startHold{}, lockUnavailableMsg
+	}
+	if run, msg = s.liveRunForExec(h.ctx, runID, execLiveRunWords); msg != "" {
+		h.release()
+		return types.AgentRun{}, startHold{}, msg
+	}
+	return run, h, ""
 }
 
 // refuseExecGovernance is this route's governance door, read from the profile the run was launched under as it
@@ -191,45 +185,22 @@ func (s *Server) refuseExecGovernance(w http.ResponseWriter, r *http.Request, ru
 	return false
 }
 
-// execStartBudget is the longest a command's start holds the run's lock: a runner that has not started the command by
-// then is cut off and the command refused, so the run's end and every other operation on the run wait no longer than
-// that for a slow runner.
+// execStartBudget is the longest a command's start holds the run's start lock: a runner that has not started the
+// command by then is cut off and the command refused, so the run's end waits no longer than that for a slow runner.
 var execStartBudget = 10 * time.Second
 
-// startAdmitted starts spec in ref while the run's lock is held (execFreshRun, desktopAdmit) and releases it (admitted)
-// beside the command once ExecStream has returned. At execStartBudget it ends ctx (cancel) and releases the lock; a
-// session that arrives after that is closed and refused.
-func (s *Server) startAdmitted(ctx context.Context, cancel context.CancelFunc, ref string, spec runner.ExecSpec, admitted func()) (*runner.ExecSession, error) {
-	slow := time.AfterFunc(execStartBudget, func() { cancel(); admitted() })
-	sess, err := s.cfg.Runner.ExecStream(ctx, ref, spec)
-	late := !slow.Stop()
-	go admitted()
-	switch {
-	case err != nil:
-		return nil, err
-	case sess == nil:
-		return nil, errors.New("the runner returned no exec session")
-	case late:
-		if sess.Close != nil {
-			_ = sess.Close()
-		}
-		return nil, errors.New("the runner took longer than the start budget to start the command")
-	}
-	return sess, nil
-}
-
-// runExec runs command in fresh and answers its result. startAdmitted releases execFreshRun's lock (admitted) beside
-// the command once ExecStream has returned: a release waits on the database, and must not hold the command before
+// runExec runs command in fresh and answers its result. execAdmitted lets execFreshRun's start lock go beside the
+// command once ExecStream has returned: a release waits on the database, and must not hold the command before
 // collectExec's timeout and Close are in place. While it runs, the run's idle clock is kept reset (TouchRun and
 // attachKeepalive), as for an SSH exec, so auto_stop does not end a long command. A background run has no idle stop,
 // so the touch changes nothing for it: it still ends when its task exits, at its end or when killed, and a command
 // running then loses its sandbox.
-func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.AgentRun, command string, timeout time.Duration, admitted func()) {
+func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.AgentRun, command string, timeout time.Duration, start startHold) {
 	ctx := r.Context()
 	at, actor := actorFromRequest(r)
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	sess, err := s.startAdmitted(execCtx, cancel, fresh.SandboxRef, runner.ExecSpec{Argv: sshExecArgv(command)}, admitted)
+	sess, err := s.execAdmitted(execCtx, start, fresh.SandboxRef, runner.ExecSpec{Argv: sshExecArgv(command)})
 	if err != nil {
 		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": err.Error()})
 		writeExecStartError(w, r, err)

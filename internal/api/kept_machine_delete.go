@@ -397,8 +397,10 @@ func (s *Server) claimKill(ctx context.Context, run types.AgentRun, killerType t
 	}
 	var intent store.KeptMachineDeletion
 	applied, err := s.claimKillTransitionWith(ctx, run, func() (bool, error) {
+		release := s.FenceRunStarts(ctx, run.ID)
 		applied, d, err := ks.KillRunMarkingKeptMachine(ctx, run.ID, run.State, keptMachineByNonOwnerKill, killer,
 			types.CanonicalUserSubject(killer))
+		release()
 		s.runStateMoved(run.ID, run.State, types.RunKilled, applied)
 		intent = d
 		return applied, err

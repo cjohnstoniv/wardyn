@@ -238,9 +238,15 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 // is the idle reaper's RUNNING->STOPPED CAS, which is issued outside this
 // package and is counted in CancelTerminalRunApprovals instead. The !from guard
 // keeps handleKillRun's supported KILLED→KILLED re-kill retry from counting
-// the same run twice.
+// the same run twice. An end of a RUNNING run holds the run's start lock around the CAS alone (FenceRunStarts), so
+// it never lands between a command start's last read and the start.
 func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
+	release := func() {}
+	if from == types.RunRunning && to.IsTerminal() {
+		release = s.FenceRunStarts(ctx, runID)
+	}
 	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
+	release()
 	s.runStateMoved(runID, from, to, applied)
 	return applied, err
 }

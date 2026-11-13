@@ -985,12 +985,9 @@ func (s *Server) liveRunForExec(ctx context.Context, runID uuid.UUID, words live
 	return run, ""
 }
 
-// thawForCommand thaws run before an exec into it: "" when the exec may go on. Every exec goes into the
-// sandbox, which the daemon refuses while it is paused, and a person connecting is presence, so a paused run is
-// resumed (run_pause.go).
+// thawForCommand thaws run before an exec into it: "" when the exec may go on, else thawRefusal's words. Every
+// exec goes into the sandbox, which the daemon refuses while it is paused, and a person connecting is presence, so
+// a paused run is resumed (run_pause.go).
 func (s *Server) thawForCommand(ctx context.Context, run types.AgentRun, principal string) string {
-	if err := s.thawForExec(ctx, run, types.ActorHuman, principal, "presence"); err != nil {
-		return "run is paused and could not be resumed; try again"
-	}
-	return ""
+	return thawRefusal(s.thawForExec(ctx, run, types.ActorHuman, principal, "presence"))
 }

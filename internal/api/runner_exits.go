@@ -125,7 +125,9 @@ func (s *Server) applyRunnerExit(ctx context.Context, st store.PG, row store.Run
 		return err
 	}
 	defer unlock()
-	applied, err := st.AcceptRunnerExit(ctx, row.RunnerID, row.RunID, row.Exit, s.cfg.RunnerAuditPrepare)
+	applied, err := s.fenced(ctx, row.RunID, func() (bool, error) {
+		return st.AcceptRunnerExit(ctx, row.RunnerID, row.RunID, row.Exit, s.cfg.RunnerAuditPrepare)
+	})
 	if err != nil {
 		return err
 	}

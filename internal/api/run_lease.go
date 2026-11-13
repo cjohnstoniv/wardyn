@@ -225,7 +225,9 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 	// Once claimed, the teardown must finish whatever the sweep's own bound says.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	applied, err := updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), s.cfg.Now())
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) {
+		return updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), s.cfg.Now())
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: killing a run at its lifetime failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -255,7 +257,7 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 // unresolved for the re-assert to retry (#1060), never a teardown on the same
 // failing daemon.
 func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) {
-	applied, err := leaser.MarkRunEnded(ctx, run.ID, now)
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) { return leaser.MarkRunEnded(ctx, run.ID, now) })
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run ended failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

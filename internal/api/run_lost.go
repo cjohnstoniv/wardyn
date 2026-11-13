@@ -167,13 +167,12 @@ func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, lease
 	if !s.lostRunKeepable(ctx, run) {
 		return loseNotKeepable, nil
 	}
-	var applied bool
-	var err error
-	if fl, ok := loser.(store.RunLoserAtGeneration); ok && fence > 0 {
-		applied, err = fl.MarkRunLostAtGeneration(ctx, run.ID, fence, reason, at, tokenLife)
-	} else {
-		applied, err = loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
-	}
+	applied, err := s.fenced(ctx, run.ID, func() (bool, error) {
+		if fl, ok := loser.(store.RunLoserAtGeneration); ok && fence > 0 {
+			return fl.MarkRunLostAtGeneration(ctx, run.ID, fence, reason, at, tokenLife)
+		}
+		return loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run lost failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

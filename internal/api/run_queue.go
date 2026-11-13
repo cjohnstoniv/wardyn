@@ -578,15 +578,24 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 // abortQueuedRun fails a run that was queued but could not be recorded in full, so it never waits as a
 // half-built row. The hint is the one line under the FAILED badge. A promoter that took the run before
 // the create could finish recording it does not get to start it: the run is killed there, so the error
-// the create answers is true.
+// the create answers is true. Each kill reads the run fresh and kills it from the state it holds; a lost
+// swap or a failed kill (its wait for the run's start fence can spend the cascade's context) is tried
+// again, at most supersedeCASAttempts times, and a run that ended meanwhile is left as it is.
 func (s *Server) abortQueuedRun(ctx context.Context, runID uuid.UUID, hint string) {
 	ctx = context.WithoutCancel(ctx)
 	if applied, _ := s.exitQueued(ctx, runID, types.RunFailed, "", hint); applied {
 		return
 	}
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err == nil {
-		_, _, err = s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelCreateAborted})
+	var err error
+	for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
+		run, gerr := s.cfg.Store.GetRun(ctx, runID)
+		if err = gerr; err != nil || isTerminalRunState(run.State) {
+			break
+		}
+		applied, _, kerr := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelCreateAborted})
+		if err = kerr; applied {
+			return
+		}
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: end a promoted run whose create failed", slog.String("run_id", runID.String()), slog.Any("err", err))

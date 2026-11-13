@@ -774,6 +774,9 @@ type lifecycleStopper struct {
 	// computer folder's pass back and the sandbox stop, as every other end of a run holds it, so no sweep
 	// stops the sandbox under that pass. Nil-safe.
 	lockEnd func(context.Context, uuid.UUID) (context.Context, func(), bool)
+	// fenceStarts is api.Server's FenceRunStarts: the run's start lock, held around the guarded transition alone,
+	// so no command starts in the run between its last read and the stop. Nil-safe.
+	fenceStarts func(context.Context, uuid.UUID) func()
 	// bringBack is api.Server's BringComputerFolderBack: a "both ways" computer folder's pass back, after
 	// the pane snapshot and before StopSandbox, with the agent stopped and its egress cut first where the
 	// substrate can. true is a pass cut short that keeps the sandbox for a resume: it is not stopped.
@@ -821,7 +824,12 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelAppro
 	// keepalive. If a concurrent kill/complete already moved the run terminal, or
 	// an open request is still inside its wait (store.openHoldSQL), the CAS also
 	// no-ops and we leave the run and any teardown/revocation untouched.
+	release := func() {}
+	if l.fenceStarts != nil {
+		release = l.fenceStarts(ctx, runID)
+	}
 	applied, uerr := transition(ctx)
+	release()
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
 	}
