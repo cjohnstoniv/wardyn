@@ -219,3 +219,20 @@ func (d *Driver) reclaimMacDisk(drive types.DriveMount) (runner.DriveReclaimOutc
 	}
 	return runner.DriveReclaimDeleted, nil
 }
+
+// macVMBooted runs the checks once the guest booted, in this order. The guest has every disk drive mounted, so each
+// holds a volume: a new drive's mark is used up before the run can write to it, and a later image of it that starts
+// with 4 KiB of zeros is refused. Then a run that wants a desktop must have had its password set. It says whether
+// the guest set that password.
+func macVMBooted(disks []macvm.Disk, res guestagent.InitResult, desktop bool) (bool, error) {
+	for _, disk := range disks {
+		if err := macvm.UseUpNewDisk(disk.Path); err != nil {
+			return false, fmt.Errorf("docker: %w", err)
+		}
+	}
+	set := res.DesktopPasswordSet != nil && *res.DesktopPasswordSet
+	if desktop && !set {
+		return false, fmt.Errorf("docker: %w", macvm.ErrDesktopPassword)
+	}
+	return set, nil
+}
