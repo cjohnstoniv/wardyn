@@ -6,7 +6,21 @@ organisation rule excludes the private ranges pods use, but the apiserver rule d
 empty it opens its ports to any address, the pod network included. egress.extra only adds rules.
 
 The runs namespace gets no chart default-deny: the boot canary's phase A would read it as an ambient deny.
+
+apiServer.ports must list a port number in every entry, and relay.servicePort must be one: an egress rule with
+no ports allows every port, and a TCP entry whose port renders empty (a blank, or a word YAML reads as null) every
+TCP port, at any address while apiServer.peers is empty. Rules only add, so the narrower rules below cannot take
+that back.
 */}}
+{{- $portRe := "^[1-9][0-9]{0,4}$" -}}
+{{- $apiPortsBad := not .Values.apiServer.ports -}}
+{{- range .Values.apiServer.ports }}{{ if not (regexMatch $portRe (toString . | trim)) }}{{ $apiPortsBad = true }}{{ end }}{{ end -}}
+{{- if $apiPortsBad -}}
+{{- fail "wardyn-runnerd: apiServer.ports must list the API server's port numbers, for example [443, 6443]. An empty list renders an egress rule that allows every port, and an entry that is empty or not a number every TCP port, to every destination while apiServer.peers is empty." -}}
+{{- end -}}
+{{- if not (regexMatch $portRe (toString .Values.relay.servicePort | trim)) -}}
+{{- fail "wardyn-runnerd: relay.servicePort must be a port number, for example 443. Left empty it renders an egress rule that allows every TCP port to egress.orgCIDRs, by default every public address." -}}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

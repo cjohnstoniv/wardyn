@@ -107,6 +107,11 @@ refused "extraRunsNamespaces repeats itself" "must be unique" -f "$VALUES" --set
 refused "extraRunsNamespaces holds an empty name" "is not a namespace name" -f "$VALUES" --set extraRunsNamespaces[0]=
 refused "workloads.namespaces repeats itself" "workloads.namespaces must be unique" -f "$VALUES" --set workloads.namespaces[0]=t --set workloads.namespaces[1]=t
 refused "workloads.namespaces holds an empty name" "is not a namespace name" -f "$VALUES" --set workloads.namespaces[0]=
+refused "apiServer.ports empty" "apiServer.ports must list" -f "$VALUES" --set-json 'apiServer.ports=[]'
+refused "apiServer.ports holds an empty entry" "apiServer.ports must list" -f "$VALUES" --set 'apiServer.ports={}'
+refused "apiServer.ports holds a blank entry" "apiServer.ports must list" -f "$VALUES" --set 'apiServer.ports={443, }'
+refused "apiServer.ports holds a word YAML reads as null" "apiServer.ports must list" -f "$VALUES" --set-string 'apiServer.ports[0]=null'
+refused "relay.servicePort empty" "relay.servicePort must be a port number" -f "$VALUES" --set relay.servicePort=
 
 # RBAC parity with the control-plane chart.
 server="$(helm template w deploy/helm/wardyn -n wardyn \

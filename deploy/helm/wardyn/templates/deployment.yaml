@@ -51,13 +51,19 @@ out; guarded, the 0.5 defaults simply carry forward.
 so the probes follow whatever the CONTAINER actually gets (wardyn.basePath). The
 chart reads WARDYN_BASE_PATH and WARDYN_MIGRATE_TIMEOUT at render to aim and size
 the probes, so an extraEnv entry that sets either through valueFrom is refused:
-the probes would follow a value the pod does not get. */ -}}
+the probes would follow a value the pod does not get. The base path must also be
+one wardynd boots on (basePathRe in cmd/wardynd): the kubelet expands a $(VAR)
+reference in the container's environment but not in a probe path, so such a value
+would serve under one prefix while the probes ask under another. */ -}}
 {{- range list "WARDYN_BASE_PATH" "WARDYN_MIGRATE_TIMEOUT" -}}
 {{- if eq (include "wardyn.envValue" (dict "ctx" $ "name" .)) "<valueFrom>" -}}
 {{- fail (printf "wardyn: extraEnv sets %s through valueFrom, which the chart cannot read at render. The liveness, readiness and startup probes follow WARDYN_BASE_PATH, and the startup window is sized from WARDYN_MIGRATE_TIMEOUT, so a value the chart cannot see leaves them wrong. Set it as a literal value in env or extraEnv, or use basePath for the base path." .) -}}
 {{- end -}}
 {{- end -}}
 {{- $basePath := include "wardyn.basePath" . -}}
+{{- if and $basePath (or (not (regexMatch `^(/[A-Za-z0-9._~-]+)+$` $basePath)) (has "." (splitList "/" $basePath)) (has ".." (splitList "/" $basePath))) -}}
+{{- fail (printf "wardyn: WARDYN_BASE_PATH %q (from basePath, env or extraEnv) is not a literal sub-path like \"/wardyn\". The probes and the ServiceMonitor use it as written, while the kubelet expands a $(VAR) reference for the container only, and wardynd refuses any other shape at boot. Set the final path: a leading slash, no trailing slash, no \".\" or \"..\" segment, and only letters, digits and . _ ~ -" $basePath) -}}
+{{- end -}}
 {{- /*
 startupProbe budget: wardynd's /healthz binds only after its fixed 30s connect and its migration
 (WARDYN_MIGRATE_TIMEOUT, default 5m) finish, so the probe window must outlast both or the kubelet
