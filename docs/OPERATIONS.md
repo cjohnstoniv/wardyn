@@ -4662,7 +4662,7 @@ secrets.allowEphemeralAgeKey=true renders anyway.
 ```console
 $ kubectl -n wardyn logs -l app.kubernetes.io/name=wardyn --tail=2
 WARN wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY public_recipient=age1qgu93czj2ksk2g3j4x3rq52kyaw5xkjetd7g38cn63gdl2az4eqsyztpgs
-ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; […] delete them (DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%') and boot with a persistent key from `wardynd -gen-age-key`"
+ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; […] delete them (BEGIN; DELETE FROM secrets WHERE enc_version=3 AND (owned_by, kek_id) IN (SELECT owner, 'pk:v' || version FROM principal_keys WHERE purpose='cred' AND destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%')); UPDATE principal_keys SET destroyed_at='epoch', wrapped_key=NULL, handle=NULL WHERE destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'); DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'; COMMIT;) and boot with a persistent key from `wardynd -gen-age-key`"
 ```
 
 - That is the correct behaviour — the boot refuses rather than mint a fresh key
@@ -4677,18 +4677,26 @@ ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] 
 - Back the Secret up off-cluster, wherever the DSN Secret is
   backed up, and treat deleting it as equivalent to deleting the database.
 - When the key was ephemeral there is no original to put back: it lived only in
-  the first pod's memory, so every row it sealed is lost.
-- Delete those rows, wire a
+  the first pod's memory, so every row it sealed is lost, and so is every per-person
+  key it wrapped.
+- Remove them, wire a
   persistent key (`wardynd -gen-age-key`), and start again; Wardyn's own boot keys
   are among the rows and are minted afresh, and every stored secret has to be set
   again:
 
 ```sh
-psql "$WARDYN_PG_DSN" -c "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
+psql "$WARDYN_PG_DSN" -c "BEGIN; DELETE FROM secrets WHERE enc_version=3 AND (owned_by, kek_id) IN (SELECT owner, 'pk:v' || version FROM principal_keys WHERE purpose='cred' AND destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%')); UPDATE principal_keys SET destroyed_at='epoch', wrapped_key=NULL, handle=NULL WHERE destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'); DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'; COMMIT;"
 ```
 
+- In one transaction it deletes the credentials sealed under per-person keys the
+  lost key wrapped, marks those keys destroyed as an erasure does, and deletes the
+  rows sealed under the lost key; keys and rows under a key service or a declared
+  key domain stay.
+- Sealed audit fields under those keys then read `[erased]`, but audit rows still
+  show the people they name: the keys are marked destroyed as of 1970, so the
+  reset's time is not recorded on the key rows. The statement writes no audit row.
 - If `WARDYN_PLATFORM_KEY_FILE` was set, keep that file: the boot-key rows under it
-  are not lost — change `OR kek_id LIKE 'local/%'` to `OR kek_id LIKE 'local/cred:%'`
+  are not lost — change every `kek_id LIKE 'local/%'` to `kek_id LIKE 'local/cred:%'`
   in the statement, so it keeps the `local/platform:` rows.
 - **Rotating it on k8s** uses the same runbook
   ([Rotating the age key](operations/secrets-and-keys.md#rotating-the-age-key)), with two differences.

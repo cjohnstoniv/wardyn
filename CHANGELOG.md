@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- The documented recovery for a lost ephemeral age key now lets wardynd start when per-person keys were wrapped under that key: its statement, in the boot refusal and in OPERATIONS.md, also marks those keys destroyed, as an erasure does, and deletes the credentials sealed under them. Before, those keys stayed live and wardynd still refused to start. Rows and per-person keys under a key service or a declared key domain are left as they are. Sealed audit fields under those keys then read `[erased]`, but audit rows still show the people they name.
 
 ## [0.10.0-rc.20] — 2026-11-12
 
