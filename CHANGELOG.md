@@ -20,6 +20,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- Linux VM sandboxes: a run with more than 64 folders and drives is now refused before anything starts. Before, the folder servers past the 64th could stay behind after the run ended or failed to start.
+- On Kubernetes, the runner's relay now lets at most 64 connections wait to be matched to a run, and gives each 10 seconds in all for that lookup and its first byte. Before, a Kubernetes API server that did not answer let such connections pile up with no limit.
+- macOS VM admission now treats an entry file with a negative disk reservation as damage, which holds a VM slot until it is removed, as an unreadable entry does, and its sums of entries' memory and disk stop at their largest value instead of wrapping. Before, an entry file another local account wrote could make the Mac look as if it had more free disk or memory than it has.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

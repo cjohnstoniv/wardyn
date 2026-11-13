@@ -310,6 +310,11 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 			shares = append(shares, m)
 		}
 	}
+	// Teardown and rollback remove the virtiofsd names below maxVMShares only, so a share past them
+	// would outlive its run: refuse such a run before anything is started.
+	if len(shares) > maxVMShares {
+		return runner.Sandbox{}, fmt.Errorf("docker: a Linux VM sandbox cannot take more than %d folders and drives; this run has %d", maxVMShares, len(shares))
+	}
 
 	var rollback []func()
 	fail := func(err error) (runner.Sandbox, error) {
@@ -689,7 +694,7 @@ func (d *Driver) startVMNet(ctx context.Context, spec runner.SandboxSpec, netDir
 	return nil
 }
 
-// maxVMShares bounds the virtiofsd names removeVMSidecars tries.
+// maxVMShares bounds a VM's shares (createVM refuses more) and so the virtiofsd names removeVMSidecars tries.
 const maxVMShares = 64
 
 // removeVMSidecars removes a run's network relay, virtiofsd and prep containers. Their names are deterministic
