@@ -15,6 +15,21 @@ var ErrProxyFenced = errors.New("runner: the run's proxy is fenced")
 // the running proxy was started for; nothing is touched.
 var ErrProxyGenerationNewer = errors.New("runner: the run's proxy belongs to a newer policy generation")
 
+// RefusedForNewerGeneration reports whether err is ErrProxyGenerationNewer's refusal alone, which touched
+// nothing. Joined with any other error it is not, for that error may have had an effect.
+func RefusedForNewerGeneration(err error) bool {
+	for err != nil {
+		if err == ErrProxyGenerationNewer {
+			return true
+		}
+		if _, joined := err.(interface{ Unwrap() []error }); joined {
+			return false
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
+}
+
 // ProxyFencer is an OPTIONAL Runner capability: cut a contained run's agent off every network it is
 // attached to, so no egress is possible from it. Idempotent. A runner that cannot cut the agent off
 // returns an error and leaves the sandbox as it was.

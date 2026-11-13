@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -39,6 +40,19 @@ func TestPosture_EventRecordedAndAudited(t *testing.T) {
 	ctx := t.Context()
 	p := types.RunnerPosture{MDMManaged: true, DiskEncrypted: true, OS: "darwin", OSVersion: "15.2", Evidence: types.PostureEvidenceMDMFile}
 	ev := runnerwire.Event{Kind: runnerwire.EventPosture, Data: mustJSON(p)}
+	// A report is stored only on the runner's current session, which the hub begins and names on each event:
+	// one that names no session writes nothing.
+	if err := srv.EventFromRunner(ctx, rn.ID, ev); err != nil {
+		t.Fatal(err)
+	}
+	if rows := syncAuditRows(cfg.Audit.(*syncAudit), placement.ActionRunnerPostureRecord); len(rows) != 0 {
+		t.Fatalf("a report that names no session wrote %+v", rows)
+	}
+	session := uuid.NewString()
+	if err := cfg.Store.(store.PG).BeginRunnerInventory(ctx, rn.ID, session); err != nil {
+		t.Fatal(err)
+	}
+	ctx = remote.WithEventSession(ctx, session)
 	for range 2 {
 		if err := srv.EventFromRunner(ctx, rn.ID, ev); err != nil {
 			t.Fatal(err)

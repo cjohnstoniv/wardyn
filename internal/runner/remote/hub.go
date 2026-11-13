@@ -428,7 +428,11 @@ func (h *Hub) resume(ctx context.Context, s *hubSession, request *runnerwire.Res
 	}
 	cfg, err := s.peer.ResumeConfig(ctx)
 	if err == nil {
-		_, err = cfg.Replay.Since(request.LastSeq)
+		var replay []runnerwire.Frame
+		if replay, err = cfg.Replay.Since(request.LastSeq); err == nil && runnerwire.ReplaysStreamCall(replay) {
+			// A fresh session sends no replay, so the runner never starts a stream call its caller gave up on.
+			return runnerwire.PeerConfig{}, false, nil
+		}
 	}
 	return cfg, err == nil, err
 }
@@ -465,11 +469,16 @@ func EventSession(ctx context.Context) string {
 	return id
 }
 
+// WithEventSession returns ctx carrying session as the session an Admission.Event call came in on (EventSession).
+func WithEventSession(ctx context.Context, session string) context.Context {
+	return context.WithValue(ctx, eventSessionKey{}, session)
+}
+
 // configureAdmission binds sessionID by value: a superseded peer's late page
 // must reach the store under its own, already fenced, inventory, and each
 // event carries it (EventSession).
 func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed bool, actions []runnerwire.PendingAction, a Admission, session *hubSession, sessionID string, peer func() *runnerwire.Peer) {
-	eventCtx := context.WithValue(ctx, eventSessionKey{}, sessionID)
+	eventCtx := WithEventSession(ctx, sessionID)
 	state := resumed
 	ready := resumed
 	var inventory runnerwire.StateInventory
