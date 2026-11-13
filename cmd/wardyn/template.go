@@ -241,7 +241,7 @@ func printTemplateImport(w io.Writer, res sdk.TemplateImportResult) error {
 		if path == "" {
 			path = "document"
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", path, d.Reason, d.Message)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", termLine(path), termLine(d.Reason), termLine(d.Message))
 	}
 	return fmt.Errorf("the template document has %d problem(s)", len(res.Diagnostics))
 }

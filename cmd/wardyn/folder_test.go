@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,5 +72,42 @@ func TestFolderBringBack_ShowsTheServersRefusal(t *testing.T) {
 		`{"error":"This run is no longer running, so its folder can't come back. Killing a run doesn't bring the folder back.","reason":"computer_folder_not_running"}`)
 	if err == nil || !strings.Contains(err.Error(), "Killing a run doesn't bring the folder back.") {
 		t.Fatalf("err = %v, want the server's refusal", err)
+	}
+}
+
+// bringBackAnswer is a success answer with n refusals whose path and reason are 300 characters of & < >,
+// encoded as the server encodes it (six bytes each), so 50 of them pass 64 KiB.
+func bringBackAnswer(t *testing.T, n int, text string) string {
+	t.Helper()
+	type refusal struct {
+		Path   string `json:"path"`
+		Reason string `json:"reason"`
+	}
+	refused := make([]refusal, n)
+	for i := range refused {
+		refused[i] = refusal{text, text}
+	}
+	b, err := json.Marshal(map[string]any{"state": "STOPPED", "sandbox_removed": true,
+		"back": map[string]any{"at": "2026-10-22T14:32:00Z", "files": 7, "bytes": 1, "refused": refused}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// The run has stopped and a bring-back runs once, so a valid receipt longer than the 64 KiB an error
+// body is cut to is read whole; an answer past the bound is said, not parsed as a cut-off receipt.
+func TestFolderBringBack_ReadsAReceiptOver64KiB(t *testing.T) {
+	answer := bringBackAnswer(t, 50, strings.Repeat("&<>", 100))
+	if len(answer) <= 1<<16 {
+		t.Fatalf("answer is %d bytes, want it over 64 KiB", len(answer))
+	}
+	out, _, err := folderBringBack(t, http.StatusOK, answer)
+	if err != nil || strings.Count(out, "left out: ") != 50 || !strings.Contains(out, "7 files came back to you.\n") {
+		t.Fatalf("err %v, output of %d bytes with %d left-out lines; want the whole receipt", err, len(out), strings.Count(out, "left out: "))
+	}
+	_, _, err = folderBringBack(t, http.StatusOK, bringBackAnswer(t, 1, strings.Repeat("<", maxBringBackAnswer/6+1)))
+	if err == nil || !strings.Contains(err.Error(), "could not be read") || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v, want the over-bound answer said", err)
 	}
 }

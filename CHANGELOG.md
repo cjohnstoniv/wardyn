@@ -20,6 +20,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- `wardyn device enrol-token`, `wardyn runner token` and `wardyn runner org-token mint` now fail when the one-time token cannot be written to standard output, and the error names the token's id, when it expires and how to revoke it. Before, they exited 0 with the token stored on the server and held by nobody.
+- `wardyn audit export-partition` now fails, and keeps no file at `-o`, when the answer is not a whole export that starts with its manifest line and ends with its footer line, such as the empty answer the server gives a caller who is not a security operator. Before, it wrote what it got and said so.
+- `wardyn folder bring-back` now reads a success answer of up to 4 MiB. Before, it read 64 KiB, so a pass with many refused files whose names hold `&`, `<` or `>` lost its receipt after the run had already stopped.
+- `wardyn workspace list` and `get`, `wardyn template import` and `wardyn audit verify` now show control characters, line breaks, tabs and text-direction marks in text from another person or a file as escapes, so that text cannot change the screen or add a row.
+- `wardyn runner pool create` and `update` now refuse a lifetime or idle value that is not a whole number of seconds. Before, the fraction was dropped after the default was checked against the maximum, so `--background-lifetime 1.9s:1.1s` was saved as one second for both.
+- `wardyn window` now exits with the code of the refusal's class (2 for 401 or 403, 3 for another 4xx, 4 for a 5xx) when the server refuses. Before, it printed the server's sentence and exited 1.
+- `wardyn run logs` now prints every event of a run when more than 1000 of them were written within 10 seconds. Before, it stopped after 1000.
+- `wardyn runner list` now refuses a negative `--offset`. Before, `--no-limits --offset=-1` crashed.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

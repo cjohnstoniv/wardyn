@@ -8,6 +8,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -120,17 +123,27 @@ func auditExportPartitionCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			defer rc.Close()
+			var check partitionExportCheck
+			body := io.TeeReader(rc, &check)
 			if outPath == "" {
-				_, err = io.Copy(cmd.OutOrStdout(), rc)
-				return err
+				if _, err = io.Copy(cmd.OutOrStdout(), body); err == nil {
+					err = check.err()
+				}
+				if err != nil {
+					return fmt.Errorf("audit partition export %s did not complete: %w", args[0], err)
+				}
+				return nil
 			}
 			f, err := os.CreateTemp(filepath.Dir(outPath), ".wardyn-audit-partition-*.part")
 			if err != nil {
 				return err
 			}
-			_, copyErr := io.Copy(f, rc)
+			_, copyErr := io.Copy(f, body)
 			if closeErr := f.Close(); copyErr == nil {
 				copyErr = closeErr
+			}
+			if copyErr == nil {
+				copyErr = check.err()
 			}
 			if err := finalizePartFile(f.Name(), outPath, copyErr); err != nil {
 				return fmt.Errorf("audit partition export %s did not complete: %w", args[0], err)
@@ -142,4 +155,57 @@ func auditExportPartitionCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVarP(&outPath, "output", "o", "", "write the export here instead of stdout")
 	cmd.Flags().BoolVar(&raw, "raw", false, "the stored, hash-covered archive form instead of the readable one")
 	return cmd
+}
+
+// partitionExportCheck watches an export as it is copied: a whole one starts with its manifest line and
+// ends with its footer line. A body without them, such as the empty answer the server gives a caller
+// below the security tier, is not an export, and the copy is not kept or reported as written.
+type partitionExportCheck struct {
+	lines      int
+	first      string // the first line's type
+	line, prev []byte // the line being read and the last whole one, each kept up to maxExportCheckLine bytes
+}
+
+// maxExportCheckLine is more than a manifest or footer line needs; a longer line is a row.
+const maxExportCheckLine = 64 << 10
+
+func (c *partitionExportCheck) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		end := bytes.IndexByte(p, '\n')
+		part := p
+		if end >= 0 {
+			part = p[:end]
+		}
+		c.line = append(c.line, part[:min(len(part), max(0, maxExportCheckLine-len(c.line)))]...)
+		if end < 0 {
+			break
+		}
+		if c.lines == 0 {
+			c.first = exportLineType(c.line)
+		}
+		c.lines++
+		c.line, c.prev = c.prev[:0], c.line
+		p = p[end+1:]
+	}
+	return n, nil
+}
+
+// err is nil for a whole export, else what is missing.
+func (c *partitionExportCheck) err() error {
+	switch {
+	case c.lines == 0 && len(c.line) == 0:
+		return errors.New("the server sent no export: only a security operator is sent one")
+	case c.first != "manifest" || len(c.line) > 0 || exportLineType(c.prev) != "footer":
+		return errors.New("the export does not start with its manifest line and end with its footer line, so it is incomplete")
+	}
+	return nil
+}
+
+func exportLineType(line []byte) string {
+	var l struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(line, &l)
+	return l.Type
 }

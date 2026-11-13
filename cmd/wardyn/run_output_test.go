@@ -146,3 +146,13 @@ func TestEscapeControls(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// termLine keeps readable text and escapes everything that would move the cursor, start a row or a
+// column, or change the screen.
+func TestTermLine(t *testing.T) {
+	got := termLine("café ✓\x1b[2J\nforged\trow\r\x07\u009b\xff\x7f\u202egnp\u2066\u2028")
+	want := "café ✓" + `\x1b[2J\nforged\trow\r\x07\x9b\xff\x7f\u202egnp\u2066\u2028`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

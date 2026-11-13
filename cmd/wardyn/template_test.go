@@ -140,3 +140,15 @@ func TestTemplateImportPrintsEveryDiagnostic(t *testing.T) {
 		t.Error("an empty answer was read as success")
 	}
 }
+
+// A diagnostic quotes the document's own text (an unknown key), so it is shown escaped: one line per
+// diagnostic, with no control character reaching the terminal.
+func TestTemplateImportEscapesADocumentsText(t *testing.T) {
+	var out strings.Builder
+	_ = printTemplateImport(&out, sdk.TemplateImportResult{Diagnostics: []sdk.TemplateDiagnostic{
+		{Path: "intent.a\x1b[2Jb", Reason: "template_field_unknown", Message: "intent.a\x1b[2Jb\nforged\tline is not a template field."},
+	}})
+	if got := out.String(); strings.Contains(got, "\x1b") || strings.Count(got, "\n") != 1 || strings.Count(got, "\t") != 2 || !strings.Contains(got, `a\x1b[2Jb\nforged\tline`) {
+		t.Fatalf("output = %q, want one escaped line", got)
+	}
+}
