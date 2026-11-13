@@ -54,3 +54,27 @@ describe("permissions availability path", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// PUT /permissions/enforcement replaces the whole map, so it must carry the
+// ETag of the map it was built from: without If-Match a stale page's write
+// switches back every kind someone else changed since it loaded.
+describe("permissions enforcement ETag", () => {
+  it("keeps GET's ETag, sends it as If-Match, and returns the PUT's new ETag", async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "PUT"
+        ? new Response(JSON.stringify({ egress_host: true }), { status: 200, headers: { ETag: '"e2"' } })
+        : new Response(JSON.stringify({ grants: [], enforcement: { egress_host: false } }), {
+            status: 200,
+            headers: { ETag: '"e1"' },
+          }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snap = await permissions.getPermissions();
+    expect(snap.etag).toBe('"e1"');
+    const saved = await permissions.putEnforcement({ egress_host: true }, snap.etag);
+
+    expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get("If-Match")).toBe('"e1"');
+    expect(saved).toEqual({ enforcement: { egress_host: true }, etag: '"e2"' });
+  });
+});

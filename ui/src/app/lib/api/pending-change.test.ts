@@ -76,7 +76,7 @@ const SITES: [string, () => Promise<unknown>][] = [
       permissions.upsertGrant({ subject_type: "all", subject: "", capability: "egress_host", value: "x", effect: "allow" }),
   ],
   ["permissions.deleteGrant", () => permissions.deleteGrant("g1")],
-  ["permissions.putEnforcement", () => permissions.putEnforcement({ egress_host: true })],
+  ["permissions.putEnforcement", () => permissions.putEnforcement({ egress_host: true }, null)],
   ["permissions.putAvailability", () => permissions.putAvailability("image", "ghcr.io/x/y:1", true)],
   ["access.upsertMapping", () => access.upsertMapping({ value: "v", role: "admin" })],
   ["access.deleteMapping", () => access.deleteMapping("m1")],
