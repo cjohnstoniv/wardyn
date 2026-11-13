@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -427,6 +428,101 @@ func TestResolveAWSSSOInjection_AccountPinDriftIsRefused(t *testing.T) {
 
 	if w := f.resolve(t); w.Code != http.StatusForbidden {
 		t.Fatalf("resolve: code = %d, want 403 on an account-pin change; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// I3 on the session itself: a session for another region than the run was authored with is refused,
+// never served onto the portal host the grant pins, whether the provider moved and its owner signed in
+// again there or the session alone changed (a sign-in landing between the scope check and the read).
+func TestResolveAWSSSOInjection_ASessionForAnotherRegionIsRefused(t *testing.T) {
+	for name, providerMoves := range map[string]bool{
+		"the provider moved and its owner signed in again there": true,
+		"the session alone is for another region":                false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newReauthFixture(t, nil)
+			moved := liveSSOBlob()
+			moved.Region, moved.AccessToken = "us-west-2", "the-new-regions-session-token"
+			f.putBlob(t, "alice@example.com", moved)
+			if providerMoves {
+				p := reauthProvider()
+				p.Bedrock.Region = "us-west-2"
+				f.st.site = reauthProviderSite(p)
+			}
+
+			w := f.resolve(t)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("resolve: code = %d, want 403 on a session for another region; body=%s", w.Code, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), moved.AccessToken) {
+				t.Fatal("the other region's token reached the refusal body")
+			}
+			var drift any
+			for _, ev := range f.audit.events() {
+				var d map[string]any
+				if ev.Action == "secret.read" && ev.Outcome == "failure" && json.Unmarshal(ev.Data, &d) == nil && d["reason"] == "scope_changed" {
+					drift = d["drift"]
+				}
+			}
+			if drift != "region" {
+				t.Errorf("secret.read failure drift = %v, want region", drift)
+			}
+		})
+	}
+}
+
+// The refusal is on the session a renewal hands back, not on the one read first: the first read is the
+// run's own region's session, due for renewal, and its owner's sign-in for another region lands before
+// the renewal re-reads the row under its lock. A check made before the renewal passes the first session
+// and serves the second.
+func TestResolveAWSSSOInjection_ASessionForAnotherRegionReadByTheRenewalIsRefused(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	due := liveSSOBlob()
+	due.ExpiresAt = time.Now().Add(time.Minute).UTC() // inside the skew and under the serve floor: the renewal locks and re-reads
+	due.RefreshToken = "refresh-token-of-the-first-session"
+	due.ClientID, due.ClientSecret = "cid", "csec"
+	due.RegistrationExpiresAt = time.Now().Add(30 * 24 * time.Hour).UTC()
+	f.putBlob(t, "alice@example.com", due)
+
+	// No redemption is expected: the re-read finds a session that needs none.
+	aws := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the first session's refresh token was redeemed; the renewal's re-read should have found the other session")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer aws.Close()
+	f.srv.cfg.AWSSSOEndpointOverride = aws.URL
+	f.brk.setHost(ssoPortalHost(reauthRegion, aws.URL)) // the host pin follows the override
+
+	moved := liveSSOBlob()
+	moved.Region, moved.AccessToken = "us-west-2", "the-new-regions-session-token"
+	name := providerSecretName(reauthProviderUID, providerSSOPart)
+	var reads atomic.Int32
+	hook := func(got string) {
+		if got == name && reads.Add(1) == 1 { // after the resolve's own read, before the renewal's
+			f.putBlob(t, "alice@example.com", moved)
+		}
+	}
+	f.srv.cfg.Secrets = hookedSecrets{Store: f.secrets, afterGet: &hook}
+
+	w := f.resolve(t)
+	if n := reads.Load(); n < 2 {
+		t.Fatalf("the session was read %d time(s), want the renewal's re-read too; code = %d", n, w.Code)
+	}
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("resolve: code = %d, want 403 on the other region's session a renewal read; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), moved.AccessToken) {
+		t.Fatal("the other region's token reached the refusal body")
+	}
+	var drift any
+	for _, ev := range f.audit.events() {
+		var d map[string]any
+		if ev.Action == "secret.read" && ev.Outcome == "failure" && json.Unmarshal(ev.Data, &d) == nil && d["reason"] == "scope_changed" {
+			drift = d["drift"]
+		}
+	}
+	if drift != "region" {
+		t.Errorf("secret.read failure drift = %v, want region", drift)
 	}
 }
 

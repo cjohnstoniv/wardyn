@@ -284,6 +284,12 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 			reason = ""
 		}
 	}
+	// The session served is the one read after any renewal: one signed in again for another region
+	// answers at another portal than the host this run's grant pins.
+	if found && blob.Region != snapshot.Region {
+		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
+			map[string]any{"drift": "region", "owner": snapshot.OwnerSubject})
+	}
 
 	// (5) the host pin, checked for the LIVE and the DEAD path alike: a grant
 	// pointing somewhere else must be refused, never held.

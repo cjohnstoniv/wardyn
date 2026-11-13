@@ -26,12 +26,14 @@ import (
 // SessionSIDs maps a sign-in's provider session id to the person it signed in (store.PG, migration 0229).
 type SessionSIDs interface {
 	// RecordOIDCSessionSID upserts the person a sign-in under issuer's sid established, kept until
-	// expiresAt, the latest the session it signed in can still be live.
+	// expiresAt, the latest the session it signed in can still be live. A row the same person already
+	// holds keeps the later end, so an older sign-in that records last cannot shorten it.
 	RecordOIDCSessionSID(ctx context.Context, issuer, sid, sub string, expiresAt time.Time) error
-	// LookupOIDCSessionSID returns issuer's sid row's person; ok is false with no row.
-	LookupOIDCSessionSID(ctx context.Context, issuer, sid string) (sub string, ok bool, err error)
-	// ForgetOIDCSessionSID deletes issuer's sid row, if any.
-	ForgetOIDCSessionSID(ctx context.Context, issuer, sid string) error
+	// LookupOIDCSessionSID returns issuer's sid row's person and the row's version; ok is false with no row.
+	LookupOIDCSessionSID(ctx context.Context, issuer, sid string) (sub, version string, ok bool, err error)
+	// ForgetOIDCSessionSID deletes issuer's sid row if it is still at version: a sign-in that
+	// re-recorded the sid since the lookup keeps its row.
+	ForgetOIDCSessionSID(ctx context.Context, issuer, sid, version string) error
 }
 
 // FrontchannelLogoutEnabled reports whether the front-channel logout route should be mounted at all.
@@ -70,7 +72,9 @@ func (a *Authenticator) recordSessionSID(ctx context.Context, cc callbackClaims,
 // client's issuer: 400 otherwise. A sid that leads to a sign-in cuts that person's browser sessions,
 // 200 once cut; a sid that leads to none answers 200 too, so a sid cannot be probed; 503 when the
 // lookup or the cut cannot be done. The sid row is deleted only after the cut, so a failed cut keeps
-// it and the provider's reloaded sign-out page retries (CutSessions twice is harmless). onCut, when set, hears each cut, with its error, for the audit row.
+// it and the provider's reloaded sign-out page retries (CutSessions twice is harmless), and only at the
+// version the lookup read, so a sign-in that re-recorded the sid meanwhile keeps its row for the
+// provider's next logout. onCut, when set, hears each cut, with its error, for the audit row.
 //
 // The api layer lets only the issuer's origin frame this answer (FrontchannelFrameOrigin); every other
 // route keeps frame-ancestors 'none'.
@@ -90,7 +94,7 @@ func (a *Authenticator) FrontchannelLogoutHandler(onCut func(r *http.Request, su
 			backchannelRefuse(w, http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation is not configured")
 			return
 		}
-		sub, ok, err := a.cfg.SessionSIDs.LookupOIDCSessionSID(r.Context(), iss, sid)
+		sub, version, ok, err := a.cfg.SessionSIDs.LookupOIDCSessionSID(r.Context(), iss, sid)
 		if err != nil {
 			backchannelRefuse(w, http.StatusServiceUnavailable, "temporarily_unavailable", "the session lookup failed")
 			return
@@ -107,7 +111,7 @@ func (a *Authenticator) FrontchannelLogoutHandler(onCut func(r *http.Request, su
 			backchannelRefuse(w, http.StatusServiceUnavailable, "temporarily_unavailable", "the session cut could not be written")
 			return
 		}
-		if err := a.cfg.SessionSIDs.ForgetOIDCSessionSID(r.Context(), iss, sid); err != nil {
+		if err := a.cfg.SessionSIDs.ForgetOIDCSessionSID(r.Context(), iss, sid, version); err != nil {
 			slog.WarnContext(r.Context(), "oidc: the sid row of a front-channel logout was not deleted; the prune takes it", "err", err)
 		}
 		w.WriteHeader(http.StatusOK)

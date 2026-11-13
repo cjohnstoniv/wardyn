@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -257,5 +258,84 @@ func TestGitHubMinter_InstallationPermissionsDropsAStaleInstallationID(t *testin
 	perms, err := m.InstallationPermissions(ctx, "acme/widgets")
 	if err != nil || perms["contents"] != "read" {
 		t.Fatalf("second read = %v, %v; want it re-resolved to the new installation", perms, err)
+	}
+}
+
+// A lookup made under the App a rotation then replaced must not land in the new App's cache: the old
+// caller's installation id is cached only while its own client is current, and its own 401 drops
+// nothing. Otherwise the new App is sent the old App's installation id until a refusal clears it.
+func TestGitHubMinter_ALookupInFlightAcrossARotationLeavesTheNewAppsCache(t *testing.T) {
+	ctx := context.Background()
+	store := newMemSecrets()
+	_ = store.Put(ctx, "github-app-id", []byte("111"))
+	_ = store.Put(ctx, "github-app-key", genPEM(t))
+
+	inLookup, release := make(chan struct{}), make(chan struct{})
+	var installLookups atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			if installLookups.Add(1) == 1 {
+				close(inLookup)
+				<-release
+				_, _ = w.Write([]byte(`{"id": 42}`)) // the replaced App's installation
+				return
+			}
+			_, _ = w.Write([]byte(`{"id": 77}`)) // the new App's installation
+		case strings.HasSuffix(r.URL.Path, "/installations/42/access_tokens"):
+			// The replaced App's installation no longer resolves.
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+		case strings.HasSuffix(r.URL.Path, "/installations/77/access_tokens"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"ghs_new_app","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock() // before srv.Close, which waits for the held lookup
+
+	gm, err := NewGitHubMinter(store, GitHubMinterConfig{AppIDSecret: "github-app-id", PrivateKeySecret: "github-app-key"})
+	if err != nil {
+		t.Fatalf("NewGitHubMinter: %v", err)
+	}
+	m := gm.(*githubMinter)
+	m.baseURL = srv.URL + "/"
+	mint := func() (string, error) {
+		tok, _, err := gm.MintInstallationToken(ctx, []string{"acme/widgets"}, map[string]string{"contents": "read"}, time.Hour)
+		return tok, err
+	}
+
+	oldDone := make(chan error, 1)
+	go func() { _, err := mint(); oldDone <- err }()
+	select { // the old App's lookup is in flight, outside the lock
+	case <-inLookup:
+	case err := <-oldDone:
+		t.Fatalf("the old App's mint ended before its installation lookup: %v", err)
+	}
+
+	_ = store.Put(ctx, "github-app-id", []byte("222"))
+	_ = store.Put(ctx, "github-app-key", genPEM(t))
+	if tok, err := mint(); err != nil || tok != "ghs_new_app" {
+		t.Fatalf("the new App's mint = %q, %v; want ghs_new_app", tok, err)
+	}
+	unblock()
+	if err := <-oldDone; err == nil {
+		t.Fatal("the old App's mint against its dead installation must fail")
+	}
+
+	m.mu.Lock()
+	cached, ok := m.installByOrg["acme"]
+	m.mu.Unlock()
+	if !ok || cached != 77 {
+		t.Fatalf("cached installation for acme = %d (present %v), want the new App's 77", cached, ok)
+	}
+	if tok, err := mint(); err != nil || tok != "ghs_new_app" {
+		t.Fatalf("the next mint = %q, %v; want the new App's token through its cached installation", tok, err)
+	}
+	if n := installLookups.Load(); n != 2 {
+		t.Fatalf("installation lookups = %d, want 2: the old App's and the new App's, with no re-resolve", n)
 	}
 }
