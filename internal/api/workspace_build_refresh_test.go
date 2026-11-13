@@ -30,12 +30,17 @@ const refreshAdminSub = "sub-refresh-admin"
 type casBuildStore struct {
 	diffBuildStore
 	swapErr error // when set, the swap fails with it
+	// swapLands makes a failing swap land first, as a write whose reply was lost does.
+	swapLands bool
 }
 
 func (s *casBuildStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, observed, ref, hash string, rec *types.ImageBuild) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.swapErr != nil {
+		if s.swapLands && s.ws.ImageRef == observed {
+			s.ws.ImageRef, s.ws.BuiltProfileHash, s.ws.ImageBuild = ref, hash, rec
+		}
 		return false, s.swapErr
 	}
 	if s.ws.ImageRef != observed {
@@ -373,24 +378,30 @@ func TestBuildWorkspace_RescanAfterARefreshIsNotDone(t *testing.T) {
 	f.waitDone(t)
 }
 
-// A refresh whose swap cannot be written changed nothing: it fails and keeps no tag.
+// A refresh whose swap write fails is a failure and keeps its own tag: the write may have landed with its
+// reply lost, and the workspace then names that image.
 func TestBuildWorkspace_RefreshThatCannotRecordItsImageFails(t *testing.T) {
-	ws := refreshDoneWorkspace(t)
-	f := newBuildRefreshFixture(t, ws, &refreshBuilder{pinningBuilder: *resolvingBuilder()})
-	f.b.found = true
-	f.st.swapErr = errors.New("store down")
+	for _, lands := range []bool{false, true} {
+		ws := refreshDoneWorkspace(t)
+		f := newBuildRefreshFixture(t, ws, &refreshBuilder{pinningBuilder: *resolvingBuilder()})
+		f.b.found = true
+		f.st.swapErr, f.st.swapLands = errors.New("store down"), lands
 
-	f.refresh(t)
+		f.refresh(t)
 
-	refs := f.b.builtRefs()
-	if got := f.removed(); len(refs) != 1 || !slices.Equal(got, refs) {
-		t.Errorf("ImageRemove saw %v, want only the refresh's own tag %v", got, refs)
-	}
-	if got := f.get(t); got.State != "failed" || !strings.Contains(got.Detail, "store down") {
-		t.Errorf("GET /build = %+v, want failed naming the write error", got)
-	}
-	if ev, data := f.refreshRow(t); ev.Outcome != "failure" || data["reason"] != "build_failed" {
-		t.Errorf("refresh row = %s %v, want a build_failed failure", ev.Outcome, data)
+		refs := f.b.builtRefs()
+		if got := f.removed(); len(refs) != 1 || len(got) != 0 {
+			t.Errorf("lands=%v: ImageRemove saw %v after a swap write failed, want nothing removed (built %v)", lands, got, refs)
+		}
+		if lands && (len(refs) != 1 || f.st.row().ImageRef != refs[0]) {
+			t.Errorf("lands=%v: the workspace names %q, want the refresh's image %v, which is still there", lands, f.st.row().ImageRef, refs)
+		}
+		if got := f.get(t); got.State != "failed" || !strings.Contains(got.Detail, "store down") {
+			t.Errorf("lands=%v: GET /build = %+v, want failed naming the write error", lands, got)
+		}
+		if ev, data := f.refreshRow(t); ev.Outcome != "failure" || data["reason"] != "build_failed" {
+			t.Errorf("lands=%v: refresh row = %s %v, want a build_failed failure", lands, ev.Outcome, data)
+		}
 	}
 }
 

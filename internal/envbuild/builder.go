@@ -782,16 +782,20 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 			return Built{}, err
 		}
 	}
-	digestRef, err := b.assertWrapSafeBase(ctx, baseRef)
+	baseID, digestRef, err := b.assertWrapSafeBase(ctx, baseRef)
 	if err != nil {
 		return Built{}, err
 	}
-	// A BYOI wrap (pullBase=false) builds FROM the digest the inspected image was pulled as, so the record names what was
-	// wrapped; the stage-1 base is this build's own per-build push ref and keeps its tag.
+	// A BYOI wrap (pullBase=false) builds FROM the image ID the preflight inspected: its tag is shared, and a refresh
+	// that pulls it again in between must not hand the build an image the preflight never saw. The digest the image
+	// was pulled as, when it has one, is the record of what was wrapped. The stage-1 base is this build's own
+	// per-build push ref, which nothing else moves, and keeps its tag.
 	from, baseDigest := baseRef, ""
-	if !pullBase && digestRef != "" {
-		from = digestRef
-		baseDigest = digestRef[strings.LastIndex(digestRef, "@")+1:]
+	if !pullBase {
+		from = baseID
+		if digestRef != "" {
+			baseDigest = digestRef[strings.LastIndex(digestRef, "@")+1:]
+		}
 	}
 	tarCtx, err := buildFinalizeContext(from, toolsDir)
 	if err != nil {
@@ -821,21 +825,25 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 // base-controlled code on the host. A Docker ONBUILD trigger fires host-side when the image is used
 // as a FROM, so a hostile BYOI base with `ONBUILD RUN curl … | sh` is build-time RCE; Docker cannot
 // suppress or report triggers, so refusing the base is the only fail-closed move. Checking only the
-// direct base suffices: ONBUILD fires one level down and children don't inherit it.
-func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) (digestRef string, err error) {
+// direct base suffices: ONBUILD fires one level down and children don't inherit it. It returns the
+// inspected image's ID, which the wrap builds FROM, and fails closed when the daemon reports none.
+func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) (id, digestRef string, err error) {
 	res, err := b.cli.ImageInspect(ctx, baseRef)
 	if err != nil {
-		return "", fmt.Errorf("envbuild: inspect base image %q before wrapping: %w", baseRef, err)
+		return "", "", fmt.Errorf("envbuild: inspect base image %q before wrapping: %w", baseRef, err)
+	}
+	if !imageIDPattern.MatchString(res.ID) {
+		return "", "", fmt.Errorf("envbuild: inspect base image %q before wrapping: the daemon reported image ID %q, not sha256:<64 hex>, so the wrap cannot be bound to the image checked", baseRef, res.ID)
 	}
 	if res.Config != nil && len(res.Config.OnBuild) > 0 {
-		return "", fmt.Errorf("envbuild: refusing to wrap base image %q: it declares %d ONBUILD trigger(s) "+
+		return "", "", fmt.Errorf("envbuild: refusing to wrap base image %q: it declares %d ONBUILD trigger(s) "+
 			"(first: %q). ONBUILD instructions execute on the HOST Docker daemon during the wrap "+
 			"build — outside every confinement tier — so wrapping such a base would run "+
 			"image-controlled code on the host. Resolve the triggers in an image you build "+
 			"yourself (a Dockerfile with `FROM %s` fires them at YOUR build time) and pass that "+
 			"image instead", baseRef, len(res.Config.OnBuild), res.Config.OnBuild[0], baseRef)
 	}
-	return repoDigestFor(baseRef, res.RepoDigests), nil
+	return res.ID, repoDigestFor(baseRef, res.RepoDigests), nil
 }
 
 // drainBuildResponse consumes the daemon's JSON build-output stream, forwarding human-readable

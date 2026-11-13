@@ -123,6 +123,8 @@ type fakeDocker struct {
 	imageArch map[string]string
 	// imageMeta overlays RepoDigests, Os, Variant and Descriptor on the ImageInspect result per ref.
 	imageMeta map[string]image.InspectResponse
+	// imageIDs is the image ID ImageInspect reports per ref; absent = the ref itself.
+	imageIDs map[string]string
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 	// subnets is each network's IPv4 subnet: the one its create asked for, or
@@ -556,7 +558,7 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	defer f.mu.Unlock()
 	if f.images[imageID] {
 		m := f.imageMeta[imageID]
-		resp := image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
+		resp := image.InspectResponse{ID: f.imageIDFor(imageID), Architecture: f.imageArch[imageID],
 			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}
 		if !f.legacyProxyImages[imageID] {
 			resp.Config = &dockerspec.DockerOCIImageConfig{}
@@ -574,6 +576,14 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
+}
+
+// imageIDFor is the image ID ref names now (f.mu held).
+func (f *fakeDocker) imageIDFor(ref string) string {
+	if id := f.imageIDs[ref]; id != "" {
+		return id
+	}
+	return ref
 }
 
 func (f *fakeDocker) ImageRemove(ctx context.Context, imageID string, _ client.ImageRemoveOptions) (client.ImageRemoveResult, error) {

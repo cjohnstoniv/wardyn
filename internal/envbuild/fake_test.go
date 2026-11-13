@@ -69,6 +69,11 @@ type fakeEnvbuilderDocker struct {
 
 	// repoDigests maps image ref -> the RepoDigests a real daemon reports for it from ImageInspect.
 	repoDigests map[string][]string
+	// imageIDs maps image ref -> the image ID ImageInspect reports for it; unset is fakeImageID(ref), and an
+	// ID inspects as itself. beforeBuild, when set, runs as ImageBuild starts, with the fake locked (it sets
+	// fields directly), so a test can move a tag between the wrap's inspect and its build.
+	imageIDs    map[string]string
+	beforeBuild func()
 
 	// inspected records the refs passed to ImageInspect, in order.
 	inspected []string
@@ -270,12 +275,26 @@ func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _
 		}
 	}
 	return client.ImageInspectResult{
-		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg, RepoDigests: f.repoDigests[imageID]},
+		InspectResponse: image.InspectResponse{ID: f.imageIDFor(imageID), Config: cfg, RepoDigests: f.repoDigests[imageID]},
 	}, nil
+}
+
+// imageIDFor is the image ID ref names now: an ID names itself.
+func (f *fakeEnvbuilderDocker) imageIDFor(ref string) string {
+	switch id := f.imageIDs[ref]; {
+	case id != "":
+		return id
+	case strings.HasPrefix(ref, "sha256:"):
+		return ref
+	}
+	return fakeImageID(ref)
 }
 
 func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error) {
 	f.mu.Lock()
+	if f.beforeBuild != nil {
+		f.beforeBuild()
+	}
 	f.imageBuildCalled = true
 	f.lastBuildTags = options.Tags
 	f.lastBuildPullParent = options.PullParent
