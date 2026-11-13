@@ -20,6 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- At startup wardynd now counts the audit spool's backlog and its quarantine file through a fixed buffer instead of reading each file into memory, so a large backlog no longer needs memory of its size before the drain starts.
+- The audit spool now syncs its directory at startup, after a compaction replaces the spool file and after it moves a line to `<spool>.quarantine`, so on a filesystem that supports a directory sync a host crash no longer undoes those files' names once that sync has succeeded. If the sync fails during a move, the line stays in the spool and the move is tried again; a failed sync at startup or after a compaction is logged. A spool directory that wardynd has just created is not itself synced into its parent directory.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

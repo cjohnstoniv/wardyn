@@ -6,7 +6,9 @@ package api
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -123,34 +125,56 @@ func seedSpoolCursor(cursorPath, spoolPath string, size int64) int64 {
 
 // countSpoolLinesFrom counts the UN-REPLAYED lines: those after the cursor. The
 // gauge means "events still to replay", so seeding it from the whole file would
-// report a backlog that is already in the store.
+// report a backlog that is already in the store. Streamed, not read whole: boot
+// runs this before the drain starts, over a spool that grows without bound while
+// the store is down, so holding it in memory could stop every restart.
 func countSpoolLinesFrom(path string, from int64) int64 {
-	buf, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return 0
 	}
-	if from > 0 && from <= int64(len(buf)) {
-		buf = buf[from:]
+	defer f.Close()
+	if from > 0 && from <= spoolFileSize(path) {
+		if _, err := f.Seek(from, io.SeekStart); err != nil {
+			return 0
+		}
 	}
-	return countSpoolLinesIn(buf)
+	return countSpoolLinesIn(f)
 }
 
 // countSpoolLines counts the JSONL lines in path, 0 for a missing or unreadable
-// one. Same line semantics as Drain: a trailing newline is a terminator, and a
-// torn tail with no newline is still a line.
-func countSpoolLines(path string) int64 {
-	buf, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	return countSpoolLinesIn(buf)
-}
+// one.
+func countSpoolLines(path string) int64 { return countSpoolLinesFrom(path, 0) }
 
-// countSpoolLinesIn is countSpoolLines over bytes already in hand.
-func countSpoolLinesIn(buf []byte) int64 {
-	trimmed := bytes.TrimRight(buf, "\n")
-	if len(bytes.TrimSpace(trimmed)) == 0 {
+// countSpoolLinesIn counts the lines r yields, through one fixed buffer. Same
+// line semantics as Drain: a trailing newline is a terminator, and a torn tail
+// with no newline is still a line. Nothing but whitespace counts 0, and so does
+// a failed read.
+func countSpoolLinesIn(r io.Reader) int64 {
+	buf := make([]byte, spoolCopyChunk)
+	var newlines, trailing int64
+	content := false
+	for {
+		n, err := r.Read(buf)
+		chunk := buf[:n]
+		newlines += int64(bytes.Count(chunk, []byte{'\n'}))
+		// The run of newlines at the very end is terminators, not lines, and it
+		// can span reads.
+		if tail := len(chunk) - len(bytes.TrimRight(chunk, "\n")); tail == len(chunk) {
+			trailing += int64(tail)
+		} else {
+			trailing = int64(tail)
+		}
+		content = content || len(bytes.TrimSpace(chunk)) > 0
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return 0
+		}
+	}
+	if !content {
 		return 0
 	}
-	return int64(bytes.Count(trimmed, []byte{'\n'}) + 1)
+	return newlines - trailing + 1
 }

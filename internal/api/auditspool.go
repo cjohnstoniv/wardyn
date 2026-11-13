@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -145,6 +146,13 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 		return nil, err
 	}
 	a := &AuditSpool{f: f, path: path}
+	// The open may have just created the spool, and Append syncs the file, not
+	// the directory entry that names it. A failure is said, not refused: a spool
+	// is still better than none.
+	if err := a.syncDir(); err != nil {
+		slog.Warn("wardynd: audit spool directory not synced; a host crash may lose a newly created spool",
+			slog.String("path", path), slog.Any("err", err))
+	}
 	// The cursor and both counters describe state ON DISK that outlives this
 	// process, so they are read back rather than started at zero. For the
 	// quarantine that keeps the only scrape signal of a permanently incomplete
@@ -614,7 +622,39 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	_ = a.f.Close()
 	a.f = tf
 	a.consumed = 0
+	// Before a.mu is released, so no Append is acknowledged into the new file
+	// while a host crash could still bring the old one back. Not returned: the
+	// rename and the swap are done, and the caller would read an error as a
+	// compaction that did not happen. The next compaction or quarantine syncs the
+	// same directory again.
+	if err := a.syncDir(); err != nil {
+		slog.Warn("wardynd: audit spool directory not synced after compaction; a host crash may lose events spooled since",
+			slog.String("path", a.path), slog.Any("err", err))
+	}
 	return nil
+}
+
+// fsyncSpoolDir fsyncs a directory. A variable, so a test can fail it.
+var fsyncSpoolDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// syncDir makes a file created or renamed in the spool's directory survive a
+// host crash: a file's own sync makes its bytes durable, not the directory
+// entry that names it. A filesystem that offers no directory sync (EINVAL,
+// ENOTSUP or EOPNOTSUPP, as some network and FUSE filesystems answer) is not an
+// error, since there is nothing more to ask of it.
+func (a *AuditSpool) syncDir() error {
+	err := fsyncSpoolDir(filepath.Dir(a.path))
+	if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) {
+		return nil
+	}
+	return err
 }
 
 // spoolCopyChunk is the buffer a rewrite and the volume probe move the spool through, so their
@@ -721,6 +761,11 @@ func (a *AuditSpool) quarantineLine(ctx context.Context, line []byte, ev types.A
 	}
 	if err := qf.Close(); err != nil {
 		return fmt.Errorf("close audit spool quarantine: %w", err)
+	}
+	// The first move creates the file, and Drain gives the line up as soon as
+	// this returns, so the file's name must be durable before then too.
+	if err := a.syncDir(); err != nil {
+		return fmt.Errorf("sync audit spool directory: %w", err)
 	}
 	a.quarantined.Add(1)
 	// The event's identifying fields, never its data payload: this line is
