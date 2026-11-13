@@ -258,10 +258,11 @@ type Proxy struct {
 	localModels map[string]*localModel
 	// allowedModels is Config.AllowedModels and BedrockRoutes compiled (allowed_models.go). Nil == off.
 	allowedModels *modelLimit
-	// gatewayRoutes is Options.GatewayIdentity and gatewayHolders each route
-	// provider's token (gateway_identity.go). Empty == off.
+	// gatewayRoutes is Options.GatewayIdentity, gatewayHolders each route's token (gateway_identity.go)
+	// and gatewayCert the run's client certificate (gateway_client_cert.go). Empty and nil == off.
 	gatewayRoutes  []GatewayIdentityRoute
 	gatewayHolders map[string]*gatewayTokenHolder
+	gatewayCert    *gatewayCertHolder
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
 	// attribution is Options.Attribution: the policy named in a policy-decided
@@ -429,7 +430,6 @@ func newProxy(opts Options) *Proxy {
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		gatewayRoutes:        opts.GatewayIdentity,
-		gatewayHolders:       map[string]*gatewayTokenHolder{},
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
@@ -508,9 +508,7 @@ func newProxy(opts Options) *Proxy {
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)
-	for _, rt := range opts.GatewayIdentity {
-		p.gatewayHolders[rt.holderKey()] = &gatewayTokenHolder{providerID: rt.ProviderID, mcpKey: rt.MCPKey, audience: rt.Audience, timeout: 15 * time.Second}
-	}
+	p.gatewayHolders, p.gatewayCert = newGatewayHolders(opts.RunID, opts.GatewayIdentity)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")
