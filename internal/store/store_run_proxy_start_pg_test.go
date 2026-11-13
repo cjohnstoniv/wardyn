@@ -25,7 +25,7 @@ func TestPG_RunProxyStarts(t *testing.T) {
 	persistRun(t, ctx, pool, run)
 	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	if _, err := pg.BeginProxyStart(ctx, run.ID, 1, "J0", store.ProxyStartExpected); err != nil {
+	if _, err := pg.BeginProxyStart(ctx, run.ID, 1, "J0", store.ProxyStartExpected, false); err != nil {
 		t.Fatalf("BeginProxyStart: %v", err)
 	}
 	ch, err := pg.ReportProxyStart(ctx, run.ID, "J0", sha)
@@ -41,7 +41,7 @@ func TestPG_RunProxyStarts(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET token_jti = 'F', token_prev_jti = NULL WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.BeginProxyStart(ctx, run.ID, 2, "F", store.ProxyStartExpected); err != nil {
+	if _, err := pg.BeginProxyStart(ctx, run.ID, 2, "F", store.ProxyStartExpected, false); err != nil {
 		t.Fatal(err)
 	}
 	if ch, _ := pg.AnswerProxyStart(ctx, run.ID, 1, sha, time.Minute); ch.Active {
@@ -66,13 +66,13 @@ func TestPG_RunProxyStarts(t *testing.T) {
 	}
 
 	// Generation 3: no hash fails at once; an abandoned generation 4 leaves 3 active.
-	if _, err := pg.BeginProxyStart(ctx, run.ID, 3, "G", store.ProxyStartExpected); err != nil {
+	if _, err := pg.BeginProxyStart(ctx, run.ID, 3, "G", store.ProxyStartExpected, false); err != nil {
 		t.Fatal(err)
 	}
 	if ch, _ := pg.AnswerProxyStart(ctx, run.ID, 3, "", time.Minute); ch.Settled != types.ProxyStartFailed || ch.Reason != store.ProxyStartHashMissing {
 		t.Fatalf("answer without a hash = %+v; want failed hash_missing", ch)
 	}
-	if _, err := pg.BeginProxyStart(ctx, run.ID, 4, "H", store.ProxyStartExpected); err != nil {
+	if _, err := pg.BeginProxyStart(ctx, run.ID, 4, "H", store.ProxyStartExpected, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := pg.AbandonProxyStart(ctx, run.ID, 4); err != nil {
@@ -126,5 +126,58 @@ func TestPG_RunProxyStarts(t *testing.T) {
 	persistRun(t, ctx, pool, other)
 	if got, _ := pg.GetRun(ctx, other.ID); got.ProxyAddr != "" {
 		t.Errorf("a run with no address reads %q, want empty", got.ProxyAddr)
+	}
+}
+
+// TestPG_ProxyStartInPlace pins migration 0278: a start begun in place reads back in place, through the
+// begin and through ActiveProxyStart, and a begin again under the same generation resets the flag with
+// the rest of the row.
+func TestPG_ProxyStartInPlace(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, run)
+
+	p, err := pg.BeginProxyStart(ctx, run.ID, 1, "J-in-place", store.ProxyStartExpected, true)
+	if err != nil || !p.InPlace {
+		t.Fatalf("begin in place = %+v, %v; want InPlace", p, err)
+	}
+	if a, found, err := pg.ActiveProxyStart(ctx, run.ID); err != nil || !found || !a.InPlace {
+		t.Fatalf("active = %+v, %v, %v; want the in-place start", a, found, err)
+	}
+	if p, err = pg.BeginProxyStart(ctx, run.ID, 1, "J-replace", store.ProxyStartExpected, false); err != nil || p.InPlace {
+		t.Fatalf("begin again by a replace = %+v, %v; want InPlace false", p, err)
+	}
+	if a, found, err := pg.ActiveProxyStart(ctx, run.ID); err != nil || !found || a.InPlace || a.JTI != "J-replace" {
+		t.Fatalf("active after the reset = %+v, %v, %v; want J-replace, not in place", a, found, err)
+	}
+}
+
+// TestPG_Migration0278InPlace pins migration 0278 itself. Up: in_place is a NOT NULL boolean defaulting to
+// false. Default and down: a start written the way a release before 0278 writes it (no in_place) lands and
+// reads as not in place, so an older binary on the migrated schema keeps working; this repo has no down
+// migrations, and going back is a database restore (docs/OPERATIONS.md's migration list says so).
+func TestPG_Migration0278InPlace(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	var typ, nullable string
+	var def *string
+	if err := pool.QueryRow(ctx, `SELECT data_type, is_nullable, column_default FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'run_proxy_starts' AND column_name = 'in_place'`).Scan(&typ, &nullable, &def); err != nil {
+		t.Fatalf("read the in_place column: %v", err)
+	}
+	if typ != "boolean" || nullable != "NO" || def == nil || *def != "false" {
+		t.Fatalf("in_place = %s, nullable %s, default %v; want boolean NOT NULL DEFAULT false", typ, nullable, def)
+	}
+	run := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, run)
+	if _, err := pool.Exec(ctx, `INSERT INTO run_proxy_starts (run_id, generation, jti, mode, started_at, state)
+		VALUES ($1, 1, 'J-old', 'expected', now(), 'pending')`, run.ID); err != nil {
+		t.Fatalf("a start written without in_place, as before 0278: %v", err)
+	}
+	if a, found, err := pg.ActiveProxyStart(ctx, run.ID); err != nil || !found || a.InPlace || a.JTI != "J-old" {
+		t.Fatalf("active = %+v, %v, %v; want J-old, not in place", a, found, err)
 	}
 }

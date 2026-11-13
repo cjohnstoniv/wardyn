@@ -399,7 +399,7 @@ func (ne *narrowEdit) write(ctx, sctx context.Context, policy types.RunPolicySpe
 // begin records the edit's pending start on token jti. A start that would not be confirmed (a legacy
 // mode) cannot carry an edit.
 func (ne *narrowEdit) begin(sctx context.Context, jti string) error {
-	start, err := ne.s.beginProxyStart(sctx, ne.run, ne.gen, jti)
+	start, err := ne.s.beginProxyStart(sctx, ne.run, ne.gen, jti, true)
 	if err != nil {
 		return err
 	}

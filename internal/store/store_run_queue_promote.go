@@ -665,13 +665,15 @@ func (s PG) SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail st
 // unchanged) and detail as its status_detail. Guarded: only a run still PENDING with admitted_at set and
 // no sandbox moves, so a kill or another end that moved it first keeps its outcome, and a kill after it
 // meets a QUEUED run. Its binding and size stay the promotion's; the next promotion sets them again.
-// false means the run had moved.
+// A run the person's run_tasks erasure marked (tasks_erased_at) never moves: e is the copy taken before
+// that erasure, task text included, and putting it back would restore what was erased.
+// false means the run had moved or was marked.
 func (s PG) RequeuePromotedRun(ctx context.Context, e RunQueueEntry, detail string) (bool, error) {
 	var moved int
 	if err := s.Pool.QueryRow(ctx, `
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=NULL, status_detail=$3
-			WHERE id=$1 AND state=$4 AND admitted_at IS NOT NULL AND sandbox_ref = '' RETURNING id),
+			WHERE id=$1 AND state=$4 AND admitted_at IS NOT NULL AND sandbox_ref = '' AND tasks_erased_at IS NULL RETURNING id),
 		back AS (
 			INSERT INTO run_queue (`+runQueueCols+`)
 			SELECT id, $5::uuid, $6::text, $7::timestamptz, $8::timestamptz, $9::jsonb, $10::jsonb, $11::jsonb, $12::timestamptz
