@@ -69,7 +69,8 @@ export const ELEV = {
   STATE_ENDED: "Ended",
   LINE_WAITING: (when: string, who: string) => `Requested ${when}. ${cap(who)} ${singular(who) ? "decides" : "decide"} it.`,
   LINE_APPROVED: (at: string, left: string, unit: string) => `Ends ${at} (in ${left}). Pick ${unit} when you start a run.`,
-  LINE_DENIED: (by: string, reason: string, when: string) => `${by}: “${reason}” · ${when}`,
+  // A decider the server no longer names leaves the reason and the time.
+  LINE_DENIED: (by: string, reason: string, when: string) => `${by ? `${by}: ` : ""}“${reason}” · ${when}`,
   LINE_EXPIRED: (when: string) => `Nobody decided it in time · ${when}`,
   LINE_ENDED: (when: string) => `Ended ${when}`,
   WITHDRAW: "Withdraw",

@@ -20,6 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
 - A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
 - When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
+- On Approvals, an approved image request under Your requests now says who approved it and when. It no longer says the image can be launched now, which was wrong once an admin deleted the grant.
+- `GET /governance/requests` answers `500` when an approved elevation's membership cannot be read. Before, it listed the request with no end, and Your requests showed it as ended at its approval. An approved elevation whose membership a unit admin made permanent now reads as approved, with who approved it and when, instead of ended.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

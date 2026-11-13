@@ -29,6 +29,9 @@ const listed = (r: GovernanceRequest) => r.mine && (r.kind === "elevation" || r.
 
 // A requester's own reject is a withdrawal: the view has no flag for it, so it is a rejection the proposer made.
 const withdrawn = (r: GovernanceRequest) => r.state === "rejected" && r.decided_by === r.proposed_by;
+// Who decided and when; a decider the server no longer names leaves just the time.
+const decidedLine = (r: GovernanceRequest) =>
+  [r.decided_by, relativeTime(r.decided_at ?? r.proposed_at)].filter(Boolean).join(" · ");
 
 function shown(r: GovernanceRequest): Shown | null {
   const unit = r.unit_name ?? "";
@@ -40,13 +43,14 @@ function shown(r: GovernanceRequest): Shown | null {
   if (r.state === "rejected") {
     const when = relativeTime(r.decided_at ?? r.proposed_at);
     if (withdrawn(r)) return { chip: IMG.STATE_WITHDRAWN, tone: "neutral", line: IMG.LINE_WITHDRAWN(when) };
-    const by = r.decided_by ?? "";
-    return { chip: ELEV.STATE_DENIED, tone: "danger", line: r.reason ? ELEV.LINE_DENIED(by, r.reason, when) : `${by} · ${when}` };
+    return { chip: ELEV.STATE_DENIED, tone: "danger", line: r.reason ? ELEV.LINE_DENIED(r.decided_by ?? "", r.reason, when) : decidedLine(r) };
   }
   if (r.state === "stale") return { chip: IMG.STATE_STALE, tone: "warning", line: IMG.LINE_STALE };
   if (r.state === "expired") return { chip: ELEV.STATE_EXPIRED, tone: "neutral", line: ELEV.LINE_EXPIRED(relativeTime(r.expires_at)) };
   if (r.state === "applied") {
-    if (image) return { chip: ELEV.STATE_APPROVED, tone: "success", line: IMG.LINE_APPROVED };
+    // An image grant is not read back and an admin can delete it, so the row says who approved and when, not that it
+    // launches now. An elevation held with no end has no end to state, and it has not ended.
+    if (image || r.no_end) return { chip: ELEV.STATE_APPROVED, tone: "success", line: decidedLine(r) };
     if (r.ends_at && Date.parse(r.ends_at) > Date.now()) {
       return {
         chip: ELEV.STATE_APPROVED,
