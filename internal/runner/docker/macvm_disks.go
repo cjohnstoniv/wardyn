@@ -83,6 +83,14 @@ func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) (
 			return nil, nil, err
 		}
 		size, err := macDiskSize(img, drive)
+		if err == nil {
+			// The guest formats a disk that starts with 4 KiB of zeros. One this Mac did not make new is refused
+			// here, before the run starts, in words the person can act on; the helper checks again under the
+			// lock it keeps for the VM's life.
+			if cerr := macvm.CheckDiskImage(img); cerr != nil {
+				err = fmt.Errorf("%s: %w", cmp.Or(drive.DriveName, runner.DriveSubject(drive)), cerr)
+			}
+		}
 		unlock()
 		if err != nil {
 			return nil, nil, err

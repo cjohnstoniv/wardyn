@@ -548,6 +548,13 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return fail(err)
 	}
+	// The guest has every disk drive mounted, so each holds a volume: a new drive's mark is used up before
+	// the run can write to it, and a later image of it that starts with 4 KiB of zeros is refused.
+	for _, disk := range disks {
+		if err := macvm.UseUpNewDisk(disk.Path); err != nil {
+			return fail(fmt.Errorf("docker: %w", err))
+		}
+	}
 	set := res.DesktopPasswordSet != nil && *res.DesktopPasswordSet
 	if desktop && !set {
 		return fail(fmt.Errorf("docker: %w", macvm.ErrDesktopPassword))
