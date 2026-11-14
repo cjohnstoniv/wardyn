@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -218,6 +219,8 @@ func (s *Server) sweepServiceHealth(ctx context.Context) error {
 			for _, run := range led {
 				reads = append(reads, serviceRead{ctx: lctx, run: run})
 			}
+		} else {
+			sweephealth.NotOwner(ctx)
 		}
 	}
 	s.mirrorServiceRuns(st, reads)

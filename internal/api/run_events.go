@@ -45,6 +45,11 @@ const (
 	// runEventsRetention keeps an ended run's ring for a reconnecting reader.
 	// After it, a reader gets the synthesized ended event alone.
 	runEventsRetention = 10 * time.Minute
+	// runEventsWrite bounds one batch's writes and flush. A peer that stops
+	// reading, or an HTTP/2 peer that grants no flow-control window, blocks the
+	// flush itself, where neither the hold nor the revocation check can end the
+	// handler and free its stream slot.
+	runEventsWrite = 30 * time.Second
 	// maxRunEventStreams bounds one principal's concurrent streams (#1407).
 	// Each is a goroutine, a held connection and a store read per beat, and a
 	// portal serves every viewer of a person through that person's delegated
@@ -61,9 +66,10 @@ const (
 type runEventHub struct {
 	mu    sync.Mutex
 	rings map[uuid.UUID]*runEventRing
-	// beat and hold override runEventsBeat and runEventsHold for one server,
-	// so a test need not wait real seconds; zero means the constant.
-	beat, hold time.Duration
+	// beat, hold and write override runEventsBeat, runEventsHold and
+	// runEventsWrite for one server, so a test need not wait real seconds; zero
+	// means the constant.
+	beat, hold, write time.Duration
 	// streams counts each principal's open streams (maxRunEventStreams).
 	streams map[runEventStreamer]int
 	// publish, when set, sends the events this replica itself emits to the others
@@ -310,10 +316,10 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	s.runEvents.settle(id, run.State)
 	for {
 		evs, wake, ended := s.runEvents.since(id, after)
-		// No write deadline (the server sets none, boot_serve.go), so a peer that
-		// stops reading must never fill the socket buffer: one hold is at most
-		// hold/beat keepalives plus the closed vocabulary's few events — a few
-		// KiB — after which the hold timer ends the handler anyway.
+		// The server sets no write deadline (boot_serve.go), so each batch sets
+		// its own (runEventsWrite) and clears it before the wait: an HTTP/2
+		// deadline resets the stream even while nothing is being written.
+		_ = rc.SetWriteDeadline(time.Now().Add(cmp.Or(s.runEvents.write, runEventsWrite)))
 		for _, ev := range evs {
 			data, _ := json.Marshal(ev)
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data); err != nil {
@@ -324,6 +330,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 		if err := rc.Flush(); err != nil || ended {
 			return
 		}
+		_ = rc.SetWriteDeadline(time.Time{})
 		select {
 		case <-wake:
 		case <-beat.C:

@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -569,6 +570,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	_, canFreeze := s.cfg.Runner.(runner.Freezer)
 	ctx, end, ok := s.beginLeaderSweep(ctx)
 	if !ok {
+		sweephealth.NotOwner(ctx)
 		return nil
 	}
 	defer end()
