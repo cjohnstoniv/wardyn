@@ -9,11 +9,13 @@ package api
 // and Azure DevOps sign-in refresh single-flights) are taken here, in the one
 // order db.LockOrder documents.
 //
-// No caller proceeds unlocked. A lock that cannot be taken is a refusal: an
-// HTTP door answers 503 reasonLockUnavailable (retry), a redemption answers as
-// it does for any transient failure, and a sweep skips the item. The context a
-// lock returns is the one the guarded work must use: it is cancelled if the
-// lock's connection is lost.
+// No caller proceeds unlocked, except a write that ends a run or marks it
+// kept: refused its start fence, it writes anyway, unfenced and logged
+// (run_admit.go). A lock that cannot be taken is a refusal: an HTTP door
+// answers 503 reasonLockUnavailable (retry), a redemption answers as it does
+// for any transient failure, and a sweep skips the item. The context a lock
+// returns is the one the guarded work must use: it is cancelled if the lock's
+// connection is lost.
 
 import (
 	"context"
@@ -37,6 +39,8 @@ type lockState struct {
 	// held replaces db.LockHeld. Set by tests only, to lose a hold the
 	// in-process locker never loses.
 	held func(context.Context) error
+	// starts is the per-run turn a command start takes before it asks for its start lock (run_admit.go).
+	starts startGates
 }
 
 // lockHeld is db.LockHeld: nil only while every lock ctx carries is held.

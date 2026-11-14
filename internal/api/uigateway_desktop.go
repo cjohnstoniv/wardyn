@@ -442,8 +442,26 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 	defer release()
-	display, err := dd.DialDesktop(ctx, run.SandboxRef)
+	// The display is dialed under the run's start lock, on the run as it stands there, a watch's too: a run that
+	// ended since the check above opens no display.
+	h, err := s.lockStart(ctx, sess.Run)
 	if err != nil {
+		_ = c.Close(desktopCloseUnreachable, lockUnavailableMsg)
+		return
+	}
+	if run, code, why = s.desktopBoundedRunCheck(h.ctx, sess); code != 0 {
+		h.release()
+		_ = c.Close(code, why)
+		return
+	}
+	display, err := startAdmitted(s, ctx, h, execStartBudget,
+		func(ctx context.Context) (io.ReadWriteCloser, error) { return dd.DialDesktop(ctx, run.SandboxRef) },
+		func(d io.ReadWriteCloser) { _ = d.Close() })
+	switch {
+	case startCut(err):
+		_ = c.Close(desktopCloseUnreachable, err.Error())
+		return
+	case err != nil:
 		_ = c.Close(desktopCloseUnreachable, uiExecFailMsg(ctx, "open the desktop", err))
 		return
 	}

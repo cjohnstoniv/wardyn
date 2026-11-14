@@ -177,6 +177,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				// The WARDYN_RUN_MAX_AGE stop's own: the same cascade without the idle_stopped event.
 				cancelMaxAgeApprovals: srv.CancelMaxAgeStoppedRunApprovals,
 				lockEnd:               srv.LockRunEnd,
+				fenceStarts:           srv.FenceRunStarts,
 				bringBack:             srv.BringComputerFolderBack,
 				holdPassed:            api.EndHoldPassed,
 			},

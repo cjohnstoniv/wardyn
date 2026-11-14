@@ -195,6 +195,11 @@ func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.E
 	} else if v != nil {
 		return d.vmExecStream(ctx, v, spec)
 	}
+	// An exec-less runtime (krun) runs the task as the container's only process: there is nothing to exec into,
+	// and the engine's own error would read as a runner fault.
+	if rt, ok := d.execLess.Load(ref); ok {
+		return nil, fmt.Errorf("%w: docker: runtime %v runs the task as the sandbox's only process", runner.ErrExecStreamUnsupported, rt)
+	}
 
 	execCfg := client.ExecCreateOptions{
 		User:         user,

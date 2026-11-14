@@ -210,6 +210,9 @@ func (d *Driver) linuxVMRef(ctx context.Context, ref string) (uuid.UUID, bool, e
 	}
 	if !isLinuxVM(res.Container.Config) {
 		d.notVMs.Store(ref, struct{}{})
+		if h := res.Container.HostConfig; h != nil && !runtimeSupportsExec(h.Runtime) {
+			d.execLess.Store(ref, h.Runtime)
+		}
 		return uuid.Nil, false, nil
 	}
 	id, err := parseRunID(res.Container.Config.Labels[labelRun])

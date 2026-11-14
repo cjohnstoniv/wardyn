@@ -694,6 +694,58 @@ func TestBackgroundWatchIsTheDoorsOneException(t *testing.T) {
 	}
 }
 
+// TestBackgroundExecIsTheDoorsThirdException holds the contract's third exception to the code: POST /runs/{id}/exec
+// stays the SSH access door's route; liveRunForExec, the fresh read without the background refusal, is called only
+// by sshFreshRun, which then refuses a background run, and by execFreshRun, which only handleRunExec calls; and
+// handleRunExec keeps the governance door, the data_out rule and the channel cap. An SSH bridge switched to
+// execFreshRun or liveRunForExec reds here.
+func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
+	bodies := backgroundDoorBodies(t)
+	calls := func(body *ast.BlockStmt, name string) bool {
+		found := false
+		ast.Inspect(body, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+					found = true
+				}
+			}
+			return !found
+		})
+		return found
+	}
+	callers := func(name string) []string {
+		var out []string
+		for sym, body := range bodies {
+			if calls(body, name) {
+				out = append(out, sym)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	for name, want := range map[string][]string{
+		"liveRunForExec": {"execFreshRun", "sshFreshRun"},
+		"execFreshRun":   {"handleRunExec"},
+	} {
+		if got := callers(name); !slices.Equal(got, want) {
+			t.Errorf("%s is called by %v, want %v", name, got, want)
+		}
+	}
+	for _, name := range []string{"refuseExecGovernance", "refuseExecDataOut", "sshAcquireSession"} {
+		if !calls(bodies["handleRunExec"], name) {
+			t.Errorf("handleRunExec no longer calls %s", name)
+		}
+	}
+	if !callsBackgroundPredicate(bodies["sshFreshRun"]) || callsBackgroundPredicate(bodies["execFreshRun"]) {
+		t.Error("sshFreshRun must refuse a background run and execFreshRun must not")
+	}
+	for _, door := range backgroundDoors {
+		if slices.Contains(door.Routes, "POST /runs/{id}/exec") != (door.Door == "SSH access") {
+			t.Errorf("the exec route and door %q disagree", door.Door)
+		}
+	}
+}
+
 // TestRunRoutesAreClassified is the completeness guard: every /runs/{id} route
 // the server registers is either a background door's route or a passive one, so
 // a new route that could open a shell, a web app or a desktop cannot be added

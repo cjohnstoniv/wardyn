@@ -1727,3 +1727,37 @@ func TestFreezeSandbox_RefusesARuntimeOtherThanRunc(t *testing.T) {
 		})
 	}
 }
+
+// TestExecStream_ExecLessRuntimeIsUnsupported: a sandbox on an exec-less runtime (krun) runs its task as the
+// container's only process, so ExecStream refuses it with runner.ErrExecStreamUnsupported before any docker exec:
+// before its task starts, after, and on a driver that did not create it (a restarted runner), which reads the
+// container's runtime.
+func TestExecStream_ExecLessRuntimeIsUnsupported(t *testing.T) {
+	f := newFakeDocker()
+	f.info = infoWithRuntimes("krun")
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+	spec := testSpec()
+	spec.ConfinementClass = types.CC3
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	refused := func(when string, d *Driver) {
+		t.Helper()
+		execs := len(f.execLog)
+		if _, err := d.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"id"}}); !errors.Is(err, runner.ErrExecStreamUnsupported) {
+			t.Fatalf("ExecStream %s = %v, want ErrExecStreamUnsupported", when, err)
+		}
+		if n := len(f.execLog) - execs; n != 0 {
+			t.Fatalf("ExecStream %s made %d docker exec(s)", when, n)
+		}
+	}
+	refused("before the task started", d)
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err != nil {
+		t.Fatalf("Exec (main process): %v", err)
+	}
+	refused("while the task runs", d)
+	refused("on a driver that did not create the sandbox", newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"}))
+}

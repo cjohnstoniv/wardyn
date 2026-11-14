@@ -415,11 +415,13 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 				slog.WarnContext(detached, "wardynd: captured sign-in sandbox was not fully torn down",
 					slog.String("run_id", runID.String()), slog.Any("error", kerr), slog.Any("errors", killData))
 			}
-			if applied || kerr != nil {
+			// A kill whose claim failed (its wait for the run's start fence can spend the cascade's context) is
+			// tried again from a fresh read, as a lost swap is.
+			if applied {
 				return
 			}
 		}
-		slog.WarnContext(detached, "wardynd: gave up ending a captured sign-in sandbox after repeated state changes",
+		slog.WarnContext(detached, "wardynd: gave up ending a captured sign-in sandbox after repeated state changes or failed kills",
 			slog.String("run_id", runID.String()), slog.Int("attempts", supersedeCASAttempts))
 	})
 }

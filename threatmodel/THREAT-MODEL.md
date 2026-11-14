@@ -389,7 +389,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 - **[0.9, client mode]** A runner, `wardyn-runnerd`, dials out to the organisation and runs its owner's locally placed runs on the laptop's Docker ([design §2.3](../docs/design/0.9/PLAN.md#23-trust-boundaries)).
 - The organisation stays the only scheduler, ceiling resolver, credential broker and audit writer. A runner never creates a run, grants, approves or mints.
 - **The developer is root on that host.** B1, B2 and L0 hold between the sandbox and the laptop proxy, so they and every other control bind the **agent**, never the developer (residual #69).
-- A background task placed on a runner is closed at the organisation's doors (terminal, SSH, exec, attach, web apps, desktop: `AgentRun.BackgroundOnly`). The developer can still open its sandbox from the host's own Docker, so no runner claims to deny that and none is asked to.
+- A background task placed on a runner is closed at the organisation's interactive doors (terminal, SSH, interactive exec, attach, web apps, desktop: `AgentRun.BackgroundOnly`). REST exec (`POST /runs/{id}/exec`) stays open to whoever may enter the run, unless its governance profile refuses it (`deny_interactive`, `deny_task_mode_exec`). The developer can still open its sandbox from the host's own Docker, so no runner claims to deny that and none is asked to.
 - An admin who may read a run's detail also reads a runner-placed sandbox's file names and resource counts, through a fixed read-only command the runner runs. Entering its terminal stays the run owner's alone.
 - **Trust class [0.9.3].** Every claimed runner carries one of `personal` < `managed_device` < `org_cluster` (`RunnerTrustClass`, [`internal/types/runner.go`](../internal/types/runner.go)). It is an administrator's assertion, never the runner's: residual #90.
 
@@ -923,7 +923,7 @@ is not the deployment described above.**
     - **SSH exec, SFTP and direct-tcpip were never masked** (`sshgateway_channels.go`), and masking is verbatim only.
     - **REST exec (`POST /runs/{id}/exec`, `run_exec.go`) is never masked or recorded either**, and it is on with the SSH gateway off.
       - So a deployment with no SSH listener still gives a run's owner, or their API token, an unmasked command door.
-      - Its per-run controls are SSH exec's: `deny_interactive`, a `data_out` rule other than `allowed`, and background-only runs refuse it.
+      - Its per-run controls are `deny_interactive`, `deny_task_mode_exec` on a background run, a `data_out` rule other than `allowed` and the run's channel cap. Unlike SSH exec it takes a background-only run, so whoever may enter a background run (its owner or their API token; a super admin on their own or an operator-owned run, who skips the profile's limits there) can run commands in it. Each command and its exit code are audited (`run.command.exec`); its output is neither masked nor recorded. Tool rules and approvals do not see these commands.
     - **Masking depends on Postgres.** With it unreachable, uploads and new attaches are refused and live output shows the placeholder: availability is traded for never persisting a credential.
     - **A compromised wardynd process still sees every value it masks**, and a refresh in flight on an old lock holder can still race a new holder across a Postgres failover (the person signs in again).
 
@@ -2587,7 +2587,7 @@ These risks are **not closed by v1 Wardyn**.
     - Tearing a run down early is scoped differently: a security admin already has that axis, on any run in the deployment (`POST /runs/{id}/kill`, gated by `ownsRunOrAdmin` in [`internal/api/helpers.go`](../internal/api/helpers.go), which admits `isSecurityOperator`).
     - It is keeping a run alive that no narrower role can do.
     - The action is fully audited with both the actor and the owner as `subject` (`run.revive`, [`docs/AUDIT-ACTIONS.md`](../docs/AUDIT-ACTIONS.md)), so misuse is visible after the fact; nothing today narrows who holds the button in advance.
-    - A run stored with the background experience has no interactive door (terminal, exec, SSH, the UI gateway and desktop). The doors read the stored experience after entry authorization, so no principal, an admin included, can enter one (`run_background_only`), and a revive keeps the experience.
+    - A run stored with the background experience has no interactive door (terminal, interactive exec, SSH, the UI gateway and desktop). The doors read the stored experience after entry authorization, so no principal, an admin included, can open one of them (`run_background_only`), and a revive keeps the experience. One command door stays open: REST exec (`POST /runs/{id}/exec`) runs a command in it for whoever may enter the run, unless its governance profile refuses it.
 
 56. **A revived or restarted run keeps its ORIGINAL agent image — revive never re-pulls or rebuilds it.**
     - A proxy-only revive (a control-plane outage) touches only the proxy sidecar; a revive after a reboot restarts the SAME, already-created agent container rather than recreating it from the current agent image.

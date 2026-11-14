@@ -132,11 +132,13 @@ wardyn governance set ci-governance.json
 | `allowed_domains` | Only the forge. A job's own policy can list fewer, never more. |
 | `first_use_approval: always_deny` | An unlisted host is refused at once. Nothing waits for a reviewer nobody is watching. |
 | `min_confinement_class` | The weakest sandbox a job may run in. A job asking for less is raised to it, and a launch the runner cannot satisfy is refused. Set it to the strongest class your substrate offers. |
-| `deny_interactive` | Refuses an interactive run, even one that omits `--task`. It also refuses `wardyn attach`, the SSH gateway, the desktop, `novnc`, desktop sign-ins and the desktop's file transfers into any run under the profile, the owner's exec runs included. |
+| `deny_interactive` | Refuses an interactive run, even one that omits `--task`. It also refuses `wardyn attach`, the SSH gateway, `POST /runs/{id}/exec`, the desktop, `novnc`, desktop sign-ins and desktop file transfers into any run under the profile. |
 | `deny_user_drive` | Refuses a user drive mount, the one storage that outlives a run. |
 | `max_concurrent_runs` | A launch past the cap is refused. |
 
 Both refusals are shown in [step 7](#7-check-the-refusals).
+
+- A job that runs commands in its own run with `POST /runs/{id}/exec` needs a profile without `deny_interactive`, which then also allows interactive runs. `deny_task_mode_exec` refuses those commands in a background run.
 
 ## 3. Pin the image
 

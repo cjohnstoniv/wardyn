@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -575,8 +576,10 @@ func TestExecSFTPServerNamesTheLaunchFailure(t *testing.T) {
 		{"anything else", errors.New("exec create failed"), "image has no " + sftpServerPath, "offline"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s := &Server{cfg: Config{Runner: &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, c.err }}}}
-			_, reason, err := s.execSFTPServer(context.Background(), types.AgentRun{SandboxRef: "sb"})
+			st, run := newSSHMemStore(), types.AgentRun{ID: uuid.New(), State: types.RunRunning, SandboxRef: "sb"}
+			st.putRun(run)
+			s := &Server{cfg: Config{Store: st, Runner: &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, c.err }}}}
+			_, reason, err := s.execSFTPServer(context.Background(), run, true)
 			if !errors.Is(err, c.err) {
 				t.Fatalf("err = %v, want %v", err, c.err)
 			}

@@ -899,7 +899,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshExecArgv(command),
 		Env:  env,
 	})
@@ -964,7 +964,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
 	if err != nil {

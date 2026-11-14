@@ -240,11 +240,12 @@ Profiles narrow by omission: a profile that omits secret grants revokes them for
 
 ### Limits that reach a running run
 
-- Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
+- These limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
 - `deny_interactive` also refuses a terminal attach (`wardyn attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
 - (A super admin enters only a run of their own or one with no personal owner, so the exemption below reaches no person's run.)
 - The attach is an `authz.denied` row (`governance_unit`, target `runs.attach`), the SSH refusal an `ssh.authenticate` failure naming the profile.
 - The harness sign-in run is exempt, as it is at create.
+- `POST /runs/{id}/exec` is refused, as an `authz.denied` row (`governance_unit`, target `runs.exec`), by `deny_interactive` on any run and by `deny_task_mode_exec` on a background run, where nobody supervises the command. `deny_task_mode_exec` closes no other door of a running run.
 - `deny_ui_apps` strips `ui_apps` from a run at create, with a `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI gateway refuses a session into a run created under the profile.
 - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
 - So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
