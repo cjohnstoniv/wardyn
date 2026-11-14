@@ -10,11 +10,16 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 type countingPools struct {
 	store.RunnerPoolStore
-	reads int
+	reads, defaults int
+}
+
+func (c *countingPools) ListRunnerPoolMembers(context.Context, uuid.UUID) ([]types.RunnerPoolMember, error) {
+	return nil, nil
 }
 
 func (c *countingPools) ListRunnerPoolCatalogue(context.Context, string, bool) ([]store.RunnerPoolCatalogueRow, error) {
@@ -22,9 +27,14 @@ func (c *countingPools) ListRunnerPoolCatalogue(context.Context, string, bool) (
 	return nil, nil
 }
 
-// TestQueuePass_ReadsAnOwnersPoolsOncePerPass: the waiting runs of one owner under one authority share
-// one read of the owner's pools within a pass; another authority, or a judgement outside any pass,
-// reads again.
+func (c *countingPools) GetRunnerPoolOrgDefaults(context.Context) (types.RunnerPoolDefaults, error) {
+	c.defaults++
+	return types.RunnerPoolDefaults{}, nil
+}
+
+// TestQueuePass_ReadsAnOwnersPoolsOncePerPass: the waiting runs of one owner under one identity share one
+// read of the owner's pools within a pass, whichever of their sessions queued them; another identity, or
+// a judgement outside any pass, reads again.
 func TestQueuePass_ReadsAnOwnersPoolsOncePerPass(t *testing.T) {
 	srv, _, _ := newRunnerRegistrationServer(t)
 	ps := &countingPools{}
@@ -39,8 +49,9 @@ func TestQueuePass_ReadsAnOwnersPoolsOncePerPass(t *testing.T) {
 	pass := withQueuePass(alice)
 	read(withQueueOwner(pass, "alice", []byte(`{"sub":"alice"}`)))
 	read(withQueueOwner(pass, "alice", []byte(`{"sub":"alice"}`)))
+	read(withQueueOwner(pass, "alice", []byte(`{"sub":"alice","epoch":7,"rseq":3}`)))
 	if ps.reads != 1 {
-		t.Fatalf("two runs under one authority read the pools %d times, want 1", ps.reads)
+		t.Fatalf("three runs of one identity, one from another session, read the pools %d times, want 1", ps.reads)
 	}
 	read(withQueueOwner(pass, "alice", []byte(`{"sub":"alice","user_type":"contractor"}`)))
 	if ps.reads != 2 {
@@ -79,5 +90,76 @@ func TestQueueHoldKey_OnePersonAcrossSessionsAndTokens(t *testing.T) {
 		if key(other) == one {
 			t.Errorf("a run with %s shares the hold key", name)
 		}
+	}
+}
+
+// TestQueueJudging_ReadsAHoldKeysRunnersOncePerJudging: the waiting runs of one hold key share one read
+// of the runners' side within a judging, whichever of the person's sessions queued them; another identity
+// or frozen unit of the same owner, another owner, the next judging, a pass with no judging, or a
+// judgement outside any pass, reads again.
+func TestQueueJudging_ReadsAHoldKeysRunnersOncePerJudging(t *testing.T) {
+	ps := &countingPools{}
+	read := func(ctx context.Context) {
+		t.Helper()
+		if _, err := queueOrgDefaults(ctx, ps); err != nil {
+			t.Fatalf("queueOrgDefaults: %v", err)
+		}
+	}
+	entry := func(owner, authority, launch string) store.RunQueueEntry {
+		return store.RunQueueEntry{RunID: uuid.New(), Owner: owner, Authority: []byte(authority), Launch: []byte(launch)}
+	}
+	const eng, noUnit = `{"sub":"alice","groups":["eng"],"epoch":1,"rseq":4}`, `{"request":{}}`
+	judging := withQueueJudging(withQueuePass(context.Background()))
+	read(withQueueRunners(judging, entry("alice", eng, noUnit)))
+	read(withQueueRunners(judging, entry("alice", `{"sub":"alice","groups":["eng"],"epoch":2,"rseq":9}`, noUnit)))
+	if ps.defaults != 1 {
+		t.Fatalf("two runs of one hold key, queued from two sessions, read the runners %d times, want 1", ps.defaults)
+	}
+	for i, other := range []store.RunQueueEntry{
+		entry("alice", `{"sub":"alice","groups":["ops"],"epoch":1,"rseq":4}`, noUnit),
+		entry("alice", eng, `{"request":{},"unit_id":"6f1c0a52-2b0e-4d7e-9a43-0d6a3b1f2c11"}`),
+		entry("bob", `{"sub":"bob","groups":["eng"]}`, noUnit),
+	} {
+		read(withQueueRunners(judging, other))
+		if want := 2 + i; ps.defaults != want {
+			t.Fatalf("a run of another identity, unit or owner (case %d) read the runners %d times in all, want %d", i, ps.defaults, want)
+		}
+	}
+	read(withQueueRunners(withQueueJudging(judging), entry("alice", eng, noUnit)))
+	if ps.defaults != 5 {
+		t.Fatalf("the next judging read the runners %d times in all, want 5 (no runner fact outlives its judging)", ps.defaults)
+	}
+	read(withQueueRunners(withQueuePass(context.Background()), entry("alice", eng, noUnit)))
+	read(withQueueRunners(context.Background(), entry("alice", eng, noUnit)))
+	if ps.defaults != 7 {
+		t.Fatalf("two judgements outside a judging read the runners %d times in all, want 7", ps.defaults)
+	}
+}
+
+// TestQueueJudging_ReadsTargetsForEachPlacementAndNamedRunner: within a judging a hold key's targets are
+// read once for each placement and named runner its runs ask for, as poolTargets answers by both; a run
+// that asks for the same shares the first one's answer. The pool has no runner, so every read answers a
+// refusal of its own to tell the answers apart by.
+func TestQueueJudging_ReadsTargetsForEachPlacementAndNamedRunner(t *testing.T) {
+	srv, _, _ := newRunnerRegistrationServer(t)
+	row := store.RunnerPoolCatalogueRow{Pool: types.RunnerPool{Name: "Shared", Scope: types.RunnerPoolOrganization}}
+	ctx := withQueueRunners(withQueueJudging(context.Background()), store.RunQueueEntry{Owner: "alice", Launch: []byte(`{"request":{}}`)})
+	targets := func(placement types.Placement, runner string) *runRefusal {
+		t.Helper()
+		_, refusal := srv.queuePoolTargets(ctx, &createRunRequest{Placement: placement, RunnerID: runner}, &countingPools{}, row)
+		if refusal == nil {
+			t.Fatal("a pool with no runner answered no refusal")
+		}
+		return refusal
+	}
+	first := targets("", "")
+	if targets("", "") != first {
+		t.Fatal("a second run asking for the same placement and no runner read the targets again")
+	}
+	if targets(types.PlacementRemote, "") == first {
+		t.Error("a run asking for another placement was answered by the first run's targets")
+	}
+	if targets("", "6f1c0a52-2b0e-4d7e-9a43-0d6a3b1f2c11") == first {
+		t.Error("a run naming a runner was answered by the targets of a run that names none")
 	}
 }

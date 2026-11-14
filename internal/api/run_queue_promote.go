@@ -36,8 +36,8 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 		return nil
 	}
 	// The pass judges other people's runs, so it works on the daemon's own context: a caller's identity
-	// on ctx must never reach it.
-	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(s.cfg.BaseCtx), ctx), bound)
+	// on ctx must never reach it. Its judging reads the runners once for each hold key (queueJudging).
+	pctx, cancel := context.WithTimeout(withQueueJudging(inheritQueuePass(context.WithoutCancel(s.cfg.BaseCtx), ctx)), bound)
 	defer cancel()
 	promoted, held, err := qs.PromoteRunQueue(pctx, store.PromotePass{
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
@@ -97,17 +97,24 @@ func queueHoldKey(e store.RunQueueEntry) string {
 	if launch.UnitID != nil {
 		unit = launch.UnitID.String()
 	}
-	identity := string(e.Authority)
+	return e.Owner + "\x00" + queueIdentity(e.Authority) + "\x00" + unit
+}
+
+// queueIdentity is a stored authority without the fields that tell one person's sessions and tokens
+// apart (queueHoldKey says which and why no pass reads them); bytes that do not parse are their own.
+// One row does carry the token id and agent: the audit row of a refusal a kept read writes (a user type
+// that is gone, callerSubjects) is stamped with those of the identity's first run of the pass or judging.
+func queueIdentity(authority []byte) string {
 	var auth queueAuthority
-	if json.Unmarshal(e.Authority, &auth) == nil {
-		auth.Epoch, auth.Seq, auth.Actor = nil, 0, nil
-		if auth.Grant != nil {
-			auth.Grant = &uuid.UUID{}
-		}
-		b, _ := json.Marshal(auth) //nolint:errcheck // plain fields only, so it cannot fail
-		identity = string(b)
+	if json.Unmarshal(authority, &auth) != nil {
+		return string(authority)
 	}
-	return e.Owner + "\x00" + identity + "\x00" + unit
+	auth.Epoch, auth.Seq, auth.Actor = nil, 0, nil
+	if auth.Grant != nil {
+		auth.Grant = &uuid.UUID{}
+	}
+	b, _ := json.Marshal(auth) //nolint:errcheck // plain fields only, so it cannot fail
+	return string(b)
 }
 
 // queueAdmit is the verdict on one waiting run, asked before the pass takes any lock: the run must be
@@ -123,7 +130,7 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	octx := withQueueOwner(auth.context(ctx), e.Owner, e.Authority)
+	octx := withQueueRunners(withQueueOwner(auth.context(ctx), e.Owner, e.Authority), e)
 	room, err := s.queueRunnerFree(octx, pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
@@ -205,7 +212,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
-	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
+	org, err := queueOrgDefaults(ctx, ps)
 	if err != nil {
 		return out, fmt.Errorf("read the organisation's runner pool defaults: %w", err)
 	}
@@ -216,7 +223,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		out.wait, out.ownerWide = runnerpool.WaitRecordingStoreOff, !out.pinned
 		return out, nil
 	}
-	targets, refusal := s.poolTargets(ctx, &req, ps, row)
+	targets, refusal := s.queuePoolTargets(ctx, &req, ps, row)
 	if refusal != nil && refusal.err != nil {
 		// A read that failed says nothing about the runners: the run keeps its place with no wait recorded.
 		return out, fmt.Errorf("read the pool's runners: %w", refusal.err)
@@ -233,7 +240,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// Room is read here without a lock, by each runner's declared limits and In use, for the size the
 	// run would start with on that runner; the promotion holds that size to it again under the runner
 	// rows' locks, the person's own runners first.
-	fits, err := s.runnerFits(ctx)
+	fits, err := s.queueRunnerFits(ctx)
 	if err != nil {
 		return out, err
 	}
