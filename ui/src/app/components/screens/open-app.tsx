@@ -37,28 +37,41 @@ function refusalText(e: unknown): string {
 export function OpenAppScreen() {
   const { run = "", app = "" } = useParams();
   const [phase, setPhase] = React.useState<Phase>({ kind: "opening" });
-  // A ticket is single-use: a second run of the effect (StrictMode) must not mint another.
-  const started = React.useRef("");
+  // A ticket is single-use: a second run of the effect for the same route (StrictMode) resumes the attempt already
+  // in flight instead of minting another. live is the attempt this page still shows; an attempt for a route the
+  // person has left is stale, so it never takes this tab anywhere and its error never replaces the current page.
+  const started = React.useRef({ key: "", id: 0 });
+  const live = React.useRef(0);
 
   React.useEffect(() => {
     const key = `${run}/${app}`;
-    if (started.current === key) return;
-    started.current = key;
-    setPhase({ kind: "opening" });
-    void (async () => {
-      try {
-        const h = await health.health();
-        if (h.status !== "ok") throw new Error(STATES.ERROR_DEFAULT);
-        if (!h.ui_sandbox?.enabled) {
-          setPhase({ kind: "refused", text: T.GATEWAY_OFF });
-          return;
+    const fresh = started.current.key !== key;
+    if (fresh) started.current = { key, id: started.current.id + 1 };
+    const id = started.current.id;
+    live.current = id;
+    if (fresh) {
+      const stale = () => live.current !== id;
+      setPhase({ kind: "opening" });
+      void (async () => {
+        try {
+          const h = await health.health();
+          if (stale()) return;
+          if (h.status !== "ok") throw new Error(STATES.ERROR_DEFAULT);
+          if (!h.ui_sandbox?.enabled) {
+            setPhase({ kind: "refused", text: T.GATEWAY_OFF });
+            return;
+          }
+          const ticket = await runs.appTicket(run, app);
+          if (stale()) return;
+          await enterUIApp(run, app, h.ui_sandbox, { ticket, target: "_self", stale });
+        } catch (e) {
+          if (!stale()) setPhase({ kind: "refused", text: refusalText(e) });
         }
-        const ticket = await runs.appTicket(run, app);
-        await enterUIApp(run, app, h.ui_sandbox, { ticket, target: "_self" });
-      } catch (e) {
-        setPhase({ kind: "refused", text: refusalText(e) });
-      }
-    })();
+      })();
+    }
+    return () => {
+      live.current = 0;
+    };
   }, [run, app]);
 
   return (
