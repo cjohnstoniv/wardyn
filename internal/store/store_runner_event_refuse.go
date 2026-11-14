@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -136,7 +137,8 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 // runner's spool seal (runnerspool Seal). The CAS moves it only for the record right after it, on the cursor of this
 // runner's run and spool; a gap, a repeat, a hash with no place in a receipt or another spool's record moves nothing.
 // A missing cursor is made as ingest makes it (lockRunnerSpool), only for the stream's first record (the one next
-// after none) and a run that is this runner's.
+// after none) and a run that is this runner's. The move keeps ingest's replay window (spoolReceipt.accept): only the
+// last runnerspool.ReplayBatch hashes stay, so a runner refused record after record cannot grow the cursor.
 func advanceRefusedSpoolCursorTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, sp RunnerEventRefusalSpool) error {
 	if sp.Seq <= 0 || len(sp.Hash) != 64 {
 		return nil
@@ -147,9 +149,10 @@ func advanceRefusedSpoolCursorTx(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 			return err
 		}
 	}
-	_, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=recent_hashes||jsonb_build_object($5::text,$6::text)
+	_, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=(recent_hashes||jsonb_build_object($5::text,$6::text))
+ - ARRAY(SELECT k FROM jsonb_object_keys(recent_hashes) AS k WHERE k::bigint <= $4::bigint-$8::bigint)
  WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND last_seq=$7::bigint`,
-		sp.RunID, runnerID, sp.SpoolID, sp.Seq, strconv.FormatInt(sp.Seq, 10), sp.Hash, sp.Seq-1)
+		sp.RunID, runnerID, sp.SpoolID, sp.Seq, strconv.FormatInt(sp.Seq, 10), sp.Hash, sp.Seq-1, int64(runnerspool.ReplayBatch))
 	return err
 }
 

@@ -169,6 +169,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The desktop viewer now stops when it can't read what the desktop sent, shows the reason and offers Try again; before, it hid the reason and reconnected again and again.
 - `wardyn drive member delete` now says before you confirm that a Mac disk image may stay: the outcome is `deferred` while the Mac can't be reached and `record_only` when the Mac is no longer registered.
 - A download from a desktop's Files panel and an audit partition export now release the downloaded file's browser link on the next tick, as recording downloads already did, instead of right after the click.
+- A local runner's spool records that the server refuses now keep the run's replay receipt to the same last 64 records as the records it takes; before, each refused record added one more entry to the receipt, and the server rewrote the whole receipt for every one.
 
 ### Security
 
