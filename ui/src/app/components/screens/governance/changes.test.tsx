@@ -331,6 +331,8 @@ describe("the change drawer", () => {
     expect(toast.warning).toHaveBeenCalledWith(detail, { duration: Infinity });
     expect(toast.success).not.toHaveBeenCalled();
     expect(onChanged).toHaveBeenCalled();
+  });
+
   it("a decision still out keeps its drawer, so its answer cannot close the next one opened", async () => {
     let answer: ((c: GovernanceChange) => void) | undefined;
     approveMock.mockReturnValue(new Promise((done) => (answer = done)));
