@@ -63,6 +63,28 @@ func unanswerable(carried []uint32, replayed []Frame) []uint32 {
 	return out
 }
 
+// streamCalls are the calls whose answer is a byte stream the runner opens to the waiting caller.
+var streamCalls = map[string]bool{MethodAttach: true, MethodDialDesktop: true, MethodExecStream: true, MethodRecoverOutput: true,
+	MethodMacWindow: true, MethodLocalAttach: true, MethodSyncFolder: true}
+
+// ReplaysStreamCall reports whether replay, the frames a resume would send, holds a CALL whose answer is
+// a byte stream (streamCalls), or a CALL it cannot read. A link drop answers every waiting caller with
+// ErrRunnerOffline, so such a CALL is served for nobody: the runner would start it only now, an exec
+// whose caller was told it failed included. A resume that would replay one starts a fresh session
+// instead, which replays nothing.
+func ReplaysStreamCall(replay []Frame) bool {
+	for _, f := range replay {
+		if f.Type != TypeCall {
+			continue
+		}
+		var c Call
+		if Unmarshal(f.Payload, &c) != nil || streamCalls[c.Method] {
+			return true
+		}
+	}
+	return false
+}
+
 // retireUnanswerable drops the unanswerable calls at the first PONG on a
 // resumed link. The PONG answers a PING read on this link, and the peer writes
 // its whole replay before anything else (Start), so every REPLY it still owed
