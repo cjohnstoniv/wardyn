@@ -269,6 +269,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn-runnerd drive open` says the changes were written back only after the throwaway VM confirmed it had written them; when it does not confirm, the folder is kept and the command fails.
 - A laptop's audit forwarding no longer stops at a row made by a service identity. The organisation answered it with 400 `invalid_row`, and every later row waited behind it; it now stores the row, with its claimed actor type `service`, as it does a human, agent or system row.
 - After every organisation server runs this release, restart `wardynd` on each laptop whose audit forwarding had already stopped at a service identity's row; it does not start again by itself. Such a laptop's log says forwarding is halted until wardynd restarts, and its `/healthz` `org_federation.lag` stays above 0. After the restart the laptop sends again from the first row the organisation has not acknowledged. This fix needs no change on the laptop besides that restart.
+- A run lost to an outage, whose end could not be read from the database, now has its agent stopped where the substrate cannot stop its proxy alone. Where it cannot keep a stopped sandbox either, as on Kubernetes in server mode, the run is torn down, and its `run.lost` row says `kept: false` with the read's error in `lost_error`. Before, nothing was stopped and the stop was only tried again: the run stayed kept, with its containment recorded as unresolved.
 
 ### Security
 
@@ -330,6 +331,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - macOS VM bases with `/Library/Wardyn/carry-before-login`: not yet known on a real Mac are whether a restart started inside the guest keeps the VM running, whether macOS then keeps `agent` at the login window until the carry is done, and whether the carried settings keep Setup Assistant's Apple Account pane closed. If runs on a test base fail as stopped while booting, remove the two items from its list.
 - On a Kubernetes install with keep on, the pool's keep chip and the ending-soon notice say files are kept for every interactive run. Only runs with a kept work folder and a `claude-code` or `codex-cli` agent are kept.
+
+### Corrections to the rc.20 notes
+
+- On Kubernetes, a live egress edit closes the open connections through the proxy only when it adds a host the proxy's deny list did not already hold. Connections to the proxy's DNS listener, which forwards nothing, stay open. The rc.20 notes said open connections through the proxy drop on every edit.
+- An ingress in front of the server that serves live egress edits needs a proxy read timeout of at least 530 seconds, as the chart's README says. The rc.20 notes said at least 540 seconds.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

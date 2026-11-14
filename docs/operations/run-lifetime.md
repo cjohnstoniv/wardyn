@@ -16,6 +16,7 @@ Every run captures a **lease** at create:
 | Decision-wait budget | `wait_budget_sec`; it does not bound a run's start, see [Start deadlines](../OPERATIONS.md#the-start-deadlines). |
 
 - A run keeps the limits it captured at create even if the profile that produced them changes later; extending or shortening the lease is bounded by what was captured, not by the profile's current shape.
+- A run's length is counted on the database's clock, and the lease sweep judges its end by that clock, so a server whose clock is off does not move that end.
 
 ## Extend
 
@@ -158,7 +159,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 6. While that stop is unconfirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
 8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config, which the edit stored before its replace.
-9. On Kubernetes, for a run of wardynd's own cluster, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks. The proxy refuses them at once and closes proxied connections, not its DNS listener; the answer waits for its readback.
+9. On Kubernetes, for a run of wardynd's own cluster, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks, and the proxy refuses them at once. If the list grew, it closes proxied connections; connections to its DNS listener, which forwards nothing, stay open. The answer waits for its readback.
 10. wardynd gives the proxy 15 seconds to apply the edit and 60 seconds more to confirm it. Past either, or on an answer it cannot read, the run is ended, since a proxy there cannot be stopped alone. Any edit answers within 8 minutes, not counting a stalled database read.
 11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). Send the edit again.
 12. It is refused with `409 egress_edit_unsupported`, and nothing changes, when:
