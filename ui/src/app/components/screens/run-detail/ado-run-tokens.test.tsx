@@ -5,7 +5,7 @@
 
 // The run page's token list (mock states 6 and 7): one line per token, oldest
 // first, under "Azure DevOps" in the Credentials widget.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ADORunToken } from "../../../lib/types/ado-pat";
 import type { AuditEvent } from "../../../lib/types";
@@ -32,6 +32,15 @@ const tok = (over: Partial<ADORunToken> = {}): ADORunToken => ({ created_at: at(
 beforeEach(() => {
   runTokensMock.mockReset();
 });
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// The page read at noon on the fixture's day, before the 17:02 expiry; without it the page reads today's clock.
+function readAtNoon() {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2000, 8, 29, 12, 0));
+}
 
 async function draw(tokens: ADORunToken[], paused = false) {
   runTokensMock.mockResolvedValue(tokens);
@@ -68,11 +77,20 @@ describe("AdoRunTokens", () => {
   });
 
   it("6f: a revoke that failed says when the token expires and where to revoke it by hand", async () => {
+    readAtNoon();
     await draw([tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" })]);
     expect(await screen.findByText(ADO_PAT.RUN_REVOKE_FAILED(hm("17:02")))).toBeInTheDocument();
     // The closed record is not a revoke: the line never says revoked beside the warning.
     expect(screen.getByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (not revoked)`)).toBeInTheDocument();
     expect(screen.queryByText(/· revoked /)).not.toBeInTheDocument();
+  });
+
+  it("6g: a refused revoke past the token's expiry reads (expired), muted, and asks for no revoke by hand", async () => {
+    await draw([tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" })]);
+    const line = await screen.findByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (expired)`);
+    expect(line).toHaveClass("text-muted-foreground");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/not revoked/)).not.toBeInTheDocument();
   });
 
   it("7: a token a wider one replaced reads (access added), with no separate 'Access added' line", async () => {

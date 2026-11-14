@@ -280,7 +280,7 @@ export interface RunTokenLine {
 export interface RunTokenView {
   lines: RunTokenLine[];
   paused: boolean;
-  /** The clock time each unrevokable token expires. */
+  /** The clock time each unrevokable token that still works expires. */
   revokeFailedAt: string[];
 }
 
@@ -298,25 +298,31 @@ function widened(t: ADORunToken, next: ADORunToken): boolean {
 const NEVER_HANDED_OUT = new Set(["unrecorded", "ends_unreadable"]);
 
 /** A run's tokens as the page draws them, oldest first. `paused` is the run's own
- *  state; the token list alone cannot say a run is paused.
+ *  state; the token list alone cannot say a run is paused. `now` is when the page
+ *  is drawn, as for the person's card (patCardView).
  *
  *  A token is never revoked early: one a renewal or a widening replaced is still
  *  live at Azure DevOps until its own expiry. So a token the next one followed
  *  reads "(access added)" when the next one's scope is a strict superset of its
  *  own and "(renewed)" otherwise, from the two rows, not from a revoke reason.
- *  One closed at its own expiry reads "(expired)". Only a token the server
+ *  One closed at its own expiry reads "(expired)", as does one whose revoke failed
+ *  or is unconfirmed once its expiry has passed. Only a token the server
  *  actually revoked (a pause, the run's end, a disconnect, and the like) names a
  *  revoke time and reason. */
-export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenView {
+export function runTokenView(tokens: ADORunToken[], paused: boolean, now: number = Date.now()): RunTokenView {
   const sorted = [...tokens].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  // Past valid_to a token is dead whatever its revoke came to, as on the person's card (lastTokenLine).
+  const works = (t: ADORunToken) => Date.parse(t.valid_to) > now;
   const lines = sorted.map((t, i) => {
     const created = formatClock(t.created_at);
     const expires = formatClock(t.valid_to);
     // A token that was minted and revoked before the run could use it replaced nothing.
     const next = sorted.slice(i + 1).find((n) => !NEVER_HANDED_OUT.has(n.revoke_reason ?? ""));
-    // A failed revoke is no revoke: the token may still work, so it is never drawn revoked or old.
-    if (t.revoke_failed) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.not_revoked), old: false };
-    if (t.revoke_pending) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.revoke_pending), old: false };
+    // A failed revoke is no revoke: the token may still work until its expiry, so it is never drawn revoked,
+    // and it is drawn old only once that expiry has passed.
+    if (t.revoke_failed && works(t)) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.not_revoked), old: false };
+    if (t.revoke_pending && works(t)) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.revoke_pending), old: false };
+    if (t.revoke_failed || t.revoke_pending) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.expired), old: true };
     const revoked = !!t.revoked_at && t.revoke_reason !== "expired";
     const reason = (t.revoke_reason && ADO_PAT.REVOKE_REASON[t.revoke_reason]) || "";
     if (revoked && reason) {
@@ -334,7 +340,7 @@ export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenVi
   return {
     lines,
     paused,
-    revokeFailedAt: sorted.filter((t) => t.revoke_failed).map((t) => formatClock(t.valid_to)),
+    revokeFailedAt: sorted.filter((t) => t.revoke_failed && works(t)).map((t) => formatClock(t.valid_to)),
   };
 }
 

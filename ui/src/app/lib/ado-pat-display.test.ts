@@ -378,16 +378,32 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
     expect(unreadable.lines[0].text).toBe(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} · revoked ${hm("09:03")} (sign-in state unreadable)`);
   });
   it("6f: a revoke that was abandoned names when the token expires on its own", () => {
-    expect(runTokenView([tok({ revoke_failed: true })], false).revokeFailedAt).toEqual([hm("17:02")]);
+    expect(runTokenView([tok({ revoke_failed: true })], false, NOON).revokeFailedAt).toEqual([hm("17:02")]);
   });
   it("6f: a token whose revoke failed or is unconfirmed is never drawn revoked", () => {
     const v = runTokenView(
       [tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" }), tok({ created_at: at(9, 20), valid_to: at(17, 20), revoke_pending: true })],
       false,
+      NOON,
     );
     expect(v.lines).toEqual([
       { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (not revoked)`, old: false },
       { text: `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")} (revoke not confirmed)`, old: false },
+    ]);
+  });
+  it("6g: past its expiry a token whose revoke failed or is unconfirmed reads (expired), with no revoke by hand to ask for", () => {
+    const tokens = [tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" }), tok({ created_at: at(9, 20), valid_to: at(17, 20), revoke_pending: true })];
+    const v = runTokenView(tokens, false, Date.parse(at(17, 20)));
+    expect(v.lines).toEqual([
+      { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (expired)`, old: true },
+      { text: `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")} (expired)`, old: true },
+    ]);
+    expect(v.revokeFailedAt).toEqual([]);
+    // Between the two expiries only the first has died.
+    const between = runTokenView(tokens, false, Date.parse(at(17, 3)));
+    expect(between.lines.map((l) => l.text)).toEqual([
+      `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (expired)`,
+      `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")} (revoke not confirmed)`,
     ]);
   });
   it("7: a token whose successor's scope is a strict superset reads (access added), whenever it was replaced", () => {
