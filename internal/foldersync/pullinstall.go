@@ -112,13 +112,11 @@ func (sy *Syncer) moveToTrash(rel string, walked *syncFile) error {
 }
 
 // putBack moves aside back to rel, never over a file made since (placeNew), and returns err. One it
-// cannot move back stays at aside, which the error names, and so is a later save that a failed copy
-// moved aside in turn (dropCopy).
+// cannot move back stays at aside, which the error names, and the error goes on with placeNew's: a
+// later save that a failed copy moved aside in turn, or a partial copy it left at rel (dropCopy).
 func (sy *Syncer) putBack(aside, rel string, err error) error {
-	if perr := placeNew(sy.Root, aside, rel); errors.Is(perr, errNotPutBack) {
+	if perr := placeNew(sy.Root, aside, rel); perr != nil {
 		return fmt.Errorf("%w; %w", keptAt(aside), perr)
-	} else if perr != nil {
-		return keptAt(aside)
 	}
 	_ = removeIn(sy.Root, aside) // placeNew linked, copied or moved it
 	return err
