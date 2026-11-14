@@ -241,6 +241,7 @@ func (s *Server) probeSecretWrite(ctx context.Context, scope awsSSOScope) error 
 	if err := s.putOwned(ctx, scope.rowOwner(), func(ctx context.Context) error {
 		return st.Put(ctx, writeProbeSecretName, []byte("probe"))
 	}); err != nil {
+		s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", scope.rowOwner(), writeProbeSecretName)
 		return err
 	}
 	if err := st.Delete(ctx, writeProbeSecretName); err != nil {
@@ -271,8 +272,18 @@ func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope
 	if guarded {
 		ctx = secretstore.WithIfRevision(ctx, rev)
 	}
+	lost := false
 	for attempts = 1; ; attempts++ {
 		err = s.storeAWSSSOBlob(ctx, scope, next)
+		// An earlier attempt whose reply was lost may have committed: the
+		// compare-and-set then refuses this renewal's own row, which is stored.
+		if lost && errors.Is(err, secretstore.ErrRevisionChanged) {
+			if stored, found, rerr := s.readAWSSSOBlob(ctx, scope); rerr == nil && found &&
+				stored.AccessToken == next.AccessToken && stored.RefreshToken == next.RefreshToken {
+				return attempts, nil
+			}
+		}
+		lost = lost || errors.Is(err, secretstore.ErrRowNotWritten)
 		if err == nil || secretstore.Superseded(err) || attempts == awsSSOPersistAttempts {
 			return attempts, err
 		}

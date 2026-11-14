@@ -342,6 +342,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error { return s.cfg.Secrets.For(owner).Put(ctx, name, raw) }); err != nil {
+		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), owner, name)
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}
