@@ -16,6 +16,38 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// A chart value `cpu: 1` renders as the JSON number 1: cpu and memory take a number or a string, nothing else.
+func TestWarmPoolQuantityKinds(t *testing.T) {
+	pool := func(cpu, mem string) string {
+		return `[{"name":"a","image":"i","class":"CC1","cpu":` + cpu + `,"memory":` + mem + `,"size":1}]`
+	}
+	for _, tc := range []struct{ name, cpu, mem, wantCPU, wantMem string }{
+		{"cpu number", `1`, `"1Gi"`, "1", "1Gi"},
+		{"cpu string", `"1"`, `"1Gi"`, "1", "1Gi"},
+		{"cpu fraction", `0.5`, `"1Gi"`, "0.5", "1Gi"},
+		{"memory string", `"500m"`, `"1Gi"`, "500m", "1Gi"},
+		{"memory number", `1`, `1073741824`, "1", "1073741824"},
+	} {
+		pools, err := parseWarmPools(pool(tc.cpu, tc.mem))
+		if err != nil || len(pools) != 1 || pools[0].CPU != tc.wantCPU || pools[0].Memory != tc.wantMem {
+			t.Errorf("%s: pools = %+v, err = %v; want cpu %q memory %q", tc.name, pools, err, tc.wantCPU, tc.wantMem)
+		}
+	}
+	for _, tc := range []struct{ name, cpu, mem, want string }{
+		{"cpu true", `true`, `"1Gi"`, `pool "a": cpu must be a number or a string, not true`},
+		{"cpu object", `{}`, `"1Gi"`, `pool "a": cpu must be a number or a string, not {}`},
+		{"cpu array", `[1]`, `"1Gi"`, `pool "a": cpu must be a number or a string, not [1]`},
+		{"cpu null", `null`, `"1Gi"`, `pool "a": cpu must be a number or a string, not null`},
+		{"memory bool", `1`, `false`, `pool "a": memory must be a number or a string, not false`},
+		{"cpu zero number", `0`, `"1Gi"`, `pool "a": cpu must be a quantity above zero`},
+		{"cpu negative number", `-1`, `"1Gi"`, `pool "a": cpu must be a quantity above zero`},
+	} {
+		if _, err := parseWarmPools(pool(tc.cpu, tc.mem)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v; want it to contain %q", tc.name, err, tc.want)
+		}
+	}
+}
+
 func TestWarmPoolParse(t *testing.T) {
 	if pools, err := parseWarmPools("  \n"); pools != nil || err != nil {
 		t.Fatalf("empty = %v, %v; want nil, nil", pools, err)

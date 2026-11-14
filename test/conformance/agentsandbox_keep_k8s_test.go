@@ -150,7 +150,7 @@ func TestAgentSandboxKeepProxyThroughService(t *testing.T) {
 	requireAgentSandbox(t)
 	e := newASEnv(t)
 	r := keepRunner(t, e)
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), conformance.ASKeepServiceLimit)
 	defer cancel()
 	runID := uuid.New()
 	if _, err := e.startRun(ctx, t, r, runID, e.keptRunMods(t)); err != nil {
@@ -187,7 +187,7 @@ func TestAgentSandboxKeepEndpointSliceElsewhereIsDropped(t *testing.T) {
 	requireAgentSandbox(t)
 	e := newASEnv(t)
 	r := keepRunner(t, e)
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), conformance.ASKeepSliceLimit)
 	defer cancel()
 	runID := uuid.New()
 	ref := asPodName(runID)
@@ -217,11 +217,11 @@ func TestAgentSandboxKeepEndpointSliceElsewhereIsDropped(t *testing.T) {
 		}
 	}
 	endpointsAre([]discoveryv1.Endpoint{{Addresses: []string{decoy}, Conditions: discoveryv1.EndpointConditions{Ready: ptr(true)}}})
-	keepWaitFor(t, 10*time.Second, "the agent's connect to wardyn-proxy failing once the endpoint is elsewhere", func() bool {
+	keepWaitFor(t, conformance.ASKeepSliceGoneWait, "the agent's connect to wardyn-proxy failing once the endpoint is elsewhere", func() bool {
 		return !keepProxyReachable(ctx, t, r, ref)
 	})
 	endpointsAre(original.Endpoints)
-	keepWaitFor(t, 30*time.Second, "the agent's connect to wardyn-proxy succeeding once the endpoint is restored", func() bool {
+	keepWaitFor(t, conformance.ASKeepSliceBackWait, "the agent's connect to wardyn-proxy succeeding once the endpoint is restored", func() bool {
 		return keepProxyReachable(ctx, t, r, ref)
 	})
 }
@@ -240,7 +240,7 @@ func (e *asEnv) startDecoy(ctx context.Context, t *testing.T) string {
 		_ = e.cs.CoreV1().Pods(e.ns).Delete(context.Background(), name, metav1.DeleteOptions{})
 	})
 	var ip string
-	keepWaitFor(t, 2*time.Minute, "the decoy pod running with an IP", func() bool {
+	keepWaitFor(t, conformance.ASKeepSliceDecoyWait, "the decoy pod running with an IP", func() bool {
 		got, err := e.cs.CoreV1().Pods(e.ns).Get(ctx, name, metav1.GetOptions{})
 		ip = ""
 		if err == nil && got.Status.Phase == corev1.PodRunning {
@@ -265,7 +265,7 @@ func TestAgentSandboxKeepLiveReplaceProxy(t *testing.T) {
 	requireAgentSandbox(t)
 	e := newASEnv(t)
 	r := keepRunner(t, e)
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), conformance.ASKeepReplaceLimit)
 	defer cancel()
 	runID := uuid.New()
 	ref := asPodName(runID)
@@ -283,7 +283,7 @@ func TestAgentSandboxKeepLiveReplaceProxy(t *testing.T) {
 	if got := e.keepPod(ctx, t, ref).UID; got != agentBefore {
 		t.Errorf("the agent pod changed from %s to %s: a live replace leaves it alone", agentBefore, got)
 	}
-	keepWaitFor(t, 30*time.Second, "the agent reaching the new proxy through the Service", func() bool {
+	keepWaitFor(t, conformance.ASKeepReplaceWait, "the agent reaching the new proxy through the Service", func() bool {
 		return keepProxyReachable(ctx, t, r, ref)
 	})
 }
@@ -294,7 +294,7 @@ func TestAgentSandboxKeepAPISequence(t *testing.T) {
 	requireAgentSandbox(t)
 	e := newASEnv(t)
 	r := keepRunner(t, e)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), conformance.ASKeepSequenceLimit)
 	defer cancel()
 	runID := uuid.New()
 	ref := asPodName(runID)
@@ -318,7 +318,7 @@ func TestAgentSandboxKeepAPISequence(t *testing.T) {
 
 	// 4. The held pod appears: gated, no node. A third end leaves it alone.
 	var held *corev1.Pod
-	keepWaitFor(t, time.Minute, "the agent pod held behind the gate with no node", func() bool {
+	keepWaitFor(t, conformance.ASKeepSequenceHeld, "the agent pod held behind the gate with no node", func() bool {
 		pod, err := e.cs.CoreV1().Pods(e.ns).Get(ctx, ref, metav1.GetOptions{})
 		if err != nil || pod.UID == original || asNotHeld(pod) != "" {
 			return false
@@ -329,7 +329,7 @@ func TestAgentSandboxKeepAPISequence(t *testing.T) {
 	if err := r.EndSandboxAt(ctx, ref, 1); err != nil {
 		t.Fatalf("EndSandboxAt (the third end): %v", err)
 	}
-	time.Sleep(5 * time.Second)
+	time.Sleep(conformance.ASKeepSequenceSettle)
 	if got := e.keepPod(ctx, t, ref).UID; got != held.UID {
 		t.Errorf("the held pod changed from %s to %s after a third end", held.UID, got)
 	}
@@ -400,7 +400,7 @@ func (e *asEnv) endUnsupportedThenStop(ctx context.Context, t *testing.T, r *orc
 	if err := r.StopSandbox(ctx, sb.Ref); err != nil {
 		t.Fatalf("StopSandbox: %v", err)
 	}
-	keepWaitFor(t, 2*time.Minute, "no pod of the run remaining", func() bool {
+	keepWaitFor(t, conformance.ASKeepSequenceStop, "no pod of the run remaining", func() bool {
 		pods, err := e.cs.CoreV1().Pods(e.ns).List(ctx, metav1.ListOptions{LabelSelector: "wardyn.run-id=" + runID.String()})
 		return err == nil && len(pods.Items) == 0 || apierrors.IsNotFound(err)
 	})
@@ -412,7 +412,7 @@ func (e *asEnv) endUnsupportedThenStop(ctx context.Context, t *testing.T, r *orc
 func TestAgentSandboxKeepAdmissionBoundsServices(t *testing.T) {
 	requireAgentSandbox(t)
 	e := newASEnv(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), conformance.ASKeepAdmissionLimit)
 	defer cancel()
 
 	self, err := e.cs.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})

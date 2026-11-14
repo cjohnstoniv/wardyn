@@ -188,6 +188,9 @@ func (k *keepDriver) StartSandbox(ctx context.Context, ref string) error {
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: keep: read the agent pod: %w", err)
 	}
+	if err == nil && pod.DeletionTimestamp != nil {
+		return errors.New("k8s: keep: the agent pod is still being deleted by the run's end; revive again once it is gone")
+	}
 	if err == nil && !agentPodGated(pod) && mainContainerRunning(pod) {
 		return nil
 	}

@@ -9,7 +9,8 @@
 #   - one pool renders the env as JSON that round-trips to the pool, and a PriorityClass with value -10 and
 #     preemptionPolicy Never, named in the env;
 #   - create=false with a name renders no PriorityClass, and the env names that class;
-#   - warmPools without k8s.enabled is refused.
+#   - warmPools without k8s.enabled is refused;
+#   - warmPools with create=false and no name is refused.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -71,6 +72,7 @@ if grep -q '^kind: PriorityClass' "$TMP/named.out"; then die "create=false: a Pr
 [[ "$(envval WARDYN_K8S_WARM_PRIORITY_CLASS "$TMP/named.out")" == "platform-low" ]] || die "create=false: the env does not name the existing class"
 ok "create=false with a name: no PriorityClass, env names it"
 
+refused "create=false with no name" "warmPoolPriorityClass.create=false needs warmPoolPriorityClass.name" -f "$ALLON" --set-json "k8s.warmPools=$POOLS" --set k8s.warmPoolPriorityClass.create=false
 refused "warmPools without k8s.enabled" "k8s.warmPools needs k8s.enabled=true" "${BASAL[@]}" --set-json "k8s.warmPools=$POOLS"
 helm lint "$CHART" -f "$ALLON" --set-json "k8s.warmPools=$POOLS" >/dev/null
 ok "helm lint with a pool"

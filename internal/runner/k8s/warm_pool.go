@@ -32,6 +32,37 @@ type WarmPool struct {
 	Size   int    `json:"size"`   // placeholders to keep, 0 to warmPoolMaxSize
 }
 
+// warmPoolWire is WarmPool as WARDYN_K8S_WARM_POOLS writes it: cpu and memory may be a JSON number or a JSON string,
+// since a chart value `cpu: 1` renders as the number 1.
+type warmPoolWire struct {
+	Name   string       `json:"name"`
+	Image  string       `json:"image"`
+	Class  string       `json:"class"`
+	CPU    warmQuantity `json:"cpu"`
+	Memory warmQuantity `json:"memory"`
+	Size   int          `json:"size"`
+}
+
+// warmQuantity reads a JSON string as is and a JSON number by its literal text. Any other JSON value is kept in raw
+// with bad set, so parseWarmPools can refuse it by pool and field.
+type warmQuantity struct {
+	text string
+	raw  string
+	bad  bool
+}
+
+func (q *warmQuantity) UnmarshalJSON(b []byte) error {
+	switch {
+	case len(b) > 0 && b[0] == '"':
+		return json.Unmarshal(b, &q.text)
+	case len(b) > 0 && (b[0] == '-' || (b[0] >= '0' && b[0] <= '9')):
+		q.text = string(b)
+	default:
+		q.raw, q.bad = string(b), true
+	}
+	return nil
+}
+
 const (
 	warmPoolMaxSize  = 20
 	warmPoolMaxTotal = 50
@@ -55,13 +86,25 @@ func parseWarmPools(raw string) ([]WarmPool, error) {
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var pools []WarmPool
-	if err := dec.Decode(&pools); err != nil {
+	var wire []warmPoolWire
+	if err := dec.Decode(&wire); err != nil {
 		return nil, fmt.Errorf("%scannot read the JSON array of pools: %w", warmPoolsRefusal, err)
 	}
 	// only white space may follow the array; More alone would pass a stray "]" or "}"
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%sdata after the array of pools", warmPoolsRefusal)
+	}
+	pools := make([]WarmPool, 0, len(wire))
+	for _, w := range wire {
+		for _, f := range []struct {
+			field string
+			q     warmQuantity
+		}{{"cpu", w.CPU}, {"memory", w.Memory}} {
+			if f.q.bad {
+				return nil, fmt.Errorf("%spool %q: %s must be a number or a string, not %s", warmPoolsRefusal, w.Name, f.field, f.q.raw)
+			}
+		}
+		pools = append(pools, WarmPool{Name: w.Name, Image: w.Image, Class: w.Class, CPU: w.CPU.text, Memory: w.Memory.text, Size: w.Size})
 	}
 	seen := map[string]bool{}
 	total := 0

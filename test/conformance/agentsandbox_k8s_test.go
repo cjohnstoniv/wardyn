@@ -214,7 +214,7 @@ func (e *asEnv) startRun(ctx context.Context, t *testing.T, r runner.Runner, run
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err == nil {
 		t.Cleanup(func() {
-			stopCtx, stop := context.WithTimeout(context.Background(), time.Minute)
+			stopCtx, stop := context.WithTimeout(context.Background(), conformance.ASKillBound)
 			defer stop()
 			_ = r.KillSandbox(stopCtx, sb.Ref)
 		})

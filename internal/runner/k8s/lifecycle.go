@@ -290,7 +290,9 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // name, the only shape CreateSandbox has handed out), never from the agent pod's wardyn.run-id label,
 // which anyone who can patch the pod can change: a label naming another run would tear that run down,
 // and a missing one would leave this run's objects behind. It then sweeps every Wardyn-owned object
-// carrying the run's label via three DeleteCollection calls (pods, NetworkPolicies, Secrets).
+// carrying the run's label via three DeleteCollection calls (pods, Secrets, NetworkPolicies); the agent-sandbox
+// backend's Sandbox is deleted before them, and with keep on the run's Service and a fourth DeleteCollection, of
+// its EndpointSlices, come between the pods and the Secrets.
 //
 // An agent pod whose label no longer names the ref's run is deleted by its name and UID besides
 // (teardownRun), since the run's label selector no longer reaches it.
@@ -505,7 +507,8 @@ func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, ti
 // Deduped by run id, since teardownByRunID reaches every object from the id.
 //
 // A drive PVC is never touched: it carries labelDrive, never labelRun, and
-// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets.
+// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets; with
+// keep on it also deletes the run's Service and EndpointSlices (deleteKeepAddress).
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	candidates, hasPod, err := d.sweepCandidates(ctx)
 	if err != nil {
