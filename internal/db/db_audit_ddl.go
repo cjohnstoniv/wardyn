@@ -94,32 +94,32 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 	var found, superuser, owner, trigger, function, create, unpinned bool
 	err := pool.QueryRow(ctx, `
 		WITH RECURSIVE tree(oid) AS (
-			SELECT c.oid FROM pg_class c WHERE c.relname = 'audit_events' AND c.relkind IN ('r', 'p')
+			SELECT c.oid FROM pg_catalog.pg_class c WHERE c.relname = 'audit_events' AND c.relkind IN ('r', 'p')
 			UNION ALL
-			SELECT i.inhrelid FROM pg_inherits i JOIN tree ON i.inhparent = tree.oid),
+			SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid),
 		reach(oid) AS (
-			SELECT r.oid FROM pg_roles r
+			SELECT r.oid FROM pg_catalog.pg_roles r
 			 WHERE pg_has_role(session_user, r.oid, 'MEMBER') OR pg_has_role(current_user, r.oid, 'MEMBER')),
-		nsp(oid) AS (SELECT DISTINCT c.relnamespace FROM pg_class c JOIN tree ON tree.oid = c.oid),
+		nsp(oid) AS (SELECT DISTINCT c.relnamespace FROM pg_catalog.pg_class c JOIN tree ON tree.oid = c.oid),
 		guard(oid) AS (
 			SELECT oid FROM tree
 			UNION
-			SELECT c.oid FROM pg_class c
+			SELECT c.oid FROM pg_catalog.pg_class c
 			 WHERE c.relkind = 'r' AND c.relnamespace IN (SELECT oid FROM nsp)
 			   AND c.relname IN ('audit_partition_meta', 'audit_chain_anchors')),
 		funcs(proowner, unpinned) AS (
 			SELECT p.proowner, p.prosecdef AND NOT EXISTS (
 			           SELECT 1 FROM pg_catalog.unnest(p.proconfig) AS s(v)
 			            WHERE s.v = 'search_path=pg_temp' OR s.v LIKE 'search\_path=%,pg\_temp' OR s.v LIKE 'search\_path=%, pg\_temp')
-			  FROM pg_proc p
+			  FROM pg_catalog.pg_proc p
 			 WHERE p.pronamespace IN (SELECT oid FROM nsp)
-			    OR p.oid IN (SELECT g.tgfoid FROM pg_trigger g JOIN guard ON guard.oid = g.tgrelid))
+			    OR p.oid IN (SELECT g.tgfoid FROM pg_catalog.pg_trigger g JOIN guard ON guard.oid = g.tgrelid))
 		SELECT EXISTS (SELECT 1 FROM tree),
-		       EXISTS (SELECT 1 FROM pg_roles s JOIN reach ON reach.oid = s.oid
+		       EXISTS (SELECT 1 FROM pg_catalog.pg_roles s JOIN reach ON reach.oid = s.oid
 		                WHERE s.rolsuper
 		                   OR s.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files')
 		                   OR (s.rolcreaterole AND current_setting('server_version_num')::int < 160000)),
-		       EXISTS (SELECT 1 FROM pg_class c JOIN guard ON guard.oid = c.oid JOIN reach ON reach.oid = c.relowner),
+		       EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN guard ON guard.oid = c.oid JOIN reach ON reach.oid = c.relowner),
 		       EXISTS (SELECT 1 FROM guard, reach WHERE has_table_privilege(reach.oid, guard.oid, 'TRIGGER')),
 		       EXISTS (SELECT 1 FROM funcs JOIN reach ON reach.oid = funcs.proowner),
 		       EXISTS (SELECT 1 FROM nsp, reach WHERE has_schema_privilege(reach.oid, nsp.oid, 'CREATE')),
@@ -188,7 +188,7 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 	var canSilenceTriggers bool
 	if err := pool.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM pg_roles r
+			SELECT 1 FROM pg_catalog.pg_roles r
 			 WHERE (pg_has_role(session_user, r.oid, 'MEMBER') OR pg_has_role(current_user, r.oid, 'MEMBER'))
 			   AND has_parameter_privilege(r.oid, 'session_replication_role', 'SET'))`,
 	).Scan(&canSilenceTriggers); err != nil {
