@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -123,5 +124,16 @@ func TestNoViaOrgEngineIsBuiltOnAnUpstreamProxyHostConfigLoadRefuses(t *testing.
 		if (err != nil) != refused || (refused && (!strings.HasPrefix(err.Error(), "upstream proxy: \"") || strings.Contains(err.Error(), "user:pass"))) {
 			t.Errorf("an engine on upstream %q: %v, want refused = %v, naming the host and no credential", raw, err, refused)
 		}
+		// The refusal is told apart from every other build failure: it is permanent, so no retry helps.
+		if errors.Is(err, ErrUpstreamProxyHostRefused) != refused {
+			t.Errorf("an engine on upstream %q: errors.Is(%v, ErrUpstreamProxyHostRefused) = %v, want %v", raw, err, !refused, refused)
+		}
+	}
+	// A URL refused for another reason is not that refusal.
+	cfg := &Config{RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK", DecisionBufferSize: defaultBufferSize,
+		Policy: types.RunPolicySpec{AllowAllEgress: true}, UpstreamProxyURL: "http://proxy.corp.example:0"}
+	if _, err := NewViaOrgEngine(context.Background(), cfg, ViaOrgEngineOptions{Client: &http.Client{Transport: &fakeOrg{}}}); err == nil ||
+		errors.Is(err, ErrUpstreamProxyHostRefused) {
+		t.Errorf("an engine on an upstream whose port is refused: %v, want a build failure that is not ErrUpstreamProxyHostRefused", err)
 	}
 }

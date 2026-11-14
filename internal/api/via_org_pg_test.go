@@ -834,3 +834,60 @@ func TestViaOrg_StalledPeerDoesNotPinARetiredEngine(t *testing.T) {
 	f.srv.releaseViaOrgRun(run, false, false)
 	waitFor(t, "the retired engine closes although its peer stopped reading", func() bool { return old.engine.Closed() })
 }
+
+// TestViaOrg_AnUpstreamProxyHostTheProxyRefusesIsNotAnsweredAsARetry: a site upstream proxy URL whose host is
+// in a spelling the proxy refuses, stored before the write refused it, stops the run's via_org engine from
+// being built. That is permanent, so each 503 says why, asks for no retry, and names neither the host nor the
+// URL's credential, and nothing is dialed. The refusal is remembered for the URL: its resolve is audited once,
+// however many requests come, and once more for each rewrite. Once the URL is cleared, the next request is served.
+func TestViaOrg_AnUpstreamProxyHostTheProxyRefusesIsNotAnsweredAsARetry(t *testing.T) {
+	f := newViaOrgAPIFixture(t)
+	const want = "the organisation's egress for this run cannot be built: the site's upstream proxy URL writes its host in a " +
+		"spelling the proxy refuses in every request, so it stays refused until an operator rewrites the URL"
+	refusedRows := func() int {
+		a := f.srv.cfg.Audit.(*syncAudit)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		n := 0
+		for _, ev := range a.events {
+			if ev.Action == "run.upstream_proxy.resolve" && ev.Outcome == "failure" && ev.RunID != nil && *ev.RunID == f.run.ID &&
+				strings.Contains(string(ev.Data), `"`+upstreamURLHostRefused+`"`) {
+				n++
+			}
+		}
+		return n
+	}
+	logs := captureSlog(t)
+	for i, raw := range []string{"http://user:pass@010.0.0.1:3128", "http://134744072:3128"} {
+		if _, err := f.st.PutSiteConfig(f.ctx, types.SiteConfig{UpstreamProxyURL: raw}); err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			w := f.forward(t, f.rn.ID, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost)
+			var got errorBody
+			if w.Code != http.StatusServiceUnavailable || json.Unmarshal(w.Body.Bytes(), &got) != nil ||
+				got.Reason != reasonViaOrgUpstreamProxyRefused || got.Error != want {
+				t.Errorf("a via_org request with the site's upstream at %q = %d %s, want 503 %s %q", raw, w.Code, w.Body, reasonViaOrgUpstreamProxyRefused, want)
+			}
+			if body := w.Body.String(); strings.Contains(body, "retry") || strings.Contains(body, "010.0.0.1") ||
+				strings.Contains(body, "134744072") || strings.Contains(body, "user:pass") {
+				t.Errorf("the answer asks for a retry or names the host or the credential: %s", body)
+			}
+		}
+		if n := refusedRows(); n != i+1 {
+			t.Errorf("after 3 requests at %q: %d run.upstream_proxy.resolve failure rows for the host's spelling, want %d (one per URL)", raw, n, i+1)
+		}
+		if n := strings.Count(logs.String(), "level=ERROR msg=\"api: build the via_org engine\""); n != i+1 {
+			t.Errorf("after 3 requests at %q: %d error lines for the refused build, want %d (one per URL)", raw, n, i+1)
+		}
+	}
+	if hits, _, _ := f.up.seen(); hits != 0 {
+		t.Fatalf("a refused request reached the destination %d times", hits)
+	}
+	if _, err := f.st.PutSiteConfig(f.ctx, types.SiteConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.forward(t, f.rn.ID, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK || w.Body.String() != "upstream-ok" {
+		t.Fatalf("with the URL cleared = %d %s, want the request served", w.Code, w.Body)
+	}
+}
