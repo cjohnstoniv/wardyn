@@ -488,6 +488,10 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 	if err != nil || before.ConfigSHA256 != h {
 		t.Fatalf("before the restart: %+v, %v; want hash %s", before, err, h)
 	}
+	// The agent stand-in, asked once before the reboot: a stand-in the proxy does not admit must not pass
+	// the new-address case below by reaching nothing.
+	standIn := newAgentStandIn(t, cs, ns, s.spec.RunID)
+	assertStandInNarrowed(t, ns, standIn, pinnedProxy)
 	node := s.pod.Spec.NodeName
 	oldNodeIP := dockerNodeIP(t, node)
 
@@ -561,38 +565,46 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 		t.Fatalf("after a node restart the proxy holds %+v; want the list %v at hash %s, or no list at the launch hash %s", st, []string{narrowedHost}, h, l)
 	}
 
-	// 7. The agent-side check needs a live agent to exec into. The agent pod has RestartPolicy Never, so a
-	// node reboot leaves it dead, so after a real reboot this check is skipped and the verdict above stands
-	// without it. A phase alone can still read Running from before the node went down, so the skip reads
-	// whether a container started after the restart.
+	// 7. The agent-side check. The agent pod has RestartPolicy Never, so a node reboot usually leaves it
+	// dead; then the stand-in, which the kubelet starts again, is asked in its place. A phase alone can still
+	// read Running from before the node went down, so both are read for a container started after the restart.
+	waitFor(t, 3*time.Minute, "the agent stand-in to start again after the node restart", func() bool {
+		p, err := cs.CoreV1().Pods(ns).Get(ctx, standIn, metav1.GetOptions{})
+		return err == nil && startedSince(p, restartedAt)
+	})
+	ask, who := func(host string) string { return proxyAnswer(t, r, s.sb.Ref, host) }, "agent"
 	agent, err := cs.CoreV1().Pods(ns).Get(ctx, "wardyn-agent-"+s.spec.RunID.String(), metav1.GetOptions{})
-	if err != nil {
-		t.Logf("agent-side check skipped: read the agent pod: %v", err)
-		return
-	}
-	if !startedSince(agent, restartedAt) {
-		t.Logf("agent-side check skipped: no agent container started after the node restart (pod phase %s)", agent.Status.Phase)
-		return
+	if err != nil || !startedSince(agent, restartedAt) {
+		ask, who = func(host string) string { return standInAnswer(t, ns, standIn, pinnedProxy, host) }, "agent stand-in"
+		t.Log("node-restart: agent-side check from the agent stand-in")
 	}
 	if pod, err = cs.CoreV1().Pods(ns).Get(ctx, s.pod.Name, metav1.GetOptions{}); err != nil {
 		t.Fatalf("read the proxy pod again: %v", err)
 	}
 	if pod.Status.PodIP == ip {
-		assertNarrowed(t, r, s.sb.Ref)
+		if got := ask(narrowedHost); !strings.Contains(got, deniedBy) {
+			t.Errorf("the %s's answer for %s lacks %q:\n%s", who, narrowedHost, deniedBy, got)
+		}
+		if got := ask(otherHost); strings.Contains(got, deniedBy) {
+			t.Errorf("the proxy refused %s to the %s by policy, which the narrowing did not name:\n%s", otherHost, who, got)
+		}
 		return
 	}
-	// The agent's pinned address reaches no proxy now: neither host may get through. Each probe must
-	// show it ran, so an exec that printed nothing does not pass.
+	// The pinned address reaches no proxy now: neither host may get through. Each probe must show it ran,
+	// so an exec that printed nothing does not pass.
 	for _, host := range []string{narrowedHost, otherHost} {
-		got := proxyAnswer(t, r, s.sb.Ref, host)
+		got := ask(host)
 		switch {
 		case !strings.Contains(got, probeDone):
-			t.Errorf("the agent's probe for %s at the old address printed no end marker, so it proves nothing:\n%s", host, got)
+			t.Errorf("the %s's probe for %s at the old address printed no end marker, so it proves nothing:\n%s", who, host, got)
 		case strings.Contains(got, "http/1."):
-			t.Errorf("the agent reached a proxy for %s at the old address: %s", host, got)
+			t.Errorf("the %s reached a proxy for %s at the old address: %s", who, host, got)
 		}
 	}
-	t.Log("the proxy pod came back on a new address; the agent reaches none, which is narrower")
+	// The rebooted proxy's deny list, asked from the agent's position at the proxy's address now: the run's
+	// policies admit the agent's labels to the proxy's wherever its pod landed.
+	assertStandInNarrowed(t, ns, standIn, pod.Status.PodIP)
+	t.Logf("the proxy pod came back on %s; the %s reaches no proxy at the old address, and the proxy still refuses %s", pod.Status.PodIP, who, narrowedHost)
 }
 
 // startedSince reports whether one of p's containers is running and started after at. A phase alone can

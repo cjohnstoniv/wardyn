@@ -2746,8 +2746,8 @@ jobs:
   kind-node-restart:
     if: inputs.scope != 'candidate'
     runs-on: ubuntu-26.04
-    # The test's go test -timeout 30m, plus the 25 minutes of cluster setup the job kept beside its old 15m.
-    timeout-minutes: 55
+    # The test's go test -timeout 35m, plus the 25 minutes of cluster setup the job kept beside its old 15m.
+    timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -2822,11 +2822,11 @@ jobs:
           WARDYN_TEST_K8S_NODE_RESTART: wardyn-node-restart
         # `shell: bash` runs with pipefail, so tee does not hide a red test (see the note at the top of the jobs).
         shell: bash
-        run: go test -tags k8s -count=1 -timeout 30m -v -run '^TestK8sNodeRestartKeepsLiveDenies$' ./test/conformance/ 2>&1 | tee node-restart.log
+        run: go test -tags k8s -count=1 -timeout 35m -v -run '^TestK8sNodeRestartKeepsLiveDenies$' ./test/conformance/ 2>&1 | tee node-restart.log
       - name: Print the case the run took
         if: always()
         run: |
-          grep -E 'node-restart: list (kept|lost)' node-restart.log || echo "no case line, so the test did not reach its verdict"
+          grep -E 'node-restart: (list (kept|lost)|agent-side check from the agent stand-in)' node-restart.log || echo "no case line, so the test did not reach its verdict"
 
   # ai-gateway-kind is outside notify-new-lanes (scripts/test-repo-guards.sh, NOTIFY_EXEMPT), so a
   # scheduled red reaches someone through this job instead.
