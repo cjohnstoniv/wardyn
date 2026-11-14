@@ -523,13 +523,21 @@ func (m *metrics) write(w io.Writer) {
 // (healthz.go); a buffer is what makes that all-or-nothing true of a panic too.
 // One small allocation per scrape, on a body of a few KB.
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	body := s.MetricsText(r.Context())
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write(body)
+}
+
+// MetricsText is the whole /metrics body, composed as the scrape composes it.
+// cmd/wardynd's OTLP metrics push sends this same body, so a scrape and a push
+// read one set of counters.
+func (s *Server) MetricsText(ctx context.Context) []byte {
 	var body bytes.Buffer
 	s.metrics.write(&body)
-	s.writeHealthGauges(r, &body)
-	s.writeFleetGauges(r, &body)
-	s.writeQueueGauges(r, &body)
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	_, _ = w.Write(body.Bytes())
+	s.writeHealthGauges(ctx, &body)
+	s.writeFleetGauges(ctx, &body)
+	s.writeQueueGauges(ctx, &body)
+	return body.Bytes()
 }
 
 // writeHealthGauges appends the two LIVE gauges — sampled at scrape time rather
@@ -544,13 +552,13 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // disk. A spool that grows and never drains back to 0 is the fallback doing
 // its job while the drain loop is not doing its own — invisible until now
 // outside a log line.
-func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
+func (s *Server) writeHealthGauges(ctx context.Context, w io.Writer) {
 	// ONE bounded context for every store read this scrape makes. A scrape must
 	// answer or fail; it must never hang, and a store that accepts a PING while
 	// stalling a query is exactly the asymmetry wardyn_auth_store_errors_total
 	// exists to describe — so the ground-truth read below gets the same deadline
 	// the ping does rather than the caller's unbounded request context.
-	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+	ctx, cancel := context.WithTimeout(ctx, storePingTimeout)
 	defer cancel()
 	// Nil Store (tests, and only tests) matches /readyz: nothing to be down.
 	up := 1
@@ -575,6 +583,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	}
 	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
+	s.writeOTLPPushFailures(w)
 	s.writeAuditDelivery(ctx, w)
 	s.writeAuditCheckpoint(w)
 	writeApprovalNotify(w)

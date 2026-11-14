@@ -126,6 +126,30 @@ func TestMetricsSinkDrops(t *testing.T) {
 	}
 }
 
+// TestMetricsOTLPPushFailures: the push-failure counter is absent with the OTLP metrics push off
+// (nil callback) and carries the callback's count with it on.
+func TestMetricsOTLPPushFailures(t *testing.T) {
+	h := newHarness(t)
+	w := do(t, New(baseTestConfig(h, nil)), http.MethodGet, "/metrics", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "wardyn_otlp_metrics_push_failures_total") {
+		t.Errorf("/metrics carries the push-failure counter with the push off:\n%s", w.Body)
+	}
+	cfg := baseTestConfig(h, nil)
+	cfg.OTLPMetricsPushFailures = func() int64 { return 3 }
+	w = do(t, New(cfg), http.MethodGet, "/metrics", adminToken, "")
+	for _, want := range []string{
+		"# TYPE wardyn_otlp_metrics_push_failures_total counter\n",
+		"\nwardyn_otlp_metrics_push_failures_total 3\n",
+	} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("/metrics body missing %q:\n%s", want, w.Body)
+		}
+	}
+}
+
 // TestMetricsAuditDelivery covers the acknowledged-delivery series (#1513):
 // a nil AuditDelivery (the mode off) emits nothing, and a destination's
 // checkpoint status becomes lag, age, last-ack, halted and resets series.

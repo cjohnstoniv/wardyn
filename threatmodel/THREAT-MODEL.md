@@ -4086,6 +4086,8 @@ What it does not stop:
 - `WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a second, plain-HTTP listener that answers `GET /metrics` with **no credential** and `404` to everything else (`api.Server.MetricsListenerHandler`, [`internal/api/metrics_listener.go`](../internal/api/metrics_listener.go)).
 - `/metrics` on the console port keeps its `requireOperator` gate.
 - Boot refuses a metrics address equal to the console, internal, SSH or UI-sandbox listener, so the open route never sits on an address an authenticated route uses.
+- The `otlp_metrics` block of `WARDYN_AUDIT_SINKS` (off by default) pushes the same series to a collector the operator names, with no audit row (`OTLPMetrics`, [`internal/audit/sinks/otlp_metrics.go`](../internal/audit/sinks/otlp_metrics.go)).
+  - The push adds one value the body does not carry: the replica's host name, prefixed by `WARDYN_AUDIT_SOURCE` when set. On a laptop the host name can name its owner.
 
 **What a reader who reaches the port learns.**
 

@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- An `otlp_metrics` block in `WARDYN_AUDIT_SINKS` makes each wardynd replica push its `/metrics` series to `<endpoint>/v1/metrics` as OTLP/HTTP JSON every `interval` (default `60s`). It is separate from the `otlp` sink and sends no audit row. Off by default; the Prometheus scrape is unchanged. A failed push counts in `wardyn_otlp_metrics_push_failures_total`. See [monitoring](docs/operations/monitoring.md#opentelemetry-metrics).
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

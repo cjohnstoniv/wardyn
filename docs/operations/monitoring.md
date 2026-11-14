@@ -20,6 +20,7 @@
 | `wardyn_audit_spool_torn_total` | Spool lines dropped as unparseable, such as a torn tail from an ENOSPC or a partial write. Distinct from a store refusal: these never parsed far enough to be replayed, so they are not in the quarantine count. |
 | `wardyn_audit_outcome_refused_total` | Audit events refused before the store because their `outcome` was not `success`, `failure` or `denied`, each also logged at error level with its action. Non-zero is a code defect: report the logged action. |
 | `wardyn_audit_sink_drops_total{sink}` | Events an off-box SIEM sink dropped (buffer overflow or retry exhaustion), even though Postgres, the primary, still got the row. Non-zero means SIEM-side loss only. |
+| `wardyn_otlp_metrics_push_failures_total` | OTLP metrics pushes that did not reach the collector: an encode error, a transport error or a non-2xx reply. Present only with an `otlp_metrics` block; per replica. See [OpenTelemetry metrics](#opentelemetry-metrics). |
 | `wardyn_audit_checkpoint_lag_rows` | Gauge. Audit rows appended since the last signed checkpoint, as of this replica's last signer tick. Process-local: only the replica that signs a tick updates it, so read it from every replica. Staying high means signing stopped or fell behind. |
 | `wardyn_audit_checkpoint_last_timestamp_seconds` | Gauge, Unix seconds this replica last wrote a signed checkpoint; 0 if it never did. Process-local. |
 | `wardyn_audit_checkpoint_failures_total{reason}` | Counter by `key_unavailable`, `chain_break`, `foreign_row`, `write`. `chain_break` and `foreign_row` stop signing until restart, except a late retired-key checkpoint: it counts, and signing continues from a new genesis ([details](../OPERATIONS.md#signed-checkpoints-and-receipts)). Process-local. |
@@ -77,7 +78,26 @@
   - A correlation id that is a valid W3C `traceparent` puts the span in the caller's trace, under the caller's span. Valid means `00-<32 hex>-<16 hex>-<2 hex>`, lowercase, with a trace id and parent id that are not all zeros.
   - Any other correlation id gives a trace id derived from it. A run with none uses its run id. A row with no run has no span.
   - Spans use the logs' batching, retries and drop counter, counted per span. A row's ids are fixed by the row, so a retry sends the same ones.
-- The sink exports no metrics. `/metrics` is the Prometheus surface.
+- The sink exports no metrics. The separate `otlp_metrics` block does; see [OpenTelemetry metrics](#opentelemetry-metrics).
+
+## OpenTelemetry metrics
+
+- An `otlp_metrics` block in `WARDYN_AUDIT_SINKS` makes each wardynd replica POST its `/metrics` body to `<endpoint>/v1/metrics` as OTLP/HTTP JSON every `interval` (default `60s`, at least `1s`). Off by default. Setup is in [ENV.md](../ENV.md#opentelemetry-metrics-otlp_metrics).
+- The block is separate from the `otlp` sink and sends no audit row, so the metrics collector need not receive audit logs.
+- The push reads the counters the scrape reads, so the two never count separately. The scrape is unchanged.
+- Each series keeps its name and its HELP text as the description; labels become attributes.
+
+| Prometheus type | OTLP metric |
+| --- | --- |
+| counter | cumulative monotonic sum, starting when wardynd started |
+| gauge | gauge |
+| summary (`_sum`, `_count`, any `quantile` samples) | summary |
+| histogram (`_bucket`, `_sum`, `_count`) | cumulative histogram with the same bucket bounds |
+
+- Six counters carry counts that outlive a wardynd restart, so they are sent with no start time: the four `wardyn_groundtruth_*_total` series, `wardyn_audit_delivery_resets_total` and `wardyn_audit_spool_quarantined_total`.
+- The resource is `service.name=wardynd` and `service.instance.id`: the host name, or `<WARDYN_AUDIT_SOURCE>/<host name>` when the source is set. Each replica pushes its own totals under its own id.
+- A sample whose value is NaN or infinite, or a line that does not parse, is left out of the push.
+- A failed push is logged, counted in `wardyn_otlp_metrics_push_failures_total` and not retried; the next push carries the same running totals. Changes after the last push are not sent at shutdown.
 
 ## Substrate and sweep health
 
