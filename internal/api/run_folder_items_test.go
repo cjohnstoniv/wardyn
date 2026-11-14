@@ -557,3 +557,389 @@ func TestFolderBack_OfflineFolderRunnerStopsAnUnholdableSandbox(t *testing.T) {
 		})
 	}
 }
+
+// seedReadAfterFirst is computerFolderStore whose folder seed reads after the first answer no folder and err: an
+// end's eligibility read answers, and its own read of the folder just after it does not, or finds none.
+type seedReadAfterFirst struct {
+	*computerFolderStore
+	err   error
+	reads atomic.Int32
+}
+
+func (s *seedReadAfterFirst) RunLocalFolderSeed(ctx context.Context, id uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if s.reads.Add(1) > 1 {
+		return nil, store.LocalFolderSeed{}, s.err
+	}
+	return s.computerFolderStore.RunLocalFolderSeed(ctx, id)
+}
+
+// statusReadFails is computerFolderStore whose pass record never reads.
+type statusReadFails struct{ *computerFolderStore }
+
+func (s statusReadFails) RunLocalFolderStatus(context.Context, uuid.UUID) (types.RunLocalFolderStatus, error) {
+	return types.RunLocalFolderStatus{}, errors.New("the record does not decode")
+}
+
+// An end that cannot read its computer folder's settings or its run's data_out rule has no answer on whether a pass
+// back is owed. It keeps the sandbox as the sweeps would (folderKeepVerdict): on a confirmed cut, or left in place
+// while the run's runner is not here, with no pass run and the record left as it was, so the tail owner runs the pass
+// once the reads answer. Past the keep it is still kept: the tail owner gives the changes up durably before anything
+// stops it. A virtual machine, a sandbox whose cut fails (audited under the end's own action), a killed run (with a
+// resume or without), a record whose pass already ran and a second read that finds no folder are stopped as before.
+// Catches the unreadable read taken as "no folder" at either of the end's two reads, which stops the sandbox with the
+// changes in it and nothing recorded; a keep on a confirmed cut alone, which stops a sandbox whose runner is away; and
+// a killed run kept for its resume.
+func TestFolderBack_UnreadableFolderSettingsKeepOnAConfirmedCut(t *testing.T) {
+	down := errors.New("database down")
+	for name, tc := range map[string]struct {
+		setup func(*passFixture)
+		kept  bool
+	}{
+		"the folder seed cannot be read":  {func(f *passFixture) { f.cs.seedErr = down }, true},
+		"the data out rule is unreadable": {func(f *passFixture) { f.cs.policyErr = down }, true},
+		"the second seed read fails": {func(f *passFixture) {
+			f.s.cfg.Store = &seedReadAfterFirst{computerFolderStore: f.cs, err: down}
+		}, true},
+		"the second seed read finds no folder": {func(f *passFixture) {
+			f.s.cfg.Store = &seedReadAfterFirst{computerFolderStore: f.cs}
+		}, false},
+		"a virtual machine": {func(f *passFixture) {
+			f.cs.policyErr = down
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.run.MachineKind = types.MachineLinuxVM
+			ds.mu.Unlock()
+		}, false},
+		"a cut that fails": {func(f *passFixture) {
+			f.cs.policyErr = down
+			f.sb.proxyErr = errors.New("the proxy did not stop")
+		}, false},
+		"a killed run": {func(f *passFixture) {
+			f.cs.seedErr = down
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunKilled
+			ds.mu.Unlock()
+		}, false},
+		"a killed run with a resume": {func(f *passFixture) {
+			f.cs.seedErr = down
+			f.set(func(st *types.RunLocalFolderStatus) { st.Resume = &types.FolderResume{} })
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunKilled
+			ds.mu.Unlock()
+		}, false},
+		"a runner that is not here": {func(f *passFixture) {
+			f.cs.seedErr = down
+			absent := uuid.New()
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.run.RunnerID = &absent
+			ds.mu.Unlock()
+		}, true},
+		"past the keep": {func(f *passFixture) {
+			f.cs.seedErr = down
+			f.advance(f.s.pendingCap() + time.Minute)
+		}, true},
+		"a pass already recorded": {func(f *passFixture) {
+			f.cs.seedErr = down
+			f.set(func(st *types.RunLocalFolderStatus) {
+				st.Back = folderPassRecord(f.s.cfg.Now(), runnerwire.FolderPass{}, "an earlier pass's error", true)
+			})
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 1, 1, nil)
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunCompleted
+			ds.mu.Unlock()
+			tc.setup(f)
+			ds.mu.Lock()
+			away := ds.run.RunnerID != nil // left in place, with no cut, while its runner is not here
+			ds.mu.Unlock()
+			before := f.cs.folderStatus()
+			seen := passSeen(f.sb)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err := f.s.finalizeRunEffects(ctx, f.run.ID, "sbx", "sandbox.orphan.sweep", nil, false, false)
+			if kept := errors.Is(err, errComputerFolderResumes); kept != tc.kept {
+				t.Errorf("finalize = %v; want kept %v", err, tc.kept)
+			}
+			wantStops := 1
+			if tc.kept {
+				wantStops = 0
+			}
+			if n := f.sb.stopCount(); n != wantStops {
+				t.Errorf("StopSandbox called %d times, want %d", n, wantStops)
+			}
+			if tc.kept && !away && !f.sb.proxyStopped.Load() {
+				t.Error("kept with its proxy not stopped: the cut was not confirmed")
+			}
+			if seen.Load() {
+				t.Error("a pass was sent with the folder's settings unread")
+			}
+			if st := f.cs.folderStatus(); !reflect.DeepEqual(st, before) {
+				t.Errorf("record %+v, want it unchanged from %+v", st, before)
+			}
+			if f.sb.proxyErr != nil {
+				ev := findAudit(f.audit.snapshot(), f.run.ID, "sandbox.orphan.sweep", "failure")
+				if ev == nil || !strings.Contains(string(ev.Data), "the proxy did not stop") {
+					t.Errorf("cut failure row %v, want one under the end's own action naming the proxy's error", ev)
+				}
+			}
+		})
+	}
+}
+
+// The tail owner's give-up tail, which runs only once giveUpFolderNoted has made the record final, stops the sandbox
+// and sends no pass, through the real finalizeRunEffects, even while the record and the folder's settings still
+// cannot be read. Any other tail with the same reads keeps the sandbox on its confirmed cut for the tail owner, which
+// gives the changes up durably before it stops it. Catches the give-up's finalize deciding the sandbox again from
+// reads that fail, which keeps it on each confirmed cut, past the give-up, for ever.
+func TestTailFinalize_AGiveUpStopsASandboxWhoseFolderCannotBeRead(t *testing.T) {
+	for name, tc := range map[string]struct {
+		step tailStep
+		kept bool
+	}{
+		"the give-up's tail":    {tailGiveUp, false},
+		"a folder visit's tail": {tailFolder, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 1, 1, nil)
+			ds := f.cs.localFolderStore.dispatchTestStore
+			ds.mu.Lock()
+			ds.state = types.RunCompleted
+			ds.mu.Unlock()
+			f.cs.seedErr = errors.New("database down")
+			f.s.cfg.Store = statusReadFails{f.cs}
+			seen := passSeen(f.sb)
+			run := f.run
+			run.State, run.SandboxRef = types.RunCompleted, "sbx"
+			f.s.tailFinalize(context.Background(), run, tc.step)
+			wantStops := 1
+			if tc.kept {
+				wantStops = 0
+			}
+			if n := f.sb.stopCount(); n != wantStops {
+				t.Errorf("StopSandbox called %d times, want %d", n, wantStops)
+			}
+			if seen.Load() {
+				t.Error("a pass was sent from a tail whose folder cannot be read")
+			}
+		})
+	}
+}
+
+// A pass back with no time left to start, because the caller's deadline was too near or its ctx was cancelled, sends
+// nothing and keeps a sandbox that can be held (here a container whose quiesce worked), as a runner that is away
+// does: a resume with nothing counted, settled at its generation, and the record and its audit row say Wardyn tries
+// again. Catches a no-time pass recorded as done with an error, which stops the sandbox with the changes in it, and
+// one counted as a stall on a resume visit, which gives the changes up at the second.
+func TestFolderBack_NoTimeLeftKeepsAHoldableSandbox(t *testing.T) {
+	t.Run("the caller's deadline leaves no time", func(t *testing.T) {
+		f := newPassFixture(t, 1, 1, nil)
+		seen := passSeen(f.sb)
+		err := f.finalizeWithin(10 * time.Second)
+		if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
+			t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
+		}
+		if seen.Load() {
+			t.Error("a pass was sent with no time left")
+		}
+		st := f.cs.folderStatus()
+		if st.Resume == nil || !reflect.DeepEqual(*st.Resume, types.FolderResume{}) || st.Gen != 2 || st.Settled != 2 || st.Back == nil || st.Back.Error != folderPassNoTimeMsg {
+			t.Errorf("record %+v, want a resume with nothing counted, settled at gen 2, with the no-time text", st)
+		}
+		if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", folderPassNoTimeMsg); ev == nil || ev.Outcome != "failure" {
+			t.Errorf("audit row %v, want a failure row with the no-time text", ev)
+		}
+		if v := f.s.computerFolderRunView(context.Background(), f.run.ID); v == nil || v.Back == nil || v.Back.Error != folderPassNoTimeMsg {
+			t.Errorf("GET /runs/{id} computer_folder %+v, want back.error to be the no-time text verbatim", v)
+		}
+	})
+	t.Run("a cancelled caller on a resume visit", func(t *testing.T) {
+		f := newPassFixture(t, 2, 2, &types.FolderResume{Stalled: 1})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := f.s.finalizeRunEffects(ctx, f.run.ID, "sbx", "run.complete", nil, false, false)
+		if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
+			t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
+		}
+		st := f.cs.folderStatus()
+		if st.Resume == nil || st.Resume.Stalled != 1 || st.Gen != 3 || st.Settled != 3 || st.Back == nil || st.Back.Error != folderPassNoTimeMsg {
+			t.Errorf("record %+v, want the resume's one stall unchanged, settled at gen 3, with the no-time text", st)
+		}
+	})
+}
+
+// A pass back with no time left on a sandbox that cannot be held (a virtual machine) is stopped as before, with its
+// changes not brought back, and the record says no pass ran for want of time.
+func TestFolderBack_NoTimeLeftStopsAnUnholdableSandbox(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.MachineKind = types.MachineLinuxVM
+	ds.mu.Unlock()
+	if err := f.finalizeWithin(10 * time.Second); errors.Is(err, errComputerFolderResumes) {
+		t.Errorf("finalize = %v, want the sandbox left to its stop", err)
+	}
+	for _, want := range []string{"no pass ran; no time was left for it when the run ended", "a virtual machine's agent cannot be stopped alone", "its changes not brought back yet, uncounted"} {
+		assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, want)
+	}
+	if st := f.cs.folderStatus(); st.Resume != nil || st.Settled != 2 {
+		t.Errorf("record %+v, want no resume, settled at gen 2", st)
+	}
+}
+
+// ctxExecSandbox is agentSandbox whose execs fail on a done ctx, as a runner's do.
+type ctxExecSandbox struct{ *agentSandbox }
+
+func (r ctxExecSandbox) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.agentSandbox.ExecStream(ctx, ref, spec)
+}
+
+// The keeps for a runner still busy with the last pass, and for one that may still run it, stop the agent of a
+// sandbox on a runner on a teardown ctx: a cancelled caller (a daemon shutdown) still gets the agent stopped and the
+// sandbox kept. Catches the agent stop asked on the caller's ctx, whose exec then fails, which stops the sandbox with
+// its changes in it.
+func TestFolderBack_BusyAndUnconfirmedKeepsStopTheAgentForACancelledCaller(t *testing.T) {
+	for name, keep := range map[string]func(*passFixture, context.Context, types.AgentRun) bool{
+		"busy": func(f *passFixture, ctx context.Context, run types.AgentRun) bool {
+			return f.s.keepBusy(ctx, run, *f.cs.folder, 1, notQuiescable("on a runner"))
+		},
+		"unconfirmed": func(f *passFixture, ctx context.Context, run types.AgentRun) bool {
+			rec := f.cs.folderStatus()
+			return f.s.keepUnconfirmed(ctx, run, *f.cs.folder, 1, rec, rec.GenAt, notQuiescable("on a runner"))
+		},
+		"no time": func(f *passFixture, ctx context.Context, run types.AgentRun) bool {
+			return f.s.keepNoTime(ctx, run, *f.cs.folder, 1, notQuiescable("on a runner"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPassFixture(t, 1, 1, nil)
+			ag := f.onARunner(t, false)
+			f.s.cfg.Runner = ctxExecSandbox{ag}
+			run, err := f.s.cfg.Store.GetRun(context.Background(), f.run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.SandboxRef = "sbx"
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if !keep(f, ctx, run) {
+				t.Error("not kept: the agent stop ran on the cancelled caller's ctx")
+			}
+			if ag.stops != 1 || f.sb.stopCount() != 0 {
+				t.Errorf("agent stops %d, sandbox stops %d; want the agent stopped once and the sandbox kept", ag.stops, f.sb.stopCount())
+			}
+		})
+	}
+}
+
+// recordCtxStore is computerFolderStore noting each guarded record write's ctx deadline.
+type recordCtxStore struct {
+	*computerFolderStore
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (s *recordCtxStore) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard store.FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
+	dl, _ := ctx.Deadline()
+	s.mu.Lock()
+	s.deadlines = append(s.deadlines, dl)
+	s.mu.Unlock()
+	return s.computerFolderStore.SetRunLocalFolderStatusIf(ctx, id, guard, st)
+}
+
+// A pass back's record is written on a ctx made after the pass, not before its quiesce: for a caller with no deadline
+// (the completion watcher, a person's bring-back) that ctx is reconcileFinalizeTimeout, and a pass of up to
+// computerFolderBackTimeout would find a ctx made before it already done, losing the record and stopping the sandbox.
+// The record's deadline must be at least reconcileFinalizeTimeout after the pass started, compared on the monotonic
+// clock with no margin. Catches the record's ctx made before the pass.
+func TestFolderBack_RecordCtxStartsAfterThePass(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	rs := &recordCtxStore{computerFolderStore: f.cs}
+	f.s.cfg.Store = rs
+	var passAt time.Time
+	f.sb.onPass = func() {
+		rs.mu.Lock()
+		passAt = time.Now()
+		rs.mu.Unlock()
+	}
+	_ = f.back()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if passAt.IsZero() || len(rs.deadlines) == 0 {
+		t.Fatalf("pass at %v, record deadlines %v: want a pass and its record", passAt, rs.deadlines)
+	}
+	if last := rs.deadlines[len(rs.deadlines)-1]; last.Before(passAt.Add(reconcileFinalizeTimeout)) {
+		t.Errorf("record deadline %v is before the pass's start %v plus %s: its ctx was made before the pass", last, passAt, reconcileFinalizeTimeout)
+	}
+}
+
+// stopDeadlineRunner is folderSandboxRunner noting each StopSandbox's ctx deadline. Its first stop fails, as a stop
+// cut short by its deadline does.
+type stopDeadlineRunner struct {
+	*folderSandboxRunner
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (r *stopDeadlineRunner) StopSandbox(ctx context.Context, ref string) error {
+	dl, _ := ctx.Deadline()
+	r.mu.Lock()
+	r.deadlines = append(r.deadlines, dl)
+	first := len(r.deadlines) == 1
+	r.mu.Unlock()
+	if first {
+		return context.DeadlineExceeded
+	}
+	return r.folderSandboxRunner.StopSandbox(ctx, ref)
+}
+
+// A macOS VM's stop cut short by its end hold (here at about 15 s, where the VM's stop needs up to
+// macOSVMTeardownBudget) leaves the sandbox and its ref. With the folder's record final, the next finalize (the tail
+// owner's, which holds no end hold) runs no pass and gives the stop the VM's full budget. No time is reserved for the
+// VM's stop out of the pass: the stop cut short is made whole on the next visit. Catches a later finalize that sends a
+// pass for a final record, or stops a VM on the ordinary teardown budget.
+func TestFolderBack_MacOSVMStopCutShortGetsItsFullBudgetNext(t *testing.T) {
+	f := newPassFixture(t, 2, 2, nil)
+	f.set(func(st *types.RunLocalFolderStatus) {
+		st.Back = folderPassRecord(f.s.cfg.Now(), runnerwire.FolderPass{}, "", true)
+	})
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.state = types.RunCompleted
+	ds.run.MachineKind = types.MachineMacOSVM
+	ds.mu.Unlock()
+	rn := &stopDeadlineRunner{folderSandboxRunner: f.sb}
+	f.s.cfg.Runner = rn
+	seen := passSeen(f.sb)
+	hold := time.Now().Add(15 * time.Second)
+	if err := f.s.finalizeRunEffects(withHoldDeadline(context.Background(), hold), f.run.ID, "sbx", "run.complete", nil, false, false); err == nil {
+		t.Error("the finalize whose stop was cut short reported no error")
+	}
+	before := time.Now()
+	_ = f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "sandbox.orphan.sweep", nil, false, false)
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	if len(rn.deadlines) != 2 {
+		t.Fatalf("StopSandbox called %d times, want 2", len(rn.deadlines))
+	}
+	if rn.deadlines[0].After(hold) {
+		t.Errorf("the first stop's deadline %v is past the end hold's %v", rn.deadlines[0], hold)
+	}
+	if rn.deadlines[1].Before(before.Add(macOSVMTeardownBudget)) {
+		t.Errorf("the next stop's deadline %v, want at least %s after %v", rn.deadlines[1], macOSVMTeardownBudget, before)
+	}
+	if seen.Load() {
+		t.Error("a pass was sent for a final record")
+	}
+	if st := f.cs.folderStatus(); !folderFinal(st) || st.Gen != 2 {
+		t.Errorf("record %+v, want it final and untouched at gen 2", st)
+	}
+}

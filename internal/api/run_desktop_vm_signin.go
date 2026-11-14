@@ -166,7 +166,9 @@ func (s *Server) desktopSignInsRun(w http.ResponseWriter, r *http.Request, enter
 			return r, run, nil, none, nil, false
 		}
 	}
-	row, found, err := st.DesktopVMSignIns(r.Context(), run.ID)
+	sctx, scancel := context.WithTimeout(r.Context(), heldStoreCallBound) // read under the run's lock when enter
+	row, found, err := st.DesktopVMSignIns(sctx, run.ID)
+	scancel()
 	if err != nil {
 		unlock()
 		slog.WarnContext(r.Context(), "wardynd: desktop sign-ins unreadable", "run_id", run.ID, "err", err)
@@ -249,7 +251,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
-	if s.refuseUIAppsDenied(w, r, run) || s.refuseInteractiveAttach(w, r, run) {
+	if rr := r.WithContext(ctx); s.refuseUIAppsDenied(w, rr, run) || s.refuseInteractiveAttach(w, rr, run) { // under the run's lock
 		return
 	}
 	p, ok := s.agentPauser(w)
@@ -259,7 +261,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 	at, principal := actorFromRequest(r)
 	gen, err := st.NextDesktopVMPauseGeneration(ctx, run.ID)
 	if err != nil { // nothing was sent: the agent runs on
-		s.recordAudit(context.WithoutCancel(ctx), s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
+		s.recordAuditHeld(context.WithoutCancel(ctx), s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
 			mustJSON(map[string]any{"stage": "record", "error": err.Error()})))
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSignInsPauseFailed, "The agent's pause could not be recorded; try again")
 		return
@@ -790,6 +792,10 @@ func (s *Server) endStoppedAgentPause(ctx context.Context, st store.DesktopVMSig
 		return
 	}
 	defer unlock()
+	// Store calls only from here, on one bound past the pause end's own server-side limit, so a store that never
+	// answers cannot hold the run's lock.
+	ctx, cancel := context.WithTimeout(ctx, heldWriteBound+heldStoreCallBound)
+	defer cancel()
 	run, err := s.cfg.Store.GetRun(ctx, p.RunID)
 	if err != nil || run.LostAt == nil || run.LostReason != types.LostOutage {
 		return

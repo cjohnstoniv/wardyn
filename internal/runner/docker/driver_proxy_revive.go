@@ -329,8 +329,12 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	if err != nil {
 		return "", "", fmt.Errorf("docker: create proxy: %w", err)
 	}
+	// The rollback has a bound of its own: a revive reaches it under the run's lock (ReplaceProxy), and a remove
+	// that never answers would hold that lock with it.
 	remove := func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), resp.ID, client.ContainerRemoveOptions{Force: true})
+		rctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		_, _ = d.cli.ContainerRemove(rctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 	}
 	// Connect the proxy to the control-plane-facing network so it can reach
 	// the control plane. This network is the ONLY route off the per-run

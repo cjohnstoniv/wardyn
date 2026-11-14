@@ -582,12 +582,12 @@ ingress:
   annotations:
     # The setup connectivity probe is one request of up to 90s; ingress-nginx
     # times reads out at 60s by default, which turns the verdict into a 504.
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "120" # or 540 if this ingress serves the egress edit
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120" # or 530 if this ingress serves the egress edit
     # The egress edit request (PATCH /api/v1/runs/{id}/egress), counted from wardynd's own
-    # time limits, can take up to 425s, or 485s for a run with a both-ways computer
-    # folder; a stalled database read at sign-in or at the audit write is not counted. Set
-    # a proxy read timeout of at least 540s for it; a shorter one can return 504 to the
-    # caller while the edit continues.
+    # time limits, can take up to 8 minutes (480s); a stalled database read at sign-in,
+    # when the run is first read or at the audit write is not counted. Set a proxy read
+    # timeout of at least 530s for it; a shorter one can return 504 to the caller while
+    # the edit continues.
   hosts:
     - host: wardyn.example.com
       paths:

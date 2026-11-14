@@ -131,7 +131,7 @@ const clearDesktopVMPauseSQL = `UPDATE desktop_vm_sign_ins d SET paused_by = NUL
 
 // EndStoppedDesktopVMAgentPause — see DesktopVMSignInStore.
 func (s PG) EndStoppedDesktopVMAgentPause(ctx context.Context, runID uuid.UUID, lostAt, pausedAt time.Time, gen int64) (by string, at, stoppedAt time.Time, found bool, err error) {
-	err = s.inTx(ctx, func(q Querier) error {
+	err = s.inRunWriteTx(ctx, func(q Querier) error {
 		err := q.QueryRow(ctx, `SELECT agent_stopped_at FROM agent_runs
 			WHERE id = $1 AND lost_at = $2 AND lost_reason = $3 AND agent_stopped_at IS NOT NULL FOR UPDATE`,
 			runID, lostAt, string(types.LostOutage)).Scan(&stoppedAt)

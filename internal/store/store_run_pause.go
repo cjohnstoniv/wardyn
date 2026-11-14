@@ -198,7 +198,7 @@ func (s PG) MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseR
 	if reason != types.PauseWaiting && reason != types.PauseIdle {
 		return false, fmt.Errorf("store: mark run paused: unknown reason %q", reason)
 	}
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := s.execRunWrite(ctx, `
 		UPDATE agent_runs SET paused_at=now(), paused_reason=$2
 		WHERE id=$1 AND state=$3 AND lost_at IS NULL AND paused_at IS NULL
 		  AND active_at IS NOT DISTINCT FROM $4
@@ -213,7 +213,7 @@ func (s PG) MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseR
 
 // ClearRunPaused — see RunPauser.
 func (s PG) ClearRunPaused(ctx context.Context, id uuid.UUID) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := s.execRunWrite(ctx, `
 		UPDATE agent_runs SET paused_at=NULL, paused_reason='', active_at=now()
 		WHERE id=$1 AND paused_at IS NOT NULL`, id)
 	if err != nil {

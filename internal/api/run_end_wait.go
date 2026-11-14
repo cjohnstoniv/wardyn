@@ -156,8 +156,10 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 			writeLockRefused(w, r, err)
 			return
 		}
-		applied, err := leaser.SetRunEndAndWait(lctx, run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
-			p.resp.EndsAt, p.resp.WaitBudgetSec, s.endedKept(run, s.cfg.Now()))
+		applied, err := heldWrite(lctx, func(ctx context.Context) (bool, error) {
+			return leaser.SetRunEndAndWait(ctx, run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
+				p.resp.EndsAt, p.resp.WaitBudgetSec, s.endedKept(run, s.cfg.Now()))
+		})
 		unlock()
 		if err != nil {
 			writeServerError(w, r, "set run end and wait", err)

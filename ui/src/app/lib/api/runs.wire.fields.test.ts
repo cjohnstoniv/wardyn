@@ -310,6 +310,11 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(forcedGo).toContain(`const forcedKeptForCopyBack = "${FORCED_KEEP_PREFIX}`);
   });
 
+  it("folderPassNoTimeMsg opens with FORCED_KEEP_PREFIX, so the run page shows a copy back with no time left as kept (run_folder_pass_once.go)", () => {
+    const passGo = readFileSync(join(root, "internal/api/run_folder_pass_once.go"), "utf8");
+    expect(passGo).toContain(`const folderPassNoTimeMsg = "${FORCED_KEEP_PREFIX}: there was no time left to bring the changes back. Wardyn tries again on its next check."`);
+  });
+
   it("RunSync and RunSyncOpen's keys are exactly runSyncView's and runSyncOpen's json tags (GET /runs/{id} sync.open, sshgateway_sync.go)", () => {
     const syncGo = readFileSync(join(root, "internal/api/sshgateway_sync.go"), "utf8");
     expect(tsInterfaceKeys(runsTs, "RunSync").sort()).toEqual(goJSONTags(syncGo, "runSyncView").sort());

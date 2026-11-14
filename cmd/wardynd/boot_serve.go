@@ -178,6 +178,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				cancelMaxAgeApprovals: srv.CancelMaxAgeStoppedRunApprovals,
 				lockEnd:               srv.LockRunEnd,
 				bringBack:             srv.BringComputerFolderBack,
+				holdPassed:            api.EndHoldPassed,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks},

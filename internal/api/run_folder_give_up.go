@@ -83,6 +83,11 @@ func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 b
 	if !ok {
 		return false, errors.New("this server's store cannot keep a folder record")
 	}
+	// The statement, its audit row and the re-read below run under the run's lock on one bound of their own: a
+	// holder's ctx may have none (the tail owner's loop, the boot pass). A give-up cut there is not final, and the
+	// next visit reads the record again; a statement that landed after its cut is then found final (Done).
+	ctx, cancel := context.WithTimeout(ctx, heldStoreCallBound)
+	defer cancel()
 	back := s.folderGivenUpRecord(st)
 	back.Error += note
 	p := store.GiveUpParams{Back: back, Cap: s.pendingCap()}

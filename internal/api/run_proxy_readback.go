@@ -471,8 +471,10 @@ func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, act
 		return nil
 	case errors.Is(err, runner.ErrEndUnsupported):
 		return errProxyAloneUnsupported
-	case s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err }):
-		return nil
+	default:
+		// teardownOrAudit is called only for the failure row: its teardown answers the stop's own error, so it
+		// never reports the stop confirmed.
+		s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
 	}
 	return errProxyStopUnconfirmed
 }

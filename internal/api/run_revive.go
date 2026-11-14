@@ -215,10 +215,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	defer unlockRun()
-	// One deadline bounds every call the revive makes to a runner while it holds the run's lock, so a
-	// runner that stops answering cannot hold the lock, or a lock connection, past it.
+	// One deadline bounds every call the revive makes while it holds the run's lock before its claim, the proxy
+	// image pull and the reads among them, for a hosted run as for a run on a runner, so a substrate or a store that
+	// stops answering cannot hold the lock, or a lock connection, past it. After the claim the runner calls stay
+	// under it (runnerCtx).
 	runnerDeadline := time.Now().Add(reviveRunnerTimeout)
-	ctx, endRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)
+	ctx, endRunnerCalls := context.WithDeadline(ctx, runnerDeadline)
 	defer endRunnerCalls()
 
 	c, rerr := s.reviveCeilingAdmitting(ctx, run, actorType, actor)
