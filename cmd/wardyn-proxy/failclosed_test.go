@@ -102,12 +102,7 @@ func TestEgressCanaryExitCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = open.Close() })
-	closedLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closedAddr := closedLn.Addr().String()
-	_ = closedLn.Close()
+	closedAddr := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 
 	for _, tc := range []struct {
 		name, addr string

@@ -7,13 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -455,17 +453,11 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 		t.Fatal("authoring refused")
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
 	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
 		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: lane.injections,
 		MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM), MITMHosts: lane.mitmHosts,
 		ADOGrant: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
-	}, port)
+	}, 0)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)
 	}
@@ -473,22 +465,17 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigBytes: %v", err)
 	}
-	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
+	cfg.Listen = "127.0.0.1:0"
 	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
 	if err != nil {
 		t.Fatalf("the sidecar did not boot over this lane's own authored config: %v", err)
 	}
-	go func() { _ = psrv.ListenAndServe() }()
-	t.Cleanup(func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = psrv.Shutdown(sctx)
-	})
+	addr := serveTestSidecar(t, psrv)
 	if resolves != len(adoContosoHosts) {
 		t.Fatalf("boot resolved %d injections, want %d", resolves, len(adoContosoHosts))
 	}
 
-	proxyURL, _ := url.Parse("http://" + cfg.Listen)
+	proxyURL, _ := url.Parse("http://" + addr)
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 	var resp *http.Response
 	for i := 0; i < 50; i++ { // wait for the listener
@@ -524,7 +511,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 
 	// Absolute-form https:// on the same lane: the transport is not cleartext,
 	// so require_tls does not refuse it, and the lane never runs the REST gate.
-	assertADOPlainLaneRefused(t, cfg.Listen, seen)
+	assertADOPlainLaneRefused(t, addr, seen)
 }
 
 // The wired source on a deployment with no Entra row is indistinguishable from

@@ -60,31 +60,37 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer cp.Close()
-	serve := func(gate *lapseGate) (*Server, string, chan error) {
+	// serve starts a proxy on listen. bound carries its listener's address once the proxy has bound it and
+	// begun to serve. On 127.0.0.1:0 the port is chosen at that bind: a port picked and freed beforehand
+	// could be taken by another process while a closed gate holds the bind off, and a dial would reach
+	// that process.
+	serve := func(gate *lapseGate, listen string) (*Server, <-chan string, chan error) {
 		p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
 		p.lapse = gate
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := ln.Addr().String()
-		_ = ln.Close()
-		s := &Server{proxy: p, http: &http.Server{Addr: addr, Handler: p}}
+		bound := make(chan string, 1)
+		s := &Server{proxy: p, http: &http.Server{Addr: listen, Handler: p, BaseContext: func(ln net.Listener) context.Context {
+			bound <- ln.Addr().String()
+			return context.Background()
+		}}}
 		s.watchShutdown()
 		served := make(chan error, 1)
 		go func() { served <- s.ListenAndServe() }()
 		t.Cleanup(func() { _ = s.http.Shutdown(context.Background()) })
-		return s, addr, served
+		return s, bound, served
 	}
-	listening := func(addr string, within time.Duration) bool {
-		for end := time.Now().Add(within); ; time.Sleep(10 * time.Millisecond) {
-			if c, err := net.Dial("tcp", addr); err == nil {
-				_ = c.Close()
-				return true
+	// listening is the address the proxy bound and accepts a connection on, or "" when it has bound none
+	// within the wait.
+	listening := func(bound <-chan string, within time.Duration) string {
+		select {
+		case addr := <-bound:
+			c, err := net.Dial("tcp", addr)
+			if err != nil {
+				t.Fatalf("the proxy bound %s and refused a connection: %v", addr, err)
 			}
-			if time.Now().After(end) {
-				return false
-			}
+			_ = c.Close()
+			return addr
+		case <-time.After(within):
+			return ""
 		}
 	}
 	upload := func(p *Proxy, addr string) int {
@@ -100,20 +106,22 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 		return resp.StatusCode
 	}
 
-	if _, addr, _ := serve(nil); !listening(addr, 5*time.Second) {
+	_, bound, _ := serve(nil, "127.0.0.1:0")
+	if listening(bound, 5*time.Second) == "" {
 		t.Fatal("ungated proxy never listened")
 	}
 
 	clock := &fakeBoot{}
-	s, addr, _ := serve(newLapseGate(clock, testLapseTTL))
+	s, bound, _ := serve(newLapseGate(clock, testLapseTTL), "127.0.0.1:0")
 	p := s.proxy
-	if listening(addr, 300*time.Millisecond) || landed.Load() != 0 {
+	if listening(bound, 300*time.Millisecond) != "" || landed.Load() != 0 {
 		t.Fatalf("closed proxy accepted a connection (%d forwarded); a probe would read it Ready before it serves", landed.Load())
 	}
 	if !p.lapse.renewed(clock.Now(), func() {}) {
 		t.Fatal("first renew did not apply")
 	}
-	if !listening(addr, 5*time.Second) {
+	addr := listening(bound, 5*time.Second)
+	if addr == "" {
 		t.Fatal("open proxy never listened")
 	}
 	if got := upload(p, addr); got != http.StatusNoContent || landed.Load() != 1 {
@@ -124,9 +132,16 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 		t.Fatalf("lapsed proxy: upload %d, %d forwarded; want 503, still one", got, landed.Load())
 	}
 
-	s, addr, served := serve(newLapseGate(clock, testLapseTTL))
+	// A proxy lapsed before its first renew is given a port this test holds, so a bind at any moment,
+	// before the gate or after it, fails ListenAndServe at once.
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	s, bound, served := serve(newLapseGate(clock, testLapseTTL), held.Addr().String())
 	s.proxy.lapse.lapse(LapseRenewRefused)
-	if listening(addr, 300*time.Millisecond) {
+	if listening(bound, 300*time.Millisecond) != "" {
 		t.Fatal("a proxy lapsed before its first renew listened")
 	}
 	// ListenAndServe registers its Shutdown hook on its own goroutine, so Shutdown is repeated
@@ -135,8 +150,8 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 		_ = s.http.Shutdown(context.Background())
 		select {
 		case err := <-served:
-			if err != nil || listening(addr, 0) {
-				t.Fatalf("a proxy shut down before its first renew: ListenAndServe %v, listening %v", err, listening(addr, 0))
+			if err != nil || len(bound) != 0 {
+				t.Fatalf("a proxy shut down before its first renew: ListenAndServe %v, listening %v", err, len(bound) != 0)
 			}
 			return
 		case <-time.After(20 * time.Millisecond):
@@ -381,12 +396,7 @@ func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
 	}
 
 	t.Run("unreachable", func(t *testing.T) {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		hostPort := ln.Addr().String()
-		_ = ln.Close()
+		hostPort := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 		clock := &fakeBoot{}
 		g := newLapseGate(clock, testLapseTTL)
 		run(t, "http://user:hunter2@"+hostPort+"/?sig="+tok, http.DefaultClient, g)

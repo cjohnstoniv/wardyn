@@ -161,10 +161,15 @@ cmd_build() {
   fi
 }
 
+# cmd_wait [PID] — with PID (the wardynd `up` just started), a wardynd that exits fails at once, and an
+# answer on its port counts only while it runs: another process may have taken a picked port first.
 cmd_wait() {
   log "Waiting for ${DAEMON_URL}/healthz"
-  if ! wait_healthy "${DAEMON_URL}" 60 0.5; then
+  local rc=0
+  wait_healthy "${DAEMON_URL}" 60 0.5 "${1:-}" || rc=$?
+  if [[ ${rc} -ne 0 ]]; then
     cat "${LOG_FILE}" 2>/dev/null | tail -30
+    [[ ${rc} -ne 2 ]] || die "wardynd exited before it served ${ADDR} (a port taken first exits with \"address already in use\" above)"
     die "wardynd did not become healthy"
   fi
   log "wardynd healthy"
@@ -274,15 +279,24 @@ cmd_up() {
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
       >"${LOG_FILE}" 2>&1 8>&- 9>&- &
   echo $! > "${PID_FILE}"
-  cmd_wait
+  cmd_wait "$(cat "${PID_FILE}")"
   if [[ -n "${BASE_PATH}" ]]; then
     "${BIN_DIR}/basepathproxy" -listen "${PROXY_ADDR}" -target "${BASE_URL}" -prefix "${BASE_PATH}" \
       >"${PROXY_LOG_FILE}" 2>&1 &
     echo $! > "${PROXY_PID_FILE}"
     log "Waiting for the base-path proxy on ${PROXY_ADDR}"
-    wait_healthy "$(e2e_base_url "${PROXY_ADDR}")${BASE_PATH}" 40 0.25 || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
+    local prc=0
+    wait_healthy "$(e2e_base_url "${PROXY_ADDR}")${BASE_PATH}" 40 0.25 "$(cat "${PROXY_PID_FILE}")" || prc=$?
+    [[ ${prc} -ne 2 ]] || die "basepathproxy exited before it served ${PROXY_ADDR} (log: ${PROXY_LOG_FILE})"
+    [[ ${prc} -eq 0 ]] || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
   fi
   cmd_seed
+  # Another process on ${ADDR} answers the health check while wardynd is still starting. A wardynd that has
+  # exited on its bind error by now is caught here; one that has not is not, and what stops the seed
+  # above against another process is that process refusing the seed's calls (another wardynd refuses
+  # this up's token). The same holds for the base-path proxy on ${PROXY_ADDR}.
+  kill -0 "$(cat "${PID_FILE}")" 2>/dev/null || die "wardynd exited during up; whatever answered on ${ADDR} was not it"
+  [[ -z "${BASE_PATH}" ]] || kill -0 "$(cat "${PROXY_PID_FILE}")" 2>/dev/null || die "basepathproxy exited during up; whatever answered on ${PROXY_ADDR} was not it (log: ${PROXY_LOG_FILE})"
   log "Seeded backend ready:"
   log "  URL:   ${DAEMON_URL}"
   if [[ -n "${BASE_PATH}" ]]; then

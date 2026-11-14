@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"crypto/x509"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -229,15 +228,11 @@ func TestInstallDaemonProxy_NoProxyMatrix(t *testing.T) {
 }
 
 func TestInstallDaemonProxy_UnreachableProxyErrorNamesHostPort(t *testing.T) {
-	// Bind then immediately close: nothing listens at addr any more, so a
-	// dial there refuses the connection — the CreateToken-shaped failure mode
-	// (10s client timeout stands; this fails much faster via ECONNREFUSED).
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
+	// Nothing listens at addr, so a dial there refuses the connection — the
+	// CreateToken-shaped failure mode (10s client timeout stands; this fails
+	// much faster via ECONNREFUSED). A port picked and freed could be taken by
+	// another process before the dial.
+	addr := "127.0.0.1:1"
 
 	tr := freshTransport()
 	if _, err := installDaemonProxy(tr, "http://"+addr, ""); err != nil {

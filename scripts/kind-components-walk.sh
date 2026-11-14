@@ -42,12 +42,14 @@ done
 SUFFIX="$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export WARDYN_QUICKSTART_CLUSTER="wardyn-c17-${SUFFIX}"
 export WARDYN_QUICKSTART_IMAGE_TAG="c17-${SUFFIX}"
-export WARDYN_QUICKSTART_HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-$((20000 + RANDOM % 5000))}"
-export WARDYN_QUICKSTART_SSH_PORT="${WARDYN_QUICKSTART_SSH_PORT:-$((25000 + RANDOM % 5000))}"
+# Host ports for quickstart's port mappings: free ones, two distinct, unless the caller named them. A
+# picked port stays free only until kind publishes it: one another process takes first fails the
+# cluster create ("port is already allocated"). The walk reads the HTTP port back once the cluster is up.
+export WARDYN_QUICKSTART_HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-$(pick_free_port)}"
+export WARDYN_QUICKSTART_SSH_PORT="${WARDYN_QUICKSTART_SSH_PORT:-$(pick_free_port "${WARDYN_QUICKSTART_HTTP_PORT}")}"
 CLUSTER="${WARDYN_QUICKSTART_CLUSTER}"
 CONTEXT="kind-${CLUSTER}"
 NAMESPACE="wardyn"
-BASE_URL="http://127.0.0.1:${WARDYN_QUICKSTART_HTTP_PORT}"
 TMPDIR="$(mktemp -d /tmp/wardyn-kind-components-walk.XXXXXX)"
 export KUBECONFIG="${TMPDIR}/kubeconfig"
 # The header secret is split so the task text that carries it into the
@@ -75,6 +77,11 @@ fi
 step "creating ${CLUSTER} (deploy/kind/quickstart.sh, private kubeconfig)"
 CREATED=1
 deploy/kind/quickstart.sh >"${TMPDIR}/quickstart.log" 2>&1 || { tail -40 "${TMPDIR}/quickstart.log" >&2; die "quickstart failed"; }
+# The port the node container publishes wardynd's NodePort (quickstart.sh NODE_HTTP_PORT) on, as docker
+# bound it, not the number asked for.
+HTTP_PORT="$(docker port "${CLUSTER}-control-plane" 30080/tcp | sed -nE 's/^127\.0\.0\.1:([0-9]+)$/\1/p' | sed -n 1p)"
+[[ -n "${HTTP_PORT}" ]] || die "could not read the published port of 30080/tcp on ${CLUSTER}-control-plane"
+BASE_URL="http://127.0.0.1:${HTTP_PORT}"
 
 TOKEN="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret wardyn-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
 [[ -n "${TOKEN}" ]] || die "could not read the admin token"

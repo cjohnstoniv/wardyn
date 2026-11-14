@@ -6,7 +6,6 @@ package imageadmit
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,9 +17,7 @@ import (
 // registry the image ref named, never that other host.
 func TestUnavailableNamesTheRegistryNotAHostItChose(t *testing.T) {
 	const marker = "leak-marker"
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	_, closed, _ := net.SplitHostPort(l.Addr().String())
-	_ = l.Close()
+	closed := "1" // nothing listens there; a freed port could be taken by another process
 	var srvPort string
 	other := func(p string) string { return "https://" + marker + ".example.com:" + p }
 	cases := map[string]func(w http.ResponseWriter, r *http.Request){

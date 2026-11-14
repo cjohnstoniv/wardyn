@@ -389,16 +389,13 @@ func newSSHTestHarness(t *testing.T, st store.Store, fr *sshFakeRunner, configur
 		t.Fatalf("host signer: %v", err)
 	}
 
-	// Ask the OS for a free port, release it, then bind the SAME address —
-	// the standard Go test idiom for "know the port before the real listener
-	// exists"; a collision in that window is not realistic for a
-	// single-process test run.
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	// The harness binds port 0 itself and serves the gateway on that listener, so the port is never free
+	// for another process to take between a pick and the gateway's bind.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("probe free port: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
-	addr := probe.Addr().String()
-	_ = probe.Close()
+	addr := ln.Addr().String()
 
 	audit := &sshTestRecorder{}
 	cfg := Config{
@@ -425,30 +422,12 @@ func newSSHTestHarness(t *testing.T, st store.Store, fr *sshFakeRunner, configur
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		if err := srv.ServeSSHGateway(ctx); err != nil {
+		if err := srv.ServeSSHGatewayOn(ctx, ln); err != nil {
 			t.Logf("ssh gateway stopped: %v", err)
 		}
 	}()
-	waitForListener(t, addr)
 
 	return &sshTestHarness{srv: srv, addr: addr, hostPub: signer.PublicKey(), audit: audit}
-}
-
-// waitForListener polls addr until something accepts a TCP connection —
-// ServeSSHGateway's net.Listen happens in the goroutine above with no
-// separate readiness signal, so a short poll stands in for one.
-func waitForListener(t *testing.T, addr string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			_ = c.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("ssh gateway never started listening on %s", addr)
 }
 
 // waitForAudit polls audit for a matching event for up to a second. A

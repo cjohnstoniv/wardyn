@@ -114,12 +114,7 @@ func TestTLSCheckBadArgumentExits2(t *testing.T) {
 }
 
 func TestTLSCheckNetworkErrorExits2(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	_ = l.Close()
+	addr := "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 	code, _, errw := runTLSCheck(t, tlsChecker{}, addr)
 	if code != 2 || strings.HasPrefix(errw, "TLS failed") {
 		t.Fatalf("code=%d err=%q", code, errw)

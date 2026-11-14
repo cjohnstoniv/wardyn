@@ -27,14 +27,9 @@ func TestProxyServesOnlyAllowedPeers(t *testing.T) {
 		peers  string
 		served bool
 	}{{`,"allowed_peers":["10.200.0.0/24"]`, false}, {`,"allowed_peers":["127.0.0.0/8"]`, true}, {``, true}} {
-		probe, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := probe.Addr().String()
-		_ = probe.Close()
-		cfg, err := LoadConfigBytes(fmt.Appendf(nil, `{"run_id":%q,"control_plane_url":%q,"run_token":"t","listen":%q,"policy":{"allowed_domains":["example.com"]}%s}`,
-			uuid.New(), cp.URL, addr, c.peers))
+		// Port 0: the kernel picks the port at the bind, so no other process can hold it first.
+		cfg, err := LoadConfigBytes(fmt.Appendf(nil, `{"run_id":%q,"control_plane_url":%q,"run_token":"t","listen":"127.0.0.1:0","policy":{"allowed_domains":["example.com"]}%s}`,
+			uuid.New(), cp.URL, c.peers))
 		if err != nil {
 			t.Fatalf("peers %q: config: %v", c.peers, err)
 		}
@@ -42,15 +37,20 @@ func TestProxyServesOnlyAllowedPeers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("peers %q: NewServer: %v", c.peers, err)
 		}
-		go func() { _ = srv.ListenAndServe() }()
-		var conn net.Conn
-		for deadline := time.Now().Add(5 * time.Second); conn == nil; {
-			if conn, err = net.Dial("tcp", addr); err != nil {
-				if time.Now().After(deadline) {
-					t.Fatalf("peers %q: the proxy never listened: %v", c.peers, err)
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
+		listening := make(chan struct{})
+		srv.OnListening(func() { close(listening) })
+		served := make(chan error, 1)
+		go func() { served <- srv.ListenAndServe() }()
+		select {
+		case <-listening:
+		case err := <-served:
+			t.Fatalf("peers %q: the proxy never listened: %v", c.peers, err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("peers %q: the proxy never listened", c.peers)
+		}
+		conn, err := net.Dial("tcp", srv.BoundAddr().String())
+		if err != nil {
+			t.Fatalf("peers %q: dial the proxy: %v", c.peers, err)
 		}
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		_, _ = io.WriteString(conn, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
