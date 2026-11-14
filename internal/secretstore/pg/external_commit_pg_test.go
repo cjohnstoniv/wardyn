@@ -8,13 +8,18 @@ package pg
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 // A store-mode Put whose COMMIT reaches the server while its reply is lost (the
 // caller's deadline ends mid-commit) keeps the value its committed row points
-// to, and reports the save (#2812).
+// to (#2812). It answers at once that whether the row was written is unknown:
+// the recheck runs after it returns.
 func TestPutExternal_ALostCommitReplyKeepsTheCommittedValue(t *testing.T) {
 	pool := rekeyDatabase(t)
 	ext := newMemExt("vaultkv")
@@ -32,9 +37,10 @@ func TestPutExternal_ALostCommitReplyKeepsTheCommittedValue(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
-	if err := s.For("bob").Put(ctx, "slow", []byte("the-value")); err != nil {
-		t.Fatalf("Put whose commit landed = %v; want the save reported", err)
+	if err := s.For("bob").Put(ctx, "slow", []byte("the-value")); !errors.Is(err, secretstore.ErrRowNotWritten) || !strings.Contains(err.Error(), "is unknown") {
+		t.Fatalf("Put whose commit reply was lost = %v; want ErrRowNotWritten saying whether the row was written is unknown", err)
 	}
+	WaitForCleanUps(t.Context())
 	if n := ext.deletes(); n != 0 {
 		t.Fatalf("%d external deletes; want none — the committed row points to the value", n)
 	}

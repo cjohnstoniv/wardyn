@@ -8,6 +8,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 )
 
 // order is the shared call-order log fakeHTTPShutdowner and
@@ -31,12 +34,52 @@ func (f fakeHTTPShutdowner) Shutdown(context.Context) error {
 
 // fakeBackgroundServer records whether WaitBackground and
 // FlushAuthFailedStreak ran, and in what order, without a real *api.Server.
+// WaitBackground first gives the secret store's clean-up wait a few seconds to
+// start and logs "cleanups" if it did: one started after WaitBackground, or
+// not at all, is missing from the log.
 type fakeBackgroundServer struct {
-	log *order
+	log      *order
+	cleanUps *fakeCleanUpWait
 }
 
-func (f *fakeBackgroundServer) WaitBackground()        { *f.log = append(*f.log, "wait") }
+func (f *fakeBackgroundServer) WaitBackground() {
+	select {
+	case <-f.cleanUps.started:
+		*f.log = append(*f.log, "cleanups")
+	case <-time.After(5 * time.Second):
+	}
+	*f.log = append(*f.log, "wait")
+}
 func (f *fakeBackgroundServer) FlushAuthFailedStreak() { *f.log = append(*f.log, "flush") }
+
+// fakeCleanUpWait stands in for secretstorepg.WaitForCleanUps: it notes how
+// much time its ctx leaves (0 for none) and closes started.
+type fakeCleanUpWait struct {
+	started chan struct{}
+	left    time.Duration
+}
+
+func newFakeCleanUpWait() *fakeCleanUpWait { return &fakeCleanUpWait{started: make(chan struct{})} }
+
+func (f *fakeCleanUpWait) wait(ctx context.Context) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.left = time.Until(deadline)
+	}
+	close(f.started)
+	return nil
+}
+
+// checkCleanUpWait fails unless the clean-up wait ran beside WaitBackground,
+// within the background budget, and runShutdownSequence reported it.
+func checkCleanUpWait(t *testing.T, cw *fakeCleanUpWait, waited bool) {
+	t.Helper()
+	if !waited {
+		t.Error("runShutdownSequence reported no clean-up wait, so run's deferred close would wait the whole budget again")
+	}
+	if cw.left <= 0 || cw.left > api.BackgroundShutdownBudget {
+		t.Errorf("the clean-up wait's ctx left %v; want a deadline within api.BackgroundShutdownBudget (%v)", cw.left, api.BackgroundShutdownBudget)
+	}
+}
 
 // TestRunShutdownSequence_WaitsForBackgroundEvenWhenHTTPDrainFails is #990 /
 // #710 item 5's behavioural pin: a SIGTERM landing on a slow (or otherwise
@@ -49,19 +92,21 @@ func (f *fakeBackgroundServer) FlushAuthFailedStreak() { *f.log = append(*f.log,
 func TestRunShutdownSequence_WaitsForBackgroundEvenWhenHTTPDrainFails(t *testing.T) {
 	drainErr := errors.New("drain timed out")
 	var log order
-	bg := &fakeBackgroundServer{log: &log}
+	cw := newFakeCleanUpWait()
+	bg := &fakeBackgroundServer{log: &log, cleanUps: cw}
 	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{err: drainErr, log: &log}, bg, nil)
+	waited, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{err: drainErr, log: &log}, bg, cw.wait, nil)
+	checkCleanUpWait(t, cw, waited)
 
 	if !errors.Is(err, drainErr) {
 		t.Fatalf("runShutdownSequence returned %v, want an error wrapping %v", err, drainErr)
 	}
-	if got := []string(log); len(got) != 3 || got[0] != "shutdown" || got[1] != "wait" || got[2] != "flush" {
-		t.Errorf("runShutdownSequence(failing Shutdown) called %v, want [shutdown wait flush] — a failed HTTP "+
-			"drain must not skip the background wait or the auth-fail flush, and must not run either one before "+
-			"Shutdown", got)
+	if got := []string(log); len(got) != 4 || got[0] != "shutdown" || got[1] != "cleanups" || got[2] != "wait" || got[3] != "flush" {
+		t.Errorf("runShutdownSequence(failing Shutdown) called %v, want [shutdown cleanups wait flush] — a failed HTTP "+
+			"drain must not skip the background wait, the clean-up wait beside it or the auth-fail flush, and must not "+
+			"run any of them before Shutdown", got)
 	}
 }
 
@@ -70,16 +115,35 @@ func TestRunShutdownSequence_WaitsForBackgroundEvenWhenHTTPDrainFails(t *testing
 // FlushAuthFailedStreak, and runShutdownSequence returns nil.
 func TestRunShutdownSequence_SucceedsWhenHTTPDrainSucceeds(t *testing.T) {
 	var log order
-	bg := &fakeBackgroundServer{log: &log}
+	cw := newFakeCleanUpWait()
+	bg := &fakeBackgroundServer{log: &log, cleanUps: cw}
 	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{log: &log}, bg, nil)
+	waited, err := runShutdownSequence(shutCtx, nil, fakeHTTPShutdowner{log: &log}, bg, cw.wait, nil)
+	checkCleanUpWait(t, cw, waited)
 
 	if err != nil {
 		t.Fatalf("runShutdownSequence returned %v, want nil", err)
 	}
-	if got := []string(log); len(got) != 3 || got[0] != "shutdown" || got[1] != "wait" || got[2] != "flush" {
-		t.Errorf("runShutdownSequence(clean Shutdown) called %v, want [shutdown wait flush]", got)
+	if got := []string(log); len(got) != 4 || got[0] != "shutdown" || got[1] != "cleanups" || got[2] != "wait" || got[3] != "flush" {
+		t.Errorf("runShutdownSequence(clean Shutdown) called %v, want [shutdown cleanups wait flush]", got)
+	}
+}
+
+// TestServeAndShutdown_ReportsTheCleanUpWaitAfterAShutdown: a shutdown runs
+// the sequence, which waits for the secret store's clean-ups, so run's
+// deferred close waits no more (a second wait would run past the grace).
+func TestServeAndShutdown_ReportsTheCleanUpWaitAfterAShutdown(t *testing.T) {
+	addr, empty, no, trust := "127.0.0.1:0", "", false, "wardyn.local"
+	f := &bootFlags{listen: &addr, tlsCert: &empty, tlsKey: &empty, tlsTerminated: &no, trustDomain: &trust}
+	rootCtx, cancel := context.WithCancel(context.Background())
+	cancel() // the shutdown signal, already received
+	waited, err := serveAndShutdown(rootCtx, f, tlsPosture{}, api.New(api.Config{}), "none", nil, &audit.DenialCoalescer{}, nil, nil)
+	if err != nil {
+		t.Fatalf("serveAndShutdown after a shutdown signal = %v; want nil", err)
+	}
+	if !waited || cleanUpWaitAfterServe(waited) != 0 {
+		t.Fatalf("after a shutdown: cleanUpsWaited %v, run's close waits %v; want true and 0", waited, cleanUpWaitAfterServe(waited))
 	}
 }

@@ -64,6 +64,11 @@ func (s *Server) GoBackground(fn func()) {
 // non-terminal is picked up by ReconcileOnBoot's passes (reconcile.go).
 const backgroundShutdownBudget = killCascadeTimeout + killRevokeTimeout + signInCaptureReadTimeout
 
+// BackgroundShutdownBudget is backgroundShutdownBudget. cmd/wardynd waits for
+// the secret store's clean-ups beside WaitBackground, within this budget, so
+// the termination grace does not grow.
+const BackgroundShutdownBudget = backgroundShutdownBudget
+
 // WaitBackground blocks until every goroutine started through goBackground has
 // returned, or until backgroundShutdownBudget elapses — whichever comes first.
 // Bounded because this runs on the shutdown path with an operator waiting: a

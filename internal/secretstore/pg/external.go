@@ -10,9 +10,12 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -73,11 +76,12 @@ func extErr(ref string, err error) error {
 
 // putExternal writes the value to the external store, then points the row at
 // it, holding the row's lock throughout: two Puts for one row never interleave
-// their store writes (with azurekv that could leave no version enabled). If
-// the row cannot be written, a value in an object the row never pointed to is
-// removed again rather than orphaned. When the row moves to a new object
-// (azurekv's generation rollover), the old one is removed after the row
-// points away from it.
+// their store writes (with azurekv that could leave no version enabled). It
+// answers once the row write is done. If the row cannot be written, a value in
+// an object the row never pointed to is removed again rather than orphaned.
+// When the row moves to a new object (azurekv's generation rollover), the old
+// one is removed after the row points away from it. Both removals run after
+// the Put returns (afterPut).
 func (s *Store) putExternal(ctx context.Context, name string, value []byte) error {
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
@@ -86,7 +90,10 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", ref, err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// The rollback runs on ctx, as every call here does. Once ctx has ended it
+	// fails at once and pgx closes the connection, which ends the transaction on
+	// the server, so it never outlasts the Put's bound.
+	defer func() { _ = tx.Rollback(ctx) }()
 	// The counter row's share lock comes before the row's advisory lock, the
 	// order DeleteEverywhere takes them in: an erase queued for the counter
 	// row would otherwise leave this Put holding the advisory lock while it
@@ -127,7 +134,7 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	newObject := secretstore.RefObject(loc) != secretstore.RefObject(prev)
 	if err == nil {
 		if prev != "" && newObject {
-			s.removeOld(ctx, name, prev)
+			s.afterPut(ctx, name, func(ctx context.Context) { s.removeOld(ctx, name, prev) })
 		}
 		return nil
 	}
@@ -139,24 +146,116 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	if commitFailed {
 		// A failed COMMIT may still have reached the server (its reply lost, or
 		// the bounded context ending mid-commit), so only the row can say
-		// whether loc is live. The recheck under the row's lock leaves an
-		// object the row names, as the migration's cleanup does.
-		named, _, derr := s.removeOldExternal(context.WithoutCancel(ctx), s.owner, name, s.ext.Name(), loc)
-		switch {
-		case derr != nil:
-			return fmt.Errorf("pg secretstore: put %s: the value reached %s, but whether the row did is unknown (%w: %w) and checking it failed (%v), so the value was left in place — `wardynd -reconcile` lists it if the row does not point to it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err, derr)
-		case named:
+		// whether loc is live, and the Put does not wait to learn it. Each
+		// removal rechecks under the row's lock and leaves an object the row
+		// names, as the migration's cleanup does: the row names loc if the
+		// commit landed, prev if it did not, and neither if a Delete queued on
+		// the lock ran first, which leaves both for removal.
+		s.afterPut(ctx, name, func(ctx context.Context) {
+			s.removeOld(ctx, name, loc)
 			if prev != "" {
 				s.removeOld(ctx, name, prev)
 			}
-			return nil
+		})
+		return fmt.Errorf("pg secretstore: put %s: the value reached %s, but whether the row did is unknown (%w: %w); it is removed after this call unless the row points to it, and if that removal is skipped, cut or fails, `wardynd -reconcile` lists it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+	}
+	// The row's lock ends with this Put, so a later Put may reuse loc's object
+	// before the removal runs: removeOld leaves an object the row names.
+	s.afterPut(ctx, name, func(ctx context.Context) { s.removeOld(ctx, name, loc) })
+	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it is removed again after this call; if that removal is skipped, cut or fails, `wardynd -reconcile` lists it: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+}
+
+// cleanUps counts the clean-ups afterPut started in this process that have
+// not ended; afterPut caps it. Ending cut ends every one still running
+// (WaitForCleanUps, once its ctx ends first); cutMu guards the swap to a
+// fresh cut.
+var (
+	cleanUps    atomic.Int64
+	cutMu       sync.Mutex
+	cut, cutAll = context.WithCancel(context.Background())
+)
+
+// cleanUpCap is how many clean-ups may run at once beside a pool of pool's
+// size. Each holds one pooled connection, and the row's lock, for up to
+// bounded's six per-call timeouts plus a 2 s release, and its Put no longer
+// waits for it, so nothing else slows the next one. A quarter of the pool, and
+// at least one: at the default of 10 connections (db.DefaultPoolMaxConns), 2
+// run at once and 8 stay for requests, the sweeps and the Puts themselves; at
+// 4, 1 runs and 3 stay. 0 (no pool) sets no cap.
+func cleanUpCap(pool *pgxpool.Pool) int64 {
+	if pool == nil {
+		return 0
+	}
+	return max(1, int64(pool.Stat().MaxConns())/4)
+}
+
+// afterPut runs cleanUp once the Put of name that calls it has answered, on a
+// context detached from the caller's: the caller's cancellation does not stop
+// it, and the locks the caller holds around the Put do not wait for it. It is
+// bounded on its own, at bounded's six per-call timeouts, plus the 2 s release
+// of a row lock it holds. A cut or a process exit ends it early, and with
+// cleanUpLimit clean-ups already running it is skipped, never waited for: in
+// each case the value it was removing stays, and `wardynd -reconcile` lists it
+// if no row points to it. A panic in it is logged and ends that clean-up only:
+// no caller's recovery covers this goroutine, so it would otherwise end the
+// process.
+func (s *Store) afterPut(ctx context.Context, name string, cleanUp func(context.Context)) {
+	if n := cleanUps.Add(1); s.cleanUpLimit > 0 && n > s.cleanUpLimit {
+		cleanUps.Add(-1)
+		slog.Warn("pg secretstore: too many clean-ups are running, so this Put's is skipped; the value it would remove stays, and `wardynd -reconcile` lists it if no row points to it",
+			slog.String("secret", rowRef(s.owner, name)), slog.Int64("limit", s.cleanUpLimit))
+		return
+	}
+	ctx, cancel := s.bounded(context.WithoutCancel(ctx))
+	cutMu.Lock()
+	stop := context.AfterFunc(cut, cancel)
+	cutMu.Unlock()
+	go func() {
+		defer cleanUps.Add(-1)
+		defer stop()
+		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("pg secretstore: a Put's clean-up panicked; the value it was removing stays, and `wardynd -reconcile` lists it if no row points to it",
+					slog.Any("panic", r))
+			}
+		}()
+		cleanUp(ctx)
+	}()
+}
+
+// WaitForCleanUps returns nil once no clean-up a Put left is running. If ctx
+// ends first, it cuts every one still running and returns ctx's error. Puts
+// may run while it waits. wardynd's shutdown calls it beside the wait for its
+// background work; tests call it before they read what a clean-up removes.
+func WaitForCleanUps(ctx context.Context) error {
+	for cleanUps.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			cutMu.Lock()
+			cutAll()
+			cut, cutAll = context.WithCancel(context.Background())
+			cutMu.Unlock()
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
 		}
-		return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
 	}
-	if derr := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, loc); derr != nil {
-		return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not (%w: %w), and removing the value failed too (%v) — `wardynd -reconcile` lists it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err, derr)
+	return nil
+}
+
+// CloseAfterCleanUps waits up to bound for the clean-ups Puts left, cutting
+// any still running then, and closes pool. A command that may exit soon after
+// a Put closes its pool this way: pool.Close waits only for a clean-up that
+// already holds a connection, and one that has not taken it yet would fail on
+// the closed pool and leave its value.
+func CloseAfterCleanUps(pool interface{ Close() }, bound time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
+	defer cancel()
+	if err := WaitForCleanUps(ctx); err != nil {
+		slog.Warn("pg secretstore: closing the pool with a Put's clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+			slog.Duration("bound", bound))
 	}
-	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+	pool.Close()
 }
 
 // bounded bounds one store-mode write, including the wait for the row's
@@ -188,14 +287,15 @@ func rowLockKey(owner, name string) int32 {
 	return int32(crc32.ChecksumIEEE([]byte(owner + "\x00" + name)))
 }
 
-// removeOld removes the object a row pointed to before a Put moved it. The Put
-// has succeeded by then, so a failure is logged, not returned: the old object
-// is one `wardynd -reconcile` lists. It goes through removeOldExternal, which
-// deletes under the row's lock and leaves an object the row names again: a
-// replacement may have reused the old object between the Put's commit and now.
-func (s *Store) removeOld(ctx context.Context, name, prev string) {
-	if _, _, err := s.removeOldExternal(context.WithoutCancel(ctx), s.owner, name, s.ext.Name(), prev); err != nil {
-		slog.Warn("pg secretstore: a replaced value's old object was not removed; `wardynd -reconcile` lists it",
+// removeOld removes the object ref names, after a Put has answered, unless the
+// row names it. A failure is logged, not returned: the object is one
+// `wardynd -reconcile` lists if no row points to it. It goes through
+// removeOldExternal, which deletes under the row's lock and leaves an object
+// the row names: a later Put may have reused the object since this Put
+// released the lock.
+func (s *Store) removeOld(ctx context.Context, name, ref string) {
+	if _, _, err := s.removeOldExternal(ctx, s.owner, name, s.ext.Name(), ref); err != nil {
+		slog.Warn("pg secretstore: a value a Put left behind was not removed; `wardynd -reconcile` lists it if no row points to it",
 			slog.String("secret", rowRef(s.owner, name)), slog.String("store", s.ext.Name()), slog.Any("err", err))
 	}
 }
