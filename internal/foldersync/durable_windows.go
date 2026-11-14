@@ -27,7 +27,7 @@ func readOnlyRefusal(root *os.Root, name string, err error) bool {
 	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		return false
 	}
-	fi, lerr := root.Lstat(name)
+	fi, lerr := lstatIn(root, name)
 	if lerr != nil {
 		return false
 	}
@@ -41,7 +41,7 @@ func readOnlyRefusal(root *os.Root, name string, err error) bool {
 func replaceFile(root *os.Root, from, to string) error {
 	src, dst, err := nativePaths(root, from, to)
 	if err != nil {
-		return root.Rename(from, to)
+		return renameIn(root, from, to)
 	}
 	return windows.MoveFileEx(src, dst, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
@@ -52,7 +52,7 @@ func replaceFile(root *os.Root, from, to string) error {
 func placeNew(root *os.Root, from, to string) error {
 	src, dst, err := nativePaths(root, from, to)
 	if err != nil {
-		return root.Link(from, to)
+		return linkIn(root, from, to)
 	}
 	err = windows.MoveFileEx(src, dst, windows.MOVEFILE_WRITE_THROUGH)
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
@@ -67,7 +67,7 @@ func nativePaths(root *os.Root, from, to string) (src, dst *uint16, err error) {
 	if path.Dir(from) != path.Dir(to) {
 		return nil, nil, errors.New("not in one directory")
 	}
-	d, err := root.Open(path.Dir(from))
+	d, err := openIn(root, path.Dir(from), os.O_RDONLY, 0)
 	if err != nil {
 		return nil, nil, err
 	}

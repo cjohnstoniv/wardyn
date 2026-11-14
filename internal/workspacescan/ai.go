@@ -170,8 +170,14 @@ func mergeAdvice(base WorkspaceProfile, adv adviceWire) WorkspaceProfile {
 	// allowedEgress is empty here on purpose: the subtraction that argument
 	// performs is against the filename-keyed table, and out.EgressDomains is
 	// already the union this merge is gap-filling around.
-	if v := validateSuggestedHosts(adv.EgressDomains, nil); len(v) > 0 {
-		out.SuggestedEgress = validateSuggestedHosts(append(append([]string(nil), out.SuggestedEgress...), v...), nil)
+	// A host the cap leaves out, of the advice or of the merged list, leaves the profile incomplete
+	// as a cut in DeriveProfile does.
+	if v, cut := validateSuggestedHosts(adv.EgressDomains, nil); len(v) > 0 {
+		var mergedCut bool
+		out.SuggestedEgress, mergedCut = validateSuggestedHosts(append(append([]string(nil), out.SuggestedEgress...), v...), nil)
+		if cut || mergedCut {
+			out.Incomplete, out.Confidence = true, ConfidenceLow
+		}
 		out.NeedsReview = true
 		added = true
 	}

@@ -22,10 +22,10 @@ const existingSyncFlag = os.O_RDONLY
 // readOnlyRefusal is false: a file is synced through a read-only handle here.
 func readOnlyRefusal(*os.Root, string, error) bool { return false }
 
-func replaceFile(root *os.Root, from, to string) error { return root.Rename(from, to) }
+func replaceFile(root *os.Root, from, to string) error { return renameIn(root, from, to) }
 
 // linkFile is root.Link, replaced by tests to fail.
-var linkFile = func(root *os.Root, from, to string) error { return root.Link(from, to) }
+var linkFile = func(root *os.Root, from, to string) error { return linkIn(root, from, to) }
 
 // placeNew links to at from; it fails with fs.ErrExist when to exists. On a filesystem without
 // hard links it creates to exclusively instead and copies from into it, synced (copyNew).
@@ -57,7 +57,7 @@ func noHardLinks(err error) bool {
 // own is this copy and not a later save. A close that fails after the sync leaves the copy at to,
 // and the error says so.
 func copyNew(root *os.Root, from, to string) (err error) {
-	src, err := root.Open(from)
+	src, err := openIn(root, from, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func copyNew(root *os.Root, from, to string) (err error) {
 	if err != nil {
 		return err
 	}
-	dst, err := root.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	dst, err := openIn(root, to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func copyNew(root *os.Root, from, to string) (err error) {
 	if err := fsyncFile(dst); err != nil {
 		return err
 	}
-	if li, err := root.Lstat(to); err != nil || !os.SameFile(own, li) {
+	if li, err := lstatIn(root, to); err != nil || !os.SameFile(own, li) {
 		return fmt.Errorf("%s changed while it was copied: %w", to, fs.ErrExist)
 	}
 	return nil
@@ -119,7 +119,7 @@ var dropLooked = func() {}
 // the aside, and the error names it. A copy that cannot be moved aside stays at to, and the error
 // says so.
 func dropCopy(root *os.Root, to string, own os.FileInfo, err error) error {
-	if li, lerr := root.Lstat(to); lerr != nil || !os.SameFile(own, li) {
+	if li, lerr := lstatIn(root, to); lerr != nil || !os.SameFile(own, li) {
 		return err
 	}
 	dropLooked()
@@ -129,18 +129,18 @@ func dropCopy(root *os.Root, to string, own os.FileInfo, err error) error {
 	}
 	_ = f.Close()
 	if replaceFile(root, to, aside) != nil {
-		_ = root.Remove(aside)
+		_ = removeIn(root, aside)
 		return fmt.Errorf("%w; its partial copy is left at %s", err, to)
 	}
-	if li, lerr := root.Lstat(aside); lerr != nil || !os.SameFile(own, li) {
+	if li, lerr := lstatIn(root, aside); lerr != nil || !os.SameFile(own, li) {
 		return fmt.Errorf("%w; %w", err, keptAt(aside))
 	}
-	_ = root.Remove(aside)
+	_ = removeIn(root, aside)
 	return err
 }
 
 func syncDirIn(root *os.Root, note *dirNote, dir string) error {
-	d, err := root.Open(dir)
+	d, err := openIn(root, dir, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}

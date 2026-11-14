@@ -1106,6 +1106,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
 - The same list covers `.codex`, `.gemini`, `.npmrc` and `.pypirc`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
+- A member's folder scan opens every folder from the top of the drive down to the member's folder, so the server's user needs read access to each one.
+- Where the server's user can only pass through one of them (execute without read), the scan is refused as outside the member's roots and the server log says why.
 - A source bound to the member's runner (`runner_id`) is checked here by its text alone, and by [its runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner) before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits

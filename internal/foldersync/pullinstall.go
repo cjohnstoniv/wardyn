@@ -100,7 +100,7 @@ func (sy *Syncer) moveToTrash(rel string, walked *syncFile) error {
 	}
 	_ = f.Close()
 	if err := replaceFile(sy.Root, rel, aside); err != nil {
-		_ = sy.Root.Remove(aside)
+		_ = removeIn(sy.Root, aside)
 		_ = os.Remove(trash)
 		return err
 	}
@@ -108,7 +108,7 @@ func (sy *Syncer) moveToTrash(rel string, walked *syncFile) error {
 		_ = os.Remove(trash)
 		return sy.putBack(aside, rel, errSavedLocally)
 	}
-	return sy.Root.Remove(aside)
+	return removeIn(sy.Root, aside)
 }
 
 // putBack moves aside back to rel, never over a file made since (placeNew), and returns err. One it
@@ -120,7 +120,7 @@ func (sy *Syncer) putBack(aside, rel string, err error) error {
 	} else if perr != nil {
 		return keptAt(aside)
 	}
-	_ = sy.Root.Remove(aside) // placeNew linked, copied or moved it
+	_ = removeIn(sy.Root, aside) // placeNew linked, copied or moved it
 	return err
 }
 
