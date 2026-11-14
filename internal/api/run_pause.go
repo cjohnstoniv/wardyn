@@ -385,7 +385,7 @@ func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType 
 	if !ok || run.PausedAt == nil {
 		return nil
 	}
-	if run, err = s.cfg.Store.GetRun(ctx, run.ID); err != nil || run.PausedAt == nil || !runLive(run) {
+	if run, err = s.getRunHeld(ctx, run.ID); err != nil || run.PausedAt == nil || !runLive(run) {
 		return err
 	}
 	return s.resumeRun(ctx, pauser, run, actorType, principal, reason)
