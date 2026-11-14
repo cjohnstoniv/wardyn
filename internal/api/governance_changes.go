@@ -17,7 +17,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -154,9 +153,7 @@ func (s *Server) readRejectReason(w http.ResponseWriter, r *http.Request) (strin
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := types.DecodeOneJSON(bytes.NewReader(body), &req, true); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return "", false
 	}

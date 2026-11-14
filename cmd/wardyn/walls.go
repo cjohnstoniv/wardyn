@@ -105,8 +105,17 @@ func readWallsSpec(stdin io.Reader, file string) (types.PersonalWallsSpec, error
 	if err != nil {
 		return types.PersonalWallsSpec{}, fmt.Errorf("read the walls file: %w", err)
 	}
+	// A decoder, not Unmarshal: Unmarshal reads the first document and drops the rest, so a second
+	// document's limits would be lost while the whole walls document is replaced.
+	docs := yamlv3.NewDecoder(bytes.NewReader(raw))
 	var doc yamlv3.Node
-	if err := yamlv3.Unmarshal(raw, &doc); err != nil {
+	if err := docs.Decode(&doc); err != nil && !errors.Is(err, io.EOF) {
+		return types.PersonalWallsSpec{}, wallsParseError(err)
+	}
+	var extra yamlv3.Node
+	if err := docs.Decode(&extra); err == nil {
+		return types.PersonalWallsSpec{}, wallsParseError(errNotOneDocument)
+	} else if !errors.Is(err, io.EOF) {
 		return types.PersonalWallsSpec{}, wallsParseError(err)
 	}
 	if err := checkHostsAreText(&doc); err != nil {

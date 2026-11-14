@@ -282,7 +282,7 @@ func (s *Server) putSecretFor(w http.ResponseWriter, r *http.Request, name, owne
 		return
 	}
 	var body putSecretRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil || body.Value == "" {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &body, false); err != nil || body.Value == "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonSecretBodyInvalid, `body must be {"value":"<non-empty secret>"}`)
 		return
 	}

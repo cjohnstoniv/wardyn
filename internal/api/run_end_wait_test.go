@@ -266,6 +266,22 @@ func TestSetRunEnd_Refusals(t *testing.T) {
 	}
 }
 
+// TestSetRunEnd_KeyInAnotherCaseIsTheField: a key in another letter case sets the field the
+// decode reads it into, so it counts as written: Ends_At moves the end, and a null Wait_Budget_Sec
+// is the null wait it is, never "neither field".
+func TestSetRunEnd_KeyInAnotherCaseIsTheField(t *testing.T) {
+	f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+	later := f.now.Add(48 * time.Hour)
+	if code, out := f.patch(t, ownerSession(t), strings.Replace(endsAtBody(later), `"ends_at"`, `"Ends_At"`, 1)); code != http.StatusOK ||
+		out.EndsAt == nil || !out.EndsAt.Equal(later) {
+		t.Errorf("Ends_At = %d %+v, want 200 at %v", code, out, later)
+	}
+	w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), ownerSession(t), `{"Wait_Budget_Sec":null}`)
+	if got := errorReason(w); w.Code != http.StatusBadRequest || got != reasonRunWaitBudgetNotANumber {
+		t.Errorf("a null Wait_Budget_Sec = %d %s, want 400 %s", w.Code, got, reasonRunWaitBudgetNotANumber)
+	}
+}
+
 // TestSetRunEnd_MustBeFutureReasonIsPinned covers the same "an end in the
 // past" case TestSetRunEnd_Refusals already exercises, with the wire reason
 // asserted as a LITERAL, not the Go const, so a rename of

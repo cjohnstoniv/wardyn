@@ -716,11 +716,16 @@ func TestDevices_IngestContract(t *testing.T) {
 		t.Fatalf("store was handed source_ip %q, want the TCP peer the server saw (127.0.0.1:54321), never the claim", stored)
 	}
 
+	row4 := string(mustJSON(chainRows(4, 1, "h3")))
 	refusals := []struct {
 		name, body, reason string
 		want               int
 	}{
 		{"over 500 rows", string(mustJSON(chainRows(4, maxDeviceIngestRows+1, "h3"))), "batch_too_large", http.StatusRequestEntityTooLarge},
+		{"over 500 rows, counted before they are read", "[" + strings.Repeat("1,", maxDeviceIngestRows) + "1]", "batch_too_large", http.StatusRequestEntityTooLarge},
+		{"a second value", row4 + " " + row4, "invalid_body", http.StatusBadRequest},
+		{"a key twice", strings.Replace(row4, `"seq":4`, `"seq":4,"seq":4`, 1), "invalid_body", http.StatusBadRequest},
+		{"a key in two cases", strings.Replace(row4, `"seq":4`, `"seq":4,"SEQ":4`, 1), "invalid_body", http.StatusBadRequest},
 		{"unknown field", `[{"seq":4,"smuggled":true}]`, "invalid_body", http.StatusBadRequest},
 		{"not an array", `{}`, "invalid_body", http.StatusBadRequest},
 		{"seq not increasing", string(mustJSON(append(chainRows(4, 1, "h3"), chainRows(4, 1, "h4")...))), "invalid_row", http.StatusBadRequest},

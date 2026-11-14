@@ -120,6 +120,8 @@ func TestGovernanceDeciders_RefusesBeforeAnyWrite(t *testing.T) {
 		"unknown unit":  {[]string{"deciders", "set", "Nope", "--file", writeDecidersFile(t, decidersFileBody)}, `no governance unit named "Nope"`},
 		"no rules key":  {[]string{"deciders", "set", "Platform", "--file", writeDecidersFile(t, `{}`)}, "rules"},
 		"unknown field": {[]string{"deciders", "set", "Platform", "--file", writeDecidersFile(t, `{"rules":[],"extra":1}`)}, "extra"},
+		"second value":  {[]string{"deciders", "set", "Platform", "--file", writeDecidersFile(t, `{"rules":[]} `+decidersFileBody)}, "exactly one document"},
+		"a key twice":   {[]string{"deciders", "set", "Platform", "--file", writeDecidersFile(t, `{"rules":[{"kinds":["egress_domain"],"who":["owner"]}],"rules":[]}`)}, `has the key "rules" twice`},
 		"missing file":  {[]string{"deciders", "set", "Platform", "--file", filepath.Join(t.TempDir(), "absent.json")}, "absent.json"},
 		"no --file":     {[]string{"deciders", "set", "Platform"}, "file"},
 	} {

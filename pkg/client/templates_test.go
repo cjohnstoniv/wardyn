@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -97,6 +98,48 @@ func TestTemplateIntentBytesAreCanonical(t *testing.T) {
 	}
 	if string(a.Raw("inline_policy")) != string(b.Raw("inline_policy")) || string(a.Raw("inline_policy")) != `{"a":"<x>","b":[1,2]}` {
 		t.Errorf("a = %s, b = %s", a.Raw("inline_policy"), b.Raw("inline_policy"))
+	}
+}
+
+// TestTemplateIntentRefusesAKeyWrittenTwice: decoding into a map keeps the last of a repeated key,
+// so a save would carry `"denied_domains":[]` where the text also denied a site. The intent refuses
+// a repeated key at every depth, as the server's import does; the same key in two objects is fine.
+func TestTemplateIntentRefusesAKeyWrittenTwice(t *testing.T) {
+	for src, want := range map[string]string{
+		`{"inline_policy":{"denied_domains":["example.com"],"denied_domains":[]}}`: `intent.inline_policy has the key "denied_domains" twice`,
+		`{"agent":"a","agent":"b"}`:                `intent has the key "agent" twice`,
+		`{"workspaces":[{"name":"a","name":"b"}]}`: `intent.workspaces[0] has the key "name" twice`,
+	} {
+		var doc client.TemplateDocument
+		err := json.Unmarshal([]byte(`{"api_version":"wardyn/v1","kind":"RunTemplate","intent":`+src+`}`), &doc)
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: err = %v, want %q", src, err, want)
+		}
+	}
+	var intent client.TemplateIntent
+	if err := json.Unmarshal([]byte(`{"workspaces":[{"name":"a"},{"name":"b"}],"inline_policy":{"denied_domains":["example.com"]}}`), &intent); err != nil {
+		t.Fatalf("an intent with no repeated key: %v", err)
+	}
+	if got := string(intent.Raw("inline_policy")); got != `{"denied_domains":["example.com"]}` {
+		t.Errorf("inline_policy = %s", got)
+	}
+}
+
+// TestTemplateIntentDeepNestingStaysCheap: the repeated-key check runs on a request body before
+// any other limit, so a body nested as deep as encoding/json allows must cost memory in
+// proportion to its size, not to the square of its depth.
+func TestTemplateIntentDeepNestingStaysCheap(t *testing.T) {
+	const depth = 2000
+	src := strings.Repeat(`{"`+strings.Repeat("k", 50)+`":`, depth) + "1" + strings.Repeat("}", depth)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	var intent client.TemplateIntent
+	if err := json.Unmarshal([]byte(src), &intent); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if got := (after.TotalAlloc - before.TotalAlloc) >> 20; got > 32 {
+		t.Errorf("reading a %d KiB intent nested %d deep allocated %d MiB, want at most 32", len(src)>>10, depth, got)
 	}
 }
 

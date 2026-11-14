@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -114,6 +115,69 @@ func TestTemplateSaveBuildsTheRequest(t *testing.T) {
 	req, id, err = templateSaveRequest(cmd, file, "person", "", "flag name", "", want.String(), "", 4)
 	if err != nil || id != want || req.Name != "flag name" || req.ExpectedRevision == nil || *req.ExpectedRevision != 4 {
 		t.Errorf("update request = %+v id=%s err=%v", req, id, err)
+	}
+}
+
+// The save endpoint takes an empty envelope name or description as the document's, and refuses one
+// that differs from a nonempty document value, so --name and --description replace the document's
+// copy as well; an explicit --description "" clears it.
+func TestTemplateSaveFlagsReplaceTheDocumentsNameAndDescription(t *testing.T) {
+	file := writeTemplateFile(t, "t.json", `{"api_version":"wardyn/v1","kind":"RunTemplate","name":"doc name","description":"doc text","coverage":"partial","intent":{}}`)
+	saved := func(given, inDoc string) (string, bool) { // the server's rule, templateForSave
+		if given == "" {
+			return inDoc, true
+		}
+		return given, inDoc == "" || inDoc == given
+	}
+	for _, tc := range []struct {
+		flags      []string
+		name, desc string
+	}{
+		{[]string{"--name", "flag name", "--description", "flag text"}, "flag name", "flag text"},
+		{[]string{"--description", ""}, "doc name", ""},
+		{nil, "doc name", "doc text"},
+	} {
+		cs := newCmdServer(t, http.StatusNotImplemented, map[string]string{"error": "Templates are not available on this server yet.", "reason": "templates_unavailable"})
+		_ = execCmd(t, append(append([]string{"template", "save", file}, tc.flags...), "--url", cs.URL, "--token", "tok")...)
+		var sent struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Document    struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"document"`
+		}
+		if err := json.Unmarshal(cs.last().body, &sent); err != nil {
+			t.Fatalf("%v: request body %q: %v", tc.flags, cs.last().body, err)
+		}
+		name, nameOK := saved(sent.Name, sent.Document.Name)
+		desc, descOK := saved(sent.Description, sent.Document.Description)
+		if !nameOK || !descOK || name != tc.name || desc != tc.desc {
+			t.Errorf("%v: sent %+v saves as %q/%q (accepted %v/%v), want %q/%q", tc.flags, sent, name, desc, nameOK, descOK, tc.name, tc.desc)
+		}
+	}
+}
+
+// A key written twice in the document is refused before any request, in JSON and in YAML, in the
+// intent or as the intent itself: decoding keeps only the last, so the empty list or intent would
+// be saved over the site the text also denied.
+func TestTemplateSaveRefusesAKeyWrittenTwice(t *testing.T) {
+	jsonFile := writeTemplateFile(t, "d.json", `{"api_version":"wardyn/v1","kind":"RunTemplate","name":"n","coverage":"partial","intent":{"inline_policy":{"denied_domains":["example.com"],"denied_domains":[]}}}`)
+	intentFile := writeTemplateFile(t, "i.json", `{"api_version":"wardyn/v1","kind":"RunTemplate","name":"n","coverage":"partial","intent":{"inline_policy":{"denied_domains":["example.com"]}},"intent":{}}`)
+	yamlFile := writeTemplateFile(t, "d.yaml", "api_version: wardyn/v1\nkind: RunTemplate\nname: n\ncoverage: partial\nintent:\n  inline_policy:\n    denied_domains: [example.com]\n    denied_domains: []\n")
+	for file, want := range map[string]string{
+		jsonFile:   `has the key "denied_domains" twice`,
+		intentFile: `the document has the key "intent" twice`,
+		yamlFile:   `"denied_domains" already defined`,
+	} {
+		cs := newCmdServer(t, http.StatusNotImplemented, nil)
+		err := execCmd(t, "template", "save", file, "--url", cs.URL, "--token", "tok")
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want it to contain %q", filepath.Base(file), err, want)
+		}
+		if got := cs.last(); got.method != "" {
+			t.Errorf("%s: a request was sent: %s %s", filepath.Base(file), got.method, got.path)
+		}
 	}
 }
 

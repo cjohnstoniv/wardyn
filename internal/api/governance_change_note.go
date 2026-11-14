@@ -10,7 +10,6 @@ package api
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -58,9 +57,7 @@ func (s *Server) handlePutGovernanceChangeNote(w http.ResponseWriter, r *http.Re
 		Reason string `json:"reason"`
 		Ticket string `json:"ticket"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := types.DecodeOneJSON(bytes.NewReader(body), &req, true); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return
 	}

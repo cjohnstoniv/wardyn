@@ -4,9 +4,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"slices"
@@ -37,7 +39,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// Capped generously (maxJSONBody, 1 MiB): a decision log is a host/port/path
 	// plus an optional scan summary, so nothing legitimate comes near it, and a
 	// too-tight cap here would DROP an egress audit record behind a 413.
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&dl); err != nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &dl, false); err != nil {
 		s.refuseDecisionLog(w, r, claims.RunID)
 		return
 	}
@@ -253,17 +255,20 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// Byte ceiling under maxBatch below: 1000 kernel events legitimately exceed
 	// maxJSONBody, so this stream gets its own larger cap rather than 413ing a
 	// full sensor batch.
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGroundtruthBatchBytes)).Decode(&batch); err != nil {
+	// The events are counted before any is decoded, so an oversized batch costs its bytes only.
+	const maxBatch = 1000
+	err := types.DecodeOneJSONRows(http.MaxBytesReader(w, r.Body, maxGroundtruthBatchBytes), &batch, false, "events", maxBatch)
+	var tooMany *types.TooManyJSONRowsError
+	if errors.As(err, &tooMany) {
+		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonGroundtruthBatchTooLarge, "batch too large")
+		return
+	}
+	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonGroundtruthBatchInvalid, "invalid ground-truth batch")
 		return
 	}
 	if len(batch.Events) == 0 {
 		writeJSON(w, http.StatusAccepted, map[string]any{"accepted": 0})
-		return
-	}
-	const maxBatch = 1000
-	if len(batch.Events) > maxBatch {
-		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonGroundtruthBatchTooLarge, "batch too large")
 		return
 	}
 
@@ -652,12 +657,18 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var body internalApprovalRequest
-	err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body)
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody))
+	if err == nil {
+		err = json.NewDecoder(bytes.NewReader(raw)).Decode(&body) // the first value
+	}
 	if err == nil {
 		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
 		if body.RequestedScope, refused = s.refuseBadCallScope(w, r, body.Kind, body.RequestedScope); refused {
 			return
 		}
+		// After the call scope's own readers, which answer a bad call scope with their own reason and
+		// auth.fail row, also when text follows it: then one value, with no key written twice.
+		err = types.DecodeOneJSON(bytes.NewReader(raw), new(internalApprovalRequest), false)
 	}
 	if err != nil || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
 		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")

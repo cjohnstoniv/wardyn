@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -648,7 +647,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 // truncated body leaves Scope == "", which Normalize() reads as `run` — a
 // client that meant `once` would get a run-wide grant and a 200.
 // io.ErrUnexpectedEOF still catches the truncation; only the genuinely empty
-// body (io.EOF) stays tolerated.
+// body (io.EOF) stays tolerated. A second value after the first, or a key
+// written twice, is a 400 too: the decode would keep the last, so a body that
+// wrote `once` could be read as a wider scope written after it.
 //
 // The reason is bounded here, before any row is read or written, and refused
 // rather than truncated: it is the audit explanation, and a decided row keeps it
@@ -661,7 +662,7 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 	if r.Body == nil {
 		return body, true
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDecisionBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxDecisionBody), &body, false); err != nil && !errors.Is(err, io.EOF) {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRequestBodyTooLarge, "request body exceeds size limit")

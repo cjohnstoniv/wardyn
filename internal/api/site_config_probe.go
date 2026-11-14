@@ -813,9 +813,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	// here, not a 400. Anything actually sent still decodes strictly, so a
 	// typo'd field can't be silently swallowed.
 	var req testProxyRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &req, true); err != nil && !errors.Is(err, io.EOF) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigProbeRequestInvalid, "invalid JSON body: "+err.Error())
 		return
 	}

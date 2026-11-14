@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	neturl "net/url"
 	"os"
@@ -42,6 +43,17 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&spec); err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
+	}
+	// A second object would be ignored with every restriction it names.
+	if err := dec.Decode(new(json.RawMessage)); err == nil {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: more than one JSON value", path)
+	} else if !errors.Is(err, io.EOF) {
+		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
+	}
+	// After the decode, which checks the syntax and the depth: it kept only the last of a key
+	// written twice, also in another letter case, so a restriction written first would be dropped.
+	if err := types.RefuseRepeatedJSONKeysFor(b, "the policy", &spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)

@@ -364,6 +364,9 @@ func TestPG_DefaultsWriteWithoutRecordingKeepsIt(t *testing.T) {
 	put("require recording again", `{"recording":"required"}`)
 	put("lower recording with an empty value", `{"recording":""}`)
 	stored("lower recording with an empty value", types.RecordingPreferred)
+	put("require recording again", `{"recording":"required"}`)
+	put("lower recording with an empty value, key in another case", `{"Recording":""}`)
+	stored("lower recording with an empty value, key in another case", types.RecordingPreferred)
 
 	// The keep is the store's, against the row it writes, not a read the handler made earlier.
 	put("require recording again", `{"recording":"required"}`)
