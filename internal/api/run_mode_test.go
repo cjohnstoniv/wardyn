@@ -715,9 +715,10 @@ func TestBackgroundWatchIsTheDoorsOneException(t *testing.T) {
 // stays the SSH access door's route; liveRunForExec, the fresh read without the background refusal, is called only
 // by sshFreshRun, which then refuses a background run, by execFreshRun, which only handleRunExec calls, and by
 // startFresh; and handleRunExec keeps the governance door, the data_out rule and the channel cap. startFresh re-reads
-// the run under its start lock; each of its callers has already refused a background run, and a run's experience
-// never changes after create. An SSH bridge switched to execFreshRun or liveRunForExec, or a new door through
-// startFresh, reds here.
+// the run under its start lock; each of its callers has already made its door's background decision (SSH, attach and
+// sign-in refuse a background run; the UI gateway admits one only for its watch and inbound exceptions), and a run's
+// experience never changes after create. An SSH bridge switched to execFreshRun or liveRunForExec, or a new door
+// through startFresh, execFresh or a fenced execSFTPServer, reds here.
 func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 	bodies := backgroundDoorBodies(t)
 	calls := func(body *ast.BlockStmt, name string) bool {
@@ -726,9 +727,6 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 			if call, ok := n.(*ast.CallExpr); ok {
 				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
 					found = true
-				}
-				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == name {
-					found = true // a plain function, such as the generic startFresh
 				}
 			}
 			return !found
@@ -753,17 +751,35 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 			t.Errorf("%s is called by %v, want %v", name, got, want)
 		}
 	}
-	// startFresh's callers, keyed by receiver too: three methods in the package are named run.
-	var fresh []string
-	for sym, body := range funcBodies(t, true) {
-		if calls(body, "startFresh") {
-			fresh = append(fresh, sym)
-		}
+	// The doors through startFresh, keyed by receiver too: three methods in the package are named run. refers counts
+	// any use of the name, so a generic instantiation (startFresh[T]) or a function value is a caller too.
+	refers := func(body *ast.BlockStmt, name string) bool {
+		found := false
+		ast.Inspect(body, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+			return !found
+		})
+		return found
 	}
-	slices.Sort(fresh)
-	want := []string{"Server.desktopSigninDial", "Server.establishExec", "Server.execFresh", "Server.signinExec", "localAttach.run"}
-	if !slices.Equal(fresh, want) {
-		t.Errorf("startFresh is called by %v, want %v", fresh, want)
+	qualified := funcBodies(t, true)
+	for name, want := range map[string][]string{
+		"startFresh": {"Server.desktopSigninDial", "Server.establishExec", "Server.execFresh", "Server.signinExec", "localAttach.run"},
+		// execFresh is startFresh for an ExecStream, and execSFTPServer is execFresh when fenced.
+		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp"},
+		"execSFTPServer": {"Server.bridgeSSHSFTP", "Server.bridgeSSHSync", "Server.computerFolderPass"},
+	} {
+		var got []string
+		for sym, body := range qualified {
+			if refers(body, name) {
+				got = append(got, sym)
+			}
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s is used by %v, want %v", name, got, want)
+		}
 	}
 	for _, name := range []string{"refuseExecGovernance", "refuseExecDataOut", "sshAcquireSession"} {
 		if !calls(bodies["handleRunExec"], name) {

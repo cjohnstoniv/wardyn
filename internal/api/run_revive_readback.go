@@ -109,8 +109,9 @@ func (s *Server) replaceRevivedProxyHashed(ctx context.Context, rv runner.ProxyR
 	}
 	if err != nil {
 		// Detached from the replace's end, so a cut replace still abandons its start, and bounded: it runs under the
-		// run's lock. One its bound cuts stays the run's pending start until the reconcile tick's deadline pass
-		// (sweepOverdueProxyStarts) expires it.
+		// run's lock. One its bound cuts was never answered, so it has no deadline and no sweep lists it: it stays the
+		// run's pending start, which no report can confirm without an expected hash, until the run's next start
+		// replaces it.
 		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), heldStoreCallBound)
 		s.abandonProxyStart(actx, run.ID, start)
 		cancel()
