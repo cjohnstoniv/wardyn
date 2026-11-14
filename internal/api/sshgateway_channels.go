@@ -355,6 +355,17 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 // mirroring a real sshd's one-exec-per-channel rule — to its own bridge
 // goroutine while continuing to serve window-change concurrently (a live PTY
 // resize must keep working after the shell starts).
+// errSSHChannelClosed is the cause a session channel's context ends with when its request stream ends while the
+// connection's context is still live: the client closed the channel or its whole connection.
+var errSSHChannelClosed = errors.New("the client closed the SSH channel")
+
+// sshClientClosedFirst reports whether ctx, a session channel's context, ended because its client closed the channel
+// or its connection (errSSHChannelClosed), not because the daemon stopped, which ends the connection's context and so
+// the channel's with that context's own cause.
+func sshClientClosedFirst(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errSSHChannelClosed)
+}
+
 func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, principal string, newCh ssh.NewChannel, slot *sshChannelSlot) {
 	channel, reqs, err := newCh.Accept()
 	if err != nil {
@@ -364,8 +375,8 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// stream ends (client closed the channel) as well as when the parent
 	// connection ctx dies — the bridge's AfterFunc closes its exec session on
 	// either, so a parked io.Copy can never outlive its channel.
-	chCtx, chCancel := context.WithCancel(ctx)
-	defer chCancel()
+	chCtx, chCancel := context.WithCancelCause(ctx)
+	defer chCancel(nil)
 	// Backstop only: the client-disconnects-first path (reqs closes with no
 	// shell/exec/subsystem ever dispatched, or a still-running bridge is
 	// interrupted). The COMPLETION path closes channel itself, from inside the
@@ -504,8 +515,11 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// connection died). A bridge parked on a quiet exec would wait for the
 	// in-sandbox command forever; cancel the channel-scoped ctx so its
 	// AfterFunc closes the session and the bridge returns. A normally-finished
-	// bridge already closed the channel itself, making this a no-op.
-	chCancel()
+	// bridge already closed the channel itself, making this a no-op. The cause
+	// says the client ended it (sshClientClosedFirst); when the connection's
+	// context ended first (the daemon stopping), chCtx already carries that
+	// cause and this one is dropped.
+	chCancel(errSSHChannelClosed)
 	if bridgeDone != nil {
 		<-bridgeDone
 	}

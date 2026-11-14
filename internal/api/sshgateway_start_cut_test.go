@@ -34,12 +34,12 @@ func (l *cutsAtTheStartLock) Lock(ctx context.Context, k db.LockKey, wait time.D
 
 // sshStartCutRig is a server whose SSH doors' start lock for run ends the door's context while it waits (cut), and
 // whose audit refuses a row written on an ended context, as a store does.
-func sshStartCutRig(t *testing.T, cut func(id uuid.UUID) func()) (*Server, *sshTestRecorder, types.AgentRun, string) {
+func sshStartCutRig(t *testing.T, cut func()) (*Server, *sshTestRecorder, types.AgentRun, string) {
 	t.Helper()
 	st, run, principal := sshOwnedRunningRun(t)
 	rec := &sshTestRecorder{}
 	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Runner: &sshFakeRunner{}, Audit: rec})
-	srv.locks.override = &cutsAtTheStartLock{Locker: db.NewLocalLocker(), key: runStartKey(run.ID), cut: cut(run.ID)}
+	srv.locks.override = &cutsAtTheStartLock{Locker: db.NewLocalLocker(), key: runStartKey(run.ID), cut: cut}
 	return srv, rec, run, principal
 }
 
@@ -64,7 +64,7 @@ func TestSSHGateway_AStartFailureRowLandsWhenTheClientIsGone(t *testing.T) {
 		t.Run(c.action, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			srv, rec, run, principal := sshStartCutRig(t, func(uuid.UUID) func() { return cancel })
+			srv, rec, run, principal := sshStartCutRig(t, cancel)
 			c.door(srv, ctx, run.ID, principal)
 			ev := findAudit(rec.snapshot(), run.ID, c.action, "failure")
 			if ev == nil {
@@ -72,6 +72,55 @@ func TestSSHGateway_AStartFailureRowLandsWhenTheClientIsGone(t *testing.T) {
 			}
 			if d := sshAuditData(t, ev); d["error"] != lockUnavailableMsg {
 				t.Errorf("row data = %v, want the cut start's error", d)
+			}
+		})
+	}
+}
+
+// An sftp start its client's own channel close cuts is the client's end, as a close under the running sftp-server
+// is (bridgeOutcome): a success that names no error. One the daemon's stop cuts (the connection's context ends
+// first, and with it the channel's, under that context's cause) is a failure with the cut in it. Catches: the
+// outcome read from the start's error alone, which is the same cut in both.
+func TestSSHGateway_AnSFTPStartItsClientsCloseCutIsNotAFailedTransfer(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		shutdown bool
+		outcome  string
+	}{
+		{"the client closed the channel", false, "success"},
+		{"the daemon stopped", true, "failure"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			conn, stop := context.WithCancel(t.Context())
+			defer stop()
+			ch, closeCh := context.WithCancelCause(conn)
+			defer closeCh(nil)
+			srv, rec, run, principal := sshStartCutRig(t, func() {
+				if c.shutdown {
+					stop()
+				}
+				closeCh(errSSHChannelClosed) // the request stream ends either way, as handleSSHSessionChannel's does
+			})
+			srv.bridgeSSHSFTP(ch, run.ID, principal, &stubChannel{})
+			ev := findAudit(rec.snapshot(), run.ID, "ssh.sftp.transfer", c.outcome)
+			if ev == nil {
+				t.Fatalf("no ssh.sftp.transfer %s row; events=%s", c.outcome, auditDump(rec.snapshot(), run.ID))
+			}
+			want := any(nil)
+			if c.shutdown {
+				want = lockUnavailableMsg
+			}
+			if d := sshAuditData(t, ev); d["error"] != want {
+				t.Errorf("row data = %v, want error %v", d, want)
+			}
+			n := 0
+			for _, e := range rec.snapshot() {
+				if e.Action == "ssh.sftp.transfer" {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Errorf("%d ssh.sftp.transfer rows, want one: %s", n, auditDump(rec.snapshot(), run.ID))
 			}
 		})
 	}
