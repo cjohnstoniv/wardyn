@@ -938,12 +938,14 @@ metrics:
 ## UI sandbox gateway
 
 - `uiSandbox.enabled` relays one policy-declared loopback port inside a run's sandbox — a code editor, a dev server — to a browser ([docs/UI-SANDBOXES.md](../../../docs/UI-SANDBOXES.md)).
-- Like `ssh.*` it adds a conditional port to the SAME Service/Deployment, and it is off by default.
-- **The one thing this chart cannot do for you: give it its own hostname.**
+- It adds a port to the SAME Service/Deployment, and it is off by default.
+- **It needs its own hostname.**
   - What the gateway serves is the sandbox's own HTML and JavaScript.
   - On the console's origin that code could read the console's session and drive every admin action the operator can —
-    - so `wardynd` refuses to boot when the two *bind addresses* are equal, and it is on you to keep them apart at the *hostname* level too.
+    - so `wardynd` refuses to boot when the two *bind addresses* are equal, and `uiSandbox.ingress` refuses a host `ingress.hosts` routes for the console. Without it, keeping the hostnames apart is on you.
   - A single ingress hostname routing `/` to the console and something else to the gateway re-creates exactly the shared origin the second listener exists to prevent.
+- **Set a per-run origin.** Without `originTemplate` every run's apps share one browser origin, published residual #18 in the threat model. With SSO the chart refuses that; without SSO it renders and prints a warning. `acceptSharedOrigin: true` accepts the shared origin either way.
+- **`uiSandbox.ingress` renders its Ingress**, apart from `ingress.*`: the `advertiseURL` host and the wildcard host the `originTemplate` needs, both to the `ui` port.
 
 ```yaml
 uiSandbox:
@@ -951,39 +953,29 @@ uiSandbox:
   port: 8081
   # A DIFFERENT hostname than the console's, with a certificate that covers it.
   advertiseURL: https://wardyn-ui.example.com
-  # Optional, strongly preferred: one origin per run (wildcard DNS + wildcard
-  # certificate). Unset, every run's apps share one origin, separated only by
-  # a path-scoped cookie — published residual #18 in the threat model.
+  # Strongly preferred: one origin per run (wildcard DNS and a wildcard
+  # certificate). {run} sits in the first host label, so one wildcard host
+  # covers every run.
   originTemplate: https://run-{run}.ui.example.com
+  ingress:
+    enabled: true
+    className: nginx
+    # Your secret, covering both hosts. Use the same backend-protocol
+    # annotation as your console Ingress.
+    tls:
+      - hosts: ["wardyn-ui.example.com", "*.ui.example.com"]
+        secretName: wardyn-ui-sandbox-tls
 ```
 
-- `ingress.*` above deliberately cannot render this one — it targets the console's `http` port only, never `ui` (a different hostname is the control, not a routing detail).
-- Route it with an Ingress (or its own Service) against the Deployment's named `ui` containerPort, the same shape as the "Split SSH exposure" recipe above:
+| What | Who provides it |
+|---|---|
+| The Ingress for both hosts | The chart, with `uiSandbox.ingress.enabled` |
+| DNS for `wardyn-ui.example.com` and `*.ui.example.com` | You |
+| The certificate covering both | You, as the secret `tls` names |
+| `ui_apps` in policy and the launcher in the image | The run's policy and image |
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: wardyn-ui-sandbox
-spec:
-  rules:
-    # Wildcard host: what originTemplate needs. Drop to a single host only if
-    # you are accepting the shared-origin residual.
-    - host: "*.ui.example.com"
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: wardyn
-                port:
-                  name: ui
-  tls:
-    - hosts: ["*.ui.example.com"]
-      secretName: wardyn-ui-sandbox-tls
-```
-
+- `ingress.*` above still targets the console's `http` port only, never `ui`.
+- Without `uiSandbox.ingress`, route the `ui` port yourself, with the same two hosts.
 - The gateway relays WebSockets (a browser IDE needs them), so an ingress controller in front of it must not buffer or strip the `101` upgrade.
 - Runs still have to declare `ui_apps` in policy ([docs/POLICIES.md](../../../docs/POLICIES.md)) and run an image that ships the matching `/usr/local/bin/wardyn-ui-<name>` launcher — enabling the gateway on its own opens nothing.
 

@@ -14,6 +14,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - `/metrics` has a new counter, `wardyn_lock_holds_over_limit_total`: holds of a run's lock that ran past 10 minutes. Each such hold is also logged at WARN with the functions that took the lock, and again with its length when it is released. The watchdog never frees the lock or cancels the holder's work.
+- Helm: `uiSandbox.ingress` renders the UI-sandbox gateway's Ingress: the `advertiseURL` host and the wildcard host `originTemplate` needs (`run-{run}.ui.example.com` gives `*.ui.example.com`), to the `ui` port. DNS and the certificate stay yours.
+- Helm: with `uiSandbox.enabled`, no SSO, no `uiSandbox.originTemplate` and no `uiSandbox.acceptSharedOrigin`, `helm install` and `helm upgrade` now print a warning: every run's apps share one browser origin, so a page one run serves can reach another run's app in the same person's browser. It names both settings, and the chart renders as before.
 
 ### Changed
 
