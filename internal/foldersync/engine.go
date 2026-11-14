@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -613,44 +612,17 @@ func (sy *Syncer) deleteLocal(ctx context.Context, v *passView, rep *Report) err
 			return err
 		}
 		l := v.local[rel]
-		if !sy.unchangedLocally(rel, &l) {
+		if err := sy.moveToTrash(rel, &l); errors.Is(err, errSavedLocally) {
 			rep.Conflicts = append(rep.Conflicts, rel)
-			continue
-		}
-		if err := sy.moveToTrash(rel); err != nil {
+		} else if err != nil {
 			rep.refuse(rel, "delete on this computer: "+err.Error())
-			continue
+		} else {
+			delete(sy.State.Files, rel)
+			rep.DeletedLocal = append(rep.DeletedLocal, rel)
+			rep.KeptIn = sy.Opts.Trash
 		}
-		delete(sy.State.Files, rel)
-		rep.DeletedLocal = append(rep.DeletedLocal, rel)
-		rep.KeptIn = sy.Opts.Trash
 	}
 	return nil
-}
-
-// moveToTrash copies rel out of the root into trash, then removes it.
-func (sy *Syncer) moveToTrash(rel string) error {
-	src, err := sy.Root.Open(rel)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst := filepath.Join(sy.Opts.Trash, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(out, src)
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	return sy.Root.Remove(rel)
 }
 
 func (sy *Syncer) walkLocal(rep *Report) (files map[string]syncFile, dirs []string, tree treeSeen, err error) {
@@ -879,7 +851,9 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 	if err != nil {
 		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
-	if _, err := installSynced(sy.Root, sy.dirs, tmp, tmpName, InstallReplace, rel); err != nil {
+	if err := sy.installPulled(tmp, tmpName, rel, walked, localSide(tfi)); errors.Is(err, errSavedLocally) {
+		return sy.listedConflict(ctx, rel, r, rep, pulled)
+	} else if err != nil {
 		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
 	// Recorded only if the file in place is still the one installed: a save just after it wins.

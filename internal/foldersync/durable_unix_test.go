@@ -70,8 +70,9 @@ func TestInstall_WithoutHardLinksTheCopyIsCreatedAndSynced(t *testing.T) {
 	}
 }
 
-// A copy whose sync fails is removed, being the pass's own file, and the push is refused. A link that
-// fails for another reason (EIO) is not tried as a copy and refuses the push too.
+// A copy whose sync fails is removed, being the pass's own file, with nothing left under a temp name,
+// and the push is refused. A link that fails for another reason (EIO) is not tried as a copy and
+// refuses the push too.
 func TestInstall_AFailedCopyOrLinkRefusesThePush(t *testing.T) {
 	for _, errno := range []syscall.Errno{syscall.EPERM, syscall.EIO} {
 		t.Run(errno.Error(), func(t *testing.T) {
@@ -93,6 +94,12 @@ func TestInstall_AFailedCopyOrLinkRefusesThePush(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(root, copyName(1))); !os.IsNotExist(err) {
 				t.Errorf("a copy that was not kept is on the laptop: %v", err)
+			}
+			ents, _ := os.ReadDir(root)
+			for _, e := range ents {
+				if strings.Contains(e.Name(), ".wardyn-sync-") {
+					t.Errorf("temp file left: %s", e.Name())
+				}
 			}
 		})
 	}
