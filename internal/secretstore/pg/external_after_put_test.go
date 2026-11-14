@@ -94,13 +94,16 @@ func TestWaitForCleanUps_CutsWhatOutlastsIt(t *testing.T) {
 // `wardynd -reconcile`. A wait here would hang the test, as the running
 // clean-up ignores its context until the test lets it end.
 func TestAfterPut_SkipsACleanUpPastTheCap(t *testing.T) {
+	if err := WaitForCleanUps(t.Context()); err != nil { // none left by an earlier test
+		t.Fatal(err)
+	}
 	var logged bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	s := &Store{extTimeout: time.Second, cleanUpLimit: 1}
-	held, ran := make(chan struct{}), make(chan struct{})
-	s.afterPut(t.Context(), "tok", func(context.Context) { <-held })
+	held, ran, within := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	s.afterPut(t.Context(), "tok", func(context.Context) { close(within); <-held })
 	s.afterPut(t.Context(), "tok", func(context.Context) { close(ran) })
 	close(held)
 	if err := WaitForCleanUps(t.Context()); err != nil {
@@ -110,6 +113,11 @@ func TestAfterPut_SkipsACleanUpPastTheCap(t *testing.T) {
 	case <-ran:
 		t.Fatal("a clean-up past the cap ran")
 	default:
+	}
+	select {
+	case <-within:
+	default:
+		t.Fatal("the clean-up within the cap was skipped")
 	}
 	if !strings.Contains(logged.String(), "level=WARN") || !strings.Contains(logged.String(), "is skipped") {
 		t.Fatalf("log = %q; want the skip logged at WARN", logged.String())

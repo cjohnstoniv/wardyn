@@ -157,12 +157,12 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 				s.removeOld(ctx, name, prev)
 			}
 		})
-		return fmt.Errorf("pg secretstore: put %s: the value reached %s, but whether the row did is unknown (%w: %w); the value is removed after this call unless the row points to it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+		return fmt.Errorf("pg secretstore: put %s: the value reached %s, but whether the row did is unknown (%w: %w); it is removed after this call unless the row points to it, and if that removal is skipped, cut or fails, `wardynd -reconcile` lists it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
 	}
 	// The row's lock ends with this Put, so a later Put may reuse loc's object
 	// before the removal runs: removeOld leaves an object the row names.
 	s.afterPut(ctx, name, func(ctx context.Context) { s.removeOld(ctx, name, loc) })
-	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it is removed again after this call: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it is removed again after this call; if that removal is skipped, cut or fails, `wardynd -reconcile` lists it: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
 }
 
 // cleanUps counts the clean-ups afterPut started in this process that have

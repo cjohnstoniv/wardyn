@@ -208,8 +208,10 @@ func run() error {
 	}
 	// After the secret store's clean-ups: a boot step that fails right after a Put
 	// (a boot key, a device credential) exits here, and pool.Close alone would cut a
-	// clean-up that has not taken its connection.
-	defer secretstorepg.CloseAfterCleanUps(pool, api.BackgroundShutdownBudget)
+	// clean-up that has not taken its connection. Once the shutdown sequence has
+	// waited for them, cleanUpWaitAfterServe sets the wait to none.
+	cleanUpWait := api.BackgroundShutdownBudget
+	defer func() { secretstorepg.CloseAfterCleanUps(pool, cleanUpWait) }()
 
 	// One instance per database, enforced at RUNTIME — the Helm chart's
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
@@ -643,7 +645,9 @@ func run() error {
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the
 	// process (issue #1131).
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
+	cleanUpsWaited, err := serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
+	cleanUpWait = cleanUpWaitAfterServe(cleanUpsWaited)
+	return err
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
