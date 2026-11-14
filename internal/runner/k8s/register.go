@@ -98,7 +98,7 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return s, nil // avoid the typed-nil interface trap
+		return served(s), nil // avoid the typed-nil interface trap
 	})
 }
 
