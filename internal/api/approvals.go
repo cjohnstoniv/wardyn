@@ -252,9 +252,16 @@ func (s *Server) refuseIfRunEnded(
 	}
 	// A run at its lifetime cap is being ended by the lease sweep, whose kill cancels this row. It is not
 	// decided in between: an approve now would hand a credential or a host to a run that is over.
-	if haveRun && pastLifetimeCap(run, s.cfg.Now()) && (ap.State == "" || ap.State == types.ApprovalPending) {
-		writeErrorReason(w, http.StatusConflict, reasonApprovalRunPastLifetime, approvalRunPastLifetimeBody)
-		return "run_past_lifetime"
+	if haveRun && run.LifetimeCapAt != nil && (ap.State == "" || ap.State == types.ApprovalPending) {
+		now, err := s.dbNow(r.Context()) // lifetime_cap_at is the database's stamp
+		if err != nil {
+			writeServerError(w, r, "read the database's clock", err)
+			return "clock_unreadable" // nothing is decided; the person can retry
+		}
+		if pastLifetimeCap(run, now) {
+			writeErrorReason(w, http.StatusConflict, reasonApprovalRunPastLifetime, approvalRunPastLifetimeBody)
+			return "run_past_lifetime"
+		}
 	}
 	return ""
 }

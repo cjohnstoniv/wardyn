@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -392,8 +391,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBSoft = diskSoft
 	if run.LifetimeCapAt != nil {
-		// The run pods' deadline follows this run's own cap, not a driver-wide one.
-		resources.LifetimeCap = max(run.LifetimeCapAt.Sub(s.cfg.Now()), time.Second)
+		// The run pods' deadline follows this run's own cap, not a driver-wide one (podLifetimeCap).
+		resources.LifetimeCap = s.podLifetimeCap(ctx, *run.LifetimeCapAt)
 	}
 	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
 	// with each narrowed grant's scope read from its stored row — and, with every

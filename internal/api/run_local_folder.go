@@ -169,7 +169,11 @@ func (s *Server) holdForLocalFolder(ctx context.Context, run types.AgentRun, ref
 		wait = DefaultLocalFolderSeedWait
 	}
 	if run.EndsAt != nil {
-		wait = min(wait, run.EndsAt.Sub(s.cfg.Now()))
+		// ends_at is the database's stamp; an unreadable clock leaves the configured wait, and the lease sweep
+		// still ends the run at its end.
+		if left, ok := s.untilOnDatabaseClock(ctx, *run.EndsAt); ok {
+			wait = min(wait, left)
+		}
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.seed.hold", run.ID.String(), "success",
 		mustJSON(map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "wait_sec": int(wait.Seconds())})))

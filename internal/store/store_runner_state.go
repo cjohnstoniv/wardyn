@@ -167,7 +167,7 @@ func (s PG) MarkRunnerRunGone(ctx context.Context, runnerID, runID uuid.UUID, ex
 
 // probeSessionSQL is TRUE for an agent_runs row (alias a) whose runner's current session began its
 // inventory at or before $4, the database time read before a status check of the run's sandbox
-// (RunnerProbeClock). Every check over the current session passes: every call over a session follows
+// (DatabaseNow). Every check over the current session passes: every call over a session follows
 // its BeginInventory (remote Hub.start runs fresh before AttachSession), and a resumed session keeps the
 // row it began with. A check issued before it went over a superseded session, so its late reply, on this
 // replica or another, records nothing.
@@ -178,17 +178,28 @@ const probeSessionSQL = `EXISTS (SELECT 1 FROM runner_inventories i WHERE i.runn
 // check that found it absent again over the runner's current session, that a gone mark may land on.
 const probeConfirmedSQL = `a.sandbox_absent_at IS NOT NULL AND $4::timestamptz >= a.sandbox_absent_at + $5::interval AND ` + probeSessionSQL + ` AND ` + goneClaimableSQL
 
-// RunnerProbeClock reads the database clock before a status check of a runner's sandbox (api
-// probeRunnerSandbox). The check observes after it, so a report timed here is never later than what
-// it saw, on the clock the absent stamp and the runner's inventories use.
-func (s PG) RunnerProbeClock(ctx context.Context) (time.Time, error) {
+// DatabaseClock reads the database's clock. It is optional like store.ForcedStopper: the api layer asserts
+// it (Server.dbNow), and a store without it, such as the tests' fakes, has the server's own clock stand in.
+type DatabaseClock interface {
+	DatabaseNow(ctx context.Context) (time.Time, error)
+}
+
+// DatabaseNow reads the database's clock: what clock_timestamp() answers in a statement sent now. The api
+// reads it for decisions about stored run times, so they are on the clock that stamped those times, and
+// before a status check of a runner's sandbox (probeRunnerSandbox): the check observes after it, so a report
+// timed here is never later than what it saw, on the clock the absent stamp and the runner's inventories
+// use. DBNow, when set (tests only), answers in its place, error included.
+func (s PG) DatabaseNow(ctx context.Context) (time.Time, error) {
+	if s.DBNow != nil {
+		return s.DBNow()
+	}
 	var at time.Time
 	err := s.Pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at)
 	return at, err
 }
 
 // NoteRunnerSandboxProbe records one status check of runner runnerID's run runID under ref, issued at
-// database time issued (RunnerProbeClock). Absent with no exit code, over the runner's current session,
+// database time issued (DatabaseNow). Absent with no exit code, over the runner's current session,
 // on a run a gone mark may land on, it stamps agent_runs.sandbox_absent_at once (as runnerSandboxGoneTx
 // does) and answers stamped, and due once the stamp is at least RunnerSandboxGoneAfter older than
 // issued (MarkRunnerRunGoneProbed confirms). Any other answer over the current session clears the stamp,

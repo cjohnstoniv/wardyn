@@ -332,7 +332,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 	warnings = append(warnings, f.fitWarnings...)
-	warnings = append(append(warnings, f.end.warnings(run)...), serviceCreateWarnings(run)...)
+	// The end as stored: the insert decides it again on the database's clock (store stampRunTimes).
+	warnings = append(append(warnings, f.end.warnings(created)...), serviceCreateWarnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
@@ -356,7 +357,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
-	createData := s.runCreateAuditData(ctx, runCreateAudit{req: req, f: f, run: run, created: created, enforced: enforced, reqCC: reqCC,
+	createData := s.runCreateAuditData(ctx, runCreateAudit{req: req, f: f, created: created, enforced: enforced, reqCC: reqCC,
 		jti: id.JTI, policyWarns: policyWarns, autonomy: autonomy, belowFloor: belowFloor, mpChoice: mpChoice, gw: gw, comps: comps,
 		intent: intent, runID: runID, createdByType: createdByType, createdBy: createdBy})
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
@@ -584,7 +585,7 @@ func noModelAccessWarning(req createRunRequest, mp runProviderChoice) []string {
 type runCreateAudit struct {
 	req           createRunRequest
 	f             runFold
-	run, created  types.AgentRun
+	created       types.AgentRun
 	enforced      types.ConfinementClass
 	reqCC         types.ConfinementClass
 	jti           string
@@ -604,7 +605,7 @@ type runCreateAudit struct {
 func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[string]any {
 	f := a.f
 	createData := createRunAuditData(a.req, f.policyID, a.enforced, a.reqCC, a.jti, a.policyWarns, a.autonomy, a.belowFloor, a.mpChoice)
-	createData["policy_source"], createData["end"] = f.source, f.end.audit(a.run)
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(a.created) // the end as stored
 	stampConfinementDefault(createData, a.reqCC, f.confinementDefault)
 	if len(a.gw.delivery) > 0 {
 		createData["delivery"] = a.gw.delivery

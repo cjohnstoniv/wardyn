@@ -55,8 +55,9 @@ type RunLeaser interface {
 	StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error)
 	// SetRunContainmentError records that a kept run's stop (proxy or agent)
 	// failed with msg, only while RUNNING and kept. Message refreshes on every
-	// call; containment_error_at keeps the first failure's time.
-	SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string, now time.Time) error
+	// call; containment_error_at keeps the first failure's time, on the
+	// database's clock, which the give-up that ages it reads.
+	SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string) error
 	// ClearRunContainmentError clears it once the stop is confirmed; true only
 	// for the call that cleared a recorded error, so resolution is audited
 	// once across replicas.
@@ -73,11 +74,11 @@ type RunLeaser interface {
 // so the RunLeaser fakes need no change and a store without it never forces an end (migration 0276).
 type ForcedStopper interface {
 	// StopKeptRunForcedIf is StopKeptRunIf, and in the same statement stamps forced_stop_at. It answers the
-	// stamp the row now carries, for ClearForcedStop. applied is false when the mark or state changed.
-	StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (stamp time.Time, applied bool, err error)
-	// KeptHoldOffPassed answers, on the database's clock, whether run id's lost_at (fromLostAt) or ends_at
-	// plus after is at or before now(). False for a run that does not exist or has no such time.
-	KeptHoldOffPassed(ctx context.Context, id uuid.UUID, fromLostAt bool, after time.Duration) (bool, error)
+	// stamp the row now carries, for ClearForcedStop. The same statement holds the claim off until run id's
+	// lost_at (fromLostAt) or ends_at plus after is at or before the database's now(), so no replica's clock
+	// decides it and no end edit lands between the check and the claim. applied is false when the mark or
+	// state changed, the hold-off has not passed, or the row has no such time.
+	StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time, fromLostAt bool, after time.Duration) (stamp time.Time, applied bool, err error)
 	// ListForcedStops lists the runs whose forced stop is not yet confirmed.
 	ListForcedStops(ctx context.Context) ([]ForcedStop, error)
 	// ClearForcedStop clears run id's mark, only while it still carries stamp (the one the caller read).
@@ -216,15 +217,17 @@ func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, 
 	return tag.RowsAffected() > 0, nil
 }
 
-// StopKeptRunForcedIf — see ForcedStopper. It is StopKeptRunIf's UPDATE with the same SET and WHERE, plus the mark.
-func (s PG) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (time.Time, bool, error) {
+// StopKeptRunForcedIf — see ForcedStopper. It is StopKeptRunIf's UPDATE with the same SET and WHERE, plus the mark
+// and the hold-off, which is the database's own time, so no replica's clock decides it.
+func (s PG) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time, fromLostAt bool, after time.Duration) (time.Time, bool, error) {
 	var stamp time.Time
 	err := s.Pool.QueryRow(ctx, `
 		UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=CASE WHEN $6 THEN now() ELSE ended_at END, forced_stop_at=now()
 		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT DISTINCT FROM $3
 		  AND lost_reason=$4 AND ends_at IS NOT DISTINCT FROM $5
+		  AND COALESCE((CASE WHEN $7 THEN lost_at ELSE ends_at END) + make_interval(secs => $8::float8) <= now(), false)
 		RETURNING forced_stop_at`,
-		id, string(to), lostAt, string(lostReason), endsAt, to.IsTerminal()).Scan(&stamp)
+		id, string(to), lostAt, string(lostReason), endsAt, to.IsTerminal(), fromLostAt, after.Seconds()).Scan(&stamp)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, false, nil
 	}
@@ -232,21 +235,6 @@ func (s PG) StopKeptRunForcedIf(ctx context.Context, id uuid.UUID, to types.RunS
 		return time.Time{}, false, fmt.Errorf("store: stop kept run forced if: %w", err)
 	}
 	return stamp, true, nil
-}
-
-// KeptHoldOffPassed — see ForcedStopper. The time is the database's own, so no replica's clock decides it.
-func (s PG) KeptHoldOffPassed(ctx context.Context, id uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
-	var past bool
-	err := s.Pool.QueryRow(ctx, `
-		SELECT COALESCE((CASE WHEN $2 THEN lost_at ELSE ends_at END) + make_interval(secs => $3::float8) <= now(), false)
-		FROM agent_runs WHERE id=$1`, id, fromLostAt, after.Seconds()).Scan(&past)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("store: kept hold-off passed: %w", err)
-	}
-	return past, nil
 }
 
 // ListForcedStops — see ForcedStopper.
@@ -294,11 +282,11 @@ func stateNames(in []types.RunState) []string {
 }
 
 // SetRunContainmentError — see RunLeaser.
-func (s PG) SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string, now time.Time) error {
+func (s PG) SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string) error {
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET containment_error=$2, containment_error_at=COALESCE(containment_error_at, $3)
+		UPDATE agent_runs SET containment_error=$2, containment_error_at=COALESCE(containment_error_at, now())
 		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT NULL`,
-		id, msg, now); err != nil {
+		id, msg); err != nil {
 		return fmt.Errorf("store: set run containment error: %w", err)
 	}
 	return nil

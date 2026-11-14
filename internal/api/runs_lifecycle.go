@@ -489,7 +489,11 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 		slog.WarnContext(ctx, "wardynd: run-secret sweep skipped", slog.Any("err", err))
 		return 0, fmt.Errorf("list runs for the run-secret sweep: %w", err)
 	}
-	cutoff := time.Now().UTC().Add(-RunSecretGrace)
+	now, err := s.dbNow(ctx) // against updated_at, the database's stamp
+	if err != nil {
+		return 0, fmt.Errorf("read the database's clock for the run-secret sweep: %w", err) // nothing evicted
+	}
+	cutoff := now.Add(-RunSecretGrace)
 	cold := func(id uuid.UUID) bool {
 		run, known := byID[id]
 		return known && isTerminalRunState(run.State) && run.UpdatedAt.Before(cutoff)

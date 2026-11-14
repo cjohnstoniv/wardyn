@@ -583,7 +583,10 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun, gen
 	if !ok || !lok {
 		return false, nil
 	}
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return true, fmt.Errorf("the database's clock could not be read, so the run's proxy was not stopped: %w", err)
+	}
 	switch o, stopErr := s.loseRunStopped(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, 0, now, gen); o {
 	case loseNotKeepable:
 		return false, nil

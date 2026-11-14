@@ -73,9 +73,12 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun) {
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx) // every decision below is about times the database stamped or compares
+	if err != nil {
+		return // nothing is killed, ended, stopped, warned or renewed; the next sweep reads the clock again
+	}
 	if reason, due := lifetimeEndDue(run, now); due {
-		s.killRunAtLifetime(ctx, run, reason)
+		s.killRunAtLifetime(ctx, run, reason, now)
 		return
 	}
 	run, renewing := s.renewServiceLease(ctx, leaser, run, now)
@@ -217,7 +220,7 @@ func lifetimeStatusDetail(reason types.RunEndReason) string { return "lifetime: 
 // and broker credentials revoked. A sandbox on an offline self-hosted runner
 // is a pending kill, applied when the runner reconnects; the run is KILLED at
 // the org at once either way.
-func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reason types.RunEndReason) {
+func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reason types.RunEndReason, now time.Time) {
 	updater, ok := s.cfg.Store.(runStateDetailUpdater)
 	if !ok {
 		return
@@ -225,7 +228,7 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 	// Once claimed, the teardown must finish whatever the sweep's own bound says.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	applied, err := updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), s.cfg.Now())
+	applied, err := updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), now)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: killing a run at its lifetime failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -372,7 +375,7 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) (wipeFailed
 // re-assert, and true means this process had not yet seen the failure, so the
 // caller audits it. A failed write is retried by the next pass's re-assert.
 func (s *Server) noteContainmentFailure(ctx context.Context, leaser store.RunLeaser, runID uuid.UUID, err error) bool {
-	if serr := leaser.SetRunContainmentError(ctx, runID, err.Error(), s.cfg.Now()); serr != nil {
+	if serr := leaser.SetRunContainmentError(ctx, runID, err.Error()); serr != nil {
 		slog.WarnContext(ctx, "wardynd: recording a kept run's unresolved containment failed",
 			slog.String("run_id", runID.String()), slog.Any("err", serr))
 	}

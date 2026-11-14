@@ -362,8 +362,9 @@ type runAgentStoppedReader interface {
 // keptAgentStopped reports whether run is kept with its agent stopped, so an exec into it cannot
 // work: lost to its own end or a reboot, or lost to an outage whose agent was stopped (persisted, so
 // an extension since does not undo it) or whose lease has run out and so requires the stop. An outage
-// run inside its lease keeps its agent running and is still inspectable. A store that cannot read the
-// persisted stop, or a failed read, leaves such a run inspectable as before.
+// run inside its lease keeps its agent running and is still inspectable. The lease's end is judged on the
+// database's clock, which stamps ends_at. A store that cannot read the persisted stop, or a failed read of it or
+// of the database's clock, leaves such a run inspectable as before.
 func (s *Server) keptAgentStopped(ctx context.Context, run types.AgentRun) bool {
 	if run.LostAt == nil {
 		return false
@@ -372,8 +373,10 @@ func (s *Server) keptAgentStopped(ctx context.Context, run types.AgentRun) bool 
 	case types.LostEnded, types.LostReboot:
 		return true
 	case types.LostOutage:
-		if run.EndsAt != nil && !s.cfg.Now().Before(*run.EndsAt) {
-			return true
+		if run.EndsAt != nil {
+			if now, err := s.dbNow(ctx); err == nil && !now.Before(*run.EndsAt) {
+				return true
+			}
 		}
 		if rd, ok := s.cfg.Store.(runAgentStoppedReader); ok {
 			stopped, err := rd.RunAgentStopped(ctx, run.ID)

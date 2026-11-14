@@ -309,7 +309,7 @@ func (s *keptStore) MarkRunEndingSoon(context.Context, uuid.UUID, time.Time, int
 func (s *keptStore) SetRunEndAndWait(context.Context, uuid.UUID, types.RunLimits, *time.Time, int, *time.Time, int, *store.EndedKept) (bool, error) {
 	return false, nil
 }
-func (s *keptStore) SetRunContainmentError(context.Context, uuid.UUID, string, time.Time) error {
+func (s *keptStore) SetRunContainmentError(context.Context, uuid.UUID, string) error {
 	return nil
 }
 func (s *keptStore) ClearRunContainmentError(context.Context, uuid.UUID) (bool, error) {

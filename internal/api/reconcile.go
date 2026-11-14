@@ -579,7 +579,10 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx) // admitted_at and created_at are database times
+	if err != nil {
+		return err // nothing is finalized; the next pass reads the clock again
+	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	var finalized int
 	for _, run := range runs {

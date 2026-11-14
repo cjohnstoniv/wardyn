@@ -161,10 +161,28 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read run failed; retry")
 		return nil, false
 	}
-	now := s.cfg.Now().UTC()
+	// now is the database's time (lifetime_cap_at, ended_at, updated_at and lost_at are its stamps), read only
+	// where a time decides: a terminal run, a run with a cap, a kept run. This gate runs on every /internal/*
+	// door, and a live run with no cap needs no second round trip. A failed read refuses as retryable.
+	var now time.Time
+	clockRead := func() bool {
+		if !now.IsZero() {
+			return true
+		}
+		at, err := s.dbNow(r.Context())
+		if err != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read the database's clock failed; retry")
+			return false
+		}
+		now = at
+		return true
+	}
 	// Terminal first: a kept run keeps its lost mark when it is later killed or
 	// torn down, and a terminal run is refused as terminal whatever it was.
 	if isTerminalRunState(run.State) {
+		if !clockRead() {
+			return nil, false
+		}
 		if internalUploadWithinGrace(r.URL.Path, run, now) {
 			return &run, true
 		}
@@ -181,6 +199,9 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	}
 	// A run at its lifetime cap is over even before the lease sweep kills it: no mint, injection or
 	// decision is answered for it. Its tail uploads keep their grace, counted from the cap.
+	if run.LifetimeCapAt != nil && !clockRead() {
+		return nil, false
+	}
 	if pastLifetimeCap(run, now) {
 		if pathHasAny(r.URL.Path, terminalGraceRoutes) && uploadGraceOpen(*run.LifetimeCapAt, now) {
 			return &run, true
@@ -200,8 +221,13 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	// no mint, injection or decision is answered for it. The tail uploads keep
 	// their grace, counted from the mark: the agent stops before its proxy,
 	// and its last cast races both.
-	if pathHasAny(r.URL.Path, terminalGraceRoutes) && uploadGraceOpen(*run.LostAt, now) {
-		return &run, true
+	if pathHasAny(r.URL.Path, terminalGraceRoutes) {
+		if !clockRead() {
+			return nil, false
+		}
+		if uploadGraceOpen(*run.LostAt, now) {
+			return &run, true
+		}
 	}
 	s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
 	writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
