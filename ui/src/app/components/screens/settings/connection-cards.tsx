@@ -19,7 +19,9 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { Check, Loader2 } from "lucide-react";
+import { HttpError } from "../../../lib/api/core";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
+import { SECRET_EXISTS_REASON } from "../../../lib/secret-refusals";
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -28,6 +30,7 @@ import { PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
+import { SecretOverwriteWarning } from "../secrets";
 
 // Canon strings, reviewed against the settings mock. Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
@@ -141,7 +144,10 @@ export function LaneBody({ children }: { children: React.ReactNode }) {
 }
 
 // A one-secret lane form: a single write-only value + Save, and Disconnect once
-// stored. Every key/token lane in both cards is this shape.
+// stored. Every key/token lane in both cards is this shape. Its only caller, the
+// Workspace Providers Git tab, offers it to administrators, so it writes and
+// deletes in the shared namespace by that route: a role change since the page
+// loaded is refused there rather than moving the write to the person's own.
 export function SecretLane({
   label,
   placeholder,
@@ -184,17 +190,23 @@ export function SecretLane({
   // Only ever true after an explicit Replace: a stored secret is write-only, so
   // the field starts hidden rather than empty-and-ambiguous.
   const [editing, setEditing] = React.useState(false);
+  // The name a Save found already stored although this lane showed none: the next Save replaces it only once the
+  // person has seen the warning. Replace is already that choice.
+  const [takenName, setTakenName] = React.useState("");
+  const taken = !stored && takenName === secretName;
 
   const save = async () => {
     setBusy(true);
     try {
-      await secretsApi.setSecret(secretName, value.trim());
+      await secretsApi.setSecret(secretName, value.trim(), { scope: "shared", createOnly: !stored && !taken });
       setValue("");
       setEditing(false);
+      setTakenName("");
       toast.success(`Saved ${secretName}`);
       onChanged();
     } catch (e) {
-      toast.error(getErrorMessage(e));
+      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) setTakenName(secretName);
+      else toast.error(getErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -229,7 +241,7 @@ export function SecretLane({
           allowed
           description={PROVIDERS_EXTRA.DISCONNECT_CREDENTIAL_BODY}
           onOpenChange={(o) => !o && setConfirming(false)}
-          onDelete={() => secretsApi.deleteSecret(secretName)}
+          onDelete={() => secretsApi.deleteSecret(secretName, undefined, "shared")}
           onDeleted={() => {
             setConfirming(false);
             onChanged();
@@ -253,10 +265,11 @@ export function SecretLane({
           onChange={(e) => setValue(e.target.value)}
         />
       </Field>
+      {taken && <SecretOverwriteWarning name={secretName} />}
       <div className="flex items-center gap-2">
-        <Button size="sm" variant={saveVariant} disabled={disabled || busy || !value.trim()} onClick={save}>
+        <Button size="sm" variant={taken ? "destructive" : saveVariant} disabled={disabled || busy || !value.trim()} onClick={save}>
           {busy && <Loader2 className="size-3.5 animate-spin" />}
-          {stored ? "Save replacement" : "Save"}
+          {stored ? "Save replacement" : taken ? "Overwrite secret" : "Save"}
         </Button>
         {stored && (
           <Button

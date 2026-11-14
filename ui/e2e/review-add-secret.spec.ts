@@ -29,7 +29,8 @@ test.describe("Review: Add a secret that is not stored (#2108)", () => {
         },
       }),
     );
-    await page.route(`**/api/v1/secrets/${NAME}`, async (route) => {
+    // The admin token is an administrator, so the token goes to the shared namespace's route.
+    await page.route(`**/api/v1/shared-secrets/${NAME}`, async (route) => {
       const response = await route.fetch();
       if (route.request().method() === "PUT" && response.ok()) stored = true;
       await route.fulfill({ response });

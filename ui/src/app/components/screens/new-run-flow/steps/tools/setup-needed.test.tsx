@@ -8,11 +8,14 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { ADO } from "../../../../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
+import { HttpError } from "../../../../../lib/api/core";
+import { health, type Me } from "../../../../../lib/api/health";
 import { secrets } from "../../../../../lib/api/secrets";
 import { HARNESS_NAMES, SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { SetupItem } from "../../../../../lib/types/preflight";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { OperatorProvider } from "../../../../wardyn/operator-context";
 import type { RunIntent } from "../../draft/run-intent";
 import { needsSetup, providerControlId, setupDoor, setupRowId, signInProvider } from "../../lenses/tools-lens";
 import { SetupNeeded, type SetupNeededProps } from "./setup-needed";
@@ -39,6 +42,7 @@ function show(items: SetupItem[], over: Partial<SetupNeededProps> = {}) {
 let setSecret: Mock<typeof secrets.setSecret>;
 beforeEach(() => {
   setSecret = vi.spyOn(secrets, "setSecret").mockResolvedValue(undefined);
+  vi.spyOn(health, "whoami").mockResolvedValue(null);
 });
 afterEach(() => {
   cleanup();
@@ -150,7 +154,7 @@ describe("the add-token door", () => {
       await userEvent.type(field, "s3cret");
       await userEvent.click(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
       await waitFor(() => expect(onDone).toHaveBeenCalledWith(item.id));
-      expect(secrets.setSecret).toHaveBeenCalledWith(item.fix?.secret_name, "s3cret");
+      expect(secrets.setSecret).toHaveBeenCalledWith(item.fix?.secret_name, "s3cret", { scope: "shared", createOnly: true });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     },
   );
@@ -164,6 +168,68 @@ describe("the add-token door", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("secret store is read-only");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("a token name the server already holds: the first save stores nothing and warns; Overwrite secret replaces it", async () => {
+    setSecret.mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+    show([COMPONENT_SECRET]);
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onDone).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Overwrite secret" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(COMPONENT_SECRET.id));
+    expect(secrets.setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: "shared", createOnly: false });
+  });
+
+  it("after the overwrite warning, Enter in the field stores nothing: only Overwrite secret replaces the stored token", async () => {
+    setSecret.mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+    show([COMPONENT_SECRET]);
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok{Enter}");
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "{Enter}");
+    expect(secrets.setSecret).toHaveBeenCalledTimes(1);
+    expect(onDone).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Overwrite secret" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(COMPONENT_SECRET.id));
+    expect(secrets.setSecret).toHaveBeenLastCalledWith("billing-key", "tok", { scope: "shared", createOnly: false });
+  });
+
+  it.each([
+    ["a member's own namespace", false, true, "personal"],
+    ["an administrator's shared namespace", true, true, "shared"],
+    ["the role-placed route before this tab knows who is signed in", true, false, undefined],
+  ] as const)("saves to %s", async (_name, operator, operatorResolved, scope) => {
+    render(
+      <OperatorProvider operator={operator} operatorResolved={operatorResolved}>
+        <SetupNeeded items={[COMPONENT_SECRET]} pending={new Set()} done={new Set()} intent={BEDROCK_RUN} names={HARNESS_NAMES} onDone={onDone} />
+      </OperatorProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+    await waitFor(() => expect(secrets.setSecret).toHaveBeenCalledWith("billing-key", "tok", { scope, createOnly: true }));
+  });
+
+  // The preflight reads the shared namespace for an administrator and the person's own (with the shared one) for
+  // anyone else, by the role the server holds now: the save follows that role, not the one this tab read at load.
+  it.each([
+    ["promoted since this tab read /me: the shared namespace", false, true, "shared"],
+    ["demoted since this tab read /me: their own namespace", true, false, "personal"],
+  ] as const)("a person %s", async (_name, tabOperator, nowOperator, scope) => {
+    vi.spyOn(health, "whoami").mockResolvedValue({ operator: nowOperator } as Me);
+    render(
+      <OperatorProvider operator={tabOperator}>
+        <SetupNeeded items={[COMPONENT_SECRET]} pending={new Set()} done={new Set()} intent={BEDROCK_RUN} names={HARNESS_NAMES} onDone={onDone} />
+      </OperatorProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+    await waitFor(() => expect(secrets.setSecret).toHaveBeenCalledWith("billing-key", "tok", { scope, createOnly: true }));
   });
 
   it("Cancel saves nothing", async () => {

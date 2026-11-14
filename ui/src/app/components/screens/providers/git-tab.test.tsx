@@ -16,6 +16,7 @@ import { PERM } from "../../../lib/permissions-copy";
 import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 import { GitTab } from "./git-tab";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
+import { HttpError } from "../../../lib/api/core";
 
 const setSecretMock = vi.fn();
 const deleteSecretMock = vi.fn();
@@ -628,7 +629,7 @@ describe("GitTab", () => {
       const row = screen.getByTestId("provider-row-github");
       await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
       await userEvent.click(within(row).getByRole("button", { name: "Save" }));
-      expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_x");
+      expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_x", { scope: "shared", createOnly: true });
       // …and github (including GHES, kind `github` on a corporate host) keeps it.
       expect(within(row).getByLabelText("Access token")).toHaveAttribute("placeholder", "ghp_…");
     });
@@ -718,8 +719,39 @@ describe("GitTab", () => {
       const row = screen.getByTestId("provider-row-github");
       await userEvent.click(within(row).getByRole("button", { name: "Disconnect" }));
       await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disconnect" }));
-      await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("git-pat-github-com"));
+      await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("git-pat-github-com", undefined, "shared"));
       expect(deleteSecretMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The lane's list can be stale (another tab, the CLI, another administrator): only the server knows what is
+  // stored now, so a Save on a lane that shows nothing stored is create-only until the person has seen the warning.
+  describe("a lane Save never replaces a stored token without asking", () => {
+    const row = { id: "gh", kind: "github" as const, base_urls: ["https://github.com/acme"] };
+
+    it("a token name already stored although the lane showed none: the first Save stores nothing and warns; Overwrite secret replaces it", async () => {
+      setSecretMock.mockReset().mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+      const onStatusRefresh = vi.fn();
+      render(<CredHarness initial={[row]} present={[]} githubApp={false} onStatusRefresh={onStatusRefresh} />);
+      const lane = screen.getByTestId("provider-row-github");
+      await userEvent.type(within(lane).getByLabelText("Access token"), "ghp_x");
+      await userEvent.click(within(lane).getByRole("button", { name: "Save" }));
+      expect(await within(lane).findByText(/already exists/i)).toBeInTheDocument();
+      expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_x", { scope: "shared", createOnly: true });
+      expect(onStatusRefresh).not.toHaveBeenCalled();
+      await userEvent.click(within(lane).getByRole("button", { name: "Overwrite secret" }));
+      await waitFor(() => expect(setSecretMock).toHaveBeenLastCalledWith("git-pat-github-com", "ghp_x", { scope: "shared", createOnly: false }));
+      expect(onStatusRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("Replace on a stored token is the person's choice to replace it, so it is sent as a replacement", async () => {
+      setSecretMock.mockReset().mockResolvedValue(undefined);
+      render(<CredHarness initial={[row]} present={["git-pat-github-com"]} githubApp={false} />);
+      const lane = screen.getByTestId("provider-row-github");
+      await userEvent.click(within(lane).getByRole("button", { name: "Replace" }));
+      await userEvent.type(within(lane).getByLabelText("Access token"), "ghp_y");
+      await userEvent.click(within(lane).getByRole("button", { name: "Save replacement" }));
+      await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_y", { scope: "shared", createOnly: false }));
     });
   });
 
