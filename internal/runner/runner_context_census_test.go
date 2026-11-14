@@ -39,6 +39,8 @@ type runnerContextRow struct {
 // internal/runner and the folders below it that is not the parent handed straight to context.WithTimeout or
 // context.WithDeadline, keyed by file (relative to internal/runner), function and kind.
 var runnerContextCensus = map[runnerContextSite]runnerContextRow{
+	{"docker/drive_pin.go", "Driver.dropDrivePin", "Background"}:              {1, ctxCreate},
+	{"docker/drive_pin.go", "Driver.pinDriveVolumes", "WithoutCancel"}:        {1, ctxCreate},
 	{"docker/driver_dns.go", "Driver.mountProxyResolver", "Background"}:       {1, ctxCreate},
 	{"docker/driver_exec.go", "Driver.followMainProcessOutput", "Background"}: {1, ctxOwnLoop},
 	{"docker/driver_network.go", "Driver.CreateSandbox", "Background"}:        {1, ctxCreate},
