@@ -765,7 +765,7 @@ func isNormalClose(err error) bool {
 
 // attachCloseGrace bounds how long an end without a close reason waits for the
 // output half's: longer than localEndGrace, which the local output half may
-// spend waiting for the organisation's close.
+// spend waiting for the organisation's close or for the runner's last output.
 var attachCloseGrace = 3 * time.Second
 
 // settleAttachEnd is the session's end as shown. When the first end carries
