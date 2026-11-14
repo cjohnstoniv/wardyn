@@ -127,7 +127,7 @@ const (
 )
 
 // Valid reports whether a is an actor type audit_events stores (its actor_type CHECK constraint). A new
-// ActorType constant is added here too, so every boundary that admits an actor type reads one list.
+// ActorType constant is added here too; the device audit ingest admits exactly this set.
 func (a ActorType) Valid() bool {
 	switch a {
 	case ActorHuman, ActorAgent, ActorSystem, ActorService:
