@@ -23,6 +23,7 @@
 package maskstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -220,43 +221,24 @@ var afterRunCommit = func() {}
 var beforeRunFenceRead = func(ctx context.Context) context.Context { return ctx }
 
 // publishRun puts a committed per-run value in this process's cache (rf, when this process wrote the
-// row, and the registry), then reads the run's fence and the row again. An erasure or purge that
+// row, and the registry), then reads the run's fence and the row again (settle). An erasure or purge that
 // tombstoned the row before the value was cached found nothing here to drop, and no later read of the
 // table applies a tombstone twice, so a row gone or a run fenced by now takes the value back out and
 // refuses as a fenced run does; one that comes later finds the value here and drops it. Only what this
 // call added is taken out: a copy the registry already held is the other writer's to drop. A read that
-// fails takes nothing out: the row is committed, another registration of the value may already have found
-// it cached and returned, and this process's read of the table may have moved past the row, so the value
-// and this process's ref stay and the call reports the error.
+// fails takes nothing out yet: the row is committed, another registration of the value may already have
+// found it cached and returned, and this process's read of the table may have moved past the row. The
+// value and this process's ref stay pending, the call reports the error, and the next read of the table,
+// or the next registration of the value, reads the fence again.
 func (s *Store) publishRun(ctx context.Context, runID uuid.UUID, digest, value []byte, rf *ref) error {
 	if rf != nil {
 		s.note(rf)
 	}
-	added := s.reg.AddLocal(runID, value)
-	var live bool
-	err := s.pool.QueryRow(beforeRunFenceRead(ctx), `SELECT EXISTS (SELECT 1 FROM run_mask_manifest WHERE run_id=$1 AND fenced_at IS NULL)
-		AND EXISTS (SELECT 1 FROM mask_values WHERE bucket=$2 AND digest=$3 AND NOT tombstone)`, runID, bucketRun, digest).Scan(&live)
-	if err != nil {
-		return fmt.Errorf("maskstore: read the run's fence again: %w", err)
-	}
-	if live {
-		return nil
-	}
-	if rf != nil {
-		s.sync.mu.Lock()
-		ours := s.sync.rows[rf.id] == rf
-		if ours {
-			delete(s.sync.rows, rf.id)
-		}
-		s.sync.mu.Unlock()
-		if ours {
-			clear(rf.value)
-		}
-	}
-	if added {
-		s.reg.RemoveLocal(runID, value)
-	}
-	return ErrFenced
+	p := &pendingRun{runID: runID, digest: digest, value: bytes.Clone(value), rf: rf, added: s.reg.AddLocal(runID, value)}
+	s.sync.mu.Lock()
+	s.sync.pending = append(s.sync.pending, p)
+	s.sync.mu.Unlock()
+	return s.settle(beforeRunFenceRead(ctx), p)
 }
 
 // CachesRunValues marks PutRun as the one that puts a value in the registry (secretmask.Backend).

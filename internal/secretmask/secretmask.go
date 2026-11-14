@@ -142,14 +142,14 @@ func NewRegistry() *Registry {
 // ignored. The value is copied so the caller may reuse the backing array.
 // Never logs the secret value.
 //
-// With a Backend the value is committed to it before Add returns, and an error
-// means it is NOT on record: the caller must not hand the credential out.
+// With a Backend the value is committed to it before Add returns. An error means
+// the caller must not hand the credential out; the value may still be on record.
 func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 	if r == nil || len(value) < MinLen {
 		return nil
 	}
-	// Re-registering a value the run already has is a no-op: masking is
-	// exact-match over a set, so a duplicate could never mask anything new. A
+	// Re-registering a value the run already has commits nothing (settledRun):
+	// masking is exact-match over a set, so a duplicate masks nothing new. A
 	// value that is only in the global set is NOT known: a global is let go
 	// when its credential is replaced or deleted, and a run that was handed
 	// the value before then still holds it. There is deliberately no CAP
@@ -160,7 +160,7 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 	b := r.backend
 	r.mu.RUnlock()
 	if known {
-		return nil
+		return settledRun(b, runID, value)
 	}
 	// Commit first, cache second: a failed commit must leave the value unknown here, or the retry would see
 	// it as known and never persist it. A backend that caches (runCacher) has put it here itself.
