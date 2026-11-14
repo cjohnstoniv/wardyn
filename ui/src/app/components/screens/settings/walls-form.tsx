@@ -620,7 +620,8 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.UNLISTED}</span>
         {errors?.unlisted && <SectionError id={eid("unlisted")} text={errors.unlisted} />}
-        <div role="group" aria-label={T.UNLISTED} aria-describedby={describedBy(errors?.unlisted && eid("unlisted"))}>
+        {/* The four options need about 551px side by side: the container lets them stack in any narrower card or dialog. */}
+        <div role="group" aria-label={T.UNLISTED} aria-describedby={describedBy(errors?.unlisted && eid("unlisted"))} className="@container/segmented-wide">
           <Segmented<FirstUseMode | "">
             stackOnPhone
             value={form.firstUse ?? ""}

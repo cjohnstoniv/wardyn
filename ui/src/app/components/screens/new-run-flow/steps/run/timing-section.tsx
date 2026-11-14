@@ -4,27 +4,32 @@
  */
 
 import * as React from "react";
+import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { RadioCard, RadioCardGroup } from "../../../../wardyn/radio-card";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
-import { emptyStart, scheduleDaysAhead, scheduledRunsOn, startInstant, startProblem, todayDate, whenText, zoneOptions, type StartChoice, type StartProblem } from "../../../../../lib/schedule";
+import { emptyStart, scheduleDaysAhead, scheduledRuns, startInstant, startProblem, todayDate, whenText, zoneOptions, type StartChoice, type StartProblem } from "../../../../../lib/schedule";
+import { heldStart, startHeldText } from "../../draft/launch-start";
 import { QuestionBlock } from "./question-block";
 
 const SELECT_CLASS =
   "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm";
 
-const PROBLEM_TEXT = (): Record<StartProblem, string> => ({ missing: NR_RUN.START_MISSING, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR(scheduleDaysAhead()) });
+const PROBLEM_TEXT = (): Record<StartProblem, string> => ({ missing: NR_RUN.START_MISSING, clock: NR_RUN.START_CLOCK, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR(scheduleDaysAhead()) });
 
 /**
  * When an Autonomous run starts: now, or at a date and time the person picks. Later is offered only while the
- * setup status carries features.scheduled_runs; otherwise Run now is the one answer, said as a sentence.
+ * setup status carries features.scheduled_runs; otherwise Run now is the one answer, said as a sentence. A Later
+ * start the draft still holds while the switch is off or not known is said as held, with Run now beside it.
  */
 export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice | undefined; onSchedule: (next: StartChoice | undefined) => void }) {
   const labelId = React.useId();
   const { status } = useShellSetupStatus();
-  const on = scheduledRunsOn(status);
+  const switchOn = scheduledRuns(status);
+  const on = switchOn === true;
+  const held = heldStart(schedule, switchOn);
   const later = on && schedule !== undefined;
   const problem = later ? startProblem(schedule, Date.now()) : null;
   const at = later && !problem ? startInstant(schedule) : null;
@@ -40,12 +45,42 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
   const helpId = `${labelId}-help`;
   const errorId = `${labelId}-error`;
   const describedBy = told ? `${errorId} ${helpId}` : helpId;
+  // Run now on a held start unmounts the button that had focus: focus goes to the Run now sentence that replaces it.
+  const nowLine = React.useRef<HTMLParagraphElement>(null);
+  const ranNow = React.useRef(false);
+  React.useEffect(() => {
+    if (!ranNow.current || held) return;
+    ranNow.current = false;
+    nowLine.current?.focus();
+  }, [held]);
+
+  // A held start: why, in the dialog's words, and Run now to clear it. Shown unasked, so polite.
+  if (held) {
+    return (
+      <QuestionBlock labelId={labelId} label={NR_RUN.TIMING_LABEL}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p aria-labelledby={labelId} role="status" className="min-w-0 flex-[1_1_20rem] text-sm text-danger">{startHeldText(held)}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              ranNow.current = true;
+              onSchedule(undefined);
+            }}
+          >
+            {NR_RUN.TIMING_NOW}
+          </Button>
+        </div>
+      </QuestionBlock>
+    );
+  }
 
   // Switch off: no start time exists on the wire, so the one answer is a sentence, not a radio (#3045).
   if (!on) {
     return (
       <QuestionBlock labelId={labelId} label={NR_RUN.TIMING_LABEL}>
-        <p aria-labelledby={labelId} className="text-sm">
+        <p ref={nowLine} tabIndex={-1} aria-labelledby={labelId} className="text-sm outline-none">
           <strong className="font-medium">{NR_RUN.TIMING_NOW}</strong>
           <span className="text-muted-foreground"> · {NR_RUN.TIMING_NOW_BODY}</span>
         </p>
@@ -87,7 +122,8 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
               </select>
             </div>
           </div>
-          {told && problem && <p id={errorId} role="alert" className="text-sm text-danger">{PROBLEM_TEXT()[problem]}</p>}
+          {/* An alert only after the person typed; values they come back to are told politely. */}
+          {told && problem && <p id={errorId} role={touched ? "alert" : "status"} className="text-sm text-danger">{PROBLEM_TEXT()[problem]}</p>}
           {at !== null && <p role="status" className="text-sm"><strong>{NR_RUN.STARTS(whenText(at, schedule.zone))}</strong></p>}
           <p id={helpId} className="text-xs text-muted-foreground">{NR_RUN.START_HELP(scheduleDaysAhead())}</p>
         </div>

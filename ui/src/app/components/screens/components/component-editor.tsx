@@ -85,11 +85,12 @@ function SecretRow({
         </Button>
       </div>
 
-      <Field label={T.DELIVERY}>
+      <Field label={T.DELIVERY} className="@container">
         <Segmented
           value={secret.mode}
           options={MODES}
           onChange={(mode) => set({ mode, ...(mode !== "header" && { shared: false }) })}
+          stackOnPhone
         />
       </Field>
       <p className="-mt-1 text-xs text-muted-foreground">{header ? T.DEL_HEADER_HINT : T.DEL_RESIDENT_HINT}</p>
@@ -159,7 +160,7 @@ function SecretRow({
         </Field>
       )}
 
-      <Field label={T.WHOSE}>
+      <Field label={T.WHOSE} className="@container">
         <Segmented
           value={secret.shared ? "shared" : "own"}
           options={[
@@ -168,6 +169,7 @@ function SecretRow({
           ]}
           onChange={(v) => set({ shared: v === "shared" })}
           disabled={!header}
+          stackOnPhone
         />
       </Field>
       <p className="-mt-1 text-xs text-muted-foreground">
@@ -352,7 +354,7 @@ export function ComponentEditor({
           <AudienceField value={audience} onChange={setAudience} saved={savedAudience !== ""} refusal={audienceRefused ? error : null} />
         )}
 
-        <fieldset className="space-y-3">
+        <fieldset className="min-w-0 space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SECRETS_LABEL}</legend>
           <p className="text-xs text-muted-foreground">{T.SECRETS_HINT}</p>
           {draft.secrets.map((s, i) => (

@@ -60,6 +60,15 @@ describe("Your walls card", () => {
     expect(screen.getByRole("radio", { name: "Vault" })).toBeInTheDocument();
   });
 
+  // jsdom does no layout: this pins the classes that stack the 551px unlisted-sites switch in any card or dialog narrower than 35rem.
+  it("the unlisted-sites switch stacks while its group is narrower than it", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const group = screen.getByRole("group", { name: YOUR_WALLS.UNLISTED });
+    expect(group).toHaveClass("@container/segmented-wide");
+    expect(within(group).getByRole("button", { name: YOUR_WALLS.UNLISTED_BLOCK }).parentElement).toHaveClass("@max-[35rem]/segmented-wide:flex-col");
+  });
+
   it("shows the walls it loaded", async () => {
     getMock.mockResolvedValue({
       spec: {

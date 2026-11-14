@@ -38,6 +38,13 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect(((await asJson(bare).catch((e: unknown) => e)) as HttpError).cause).toBe("");
   });
 
+  it("a refusal's detail rides the HttpError; absent is absent", async () => {
+    const withDetail = new Response(JSON.stringify({ error: "x", reason: "start_at_invalid", detail: "clock_change" }), { status: 400 });
+    expect(((await asJson(withDetail).catch((e: unknown) => e)) as HttpError).detail).toBe("clock_change");
+    const bare = new Response(JSON.stringify({ error: "x", reason: "start_at_invalid" }), { status: 400 });
+    expect(((await asJson(bare).catch((e: unknown) => e)) as HttpError).detail).toBeUndefined();
+  });
+
   it("a non-string reason is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: 42 }), { status: 422 });
     expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "", cause: "", field: "" });

@@ -7,18 +7,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NR_RUN } from "../components/wardyn/copy/new-run/run";
-import { browserZone, daysAhead, scheduleDaysAhead, scheduledRunsOn, SCHEDULE_LEAD_WAIT_SEC, SCHEDULE_MAX_AHEAD_MS, startInstant, startProblem, startWire, todayDate, whenText, zoneOptions } from "./schedule";
+import { browserZone, daysAhead, scheduleDaysAhead, scheduledRuns, SCHEDULE_LEAD_WAIT_SEC, SCHEDULE_MAX_AHEAD_MS, startInstant, startProblem, startWire, todayDate, whenText, zoneOptions } from "./schedule";
 
 const at = (date: string, time: string, zone: string) => ({ date, time, zone });
 const NOW = Date.UTC(2026, 9, 20, 14, 0);
 
-describe("scheduledRunsOn", () => {
-  it("is on only when the setup status says features.scheduled_runs is true", () => {
-    expect(scheduledRunsOn({ features: { scheduled_runs: true } })).toBe(true);
-    expect(scheduledRunsOn({ features: { scheduled_runs: false } })).toBe(false);
-    expect(scheduledRunsOn({})).toBe(false);
-    expect(scheduledRunsOn(null)).toBe(false);
-    expect(scheduledRunsOn(undefined)).toBe(false);
+describe("scheduledRuns", () => {
+  it("is the server's switch once it has answered, and not known while nothing it said is in", () => {
+    expect(scheduledRuns({ features: { scheduled_runs: true } })).toBe(true);
+    expect(scheduledRuns({ features: { scheduled_runs: false } })).toBe(false);
+    expect(scheduledRuns({})).toBe(false);
+    expect(scheduledRuns(null)).toBeUndefined();
+    expect(scheduledRuns(undefined)).toBeUndefined();
+    expect(scheduledRuns({ unreachable: true })).toBeUndefined();
+    expect(scheduledRuns({ unreachable: true, features: { scheduled_runs: true } })).toBeUndefined();
   });
 });
 
@@ -36,6 +38,20 @@ describe("startInstant", () => {
     expect(startInstant(at("2026-10-21", "", "UTC"))).toBeNull();
     expect(startInstant(at("2026-10-21", "02:00", "Mars/Olympus"))).toBeNull();
   });
+
+  it("names none for a wall time the clocks skip or repeat, east or west of UTC, and keeps the minutes either side", () => {
+    // London skips 01:00-01:59 on 28 Mar 2027 and repeats it on 31 Oct 2027; New York skips 02:00-02:59 on 14 Mar 2027.
+    for (const gap of [at("2027-03-28", "01:30", "Europe/London"), at("2027-03-28", "01:00", "Europe/London"), at("2027-03-14", "02:30", "America/New_York")]) {
+      expect(startInstant(gap), `${gap.date} ${gap.time} ${gap.zone}`).toBeNull();
+    }
+    for (const repeat of [at("2027-10-31", "01:30", "Europe/London"), at("2027-11-07", "01:30", "America/New_York")]) {
+      expect(startInstant(repeat), `${repeat.date} ${repeat.time} ${repeat.zone}`).toBeNull();
+    }
+    expect(startInstant(at("2027-03-28", "00:59", "Europe/London"))).toBe(Date.UTC(2027, 2, 28, 0, 59));
+    expect(startInstant(at("2027-03-28", "02:00", "Europe/London"))).toBe(Date.UTC(2027, 2, 28, 1, 0));
+    expect(startInstant(at("2027-10-31", "00:59", "Europe/London"))).toBe(Date.UTC(2027, 9, 30, 23, 59));
+    expect(startInstant(at("2027-10-31", "02:00", "Europe/London"))).toBe(Date.UTC(2027, 9, 31, 2, 0));
+  });
 });
 
 describe("startProblem", () => {
@@ -52,6 +68,14 @@ describe("startProblem", () => {
     expect(startProblem(at("2026-10-26", "14:00", "UTC"), NOW)).toBeNull();
     expect(startProblem(at("2026-10-26", "14:01", "UTC"), NOW)).toBe("far");
     expect(startProblem(at("2026-10-27", "14:00", "UTC"), NOW)).toBe("far");
+  });
+
+  it("says clock for a wall time the clocks skip or repeat, before past or too far", () => {
+    const spring = Date.UTC(2027, 2, 25, 12, 0);
+    expect(startProblem(at("2027-03-28", "01:30", "Europe/London"), spring)).toBe("clock");
+    expect(startProblem(at("2027-03-28", "02:30", "Europe/London"), spring)).toBeNull();
+    expect(startProblem(at("2027-10-31", "01:30", "Europe/London"), NOW)).toBe("clock");
+    expect(startProblem(at("2027-03-28", "", "Europe/London"), spring)).toBe("missing");
   });
 
   it("judges the start in its own zone", () => {

@@ -38,7 +38,9 @@ export function Segmented<T extends string>({
   disabled?: boolean;
   /** New Run's view and format switches: a padded track with an inset pill per option (the Make design's compact control). */
   size?: "default" | "compact";
-  /** Default size only: below 400px the options stack, one to a row, so none scrolls off a narrow card. */
+  /** Default size only: below 400px the options stack, one to a row, so none scrolls off a narrow card. Inside an
+   *  `@container` they also stack when that container is narrower than 22rem, and inside an `@container/segmented-wide`
+   *  when it is narrower than 35rem (a caller that knows its switch needs that much). */
   stackOnPhone?: boolean;
 }) {
   // On the selected default option the warning tint (13%) would show the primary fill through it, so the chip
@@ -81,7 +83,7 @@ export function Segmented<T extends string>({
   // The selected fill is the primary token: bg-muted sat at ~1.1:1 on the card, so only the bolder label told the options apart (#2832).
   // max-w-full + overflow-x-auto: an over-wide set scrolls inside its card instead of being clipped (#2870).
   return (
-    <div className={cn("inline-flex w-fit max-w-full overflow-x-auto rounded-lg border border-border-strong", stackOnPhone && "max-[399px]:flex max-[399px]:w-full max-[399px]:flex-col")}>
+    <div className={cn("inline-flex w-fit max-w-full overflow-x-auto rounded-lg border border-border-strong", stackOnPhone && "max-[399px]:flex max-[399px]:w-full max-[399px]:flex-col @max-[22rem]:flex @max-[22rem]:w-full @max-[22rem]:flex-col @max-[35rem]/segmented-wide:flex @max-[35rem]/segmented-wide:w-full @max-[35rem]/segmented-wide:flex-col")}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -91,7 +93,7 @@ export function Segmented<T extends string>({
           onClick={() => onChange(o.value)}
           className={cn(
             "flex items-center gap-1.5 whitespace-nowrap border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 focus-visible:outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
-            stackOnPhone && "max-[399px]:border-l-0 max-[399px]:border-t max-[399px]:first:border-t-0",
+            stackOnPhone && "max-[399px]:border-l-0 max-[399px]:border-t max-[399px]:first:border-t-0 @max-[22rem]:border-l-0 @max-[22rem]:border-t @max-[22rem]:first:border-t-0 @max-[35rem]/segmented-wide:border-l-0 @max-[35rem]/segmented-wide:border-t @max-[35rem]/segmented-wide:first:border-t-0",
             value === o.value
               ? o.value === "deny"
                 ? "bg-danger-subtle font-medium text-danger"

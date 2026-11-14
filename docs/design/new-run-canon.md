@@ -137,6 +137,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `START_MISSING` | deviation (FEAT-2 board F2SCHED-1) | Choose a date and time. |
 | `START_PAST` | deviation (FEAT-2 board F2SCHED-1) | Choose a time in the future. |
 | `START_FAR(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Choose a time up to {n} days ahead. |
+| `START_CLOCK` | deviation (a wall time the clocks skip or repeat names no single start) | That time is skipped or repeated when the clocks change. Choose another time. |
+| `START_HELD_UNKNOWN` | deviation (a Later start is held while the server has not said whether scheduled runs are on) | The server has not said yet whether scheduled runs are on. Wait for it to answer, or start the run now. |
 | `STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Starts {when} |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |

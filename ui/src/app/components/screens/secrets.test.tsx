@@ -782,3 +782,15 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
     ).toBeInTheDocument();
   });
 });
+
+// jsdom does no layout, so this pins the classes that keep the host row inside a phone-width dialog.
+describe("AddSecretDialog — the host row at phone width", () => {
+  it("breaks a long host and lets the lane chip wrap under it", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} host="dev.azure.com/example-org" lane="pat" patBroker={false} />);
+    const host = screen.getByText("dev.azure.com/example-org");
+    expect(host).toHaveClass("[overflow-wrap:anywhere]");
+    const line = host.parentElement!;
+    expect(line).toHaveClass("min-w-0", "flex-wrap");
+    expect(line).toHaveTextContent("PAT · in-sandbox");
+  });
+});

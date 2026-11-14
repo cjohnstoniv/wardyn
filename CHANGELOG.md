@@ -151,6 +151,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A failed pick from the Ends or Waits menu in a run's header now stays on screen under the menus, which stay there to try again; before, the error showed only in a passing notification.
 - On a runner, a command sent with `POST /runs/{id}/exec` just as the runner's connection dropped was answered as failed, yet could still start on the runner when it reconnected. A reconnect that would deliver such a request now starts a new session instead of resuming, so the request is dropped. An exec, terminal or desktop connection cancelled just as the runner answered no longer holds stream slots on that connection until the runner reconnects.
 - On a Docker runner, a proxy stop, end or proxy replacement refused because the run's proxy belongs to a newer policy generation no longer makes the runner stop that newer proxy afterwards.
+- A run scheduled for later no longer starts at once when scheduled runs are turned off while its Name dialog is open: the Run step, Review and the dialog say it is held, with the reason, Launch waits, and the run starts now only when you choose Run now. A start time that the clocks skip or repeat on a daylight-saving change is now refused, in the console and by `POST /runs` (`start_at_invalid` with `detail` `clock_change`), instead of being moved to another time; an RFC 3339 `start_at` with its UTC offset still names one occurrence of a repeated hour.
 
 ### Security
 

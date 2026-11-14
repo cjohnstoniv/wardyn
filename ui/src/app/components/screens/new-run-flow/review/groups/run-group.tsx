@@ -5,10 +5,11 @@
 
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
+import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
-import { scheduledRunsOn, startInstant, whenText } from "../../../../../lib/schedule";
-import { launchStart, type LaunchStart } from "../../draft/launch-start";
+import { scheduledRuns, startInstant, whenText } from "../../../../../lib/schedule";
+import { launchStart, startHeld, startHeldText, type LaunchStart, type StartHeld } from "../../draft/launch-start";
 import type { RunIntent } from "../../draft/run-intent";
 import { appsOf, hasPorts, isServer } from "../../lenses/apps-lens";
 import { mayKeepRunning } from "../../lenses/service-lens";
@@ -19,20 +20,24 @@ import { JumpButton } from "./jump-button";
 
 const VALUE = { agent_task: NR_REVIEW.VALUE_AGENT, application: NR_REVIEW.VALUE_APPLICATION, environment: NR_REVIEW.VALUE_ENVIRONMENT } as const;
 
-function timing(intent: RunIntent, start?: LaunchStart): string | undefined {
+function timing(intent: RunIntent, start?: LaunchStart, held?: StartHeld | null): string | undefined {
   if (isServer(intent)) return NR_REVIEW.TIMING_APPLICATION_SERVER;
   if (intent.shape === "application") return NR_REVIEW.TIMING_APPLICATION;
   if (start) {
     const at = start.problem ? null : startInstant(start.choice);
     return at === null ? NR_REVIEW.TIMING_CHOOSE : NR_SHARED.JOIN(NR_REVIEW.TIMING_STARTS(whenText(at, start.choice.zone)), NR_REVIEW.TIMING_CHECKED);
   }
+  // A Later start the switch does not keep reads as held, in the Name dialog's words, never as Run now.
+  if (held) return NR_SHARED.JOIN(NR_RUN.MODE_AUTONOMOUS, startHeldText(held));
   if (intent.experience === "background") return NR_REVIEW.TIMING_NOW;
   return intent.experience === "interactive" ? NR_REVIEW.TIMING_INTERACTIVE : undefined;
 }
 
 export function RunGroup({ draft, preview, docRows, go }: GroupProps) {
   const { status } = useShellSetupStatus();
-  const detail = timing(draft.intent, launchStart(draft, scheduledRunsOn(status), Date.now()));
+  const on = scheduledRuns(status);
+  const held = startHeld(draft, on);
+  const detail = timing(draft.intent, launchStart(draft, on, Date.now()), held);
   // The ports the server will actually keep: once the policy preview answers, what governance left of them.
   const apps = hasPorts(draft.intent) ? (preview ? (preview.spec.ui_apps ?? []) : appsOf(draft.intent)) : [];
   const service = mayKeepRunning(draft.intent) ? draft.intent.service : undefined;
@@ -43,6 +48,7 @@ export function RunGroup({ draft, preview, docRows, go }: GroupProps) {
       value={draft.intent.shape && VALUE[draft.intent.shape]}
       detail={detail}
       provenance={NR_REVIEW.PROV_RUN_SETUP}
+      attention={held !== null}
       docRows={docRows}
       editor={() => (
         <>

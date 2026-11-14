@@ -492,10 +492,12 @@ export function AddSecretDialog({
               <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground">
                 <GitBranch className="size-4" />
               </div>
-              <Mono className="text-sm text-foreground">{host}</Mono>
-              <Chip tone={resolvedLaneMeta.tone} title={resolvedLaneMeta.tooltip}>
-                {resolvedLaneMeta.label}
-              </Chip>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+                <Mono className="text-sm text-foreground [overflow-wrap:anywhere]">{host}</Mono>
+                <Chip tone={resolvedLaneMeta.tone} title={resolvedLaneMeta.tooltip}>
+                  {resolvedLaneMeta.label}
+                </Chip>
+              </div>
             </div>
           )}
           <Field

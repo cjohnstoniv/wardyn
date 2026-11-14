@@ -141,7 +141,7 @@ With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can b
 
 - `start_at` and `start_time_zone` on `POST /api/v1/runs` (`wardyn run --start-at 2026-10-21T02:00 --time-zone Europe/London`): a date and time in an IANA zone, or an RFC 3339 time.
 - It must be in the future and leave the run its wait before the 7-day cap: at most 6 days ahead for a background task, 6 days 23 hours for an interactive environment. Else `start_at_past`, or `start_at_too_far` naming the latest start; switched off, `scheduled_runs_off`.
-- A wall-clock time in a daylight-saving gap or overlap resolves to one instant; the `201` shows that resolved time with its zone.
+- A wall-clock time in a daylight-saving gap or overlap names no single instant: it is refused `start_at_invalid`, with `detail` `clock_change`.
 - The run waits `QUEUED` with the reason `scheduled` and its `queue.start_at`, holding no credential, until then.
 - At its time it joins its pool's line and starts like any waiting run, after the same checks. Its wait counts from then, held at most 7 days from the request.
 - At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you, with the reason `owner_sign_in`, until you sign in again. Still waiting at its deadline, it ends `queue_sign_in_timeout`.

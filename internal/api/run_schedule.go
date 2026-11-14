@@ -47,9 +47,10 @@ type runSchedule struct {
 }
 
 // parseRunSchedule validates a create's start_at and start_time_zone against now: nil, nil when the
-// request schedules nothing. Off, a malformed time or zone, a time already past or one later than seven
-// days less the run's default wait (waitSec) is refused, each with its own reason. That latest start
-// leaves the run its wait before the seven-day cap (scheduledDeadline), so it is judged before it expires.
+// request schedules nothing. Off, a malformed time or zone, a wall-clock time the zone's clocks skip or
+// repeat, a time already past or one later than seven days less the run's default wait (waitSec) is
+// refused, each with its own reason. That latest start leaves the run its wait before the seven-day cap
+// (scheduledDeadline), so it is judged before it expires.
 func parseRunSchedule(start, zone string, enabled bool, now time.Time, waitSec int) (*runSchedule, *runRefusal) {
 	if start == "" && zone == "" {
 		return nil, nil
@@ -70,7 +71,10 @@ func parseRunSchedule(start, zone string, enabled bool, now time.Time, waitSec i
 		if err == nil {
 			break
 		}
-		at, err = time.ParseInLocation(layout, start, loc)
+		if at, err = time.ParseInLocation(layout, start, loc); err == nil && !singleWallInstant(at, layout, start, loc) {
+			return nil, &runRefusal{status: http.StatusBadRequest, body: errorBody{Error: fmt.Sprintf(startAtClockChangeMsg, start, zone),
+				Reason: reasonStartAtInvalid, Detail: startAtClockChangeDetail}}
+		}
 	}
 	if err != nil {
 		return nil, invalid
@@ -87,10 +91,41 @@ func parseRunSchedule(start, zone string, enabled bool, now time.Time, waitSec i
 	return &runSchedule{at: at.UTC(), zone: zone}, nil
 }
 
+// singleWallInstant reports whether the wall-clock start names exactly one instant in loc. ParseInLocation
+// always answers with one of the zone's offsets, so a time in the hour the clocks skip comes back shifted, and
+// one in the hour they repeat comes back as either occurrence: the start is certain only when the parsed
+// instant reads back as the typed wall clock and no offset the zone uses a day either side does too. The
+// console's startInstant (ui/src/app/lib/schedule.ts) applies the same rule. The wall clocks are compared as
+// times, not as text: the layouts also read a one-digit hour and fractional seconds, which never format back
+// to what was typed.
+func singleWallInstant(at time.Time, layout, start string, loc *time.Location) bool {
+	wall, _ := time.Parse(layout, start) // the typed wall clock, read as if it were UTC
+	reads := func(t time.Time) bool {
+		_, off := t.In(loc).Zone()
+		return t.Add(time.Duration(off) * time.Second).Equal(wall)
+	}
+	if !reads(at) {
+		return false
+	}
+	for _, probe := range []time.Time{at.Add(-24 * time.Hour), at.Add(24 * time.Hour)} {
+		_, off := probe.In(loc).Zone()
+		if other := wall.Add(-time.Duration(off) * time.Second); !other.Equal(at) && reads(other) {
+			return false
+		}
+	}
+	return true
+}
+
+// startAtClockChangeDetail is the detail of a start_at_invalid that names a wall time the clocks skip or
+// repeat. The console, which never sends an offset, says its own sentence for it instead of startAtClockChangeMsg's
+// RFC 3339 advice (ui/src/app/components/screens/new-run-flow/launch/refusal-text.ts).
+const startAtClockChangeDetail = "clock_change"
+
 const (
 	scheduledRunsOffMsg         = "Scheduled runs are off on this deployment (WARDYN_SCHEDULED_RUNS is not set). Start the run now, or ask an admin to turn scheduled runs on."
 	scheduledRunsUnavailableMsg = "This deployment places no runs on runners, so a run cannot be scheduled here."
 	startAtInvalidMsg           = "start_at needs a date and time (2026-10-21T02:00, or RFC 3339) and start_time_zone an IANA time zone (Europe/London)."
+	startAtClockChangeMsg       = "The start time %s is skipped or repeated in %s when the clocks change. Choose another time, or give start_at with its UTC offset (RFC 3339)."
 	startAtPastMsg              = "The start time %s has already passed. Choose a time in the future."
 	startAtTooFarMsg            = "The start time %s is too far ahead. The latest start is %s: 7 days from now, less this run's %d-hour wait. Choose an earlier time."
 )

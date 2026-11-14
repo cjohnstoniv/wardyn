@@ -450,7 +450,7 @@ export function PolicyPanel({
                           {/* The doc anchor rides the field name's tooltip: the
                               console does not serve docs/, so a real href would be
                               a dead link. */}
-                          <code className="font-mono text-xs text-foreground" title={`docs/POLICIES.md#${help.doc}`}>
+                          <code className="font-mono text-xs text-foreground [overflow-wrap:anywhere]" title={`docs/POLICIES.md#${help.doc}`}>
                             {key}
                           </code>
                           <Button

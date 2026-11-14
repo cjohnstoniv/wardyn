@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sidewaysScroll } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 // E2E coverage for the Secrets screen
@@ -355,5 +355,18 @@ test.describe("Secrets screen", () => {
     await page.request.delete(`/api/v1/secrets/${encodeURIComponent(victim)}`, {
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
     });
+  });
+});
+
+// The console opens this dialog without a host, so this measures the dialog as shipped. The host line of D529 is
+// never rendered here: its wrapping is pinned by class in secrets.test.tsx.
+test.describe("Secrets screen at phone widths (D529)", () => {
+  test("the Add secret dialog scrolls sideways nowhere at 320, 375, 412 or 430", async ({ page }) => {
+    await openSecrets(page);
+    const dlg = await openAddDialog(page);
+    for (const width of [320, 375, 412, 430]) {
+      await page.setViewportSize({ width, height: 800 });
+      await expect.poll(() => sidewaysScroll(dlg), { message: `${width}px` }).toEqual([]);
+    }
   });
 });
