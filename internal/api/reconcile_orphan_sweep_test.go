@@ -812,9 +812,10 @@ func (s *givenUpSweepStore) SetRunLocalFolderSeed(context.Context, uuid.UUID, st
 // The boot pass that tears down a sandbox kept for its computer folder, on a cut it could not confirm, gives the
 // owed copy back up before it clears the run's ref: the give-up is made while the ref is still set, due at once (a
 // zero cap), its final record keeps the count and names of the changes left behind, and its run.folder.transfer
-// given_up row is written. A give-up that leaves the record open, or a record that cannot be read, keeps the ref for
-// the next boot, with no give-up and no row for the unreadable one. A run with nothing owed is not given up and its
-// ref is cleared. Catches: a ref cleared while the record still shows the changes owed, with no given_up row.
+// given_up row is written. A give-up that leaves the record open keeps the ref for the next boot. A record that
+// cannot be read is decided by the owed checks that need no record: this folder has no runner and was never seeded,
+// so nothing is owed, and the ref is cleared with no give-up and no row. A run with nothing owed is not given up and
+// its ref is cleared. Catches: a ref cleared while the record still shows the changes owed, with no given_up row.
 func TestOrphanPass_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
 	for _, c := range []struct {
 		name               string
@@ -851,8 +852,9 @@ func TestOrphanPass_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
 						t.Errorf("audit row %s %s for a run whose record could not be read; want none", ev.Action, ev.Outcome)
 					}
 				}
-				if len(st.giveUps) != 0 || slices.Contains(st.clearedRefs, kept) || !slices.Contains(st.clearedRefs, ended) {
-					t.Errorf("%d give-ups, refs cleared %v; want none, the kept run's ref kept and the other run's cleared", len(st.giveUps), st.clearedRefs)
+				if len(st.giveUps) != 0 || !slices.Contains(st.clearedRefs, kept) || !slices.Contains(st.clearedRefs, ended) {
+					t.Errorf("%d give-ups, refs cleared %v; want none, and both runs' refs cleared: a folder with no runner owes nothing",
+						len(st.giveUps), st.clearedRefs)
 				}
 				return
 			}

@@ -403,7 +403,9 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		// lock too: the give-up moves the record's generation on, so a pass still holding it writes nothing. A record
 		// not final yet keeps the ref and the mark for this tick. The next tick decides the sandbox again: while its
 		// cut is still not confirmed it stops again (a stop of a gone sandbox answers success) and tries the give-up
-		// again; once a cut is confirmed the sandbox counts as kept, and the tail owner's pass closes the record.
+		// again; once a cut is confirmed the sandbox counts as kept, and the tail owner's pass closes the record. A
+		// folder read that never answers is given up once the keep has run out (giveUpFolderStopped), so the stops
+		// end with the keep.
 		final, gerr := false, error(nil)
 		settleAfterTeardown(ctx, func(sctx context.Context) { final, gerr = s.giveUpFolderStopped(sctx, run) })
 		if !final {

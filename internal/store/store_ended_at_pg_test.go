@@ -200,8 +200,8 @@ func TestPG_StopKeptRunForcedIf_OneWinnerAndTheMarkLandsWithTheEnd(t *testing.T)
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
-	if got.State != types.RunStopped || got.EndedAt == nil {
-		t.Errorf("state %s, ended_at %v; want STOPPED with an end", got.State, got.EndedAt)
+	if got.State != types.RunStopped || got.EndedAt == nil || !got.EndedAt.Equal(stamps[0]) {
+		t.Errorf("state %s, ended_at %v; want STOPPED with an end equal to the claim's mark %v", got.State, got.EndedAt, stamps[0])
 	}
 	if at := forcedStopAt(t, ctx, pool, r.ID); at == nil || !at.Equal(stamps[0]) {
 		t.Errorf("forced_stop_at = %v, want the winner's stamp %v", at, stamps[0])

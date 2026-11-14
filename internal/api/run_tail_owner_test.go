@@ -731,8 +731,9 @@ func TestTailOwner_UnreadableStatusOfARunOwingNothingIsNotGivenUp(t *testing.T) 
 
 // Past the cap a row whose data_out rule or seed cannot be read is given up like any other (one statement), with a
 // given_up audit row saying the rule could not be read, and its sandbox is stopped; the reads' failure does not
-// hold it. Inside the cap the same failure gives nothing up. A seed that cannot be read also keeps the audit row
-// from being written (it names the folder), so the row follows once the seed reads, with the same field.
+// hold it. Inside the cap the same failure gives nothing up. A seed that cannot be read leaves the audit row no
+// folder to name; the row is still written with the give-up, naming no folder, because a give-up with no audit
+// row and a WARN on every tail tick is worse.
 // Catches: a read error past the cap returning tailNone (the row waits for ever), a give-up that drops the
 // field, and the cap read as the server's clock.
 func TestTailOwner_UnreadableRuleIsGivenUpPastTheCapNotInsideIt(t *testing.T) {

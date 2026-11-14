@@ -92,7 +92,13 @@ func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 b
 // stopped, and whose ref the caller is about to clear: with no ref no pass runs again, so the keep ends now
 // (a zero cap) and the final record and its given_up row keep what was left behind. final says the ref may be
 // cleared: nothing was owed (no resume, and no pass owed that never ran: keepsSandboxForFolder's two halves), or
-// the record is final. A record or rule that cannot be read, or a give-up that left the record open, is not final.
+// the record is final. A read that fails is decided as the tail owner decides it (tailStepOf): a record that cannot
+// be read, on a run that the owed checks needing no record say owes nothing, is final; otherwise a record, folder
+// seed or data_out rule that cannot be read has the copy back given up once its keep has run out (noted
+// folderStatusUnreadable or folderRuleUnreadable), by the statement that also finds a record already final without
+// decoding it. Inside the keep that is not final, so a read that fails for a while throws no count away. Not final
+// whatever the keep, a read that never answers would keep the ref for good, and a forced-marked run's retry, which
+// the tail owner passes over, would stop its sandbox again on every tick.
 func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (final bool, err error) {
 	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
@@ -103,12 +109,18 @@ func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (f
 	case errors.Is(err, store.ErrNotFound):
 		return true, nil
 	case err != nil:
-		return false, err
+		if owed, oerr := s.folderOwed(ctx, run, types.RunLocalFolderStatus{}); oerr == nil && !owed {
+			return true, nil
+		}
+		return s.giveUpFolderNoted(ctx, run, false, types.RunLocalFolderStatus{}, folderStatusUnreadable)
 	}
 	owed := st.Resume != nil
 	if !owed {
 		if owed, err = s.folderOwed(ctx, run, st); err != nil {
-			return false, err
+			if final, gerr := s.giveUpFolderNoted(ctx, run, false, st, folderRuleUnreadable); final || gerr != nil {
+				return final, gerr
+			}
+			return false, err // inside the keep: the read's own error says why
 		}
 	}
 	if !owed {
@@ -119,16 +131,9 @@ func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (f
 
 // giveUpFolderEnded is giveUpFolderStopped for a run's end tail (finalizeRunEffects), which has the run's id
 // alone: the run is read here, and only from a store that keeps folder records. A run that is gone is final; a
-// run that cannot be read is not. A record that cannot be read is decided as the tail owner decides it
-// (tailStepOf): a run that the owed checks needing no record say owes nothing is final, and otherwise (owed, or
-// a folder seed or data_out rule that cannot be read either) the copy back is given up once its keep has run out
-// (noted folderStatusUnreadable), by the statement that also finds a record already final without decoding it.
-// Inside the keep that is not final, so a read that fails for a while throws no count away. Answering not final
-// for every such record would keep the ref for good, and the tail owner's give-up past the keep would stop the
-// sandbox again on every tick.
+// run that cannot be read is not.
 func (s *Server) giveUpFolderEnded(ctx context.Context, id uuid.UUID) (final bool, err error) {
-	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
-	if !ok {
+	if _, ok := s.cfg.Store.(store.RunLocalFolderStatuses); !ok {
 		return true, nil
 	}
 	run, err := s.cfg.Store.GetRun(ctx, id)
@@ -137,12 +142,6 @@ func (s *Server) giveUpFolderEnded(ctx context.Context, id uuid.UUID) (final boo
 		return true, nil
 	case err != nil:
 		return false, err
-	}
-	if _, serr := ss.RunLocalFolderStatus(ctx, id); serr != nil && !errors.Is(serr, store.ErrNotFound) {
-		if owed, oerr := s.folderOwed(ctx, run, types.RunLocalFolderStatus{}); oerr == nil && !owed {
-			return true, nil
-		}
-		return s.giveUpFolderNoted(ctx, run, false, types.RunLocalFolderStatus{}, folderStatusUnreadable)
 	}
 	return s.giveUpFolderStopped(ctx, run)
 }
@@ -223,6 +222,8 @@ func (s *Server) giveUpFolderWith(ctx context.Context, run types.AgentRun, st ty
 // auditGivenUp writes the run.folder.transfer failure row for a record given up (st, as it stands at its Gen),
 // and, only once the audit log has accepted it (written, or held by the audit spool), marks the record so
 // (MarkGivenUpAudited, at st.Gen). A row not accepted is an error and no mark: the row is written again later.
+// A give-up decided on a read that failed (its note) is recorded even when the folder cannot be read here either,
+// and its row then names no folder: a folder seed that never reads would otherwise never have its row.
 func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus) error {
 	if st.Back == nil || st.Back.GivenUpAt == nil {
 		return errors.New("the record is not given up")
@@ -233,14 +234,17 @@ func (s *Server) auditGivenUp(ctx context.Context, run types.AgentRun, st types.
 		return errors.New("this server's store cannot keep a folder record")
 	}
 	folder, _, err := fst.RunLocalFolderSeed(ctx, run.ID)
-	if err != nil {
+	noted := strings.HasSuffix(st.Back.Error, folderRuleUnreadable) || strings.HasSuffix(st.Back.Error, folderStatusUnreadable)
+	switch {
+	case err != nil && !noted:
 		return fmt.Errorf("read the folder: %w", err)
-	}
-	if folder == nil {
+	case err == nil && folder == nil:
 		return errors.New("the run has no folder")
 	}
-	data := map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "direction": "back",
-		"files": st.Back.Files, "bytes": st.Back.Bytes, "error": st.Back.Error}
+	data := map[string]any{"direction": "back", "files": st.Back.Files, "bytes": st.Back.Bytes, "error": st.Back.Error}
+	if err == nil {
+		data["folder"], data["remote_dir"] = folder.Name, folder.RemoteDir
+	}
 	switch {
 	case strings.HasSuffix(st.Back.Error, folderRuleUnreadable):
 		data["rule_unreadable"] = true
