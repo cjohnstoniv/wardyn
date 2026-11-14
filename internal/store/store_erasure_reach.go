@@ -24,22 +24,43 @@ func (s PG) EraseApprovalDecisionPersonalFields(ctx context.Context, principals 
 }
 
 // DeleteSettledRunPATsOf deletes the Azure DevOps token history of owners: every ado_run_pats row
-// already revoked or past its valid_to. A row still live at Azure DevOps stays, since revoking it
-// needs it. It returns the rows it deleted and the live rows it left.
+// revoked or past its valid_to. A row still live at Azure DevOps stays, since revoking it needs it,
+// and so does a row whose revoke Azure DevOps refused (ListRefusedRunPATs) until its valid_to: that
+// token may still work, and a later erase reads the row to say so. It returns the rows it deleted
+// and the rows it left.
 func (s PG) DeleteSettledRunPATsOf(ctx context.Context, owners []string) (deleted, liveLeft int64, err error) {
 	if len(owners) == 0 {
 		return 0, 0, nil
 	}
 	// The count reads the snapshot from before the delete, so it is the rows the delete leaves.
 	err = s.Pool.QueryRow(ctx, `
-		WITH gone AS (DELETE FROM ado_run_pats WHERE owner = ANY($1) AND (revoked_at IS NOT NULL OR valid_to <= now()) RETURNING 1)
+		WITH gone AS (DELETE FROM ado_run_pats WHERE owner = ANY($1) AND (valid_to <= now() OR
+		    (revoked_at IS NOT NULL AND NOT (last_error <> '' AND revoke_reason <> $2))) RETURNING 1)
 		SELECT (SELECT count(*) FROM gone),
-		       (SELECT count(*) FROM ado_run_pats WHERE owner = ANY($1) AND revoked_at IS NULL AND (valid_to IS NULL OR valid_to > now()))`,
-		owners).Scan(&deleted, &liveLeft)
+		       (SELECT count(*) FROM ado_run_pats WHERE owner = ANY($1) AND valid_to > now() AND
+		           (revoked_at IS NULL OR (last_error <> '' AND revoke_reason <> $2)))`,
+		owners, runPATRevokeExpired).Scan(&deleted, &liveLeft)
 	if err != nil {
 		return 0, 0, fmt.Errorf("store: delete settled run tokens: %w", err)
 	}
 	return deleted, liveLeft, nil
+}
+
+// DeleteErasedRefusedRunPATs deletes what DeleteSettledRunPATsOf kept of a token whose revoke Azure
+// DevOps refused, once the token is past its valid_to: a refused row created before its owner's last
+// sign-in end (ado_signin_ends), when that end was an erase (reason eraseReason). A person a SCIM
+// purge removed is never erased again, so nothing else would delete it. Anyone else's refused rows
+// stay, as the history the console shows. It returns the rows it deleted.
+func (s PG) DeleteErasedRefusedRunPATs(ctx context.Context, eraseReason string) (int64, error) {
+	tag, err := s.Pool.Exec(ctx, `
+		DELETE FROM ado_run_pats p USING ado_signin_ends e
+		WHERE e.owner = p.owner AND e.reason = $1 AND p.created_at < e.updated_at AND p.valid_to <= now()
+		  AND p.revoked_at IS NOT NULL AND p.last_error <> '' AND p.revoke_reason <> $2`,
+		eraseReason, runPATRevokeExpired)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete erased refused run tokens: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // DeleteDelegatedTokensOf deletes every delegated token minted for one of principals, live or

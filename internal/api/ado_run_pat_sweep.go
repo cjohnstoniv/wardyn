@@ -197,7 +197,8 @@ func (s *Server) deleteRunPAT(ctx context.Context, p store.RunPAT) (transient bo
 
 // sweepRunPATs is the backstop: at most once per adoRunPATSweepEvery it
 // revokes the tokens of every run that has ended, is kept after its end, is
-// paused or is gone, and closes the rows of tokens past their validTo. On a
+// paused or is gone, closes the rows of tokens past their validTo, and deletes
+// what an erase kept of a refused token past its validTo. On a
 // live run it also retries a token whose revoke failed transiently (a drift
 // refusal, or a pause revoke followed by a resume); its other older tokens, kept
 // by a renewal or a widening, are left to their validTo.
@@ -233,7 +234,18 @@ func (s *Server) sweepRunPATs(ctx context.Context) error {
 			s.sweepLiveRunPATs(ctx, st, runID, byRun[runID])
 		}
 	}
+	if d, ok := s.cfg.Store.(erasedRunPATDeleter); ok {
+		if _, err := d.DeleteErasedRefusedRunPATs(ctx, adoPATRevokeOffboarding); err != nil {
+			return fmt.Errorf("delete erased refused run tokens: %w", err)
+		}
+	}
 	return nil
+}
+
+// erasedRunPATDeleter deletes the record an erase kept of a token Azure DevOps refused to revoke, once
+// the token has expired (store.PG): a person a SCIM purge removed is never erased again.
+type erasedRunPATDeleter interface {
+	DeleteErasedRefusedRunPATs(ctx context.Context, eraseReason string) (int64, error)
 }
 
 // sweepLiveRunPATs closes the expired rows of a live run and retries, under

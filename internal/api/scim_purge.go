@@ -222,6 +222,10 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 		if m["tokens_revocation_failed"] == true {
 			detail["tokens_revocation_failed"] = 1
 		}
+		// The person's Azure DevOps token rows the erase left because those tokens may still work.
+		if n, ok := m["live_left"].(int64); ok {
+			detail["live_left"] = int(n)
+		}
 	}
 	if m, ok := rep.Details[erasure.MaskCopies].(map[string]any); ok {
 		detail["masks_fenced"], _ = m["runs_fenced"].(int)
@@ -531,7 +535,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 		"invitations_deleted": counts["invitations_deleted"], "invitations_cleared": counts["invitations_cleared"], "service_identities_cleared": counts["service_identities_cleared"],
 		"runner_pools_deleted": counts["runner_pools_deleted"], "templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
-		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"],
+		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"], "live_left": counts["live_left"],
 		"granted_drives": granted,
 	}
 	if len(memberIDs) > 0 {

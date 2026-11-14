@@ -184,37 +184,57 @@ func credentialEraseData(rep secretstore.EraseReport) map[string]any {
 // The person's runs are fenced (FenceSubject) before the cred key goes: their
 // masking values are sealed under it, so a replica that has not opened them
 // could no longer vouch for those runs' masking. It returns how many runs it
-// fenced, and whether Azure DevOps refused for good to revoke a token, which then
-// works until it expires. A revoke that did not finish refuses the scope with
-// errADORevokeUnfinished before anything is fenced or erased. Their history and
+// fenced, and whether Azure DevOps refused for good to revoke a token of theirs
+// still inside its valid_to, now or earlier, which then works until it expires.
+// Their tokens are those recorded under any name they hold credentials under
+// (personNamespaces): a run started under an entra form owns its tokens by it.
+// A revoke that did not finish, or a refused token that cannot be listed,
+// refuses the scope with errADORevokeUnfinished before anything is fenced or
+// erased. Their history and
 // sandboxes are untouched.
 func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, want *erasureNames, rep *secretstore.EraseReport) (int, bool, error) {
 	rowID, cfgErr := s.adoSignInRowID(ctx)
 	if cfgErr != nil {
 		return 0, false, errSignInConfigUnreadable
 	}
+	// Every namespace eraseLocked erases: a run started under an entra form owns its tokens and
+	// its manifest by it, and the erase takes that form's sign-in too.
+	namespaces, err := s.personNamespaces(ctx, owner, want)
+	if err != nil {
+		return 0, false, err
+	}
 	// Revoke the person's live Azure DevOps tokens first: the erase takes the
 	// sign-in that revoking them needs. That runs BEFORE and OUTSIDE the three
 	// locks eraseLocked takes, because its paths take the Entra redemption lock
 	// themselves (ado_pat_client.go) and a nested take would deadlock.
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
-	finish, err := s.beginADOSignInEnd(ctx, owner, adoPATRevokeOffboarding)
-	if err != nil {
-		return 0, false, err
+	revoke := adoRevoked
+	for _, ns := range namespaces {
+		finish, err := s.beginADOSignInEnd(ctx, ns, adoPATRevokeOffboarding)
+		if err != nil {
+			return 0, false, err
+		}
+		defer finish()
+		revoke = max(revoke, s.revokeOwnerRunPATs(ctx, ns, adoPATRevokeOffboarding))
 	}
-	defer finish()
-	revoke := s.revokeOwnerRunPATs(ctx, owner, adoPATRevokeOffboarding)
 	if revoke == adoRevokeUnfinished {
 		return 0, false, errADORevokeUnfinished
 	}
-	revokeFailed := revoke == adoRevokeRefused
+	// A token an earlier revoke had refused is closed, so this revoke no longer lists it, but it may
+	// still work: a retry after a failed erase, or after any revoke Azure DevOps refused, says so too.
+	refused := 0
+	if rd, ok := s.cfg.Store.(store.RunPATReader); ok && owner != "" {
+		for _, ns := range namespaces {
+			rows, err := rd.ListRefusedRunPATs(ctx, ns, s.cfg.Now())
+			if err != nil {
+				return 0, false, errADORevokeUnfinished
+			}
+			refused += len(rows)
+		}
+	}
+	revokeFailed := revoke == adoRevokeRefused || refused > 0
 	fenced := 0
 	if s.cfg.MaskManifests != nil && owner != "" { // "" is refused by the erase below
-		// Every namespace eraseLocked erases: a run started under an entra form owns its manifest by it.
-		namespaces, err := s.personNamespaces(ctx, owner, want)
-		if err != nil {
-			return 0, revokeFailed, err
-		}
 		for _, ns := range namespaces {
 			runs, err := s.cfg.MaskManifests.FenceSubject(ctx, ns)
 			fenced += len(runs)

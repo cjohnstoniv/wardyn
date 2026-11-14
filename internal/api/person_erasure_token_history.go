@@ -15,8 +15,10 @@ type tokenHistoryEraser interface {
 // eraseTokenHistory deletes, under each name the person holds credentials under (personNamespaces),
 // their delegated tokens and the history of their runs' Azure DevOps tokens, as the credentials
 // scope's last step. It runs after the scope revoked those tokens: a row Azure DevOps has not yet
-// confirmed revoked stays for the sweep that retries it, and live_left counts those, so an operator
-// knows to run the erasure again once they expire. It adds its counts to data.
+// confirmed revoked stays for the sweep that retries it, a row whose revoke it refused stays until
+// its valid_to so a retry still says the token may work (the sweep then deletes it,
+// DeleteErasedRefusedRunPATs), and live_left counts both, so an operator knows to run the erasure
+// again once they expire. It adds its counts to data.
 func (s *Server) eraseTokenHistory(ctx context.Context, person string, want *erasureNames, data map[string]any) error {
 	st, ok := s.cfg.Store.(tokenHistoryEraser)
 	if !ok {

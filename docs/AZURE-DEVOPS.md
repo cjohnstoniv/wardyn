@@ -277,6 +277,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - **Offboarding tries to revoke the person's live tokens first.**
 - `DELETE /people/{principal}/credentials`, and the `credentials` scope of `POST /people/{principal}/erasure`, revoke every live token created in their name (each audited `ado_pat.revoke`, reason `offboarding`), then delete the stored grant.
 - A revoke Azure DevOps refuses for good (no permission, say) is audited `ado_pat.revoke.failed`; the erase goes on, and its answer and audit row carry `tokens_revocation_failed: true` and a `detail`: that token works until it expires.
+- An erase run again before that token expires says so too.
 - A revoke that does not finish (no answer, a timeout, a server error) erases nothing: the erase answers `503` `credential_erase_revoke_unfinished`, and running it again revokes the token and erases.
 - `/me/scm-access` adds, on a row that creates tokens, `token_mode: minted_pat`, `last_token` (when the newest token was created and expires, once its record is closed when that was and why, and `revoke_failed` or `revoke_pending` when a revoke failed) and `default_profile`.
 
