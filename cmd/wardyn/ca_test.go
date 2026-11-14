@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -161,6 +162,87 @@ func TestAnchor_UsedOnlyForItsOrg(t *testing.T) {
 func isUnknownAuthority(err error) bool {
 	var ua x509.UnknownAuthorityError
 	return errors.As(err, &ua)
+}
+
+// TestAnchor_ScopedByTheHostDialled: an anchor vouches for a connection to its
+// organisation's host only, decided by the host dialled and not by the names
+// the certificate carries. Every peer here presents one certificate the CA
+// signed for 127.0.0.1, 192.0.2.10, localhost and org.example.
+func TestAnchor_ScopedByTheHostDialled(t *testing.T) {
+	isolateStore(t)
+	tc := newTestCA(t, "Corp Inspection Root")
+	leaf, key := tc.mintLeaf(t, []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("192.0.2.10")}, "localhost", "org.example")
+	port := strconv.Itoa(tc.serveLeaf(t, leaf, key, nil).Listener.Addr().(*net.TCPAddr).Port)
+	client := func(origin, proxy string) *http.Client {
+		c := orgClientTrusting(origin, 5*time.Second, []*x509.Certificate{tc.ca})
+		if proxy != "" {
+			pu, _ := url.Parse(proxy)
+			c.Transport.(*http.Transport).Proxy = http.ProxyURL(pu)
+		}
+		return c
+	}
+	for _, org := range []struct{ origin, get string }{
+		{"https://127.0.0.1:" + port, "https://127.0.0.1:" + port},
+		{"https://LocalHost.:" + port, "https://localhost:" + port},
+	} {
+		resp, err := client(org.origin, "").Get(org.get + "/healthz")
+		if err != nil {
+			t.Fatalf("org %s through its anchor: %v", org.origin, err)
+		}
+		resp.Body.Close()
+	}
+	for _, other := range []struct{ name, origin, proxy, get string }{
+		{"another host the certificate names", "https://127.0.0.1:" + port, "", "https://localhost:" + port},
+		{"an IP address for an org named by host", "https://localhost:" + port, "", "https://127.0.0.1:" + port},
+		{"an https proxy", "https://org.example", "https://localhost:" + port, "https://org.example"},
+		{"an https proxy at an IP address for an org at another", "https://192.0.2.10", "https://127.0.0.1:" + port, "https://192.0.2.10"},
+	} {
+		if _, err := client(other.origin, other.proxy).Get(other.get + "/healthz"); !isUnknownAuthority(err) {
+			t.Errorf("%s: %v, want the system roots alone", other.name, err)
+		}
+	}
+}
+
+// TestToOrgHost: the address branches one loopback address cannot reach.
+func TestToOrgHost(t *testing.T) {
+	tc := newTestCA(t, "Corp Root")
+	for _, c := range []struct {
+		name, serverName, host, proxy string
+		ips                           []string
+		want                          bool
+	}{
+		{"the org's name, other case and a trailing dot", "org.example", "Org.Example.", "", nil, true},
+		{"another name", "proxy.example", "org.example", "", nil, false},
+		{"an address for an org named by host", "", "org.example", "", []string{"10.0.0.5"}, false},
+		{"the org's IPv6 address", "", "fd00::5", "", []string{"fd00::5"}, true},
+		{"another address", "", "10.0.0.5", "", []string{"10.0.0.9"}, false},
+		{"an https proxy's other address, also named", "", "10.0.0.5", "https://[fd00::9]:3128", []string{"10.0.0.5", "fd00::9"}, false},
+		{"an https proxy's other address in fullwidth digits, also named", "", "10.0.0.5", "https://\uff11\uff10.\uff10.\uff10.\uff19:3128", []string{"10.0.0.5", "10.0.0.9"}, false},
+		{"an https proxy's other address, not named", "", "10.0.0.5", "https://10.0.0.9:3128", []string{"10.0.0.5"}, true},
+		{"a named https proxy", "", "10.0.0.5", "https://proxy.example:3128", []string{"10.0.0.5"}, true},
+		{"an https proxy at the org's address", "", "10.0.0.5", "https://10.0.0.5:3128", []string{"10.0.0.5"}, true},
+		{"an http proxy", "", "10.0.0.5", "http://10.0.0.9:3128", []string{"10.0.0.5", "10.0.0.9"}, true},
+	} {
+		var ips []net.IP
+		for _, ip := range c.ips {
+			ips = append(ips, net.ParseIP(ip))
+		}
+		leaf, _ := tc.mintLeaf(t, ips)
+		var proxy *url.URL
+		if c.proxy != "" {
+			proxy, _ = url.Parse(c.proxy)
+		}
+		cs := tls.ConnectionState{ServerName: c.serverName, PeerCertificates: []*x509.Certificate{leaf}}
+		if got := toOrgHost(cs, c.host, proxy); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+	// A zoned address is dialled with no server name too, and its certificate can name it only as text.
+	zoned, _ := tc.mintLeaf(t, []net.IP{net.ParseIP("10.0.0.5")}, "fe80::9%eth0")
+	zp, _ := url.Parse("https://[fe80::9%25eth0]:3128")
+	if toOrgHost(tls.ConnectionState{PeerCertificates: []*x509.Certificate{zoned}}, "10.0.0.5", zp) {
+		t.Error("an https proxy at a zoned address the certificate names: true, want false")
+	}
 }
 
 // TestAnchor_StoreModeEnforced: the store is 0400 in 0700, and at use a

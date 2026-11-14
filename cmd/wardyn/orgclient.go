@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -61,14 +62,21 @@ func orgClientTrusting(origin string, timeout time.Duration, extra []*x509.Certi
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.TLSClientConfig = &tls.Config{
 		RootCAs: certbundle.Pool(anchors),
-		// A certificate that does not name the organisation's host (an
-		// https:// proxy's, say) is held to the system roots alone, so an
-		// anchor never vouches for another host on this transport.
+		// Only a connection to the organisation's host goes through the
+		// anchors. Any other (an https:// proxy's, say) is held to the system
+		// roots alone, whatever names its certificate carries.
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return errors.New("no certificate presented")
 			}
-			if cs.PeerCertificates[0].VerifyHostname(host) == nil {
+			// The proxy t dials on its way to origin, the one host its
+			// requests go to.
+			var proxy *url.URL
+			var proxyErr error
+			if t.Proxy != nil {
+				proxy, proxyErr = t.Proxy(&http.Request{URL: u})
+			}
+			if proxyErr == nil && toOrgHost(cs, host, proxy) {
 				return nil
 			}
 			inter := x509.NewCertPool()
@@ -81,6 +89,34 @@ func orgClientTrusting(origin string, timeout time.Duration, extra []*x509.Certi
 	}
 	c.Transport = t
 	return c
+}
+
+// toOrgHost reports whether cs is a handshake with host, the organisation's,
+// on a transport that dials proxy (nil for none) on its way there. It decides
+// by the host dialled, never by the names the certificate carries:
+// cs.ServerName is that host without its trailing dot, compared without case,
+// or "" when an IP address was dialled.
+func toOrgHost(cs tls.ConnectionState, host string, proxy *url.URL) bool {
+	host = strings.TrimRight(host, ".")
+	if cs.ServerName != "" {
+		return strings.EqualFold(cs.ServerName, host)
+	}
+	// The handshake has already checked that the certificate names the
+	// address dialled, so a certificate naming host's address is host's,
+	// unless it also names the host of an https:// proxy at another address,
+	// which then may be the one dialled.
+	ip, leaf := net.ParseIP(host), cs.PeerCertificates[0]
+	if ip == nil || leaf.VerifyHostname(host) != nil {
+		return false
+	}
+	if proxy == nil || proxy.Scheme != "https" {
+		return true
+	}
+	// net/http dials a proxy host that is not ASCII by its IDNA form, which
+	// may be an address, so only an ASCII host is the name that was checked.
+	ph := proxy.Hostname()
+	ascii := strings.IndexFunc(ph, func(r rune) bool { return r >= 0x80 }) < 0
+	return net.ParseIP(ph).Equal(ip) || ascii && leaf.VerifyHostname(ph) != nil
 }
 
 // refusedTransport fails every request with the reason the anchors were

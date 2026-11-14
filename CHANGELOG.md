@@ -102,6 +102,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`), and `SELECT, INSERT`
   on `audit_checkpoints` and `run_model_usage`.
 
+### Security
+
+- The CA certificates `wardyn ca add` stores are now trusted only for the CLI's connection to that organisation's host. Before, a certificate signed by one of them that also named another host was accepted on the CLI's connection to that other host, such as an `https://` proxy; that connection now uses the system's trusted roots only.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added
