@@ -1416,11 +1416,14 @@ jobs:
     # TEMPORARY for the sandbox-pools branches: the lead removes this before the train PR.
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/021-sandbox-pools'))) }}
     runs-on: ubuntu-26.04
-    # Until measured: conformance-k8s's 35 (the Makefile's 30m suite timeout plus the bring-up) plus 10 for
-    # the controller fetch, two trivy scans, its install, the policies, can-i and the fourteen cases the job
-    # requires to pass. The 45 was sized for seven of them and is not measured yet for fourteen: the keep and
-    # warm pool cases wait on pod deletes and a controller remake.
-    timeout-minutes: 45
+    # Sized from two hosted runs on 2026-11-12 and 2026-11-13, which ran the first seven cases: the suite step took
+    # 715 s and 658 s, and everything else in the job took 379 s and 328 s. The seven keep and warm pool cases have
+    # not run hosted, so they are bounded by their wait limits (the worst case of each, test/conformance, in
+    # seconds): proxy through the Service 420, endpoint slice elsewhere 660, live proxy replace 570, API sequence
+    # 1145, Service admission 120, placeholder holds nothing 240, placeholder claimed and refilled 615; 3770 in
+    # all. (379 + 715 + 3770) x 1.25 = 6080 s, so 102 minutes. The Makefile's 30m go test -timeout is lower than
+    # 715 s plus those 3770 s, so a case that waits out its full limit is cut off by it first.
+    timeout-minutes: 102
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       AGENT_SANDBOX_CONTROLLER_IMAGE: registry.k8s.io/agent-sandbox/agent-sandbox-controller@sha256:ef1a1a3076afc996e711c44b388fbb7ffb7cd6858953d7e685166b299d77bd38
