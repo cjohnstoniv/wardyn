@@ -50,12 +50,12 @@ func noHardLinks(err error) bool {
 
 // copyNew creates to, failing with fs.ErrExist when it exists, and copies from into it with from's
 // mode and modification time, both set through its handle, then syncs it. The copy counts as placed
-// only if to still names it after the sync: a file saved at to meanwhile, as an editor renames its
-// save over the name, is never stamped or taken for the copy, and is fs.ErrExist. A copy that fails
-// part-way is removed only where dropCopy is sure the entry it removes is this copy. Its handle stays
-// open until then: no other file is given an open file's inode number, so an entry that matches
-// own is this copy and not a later save. A close that fails after the sync leaves the copy at to,
-// and the error says so.
+// only if to still names it after the sync (copyAt): a file saved at to meanwhile, as an editor
+// renames its save over the name, is never stamped or taken for the copy, and is fs.ErrExist. A copy
+// that fails part-way is removed only where dropCopy proves the entry it removes is this copy, and is
+// otherwise named. Its handle stays open until then: no other file is given an open file's inode
+// number, so an entry that matches it is this copy and not a later save. A close that fails after the
+// sync leaves the copy at to, and the error says so.
 func copyNew(root *os.Root, from, to string) (err error) {
 	src, err := openIn(root, from, os.O_RDONLY, 0)
 	if err != nil {
@@ -70,20 +70,16 @@ func copyNew(root *os.Root, from, to string) (err error) {
 	if err != nil {
 		return err
 	}
-	own, err := dst.Stat()
-	if err != nil {
-		_ = dst.Close()
-		return fmt.Errorf("%w; its partial copy is left at %s", err, to)
-	}
+	var written int64
 	defer func() {
 		if err != nil {
-			err = dropCopy(root, to, own, err)
+			err = dropCopy(root, to, dst, written, err)
 		}
 		if cerr := dst.Close(); err == nil && cerr != nil {
 			err = fmt.Errorf("%w; its partial copy is left at %s", cerr, to)
 		}
 	}()
-	if _, err := io.Copy(dst, src); err != nil {
+	if written, err = io.Copy(dst, src); err != nil {
 		return err
 	}
 	if err := dst.Chmod(fi.Mode().Perm()); err != nil {
@@ -95,10 +91,35 @@ func copyNew(root *os.Root, from, to string) (err error) {
 	if err := fsyncFile(dst); err != nil {
 		return err
 	}
-	if li, err := lstatIn(root, to); err != nil || !os.SameFile(own, li) {
+	if held, _ := copyAt(root, to, dst, written); !held {
 		return fmt.Errorf("%s changed while it was copied: %w", to, fs.ErrExist)
 	}
 	return nil
+}
+
+// statCopy is fstat on a copy's open handle; replaced by tests. It is read after the copy's last
+// write, never before: a filesystem may number a file anew once its bytes land, and on macOS exFAT a
+// number read before the write did not match the copy's name after it.
+var statCopy = func(f *os.File) (os.FileInfo, error) { return f.Stat() }
+
+// copyAt reports whether name holds the copy open at dst, by two proofs: the same file as dst's handle
+// reports now, and the size written. gone is true when name is free, or when the handle's file has
+// no name left, as a copy has once a save is renamed over it: either way name holds nothing of the
+// copy's. When neither holds, name may hold the copy and is named, never removed.
+func copyAt(root *os.Root, name string, dst *os.File, written int64) (held, gone bool) {
+	li, lerr := lstatIn(root, name)
+	if errors.Is(lerr, fs.ErrNotExist) {
+		return false, true
+	}
+	own, serr := statCopy(dst)
+	if lerr != nil || serr != nil {
+		return false, false
+	}
+	if os.SameFile(own, li) {
+		return li.Size() == written, false
+	}
+	st, ok := own.Sys().(*syscall.Stat_t)
+	return false, ok && st.Nlink == 0
 }
 
 // setModTime sets f's access and modification times to t through its handle (futimes), so they land
@@ -112,15 +133,17 @@ var setModTime = func(f *os.File, t time.Time) error {
 // dropLooked runs in dropCopy after its look at the copy's name and before its move; tests save there.
 var dropLooked = func() {}
 
-// dropCopy removes copyNew's partial copy own after err, and returns err; own's handle is still
-// open. It removes no name it has not seen hold own: while to still names own, to is moved aside in
-// one step, onto an empty temp of its own, and the aside is removed only if it holds own. A file
-// saved over to before that look stays at to. One saved after it is moved with the name, is kept at
-// the aside, and the error names it. A copy that cannot be moved aside stays at to, and the error
-// says so.
-func dropCopy(root *os.Root, to string, own os.FileInfo, err error) error {
-	if li, lerr := lstatIn(root, to); lerr != nil || !os.SameFile(own, li) {
+// dropCopy removes copyNew's partial copy, open at dst with written bytes, after err, and returns
+// err. It removes no name it has not proved holds the copy (copyAt): while to holds it, to is moved
+// aside in one step, onto an empty temp of its own, and the aside is removed only if it holds the
+// copy. A file saved over to before that look stays at to. One saved after it is moved with the
+// name, is kept at the aside, and the error names it. A copy that cannot be proved or moved aside
+// stays at to, and the error says so.
+func dropCopy(root *os.Root, to string, dst *os.File, written int64, err error) error {
+	if held, gone := copyAt(root, to, dst, written); gone {
 		return err
+	} else if !held {
+		return fmt.Errorf("%w; its partial copy is left at %s", err, to)
 	}
 	dropLooked()
 	aside, f, terr := createTemp(root, path.Dir(to), ".wardyn-sync-", "")
@@ -132,7 +155,7 @@ func dropCopy(root *os.Root, to string, own os.FileInfo, err error) error {
 		_ = removeIn(root, aside)
 		return fmt.Errorf("%w; its partial copy is left at %s", err, to)
 	}
-	if li, lerr := lstatIn(root, aside); lerr != nil || !os.SameFile(own, li) {
+	if held, _ := copyAt(root, aside, dst, written); !held {
 		return fmt.Errorf("%w; %w", err, keptAt(aside))
 	}
 	_ = removeIn(root, aside)
