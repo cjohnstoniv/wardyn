@@ -306,26 +306,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 			return true // no run row owns these containers — pure leak
 		}
 		if isTerminalRunState(run.State) {
-			// The run ended; its containers should already be gone, unless its computer folder's
-			// pass back keeps them for the tail owner (folderCleanupLoop), or that pass is still
-			// running under the end's lock (lockRunEnd).
-			if sctx.Err() != nil || !time.Now().Before(sweepEnd) {
-				return false // the sweep's bound is spent: no cut, and the run is left to the terminal sweep
-			}
-			lctx, unlock, free := s.tryLockRunOp(sctx, runID)
-			if !free {
-				return false
-			}
-			defer unlock()
-			// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
-			// owner's give-up at the cap ends the keep. The cut runs on the sweep's own bound, not a fresh one per
-			// run, so cuts that never answer take one bound in all, and one failure row up to one runTeardownBudget
-			// past it (the allowance at sctx above; the lock's release is outside both). A cut that bound ended
-			// decides nothing: the run keeps its ref and is left to the terminal sweep and the next label sweep.
-			vctx, vcancel := context.WithDeadline(lctx, sweepEnd)
-			defer vcancel()
-			v, _, _ := s.folderKeepVerdict(vctx, run, "sandbox.orphan.sweep")
-			return v == folderKeepNone && vctx.Err() == nil
+			return s.terminalSandboxOrphan(sctx, run, sweepEnd)
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -350,6 +331,31 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		return fmt.Errorf("sweep orphaned sandboxes: %w", err)
 	}
 	return nil
+}
+
+// terminalSandboxOrphan is the one verdict both label sweeps give a terminal run's sandbox: the cadence sweep
+// (sweepOrphanedSandboxes) and the sweep a runner gets when it reconnects (sweepRunnerOrphansOnce). The run ended,
+// so its sandbox should already be gone, unless its computer folder's pass back keeps it for the tail owner
+// (folderCleanupLoop), or that pass is still running under the end's lock (lockRunEnd). sctx is the sweep's bound
+// (orphanSweepBound) and sweepEnd its deadline; the run-op lock it takes is released before it answers.
+func (s *Server) terminalSandboxOrphan(sctx context.Context, run types.AgentRun, sweepEnd time.Time) bool {
+	if sctx.Err() != nil || !time.Now().Before(sweepEnd) {
+		return false // the sweep's bound is spent: no cut, and the run is left to the terminal sweep
+	}
+	lctx, unlock, free := s.tryLockRunOp(sctx, run.ID)
+	if !free {
+		return false
+	}
+	defer unlock()
+	// Kept only on a confirmed cut (folderKeepVerdict); a runner that is not here is left, and the tail
+	// owner's give-up at the cap ends the keep. The cut runs on the sweep's own bound, not a fresh one per
+	// run, so cuts that never answer take one bound in all, and one failure row up to one runTeardownBudget
+	// past it (the allowance at sweepOrphanedSandboxes' sctx; the lock's release is outside both). A cut that
+	// bound ended decides nothing: the run keeps its ref and is left to the terminal sweep and the next label sweep.
+	vctx, vcancel := context.WithDeadline(lctx, sweepEnd)
+	defer vcancel()
+	v, _, _ := s.folderKeepVerdict(vctx, run, "sandbox.orphan.sweep")
+	return v == folderKeepNone && vctx.Err() == nil
 }
 
 // reconcileOrphanedSandbox is ReconcileOnBoot's fourth pass: on the
