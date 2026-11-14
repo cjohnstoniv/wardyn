@@ -92,33 +92,53 @@ const (
 	signinEndFailed   = "failed"
 )
 
-// signinContinueTries is how many sweep passes retry the bare SIGCONT of a
-// begin whose pause-agent never ran before the run is killed
-// (desktop_signin_resume_failed). The passes made ride end_stage ("continue",
-// then "continue:1", "continue:2"), so the count survives a restart.
+// signinContinueTries is how many sweep passes retry a sign-in whose agent is
+// still stopped before the run is killed (desktop_signin_resume_failed): the
+// bare SIGCONT of a begin left at the "continue" stage, and an end stuck at the
+// "stop" or "resume" stage, whose two stages share one count. The passes made
+// ride end_stage ("continue", then "continue:1", "continue:2"; for an end, the
+// stage it is stuck at now with the same suffix, kept across a change of
+// stage), so the count survives a restart.
 const signinContinueTries = 3
 
-const signinStageContinue = "continue"
+// The stages whose sweep passes signinContinueTries counts.
+const (
+	signinStageContinue = "continue"
+	signinStageStop     = "stop"
+	signinStageResume   = "resume"
+)
 
-func signinContinueStage(made int) string {
+// signinStage is the counted stage after made sweep passes.
+func signinStage(stage string, made int) string {
 	if made == 0 {
-		return signinStageContinue
+		return stage
 	}
-	return signinStageContinue + ":" + strconv.Itoa(made)
+	return stage + ":" + strconv.Itoa(made)
 }
 
-// signinContinueMade is how many sweep passes a "continue" stage has made;
-// false for any other stage.
-func signinContinueMade(stage string) (int, bool) {
-	if stage == signinStageContinue {
+// signinStageMade is how many sweep passes the counted stage has made at a
+// row's end_stage; false for any other end_stage.
+func signinStageMade(endStage, stage string) (int, bool) {
+	if endStage == stage {
 		return 0, true
 	}
-	rest, ok := strings.CutPrefix(stage, signinStageContinue+":")
+	rest, ok := strings.CutPrefix(endStage, stage+":")
 	if !ok {
 		return 0, false
 	}
 	made, err := strconv.Atoi(rest)
 	return made, err == nil
+}
+
+// signinEndMade is the stage an end is stuck at and how many sweep passes it
+// has made, counted across "stop" and "resume"; false for any other end_stage.
+func signinEndMade(endStage string) (string, int, bool) {
+	for _, stage := range []string{signinStageStop, signinStageResume} {
+		if made, ok := signinStageMade(endStage, stage); ok {
+			return stage, made, true
+		}
+	}
+	return "", 0, false
 }
 
 // signinProxyAddr is the run proxy's sign-in listener as the sandbox names it.
@@ -399,7 +419,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 			// retries.
 			s.rollbackDesktopSignin(ctx, run, si, principal)
 		}
-		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be proven stopped, so the sign-in did not start; Wardyn resumes the agent", "pause", err)
+		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be proven stopped, so the sign-in did not start; Wardyn resumes the agent, or ends the run if it cannot", "pause", err)
 		return
 	}
 	if !json.Valid(pauseRec) {
@@ -408,7 +428,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	si.PauseRecord = pauseRec
 	if err := st.SetDesktopSigninPauseRecord(ctx, si.ID, pauseRec); err != nil {
 		s.rollbackDesktopSignin(ctx, run, si, principal)
-		fail(http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in could not be recorded; the agent was resumed", "record", err)
+		fail(http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in could not be recorded; Wardyn resumes the agent, or ends the run if it cannot", "record", err)
 		return
 	}
 
@@ -420,7 +440,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	startCfg, _ := json.Marshal(map[string]string{"credential": cred, "proxy": signinProxyAddr})
 	if _, err := s.signinExec(ctx, run.SandboxRef, true, startCfg, 64<<10, "start"); err != nil {
 		s.rollbackDesktopSignin(ctx, run, si, principal)
-		fail(http.StatusBadGateway, reasonDesktopSigninStartFailed, "the sign-in display did not start; the agent was resumed", "start", err)
+		fail(http.StatusBadGateway, reasonDesktopSigninStartFailed, "the sign-in display did not start; Wardyn resumes the agent, or ends the run if it cannot", "start", err)
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorHuman, principal, "desktop_signin.begin", run.ID.String(), "success",
@@ -493,16 +513,42 @@ func (s *Server) continueDesktopSignin(ctx context.Context, st store.DesktopSign
 		made++
 		slog.WarnContext(ctx, "wardynd: desktop sign-in could not continue the agent", "run_id", run.ID, "tries", made, "err", err)
 		if made < signinContinueTries {
-			_, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, signinContinueStage(made))
+			_, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, signinStage(signinStageContinue, made))
 			return errors.Join(err, rerr)
 		}
 	}
-	if _, _, err := s.killRunCascade(ctx, run, actorType, actor,
-		map[string]any{"reason": reasonDesktopSigninResumeFailed, "signin_id": si.ID}); err != nil {
-		_, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, signinContinueStage(signinContinueTries))
+	return s.killStuckDesktopSignin(ctx, st, run, si, signinStageContinue, reason, actorType, actor)
+}
+
+// killStuckDesktopSignin kills the run of a sign-in whose agent is still
+// stopped after signinContinueTries counted sweep passes, so a sandbox is never
+// left stopped, then closes the row. A kill that fails leaves stage at its last
+// pass, and the next pass tries the kill again.
+func (s *Server) killStuckDesktopSignin(ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, si types.DesktopSignin,
+	stage, reason string, actorType types.ActorType, actor string) error {
+	applied, data, err := s.killRunCascade(ctx, run, actorType, actor,
+		map[string]any{"reason": reasonDesktopSigninResumeFailed, "signin_id": si.ID})
+	if _, kept := data["runner_error"]; err == nil && applied && kept {
+		// The run is killed but its sandbox, and the person's display in it, is not gone: the row
+		// stays open at its last pass, and the sweep retries the teardown (signinKillOwed).
+		err = errors.New("the sandbox of a killed sign-in run was not torn down")
+	}
+	if err != nil {
+		_, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, signinStage(stage, signinContinueTries))
 		return errors.Join(err, rerr)
 	}
 	return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, false)
+}
+
+// signinKillOwed reports an end_stage at a counted stage's last pass, which only a kill that failed
+// leaves (killStuckDesktopSignin).
+func signinKillOwed(endStage string) bool {
+	for _, stage := range []string{signinStageContinue, signinStageStop, signinStageResume} {
+		if made, ok := signinStageMade(endStage, stage); ok && made >= signinContinueTries {
+			return true
+		}
+	}
+	return false
 }
 
 // signinSettleGaps space the reads of pid 1's state after its SIGCONT. dockerd
@@ -515,6 +561,11 @@ var signinSettleGaps = [...]time.Duration{100 * time.Millisecond, 400 * time.Mil
 var signinMainState = []string{"/bin/cat", "/proc/1/stat"}
 
 var errSigninStateUnread = errors.New("the agent's state could not be read")
+
+// errSigninResumeStage marks an end that failed at its "resume" stage, after
+// the display was proven closed: handleEndDesktopSignin answers it with its own
+// message.
+var errSigninResumeStage = errors.New("the agent could not be resumed")
 
 // continueMain sends pid 1 a SIGCONT, then reads its state through
 // signinSettleGaps: nil only when the last read finds it running, and a read
@@ -675,8 +726,8 @@ func (s *Server) heldSignin(w http.ResponseWriter, ctx context.Context, st store
 }
 
 // handleEndDesktopSignin closes the person's display and resumes the agent.
-// When the display cannot be proven closed the agent stays stopped and the
-// sweep retries.
+// When the display cannot be proven closed, or the agent cannot be resumed
+// after it, the agent stays stopped and the sweep retries.
 func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) {
 	run, st, ok := s.signinRun(w, r)
 	if !ok {
@@ -689,7 +740,11 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.finishDesktopSignin(ctx, run, si, signinEndDone, types.ActorHuman, principal); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninEndFailed, "the sign-in display could not be proven closed; the agent stays stopped and Wardyn retries")
+		msg := "the sign-in display could not be proven closed; the agent stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+		if errors.Is(err, errSigninResumeStage) {
+			msg = "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+		}
+		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninEndFailed, msg)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -697,9 +752,11 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 
 // finishDesktopSignin ends a sign-in in order: the person's processes are
 // killed and proven gone, then the agent is resumed, then the row closes.
-// Any failure marks the row for the sweep and leaves the agent stopped; the
-// failure is audited when it changes the row's state (its reason or stuck
-// stage), not on every sweep pass that finds the same state.
+// Any failure marks the row for the sweep and leaves the agent stopped. The
+// first failure is audited; the sweep's passes over an end already stuck at
+// "stop" or "resume" are counted together and store only the stage and the
+// count, and after signinContinueTries of them the run is killed, as for the
+// "continue" stage.
 func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si types.DesktopSignin, reason string, actorType types.ActorType, actor string) error {
 	st, ok := s.desktopSigninStore()
 	if !ok {
@@ -713,27 +770,49 @@ func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si
 		}
 		return err
 	}
-	if made, ok := signinContinueMade(si.EndStage); ok {
+	if made, ok := signinStageMade(si.EndStage, signinStageContinue); ok {
 		return s.continueDesktopSignin(ctx, st, run, si, made, reason, actorType, actor)
+	}
+	// A sweep pass over an end already stuck at "stop" or "resume" counts, one
+	// count for both stages, and stores only the stage and the count, as
+	// continueDesktopSignin does: the stuck end was audited once.
+	stuckAt, made, counted := signinEndMade(si.EndStage)
+	if counted && made >= signinContinueTries {
+		return s.killStuckDesktopSignin(ctx, st, run, si, stuckAt, reason, actorType, actor)
+	}
+	stuck := func(stage string, err error) error {
+		if stage == signinStageResume {
+			err = fmt.Errorf("%w: %w", errSigninResumeStage, err)
+		}
+		if !counted {
+			return failed(stage, err)
+		}
+		made++
+		slog.WarnContext(ctx, "wardynd: desktop sign-in did not end", "run_id", run.ID, "stage", stage, "tries", made, "err", err)
+		if made < signinContinueTries {
+			_, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, signinStage(stage, made))
+			return errors.Join(err, rerr)
+		}
+		return s.killStuckDesktopSignin(ctx, st, run, si, stage, reason, actorType, actor)
 	}
 	if _, err := s.signinExec(ctx, run.SandboxRef, true, nil, 4<<10, "stop"); err != nil {
 		if errors.Is(err, runner.ErrSandboxGone) {
 			return s.closeDesktopSignin(ctx, st, run, si, signinEndRunEnded, actorType, actor, false)
 		}
-		return failed("stop", err)
+		return stuck(signinStageStop, err)
 	}
 	rec := si.PauseRecord
 	if len(rec) == 0 {
 		rec = []byte(`{}`)
 	}
 	if _, err := s.signinExec(ctx, run.SandboxRef, false, rec, 4<<10, "resume-agent"); err != nil {
-		return failed("resume", err)
+		return stuck(signinStageResume, err)
 	}
 	resumed := false // a runner that cannot be read has not shown the agent running
 	if se, ok := s.cfg.Runner.(runner.SigninExecer); ok {
 		err := s.continueMain(ctx, se, run.SandboxRef)
 		if err != nil && !errors.Is(err, errSigninStateUnread) {
-			return failed("resume", err)
+			return stuck(signinStageResume, err)
 		}
 		resumed = err == nil
 	}
@@ -851,59 +930,4 @@ func (s *Server) handleInternalDesktopSigninCheck(w http.ResponseWriter, r *http
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// sweepDesktopSignins ends every sign-in whose run ended, whose window
-// passed, or whose end could not finish before. One pass of the reconciler.
-func (s *Server) sweepDesktopSignins(ctx context.Context) error {
-	st, on := s.desktopSigninStore()
-	if !on {
-		return nil
-	}
-	ctx, end, ok := s.beginLeaderSweep(ctx)
-	if !ok {
-		return nil
-	}
-	defer end()
-	open, err := st.ListOpenDesktopSignins(ctx)
-	if err != nil {
-		return err
-	}
-	now := s.cfg.Now()
-	for _, si := range open {
-		run, err := s.cfg.Store.GetRun(ctx, si.RunID)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			continue
-		}
-		if err != nil || run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
-			_ = s.closeDesktopSignin(ctx, st, run, si, signinEndRunEnded, types.ActorSystem, "wardynd", false)
-			continue
-		}
-		reason := si.EndRequested
-		if reason == "" && !now.Before(si.ExpiresAt) {
-			reason = signinEndExpired
-		}
-		if reason != "" {
-			_ = s.finishDesktopSignin(ctx, run, si, reason, types.ActorSystem, "wardynd")
-		}
-	}
-	return nil
-}
-
-// inDesktopSignin reports whether the run has an open sign-in, reading the
-// set once per sweep into *cache. An unreadable set counts every run in one.
-func (s *Server) inDesktopSignin(ctx context.Context, cache *map[uuid.UUID]bool, runID uuid.UUID) bool {
-	st, on := s.desktopSigninStore()
-	if !on {
-		return false
-	}
-	if *cache == nil {
-		m, err := st.RunsWithOpenDesktopSignin(ctx)
-		if err != nil {
-			slog.WarnContext(ctx, "wardynd: open desktop sign-ins unreadable; no run is frozen this pass", "err", err)
-			return true
-		}
-		*cache = m
-	}
-	return (*cache)[runID]
 }

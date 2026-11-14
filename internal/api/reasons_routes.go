@@ -976,12 +976,12 @@ const (
 	reasonDesktopSigninNotHolder         = "desktop_signin_not_holder"         // the open sign-in was begun by someone else
 	reasonDesktopSigninPauseFailed       = "desktop_signin_pause_failed"       // the agent could not be stopped and proven stopped
 	reasonDesktopSigninStartFailed       = "desktop_signin_start_failed"       // the person's display did not start
-	reasonDesktopSigninEndFailed         = "desktop_signin_end_failed"         // the display could not be proven closed; the agent stays stopped
+	reasonDesktopSigninEndFailed         = "desktop_signin_end_failed"         // the display could not be proven closed, or the agent could not be resumed; the agent stays stopped
 	reasonDesktopSigninSiteInvalid       = "desktop_signin_site_invalid"       // a share's site is not a registrable host name
 	reasonDesktopSigninShareFailed       = "desktop_signin_share_failed"       // a share's export or import failed; nothing was shared
 	reasonDesktopSigninUnavailable       = "desktop_signin_unavailable"        // the sign-in store could not be read or written
 	reasonDesktopSigninCredentialRefused = "desktop_signin_credential_refused" // the proxy's check: not an open sign-in's credential
-	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a failed begin's agent could not be continued, so the run was killed
+	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a sign-in's agent could not be resumed at its begin or its end, so the run was killed
 )
 
 // Sign-ins in a Linux VM's desktop (run_desktop_vm_signin.go).

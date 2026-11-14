@@ -62,6 +62,8 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "StopProxy"}: {1, guardHeldReread},
 	// The containment loop's stop of an ended run: the lock's loss is asked inside the call's own step.
 	{"internal/api/run_contain_d1.go", "Server.d1Stop", "StopSandbox"}: {1, guardChecked},
+	// The sign-in sweep's retry of a KILLED run's failed teardown (a stuck sign-in's kill owed, signinKillOwed).
+	{"internal/api/run_desktop_signin_sweep.go", "Server.sweepDesktopSignins", "KillSandbox"}: {1, guardNotReplaceable},
 	// The lease sweep's re-stop of a kept run on every pass (leaseRun), and an ended lost run's (stopLostSandbox):
 	// the lock taken and the run re-read can be lost after.
 	{"internal/api/run_lease.go", "Server.endSandbox", "EndSandbox"}: {1, "unguarded: K11"},

@@ -485,9 +485,11 @@ func TestDesktopSignin_ANormalEndReadsTheAgentBackToo(t *testing.T) {
 		endCode int    // the end's answer
 		closed  bool   // the row closed, else it is open for the sweep
 		close   string // the one desktop_signin.close row
+		message string // the end's 502 message, when it has one
 	}{
-		"every read finds pid 1 stopped": {states: "TTT", conts: 3, endCode: http.StatusBadGateway, close: "failure false"},
-		"a read finds pid 1 running":     {states: "T", conts: 2, endCode: http.StatusNoContent, closed: true, close: "success true"},
+		"every read finds pid 1 stopped": {states: "TTT", conts: 3, endCode: http.StatusBadGateway, close: "failure false",
+			message: "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"},
+		"a read finds pid 1 running": {states: "T", conts: 2, endCode: http.StatusNoContent, closed: true, close: "success true"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newSigninFixture(t)
@@ -497,6 +499,8 @@ func TestDesktopSignin_ANormalEndReadsTheAgentBackToo(t *testing.T) {
 			f.rn.mu.Unlock()
 			if code, body := f.post(t, "/desktop-signin/end", ""); code != tc.endCode {
 				t.Fatalf("end = %d %s, want %d", code, body, tc.endCode)
+			} else if !strings.Contains(body, tc.message) {
+				t.Fatalf("end = %s, want the message %q", body, tc.message)
 			}
 			if n := strings.Count(strings.Join(f.rn.seen(), " "), "signal:SIGCONT"); n != tc.conts {
 				t.Fatalf("SIGCONTs sent by the end = %d, want %d: %v", n, tc.conts, f.rn.seen())
@@ -508,6 +512,18 @@ func TestDesktopSignin_ANormalEndReadsTheAgentBackToo(t *testing.T) {
 				t.Fatalf("desktop_signin.close rows = %v, want [%s]", got, tc.close)
 			}
 		})
+	}
+}
+
+// TestDesktopSignin_AnEndThatCannotProveTheDisplayClosedSaysSo: a failure at the stop stage answers the
+// display message, not the resume one.
+func TestDesktopSignin_AnEndThatCannotProveTheDisplayClosedSaysSo(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	f.rn.exit["stop"] = 1
+	want := "the sign-in display could not be proven closed; the agent stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusBadGateway || !strings.Contains(body, want) {
+		t.Fatalf("end = %d %s, want 502 %q", code, body, want)
 	}
 }
 

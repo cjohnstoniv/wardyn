@@ -545,8 +545,8 @@ func TestDesktopSignin_ContinueTriesRunOutAndKillTheRun(t *testing.T) {
 	for pass := 1; pass <= signinContinueTries+2; pass++ {
 		_ = f.srv.sweepDesktopSignins(context.Background())
 		if pass < signinContinueTries {
-			if si := f.st.only(t); si.EndedAt != nil || si.EndStage != signinContinueStage(pass) {
-				t.Fatalf("row after pass %d = %+v, want open at stage %q", pass, si, signinContinueStage(pass))
+			if si := f.st.only(t); si.EndedAt != nil || si.EndStage != signinStage(signinStageContinue, pass) {
+				t.Fatalf("row after pass %d = %+v, want open at stage %q", pass, si, signinStage(signinStageContinue, pass))
 			}
 		}
 	}
@@ -584,44 +584,42 @@ func TestDesktopSignin_BeginRefusedOnARunDispatchedWithout(t *testing.T) {
 }
 
 // TestDesktopSignin_StuckEndIsAuditedOncePerState (#2972 H1c): an end the
-// sweep cannot finish writes one failure row per stuck state, not one per
-// pass; a new stuck stage is a new state and gets its own row.
+// sweep cannot finish writes one failure row, not one per pass. An end stuck at
+// the display's stop is retried on signinContinueTries sweep passes with the
+// count on the row and the agent never resumed; then the run is killed with the
+// named reason and the row closes with agent_resumed false.
 func TestDesktopSignin_StuckEndIsAuditedOncePerState(t *testing.T) {
 	f := newSigninFixture(t)
 	f.begin(t)
-	failures := func() int {
-		n := 0
-		for _, ev := range f.h.audit.snapshot() {
-			if ev.Action == "desktop_signin.close" && ev.Outcome == "failure" {
-				n++
-			}
-		}
-		return n
-	}
-	sweep := func(n int) {
-		for range n {
-			if err := f.srv.sweepDesktopSignins(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
 	f.rn.exit["stop"] = 1
 	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusBadGateway {
 		t.Fatalf("end = %d %s, want 502", code, body)
 	}
-	sweep(5)
-	if n := failures(); n != 1 {
-		t.Fatalf("failure rows after the end and 5 sweeps of one stuck state = %d, want 1", n)
+	for pass := 1; pass <= signinContinueTries+2; pass++ {
+		if err := f.srv.sweepDesktopSignins(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		run, err := f.st.GetRun(context.Background(), f.run.ID)
+		si := f.st.only(t)
+		switch {
+		case pass < signinContinueTries && (si.EndedAt != nil || si.EndStage != signinStage(signinStageStop, pass) || err != nil || run.State != types.RunRunning):
+			t.Fatalf("after pass %d: row %+v, run %v %v; want open at stage %q, run RUNNING", pass, si, run.State, err, signinStage(signinStageStop, pass))
+		case pass >= signinContinueTries && (si.EndedAt == nil || err != nil || run.State != types.RunKilled):
+			t.Fatalf("after pass %d: row %+v, run %v %v; want closed, run KILLED", pass, si, run.State, err)
+		}
 	}
-	f.rn.exit["stop"], f.rn.exit["resume-agent"] = 0, 1
-	sweep(5)
-	if n := failures(); n != 2 {
-		t.Fatalf("failure rows after the stage moved to resume = %d, want 2", n)
+	got := f.rn.seen()
+	if slices.Contains(got, "agent:resume-agent") || slices.Contains(got, "signal:SIGCONT") {
+		t.Fatalf("calls = %v: the agent was resumed while the display was not proven closed", got)
 	}
-	f.rn.exit["resume-agent"] = 0
-	sweep(1)
-	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndDone {
-		t.Fatalf("row = %+v, want ended done once the resume works", si)
+	if n := strings.Count(strings.Join(got, " "), "person:stop"); n != 1+signinContinueTries {
+		t.Fatalf("stop ran %d times, want %d (the end's, then one per pass until the kill)", n, 1+signinContinueTries)
+	}
+	if ev := findAuditData(f.h.audit.snapshot(), f.run.ID, "run.kill", `"reason":"`+reasonDesktopSigninResumeFailed+`"`); ev == nil {
+		t.Fatalf("no run.kill row with reason %s", reasonDesktopSigninResumeFailed)
+	}
+	if got, want := signinCloseRows(f), []string{"failure false", "success false"}; !slices.Equal(got, want) {
+		t.Fatalf("desktop_signin.close rows = %v, want %v (the end's failure, then the kill's close)", got, want)
 	}
 }
 
