@@ -286,6 +286,13 @@ func TestWarmPlaceholderCarriesThePullSecret(t *testing.T) {
 	if s := pod.Spec.ImagePullSecrets; len(s) != 1 || s[0].Name != "regcred" {
 		t.Errorf("pull secrets %v, want regcred alone", s)
 	}
+	bare, _ := newTestDriver(t, Config{})
+	if pod, err = bare.warmPlaceholderPod(context.Background(), warmTestPool("a", 1), testNamespace, 0); err != nil {
+		t.Fatalf("warmPlaceholderPod: %v", err)
+	}
+	if s := pod.Spec.ImagePullSecrets; len(s) != 0 {
+		t.Errorf("pull secrets %v with none configured, want none", s)
+	}
 }
 
 func TestWarmReconcileDenyPolicyBeforeFirstPlaceholder(t *testing.T) {
@@ -452,7 +459,7 @@ func TestWarmReconcileBacksOffAfterCreateError(t *testing.T) {
 
 func TestWarmReconcileCreatesResumeAfterTheBackoff(t *testing.T) {
 	d, cs := warmTestDriver(t, warmTestPool("a", 1))
-	clock := time.Now()
+	clock := time.Now().Add(-time.Hour) // off the wall clock: a backoff set or read on time.Now fails below
 	d.now = func() time.Time { return clock }
 	failed := false
 	cs.PrependReactor("create", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
