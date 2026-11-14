@@ -56,7 +56,12 @@ func logoutCmd(serverURL func() string) *cobra.Command {
 			defer unlock()
 			// The item as stored now, under the lock: another command may have rotated it since.
 			var serverErr error
-			if it, found, err := storeFor(kind, dir).get(origin); err == nil && found {
+			it, found, getErr := storeFor(kind, dir).get(origin)
+			switch {
+			case getErr != nil:
+				// An item that cannot be read may hold a session still live at the server.
+				serverErr = errors.New(readCause(getErr))
+			case found:
 				now := time.Now()
 				switch tok, _ := it.bearer(now); {
 				case tok != "":

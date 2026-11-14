@@ -284,24 +284,64 @@ func (l *login) store(kind string, it cliItem, stepUp bool) (prev cliItem, repla
 		cur.AdminToken, cur.AdminExpiresAt = it.AdminToken, it.AdminExpiresAt
 		return prev, false, st.put(l.origin, cur)
 	}
-	prev, replacing = l.previous()
-	if old, _ := cliprofile.ReadSessionStore(l.dir, l.origin); old != "" && old != kind {
-		_ = storeFor(old, l.dir).del(l.origin)
-	}
+	old, prev, replacing, readErr := l.previous()
 	if err := st.put(l.origin, it); err != nil {
 		return prev, false, err
 	}
-	return prev, replacing, cliprofile.WriteSessionStore(l.dir, l.origin, kind)
+	if err := cliprofile.WriteSessionStore(l.dir, l.origin, kind); err != nil {
+		return prev, false, err
+	}
+	// The new sign-in stands from here. One that could not be read is never signed out (endPrevious needs
+	// its session), so say so.
+	if readErr != nil {
+		fmt.Fprintf(l.errOut, copyPreviousNotEnded+"\n", readCause(readErr))
+	}
+	// Another store's item goes only once the new one is stored and the profile names its store: deleted
+	// first, a refused write would leave this computer with no sign-in. Once the profile names kind,
+	// nothing reads the old item.
+	if old != "" && old != kind {
+		if err := storeFor(old, l.dir).del(l.origin); err != nil {
+			where := "the keychain"
+			if old == types.CLIStoreFile {
+				where = fileStore{l.dir}.path()
+			}
+			fmt.Fprintf(l.errOut, copyPreviousNotRemoved+"\n", where, err)
+		}
+	}
+	return prev, replacing, nil
 }
 
-// previous is the live sign-in this computer holds for the organisation, which a new one replaces.
-func (l *login) previous() (cliItem, bool) {
-	kind, err := cliprofile.ReadSessionStore(l.dir, l.origin)
-	if err != nil || kind == "" {
-		return cliItem{}, false
+// previous is the sign-in this computer holds for the organisation, which a new one replaces: the store
+// holding it, the item, whether it is live, and the error reading it from the store the profile names.
+// When the profile names no store (a first sign-in, or a profile cliprofile.Write replaced because it could
+// not be read), it is the item found first in the keychain, then the file, and a store that cannot be read
+// is no sign one was stored. A profile that cannot be read now is no error here: WriteSessionStore refuses
+// it, and the login fails.
+func (l *login) previous() (string, cliItem, bool, error) {
+	named, err := cliprofile.ReadSessionStore(l.dir, l.origin)
+	if err != nil {
+		return "", cliItem{}, false, nil
 	}
-	it, ok, err := storeFor(kind, l.dir).get(l.origin)
-	return it, err == nil && ok && it.endedWhy(cliNow()) == ""
+	if named != "" {
+		it, ok, err := storeFor(named, l.dir).get(l.origin)
+		return named, it, ok && it.endedWhy(cliNow()) == "", err
+	}
+	for _, k := range []string{types.CLIStoreKeychain, types.CLIStoreFile} {
+		if it, ok, err := storeFor(k, l.dir).get(l.origin); err == nil && ok {
+			return k, it, it.endedWhy(cliNow()) == "", nil
+		}
+	}
+	return "", cliItem{}, false, nil
+}
+
+// readCause is err, a store's error reading a sign-in, for a line printed once that item is replaced or
+// removed. A damaged item's error ends with advice to sign in again (keychainStore.get, fileStore.load);
+// by then the damaged item is gone, so the advice is dropped and the damage is put in the past.
+func readCause(err error) string {
+	if cut, ok := strings.CutSuffix(err.Error(), errDamagedAdvice); ok {
+		return cut + copyWasDamaged
+	}
+	return err.Error()
 }
 
 // endPrevious signs the replaced session out at the server (DELETE /api/v1/me/cli-sessions/{id}) with the

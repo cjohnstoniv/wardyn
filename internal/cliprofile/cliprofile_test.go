@@ -6,7 +6,9 @@ package cliprofile
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestProfileWriteReadRoundTripIsWorldReadableAndHoldsOnlyTheURL(t *testing.T) {
@@ -125,5 +127,40 @@ func TestNormalizeIsTheProofOrigin(t *testing.T) {
 		if got, err := Normalize(in); err != nil || got != want {
 			t.Errorf("Normalize(%q) = %q, %v; want %q", in, got, err, want)
 		}
+	}
+}
+
+// TestProfileUpdateDoesNotLoseAConcurrentOne: an update that read the profile before another command's update
+// waits for that one to land instead of writing back what it read, so a URL write that started first keeps
+// the login's choice of store.
+func TestProfileUpdateDoesNotLoseAConcurrentOne(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "wardyn")
+	const org = "https://org.example"
+	done := make(chan error, 1)
+	var first atomic.Bool
+	prev := beforeStore
+	t.Cleanup(func() { beforeStore = prev })
+	beforeStore = func() {
+		if !first.CompareAndSwap(false, true) {
+			return
+		}
+		go func() { done <- WriteSessionStore(dir, org, "keychain") }()
+		select {
+		case err := <-done:
+			done <- err // it landed while Write held what it read
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if err := Write(dir, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if kind, err := ReadSessionStore(dir, org); err != nil || kind != "keychain" {
+		t.Errorf("session store = %q, %v; want keychain kept", kind, err)
+	}
+	if u, err := Read(dir); err != nil || u != org {
+		t.Errorf("URL = %q, %v; want %s", u, err, org)
 	}
 }
