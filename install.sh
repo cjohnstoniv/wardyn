@@ -387,6 +387,7 @@ else
   env_set() { # KEY VALUE — replace an uncommented KEY= line, or append.
     k=$1; v=$2
     if grep -qE "^${k}=" .env; then
+      # shellcheck disable=SC2016 # awk reads $1, k and v; the shell must not expand them
       env_rewrite -v k="$k" -v v="$v" 'BEGIN{FS=OFS="="} $1==k {print k "=" v; next} {print}'
     else
       printf '%s=%s\n' "$k" "$v" >> .env

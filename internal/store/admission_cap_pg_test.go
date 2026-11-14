@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -105,7 +106,9 @@ func TestPG_LaunchPreset_PutBehindAnUncommittedDeleteTakesANewVersion(t *testing
 	if _, err := pool.Exec(ctx, `INSERT INTO launch_preset_version_floor (name, version) VALUES ('ci', 0)`); err != nil {
 		t.Fatal(err)
 	}
-	hold, err := pool.Begin(ctx)
+	// The hold runs on a session outside pool (testutil.PGConn): waitLockWaiters polls through pool from this
+	// goroutine, and a pool connection held across that poll is a nested acquire the pool guard exits on.
+	hold, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
