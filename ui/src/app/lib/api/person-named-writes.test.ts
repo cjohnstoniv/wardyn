@@ -113,6 +113,9 @@ it("every secret save calls setSecret before its handler waits on anything", () 
       // The `await` this call sits in (on its own line) is not a wait before it.
       const own = head.lastIndexOf("await");
       const before = own >= 0 && !head.slice(own).includes("\n") ? head.slice(0, own) : head;
+      // A save that names the person read at the click (`person`, from getExpectedPrincipal) may wait first.
+      const args = src.slice(m.index!, src.indexOf(";", m.index!));
+      if (/\bperson\b/.test(args) && head.includes("getExpectedPrincipal()")) continue;
       if (/\bawait\b/.test(before) || head.includes(".then(")) late.push(file);
     }
   }

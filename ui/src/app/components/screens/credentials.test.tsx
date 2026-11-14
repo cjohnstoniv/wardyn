@@ -670,8 +670,11 @@ describe("tokens an admin created for someone else (#1477)", () => {
     renderScreen();
     const sec = within(await section());
     await userEvent.click(await sec.findByRole("button", { name: "Revoke" }));
-    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Revoke token" }));
-    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Revoke token" }));
+    // The failure stays in the dialog with the server's sentence, not in a toast.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("boom");
+    expect(toastError).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(sec.getByText("dana@acme.io")).toBeInTheDocument();
   });

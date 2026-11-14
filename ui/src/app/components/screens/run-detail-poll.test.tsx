@@ -393,8 +393,8 @@ describe("RunDetailScreen — a long trail's oldest page is read once per run", 
   it("polls the newest page again but not the oldest", async () => {
     const oldest = Array.from({ length: 1000 }, (_, i) => row(i));
     listAuditMock.mockReset();
-    listAuditMock.mockImplementation(async (_id: string, o?: { newest?: boolean; actionPrefix?: string }) => {
-      if (o?.actionPrefix) return [];
+    listAuditMock.mockImplementation(async (_id: string, o?: { newest?: boolean; actionPrefix?: string; action?: string }) => {
+      if (o?.actionPrefix || o?.action) return [];
       return o?.newest ? [row(5000)] : oldest;
     });
     renderRun({ ...RUN, state: "RUNNING" });

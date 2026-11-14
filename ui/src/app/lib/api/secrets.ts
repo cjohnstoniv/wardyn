@@ -51,9 +51,12 @@ export const secrets = {
   // `createOnly` sends If-None-Match: *, so a name the namespace already holds is
   // refused (409, lib/secret-refusals.ts) instead of replaced: a list read earlier
   // can be stale, and only the server knows what is stored now.
-  async setSecret(name: string, value: string, opts?: { scope?: SecretScope; createOnly?: boolean }): Promise<void> {
+  // `person`, when given, is getExpectedPrincipal() read at the click, for a handler that must wait before it
+  // saves; without it the save names the person this tab has confirmed when it is sent.
+  async setSecret(name: string, value: string, opts?: { scope?: SecretScope; createOnly?: boolean; person?: string }): Promise<void> {
+    const person = opts?.person;
     const res = await wfetch(`${scopeBase(opts?.scope)}/${encodeURIComponent(name)}`, {
-      method: "PUT", asPerson: true,
+      method: "PUT", asPerson: person ?? true,
       headers: opts?.createOnly ? { "If-None-Match": "*" } : undefined,
       body: JSON.stringify({ value }),
     });
