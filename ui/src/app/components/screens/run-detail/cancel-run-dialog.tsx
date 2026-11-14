@@ -5,8 +5,11 @@
 
 // Cancel run on a run that has not started (scheduled, or waiting for its owner's sign-in): a plain cancel confirm, then the kill. It is open from the moment it mounts, so a
 // caller mounts it on the press and unmounts it on `onClose`. The Runs row loads it lazily; the run page's hero mounts it.
+// The kill asks the server to end the run only while it has not started: a run that started after this view last read it
+// is refused, not torn down behind a confirm that said nothing was set up, and the toast says so.
 
 import { toast } from "sonner";
+import { isKillStartedRefusal } from "../../../lib/api/kill-started";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
 import { CANCEL_NOT_STARTED as NS } from "../../wardyn/copy/cancel-not-started";
@@ -19,10 +22,11 @@ export default function CancelRunDialog({ runId, title, onClose }: { runId: stri
   const cancel = async (id: string) => {
     onClose();
     try {
-      await runsApi.killRun(id);
+      await runsApi.killRun(id, { notStarted: true });
       toast.success(NS.DONE(name));
     } catch (err) {
-      toast.error(NS.FAILED(name), { description: getErrorMessage(err) });
+      if (isKillStartedRefusal(err)) toast.info(NS.STARTED(name), { description: NS.STARTED_NEXT });
+      else toast.error(NS.FAILED(name), { description: getErrorMessage(err) });
     }
   };
   return <KillRunDialog runId={runId} title={title} onOpenChange={(open) => !open && onClose()} onConfirm={(id) => void cancel(id)} notStarted />;

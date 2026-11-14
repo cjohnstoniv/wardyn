@@ -395,11 +395,13 @@ export const runs = {
     return asJson<{ id: string; title: string }>(res);
   },
 
-  // POST /api/v1/runs/{id}/kill  -> 202 Accepted
-  async killRun(id: string): Promise<void> {
-    const res = await wfetch(`/runs/${encodeURIComponent(id)}/kill`, { method: "POST" });
+  // POST /api/v1/runs/{id}/kill  -> 202 Accepted. notStarted asks ?not_started=true: the server ends the run only
+  // while it has not started, and refuses with 409 run_kill_started once it has. The refusal keeps its reason.
+  async killRun(id: string, opts?: { notStarted?: boolean }): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}/kill${opts?.notStarted ? "?not_started=true" : ""}`, { method: "POST" });
     if (!res.ok) {
-      throw new HttpError(res.status, await errText(res));
+      const env = await errEnvelope(res);
+      throw new HttpError(res.status, env.message, env.reason);
     }
   },
 
