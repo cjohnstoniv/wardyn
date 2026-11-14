@@ -8,10 +8,14 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -172,4 +176,288 @@ func TestSweepForcedStops_GivesUpAFolderThatNeverReadsOnceItsKeepHasRunOut(t *te
 			check("the next tick", 2, true)
 		})
 	}
+}
+
+// owedCounted is a copy back still owed (a resume, its generation settled) whose pass counted 3 changes and named 2.
+func owedCounted() types.RunLocalFolderStatus {
+	return types.RunLocalFolderStatus{Gen: 3, Settled: 3, Resume: &types.FolderResume{Unsynced: 3, Counted: true, Paths: []string{"a.txt", "b.txt"}}}
+}
+
+// pastTheKeep moves the fake database's clock to the run's end plus its keep: the next tick is past it.
+func (f *forced) pastTheKeep() { f.clock.now = f.due.Add(f.s.pendingCap()) }
+
+// forcedGiveUpState is what the forced retry has done about the copy back so far: the give-up statements made, the
+// run.folder.transfer failure rows, the marks, the sandbox.sweep success rows, and whether the ref is cleared.
+type forcedGiveUpState struct {
+	giveUps, rows, marks, success int
+	cleared                       bool
+}
+
+func (f *forced) giveUpState(t *testing.T) forcedGiveUpState {
+	t.Helper()
+	f.cs.smu.Lock()
+	n := len(f.cs.giveUps)
+	f.cs.smu.Unlock()
+	rows := 0
+	for _, ev := range f.audit.snapshot() {
+		if ev.Action == "run.folder.transfer" && ev.Outcome == "failure" {
+			rows++
+		}
+	}
+	return forcedGiveUpState{giveUps: n, rows: rows, marks: f.leaser.markCount(),
+		success: len(sweepRows(f.audit, "success", "sandbox_stopped")), cleared: f.terminalRun(t).SandboxRef == ""}
+}
+
+// checkKeepGiveUp checks that the first give-up was the tail owner's, with the keep as its cap and no containment
+// terms, and that the record it left is given up with the count and the names of the changes left behind.
+func (f *forced) checkKeepGiveUp(t *testing.T) {
+	t.Helper()
+	f.cs.smu.Lock()
+	p := f.cs.giveUps[0]
+	f.cs.smu.Unlock()
+	if p.Cap != f.s.pendingCap() || p.D1 || p.Back.GivenUpAt == nil || p.Back.GivenUpCount == nil || *p.Back.GivenUpCount != 3 ||
+		!slices.Equal(p.Back.GivenUpPaths, []string{"a.txt", "b.txt"}) || p.Back.GivenUpPathsMore != 1 {
+		t.Errorf("give-up %+v; want the keep as its cap, no containment terms, and 3 changes given up, 2 named and 1 more", p)
+	}
+	if rec := f.cs.folderStatus(); rec.Resume != nil || !folderGivenUp(rec) {
+		t.Errorf("record %+v; want it given up, with no resume", rec)
+	}
+}
+
+// A forced-marked run whose copy back is still owed and whose sandbox stop keeps failing (its cut fails and so does
+// the stop) has its copy back given up once its keep has run out, by the forced retry: inside the keep nothing is
+// given up; on the first tick past it the record is given up with the keep as the statement's cap, its count and
+// names, and one given_up row, while the ref and the mark stay and no success row is written; the next tick adds
+// nothing; once the stop succeeds the ref is cleared with one success row and the mark clears. Catches: a run that
+// shows its changes kept for good, past the give-up time it showed, with no given_up row; a give-up inside the keep
+// or with no keep as its cap; a give-up made only after a confirmed stop; a mark or ref cleared by the give-up.
+func TestSweepForcedStops_GivesUpAnOwedCopyBackPastItsKeepWhileTheStopFails(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t)
+	f.release()
+	f.setRecord(owedCounted())
+	f.cs.giveUpApplies = true // the fake statement has no cap of its own: the retry's keep test is what is pinned
+	f.sb.proxyErr = errors.New("daemon unavailable")
+	f.sb.stopErr = errors.New("the daemon did not answer the stop")
+	for _, step := range []struct {
+		when string
+		set  func()
+		want forcedGiveUpState
+	}{
+		{"inside the keep", func() {}, forcedGiveUpState{marks: 1}},
+		{"past the keep", f.pastTheKeep, forcedGiveUpState{giveUps: 1, rows: 1, marks: 1}},
+		{"the next tick", func() {}, forcedGiveUpState{giveUps: 1, rows: 1, marks: 1}},
+		{"the stop succeeding", func() { f.sb.stopErr = nil }, forcedGiveUpState{giveUps: 1, rows: 1, success: 1, cleared: true}},
+	} {
+		step.set()
+		f.tick(t, f.s)
+		if got := f.giveUpState(t); got != step.want {
+			t.Fatalf("%s: %+v; want %+v", step.when, got, step.want)
+		}
+		if step.want.giveUps == 1 {
+			f.checkKeepGiveUp(t)
+		}
+	}
+}
+
+// The same run whose folder seed, data_out rule or folder record never reads, with its stop failing, is given up
+// past its keep with the note of the read that failed, as the tail owner decides it: one given_up row that names the
+// read (and no folder when the seed is the read that fails), the ref and the mark kept, and nothing given up inside
+// the keep. Catches: a give-up that waits on a read that never answers; one that drops the tail owner's notes.
+func TestSweepForcedStops_GivesUpAFolderThatNeverReadsPastItsKeepWhileTheStopFails(t *testing.T) {
+	down := errors.New("the database did not answer")
+	for _, tc := range []struct {
+		name, note, row string
+		named           bool
+		set             func(f *forced)
+	}{
+		{"its folder seed", folderRuleUnreadable, "rule_unreadable", false, func(f *forced) { f.cs.seedErr = down }},
+		{"its data out rule", folderRuleUnreadable, "rule_unreadable", true, func(f *forced) { f.cs.policyErr = down }},
+		{"its folder record", folderStatusUnreadable, "status_unreadable", true, func(f *forced) {
+			f.s.cfg.Store = unreadableRecordStore{f.s.cfg.Store.(markedStore)}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForced(t)
+			f.claimOnly(t)
+			f.release()
+			f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
+			f.cs.giveUpApplies = true
+			tc.set(f)
+			f.sb.proxyErr = errors.New("daemon unavailable")
+			f.sb.stopErr = errors.New("the daemon did not answer the stop")
+			noted := func() int {
+				n := 0
+				for _, ev := range f.audit.snapshot() {
+					if ev.Action == "run.folder.transfer" && strings.Contains(string(ev.Data), `"`+tc.row+`":true`) &&
+						strings.Contains(string(ev.Data), `"folder":`) == tc.named {
+						n++
+					}
+				}
+				return n
+			}
+			f.tick(t, f.s)
+			if got := f.giveUpState(t); got != (forcedGiveUpState{marks: 1}) {
+				t.Fatalf("inside the keep: %+v; want nothing given up and the mark kept", got)
+			}
+			f.pastTheKeep()
+			f.tick(t, f.s)
+			got := f.giveUpState(t)
+			if got.giveUps == 0 || got.rows != 1 || noted() != 1 || got.marks != 1 || got.cleared || got.success != 0 {
+				t.Fatalf("past the keep: %+v, %d rows noting %s; want a give-up, one row that notes it, the ref and the mark kept", got, noted(), tc.row)
+			}
+			if p := f.cs.giveUps[0]; p.Cap != f.s.pendingCap() || p.D1 || !strings.HasSuffix(p.Back.Error, tc.note) {
+				t.Errorf("give-up %+v; want the keep as its cap, no containment terms, and the failed read noted", p)
+			}
+			f.tick(t, f.s)
+			if got := f.giveUpState(t); got.rows != 1 || noted() != 1 {
+				t.Errorf("the next tick: %+v; want still one given_up row", got)
+			}
+		})
+	}
+}
+
+// A kept sandbox whose run's lock is never let go (its cut is confirmed and its copy back owed, so the retry keeps
+// it and the mark waits for the lock) is given up once its keep has run out: inside the keep nothing is given up or
+// stopped; on the first tick past it the record is given up, and in the same tick the sandbox, no longer kept, is
+// stopped without the lock, the ref is cleared with one success row and the mark clears. Catches: a give-up only on
+// the path where the stop failed, which never runs while the lock is held.
+func TestSweepForcedStops_GivesUpAKeptSandboxsCopyBackPastItsKeepWhileTheLockIsHeld(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t) // the test's hold on the lock is never let go
+	f.setRecord(owedCounted())
+	f.cs.giveUpApplies = true
+	f.tick(t, f.s)
+	if got := f.giveUpState(t); got != (forcedGiveUpState{marks: 1}) || f.sb.stopCount() != 0 {
+		t.Fatalf("inside the keep: %+v, %d stops; want the sandbox kept, nothing given up and the mark kept", got, f.sb.stopCount())
+	}
+	f.pastTheKeep()
+	f.tick(t, f.s)
+	if got, want := f.giveUpState(t), (forcedGiveUpState{giveUps: 1, rows: 1, success: 1, cleared: true}); got != want || f.sb.stopCount() != 1 {
+		t.Fatalf("past the keep: %+v, %d stops; want %+v and one stop", got, f.sb.stopCount(), want)
+	}
+	f.checkKeepGiveUp(t)
+}
+
+// A marked run on a runner that is away is not given up by the forced retry, past the keep too: the tail owner on a
+// replica it is away from owns that give-up. Once the runner is back here, the retry gives it up on its next tick.
+// Catches: a give-up made before the away return, which would give up and write for a runner the retry does not
+// reach; and no give-up once the runner is here.
+func TestSweepForcedStops_AnAwayRunnersCopyBackIsGivenUpOnlyOnceItIsHere(t *testing.T) {
+	f := newForced(t)
+	_, online := f.onFencedRunner(t)
+	f.claimOnly(t)
+	f.release()
+	f.setRecord(owedCounted())
+	f.cs.giveUpApplies = true
+	online.Store(false)
+	f.pastTheKeep()
+	f.tick(t, f.s)
+	if got := f.giveUpState(t); got != (forcedGiveUpState{marks: 1}) {
+		t.Fatalf("away, past the keep: %+v; want nothing given up and the mark kept", got)
+	}
+	online.Store(true)
+	f.tick(t, f.s)
+	if got := f.giveUpState(t); got.giveUps != 1 || got.rows != 1 {
+		t.Fatalf("here again: %+v; want one give-up and one given_up row", got)
+	}
+	f.checkKeepGiveUp(t)
+}
+
+// giveUpBarrierStore holds each give-up statement until n have arrived, so two give-ups decided on the same owed
+// record are both in the statement before either applies.
+type giveUpBarrierStore struct {
+	markedStore
+	n       int32
+	arrived *atomic.Int32
+}
+
+func (s giveUpBarrierStore) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	s.arrived.Add(1)
+	for deadline := time.Now().Add(10 * time.Second); s.arrived.Load() < s.n && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	return s.markedStore.GiveUpRunLocalFolder(ctx, id, p)
+}
+
+// Two replicas' forced retries of a run whose lock is held for good, past its keep, both decide the give-up and race
+// into the statement: one applies and writes the one given_up row; the other finds the record final and writes
+// none. The stop fails, so the ref and the mark stay. Catches: a given_up row written for a statement that applied
+// nothing, which writes two rows for one give-up.
+func TestSweepForcedStops_TwoReplicasGivingUpOneCopyBackWriteOneRow(t *testing.T) {
+	f := newForced(t)
+	f.claimOnly(t) // the test's hold on the lock is never let go
+	f.setRecord(owedCounted())
+	f.cs.giveUpApplies = true
+	f.sb.stopErr = errors.New("the daemon did not answer the stop")
+	var arrived atomic.Int32
+	f.s.cfg.Store = giveUpBarrierStore{markedStore: f.s.cfg.Store.(markedStore), n: 2, arrived: &arrived}
+	other := New(f.s.cfg)
+	other.locks.override = f.s.locker() // one lock for both replicas, held by the test
+	f.pastTheKeep()
+	f.clock.now = f.clock.now.Add(time.Minute)
+	marks, err := f.leaser.ListForcedStops(context.Background())
+	if err != nil || len(marks) != 1 {
+		t.Fatalf("marks %v, %v; want one", marks, err)
+	}
+	fs := f.s.cfg.Store.(store.ForcedStopper)
+	var wg sync.WaitGroup
+	for _, srv := range []*Server{f.s, other} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.retryForcedStop(context.Background(), fs, marks[0])
+		}()
+	}
+	wg.Wait()
+	if arrived.Load() != 2 {
+		t.Fatalf("%d give-up statements; want both replicas to decide the give-up", arrived.Load())
+	}
+	if got, want := f.giveUpState(t), (forcedGiveUpState{giveUps: 2, rows: 1, marks: 1}); got != want {
+		t.Fatalf("%+v; want %+v: one row for one give-up", got, want)
+	}
+	f.checkKeepGiveUp(t)
+}
+
+// A given-up record, whose generation the give-up moved on without settling it, is final to the retry's settle:
+// the settle neither cuts the agent again on every tick nor keeps the stop from being sent. With the lock held each
+// tick makes one cut, the stop path's own; with the lock free and a cut that is not observed (the runner's link
+// drops after the away gate) the sandbox is still stopped, the mark clears and the record stays given up. Catches:
+// a give-up (the retry's past the keep, or the tail owner's for a runner that was away) settled again as if a
+// forced end had died before its settle, which cuts on every tick and, on a cut not observed, returns before the
+// stop for good.
+func TestSweepForcedStops_AGivenUpRecordIsNotSettledAgain(t *testing.T) {
+	at := time.Now()
+	givenUp := types.RunLocalFolderStatus{Gen: 4, Settled: 3, Back: &types.FolderPassRecord{At: at, Error: "given up", GivenUpAt: &at}}
+	t.Run("the lock held", func(t *testing.T) {
+		f := newForced(t)
+		f.claimOnly(t) // the test's hold on the lock is never let go
+		f.setRecord(givenUp)
+		rn := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+		f.s.cfg.Runner = rn
+		f.sb.stopErr = errors.New("the daemon did not answer the stop")
+		f.tick(t, f.s)
+		f.tick(t, f.s)
+		if rn.proxyStops.Load() != 2 || f.leaser.markCount() != 1 {
+			t.Errorf("%d proxy stops, %d marks after two ticks; want 2, one cut a tick, and the mark kept", rn.proxyStops.Load(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Gen != 4 || rec.Settled != 3 || !folderGivenUp(rec) {
+			t.Errorf("record %+v; want it as it was, given up at generation 4", rec)
+		}
+	})
+	t.Run("the lock free, the cut not observed", func(t *testing.T) {
+		f := newForced(t)
+		fr, _ := f.onFencedRunner(t)
+		f.claimOnly(t)
+		f.release()
+		f.setRecord(givenUp)
+		fr.fenceErr = runner.ErrRunnerOffline
+		f.tick(t, f.s)
+		if fr.fences.Load() != 0 || f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+			t.Errorf("%d fences, %d stops, %d marks; want no cut, the sandbox stopped and the mark cleared", fr.fences.Load(), f.sb.stopCount(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Gen != 4 || !folderGivenUp(rec) {
+			t.Errorf("record %+v; want it as it was, given up at generation 4", rec)
+		}
+	})
 }

@@ -381,19 +381,27 @@ func (s *Server) tailGiveUpAway(ctx context.Context, id uuid.UUID) {
 		return
 	}
 	defer unlock()
-	run, st, note, again, ok := s.tailReread(lctx, id, tailGiveUp)
+	s.tailGiveUpOwed(lctx, id)
+}
+
+// tailGiveUpOwed is the give-up decision and its write: run id and its record are read again (tailReread), and when
+// the give-up is still the due step the owed pass is given up (giveUpFolderNoted), with its audit row written only
+// when the statement applied. It takes no lock itself: tailGiveUpAway calls it under the run's lock, and the forced
+// stop's retry (giveUpForcedPastKeep) without one.
+func (s *Server) tailGiveUpOwed(ctx context.Context, id uuid.UUID) {
+	run, st, note, again, ok := s.tailReread(ctx, id, tailGiveUp)
 	if !ok || !again {
 		return
 	}
-	if _, err := s.giveUpFolderNoted(lctx, run, false, st, note); err != nil {
-		slog.WarnContext(lctx, "wardynd: giving up an owed folder copy back failed; the next tick tries again",
+	if _, err := s.giveUpFolderNoted(ctx, run, false, st, note); err != nil {
+		slog.WarnContext(ctx, "wardynd: giving up an owed folder copy back failed; the next tick tries again",
 			slog.String("run_id", id.String()), slog.Any("err", err))
 	}
 }
 
-// tailReread reads run id and its record again under its lock, and reports whether the run is still ended with its
-// ref and step is still its due step, with the note a give-up carries: the reads here decide it (tailStepOf). ok
-// false is a read that failed or a run with nothing to tail.
+// tailReread reads run id and its record again (under its lock, except for the forced stop's retry), and reports
+// whether the run is still ended with its ref and step is still its due step, with the note a give-up carries: the
+// reads here decide it (tailStepOf). ok false is a read that failed or a run with nothing to tail.
 func (s *Server) tailReread(ctx context.Context, id uuid.UUID, step tailStep) (run types.AgentRun, st types.RunLocalFolderStatus, note string, again, ok bool) {
 	// Reads only, under the run's lock on a loop's context with no deadline: one bound for them all.
 	ctx, cancel := context.WithTimeout(ctx, heldStoreCallBound)
