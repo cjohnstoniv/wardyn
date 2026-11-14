@@ -52,7 +52,8 @@ if grep -qE 'PriorityClass|WARDYN_K8S_WARM_' "$TMP/absent.out"; then die "off: a
 ok "off (absent, null, empty): identical renders, no PriorityClass, no WARDYN_K8S_WARM_* env"
 
 # One pool: the env round-trips, and the PriorityClass is below every run and never preempts.
-POOLS='[{"name":"small","image":"example.test/agent:1","class":"CC1","cpu":"500m","memory":"1Gi","size":2}]'
+# Keys in sorted order: toJson writes a map's keys sorted, and the comparison below is on the text.
+POOLS='[{"class":"CC1","cpu":"500m","image":"example.test/agent:1","memory":"1Gi","name":"small","size":2}]'
 render -f "$ALLON" --set-json "k8s.warmPools=$POOLS" >"$TMP/one.out"
 [[ "$(envval WARDYN_K8S_WARM_POOLS "$TMP/one.out" | yq -o=json -I=0 '.')" == "$POOLS" ]] || die "one pool: WARDYN_K8S_WARM_POOLS does not round-trip to the pool"
 pc='select(.kind == "PriorityClass")'
