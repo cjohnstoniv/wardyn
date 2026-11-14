@@ -384,6 +384,56 @@ func TestLostRun_AnUnreadEndWhereNoCutCanHappenTakesTheStrongerEnd(t *testing.T)
 	}
 }
 
+// An outage run whose end cannot be read, on a substrate whose cut is unsupported, whose end then does not
+// land. An end that fails another way answers with its own error: containment is unresolved, the run stays
+// kept (RUNNING, no StopSandbox), its containment_error is the end's error, and the lease sweep's next pass
+// tries the end again. An end queued on its runner is audited as pending on the runner with no lost_error: the
+// queued end is the run's containment, and the read's error is logged only, as when the end lands. RED without
+// the end on a cut that cannot happen: no end call, and the read's error is the answer, so the run is
+// unresolved with the read's error as its lost_error and containment_error.
+func TestLostRun_AnUnreadEndWhereNoCutCanHappenAndTheEndDoesNotLand(t *testing.T) {
+	errEnd := errors.New("runner refused the end")
+	for _, c := range []struct {
+		name        string
+		endErr      error
+		containment string
+		lostError   any // the run.lost row's lost_error
+		outcome     string
+	}{
+		{"the end fails: its error, unresolved, retried", errEnd, "unresolved", errEnd.Error(), "failure"},
+		{"the end is queued: pending on the runner, no lost_error", runner.ErrPendingOnRunner, "pending_runner", nil, "success"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newLostFixture(t)
+			f.ls.lapsed = true
+			f.st.endsErr = errors.New("database down")
+			f.lr.proxyErr, f.rn.endErr = runner.ErrEndUnsupported, c.endErr
+			f.sweepTokens(t)
+			if f.st.State() != types.RunRunning || f.lr.proxyStopCount() != 1 || f.rn.endCount() != 1 || f.rn.stopCount() != 0 {
+				t.Fatalf("state %s, proxy stops %d, ends %d, StopSandbox %d; want RUNNING, 1, 1, 0: the end tried and the run kept",
+					f.st.State(), f.lr.proxyStopCount(), f.rn.endCount(), f.rn.stopCount())
+			}
+			rows := f.audit.eventsFor(f.run.ID, "run.lost")
+			if len(rows) != 1 {
+				t.Fatalf("run.lost rows = %v, want 1", rows)
+			}
+			data := leaseAuditData(t, rows[0])
+			if data["containment"] != c.containment || data["kept"] != true || data["lost_error"] != c.lostError || rows[0].Outcome != c.outcome {
+				t.Errorf("run.lost %s, data %v; want outcome %s, containment %s, kept true, lost_error %v",
+					rows[0].Outcome, data, c.outcome, c.containment, c.lostError)
+			}
+			if want, _ := c.lostError.(string); f.st.containmentError() != want {
+				t.Errorf("containment_error = %q, want %q", f.st.containmentError(), want)
+			}
+			f.sweep(t)
+			if f.st.State() != types.RunRunning || f.rn.endCount() != 2 || f.rn.stopCount() != 0 {
+				t.Errorf("next pass: state %s, ends %d, StopSandbox %d; want RUNNING, 2, 0: the end retried, the run kept",
+					f.st.State(), f.rn.endCount(), f.rn.stopCount())
+			}
+		})
+	}
+}
+
 // unsupportedGenRunner is genStopRunner on a substrate that can do neither stop: each stop records its call
 // and answers runner.ErrEndUnsupported.
 type unsupportedGenRunner struct{ *genStopRunner }

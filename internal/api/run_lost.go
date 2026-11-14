@@ -298,7 +298,7 @@ func (s *Server) outageEnd(ctx context.Context, run types.AgentRun) (lostEnd, er
 	}
 	open, _, err := rd.RunEndsOpen(ctx, run.ID, s.cfg.EndedRunGrace)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: reading a lost run's end failed; cutting its proxy, the stop is retried",
+		slog.WarnContext(ctx, "wardynd: reading a lost run's end failed; its proxy is cut and the stop retried, or its agent ended where no cut can happen",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return lostEndReadFailed, err
 	}
