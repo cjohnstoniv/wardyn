@@ -596,6 +596,7 @@ commands are the ones in "Back them up" and "Restore them", and in
   - Such a trigger's function runs inside the audit function that fired it, with that function's `search_path` unless it sets its own.
   - Since migration `0285` that path is `pg_catalog, pg_temp`, so the function must name every table, sequence and function it uses with its schema, or set its own path ending in `pg_temp`.
   - A name it leaves bare is not found and the audit write fails, or a bare table name resolves to a temporary table of the writing session.
+  - Each start names, in a warning, any such trigger whose function sets no search_path, and the boot canary's refusal names them too.
 
 - The boot does more than count triggers.
   - After the catalog check, wardynd appends ONE synthetic audit row inside a transaction it always rolls back and

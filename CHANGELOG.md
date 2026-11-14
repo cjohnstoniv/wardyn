@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
+- The boot now names, in a warning and in the boot canary's refusal, an operator's trigger on the audit tables whose function sets no search_path, instead of saying the chain trigger is not working.
 
 ### Fixed
 
