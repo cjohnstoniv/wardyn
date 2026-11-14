@@ -366,8 +366,7 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		errs = append(errs, finish(store.GroupStepSessions, cutErr, map[string]int{"sessions_cut": len(cuts)}))
 	}
 	// A newer removal replaced this one's rows: it cuts, revokes and writes its own row, so this one stops.
-	if err := errors.Join(errs...); errors.Is(err, store.ErrSuperseded) {
-		slog.WarnContext(ctx, "api: a group removal stopped for a newer removal; its session cut errors are not in the answer", slog.String("group", g.ID.String()), slog.String("identity", identityID.String()), slog.Any("err", err))
+	if superseded(ctx, errors.Join(errs...), identityID, slog.String("group", g.ID.String())) {
 		return nil
 	}
 	if pending(store.GroupStepTokens) {
@@ -385,7 +384,7 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		errs = append(errs, finish(store.GroupStepTokens, revokeErr, map[string]int{"tokens_revoked": revoked}))
 	}
 	if err := errors.Join(errs...); err != nil || !pending(store.GroupStepAudit) {
-		return unlessSuperseded(err)
+		return unlessSuperseded(ctx, err, identityID, slog.String("group", g.ID.String()))
 	}
 	latest, err := st.ListDeprovisionJobs(ctx, identityID, store.JobKindGroupRemove)
 	if err != nil {
@@ -408,13 +407,24 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		"slot": slot, "group": g.ID.String(), "group_external_id": g.ExternalID,
 		"sessions_cut": counts["sessions_cut"], "tokens_revoked": counts["tokens_revoked"],
 	}))
-	return unlessSuperseded(finish(store.GroupStepAudit, s.recordAuditStrict(ctx, ev), nil))
+	return unlessSuperseded(ctx, finish(store.GroupStepAudit, s.recordAuditStrict(ctx, ev), nil), identityID, slog.String("group", g.ID.String()))
 }
 
-// unlessSuperseded is err, or nil when err says a newer removal replaced this one's ledger rows
-// (store.ErrSuperseded): that removal cuts, revokes and writes its own row, so this one has nothing left to fail.
-func unlessSuperseded(err error) error {
-	if errors.Is(err, store.ErrSuperseded) {
+// superseded says whether err holds store.ErrSuperseded: a newer removal or suspension replaced the one this
+// work was bound to and does the work itself, so this one stops and answers nil. err can join a real failure
+// with that refusal, and the nil answer drops it, so err is logged with the identity and attrs.
+func superseded(ctx context.Context, err error, identity uuid.UUID, attrs ...slog.Attr) bool {
+	if !errors.Is(err, store.ErrSuperseded) {
+		return false
+	}
+	attrs = append(attrs, slog.String("identity", identity.String()), slog.Any("err", err))
+	slog.LogAttrs(ctx, slog.LevelWarn, "api: leaver work stopped for a newer occurrence; its errors are not in the answer", attrs...)
+	return true
+}
+
+// unlessSuperseded is err, or nil when it is superseded (which logs it).
+func unlessSuperseded(ctx context.Context, err error, identity uuid.UUID, attrs ...slog.Attr) error {
+	if superseded(ctx, err, identity, attrs...) {
 		return nil
 	}
 	return err
