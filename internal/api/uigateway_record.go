@@ -76,8 +76,9 @@ func (s *Server) recordsDesktopApp(run types.AgentRun, sess uiSession) bool {
 }
 
 // watchDesktopApp admits a recorded desktop app connection as a Linux VM's display is admitted
-// (serveDesktopRFB): the recording is held from the first frame while the run has an open take over or,
-// on a Linux VM, its sign-in row marks a pause, and either read failing refuses the connection (503).
+// (serveDesktopRFB): the recording is held from the first frame while the run has an open take over or
+// desktop sign-in or, on a Linux VM, its sign-in row marks a pause, and any read failing refuses the
+// connection (503).
 // The watch starts now, before the dial, so a pause or take over on another replica during the dial is
 // held within the same bound. stop ends it, once the connection's recording is stored; it is a no-op
 // for any other connection.
@@ -321,9 +322,14 @@ func (s *Server) resumeDesktopHold(ctx context.Context, run types.AgentRun, hold
 // over's hand back tells the other replicas in its own recording_gap notice (recordingGap). ended,
 // when set, is whether the run was over when the sign-in ended, carried in the notice
 // (recordingGapNotice.RunEnded) so the replica holding the pause writes what this one knew; unset,
-// each replica reads it from the run (desktopPauseOver).
+// each replica reads it from the run (desktopPauseOver). The notice goes out whether or not the hold was
+// held here: the replica that began a sign-in holds it, and so does every replica whose desktop watch read it
+// open (vmSignInWatch.sync). It is one try and may be lost: a container sign-in's hold is also ended by the
+// holding replica's desktop watch, which reads the sign-in's row on each open desktop stream and before it
+// admits the next.
 func (s *Server) endDesktopHold(ctx context.Context, run types.AgentRun, hold string, ended *bool) {
-	if !s.resumeDesktopHold(ctx, run, hold, ended) && s.desktopRecorded(run) {
+	s.resumeDesktopHold(ctx, run, hold, ended)
+	if s.desktopRecorded(run) {
 		s.publishNotice(livebus.KindRecordingGap, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold, RunEnded: ended})
 	}
 }
@@ -371,6 +377,12 @@ func (d *desktopRecordings) heldWith(run uuid.UUID, prefix string) []string {
 		}
 	}
 	return out
+}
+
+// signinHolds lists the desktop sign-in holds on run's open gap here. A sign-in holds the recording by
+// its bare id (handleBeginDesktopSignin); every other hold's id carries a prefix, so it is never a UUID.
+func (d *desktopRecordings) signinHolds(run uuid.UUID) []string {
+	return slices.DeleteFunc(d.heldWith(run, ""), func(h string) bool { return uuid.Validate(h) != nil })
 }
 
 // auditDesktopResume writes desktop.recording.resume for gap p, ending now. A gap closed once the run

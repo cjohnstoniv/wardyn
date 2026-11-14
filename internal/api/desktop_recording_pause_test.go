@@ -125,6 +125,93 @@ func TestDesktopSignin_PauseLeavesNoTypedBytesInTheRecording(t *testing.T) {
 	checkNoTypedBytes(t, rec, f.h.audit, desktopPauseSignin)
 }
 
+// recordedSigninFixture is newSigninFixture on a run that records its screen.
+func recordedSigninFixture(t *testing.T) *signinFixture {
+	t.Helper()
+	f := newSigninFixture(t)
+	f.run.RecordingLevel = types.RecordingScreenActions
+	f.st.putRun(f.run)
+	f.srv.cfg.RecordingStore = fsRecordingStore(t)
+	return f
+}
+
+// TestDesktopSignin_AnEndWhoseNoticeIsLostStillResumesTheRecording: a sign-in begun here and ended on
+// another replica, whose recording_gap notice never arrives, resumes this replica's recording at the
+// open desktop stream's next read of the sign-in row, with one closed gap.
+func TestDesktopSignin_AnEndWhoseNoticeIsLostStillResumesTheRecording(t *testing.T) {
+	f := recordedSigninFixture(t)
+	ctx := context.Background()
+	rec := liveDesktopRecorder(f.srv, f.run.ID)
+	f.begin(t)
+	si := f.st.only(t)
+	w, err := f.srv.watchVMSignIn(ctx, f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.stop()
+	_, _ = rec.Write(desktopFrame(desktopUpdate("typedsecret!")))
+	// Another replica's end: the row closes, and no notice reaches this replica.
+	if _, err := f.st.EndDesktopSignin(ctx, si.ID, signinEndDone, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.srv.desktopRecs.holds(f.run.ID, si.ID.String()) {
+		t.Fatal("the closed sign-in still holds the recording after the stream read its row")
+	}
+	_, _ = rec.Write(desktopFrame(desktopUpdate("afterresume!")))
+	checkNoTypedBytes(t, rec, f.h.audit, desktopPauseSignin)
+}
+
+// TestDesktopSignin_ADesktopAdmittedReadsTheSigninRow: a desktop admitted while another replica's sign-in
+// is open starts held by that sign-in's id; one admitted after that sign-in closed with its notice lost,
+// and a newer sign-in begun here, ends only the closed one's hold; and once the newer one closes
+// elsewhere too, the next admission leaves no hold, with one pause and one resume row.
+func TestDesktopSignin_ADesktopAdmittedReadsTheSigninRow(t *testing.T) {
+	f := recordedSigninFixture(t)
+	ctx := context.Background()
+	admit := func() {
+		t.Helper()
+		w, err := f.srv.watchVMSignIn(ctx, f.run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.stop()
+	}
+	now := time.Now()
+	older := types.DesktopSignin{ID: uuid.New(), RunID: f.run.ID, Holder: signinOwner, BeganAt: now, ExpiresAt: now.Add(desktopSigninWindow)}
+	if err := f.st.BeginDesktopSignin(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	admit()
+	if !f.srv.desktopRecs.holds(f.run.ID, older.ID.String()) {
+		t.Fatal("a desktop admitted while another replica's sign-in is open is not held by it")
+	}
+	if _, err := f.st.EndDesktopSignin(ctx, older.ID, signinEndDone, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.begin(t)
+	newer, err := f.st.OpenDesktopSignin(ctx, f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit()
+	if f.srv.desktopRecs.holds(f.run.ID, older.ID.String()) || !f.srv.desktopRecs.holds(f.run.ID, newer.ID.String()) {
+		t.Fatalf("holds = %v, want only the open sign-in %s", f.srv.desktopRecs.heldWith(f.run.ID, ""), newer.ID)
+	}
+	if _, err := f.st.EndDesktopSignin(ctx, newer.ID, signinEndDone, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	admit()
+	if held := f.srv.desktopRecs.heldWith(f.run.ID, ""); len(held) != 0 {
+		t.Fatalf("holds after both sign-ins closed = %v, want none", held)
+	}
+	if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
+		t.Errorf("desktop.recording rows: %d pause, %d resume, want one of each", p, r)
+	}
+}
+
 // TestDesktopRecording_ResumeEndsOnlyItsOwnPause: a sign-in's end never resumes a recording a take
 // over paused.
 func TestDesktopRecording_ResumeEndsOnlyItsOwnPause(t *testing.T) {
