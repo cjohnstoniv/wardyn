@@ -16,19 +16,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// warmClaimGoneWait mirrors the 15 s wait for a claimed placeholder to be gone in internal/runner/k8s/warm_claim.go.
+// warmClaimGoneWait mirrors the 15 s wait for a claimed placeholder to be gone in internal/runner/k8s/warm_claim.go,
+// a k8s-tagged file this test cannot import: the test reads that line and fails when the two differ.
 const warmClaimGoneWait = 15 * time.Second
 
 // agentSandboxMeasuredCases is how many cases in ci.yml's "cases ran and passed" list ran hosted before the keep and
 // warm pool cases; their go test time is ASMeasuredSuite. Every other case in the list needs a budget below.
 const agentSandboxMeasuredCases = 7
 
-// agentSandboxWorstCase is each new case's worst case: its limits, plus the cleanups its helpers run after it.
+// agentSandboxWorstCase is each new case's worst case: its context limit, the longest of its waits (only one wait can
+// run past the limit: the call after it fails the case), plus the cleanups its helpers run after it.
 var agentSandboxWorstCase = map[string]time.Duration{
 	"TestAgentSandboxKeepProxyThroughService":             ASKeepServiceLimit + ASKillBound,
-	"TestAgentSandboxKeepEndpointSliceElsewhereIsDropped": ASKeepSliceLimit + ASKeepSliceDecoyWait + ASKillBound,
+	"TestAgentSandboxKeepEndpointSliceElsewhereIsDropped": ASKeepSliceLimit + max(ASKeepSliceDecoyWait, ASKeepSliceGoneWait, ASKeepSliceBackWait) + ASKillBound,
 	"TestAgentSandboxKeepLiveReplaceProxy":                ASKeepReplaceLimit + ASKeepReplaceWait + ASKillBound,
-	"TestAgentSandboxKeepAPISequence":                     ASKeepSequenceLimit + ASKeepSequenceStop + ASKeepSequenceSettle + 2*ASKillBound,
+	"TestAgentSandboxKeepAPISequence":                     ASKeepSequenceLimit + max(ASKeepSequenceStop, ASKeepSequenceHeld) + ASKeepSequenceSettle + 2*ASKillBound,
 	"TestAgentSandboxKeepAdmissionBoundsServices":         ASKeepAdmissionLimit,
 	"TestWarmPoolPlaceholderHoldsNothing":                 ASWarmReadyWait + ASWarmCleanupBound,
 	"TestWarmPoolPlaceholderClaimedAndRefilled": ASWarmReadyWait + runner.DefaultSandboxStartTimeout + warmClaimGoneWait +
@@ -43,6 +45,13 @@ func TestAgentSandboxCaseBudgetsFitTheJobTimeout(t *testing.T) {
 	b, err := os.ReadFile("../../.github/workflows/ci.yml")
 	if err != nil {
 		t.Fatalf("read ci.yml: %v", err)
+	}
+	src, err := os.ReadFile("../../internal/runner/k8s/warm_claim.go")
+	if err != nil {
+		t.Fatalf("read warm_claim.go: %v", err)
+	}
+	if want := fmt.Sprintf("d.waitPodGone(ctx, ns, pod, %d*time.Second)", warmClaimGoneWait/time.Second); !strings.Contains(string(src), want) {
+		t.Errorf("internal/runner/k8s/warm_claim.go has no %q: warmClaimGoneWait must equal the driver's wait for a claimed placeholder to go", want)
 	}
 	job := string(b)
 	i := strings.Index(job, "\n  conformance-k8s-agent-sandbox:\n")

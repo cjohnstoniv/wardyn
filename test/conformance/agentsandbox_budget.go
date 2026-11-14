@@ -12,14 +12,17 @@ const (
 	ASKillBound        = time.Minute // startRun's cleanup: KillSandbox of the run
 	ASWarmCleanupBound = time.Minute // warmPoolRunner's cleanup of the placeholders and the deny policy
 
-	ASKeepServiceLimit   = 6 * time.Minute // TestAgentSandboxKeepProxyThroughService, the case's context
-	ASKeepSliceLimit     = 8 * time.Minute // TestAgentSandboxKeepEndpointSliceElsewhereIsDropped
-	ASKeepSliceDecoyWait = 2 * time.Minute // its longest keepWaitFor, the decoy pod running
-	ASKeepReplaceLimit   = 8 * time.Minute // TestAgentSandboxKeepLiveReplaceProxy
+	ASKeepServiceLimit   = 6 * time.Minute  // TestAgentSandboxKeepProxyThroughService, the case's context
+	ASKeepSliceLimit     = 8 * time.Minute  // TestAgentSandboxKeepEndpointSliceElsewhereIsDropped
+	ASKeepSliceDecoyWait = 2 * time.Minute  // its keepWaitFor for the decoy pod running
+	ASKeepSliceGoneWait  = 10 * time.Second // for the agent's connect failing once the endpoint is elsewhere
+	ASKeepSliceBackWait  = 30 * time.Second // for it succeeding once the endpoint is restored
+	ASKeepReplaceLimit   = 8 * time.Minute  // TestAgentSandboxKeepLiveReplaceProxy
 	ASKeepReplaceWait    = 30 * time.Second
 	ASKeepSequenceLimit  = 15 * time.Minute // TestAgentSandboxKeepAPISequence, both of its runs
 	ASKeepSequenceSettle = 5 * time.Second  // its sleep inside the remake window
-	ASKeepSequenceStop   = 2 * time.Minute  // its longest keepWaitFor, no pod of the run remaining
+	ASKeepSequenceStop   = 2 * time.Minute  // its keepWaitFor for no pod of the run remaining
+	ASKeepSequenceHeld   = time.Minute      // for the held pod appearing behind the gate
 	ASKeepAdmissionLimit = 2 * time.Minute  // TestAgentSandboxKeepAdmissionBoundsServices
 
 	ASWarmReadyWait  = 180 * time.Second // both warm pool cases wait this long for a Ready placeholder

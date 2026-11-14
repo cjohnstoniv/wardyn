@@ -126,7 +126,7 @@ render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.ke
   || die "keep: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_KEEP=true"
 grep -q 'WARDYN_K8S_AGENT_SANDBOX_KEEP\|endpointslices' "$TMP/on.out" && die "on without keep: a keep marker rendered"
 # Whole documents: keep.out less its two rules, its env and its policy objects is on.out, so nothing else changed.
-y 'select((.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") and (.metadata.name | test("keep-")) | not)
+y 'select(((.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") and (.metadata.name | test("keep-"))) | not)
   | del(.rules[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io"))
   | del(.spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP"))' "$TMP/keep.out" >"$TMP/keep-less.out"
 y '.' "$TMP/on.out" >"$TMP/on-whole.out"
@@ -148,6 +148,32 @@ done
   || die "keep: the keep-service policy does not match services only"
 [[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-endpoints") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/keep.out")" == "endpointslices" ]] \
   || die "keep: the keep-endpoints policy does not match endpointslices only"
+# The whole-document compare above leaves these four documents out, so each is read field by field here: its
+# apiVersion, the number of keys at each level, and every value but the common labels.
+for n in keep-service keep-endpoints; do
+  case "$n" in
+    keep-service)
+      rule='{"apiGroups":[""],"apiVersions":["v1"],"operations":["CREATE","UPDATE"],"resources":["services"]}'
+      expr="object.metadata.name.startsWith('wardyn-proxy-svc-') && object.spec.type == 'ClusterIP' && (!has(object.spec.selector) || size(object.spec.selector) == 0) && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)"
+      msg="wardynd may make only a run's own ClusterIP Service, with no selector and no external IPs" ;;
+    keep-endpoints)
+      rule='{"apiGroups":["discovery.k8s.io"],"apiVersions":["v1"],"operations":["CREATE","UPDATE"],"resources":["endpointslices"]}'
+      expr="has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')"
+      msg="wardynd may write EndpointSlices only for a run's own Service" ;;
+  esac
+  kp="select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\")"
+  kb="select(.kind == \"ValidatingAdmissionPolicyBinding\" and .metadata.name == \"r-wardyn-$n\")"
+  [[ "$(y "$kp | [.apiVersion, (. | length), (.metadata | length), .spec.failurePolicy, (.spec | length), (.spec.matchConstraints | length), (.spec.matchConstraints.resourceRules | length), (.spec.matchConditions | length), (.spec.matchConditions[0] | length), .spec.matchConditions[0].name, (.spec.validations | length), (.spec.validations[0] | length)] | join(\",\")" "$TMP/keep.out")" == "admissionregistration.k8s.io/v1,4,2,Fail,4,1,1,1,2,requested-by-wardynd,1,2" ]] \
+    || die "keep: the $n policy is not v1, fail-closed, with exactly one resource rule, one match condition and one validation"
+  [[ "$(y -o=json -I=0 "$kp | .spec.matchConstraints.resourceRules[0]" "$TMP/keep.out")" == "$rule" ]] \
+    || die "keep: the $n policy's resource rule is not exactly v1 CREATE and UPDATE on its one resource"
+  [[ "$(y "$kp | .spec.validations[0].expression" "$TMP/keep.out")" == "$expr" ]] || die "keep: the $n validation is not the expected expression"
+  [[ "$(y "$kp | .spec.validations[0].message" "$TMP/keep.out")" == "$msg" ]] || die "keep: the $n validation message changed"
+  [[ "$(y "$kb | [.apiVersion, (. | length), (.metadata | length)] | join(\",\")" "$TMP/keep.out")" == "admissionregistration.k8s.io/v1,4,2" ]] \
+    || die "keep: the $n binding is not v1 with only a name and labels"
+  [[ "$(y -o=json -I=0 "$kb | .spec" "$TMP/keep.out")" == "{\"policyName\":\"r-wardyn-$n\",\"validationActions\":[\"Deny\"],\"matchResources\":{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"wardyn-runs\"}}}}" ]] \
+    || die "keep: the $n binding is not exactly Deny for its policy on the runs namespace"
+done
 for f in on keep-false keep-null; do
   if grep -q 'keep-service\|keep-endpoints' "$TMP/$f.out"; then die "keep policy rendered with keep off ($f)"; fi
 done

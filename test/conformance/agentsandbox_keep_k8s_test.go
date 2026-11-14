@@ -217,11 +217,11 @@ func TestAgentSandboxKeepEndpointSliceElsewhereIsDropped(t *testing.T) {
 		}
 	}
 	endpointsAre([]discoveryv1.Endpoint{{Addresses: []string{decoy}, Conditions: discoveryv1.EndpointConditions{Ready: ptr(true)}}})
-	keepWaitFor(t, 10*time.Second, "the agent's connect to wardyn-proxy failing once the endpoint is elsewhere", func() bool {
+	keepWaitFor(t, conformance.ASKeepSliceGoneWait, "the agent's connect to wardyn-proxy failing once the endpoint is elsewhere", func() bool {
 		return !keepProxyReachable(ctx, t, r, ref)
 	})
 	endpointsAre(original.Endpoints)
-	keepWaitFor(t, 30*time.Second, "the agent's connect to wardyn-proxy succeeding once the endpoint is restored", func() bool {
+	keepWaitFor(t, conformance.ASKeepSliceBackWait, "the agent's connect to wardyn-proxy succeeding once the endpoint is restored", func() bool {
 		return keepProxyReachable(ctx, t, r, ref)
 	})
 }
@@ -318,7 +318,7 @@ func TestAgentSandboxKeepAPISequence(t *testing.T) {
 
 	// 4. The held pod appears: gated, no node. A third end leaves it alone.
 	var held *corev1.Pod
-	keepWaitFor(t, time.Minute, "the agent pod held behind the gate with no node", func() bool {
+	keepWaitFor(t, conformance.ASKeepSequenceHeld, "the agent pod held behind the gate with no node", func() bool {
 		pod, err := e.cs.CoreV1().Pods(e.ns).Get(ctx, ref, metav1.GetOptions{})
 		if err != nil || pod.UID == original || asNotHeld(pod) != "" {
 			return false
