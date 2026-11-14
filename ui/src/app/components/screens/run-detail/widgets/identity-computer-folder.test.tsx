@@ -9,7 +9,7 @@ import { shortTime } from "../../../../lib/format";
 import { aheadByHours } from "../../../../lib/test-clock";
 import type { RunComputerFolder, RunDetail } from "../../../../lib/types";
 import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
-import { ComputerFolderRows } from "./identity-computer-folder";
+import { ComputerFolderRows, computerFolderSettling } from "./identity-computer-folder";
 
 const AT = aheadByHours(-1);
 const FOLDER: RunComputerFolder = { name: "payments-service", runner: "laptop-7f2", remote_dir: "/home/agent/work", direction: "both", state: "waiting" };
@@ -204,5 +204,35 @@ describe("Folders from your computer", () => {
       expect(box.className).toMatch(/overflow-y-auto/);
       expect(box).toHaveAttribute("tabindex", "0");
     });
+  });
+});
+
+describe("computerFolderSettling", () => {
+  const run = (state: string, folder?: Partial<RunComputerFolder>) =>
+    ({ id: "r1", state, computer_folder: folder && { ...FOLDER, state: "synced", ...folder } }) as unknown as RunDetail;
+
+  it("is unsettled while an ended run's changes are kept, or given up with the sandbox copy not confirmed deleted", () => {
+    expect(computerFolderSettling(run("COMPLETED", { fate: "retained", sandbox_copy: "kept" }))).toBe("unsettled");
+    expect(computerFolderSettling(run("FAILED", { fate: "given_up", sandbox_copy: "kept" }))).toBe("unsettled");
+    expect(computerFolderSettling(run("COMPLETED", { fate: "given_up" }))).toBe("unsettled");
+  });
+
+  it("is stopping while nothing is left to copy back and the sandbox copy is still reported kept", () => {
+    expect(computerFolderSettling(run("COMPLETED", { fate: "complete", sandbox_copy: "kept" }))).toBe("stopping");
+    expect(computerFolderSettling(run("COMPLETED", { sandbox_copy: "kept" }))).toBe("stopping");
+  });
+
+  it("is settled only on a confirmed deletion", () => {
+    expect(computerFolderSettling(run("COMPLETED", { fate: "given_up", sandbox_copy: "deleted" }))).toBe("settled");
+    expect(computerFolderSettling(run("COMPLETED", { fate: "complete", sandbox_copy: "deleted" }))).toBe("settled");
+    expect(computerFolderSettling(run("COMPLETED", { sandbox_copy: "deleted" }))).toBe("settled");
+  });
+
+  it("is unknown with neither a fate nor a sandbox copy, and says nothing of a live run", () => {
+    expect(computerFolderSettling(run("COMPLETED", {}))).toBe("unknown");
+    expect(computerFolderSettling(run("COMPLETED", { fate: "complete" }))).toBe("unknown");
+    expect(computerFolderSettling(run("COMPLETED"))).toBe("unknown");
+    expect(computerFolderSettling(run("RUNNING", { fate: "retained" }))).toBeNull();
+    expect(computerFolderSettling(null)).toBeNull();
   });
 });
