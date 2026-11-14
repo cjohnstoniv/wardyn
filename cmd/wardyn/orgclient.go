@@ -37,7 +37,25 @@ func orgTransport(c *http.Client) http.RoundTripper {
 	if c.Transport != nil {
 		return c.Transport
 	}
-	return http.DefaultTransport
+	return headerBoundTransport
+}
+
+// orgHeaderWait bounds the wait for a response's headers on the transports this file builds. pkg/client
+// adds the same bound only to a transport it builds itself, and it keeps any transport the CLI hands it,
+// so without this a streamed request through a stored sign-in or an organisation's anchors could wait
+// forever on a peer that never answers.
+const orgHeaderWait = 30 * time.Second
+
+// headerBoundTransport is the default transport with orgHeaderWait, for a wrapper of an orgClient that
+// has no transport of its own. It is copied once, at start: a test that replaces http.DefaultTransport
+// copies it again (newSetupRig).
+var headerBoundTransport = newHeaderBoundTransport()
+
+// newHeaderBoundTransport is a copy of the default transport with orgHeaderWait.
+func newHeaderBoundTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = orgHeaderWait
+	return t
 }
 
 // orgClientTrusting is orgClient with extra anchors beside the stored ones:
@@ -59,7 +77,7 @@ func orgClientTrusting(origin string, timeout time.Duration, extra []*x509.Certi
 		return c
 	}
 	host := u.Hostname()
-	t := http.DefaultTransport.(*http.Transport).Clone()
+	t := newHeaderBoundTransport()
 	t.TLSClientConfig = &tls.Config{
 		RootCAs: certbundle.Pool(anchors),
 		// Only a connection to the organisation's host goes through the

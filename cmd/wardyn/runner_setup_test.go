@@ -71,6 +71,11 @@ func newSetupRig(t *testing.T) *setupRig {
 	oldTransport := http.DefaultTransport
 	http.DefaultTransport = r.srv.Client().Transport
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	// A stored sign-in dials through headerBoundTransport, a copy of the default transport: copy it again
+	// now that the default trusts this server.
+	oldBound := headerBoundTransport
+	headerBoundTransport = newHeaderBoundTransport()
+	t.Cleanup(func() { headerBoundTransport = oldBound })
 	t.Setenv("HOME", r.home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(r.home, ".config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(r.home, ".local", "share"))
