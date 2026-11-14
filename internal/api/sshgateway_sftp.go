@@ -118,11 +118,61 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, reason)
 		return
 	}
-	_, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, withSFTPLaunchNote(sess, channel.Stderr()), true)
+	var end bridgeEnd
+	noted := noteBridgeEnd(ctx, withSFTPLaunchNote(sess, channel.Stderr()), &end)
+	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, noted, true)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment above (same shape, same connection-teardown race, same fix).
 	// "bytes" keeps its pre-0.9 meaning (sandbox to client); bytes_in/bytes_out
 	// are the explicit pair.
+	extra := map[string]any{"bytes": bytesOut, "bytes_in": bytesIn, "bytes_out": bytesOut}
+	outcome := bridgeOutcome(exit, end, "sftp-server", extra)
 	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
-		runID.String(), "success", mustJSON(map[string]any{"bytes": bytesOut, "bytes_in": bytesIn, "bytes_out": bytesOut})))
+		runID.String(), outcome, mustJSON(extra)))
+}
+
+// bridgeEnd is how a bridge's process ended, kept from its Wait for
+// bridgeOutcome: sshBridgeExecSession folds a Wait that erred to exit 1, which
+// says nothing about the process.
+type bridgeEnd struct {
+	err    error // Wait's own error: no exit was read
+	closed bool  // the session's context had ended by then: the client closed first
+}
+
+// noteBridgeEnd keeps how sess.Wait ended in end. ctx is the context the bridge
+// runs on, read as Wait returns, before the bridge closes the channel itself.
+func noteBridgeEnd(ctx context.Context, sess *runner.ExecSession, end *bridgeEnd) *runner.ExecSession {
+	if sess.Wait == nil {
+		return sess
+	}
+	noted := *sess
+	noted.Wait = func() (int, error) {
+		code, err := sess.Wait()
+		end.err, end.closed = err, ctx.Err() != nil
+		return code, err
+	}
+	return &noted
+}
+
+// bridgeOutcome is the audit outcome of a bridge whose process is the gateway's
+// own transport (sftp-server, the forward relay), from the exit
+// sshBridgeExecSession returned: a nonzero exit is a transfer that failed, such
+// as a missing sftp-server a lazy substrate reports only after launch or a
+// relay whose loopback target refused, so it is a failure with the exit in
+// extra's error. A client that closed its channel or its connection before the
+// process ended (most SFTP libraries close where OpenSSH half-closes and waits;
+// an ssh -L ended with a connection still open) left no exit to read: the
+// session is closed under the process and Wait errs, which is the client's end
+// and not a failed transfer, so the row stays a success. ssh.exec keeps its own
+// rule: the command's exit is the person's, recorded as exit on a success.
+func bridgeOutcome(exit int, end bridgeEnd, process string, extra map[string]any) string {
+	switch {
+	case end.closed, end.err == nil && exit == 0:
+		return "success"
+	case end.err != nil:
+		extra["error"] = process + " ended without an exit status"
+	default:
+		extra["error"] = fmt.Sprintf("%s exited %d", process, exit)
+	}
+	return "failure"
 }

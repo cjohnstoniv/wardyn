@@ -239,11 +239,23 @@ func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, clai
 // push_content_paths since no longer matches. A list that cannot be read is an
 // error: the export fails (handleExportAudit) instead of showing the row as if
 // it had no paths, since a reader could not tell that from an incomplete one.
+// A row an enrolled device forwarded names the device's own approval, whose
+// list stays on the device: it is marked paths_unavailable held_on_device
+// whatever its target, instead of being looked up here, where no list could
+// ever be found.
 func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+	var data map[string]json.RawMessage
+	if json.Unmarshal(ev.Data, &data) != nil {
+		return ev, nil
+	}
+	if ev.DeviceID != nil {
+		data["paths_unavailable"] = mustJSON("held_on_device")
+		ev.Data = mustJSON(data)
+		return ev, nil
+	}
 	lists, ok := s.cfg.Store.(store.PushPathListStore)
 	id, perr := uuid.Parse(ev.Target)
-	var data map[string]json.RawMessage
-	if !ok || perr != nil || json.Unmarshal(ev.Data, &data) != nil {
+	if !ok || perr != nil {
 		return ev, nil
 	}
 	l, err := lists.GetPushPathList(ctx, id)

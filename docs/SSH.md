@@ -834,9 +834,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - **Audit actions**:
   - `ssh.authenticate` (every success; refusals are rate-bound),
     `session.attach` with `transport:ssh` in its data (the shell path, same
-    action name the browser terminal uses, so both show up together in a run's
-    timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
-  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`, `remove_requests` and `rename_requests` counted from the sftp framing, `laptop_deletes_reported` client-declared).
+    action name the browser terminal uses, so a run's timeline shows
+    both), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`, `error`).
+  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`, `error`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`, `remove_requests` and `rename_requests` counted from the sftp framing, `laptop_deletes_reported` client-declared, `error`).
   - This is the source of record for these five;
     [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
     every other audit action in the system and points back here for these.
