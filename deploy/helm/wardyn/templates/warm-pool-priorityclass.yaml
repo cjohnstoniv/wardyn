@@ -12,6 +12,9 @@ The name of the PriorityClass the warm pool placeholders use: k8s.warmPoolPriori
 {{- if and .Values.k8s.warmPools (not .Values.k8s.enabled) -}}
 {{- fail "wardyn: k8s.warmPools needs k8s.enabled=true: placeholders are pods the Kubernetes runner makes." -}}
 {{- end -}}
+{{- if and .Values.k8s.warmPools (not (.Values.k8s.warmPoolPriorityClass | default dict).create) (not (.Values.k8s.warmPoolPriorityClass | default dict).name) -}}
+{{- fail "wardyn: k8s.warmPools with warmPoolPriorityClass.create=false needs warmPoolPriorityClass.name: the placeholders need a PriorityClass that exists." -}}
+{{- end -}}
 {{- if and .Values.k8s.enabled .Values.k8s.warmPools ((.Values.k8s.warmPoolPriorityClass | default dict).create) }}
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
