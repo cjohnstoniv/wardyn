@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -416,4 +417,47 @@ func TestSweepForcedStops_TwoReplicasGivingUpOneCopyBackWriteOneRow(t *testing.T
 		t.Fatalf("%+v; want %+v: one row for one give-up", got, want)
 	}
 	f.checkKeepGiveUp(t)
+}
+
+// A given-up record, whose generation the give-up moved on without settling it, is final to the retry's settle:
+// the settle neither cuts the agent again on every tick nor keeps the stop from being sent. With the lock held each
+// tick makes one cut, the stop path's own; with the lock free and a cut that is not observed (the runner's link
+// drops after the away gate) the sandbox is still stopped, the mark clears and the record stays given up. Catches:
+// a give-up (the retry's past the keep, or the tail owner's for a runner that was away) settled again as if a
+// forced end had died before its settle, which cuts on every tick and, on a cut not observed, returns before the
+// stop for good.
+func TestSweepForcedStops_AGivenUpRecordIsNotSettledAgain(t *testing.T) {
+	at := time.Now()
+	givenUp := types.RunLocalFolderStatus{Gen: 4, Settled: 3, Back: &types.FolderPassRecord{At: at, Error: "given up", GivenUpAt: &at}}
+	t.Run("the lock held", func(t *testing.T) {
+		f := newForced(t)
+		f.claimOnly(t) // the test's hold on the lock is never let go
+		f.setRecord(givenUp)
+		rn := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+		f.s.cfg.Runner = rn
+		f.sb.stopErr = errors.New("the daemon did not answer the stop")
+		f.tick(t, f.s)
+		f.tick(t, f.s)
+		if rn.proxyStops.Load() != 2 || f.leaser.markCount() != 1 {
+			t.Errorf("%d proxy stops, %d marks after two ticks; want 2, one cut a tick, and the mark kept", rn.proxyStops.Load(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Gen != 4 || rec.Settled != 3 || !folderGivenUp(rec) {
+			t.Errorf("record %+v; want it as it was, given up at generation 4", rec)
+		}
+	})
+	t.Run("the lock free, the cut not observed", func(t *testing.T) {
+		f := newForced(t)
+		fr, _ := f.onFencedRunner(t)
+		f.claimOnly(t)
+		f.release()
+		f.setRecord(givenUp)
+		fr.fenceErr = runner.ErrRunnerOffline
+		f.tick(t, f.s)
+		if fr.fences.Load() != 0 || f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
+			t.Errorf("%d fences, %d stops, %d marks; want no cut, the sandbox stopped and the mark cleared", fr.fences.Load(), f.sb.stopCount(), f.leaser.markCount())
+		}
+		if rec := f.cs.folderStatus(); rec.Gen != 4 || !folderGivenUp(rec) {
+			t.Errorf("record %+v; want it as it was, given up at generation 4", rec)
+		}
+	})
 }

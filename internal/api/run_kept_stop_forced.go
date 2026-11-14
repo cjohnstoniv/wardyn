@@ -516,16 +516,19 @@ func (s *Server) runnerGoneReason(ctx context.Context, run types.AgentRun, cause
 }
 
 // settleUnsettledForcedFolder settles run's computer folder record when a forced end left it unsettled (its
-// process died between the claim and the settle), and leaves a settled record alone. It cuts the agent off first,
-// as the forced end does: owed (a resume) when that is observed and the sandbox keepable, otherwise as not
-// brought back. It reports false, having settled nothing, for a run on a runner that is not here and can come
-// back: the settle waits for the runner.
+// process died between the claim and the settle), and leaves a settled record alone, and a final one (folderFinal):
+// a give-up moves the generation on without settling it, and settleForcedFolder writes nothing over a final record,
+// so a given-up record is not cut a second time on each tick by the settle, nor held back from the stop by a cut
+// that is not observed.
+// It cuts the agent off first, as the forced end does: owed (a resume) when that is observed and the sandbox
+// keepable, otherwise as not brought back. It reports false, having settled nothing, for a run on a runner that is
+// not here and can come back: the settle waits for the runner.
 func (s *Server) settleUnsettledForcedFolder(ctx context.Context, run types.AgentRun) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
 		return true
 	}
-	if rec, err := st.RunLocalFolderStatus(ctx, run.ID); err != nil || rec.Gen == rec.Settled {
+	if rec, err := st.RunLocalFolderStatus(ctx, run.ID); err != nil || rec.Gen == rec.Settled || folderFinal(rec) {
 		return true
 	}
 	if folder, _ := s.forcedFolder(ctx, run.ID); folder == nil {
