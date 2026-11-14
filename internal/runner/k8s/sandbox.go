@@ -27,6 +27,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -197,8 +198,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// The drives come LAST in preflight since it's the only step that
 	// writes; their PVCs outlive the run on purpose and carry no
 	// wardyn.run-id label, so rollback can never delete the person's storage.
+	claims := make([]k8stypes.UID, len(spec.Drives))
 	for i := range spec.Drives {
-		if err := ensureDrivePVC(ctx, d.clientset, ns, &spec.Drives[i]); err != nil {
+		if claims[i], err = ensureDrivePVC(ctx, d.clientset, ns, &spec.Drives[i]); err != nil {
 			return runner.Sandbox{}, err
 		}
 	}
@@ -484,6 +486,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)
 	}
+	if err := recheckDriveClaims(ctx, d.clientset, ns, spec.Drives, claims); err != nil {
+		return fail(err)
+	}
 	if d.cfg.AgentSandbox {
 		if err := d.createAgentSandbox(ctx, clock, agentPod); err != nil {
 			return fail(err)
@@ -498,6 +503,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// Attach/ExecStream would hit "container not found" against a pod still Pending.
 	if err := d.waitContainerRunning(ctx, clock, ns, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
+	}
+	if err := recheckDriveClaims(ctx, d.clientset, ns, spec.Drives, claims); err != nil {
+		return fail(err)
 	}
 
 	if spec.ExecOutput != nil {

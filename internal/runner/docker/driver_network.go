@@ -144,6 +144,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// The drive's read-only bind asks for a RECURSIVELY read-only mount only where the runtime this
 	// container will actually run on declares support; under one that doesn't (gVisor, CC2), asking
 	// refuses the create outright — see driveBindOptions.
+	rb.add(func() { d.dropDrivePin(spec.RunID) })
 	agentMounts, err := d.agentMounts(ctx, spec, runtimeSupportsRecursiveReadOnly(info, runtimeName))
 	if err != nil {
 		return fail(err)
@@ -669,10 +670,15 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) (tdErr error) {
 	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove internal network: %w", err)
 	}
-	// A drive seed left by a crash between its create and its removal still
-	// holds that drive's volume.
-	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("docker: remove drive seed: %w", err)
+	// The run's hold on its drive volumes (pinDriveVolumes), and a drive seed left by a crash between its create
+	// and its removal, which holds its drive's volume too. A container under either name that is not this run's
+	// is left in place.
+	for _, c := range [][2]string{{drivePinName(id), componentDrivePin}, {driveSeedName(id), componentDriveSeed}} {
+		if err := d.removeRunContainer(ctx, c[0], id, c[1]); errors.Is(err, errRunContainerNotOurs) {
+			slog.Warn("docker: leaving a container that is not this run's in place", "container", c[0], "reason", err.Error())
+		} else if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -722,7 +728,7 @@ func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI,
 			// A DNS seed is removed only on the same label test as its teardown: a deployment label that is
 			// present and ours, and a valid run id. The drive seed keeps its older rule above.
 			if component == componentDNSSeed {
-				if runID, perr := uuid.Parse(c.Labels[labelRun]); perr != nil || !d.dnsSeedLabelsOwned(c.Labels, runID) {
+				if runID, perr := uuid.Parse(c.Labels[labelRun]); perr != nil || !d.runContainerLabelsOwned(c.Labels, runID, componentDNSSeed) {
 					continue
 				}
 			}
@@ -756,10 +762,10 @@ var _ containerListerAPI = (*client.Client)(nil)
 // live dispatch that hasn't yet written its ref. Reuses the existing deterministic-name teardown, so
 // a partially-created sandbox is torn down whole from the run id alone.
 //
-// Keyed on the agent AND the proxy container, one teardown per run: a create that failed or crashed
+// Keyed on the agent, the proxy and the drive hold, one teardown per run: a create that failed or crashed
 // after the proxy started and before the agent existed (or a rollback whose proxy removal the daemon
-// refused) leaves a proxy holding the run's config, and an exec-less sandbox has no agent until its
-// first Exec. A crash between network-create and proxy-start leaves a network with no container to
+// refused) leaves a proxy holding the run's config, an exec-less sandbox has no agent until its
+// first Exec, and a teardown cut short after the proxy went leaves only the hold. A crash between network-create and proxy-start leaves a network with no container to
 // key on; with Config.RunSubnetPool set, sweepRunNetworks removes it, otherwise that edge is left
 // to `docker network prune`.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
@@ -781,7 +787,7 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	swept, errs := seeds+vms, []error{seedErr, vmErr}
 	seen := map[uuid.UUID]bool{}
 	for _, c := range res.Items {
-		if comp := c.Labels[labelComponent]; comp != componentAgent && comp != componentProxy {
+		if comp := c.Labels[labelComponent]; comp != componentAgent && comp != componentProxy && comp != componentDrivePin {
 			continue
 		}
 		runID, perr := parseRunID(c.Labels[labelRun])

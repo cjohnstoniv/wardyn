@@ -2112,11 +2112,20 @@ These risks are **not closed by v1 Wardyn**.
 
     </details>
 
-34. **A drive created before migration `0067` names its objects by slug, so two such drives can collide, and a collision is a REFUSED RUN, not a cross-mount.**
+34. **A drive created before migration `0067` names its objects by slug, so two such drives can collide, and a collision or a replaced object is a REFUSED RUN, not a cross-mount.**
     - An old-scheme name is `wardyn-drive-<drive-slug>-<home>`. Both fields admit `-`, so drive `eng` + home `us-bob` and drive `eng-us` + home `bob` name one object.
     - Since `0067` every new drive names its objects by its fixed-width id (`DriveObjectSchemeID`), so `<home>` starts at a fixed offset. A row keeps the scheme it was created under, because neither substrate can rename storage.
     - A fail-closed identity check bounds the old scheme: `driveClaimIdentity` refuses a claim whose `wardyn.drive` / `wardyn.home` labels are not this run's, and `driveVolumeAdoptable` refuses another drive's volume.
-    - Wardyn holds no `delete` verb to repair a collision, so it costs one of the two people a refused run; the remedy is distinct home names.
+    - A collision costs one of the two people a refused run; the remedy is distinct home names.
+    - A run checks a drive's object before its proxy starts and mounts it by name later. In between, a reclaim can remove it and another person's first run make one under that name (an old-scheme collision, or a reused `home_override`).
+    - On Kubernetes the run reads the claim again before the agent pod is made and once its main container runs, and refuses one that is gone, deleting or another UID (`recheckDriveClaims`).
+    - On Docker a never-started container with no network mounts each checked volume, read-only and `NoCopy`, until teardown (`pinDriveVolumes`), so a reclaim answers "in use"; a volume whose labels changed before that is refused. A drive's seed, which writes into an empty volume, is made only after it.
+    - A reclaim is refused while one of that person's runs is STARTING (`handleReclaimUserDrive`).
+    - Left: on Kubernetes a replaced claim is mounted from the main container's start until the second read refuses the run, and a process from the run's image (its idle shell, or an interactive run's workspace preparation) can read and write it until the teardown.
+    - On Docker the hold's mount makes a volume removed after its check again, empty and with this drive's labels, so no other drive adopts it; the run goes on, or is refused if the checked volume carried other labels.
+    - `docker rm`, `docker container prune` or `docker system prune` removes a hold (a prune counts it as stopped). The run then no longer blocks a reclaim, and its seed and agent mounts after it go by name unchecked.
+    - Those mounts can then take a volume another person's run made under the name: a cross-mount. The gap is the rest of the run's create; for a krun run it lasts until its first Exec.
+    - The STARTING read and the reclaim are two steps, not one transaction, and the read covers only the person reclaimed; the checks above hold another person's run.
 
 35. **The credential-dotfile deny-list now matches a DRIVE's real path too, and that is the whole of what it covers.**
     <details><summary>Details</summary>

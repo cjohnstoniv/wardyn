@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -81,6 +82,13 @@ type driveCRUDStore struct {
 	principals    map[string][]string
 	principalsErr error
 	lookups       []string
+	// starting is the people with a run in STARTING (MemberDriveOwnerStarting), and startingErr fails that read.
+	starting    map[string]bool
+	startingErr error
+}
+
+func (s *driveCRUDStore) MemberDriveOwnerStarting(_ context.Context, owner string, _ time.Duration) (bool, error) {
+	return s.starting[owner], s.startingErr
 }
 
 func (s *driveCRUDStore) PrincipalsNamed(_ context.Context, name string) ([]string, error) {
