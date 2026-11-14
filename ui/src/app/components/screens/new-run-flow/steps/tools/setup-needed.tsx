@@ -11,7 +11,7 @@ import * as React from "react";
 import { Check, TriangleAlert } from "lucide-react";
 import { ADO } from "../../../../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
-import { HttpError } from "../../../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../../../lib/api/core";
 import { health } from "../../../../../lib/api/health";
 import { secrets, type SecretScope } from "../../../../../lib/api/secrets";
 import { SECRET_EXISTS_REASON } from "../../../../../lib/secret-refusals";
@@ -58,13 +58,15 @@ export function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; on
   const save = async () => {
     setBusy(true);
     setError("");
+    // The save follows a /me read, so it names the person who clicked, not whoever is signed in by then.
+    const person = getExpectedPrincipal() || undefined;
     try {
       // The role read at load can be out of date: after a promotion the token would go to the person's own namespace
       // while their preflight, now an administrator's, reads the shared one. Ask /me again first; if that read
       // fails, keep the namespace the tab knows.
       const me = await health.whoami();
       const scope = me ? (me.operator ? "shared" : "personal") : known;
-      await secrets.setSecret(name, value, { scope, createOnly: !taken });
+      await secrets.setSecret(name, value, { scope, createOnly: !taken, person });
       onSaved();
     } catch (e) {
       if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) setTakenName(name);
