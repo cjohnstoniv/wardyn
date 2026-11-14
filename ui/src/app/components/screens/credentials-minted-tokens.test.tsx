@@ -24,6 +24,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { AdminMintedTokens } from "./credentials-minted-tokens";
 import { HttpError } from "../../lib/api/core";
+import { credentials } from "../../lib/api/credentials";
 
 const token = (id: string, person: string, disposition: AdminMintedToken["disposition"], over: Partial<AdminMintedToken> = {}): AdminMintedToken => ({
   id,
@@ -212,5 +213,25 @@ describe("the State column", () => {
     render(<AdminMintedTokens />);
     expect(await screen.findByText(MINTED.EMPTY)).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED })).toBeInTheDocument();
+  });
+});
+
+// A failed revoke used to close its dialog and drop the token it was for, leaving only a toast.
+describe("a failed revoke", () => {
+  it("stays in the dialog with the server's sentence, and Revoke token tries the same token again", async () => {
+    vi.mocked(credentials.revokeToken)
+      .mockRejectedValueOnce(new HttpError(503, "The token store did not answer.", "unavailable"))
+      .mockResolvedValueOnce(undefined as never);
+    render(<AdminMintedTokens />);
+    await screen.findByText("alice@example.com");
+    await user.click(rowOf("alice@example.com").getByRole("button", { name: MINTED.REVOKE }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: MINTED.REVOKE_CONFIRM }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The token store did not answer.");
+    expect(dialog).toHaveAccessibleName(MINTED.REVOKE_TITLE("job-alice", "alice@example.com"));
+
+    await user.click(within(dialog).getByRole("button", { name: MINTED.REVOKE_CONFIRM }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(vi.mocked(credentials.revokeToken).mock.calls).toEqual([["m1"], ["m1"]]);
   });
 });

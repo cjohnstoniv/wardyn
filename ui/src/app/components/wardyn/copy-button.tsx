@@ -20,6 +20,7 @@ export function CopyButton({
   iconClassName = "size-3.5",
   disabled,
   children,
+  onCopied,
 }: {
   text: string;
   /** Accessible name — say WHAT is copied ("Copy setup command"), not just "Copy". */
@@ -29,12 +30,18 @@ export function CopyButton({
   disabled?: boolean;
   /** Visible content rendered before the icon (e.g. the command pill's text). */
   children?: React.ReactNode;
+  /** Called once the write has worked, never for a failed one. */
+  onCopied?: () => void;
 }) {
   const { copied, copy } = useCopyToClipboard();
   return (
     <button
       type="button"
-      onClick={() => copy(text)}
+      onClick={() =>
+        void copy(text).then((ok) => {
+          if (ok) onCopied?.();
+        })
+      }
       disabled={disabled}
       aria-label={label}
       className={cn("inline-flex items-center", className)}

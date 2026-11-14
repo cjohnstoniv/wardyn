@@ -41,6 +41,10 @@ export function DesktopReviewRow({ runId, file, latest, onAsked, onRefused }: De
   const [asking, setAsking] = React.useState(false);
   const [notAsked, setNotAsked] = React.useState<string | null>(null);
   const [failed, setFailed] = React.useState<string | null>(null);
+  // An approved download in flight: a second click must not ask for the file again. A ref as well as the state,
+  // so two clicks in one tick fetch once.
+  const [fetching, setFetching] = React.useState(false);
+  const fetchingRef = React.useRef(false);
   // The release this browser just made: the request reads "released" only after the next read of the requests.
   const [released, setReleased] = React.useState<{ id: string; at: string; sha: string } | null>(null);
 
@@ -63,6 +67,9 @@ export function DesktopReviewRow({ runId, file, latest, onAsked, onRefused }: De
   }
 
   async function fetchApproved(request: ApprovalRequest) {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
+    setFetching(true);
     setFailed(null);
     try {
       const { blob, sha256 } = await desktopFiles.download(runId, file.name, request.id);
@@ -77,6 +84,9 @@ export function DesktopReviewRow({ runId, file, latest, onAsked, onRefused }: De
       onRefused();
     } catch (e) {
       setFailed(message(e));
+    } finally {
+      fetchingRef.current = false;
+      setFetching(false);
     }
   }
 
@@ -104,7 +114,7 @@ export function DesktopReviewRow({ runId, file, latest, onAsked, onRefused }: De
   } else if (latest && state === "APPROVED" && !spent) {
     chip = <Chip tone="success" dot>{C.stateApproved}</Chip>;
     action = (
-      <Button size="sm" onClick={() => void fetchApproved(latest)}>
+      <Button size="sm" disabled={fetching} onClick={() => void fetchApproved(latest)}>
         {C.downloadApproved}
       </Button>
     );

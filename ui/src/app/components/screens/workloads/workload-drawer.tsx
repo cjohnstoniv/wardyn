@@ -140,9 +140,12 @@ export function WorkloadDrawer({
   const restart = async () => {
     setBusy(true);
     try {
-      const res = await workloads.restart(w.name, owner);
-      if (res.launch.state === "refused") toast.error(refusalSentence(res.launch.reason ?? "", res.launch.message));
-      else toast.success(W.RESTARTED(w.name));
+      const { launch } = await workloads.restart(w.name, owner);
+      if (launch.state === "launched") toast.success(W.RESTARTED(w.name));
+      else if (launch.state === "refused") toast.error(refusalSentence(launch.reason ?? "", launch.message));
+      // No run started: a person's workload restarted by someone else starts at the owner's next apply, and the
+      // server's sentence says so.
+      else toast(launch.message || W.RESTART_NOT_STARTED(w.name));
       onChanged();
     } catch (e) {
       toast.error(getErrorMessage(e));

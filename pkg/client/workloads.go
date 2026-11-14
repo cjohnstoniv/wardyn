@@ -379,8 +379,11 @@ func (c *Client) DeleteWorkload(ctx context.Context, name, owner string) error {
 	return c.do(ctx, http.MethodDelete, workloadPath(name, owner), nil, nil)
 }
 
-// RestartWorkload starts a fresh run of the stored spec and then ends the old one.
-// POST /api/v1/workloads/{name}/restart.
+// RestartWorkload asks for a fresh run of the stored spec; the answer's Launch.State says what happened.
+// WorkloadLaunched: the new run (Launch.RunID) started and the old one is ended. WorkloadRefused: the old
+// run keeps running, and Launch.Reason and Launch.Message say why. WorkloadNoLaunch: no run started; a
+// person's workload restarted by someone else is recorded and starts at the owner's next apply, and
+// Launch.Message says so. POST /api/v1/workloads/{name}/restart.
 func (c *Client) RestartWorkload(ctx context.Context, name, owner string) (WorkloadApplyResult, error) {
 	var out WorkloadApplyResult
 	path := "/api/v1/workloads/" + url.PathEscape(name) + "/restart"

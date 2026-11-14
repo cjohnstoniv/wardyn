@@ -41,6 +41,8 @@ export function ChangeEndDialog({
   const [changeValue, setChangeValue] = React.useState(() => toDatetimeLocalValue(new Date(Date.now() + DAY_MS)));
   const [noEnd, setNoEnd] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  // A failed save stays in the dialog, with Save to try again: a toast alone was gone before it could be read.
+  const [error, setError] = React.useState<string | null>(null);
 
   // A fresh default every time the dialog OPENS — "now + 1 day" from the
   // moment it opens, not from whenever this component first mounted.
@@ -48,6 +50,7 @@ export function ChangeEndDialog({
     if (open) {
       setChangeValue(toDatetimeLocalValue(new Date(Date.now() + DAY_MS)));
       setNoEnd(false);
+      setError(null);
     }
   }, [open]);
 
@@ -56,6 +59,7 @@ export function ChangeEndDialog({
 
   const submit = async () => {
     setBusy(true);
+    setError(null);
     try {
       const endsAt = noEnd ? null : new Date(changeValue).toISOString();
       const res = await runsApi.setRunEndAndWait(run.id, { endsAt });
@@ -67,7 +71,7 @@ export function ChangeEndDialog({
       onChanged();
       onOpenChange(false);
     } catch (err) {
-      toast.error("Couldn't change this run's end", { description: getErrorMessage(err) });
+      setError(getErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -95,6 +99,11 @@ export function ChangeEndDialog({
               value={changeValue}
               onChange={(e) => setChangeValue(e.target.value)}
             />
+          )}
+          {error !== null && (
+            <p role="alert" className="text-meta text-danger">
+              {`Couldn't change this run's end: ${error}`}
+            </p>
           )}
         </div>
         <DialogFooter>
