@@ -493,6 +493,55 @@ func TestSCIMResumeCutsAFormNotCutSinceItsDeactivation(t *testing.T) {
 	}
 }
 
+// A resumed suspension whose person is reactivated right after its first read still writes the session cut a
+// form owes when that form's cutoff is one microsecond older than the deactivation: only a cutoff from the
+// deactivation on spares a reactivated person's form. Guarded by WARDYN_TEST_PG (newSCIMEnv).
+func TestSCIMResumeCutsAReactivatedPersonsFormCutJustBeforeTheDeactivation(t *testing.T) {
+	e := newSCIMEnv(t)
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	ctx := context.Background()
+	e.seedRun(purgeSub, types.RunRunning)
+	e.a.runner.setFailKills(1000)
+	if w := e.patch(e.a, f.id, patchOf("false")); w.Code != http.StatusInternalServerError {
+		t.Fatalf("suspend with a failing runner = %d, want 5xx", w.Code)
+	}
+	e.a.runner.setFailKills(0)
+	for _, q := range []string{
+		`UPDATE deprovision_jobs SET state = 'pending' WHERE identity_id = $1 AND step = '` + jobStepSweep + `'`,
+		`UPDATE oidc_session_revocations SET revoked_at = (SELECT deactivated_at FROM principal_identities WHERE id = $1) - interval '1 microsecond' WHERE sub = '` + purgeSub + `'`,
+		`UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`,
+	} {
+		if _, err := e.pool.Exec(ctx, q, f.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mark int64
+	reacted := false
+	reads := &afterIdentityRead{PG: e.st, id: uuid.MustParse(f.id), hook: func(read store.PrincipalIdentity) {
+		if read.DeactivatedAt == nil {
+			t.Error("the resume read an active identity")
+			return
+		}
+		if w := e.patch(e.b, f.id, patchOf("true")); w.Code != http.StatusOK {
+			t.Errorf("reactivate = %d %s", w.Code, w.Body.String())
+		}
+		mark, reacted = e.cutMark(purgeSub, purgeEmail), true
+	}}
+	n := e.node(func(c *Config) { c.Store = reads })
+	if err := n.srv.SweepSCIMPurge(ctx); err != nil {
+		t.Errorf("sweep = %v", err)
+	}
+	if !reacted {
+		t.Fatal("the resume never read the identity")
+	}
+	if e.identity(f.id).DeactivatedAt != nil {
+		t.Error("the reactivation did not stand")
+	}
+	if got := e.cutMark(purgeSub, purgeEmail); got <= mark {
+		t.Errorf("the resume wrote no cut for a reactivated person's form last cut just before the deactivation (newest seq %d, was %d)", got, mark)
+	}
+}
+
 // A suspension tail whose person is active again leaves a run they queued after its deactivation waiting in
 // its pool's queue. Guarded by WARDYN_TEST_PG (newQueueEnv).
 func TestPG_QueueSuspensionTailLeavesARunQueuedAfterAReactivation(t *testing.T) {
