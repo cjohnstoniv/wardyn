@@ -24,7 +24,7 @@ import (
 var folderCopy = struct {
 	short, bringBackUse, bringBackShort, bringBackLong string
 	progress, broughtBack, deleted, notDeleted         string
-	leftOut, notBack                                   string
+	leftOut, notBack, unread                           string
 }{
 	short:          "A folder from your computer on a run",
 	bringBackUse:   "bring-back <run-id>",
@@ -38,10 +38,18 @@ var folderCopy = struct {
 	notDeleted:  "The sandbox copy could not be deleted yet. Wardyn tries again within about two hours (for a runner that is offline, after it reconnects).\n",
 	leftOut:     "left out: %s (%s)\n",
 	notBack:     "the run is stopped, but its folder did not come back: %s",
+	unread:      "the run is stopped, but its bring-back answer could not be read, so what came back is not known: %s",
 }
 
 // folderBringBackTimeout covers the server's pass (2 minutes) and the teardown after it.
 const folderBringBackTimeout = 5 * time.Minute
+
+// maxBringBackAnswer bounds the success answer read. Its pass record holds at most 50 refusals of two
+// texts of up to 303 characters, a 1003-character error and 50 given-up file paths; JSON can write a
+// character as six bytes (\u003c for <), so with paths of up to 4096 bytes the answer stays under
+// 1.5 MiB. The run has stopped by then and a bring-back runs once, so a cut answer would lose the
+// receipt for good.
+const maxBringBackAnswer = 4 << 20
 
 func folderCmd(client clientFn) *cobra.Command {
 	cmd := subcommandGroup(&cobra.Command{Use: "folder", Short: folderCopy.short})
@@ -73,9 +81,16 @@ func folderCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			defer resp.Body.Close()
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 			if resp.StatusCode < 200 || resp.StatusCode > 299 {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 				return sdk.NewAPIError(resp.StatusCode, body)
+			}
+			body, err := io.ReadAll(io.LimitReader(resp.Body, maxBringBackAnswer+1))
+			if err == nil && len(body) > maxBringBackAnswer {
+				err = fmt.Errorf("it is larger than %d bytes", maxBringBackAnswer)
+			}
+			if err != nil {
+				return fmt.Errorf(folderCopy.unread, err)
 			}
 			var out struct {
 				SandboxRemoved bool `json:"sandbox_removed"`
@@ -91,7 +106,7 @@ func folderCmd(client clientFn) *cobra.Command {
 				} `json:"back"`
 			}
 			if err := json.Unmarshal(body, &out); err != nil {
-				return err
+				return fmt.Errorf(folderCopy.unread, err)
 			}
 			if out.Back == nil {
 				return fmt.Errorf(folderCopy.notBack, "no pass ran")

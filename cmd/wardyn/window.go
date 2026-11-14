@@ -64,8 +64,9 @@ func windowCmd(client clientFn) *cobra.Command {
 	return cmd
 }
 
-// sentenceError turns a server refusal into its own sentence, with no status prefix around it. Anything that
-// is not a refusal with a sentence passes through unchanged.
+// sentenceError turns a server refusal into its own sentence, with no status prefix around it; the result
+// still unwraps to the refusal, so the exit code keeps its class. Anything that is not a refusal with a
+// sentence passes through unchanged.
 func sentenceError(err error) error {
 	var ae *sdk.APIError
 	if !errors.As(err, &ae) {
@@ -77,5 +78,14 @@ func sentenceError(err error) error {
 	if json.Unmarshal([]byte(ae.Body), &env) != nil || env.Error == "" {
 		return err
 	}
-	return errors.New(env.Error)
+	return &sentenceAPIError{sentence: env.Error, err: err}
 }
+
+// sentenceAPIError is a refusal shown as the server's sentence alone.
+type sentenceAPIError struct {
+	sentence string
+	err      error
+}
+
+func (e *sentenceAPIError) Error() string { return e.sentence }
+func (e *sentenceAPIError) Unwrap() error { return e.err }
