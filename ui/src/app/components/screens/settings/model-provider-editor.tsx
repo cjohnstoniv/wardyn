@@ -19,7 +19,7 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
@@ -179,13 +179,14 @@ export function ModelProviderEditor({
   const candidate = () => providerFrom(draft!, editing, stored.map((p) => p.id));
 
   const save = async () => {
+    const person = getExpectedPrincipal();
     const next = candidate();
     const rows = editing ? stored.map((p) => (p.id === editing.id ? next : p)) : [...stored, next];
     const snap = await write(rows);
     if (!snap) return;
     if (!editing) {
       try {
-        await writeAvailability("model_provider", next.id, audience);
+        await writeAvailability("model_provider", next.id, audience, person);
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
         setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e) });

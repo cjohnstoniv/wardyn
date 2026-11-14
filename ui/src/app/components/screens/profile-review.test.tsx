@@ -42,7 +42,7 @@ vi.mock("../../lib/api/permissions", async () => {
   };
 });
 
-import { HttpError } from "../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../lib/api/core";
 import { AVAILABILITY } from "../../lib/availability-copy";
 import { ProfileReview } from "./profile-review";
 import { setField } from "../../../test/set-field";
@@ -234,8 +234,33 @@ describe("ProfileReview", () => {
     expect(createPolicyMock.mock.calls[0][0]).toBe("acme-api-build-test");
     expect(upsertGrantMock).toHaveBeenCalledWith(
       expect.objectContaining({ subject: "team-docs", capability: "policy", value: "pol-1", effect: "allow" }),
+      "",
     );
-    expect(putAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1", true);
+    expect(putAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1", true, "");
+  });
+
+  it("a save whose create answers after another person signed in still writes the list as the person who saved", async () => {
+    // The list writes name the first person, so the server refuses them rather than write them as the second.
+    let created!: (policy: { id: string }) => void;
+    createPolicyMock.mockImplementation(() => new Promise((done) => (created = done)));
+    setExpectedPrincipal("a@example.com");
+    render(<ProfileReview runId="run-1" suggestedName="acme-api-build-test" onClose={vi.fn()} />);
+    await screen.findByText("Overall risk");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^save as policy$/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Save as policy" });
+    await user.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    setField(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "team-docs");
+    await user.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await user.click(within(dialog).getByRole("button", { name: /^save policy$/i }));
+    await waitFor(() => expect(createPolicyMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    created({ id: "pol-1" });
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ subject: "team-docs", value: "pol-1" }), "a@example.com");
+    expect(putAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1", true, "a@example.com");
+    setExpectedPrincipal("");
   });
 
   it("a refused list write keeps the dialog open with the three-part alert and the live control (#2514)", async () => {

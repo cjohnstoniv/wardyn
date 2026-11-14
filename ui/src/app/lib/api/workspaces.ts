@@ -175,11 +175,12 @@ export const workspaces = {
   // "write:<host-path>" | "integration:<id>" (Workspace.Requirements' grammar
   // — integration:<id> is the one key that makes a non-AI integration
   // reachable at runtime); the server 400s on anything else
-  // (internal/api/workspace_requirements_test.go).
-  async setRequirements(id: string, requirements: WorkspaceRequirementsMap): Promise<Workspace> {
+  // (internal/api/workspace_requirements_test.go). `person`: when this write follows another request, the person
+  // that began under (core.ts WfetchInit.asPerson).
+  async setRequirements(id: string, requirements: WorkspaceRequirementsMap, person?: string): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/requirements`, {
       method: "PUT",
-      asPerson: true,
+      asPerson: person ?? true,
       body: JSON.stringify({ requirements }),
     });
     return asJson<Workspace>(res);

@@ -37,7 +37,7 @@
 //
 // Every product string comes from user-drives-copy.ts. This file adds none.
 import * as React from "react";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import {
   backendsFor,
   drives as api,
@@ -215,6 +215,8 @@ export function DriveEditor({
   };
 
   const save = async (confirmRehome = false) => {
+    // Read before the first request: every write of this save names this person, not whoever signs in meanwhile.
+    const person = getExpectedPrincipal();
     setSaving(true);
     setError(null);
     const input: UserDriveInput = {
@@ -241,12 +243,12 @@ export function DriveEditor({
         if (known.length !== drive.grant_count) throw new Error(DRIVES.SAVE_ERROR);
       }
       const saved = savedId.current
-        ? await api.updateDrive(savedId.current, input, confirmRehome)
-        : await api.createDrive(input);
+        ? await api.updateDrive(savedId.current, input, confirmRehome, person)
+        : await api.createDrive(input, person);
       savedId.current = saved.id;
       if (teamUI) {
         const withWritten = (list: UserDriveGrant[]) => [...new Map([...list, ...written.current.values()].map((g) => [g.id, g])).values()];
-        await syncTeamGroups(saved.id, groups, writeUnknown && team || (drive?.team && !writeTouched) ? null : writable, withWritten(known), writeUnknown ? false : writable, withWritten(grants), written.current);
+        await syncTeamGroups(saved.id, groups, writeUnknown && team || (drive?.team && !writeTouched) ? null : writable, withWritten(known), writeUnknown ? false : writable, withWritten(grants), written.current, person);
       }
       onSaved();
     } catch (e) {

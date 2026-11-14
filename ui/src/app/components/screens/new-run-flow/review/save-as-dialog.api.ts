@@ -20,10 +20,11 @@ export class TemplateSaveError extends HttpError {
   }
 }
 
-export type SaveTemplate = (req: TemplateSaveRequest) => Promise<Template>;
+// `person`: a save sent again names the person the first try began under (core.ts WfetchInit.asPerson).
+export type SaveTemplate = (req: TemplateSaveRequest, person?: string) => Promise<Template>;
 
-export const saveTemplate: SaveTemplate = async (req) => {
-  const res = await wfetch("/templates", { method: "POST", asPerson: true, body: JSON.stringify(req) });
+export const saveTemplate: SaveTemplate = async (req, person) => {
+  const res = await wfetch("/templates", { method: "POST", asPerson: person ?? true, body: JSON.stringify(req) });
   if (res.ok) return (await res.json()) as Template;
   let body: Partial<{ error: string; reason: string; diagnostics: TemplateDiagnostic[] }> = {};
   try {

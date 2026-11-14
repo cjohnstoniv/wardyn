@@ -52,7 +52,7 @@ describe("RunRow — Revive (F1)", () => {
     renderRow(run);
     const button = screen.getByRole("button", { name: /^Revive/ });
     await user.click(button);
-    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith(run.id));
+    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith(run.id, undefined));
   });
 
   it("shows Reviving… while the call is in flight, then Revive again on failure", async () => {

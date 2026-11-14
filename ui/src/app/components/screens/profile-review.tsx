@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import type { ProfileProposal, RiskItem, RunPolicy, RunPolicySpec } from "../../lib/types";
 import { firstUseLabel } from "../../lib/types";
+import { getExpectedPrincipal } from "../../lib/api/core";
 import { policies as api } from "../../lib/api/policies";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage } from "../../lib/format";
@@ -459,10 +460,11 @@ function SavePolicyDialog({
       return;
     }
     setSaving(true);
+    const person = getExpectedPrincipal();
     try {
       const created = await api.createPolicy(name.trim(), spec);
       try {
-        await writeAvailability("policy", created.id, audience);
+        await writeAvailability("policy", created.id, audience, person);
       } catch (e) {
         setPartial({ policy: created, message: getErrorMessage(e) });
         setSaving(false);

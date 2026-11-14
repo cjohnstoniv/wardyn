@@ -4,7 +4,8 @@
  */
 
 // Every PUT, POST and PATCH sent through wfetch that carries something a person composed names the
-// person it was composed under (`asPerson: true`), so a cookie another tab switched to someone else
+// person it was composed under (`asPerson: true`, or `person ?? true` when a save of several requests passes the
+// person it began under), so a cookie another tab switched to someone else
 // refuses the save instead of landing it on the wrong account. wfetch strips the option before sending,
 // so the call sites are the only place to pin it: a new write without the flag fails here unless it is
 // on the list below with its reason. That is every module of lib/api, and every other module of the
@@ -37,7 +38,6 @@ const NOT_A_DRAFT: Record<string, string> = {
   "/attach/takeover": "action on a run, no composed body",
   "/desktop/window`, { method": "action on a run (opens its window on the caller's Mac), no composed body",
   "}/restart": "action on a workload, no composed body",
-  '"/admin/runs/restart"': "action on named runs, no composed text",
   "/org-check": "probe, saves nothing",
   "/sign-in`, { method": "starts a sign-in flow, no body",
   "/build`, {": "action on a workspace (Rebuild sends only refresh: true), no composed body",
@@ -85,7 +85,7 @@ it.each(files)("%s names the person on every composed write", (file) => {
   const src = readFileSync(join(appDir, file), "utf8");
   const bare: string[] = [];
   for (const m of src.matchAll(WRITE)) {
-    if (literalAround(src, m.index!).includes("asPerson: true")) continue;
+    if (/asPerson: (person \?\? )?true\b/.test(literalAround(src, m.index!))) continue;
     const call = src.slice(Math.max(0, src.lastIndexOf("wfetch(", m.index!)), m.index! + 20);
     const reason = Object.keys(NOT_A_DRAFT).find((k) => call.includes(k));
     if (reason) used.add(reason);
@@ -96,4 +96,26 @@ it.each(files)("%s names the person on every composed write", (file) => {
 
 it("keeps no list entry for a write that is gone", () => {
   expect(Object.keys(NOT_A_DRAFT).filter((k) => !used.has(k))).toEqual([]);
+});
+
+// A secret save names the person wfetch reads when setSecret is called, so the call comes before the handler's
+// first wait: after one, the person read is whoever this tab has confirmed by then, and the server would store
+// the value for them. A handler that must wait first reads getExpectedPrincipal() at the click instead.
+it("every secret save calls setSecret before its handler waits on anything", () => {
+  const sources = (readdirSync(appDir, { recursive: true }) as string[]).filter(isSource);
+  const saves: string[] = [];
+  const late: string[] = [];
+  for (const file of sources) {
+    const src = readFileSync(join(appDir, file), "utf8");
+    for (const m of src.matchAll(/\b(?:secrets|secretsApi)\.setSecret\(/g)) {
+      saves.push(file);
+      const head = src.slice(Math.max(0, src.lastIndexOf("async ", m.index!)), m.index!);
+      // The `await` this call sits in (on its own line) is not a wait before it.
+      const own = head.lastIndexOf("await");
+      const before = own >= 0 && !head.slice(own).includes("\n") ? head.slice(0, own) : head;
+      if (/\bawait\b/.test(before) || head.includes(".then(")) late.push(file);
+    }
+  }
+  expect(new Set(saves).size).toBeGreaterThanOrEqual(4);
+  expect(late, "setSecret called after a wait: the save would name whoever is confirmed by then").toEqual([]);
 });

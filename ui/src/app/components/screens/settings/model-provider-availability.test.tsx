@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import type { ModelProvidersList } from "../../../lib/api/model-providers";
 import { AVAILABILITY } from "../../../lib/availability-copy";
@@ -143,6 +143,33 @@ describe("the provider editor's Available to", () => {
       "grant portfolio-manager model_provider bloomberg-gateway",
       "restrict model_provider bloomberg-gateway true",
     ]);
+  });
+
+  it("a list written after another person signed in still names the person who saved the provider", async () => {
+    // The person is read before the save: read after it, the list would go out as the next person.
+    let saved!: (v: unknown) => void;
+    putMock.mockImplementation((doc: { providers: ModelProvider[] }) => new Promise((done) => (saved = () => done({ providers: doc, etag: '"e2"' }))));
+    upsertGrantMock.mockResolvedValue(undefined);
+    putAvailabilityMock.mockResolvedValue(undefined);
+    renderEditor(null);
+    await userEvent.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
+    const d = screen.getByRole("dialog");
+    await userEvent.clear(within(d).getByLabelText(E.NAME));
+    await userEvent.type(within(d).getByLabelText(E.NAME), "Bloomberg gateway");
+    await userEvent.click(within(d).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(within(d).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(within(d).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    expect(await within(d).findByText("Portfolio manager")).toBeInTheDocument();
+    setExpectedPrincipal("a@example.com");
+    await userEvent.click(within(d).getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    saved(undefined);
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    expect(upsertGrantMock.mock.calls[0][1]).toBe("a@example.com");
+    expect(putAvailabilityMock.mock.calls[0][3]).toBe("a@example.com");
+    setExpectedPrincipal("");
   });
 
   it("Only these with nobody listed disables Save, so nothing saves open to Everyone; the first Add enables it (#2593)", async () => {

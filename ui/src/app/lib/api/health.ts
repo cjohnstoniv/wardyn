@@ -605,11 +605,12 @@ export const health = {
   // caution as noCredential above: an older replica's userViewRequest already
   // carries the field (it shipped with the type itself), but there is no
   // reason for the plain toggle to start sending a key it never needed.
-  async setMemberMode(enabled: boolean, noCredential = false, userType?: string): Promise<void> {
+  // `person`, when given: the switch follows other requests and names the person they began under.
+  async setMemberMode(enabled: boolean, noCredential = false, userType?: string, person?: string): Promise<void> {
     const body: Record<string, unknown> = { view: enabled ? "user" : "admin" };
     if (noCredential) body.no_credential = true;
     if (enabled && userType) body.user_type = userType;
-    const res = await wfetch("/me/view", { method: "POST", body: JSON.stringify(body) });
+    const res = await wfetch("/me/view", { method: "POST", asPerson: person, body: JSON.stringify(body) });
     await asJson<{ user_view: boolean }>(res);
   },
 

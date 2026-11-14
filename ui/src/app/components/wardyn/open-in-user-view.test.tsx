@@ -61,7 +61,7 @@ describe("OpenInUserView", () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs/r%201"));
     // #912: switchView's third arg (userType) is forwarded through as an
     // explicit undefined when none is given.
-    expect(setMode).toHaveBeenCalledWith(true, false, undefined);
+    expect(setMode).toHaveBeenCalledWith(true, false, undefined, undefined);
   });
 
   it("a failed POST says so inline, re-enables, and does not reload", async () => {

@@ -86,7 +86,7 @@ describe("ViewSwitch", () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
     // #912: the plain toggle (no type picker here — this mount has no types)
     // names no type, forwarded through as the explicit third argument.
-    expect(setMode).toHaveBeenCalledWith(true, false, undefined);
+    expect(setMode).toHaveBeenCalledWith(true, false, undefined, undefined);
   });
 
   it("clicking the pressed segment does nothing", async () => {
@@ -133,7 +133,7 @@ describe("ViewSwitch — the type picker (#912)", () => {
     await userEvent.click(seg(CONSOLE_VIEW.USER));
     await userEvent.click(await screen.findByRole("menuitem", { name: DEV.name }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
-    expect(setMode).toHaveBeenCalledWith(true, false, "dev");
+    expect(setMode).toHaveBeenCalledWith(true, false, "dev", undefined);
   });
 
   it("picking the preselected type from Admin view still enters (not a dead click)", async () => {
@@ -146,7 +146,7 @@ describe("ViewSwitch — the type picker (#912)", () => {
     await userEvent.click(seg(CONSOLE_VIEW.USER));
     await userEvent.click(await screen.findByRole("menuitem", { name: PM.name }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
-    expect(setMode).toHaveBeenCalledWith(true, false, "pm");
+    expect(setMode).toHaveBeenCalledWith(true, false, "pm", undefined);
   });
 
   it("reselecting the type already being viewed as is a no-op", async () => {
@@ -178,7 +178,7 @@ describe("UserViewEyebrow (#912)", () => {
     await userEvent.click(trigger);
     await userEvent.click(await screen.findByRole("menuitem", { name: DEV.name }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
-    expect(setMode).toHaveBeenCalledWith(true, false, "dev");
+    expect(setMode).toHaveBeenCalledWith(true, false, "dev", undefined);
   });
 });
 
@@ -217,7 +217,7 @@ describe("UserViewDroppedNotice (#912)", () => {
     await userEvent.click(screen.getByRole("button", { name: VIEW_DROPPED.CHOOSE_ANOTHER }));
     await userEvent.click(await screen.findByRole("menuitem", { name: PM.name }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
-    expect(setMode).toHaveBeenCalledWith(true, false, "pm");
+    expect(setMode).toHaveBeenCalledWith(true, false, "pm", undefined);
   });
 
   it("falls back to the id when no cached name is available", () => {

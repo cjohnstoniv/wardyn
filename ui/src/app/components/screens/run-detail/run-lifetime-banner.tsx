@@ -18,6 +18,7 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
@@ -149,6 +150,8 @@ export function RunLifetimeBanner({
   // warning banner's own "Extend 1 day" always offers).
   const extendAndRevive = async () => {
     setAction("revive");
+    // The revive waits on the end change: it goes out as the person who clicked, never as whoever signs in meanwhile.
+    const person = getExpectedPrincipal();
     try {
       const defaultMs = (run.run_limits?.default_end_sec ?? 24 * 60 * 60) * 1000;
       try {
@@ -157,7 +160,7 @@ export function RunLifetimeBanner({
         toast.error("Couldn't extend and revive this run", { description: getErrorMessage(err) });
         return;
       }
-      await reviveWithToasts(run.id, "Couldn't extend and revive this run");
+      await reviveWithToasts(run.id, "Couldn't extend and revive this run", person);
       // The end has moved whatever the revive did, so the page re-reads either way.
       onChanged();
     } finally {

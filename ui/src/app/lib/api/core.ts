@@ -13,7 +13,7 @@ import { CC_ORDER, type ConfinementClass, type GovernanceChange, type SetupItem 
 import { apiURL } from "../base-path";
 import type { PolicyRef } from "./health";
 import { announceAuthChange, noteIdentityRead, onRemoteAuthChange, type AuthEventKind } from "./auth-sync";
-import { ACTIVITY_HEADER, noteSessionExpiry, recentlyActive, SESSION_EXPIRES_HEADER } from "./session-activity";
+import { ACTIVITY_HEADER, noteSessionExpiry, recentlyActive, resetSessionExpiry, SESSION_EXPIRES_HEADER } from "./session-activity";
 
 const TOKEN_KEY = "wardyn_admin_token";
 
@@ -106,6 +106,10 @@ let _expectedPrincipal = "";
 export function setExpectedPrincipal(principal: string): void {
   _expectedPrincipal = principal;
 }
+/** The person this tab last confirmed; "" before /me has answered. */
+export function getExpectedPrincipal(): string {
+  return _expectedPrincipal;
+}
 
 // #483: while the console is signed out mid-page — the dialog or the
 // read-only bar — no write leaves this tab. Whoever holds a session by then
@@ -128,10 +132,12 @@ export function isSignedOutHold(): boolean {
  *  never a global release: a Save clicked during the logout stays held; and
  *  `asPerson` (DR-0034): the request submits a draft composed under the person
  *  this tab confirmed, so it names them and the server refuses it if the shared
- *  cookie now names someone else. */
+ *  cookie now names someone else. A string names the person a save of several
+ *  requests began under (getExpectedPrincipal, read before its first request):
+ *  a later step must not go out as whoever has signed in since. */
 // superseded: true once a newer request has taken over this one's question (a session probe, App.tsx), so its answer,
 // a 401 included, is nobody's to act on.
-export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true; superseded?: () => boolean };
+export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true | string; superseded?: () => boolean };
 
 // H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
 // serves index.html with no path cleaning, so `GET //evil.com` 200s and
@@ -183,7 +189,11 @@ export function setToken(token: string | null, remember = false): void {
     ssSet(TOKEN_KEY, token);
     lsSet(TOKEN_KEY, null);
   }
-  if (getToken() !== previous) notifyAuthChange();
+  if (getToken() !== previous) {
+    // A token session names no expiry of its own, so one an earlier session named must not stay with it.
+    if (token) resetSessionExpiry();
+    notifyAuthChange();
+  }
 }
 
 export function onUnauthorized(fn: (refused: Refused) => void): void {
@@ -378,6 +388,10 @@ export async function wfetch(
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
+  // Read before the hold below: a write held for an identity check names the person this tab had confirmed when it
+  // was made, not whoever is confirmed by the time it leaves. "" is a save begun before /me had answered: it names
+  // whoever is confirmed when this request is made, as `true` does, never nobody.
+  const madeAs = asPerson === true || asPerson === "" ? _expectedPrincipal : asPerson;
   // Already refused by the signed-out hold: no waiting on a check that cannot change that.
   if (refused.write && !endsSession && !_signedOutHold) {
     const held = writesMayLeave();
@@ -397,9 +411,8 @@ export async function wfetch(
     headers.set("Content-Type", "application/json");
   }
   headers.set("Accept", headers.get("Accept") ?? "application/json");
-  if (asPerson && _expectedPrincipal) {
-    headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(_expectedPrincipal));
-  }
+  const person = madeAs || (asPerson === undefined ? "" : _expectedPrincipal);
+  if (person) headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(person));
   if (recentlyActive()) headers.set(ACTIVITY_HEADER, "1");
 
   let res: Response;
@@ -431,6 +444,8 @@ export async function wfetch(
     throw e;
   } finally {
     if (method === "POST" && (endsSession || path === "/me/view")) {
+      // The ended session's expiry is not the next one's: a token sign-in names none of its own.
+      if (endsSession) resetSessionExpiry();
       bumpAuthGeneration();
       // The other tabs hear of it only once the server has answered: a request that never got there changed nothing.
       if (answered) announceAuthChange(endsSession ? "signed_out" : "changed");
@@ -443,10 +458,11 @@ export async function wfetch(
   if (res.status === 401) {
     // The body is read, which also completes the request (drainBody); the reason rides the error.
     const { reason } = await errEnvelope(res);
-    // Reconciliation can invalidate /me before its 401 reaches the shell.
+    // A read sent before an auth event (a sign-out, the next sign-in, another tab's) answers for that earlier
+    // session, so its 401 is its caller's alone: the session signed in now is not signed out by it.
     // A refused write still belongs to its caller, even after an auth change.
     const stale =
-      (path === "/me" && method === "GET" && (generation !== authGeneration || init.signal?.aborted)) || !!superseded?.();
+      (!refused.write && generation !== authGeneration) || (path === "/me" && method === "GET" && !!init.signal?.aborted) || !!superseded?.();
     // A REAL 401 means the bearer THIS REQUEST sent was rejected
     // (expired/revoked/foreign admin token) — leaving it stored would replay
     // the same rejected credential on every request from here to sign-in.

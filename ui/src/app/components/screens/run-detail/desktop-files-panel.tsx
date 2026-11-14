@@ -10,7 +10,7 @@ import * as React from "react";
 import { RotateCw } from "lucide-react";
 import { desktopFiles, type DesktopFilesView } from "../../../lib/api/desktop-files";
 import { approvals as approvalsApi } from "../../../lib/api/approvals";
-import { HttpError } from "../../../lib/api/core";
+import { getExpectedPrincipal, HttpError } from "../../../lib/api/core";
 import { shortTime } from "../../../lib/format";
 import type { ApprovalRequest, FileDownloadScope } from "../../../lib/types/approvals";
 import { usePoll } from "../../../lib/use-poll";
@@ -119,11 +119,13 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
     setUploads((rows) => rows.map((r) => (r.key === key ? { ...r, ...next } : r)));
 
   async function send(files: FileList | null) {
+    // Every file goes out as the person who chose them, never as whoever signs in while the earlier ones upload.
+    const person = getExpectedPrincipal();
     for (const file of Array.from(files ?? [])) {
       const key = nextKey.current++;
       setUploads((rows) => [...rows, { key, name: file.name, bytes: file.size, state: "sending" }]);
       try {
-        const done = await desktopFiles.upload(runId, file);
+        const done = await desktopFiles.upload(runId, file, person);
         patch(key, { state: "delivered", line: C.hashLine(done.sha256, clock()) });
       } catch (e) {
         if (e instanceof HttpError && e.status === 413) patch(key, { state: "too_large", line: C.tooLargeSub });

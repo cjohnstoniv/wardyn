@@ -12,10 +12,11 @@ import { waitEnded } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { REVIVE_RESULT_UNKNOWN, revivePolicy } from "../../wardyn/copy/run-lifetime";
 
-/** False only when the revive definitely failed; a wait that ended may have changed the run, so it reads true. */
-export async function reviveWithToasts(runId: string, failure: string): Promise<boolean> {
+/** False only when the revive definitely failed; a wait that ended may have changed the run, so it reads true.
+ *  `person`, when given: the person the caller's earlier write began under (runs.reviveRun). */
+export async function reviveWithToasts(runId: string, failure: string, person?: string): Promise<boolean> {
   try {
-    const res = await runsApi.reviveRun(runId);
+    const res = await runsApi.reviveRun(runId, person);
     if (res.denied_added.length > 0) toast.info(revivePolicy(res.denied_added.length));
     return true;
   } catch (err) {

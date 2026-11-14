@@ -99,10 +99,11 @@ export const permissions = {
 
   // POST /api/v1/permissions/grants -> the stored row. 201 = created,
   // 200 = an existing (subject_type, subject, capability, value) had its
-  // effect updated in place.
-  async upsertGrant(input: CapabilityGrantInput): Promise<GrantUpsert> {
+  // effect updated in place. `person`: a later step of a save of several
+  // requests names the person it began under (core.ts WfetchInit.asPerson).
+  async upsertGrant(input: CapabilityGrantInput, person?: string): Promise<GrantUpsert> {
     const res = await wfetch("/permissions/grants", {
-      method: "POST", asPerson: true,
+      method: "POST", asPerson: person ?? true,
       body: JSON.stringify(input),
     });
     const updated = res.status === 200;
@@ -155,9 +156,9 @@ export const permissions = {
   // PUT /api/v1/permissions/availability/{kind}/{value} -> the same view, bit
   // flipped. Turning "Only…" on with nobody already listed is refused (400);
   // the server's message is surfaced verbatim by the caller, never reworded.
-  async putAvailability(kind: string, value: string, restricted: boolean): Promise<AvailabilityView> {
+  async putAvailability(kind: string, value: string, restricted: boolean, person?: string): Promise<AvailabilityView> {
     const res = await wfetch(availabilityPath(kind, value), {
-      method: "PUT", asPerson: true,
+      method: "PUT", asPerson: person ?? true,
       body: JSON.stringify({ restricted }),
     });
     return asJson<AvailabilityView>(res);

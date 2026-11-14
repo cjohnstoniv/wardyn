@@ -21,6 +21,7 @@ import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
 import { getErrorMessage } from "../../../../lib/format";
+import { getExpectedPrincipal } from "../../../../lib/api/core";
 import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../../lib/template-refusals";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
 import type { RunIntent } from "../draft/run-intent";
@@ -131,18 +132,20 @@ function SaveAsForm({
     setSaving(true);
     setNameTaken("");
     setFailure("");
+    // A save sent again after a refusal goes out as the person who clicked, never as whoever signs in meanwhile.
+    const person = getExpectedPrincipal();
     // Leaving the saver's own drives out makes a shared template partial: it no longer attaches everything.
     const coverage = kind === "template" && everything && !hasBlockers && !audienceIntent.leftOut ? "full" : "partial";
     const request = buildSaveRequest({ kind, audience, name, intent: pickIntent(audienceIntent.intent, fields), coverage });
     try {
       let saved: Template;
       try {
-        saved = await save(request);
+        saved = await save(request, person);
       } catch (e) {
         // A part left out that another kept part depends on becomes Needs setup, listed by the server's own words.
         const needs = e instanceof TemplateSaveError && e.reason === TEMPLATE_REASON.DEPENDENCY_MISSING && coverage === "partial" ? missingDependencies(e.diagnostics) : [];
         if (needs.length === 0) throw e;
-        saved = await save({ ...request, document: { ...request.document, needs_setup: needs } });
+        saved = await save({ ...request, document: { ...request.document, needs_setup: needs } }, person);
       }
       onSaved(saved);
       onOpenChange(false);

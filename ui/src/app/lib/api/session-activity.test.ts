@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { wfetch } from "./core";
+import { setToken, wfetch } from "./core";
 import {
   ACTIVITY_HEADER,
   ACTIVITY_WINDOW_MS,
@@ -91,6 +91,66 @@ describe("wfetch and the session expiry the server names", () => {
     expect(sessionExpiry()).toBe(renewed.getTime());
     expect(heard).toHaveBeenCalledTimes(1);
     off();
+  });
+});
+
+// A session this tab ended leaves no expiry behind: a token sign-in names none of its own, so the old deadline would
+// outlive it, and so would an answer to a request sent before the sign-out.
+describe("the sign-out forgets the session expiry", () => {
+  beforeAll(() => vi.useFakeTimers({ toFake: ["Date"] }));
+  afterAll(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("clears it at the logout and ignores the header of an answer to a request sent before it", async () => {
+    const deadline = new Date(Date.now() + 3_600_000).toISOString();
+    const named = () => new Response("{}", { status: 200, headers: { [SESSION_EXPIRES_HEADER]: deadline } });
+    let late!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce(named())
+        .mockImplementationOnce(() => new Promise<Response>((done) => (late = done)))
+        .mockResolvedValueOnce(new Response("", { status: 200 })),
+    );
+    vi.setSystemTime(Date.now() + 1000);
+    await wfetch("/runs");
+    expect(sessionExpiry()).toBe(Date.parse(deadline));
+
+    vi.setSystemTime(Date.now() + 1000);
+    const slow = wfetch("/runs");
+    vi.setSystemTime(Date.now() + 1000);
+    await wfetch("/auth/logout", { method: "POST", endsSession: true });
+    expect(sessionExpiry()).toBeNull();
+
+    late(named());
+    await slow;
+    expect(sessionExpiry()).toBeNull();
+  });
+});
+
+// A token signed in on this page (the sign-in prompt after a lapse takes one too) names no expiry of its own, so the
+// one an earlier session named does not stay with it.
+describe("a token sign-in forgets the session expiry", () => {
+  beforeAll(() => vi.useFakeTimers({ toFake: ["Date"] }));
+  afterAll(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    setToken(null);
+  });
+
+  it("clears an expiry an earlier session named once a new token is stored", async () => {
+    const deadline = new Date(Date.now() + 3_600_000).toISOString();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 200, headers: { [SESSION_EXPIRES_HEADER]: deadline } })));
+    // Past every request the suites above sent, whose start times the expiry still remembers.
+    vi.setSystemTime(Date.now() + 60_000);
+    await wfetch("/runs");
+    expect(sessionExpiry()).toBe(Date.parse(deadline));
+
+    vi.setSystemTime(Date.now() + 1000);
+    setToken("token-of-the-next-session");
+    expect(sessionExpiry()).toBeNull();
   });
 });
 

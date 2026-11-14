@@ -107,6 +107,7 @@ vi.mock("../../wardyn/console-view", async (importOriginal) => ({
 
 
 import { SetupScreen, setupDismissed } from "./setup-screen";
+import { setExpectedPrincipal } from "../../../lib/api/core";
 import { ViewAccessProvider, type ViewAccess } from "../../wardyn/console-view";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 
@@ -406,9 +407,23 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(completeOnboardingMock).not.toHaveBeenCalled();
   });
 
+  it("'Switch to user view': the switch after another person signed in still names the person who clicked", async () => {
+    // The server then refuses it rather than move the next person's session to the User view.
+    let marked!: () => void;
+    completeOnboardingMock.mockImplementationOnce(() => new Promise<void>((done) => (marked = done)));
+    setExpectedPrincipal("a@example.com");
+    await switchToUserFromReview("session-admin");
+    await waitFor(() => expect(completeOnboardingMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    marked();
+    await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup", false, undefined, "a@example.com"));
+    setExpectedPrincipal("");
+  });
+
   it("'Switch to user view' for an SSO admin switches the session itself, with no second confirmation", async () => {
     await switchToUserFromReview("session-admin");
-    await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup"));
+    await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup", false, undefined, ""));
     expect(completeOnboardingMock).toHaveBeenCalledTimes(1);
     expect(setupDismissed()).toBe(true);
     // The switch reloads the page; this tab never renders /setup itself.
