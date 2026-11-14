@@ -166,8 +166,64 @@ func (p UserMountPolicy) OpenUserSource(principal, src string, open func(real st
 	return dir, nil
 }
 
-// userSourceChecked runs in OpenUserSource between its check and its open; tests swap the source there.
+// userSourceChecked runs in OpenUserSource and OpenSourceInMemberRoots between the check and the open; tests swap the source there.
 var userSourceChecked = func() {}
+
+// OpenSourceInMemberRoots is OpenUserSource for a read of src that no member
+// asked for: an operator's scan of a folder in the library or in an operator's
+// own workspace. A folder that lies, by its text, inside a member workspace
+// root is one a member can replace with a link, and what the scan finds is
+// shown in every workspace that attaches the folder. So it is checked and
+// opened the same way, whoever asks, and it must resolve inside every root
+// that holds it, not any one: a person's own root often lies inside the shared
+// one, and a link from it to another folder of the shared root is a folder
+// that person may not mount. A folder outside every member root gets no handle
+// and no error, and the caller reads it by its path.
+func (p UserMountPolicy) OpenSourceInMemberRoots(src string, open func(real string) (*os.Root, error)) (*os.Root, error) {
+	var roots []string
+	for _, root := range p.allRoots() {
+		if rootHolds(root, src) {
+			roots = append(roots, root)
+		}
+	}
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	real, err := validateUserSource(src, roots)
+	if err != nil {
+		return nil, err
+	}
+	for _, root := range roots {
+		if !withinAnyRoot(real, []string{root}) {
+			return nil, memberSourceRefused(src, real, roots, fmt.Errorf("resolves outside the member workspace root %q that holds it", root))
+		}
+	}
+	userSourceChecked()
+	dir, err := open(real)
+	if err != nil {
+		return nil, memberSourceRefused(src, real, roots, err)
+	}
+	return dir, nil
+}
+
+// rootHolds reports whether src, by its text alone, is root or lies under it,
+// with root taken as configured or as it resolves. A root of "/" holds nothing
+// but itself, as in withinAnyRoot: it admits no member folder, so it makes no
+// operator folder a member's.
+func rootHolds(root, src string) bool {
+	return withinAnyCanon(src, []string{root}, filepath.Clean) || withinAnyRoot(src, []string{root})
+}
+
+// allRoots is every member root the policy sets, the shared list and each
+// person's own, sorted and without repeats.
+func (p UserMountPolicy) allRoots() []string {
+	roots := slices.Clone(p.Roots)
+	for _, own := range p.RootsByPrincipal {
+		roots = append(roots, own...)
+	}
+	slices.Sort(roots)
+	return slices.Compact(roots)
+}
 
 // ValidateUserMountLexical is the AUTHORING-time gate for a folder bound to a
 // person's runner: the folder lives on that machine, so nothing on this host is

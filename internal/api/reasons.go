@@ -198,7 +198,7 @@ const (
 	reasonWorkspaceSourcesStoreUnavailable     = "workspace_sources_store_unavailable"      // workspace onboarding needs a store, and this backend has none
 	reasonWorkspaceSourcesListUnavailable      = "workspace_sources_list_unavailable"       // the workspace list could not be read to resolve sources against
 	reasonWorkspaceSourceNotOnboarded          = "workspace_source_not_onboarded"           // the source is not onboarded — SHARED, see the doc comment above
-	reasonWorkspaceSourceMountNotAllowed       = "workspace_source_mount_not_allowed"       // the source IS onboarded, but the member-safe mount gate refuses this caller
+	reasonWorkspaceSourceMountNotAllowed       = "workspace_source_mount_not_allowed"       // the source IS onboarded, but the member-safe mount gate refuses it, for a member or for an operator's scan of a folder inside a member workspace root
 	reasonWorkspaceSourceRunnerUnavailable     = "workspace_source_runner_unavailable"      // a folder is bound to a runner that is revoked, gone, or not the workspace owner's
 	reasonWorkspaceSessionRunnerBound          = "workspace_session_runner_bound"           // record/verify runs on Wardyn's own executor, which never binds a folder on a runner
 	reasonRunnerCapabilitiesUnavailable        = "runner_capabilities_unavailable"          // the runner's advertised capabilities could not be read

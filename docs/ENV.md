@@ -1108,6 +1108,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - A member's folder scan opens every folder from the top of the drive down to the member's folder, so the server's user needs read access to each one.
 - Where the server's user can only pass through one of them (execute without read), the scan is refused as outside the member's roots and the server log says why.
+- An operator's scan of a folder inside a member workspace root, from the library or from an operator's own workspace, is opened the same way and must resolve inside every member root that holds it. A folder reached through a link that leaves that root is refused (`workspace_source_mount_not_allowed`) and is onboarded by its real path instead.
 - A source bound to the member's runner (`runner_id`) is checked here by its text alone, and by [its runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner) before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits

@@ -325,16 +325,30 @@ func userMountAllowed(policy runner.UserMountPolicy, owner string, wm types.Work
 	return nil
 }
 
-// openMemberSource is userMountAllowed for a host-side read of src: an
-// operator's source (owner=="") gets no handle and is read by its path; a
+// openMemberSource is userMountAllowed for a host-side read of src: a
 // member's is checked and opened in one step (OpenUserSource, opening with no
 // link followed from the top of the volume), and the caller reads it only
-// through the handle and closes it.
+// through the handle and closes it. An operator's source (owner=="") is opened
+// as the library door opens it (openLibrarySource): the folder is one library
+// row, and a member's workspace that attaches it reads the same scan.
 func openMemberSource(policy runner.UserMountPolicy, owner, src string) (*os.Root, error) {
 	if owner == "" {
-		return nil, nil
+		return openLibrarySource(policy, src)
 	}
 	dir, err := policy.OpenUserSource(owner, src, foldersync.OpenFromTop)
+	if err != nil {
+		return nil, fmt.Errorf("member workspace mount: %w", err)
+	}
+	return dir, nil
+}
+
+// openLibrarySource is openMemberSource for a scan no member asked for, at the
+// library door or of an operator's own workspace: a folder inside a member
+// workspace root is checked against the roots that hold it and opened the same
+// way (OpenSourceInMemberRoots), and any other folder gets no handle and is
+// read by its path.
+func openLibrarySource(policy runner.UserMountPolicy, src string) (*os.Root, error) {
+	dir, err := policy.OpenSourceInMemberRoots(src, foldersync.OpenFromTop)
 	if err != nil {
 		return nil, fmt.Errorf("member workspace mount: %w", err)
 	}
