@@ -73,18 +73,30 @@ export function ProfileReview({
   const [proposal, setProposal] = React.useState<ProfileProposal | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saveOpen, setSaveOpen] = React.useState(false);
+  // The run the status and proposal belong to. Shown for another run, the sheet is loading from its first frame;
+  // closing (no run) keeps what is shown while the sheet slides out.
+  const [loadedFor, setLoadedFor] = React.useState<string | null>(null);
+  const shown = runId && runId !== loadedFor ? "loading" : status;
 
+  // This sheet stays mounted while the run it shows changes. Only the newest synthesis may land: a slower answer for
+  // the run shown before would replace the proposal under review, and with it the policy Save policy creates.
+  const asked = React.useRef(0);
   const load = React.useCallback(() => {
     if (!runId) return;
+    const mine = ++asked.current;
     setStatus("loading");
     setProposal(null);
+    setLoadedFor(runId);
     runsApi
       .profileRun(runId)
       .then((p) => {
+        if (mine !== asked.current) return;
         setProposal(p);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch(() => {
+        if (mine === asked.current) setStatus("error");
+      });
   }, [runId]);
 
   React.useEffect(() => {
@@ -109,11 +121,11 @@ export function ProfileReview({
             {runId && <Mono className="text-foreground">{runId}</Mono>}
           </SheetHeader>
 
-          {status === "loading" ? (
+          {shown === "loading" ? (
             <div className="p-5">
               <TableSkeleton rows={5} cols={3} />
             </div>
-          ) : status === "error" ? (
+          ) : shown === "error" ? (
             <div className="p-5">
               <ErrorState
                 message="Couldn't synthesize a profile for this run."

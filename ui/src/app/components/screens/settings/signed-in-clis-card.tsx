@@ -174,20 +174,31 @@ export function SignedInClisCard() {
   );
 }
 
-function adminMinutes(iso: string): number {
-  return Math.max(1, Math.ceil((Date.parse(iso) - Date.now()) / 60_000));
+function adminMinutes(until: number): number {
+  return Math.max(1, Math.ceil((until - Date.now()) / 60_000));
 }
 
 function Row({ s, onSignOut }: { s: CLISession; onSignOut: () => void }) {
+  // The admin step-up ends at admin_expires_at and the list is not read again then: the row re-renders as each
+  // minute left passes and at that instant, so the chip neither overstates the time left nor outlives the access.
+  const until = s.admin_expires_at ? Date.parse(s.admin_expires_at) : NaN;
+  const [beat, rerender] = React.useReducer((n: number) => n + 1, 0);
+  React.useEffect(() => {
+    const left = until - Date.now();
+    if (!(left > 0)) return;
+    const timer = window.setTimeout(rerender, ((left - 1) % 60_000) + 1);
+    return () => window.clearTimeout(timer);
+  }, [until, beat]);
+  const admin = until > Date.now();
   return (
     <TableRow className="max-md:mb-2 max-md:block max-md:rounded-lg max-md:border max-md:p-3" data-session={s.id}>
       <TableCell className="max-md:block max-md:px-0">
         <span className="font-mono text-xs">{s.machine}</span>
         <span className="mt-1 flex flex-wrap items-center gap-2">
           <Chip tone="info">{T.CHIP}</Chip>
-          {s.admin_expires_at && (
+          {admin && (
             <Chip tone="warning" dot>
-              {T.ADMIN_CHIP(adminMinutes(s.admin_expires_at))}
+              {T.ADMIN_CHIP(adminMinutes(until))}
             </Chip>
           )}
         </span>

@@ -138,6 +138,28 @@ describe("ProfileEditor — the three integer LimitNumberRows", () => {
     );
   });
 
+  it("is read-only while the save is in flight, so an edit made then does not vanish with the editor", async () => {
+    updateProfileMock.mockReturnValue(new Promise(() => {}));
+    renderEditor();
+    await userEvent.type(screen.getByLabelText(GOV.LIMIT_CONCURRENT_LABEL), "5");
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(updateProfileMock).toHaveBeenCalled();
+    expect(document.getElementById("governance-profile-name")).toBeDisabled();
+    expect(screen.getByLabelText(GOV.LIMIT_CONCURRENT_LABEL)).toBeDisabled();
+    expect(screen.getByLabelText(GOV.LIMIT_EPHEMERAL_LABEL)).toBeDisabled();
+  });
+
+  it("keeps the ceiling policy read-only while the save is in flight, open or not", async () => {
+    updateProfileMock.mockReturnValue(new Promise(() => {}));
+    renderEditor();
+    await userEvent.type(screen.getByLabelText(GOV.LIMIT_CONCURRENT_LABEL), "5");
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(updateProfileMock).toHaveBeenCalled();
+    expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Done editing" })).toBeDisabled();
+  });
+
   it("shows the Docker uncapped warning under the ephemeral row only, and only for `none`", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"], ephemeral_disk_enforcement: "none" } }));
     renderEditor();

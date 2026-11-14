@@ -209,6 +209,17 @@ describe("Edit groups", () => {
     expect(screen.queryByText(ENVELOPE.EDIT_TITLE("Platform A"))).toBeNull();
   });
 
+  it("is read-only while the save is in flight: no edit, no Cancel and no other form opened for its answer to close", async () => {
+    await open();
+    setEnvelopeMock.mockReturnValue(new Promise(() => {}));
+    await userEvent.click(screen.getByRole("button", { name: ENVELOPE.SAVE_GROUPS }));
+    expect(screen.getByRole("button", { name: ENVELOPE.CANCEL })).toBeDisabled();
+    expect(screen.getByLabelText(ENVELOPE.ADD_LABEL)).toBeDisabled();
+    expect(screen.getByRole("button", { name: POOL_DRAWER.REMOVE_SUBJECT("plat-a-users") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: `${ENVELOPE.EDIT} Platform A` })).toBeDisabled();
+    expect(screen.getByRole("button", { name: ENVELOPE.SET })).toBeDisabled();
+  });
+
   it("Cancel closes the form without a write", async () => {
     await open();
     await userEvent.click(screen.getByRole("button", { name: ENVELOPE.CANCEL }));
@@ -285,6 +296,19 @@ describe("Set an envelope", () => {
     await userEvent.click(save);
     expect(setEnvelopeMock).toHaveBeenCalledWith("e", ["g1", "g2"]);
     expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the root picker shut while the save is in flight", async () => {
+    await open();
+    setEnvelopeMock.mockReturnValue(new Promise(() => {}));
+    await userEvent.type(screen.getByLabelText(ENVELOPE.GROUPS_LABEL), "g1");
+    await userEvent.click(screen.getByRole("combobox", { name: ENVELOPE.ROOT_LABEL }));
+    await userEvent.click(await screen.findByRole("option", { name: E.name }));
+    await userEvent.click(screen.getByRole("button", { name: ENVELOPE.SAVE_ENVELOPE }));
+    expect(screen.getByLabelText(ENVELOPE.GROUPS_LABEL)).toBeDisabled();
+    // The picker is not a native control: a disabled fieldset alone leaves it openable.
+    await userEvent.click(screen.getByRole("combobox", { name: ENVELOPE.ROOT_LABEL }));
+    expect(screen.queryByRole("option")).toBeNull();
   });
 
   it("shows the server's envelope_nested sentence and keeps the form open", async () => {

@@ -6,6 +6,7 @@
 // The action bar of a long editor: Cancel and Save pinned to the bottom of the scrolling page, with how many
 // changes are waiting. Dialogs get the same pinning from DialogFooter; this is for editors that live in the
 // page. SectionAnchors is the matching row of jump links at the top of such an editor.
+import { useId } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
@@ -41,6 +42,7 @@ export function FormActions({
   saveLabel = FORM_ACTIONS.SAVE,
   cancelLabel = FORM_ACTIONS.CANCEL,
   describedBy,
+  saveNote,
 }: {
   /** How many changes are waiting; the chip is hidden at 0. */
   changeCount: number;
@@ -55,7 +57,10 @@ export function FormActions({
   saveLabel?: string;
   cancelLabel?: string;
   describedBy?: string;
+  /** Why Save is unavailable: said beside it, and read with it. */
+  saveNote?: string;
 }) {
+  const noteId = useId();
   return (
     <div
       data-testid="form-actions"
@@ -72,10 +77,15 @@ export function FormActions({
       >
         {changeCount > 0 ? FORM_ACTIONS.UNSAVED(changeCount) : null}
       </span>
+      {saveNote && (
+        <span id={noteId} className="text-xs text-muted-foreground">
+          {saveNote}
+        </span>
+      )}
       <Button type="button" variant="ghost" onClick={onCancel} disabled={saving}>
         {cancelLabel}
       </Button>
-      <Button type={submit ? "submit" : "button"} onClick={submit ? undefined : onSave} disabled={saveDisabled || saving} aria-describedby={describedBy}>
+      <Button type={submit ? "submit" : "button"} onClick={submit ? undefined : onSave} disabled={saveDisabled || saving} aria-describedby={[describedBy, saveNote && noteId].filter(Boolean).join(" ") || undefined}>
         {saving ? <Loader2 className="size-4 animate-spin" /> : null}
         {saveLabel}
       </Button>

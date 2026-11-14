@@ -4,7 +4,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { useLayoutEffect } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ProfileProposal } from "../../lib/types";
 
@@ -285,5 +286,71 @@ describe("ProfileReview", () => {
     expect(onClose).not.toHaveBeenCalled();
     await waitFor(() => expect(getAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1"));
     expect(createPolicyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ProfileReview: the run it shows changes while it stays mounted", () => {
+  it("a slower synthesis for the run closed before cannot replace the proposal Save policy creates", async () => {
+    createPolicyMock.mockReset().mockResolvedValue({ id: "pol-b" });
+    putAvailabilityMock.mockResolvedValue(undefined);
+    const forA = proposal({ proposed: { ...proposal().proposed, inline_policy: { ...proposal().proposed.inline_policy, allowed_domains: ["a.example.com"] } } });
+    const forB = proposal({ proposed: { ...proposal().proposed, inline_policy: { ...proposal().proposed.inline_policy, allowed_domains: ["b.example.com"] } } });
+    let answerA: (p: ProfileProposal) => void = () => {};
+    profileRunMock.mockReset().mockImplementation((runId: string) =>
+      runId === "run-a" ? new Promise<ProfileProposal>((done) => (answerA = done)) : Promise.resolve(forB),
+    );
+    const { rerender } = render(<ProfileReview runId="run-a" suggestedName="session-a" onClose={() => {}} />);
+    rerender(<ProfileReview runId={null} suggestedName="session-a" onClose={() => {}} />);
+    rerender(<ProfileReview runId="run-b" suggestedName="session-b" onClose={() => {}} />);
+    await screen.findByText("Overall risk");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^save as policy$/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Save as policy" });
+
+    await act(async () => answerA(forA));
+    await user.click(within(dialog).getByRole("button", { name: /^save policy$/i }));
+    await waitFor(() => expect(createPolicyMock).toHaveBeenCalledTimes(1));
+    expect(createPolicyMock.mock.calls[0][0]).toBe("session-b");
+    expect(createPolicyMock.mock.calls[0][1]).toMatchObject({ allowed_domains: ["b.example.com"] });
+  });
+
+  it("a slower failure for the run closed before leaves the proposal shown", async () => {
+    let failA: (e: Error) => void = () => {};
+    profileRunMock.mockReset().mockImplementation((runId: string) =>
+      runId === "run-a" ? new Promise<ProfileProposal>((_, no) => (failA = no)) : Promise.resolve(proposal()),
+    );
+    const { rerender } = render(<ProfileReview runId="run-a" onClose={() => {}} />);
+    rerender(<ProfileReview runId={null} onClose={() => {}} />);
+    rerender(<ProfileReview runId="run-b" onClose={() => {}} />);
+    await screen.findByText("Overall risk");
+    await act(async () => failA(new Error("offline")));
+    expect(screen.getByText("Overall risk")).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't synthesize a profile for this run.")).toBeNull();
+  });
+
+  it("shown for another run while still mounted, its first frame is loading, never the run shown before", async () => {
+    profileRunMock.mockReset().mockImplementation((runId: string) =>
+      runId === "run-a" ? Promise.resolve(proposal()) : new Promise<ProfileProposal>(() => {}),
+    );
+    // What is on the page at each commit, read before the load effect runs.
+    const frames: boolean[] = [];
+    function Frame() {
+      useLayoutEffect(() => {
+        frames.push(screen.queryByText("Overall risk") !== null);
+      });
+      return null;
+    }
+    const sheet = (runId: string) => (
+      <>
+        <ProfileReview runId={runId} onClose={() => {}} />
+        <Frame />
+      </>
+    );
+    const { rerender } = render(sheet("run-a"));
+    await screen.findByText("Overall risk");
+    frames.length = 0;
+    rerender(sheet("run-b"));
+    expect(screen.getByText("run-b")).toBeInTheDocument();
+    expect(frames).toEqual([false]);
   });
 });

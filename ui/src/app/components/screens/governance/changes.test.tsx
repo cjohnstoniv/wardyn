@@ -8,7 +8,7 @@
 // decisions: the diff is the server's, Approve is disabled on the viewer's own proposal, the server's own
 // refusal sentence is shown verbatim, and a 202 at a write site is "submitted", never "saved".
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { toast } from "sonner";
@@ -331,6 +331,17 @@ describe("the change drawer", () => {
     expect(toast.warning).toHaveBeenCalledWith(detail, { duration: Infinity });
     expect(toast.success).not.toHaveBeenCalled();
     expect(onChanged).toHaveBeenCalled();
+  it("a decision still out keeps its drawer, so its answer cannot close the next one opened", async () => {
+    let answer: ((c: GovernanceChange) => void) | undefined;
+    approveMock.mockReturnValue(new Promise((done) => (answer = done)));
+    renderTab([change()]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    await act(async () => answer?.(change({ state: "applied" })));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("rejects with the typed reason", async () => {

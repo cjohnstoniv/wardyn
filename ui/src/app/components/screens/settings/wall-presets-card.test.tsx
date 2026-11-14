@@ -6,7 +6,7 @@
 // The Wall presets card (boards WP-1): what the list shows and where each action is offered, and what a save sends.
 // The two api modules are mocked at their routes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../test/set-field";
 import { HttpError } from "../../../lib/api/core";
@@ -197,6 +197,25 @@ describe("Wall presets card", () => {
     );
   });
 
+  it("a save still in flight keeps its dialog and its form: Escape and Cancel do nothing, and the walls are read-only", async () => {
+    let answer: ((p: WallPreset) => void) | undefined;
+    updateMock.mockReturnValue(new Promise<WallPreset>((done) => (answer = done)));
+    render(<WallPresetsCard />);
+    await open();
+    await user.click(row("mine-1").getByRole("button", { name: W.EDIT }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await user.click(dialog.getByRole("checkbox", { name: "Block upload" }));
+    await user.click(dialog.getByRole("button", { name: W.SAVE }));
+    expect(dialog.getByRole("button", { name: W.CANCEL })).toBeDisabled();
+    expect(dialog.getByRole("checkbox", { name: "Block download" })).toBeDisabled();
+    expect(dialog.getByLabelText(W.NAME)).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => answer?.(MINE));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText(W.SAVED)).toBeInTheDocument();
+  });
+
   it("on a version conflict says so and Reload reopens the edit on what is stored now", async () => {
     updateMock.mockRejectedValue(new HttpError(409, "Someone saved this wall preset since you opened it; it is at version 4. Reload it, then apply your edit again.", "wall_preset_version_conflict"));
     render(<WallPresetsCard />);
@@ -275,6 +294,23 @@ describe("Wall presets card", () => {
     await waitFor(() => expect(removeMock).toHaveBeenCalledWith("mine-1"));
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("a delete still in flight keeps its confirm: Escape and Cancel do nothing until the answer", async () => {
+    let answer: (() => void) | undefined;
+    removeMock.mockReturnValue(new Promise<void>((done) => (answer = done)));
+    render(<WallPresetsCard />);
+    await open();
+    await user.click(row("mine-1").getByRole("button", { name: W.DELETE }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await user.click(dialog.getByRole("button", { name: W.DELETE_CONFIRM }));
+    expect(dialog.getByRole("button", { name: W.CANCEL })).toBeDisabled();
+    expect(dialog.getByRole("button", { name: W.DELETE_CONFIRM })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => answer?.());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(removeMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([

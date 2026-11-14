@@ -29,7 +29,7 @@ export const SCIM = {
   TOKEN_NEXT_HINT:
     "Your identity provider is using the next token. Move it to WARDYN_SCIM_TOKEN and unset WARDYN_SCIM_TOKEN_NEXT to finish the rotation.",
   PURGE_DELAY: "Purge delay",
-  PURGE_DAYS: (n: number) => `${n} day${n === 1 ? "" : "s"}`,
+  PURGE_DAYS: (delay: string) => delay,
   PURGE_OFF: "Off — only a delete from your identity provider purges",
   WORKSPACES: "Workspaces on purge",
   WS_REASSIGN: "Handed to the operator",

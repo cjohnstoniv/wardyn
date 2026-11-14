@@ -403,31 +403,58 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // CANCELLED is fetched for the same reason (B4): a run's terminal transition
   // moves its PENDING approvals there, and a row that left the pending queue
   // without appearing in the decided one would just vanish.
-  const fetchPending = React.useCallback(
-    () => api.listApprovals("PENDING", "", view).then(setPendingItems),
-    [view],
-  );
-  const fetchWaiting = React.useCallback(
-    () =>
-      api.listDecidableByMe().then(({ rows, truncated }) => {
-        setWaitingRows(rows);
-        setWaitingTruncated(truncated);
-        setWaitingStatus("ready");
-        if (rows.some((r) => !!r.requested_by)) setLatched(true);
-      }),
-    [],
-  );
-  const fetchElevation = React.useCallback(
-    () => elevationApi.list().then(setElevation),
-    [],
-  );
+  // An answer lands unless a read of the same list that started after it has landed already: a poll read that started
+  // before a decision must not put the decided request back, with Approve and Deny live, after the refresh that
+  // shows it gone. A read still out holds no older answer back, so a list is never marked ready without one.
+  const pendingAsked = React.useRef(0);
+  const pendingLanded = React.useRef(0);
+  const fetchPending = React.useCallback(() => {
+    const read = ++pendingAsked.current;
+    return api.listApprovals("PENDING", "", view).then((items) => {
+      if (read < pendingLanded.current) return;
+      pendingLanded.current = read;
+      setPendingItems(items);
+    });
+  }, [view]);
+  const waitingAsked = React.useRef(0);
+  const waitingLanded = React.useRef(0);
+  const fetchWaiting = React.useCallback(() => {
+    const read = ++waitingAsked.current;
+    return api.listDecidableByMe().then(({ rows, truncated }) => {
+      if (read < waitingLanded.current) return;
+      waitingLanded.current = read;
+      setWaitingRows(rows);
+      setWaitingTruncated(truncated);
+      setWaitingStatus("ready");
+      if (rows.some((r) => !!r.requested_by)) setLatched(true);
+    });
+  }, []);
+  // Every caller (mount, poll, a withdraw's reload) bumps this; only the newest read may land, so a slower read that
+  // still saw a request pending cannot put it back after the reload that shows it withdrawn.
+  const elevationRead = React.useRef(0);
+  const fetchElevation = React.useCallback(() => {
+    const read = ++elevationRead.current;
+    return elevationApi.list().then(
+      (list) => {
+        if (read === elevationRead.current) setElevation(list);
+      },
+      (e: unknown) => {
+        if (read === elevationRead.current) throw e;
+      },
+    );
+  }, []);
+  const decidedAsked = React.useRef(0);
+  const decidedLanded = React.useRef(0);
   const fetchDecided = React.useCallback(() => {
+    const read = ++decidedAsked.current;
     return Promise.all([
       api.listApprovals("APPROVED", "", view),
       api.listApprovals("DENIED", "", view),
       api.listApprovals("EXPIRED", "", view),
       api.listApprovals("CANCELLED", "", view),
     ]).then(([approved, denied, expired, cancelled]) => {
+      if (read < decidedLanded.current) return;
+      decidedLanded.current = read;
       // Each state is its own capped fetch, so the truncation test is per list:
       // the merged decidedItems length would false-positive on three large but
       // complete lists. Decided history only grows, so this one does get hit.
@@ -548,8 +575,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // precedent); paused only while the foreground load is in flight, so a
   // tick during the error state can still recover it.
   const POLL_MS = 10_000;
+  // The chain is returned, so a tick waits for the read still out instead of starting one that supersedes it.
   usePoll(() => {
-    fetchAll()
+    return fetchAll()
       .then(() => {
         setStatus("ready");
         onChanged?.();

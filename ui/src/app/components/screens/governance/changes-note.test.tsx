@@ -7,7 +7,7 @@
 // proposer's Add/Edit note in the drawer, the security-only variant of the own-change note, and the
 // "Only security can decide" filter. Strings are read by constant.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
@@ -294,5 +294,26 @@ describe("the Only security can decide filter", () => {
     await userEvent.click(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_SECURITY }));
     expect(await screen.findByRole("alert")).toHaveTextContent("the list is unavailable");
     expect(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_SECURITY })).toBeChecked();
+  });
+});
+
+describe("a note save that answers 404 after its drawer was closed", () => {
+  it("leaves the drawer opened since alone", async () => {
+    const { HttpError } = await import("../../../lib/api/core");
+    const B = change({ id: "c2", target_key: "team-b" });
+    getChangeMock.mockImplementation((id: string) => Promise.resolve(id === "c2" ? B : change()));
+    let fail: ((e: Error) => void) | undefined;
+    noteMock.mockReturnValue(new Promise((_, reject) => (fail = reject)));
+    render(ui([change(), B], { principal: "ana@example.com" }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Profile · Edit" })[0]);
+    await userEvent.click(await screen.findByRole("button", { name: CHANGE_NOTE.ADD }));
+    await userEvent.type(screen.getByLabelText(CHANGE_NOTE.WHY_LABEL), "x");
+    await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.SAVE }));
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await userEvent.click(screen.getAllByRole("button", { name: "Profile · Edit" })[1]);
+    const second = await screen.findByRole("dialog");
+    await act(async () => fail?.(new HttpError(404, "gone")));
+    expect(screen.queryByRole("dialog")).toBe(second);
   });
 });
