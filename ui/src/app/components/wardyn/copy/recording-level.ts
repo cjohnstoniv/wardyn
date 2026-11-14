@@ -138,9 +138,13 @@ export const RECORDING_REPLAY = {
   ACT_UPLOAD_TRIED: "tried to upload a file to the desktop",
   ACT_DOWNLOAD: "downloaded a file from the desktop",
   ACT_DOWNLOAD_TRIED: "tried to download a file from the desktop",
+  // Not on the boards: a reviewed download's ask, which moves no file.
+  ACT_REVIEW_ASKED: "asked to download a file from the desktop",
+  ACT_REVIEW_ASK_TRIED: "tried to ask to download a file from the desktop",
   // Not on the boards: the controls' names, and the chain check's other answers.
   PLAY: "Play",
   PAUSE: "Pause",
+  SEEK: "Playback position",
   CHAIN_CHECKING: "Checking the chain…",
   CHAIN_BROKEN: "Chain broken",
   CHAIN_BROKEN_BODY: (seq: number, reason: string) => `Entry ${seq.toLocaleString("en-US")} does not verify: ${reason}.`,

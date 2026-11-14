@@ -254,6 +254,50 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     expect(screen.queryByTestId("desktop-replay-stopped")).toBeNull();
   });
 
+  it("the playhead is a slider the keyboard moves, and Play at the end plays again from the start", async () => {
+    verifyChain.mockResolvedValue({ ok: true, first_seq: 1, last_seq: 2, checked: 2, marks: [] });
+    getDesktopRecording.mockResolvedValue({
+      raw: "{}",
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z", frames: ["{0{AA==", "{60000{AA=="] },
+    });
+    tab({ level: "screen_actions", recordingAudit: [ev("desktop.recording.write", { key: KEY }, KEY, "2026-10-20T10:41:00Z")], selected: KEY });
+    await screen.findByTestId("desktop-replay");
+    const seek = screen.getByRole("slider", { name: RECORDING_REPLAY.SEEK });
+    fireEvent.keyDown(seek, { key: "End" });
+    expect(seek).toHaveAttribute("aria-valuenow", "60000");
+    fireEvent.keyDown(seek, { key: "ArrowLeft" });
+    expect(seek).toHaveAttribute("aria-valuenow", "55000");
+    fireEvent.keyDown(seek, { key: "Home" });
+    expect(seek).toHaveAttribute("aria-valuenow", "0");
+    fireEvent.keyDown(seek, { key: "End" });
+    fireEvent.click(screen.getByRole("button", { name: RECORDING_REPLAY.PLAY }));
+    expect(seek).toHaveAttribute("aria-valuenow", "0");
+    expect(screen.getByRole("button", { name: RECORDING_REPLAY.PAUSE })).toBeInTheDocument();
+  });
+
+  it("a click left of the track seeks to the start and one right of it to the end", async () => {
+    verifyChain.mockResolvedValue({ ok: true, first_seq: 1, last_seq: 2, checked: 2, marks: [] });
+    getDesktopRecording.mockResolvedValue({
+      raw: "{}",
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z", frames: ["{0{AA==", "{60000{AA=="] },
+    });
+    tab({ level: "screen_actions", recordingAudit: [ev("desktop.recording.write", { key: KEY }, KEY, "2026-10-20T10:41:00Z")], selected: KEY });
+    await screen.findByTestId("desktop-replay");
+    const track = screen.getByTestId("desktop-replay-timeline");
+    const seek = screen.getByRole("slider", { name: RECORDING_REPLAY.SEEK });
+    const rect = vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ left: 100, width: 200 } as DOMRect);
+    try {
+      fireEvent.click(track, { clientX: 94 });
+      expect(seek).toHaveAttribute("aria-valuenow", "0");
+      fireEvent.click(track, { clientX: 306 });
+      expect(seek).toHaveAttribute("aria-valuenow", "60000");
+      fireEvent.click(track, { clientX: 200 });
+      expect(seek).toHaveAttribute("aria-valuenow", "30000");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it("a broken range says which entry does not verify", async () => {
     getDesktopRecording.mockResolvedValue({
       raw: "{}",
