@@ -234,5 +234,7 @@ test("a run that is not kept is torn down at its end", async () => {
     .toBe(true);
   // Within 120 s of its end no pod with its run label remains.
   await expect.poll(() => podsOfRun(plainID), { timeout: 120_000, intervals: [3_000], message: "the plain run's pods outlived its end" }).toBe("");
-  expect((await getRun(plainID)).lost_at ?? null, "a run that is not kept is not read as lost").toBeNull();
+  // The lease marks every run it ends (lost_at, reason "ended") before it decides whether to keep it, and the
+  // stop leaves that mark in place. The state tells the two apart: a kept run stays RUNNING.
+  expect((await getRun(plainID)).state, "a run that is not kept is stopped at its end").toBe("STOPPED");
 });

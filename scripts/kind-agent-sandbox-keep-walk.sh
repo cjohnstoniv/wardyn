@@ -76,7 +76,10 @@ mkdir -p "${EVIDENCE_DIR}"
 WORK_DIR="$(mktemp -d /tmp/wardyn-kind-agent-sandbox-keep.XXXXXX)"
 dex_pf_pid=""
 cleanup_walk() {
-  [[ -n "${dex_pf_pid}" ]] && kill "${dex_pf_pid}" 2>/dev/null
+  if [[ -n "${dex_pf_pid}" ]]; then
+    kill "${dex_pf_pid}" 2>/dev/null
+    rm -f "${DEX_PF_PIDFILE}"
+  fi
   rm -rf "${WORK_DIR}"
   return 0
 }
@@ -144,8 +147,11 @@ got="$(kc -n agent-sandbox-system get deployment agent-sandbox-controller -o jso
 # ── 4. the release: backend on, keep on ─────────────────────────────────────
 # --reuse-values keeps what quickstart.sh and overlay.sh set (the images, the Dex issuer, the role
 # map). The chart renders the admission policies and the keep Role rules itself when these two
-# switches are on, so nothing is applied beside it. The admin token is the walk's control channel for
-# the one site-config write below; the person-facing calls all go through the member's own session.
+# switches are on, so nothing is applied beside it. drives.enabled and drives.reclaim.enabled give
+# wardynd get, create and delete on claims in the runs namespace: without all three the API refuses to
+# make a member drive, and so a kept work folder (docs/OPERATIONS.md, "Member drives"). The admin token
+# is the walk's control channel for the one site-config write below; the person-facing calls all go
+# through the member's own session.
 step "helm upgrade --reuse-values (k8s.agentSandbox.enabled, k8s.agentSandbox.keep.enabled)"
 ADMIN_TOKEN="${WARDYN_KIND_SSO_ADMIN_TOKEN:-walk-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
@@ -155,6 +161,8 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   --set "auth.adminToken.value=${ADMIN_TOKEN}" \
   --set "k8s.agentSandbox.enabled=true" \
   --set "k8s.agentSandbox.keep.enabled=true" \
+  --set "drives.enabled=true" \
+  --set "drives.reclaim.enabled=true" \
   >"${EVIDENCE_DIR}/helm-upgrade.log" 2>&1 \
   || { tail -30 "${EVIDENCE_DIR}/helm-upgrade.log" >&2; die "helm upgrade failed (see ${EVIDENCE_DIR}/helm-upgrade.log)"; }
 if ! kc -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s; then
@@ -173,7 +181,7 @@ done
 step "checking the release's admission policies are observed and type-check clean"
 policies="$(kc get validatingadmissionpolicy -l app.kubernetes.io/part-of=wardyn -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}')"
 echo "policies: ${policies}"
-for want in sandbox-pod-gate sandbox-pod-ungate keep; do
+for want in sandbox-pod-gate sandbox-pod-ungate keep-service keep-endpoints; do
   grep -q -- "${want}" <<<"${policies}" || die "no admission policy named for '${want}' in: ${policies:-<none>}"
 done
 for p in ${policies}; do
