@@ -432,11 +432,11 @@ func TestPass_ASecondSaveIsNeverTakenForTheFailedCopy(t *testing.T) {
 		failCopySync(t, name)
 		onDropLooked(t, func() {
 			editorSave(t, root, name, "first save")
-			editorSave(t, root, name, "second save")
+			editorSave(t, root, name, "the second save!") // the copy's length, so its size proves nothing
 		})
 		rep := pass(t, sy)
 		kept, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
-		if reason := refusedFor(rep, name); len(kept) != 1 || getSyncFile(t, kept[0]) != "second save" || !strings.Contains(reason, "it is kept as "+filepath.Base(kept[0])) {
+		if reason := refusedFor(rep, name); len(kept) != 1 || getSyncFile(t, kept[0]) != "the second save!" || !strings.Contains(reason, "it is kept as "+filepath.Base(kept[0])) {
 			t.Fatalf("kept %v, refusal %q, want the second save kept under the name the refusal gives", kept, reason)
 		}
 	}
