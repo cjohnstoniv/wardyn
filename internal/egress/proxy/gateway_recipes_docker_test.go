@@ -248,11 +248,11 @@ func recipeStartFront(t *testing.T, gatewayAddr string) *recipeFront {
 	f := &recipeFront{}
 	rp := &httputil.ReverseProxy{
 		FlushInterval: -1,
-		Director: func(r *http.Request) {
+		Rewrite: func(pr *httputil.ProxyRequest) {
 			f.mu.Lock()
-			f.last, f.n = r.Header.Clone(), f.n+1
+			f.last, f.n = pr.In.Header.Clone(), f.n+1
 			f.mu.Unlock()
-			r.URL.Scheme, r.URL.Host, r.Host = "http", gatewayAddr, gatewayAddr
+			pr.Out.URL.Scheme, pr.Out.URL.Host, pr.Out.Host = "http", gatewayAddr, gatewayAddr
 		},
 	}
 	f.srv = httptest.NewTLSServer(rp)
