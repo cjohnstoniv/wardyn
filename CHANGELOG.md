@@ -14,10 +14,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - `POST /api/v1/runs/{id}/exec` (SDK `ExecRun`) now takes a background run (`experience: background`), so a pipeline step can run commands in its own headless run. Before, it answered `409 run_exec_unavailable`. A background run still has no SSH access, so `wardyn run exec` still refuses it, and a command does not keep the run going. Each command and its exit code are audited (`run.command.exec`); its output is neither masked nor recorded.
+- `/metrics` has a new counter, `wardyn_lock_holds_over_limit_total`: holds of a run's lock that ran past 10 minutes. Each such hold is also logged at WARN with the functions that took the lock, and again with its length when it is released. The watchdog never frees the lock or cancels the holder's work.
 
 ### Changed
 
 - `POST /api/v1/runs/{id}/exec` answers a governance profile's refusal as `403 governance_unit` at target `runs.exec`, with its own error naming the limit: `deny_interactive` on any run, and now `deny_task_mode_exec` on a background run. Before, `deny_interactive` was recorded at target `runs.attach` with the terminal's error. Its `409 run_exec_unavailable` errors no longer say "ssh unavailable". On a runner of this release, a Docker sandbox whose runtime runs only the task (libkrun) refuses any command beside the task before a `docker exec` is made, so this route answers `501 run_inspect_exec_stream_unsupported` instead of `502 run_exec_failed`, and every other feature that runs a command in such a sandbox (SSH, the Files panel and the rest) gets the refusal it gives a runner with no command streaming.
+- `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
+
+### Fixed
+
+- The run output sweep now reaches every run that still owes its output or its macOS VM agent recording, even when more than 200 others fail on every pass; before, those 200 held the sweep and newer runs were never reached.
+- A run's output that waited on its recording now ends as a capture gap, with the reason in its `run.output.finalize` audit row, when the recording was erased (`recording_erased`) or a read of it ran over its 10-second budget on a try made 30 minutes or more after the run ended (`recording_over_budget`); before, it stayed pending for good. A later read of the recording that succeeds replaces it.
+- When a forced end keeps a run's sandbox for its copy back, the Folders from your computer card now shows the reason the server recorded, as kept for its copy back, instead of saying the changes could not come back.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

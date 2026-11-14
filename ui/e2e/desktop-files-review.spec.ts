@@ -21,6 +21,9 @@ import { DESKTOP_FILES as C } from "../src/app/components/wardyn/copy/desktop-fi
 const RUN_TASK = "e2e fixture 2";
 const SHA = "9f2c" + "0".repeat(56) + "41ab";
 
+// The page clock is pinned to noon UTC today, so "asked an hour ago" prints a time of day, never a date.
+const NOW = new Date().setUTCHours(12, 0, 0, 0);
+
 interface Req {
   id: string;
   name: string;
@@ -41,8 +44,8 @@ const wire = (run: string, r: Req, bytes: number) => ({
   run_id: run,
   kind: "file_download",
   state: r.state,
-  requested_at: new Date(Date.now() - 3_600_000).toISOString(),
-  ...(r.state === "PENDING" ? {} : { decided_at: new Date(Date.now() - 1_800_000).toISOString() }),
+  requested_at: new Date(NOW - 3_600_000).toISOString(),
+  ...(r.state === "PENDING" ? {} : { decided_at: new Date(NOW - 1_800_000).toISOString() }),
   decided_by: r.decided_by,
   reason: r.reason,
   minted_jti: r.minted_jti,
@@ -110,6 +113,11 @@ async function openFrom(page: Page, s: Stub): Promise<{ panel: Locator; calls: {
 const row = (panel: Locator, name: string) => panel.getByTestId("desktop-download").filter({ hasText: name });
 
 test.describe("Run detail — Files panel under review", () => {
+  test.use({ timezoneId: "UTC" });
+  test.beforeEach(async ({ page }) => {
+    await page.clock.setFixedTime(NOW);
+  });
+
   test("each file shows its newest request's state, line and button", async ({ page }) => {
     const { panel } = await openFrom(page, {
       files: [

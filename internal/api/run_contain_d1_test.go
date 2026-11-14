@@ -207,8 +207,18 @@ func (f *d1Store) ContainmentPastDue(ctx context.Context, id uuid.UUID, wait tim
 }
 
 // RunDueFlags is the store's per-run due read (store.TerminalDue) over the rows in memory, on the store's own
-// clock: Due once the run's due has passed, CapPassed once its end plus keep has.
-func (f *d1Store) RunDueFlags(_ context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error) {
+// clock: Due once the run's due has passed, CapPassed once its end plus keep has. Like ContainmentPastDue it
+// fails on an ended ctx and with dueErr.
+func (f *d1Store) RunDueFlags(ctx context.Context, id uuid.UUID, keep time.Duration) (store.RunDue, error) {
+	if err := ctx.Err(); err != nil {
+		return store.RunDue{}, err
+	}
+	f.fmu.Lock()
+	err := f.dueErr
+	f.fmu.Unlock()
+	if err != nil {
+		return store.RunDue{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := f.rows[id]
@@ -2258,7 +2268,9 @@ func TestContain_D1DueReadFailureIsNotDue(t *testing.T) {
 		if !l.srv.d1Due(ctx, vm, cutUnsupported, nil) || !l.srv.d1Due(ctx, run, cutUnsupported, nil) {
 			t.Fatal("both rows must be due before the read fails")
 		}
+		l.ds.fmu.Lock()
 		l.ds.dueErr = errors.New("database down")
+		l.ds.fmu.Unlock()
 		if l.srv.d1Due(ctx, vm, cutUnsupported, nil) {
 			t.Error("a virtual machine past its due: d1Due = true on a failed due read")
 		}

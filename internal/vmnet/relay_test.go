@@ -126,7 +126,7 @@ func startFakeProxy(t *testing.T, allowed ...string) *fakeProxy {
 
 func newTestRelay(t *testing.T, f *fakeProxy) (*Relay, *vmnettest.Guest) {
 	t.Helper()
-	rl, err := New(Config{Proxy: f.addr})
+	rl, err := New(Config{Proxy: f.addr, Dial: ownResolverDial})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestRelayRefusals(t *testing.T) {
 
 func TestRelayDropsOversizedFrames(t *testing.T) {
 	f := startFakeProxy(t)
-	rl, err := New(Config{Proxy: f.addr})
+	rl, err := New(Config{Proxy: f.addr, Dial: ownResolverDial})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestRelayDropsOversizedFrames(t *testing.T) {
 // A guest that connects and goes silent must not keep Listen alive once its
 // context ends.
 func TestListenReturnsOnCancelWithIdleGuest(t *testing.T) {
-	rl, err := New(Config{Proxy: "127.0.0.1:1"})
+	rl, err := New(Config{Proxy: "127.0.0.1:1", Dial: ownResolverDial})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -122,17 +122,17 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					return
 				}
 				defer unlock()
-				applied, uerr := s.casRunState(ctx, runID, types.RunRunning, types.RunFailed)
+				applied, uerr := s.casRunStateHeld(ctx, runID, types.RunRunning, types.RunFailed)
 				if uerr != nil {
 					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
-					s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+					s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 						runID.String(), "failure", mustJSON(data)))
 					return
 				}
 				if !applied {
 					// Already terminal (e.g. killed concurrently) — nothing further to
 					// do, but this process may hold the tail the winner does not.
-					s.finishRunOutput(ctx, runID)
+					heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 					return
 				}
 				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
@@ -181,13 +181,13 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			return
 		}
 		defer unlock()
-		cur, gerr := s.cfg.Store.GetRun(ctx, runID)
+		cur, gerr := s.getRunHeld(ctx, runID)
 		if gerr != nil {
 			select {
 			case <-time.After(completionWatcherReadRetryDelay):
 			case <-ctx.Done():
 			}
-			cur, gerr = s.cfg.Store.GetRun(ctx, runID)
+			cur, gerr = s.getRunHeld(ctx, runID)
 		}
 		if gerr != nil {
 			slog.WarnContext(ctx, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
@@ -199,9 +199,9 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		}
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
-		applied, uerr := s.casRunState(ctx, runID, types.RunRunning, terminal)
+		applied, uerr := s.casRunStateHeld(ctx, runID, types.RunRunning, terminal)
 		if uerr != nil {
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+			s.recordAuditHeld(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"exit_code": exitCode, "error": uerr.Error(),
 				})))
@@ -211,7 +211,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			// Run already terminal (e.g. KILLED by a user mid-run). The kill path
 			// already tore the sandbox down; only this process's tail is left, and
 			// finishing it is a no-op when the winner already did.
-			s.finishRunOutput(ctx, runID)
+			heldCall(ctx, killCascadeTimeout, func(ctx context.Context) { s.finishRunOutput(ctx, runID) })
 			return
 		}
 		// We won the RUNNING->terminal transition, so this is the authoritative end
@@ -221,7 +221,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// reconciler runs the IDENTICAL sequence via finalizeRunTail. A non-zero exit
 		// carries no reason of its own; the agent's recording may (noteModelAccessFromRecording).
 		if terminal == types.RunFailed {
-			s.noteModelAccessFromRecording(ctx, runID)
+			heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { s.noteModelAccessFromRecording(ctx, runID) })
 		}
 		s.finalizeRunTail(ctx, runID, ref, "run.complete", outcome, map[string]any{
 			"exit_code": exitCode, "state": terminal,
@@ -289,10 +289,14 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 		return true
 	}
 	if s.auditFirstTeardownFailure(ctx, runID, action, serr) {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-			ref, "failure", mustJSON(map[string]any{
-				"sandbox_ref": ref, "teardown_error": serr.Error(),
-			})))
+		// The row gets a bound of its own (settleAfterTeardown), not the stop's: a stop cut at its caller's bound is
+		// exactly the failure this row records, and it is written once per process.
+		settleAfterTeardown(ctx, func(ctx context.Context) {
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+				ref, "failure", mustJSON(map[string]any{
+					"sandbox_ref": ref, "teardown_error": serr.Error(),
+				})))
+		})
 	}
 	return false
 }
@@ -333,28 +337,30 @@ func (s *Server) RevokeStoppedRun(ctx context.Context, runID uuid.UUID) map[stri
 	return out
 }
 
-// revokeRunSteps is the cascade's work, unaudited: every step runs, and each
-// failure (or the count of PATs still unrevoked) is returned under its key.
+// revokeRunSteps is the cascade's work, unaudited: every step runs, each on a bound of its own (revokeStep), and
+// each failure (or the count of PATs still unrevoked) is returned under its key.
 func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string]any {
 	data := map[string]any{}
 	if s.cfg.Identity != nil {
-		if rerr := s.cfg.Identity.RevokeRun(ctx, runID); rerr != nil {
+		if rerr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Identity.RevokeRun(ctx, runID) }); rerr != nil {
 			data["identity_error"] = rerr.Error()
 		}
 	}
 	if s.cfg.Broker != nil {
-		if berr := s.cfg.Broker.RevokeRun(ctx, runID); berr != nil {
+		if berr := revokeStep(ctx, func(ctx context.Context) error { return s.cfg.Broker.RevokeRun(ctx, runID) }); berr != nil {
 			data["broker_error"] = berr.Error()
 		}
 	}
-	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
+	if perr := revokeStep(ctx, func(ctx context.Context) error { return s.dropRunProxyConfig(ctx, runID) }); perr != nil {
 		data["proxy_config_error"] = perr.Error()
 	}
 	macGUIEnvForget(runID)
-	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
+	_ = revokeStep(ctx, func(ctx context.Context) error { s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd); return nil })
 	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
-		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
+		lctx, lcancel := context.WithTimeout(ctx, revokeStepBound)
+		rows, err := st.ListUnrevokedRunPATs(lctx, store.RunPATFilter{RunID: runID})
+		lcancel()
 		if err != nil {
 			data["pat_revoke_check_error"] = err.Error()
 		} else if len(rows) > 0 {
@@ -541,8 +547,10 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 // end): an interactive run's pane is then snapshotted, after the revocations
 // and before StopSandbox.
 func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any, finishAfterStop, gracefulStop bool) {
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-		runID.String(), outcome, mustJSON(data)))
+	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+			runID.String(), outcome, mustJSON(data)))
+	})
 	_ = s.finalizeRunEffects(ctx, runID, ref, action, data, finishAfterStop, gracefulStop)
 }
 

@@ -466,7 +466,12 @@ func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run ty
 	}
 	defer unlock()
 	ctx = lctx
-	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	// Bounded, and settled like a held state write: a dispatch that resumes the run's kept machine stops it on a
+	// context with no deadline.
+	applied, err := heldWrite(ctx, func(ctx context.Context) (bool, error) {
+		return leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	})
+	applied, err = s.settleRunWrite(ctx, run.ID, types.RunRunning, terminal, applied, err)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))

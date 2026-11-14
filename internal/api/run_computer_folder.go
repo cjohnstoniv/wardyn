@@ -608,7 +608,7 @@ func (s *Server) killKeptAgent(ctx context.Context, run types.AgentRun, ref stri
 		_ = sess.Stdin.Close()
 	}
 	if sess.Wait != nil {
-		_, _ = sess.Wait()
+		_, _, _ = waitExecWithin(ctx, sess, 0)
 	}
 	if sess.Close != nil {
 		_ = sess.Close()
@@ -905,20 +905,44 @@ func runnerReplied(err error) bool {
 // computerFolderRunView is GET /runs/{id}'s computer_folder: the run's folder from the person's
 // computer and its passes. The path on that computer is never shown, only its name.
 type computerFolderRunView struct {
-	Name      string                  `json:"name"`
-	Runner    string                  `json:"runner"`
-	RemoteDir string                  `json:"remote_dir"`
-	Direction string                  `json:"direction"`
-	State     string                  `json:"state"` // waiting, synced or failed: the first sync's
-	Error     string                  `json:"error,omitempty"`
-	Seed      *types.FolderPassRecord `json:"seed,omitempty"`
-	Back      *types.FolderPassRecord `json:"back,omitempty"`
+	Name      string          `json:"name"`
+	Runner    string          `json:"runner"`
+	RemoteDir string          `json:"remote_dir"`
+	Direction string          `json:"direction"`
+	State     string          `json:"state"` // waiting, synced or failed: the first sync's
+	Error     string          `json:"error,omitempty"`
+	Seed      *folderPassView `json:"seed,omitempty"`
+	Back      *folderPassView `json:"back,omitempty"`
 	// Fate, SandboxCopy, LastReport and GiveUpAt are the fate of the changes not yet back (folderFateOf); each is
 	// absent when the run is live or the server cannot tell.
 	Fate        *string           `json:"fate,omitempty"`
 	SandboxCopy *string           `json:"sandbox_copy,omitempty"`
 	LastReport  *folderLastReport `json:"last_report,omitempty"`
 	GiveUpAt    *time.Time        `json:"give_up_at,omitempty"`
+}
+
+// folderPassView is a pass record as the folder's views show it: types.FolderPassRecord without GivenUpAudited,
+// the server's own note that the given_up audit row was written. That field cannot be tagged json:"-" on the
+// record, because its tag is also the stored JSONB key that MarkGivenUpAudited writes and guards on.
+type folderPassView struct {
+	At               time.Time             `json:"at"`
+	Files            int                   `json:"files"`
+	Bytes            int64                 `json:"bytes"`
+	Refused          []types.FolderRefusal `json:"refused"`
+	Error            string                `json:"error,omitempty"`
+	GivenUpAt        *time.Time            `json:"given_up_at,omitempty"`
+	GivenUpCount     *int                  `json:"given_up_count,omitempty"`
+	GivenUpPaths     []string              `json:"given_up_paths,omitempty"`
+	GivenUpPathsMore int                   `json:"given_up_paths_more,omitempty"`
+}
+
+// newFolderPassView copies rec into its view; nil for nil.
+func newFolderPassView(rec *types.FolderPassRecord) *folderPassView {
+	if rec == nil {
+		return nil
+	}
+	return &folderPassView{At: rec.At, Files: rec.Files, Bytes: rec.Bytes, Refused: rec.Refused, Error: rec.Error,
+		GivenUpAt: rec.GivenUpAt, GivenUpCount: rec.GivenUpCount, GivenUpPaths: rec.GivenUpPaths, GivenUpPathsMore: rec.GivenUpPathsMore}
 }
 
 // computerFolderRunState values.
@@ -952,7 +976,7 @@ func (s *Server) computerFolderRunView(ctx context.Context, id uuid.UUID) *compu
 	}
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(ctx, id); err == nil {
-			v.Seed, v.Back = rec.Seed, rec.Back
+			v.Seed, v.Back = newFolderPassView(rec.Seed), newFolderPassView(rec.Back)
 			if run, err := s.cfg.Store.GetRun(ctx, id); err == nil {
 				s.setFolderFate(ctx, v, run, rec, seed.SeededAt != nil)
 			}

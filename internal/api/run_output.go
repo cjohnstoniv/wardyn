@@ -158,6 +158,8 @@ func newExecOutputTail(max int, now func() time.Time) *execOutputTail {
 type execOutputTails struct {
 	mu sync.Mutex
 	m  map[uuid.UUID]*execOutputTail
+	// sweep is where the next pass of the two oldest-first output sweeps starts (run_output_final.go).
+	sweep outputSweepCursors
 }
 
 func (t *execOutputTails) pruneLocked(now time.Time, ttl time.Duration) {

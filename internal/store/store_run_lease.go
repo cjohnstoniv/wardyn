@@ -155,7 +155,7 @@ func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromLimits types
 		return false, fmt.Errorf("store: marshal run limits: %w", err)
 	}
 	lostAt, keptAfter, _ := endedArgs(ended)
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := s.execRunWrite(ctx, `
 		UPDATE agent_runs SET ends_at=$4, wait_budget_sec=$5,
 			end_tightened_at = CASE WHEN ends_at IS DISTINCT FROM $4 THEN NULL ELSE end_tightened_at END
 		WHERE id=$1 AND ends_at IS NOT DISTINCT FROM $2 AND wait_budget_sec=$3 AND state = ANY($6)
@@ -205,7 +205,7 @@ func (s PG) KillRunAtLifetimeIf(ctx context.Context, id uuid.UUID, reason types.
 
 // StopKeptRunIf — see RunLeaser.
 func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := s.execRunWrite(ctx, `
 		UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=CASE WHEN $6 THEN now() ELSE ended_at END
 		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT DISTINCT FROM $3
 		  AND lost_reason=$4 AND ends_at IS NOT DISTINCT FROM $5`,

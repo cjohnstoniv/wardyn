@@ -320,7 +320,10 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 	if hold || (!pending && !s.pause.stampDue(true, runID, now)) {
 		return false, nil
 	}
-	paused, err := pauser.StampRunActive(ctx, runID)
+	// On a bound of its own: thawForExec stamps under the run's lock, on a request's context.
+	sctx, scancel := context.WithTimeout(ctx, heldStoreCallBound)
+	paused, err := pauser.StampRunActive(sctx, runID)
+	scancel()
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stamping a run's presence failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
@@ -340,7 +343,7 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 		return false, nil
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(ctx, runID)
+	run, err := s.getRunHeld(ctx, runID)
 	if err == nil && !runLive(run) {
 		s.pause.thawDone(runID) // ended or kept since the stamp: no thaw owed (runLive)
 		return false, nil
@@ -456,11 +459,11 @@ func (s *Server) approvalClosed(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(ctx, runID)
+	run, err := s.getRunHeld(ctx, runID)
 	if err != nil || run.PausedAt == nil {
 		return
 	}
-	if open, err := pauser.RunHasOpenRequest(ctx, runID); err != nil || open {
+	if open, err := heldRead(ctx, func(ctx context.Context) (bool, error) { return pauser.RunHasOpenRequest(ctx, runID) }); err != nil || open {
 		return
 	}
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
@@ -485,7 +488,7 @@ func (s *Server) resumeClosedRun(ctx context.Context, pauser store.RunPauser, c 
 		return
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(ctx, c.Run.ID)
+	run, err := s.getRunHeld(ctx, c.Run.ID)
 	if err != nil || run.PausedAt == nil {
 		return
 	}
@@ -496,7 +499,7 @@ func (s *Server) resumeClosedRun(ctx context.Context, pauser store.RunPauser, c 
 	default:
 		return
 	}
-	if open, err := pauser.RunHasOpenRequest(ctx, run.ID); err != nil || open {
+	if open, err := heldRead(ctx, func(ctx context.Context) (bool, error) { return pauser.RunHasOpenRequest(ctx, run.ID) }); err != nil || open {
 		return
 	}
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
@@ -530,21 +533,22 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 				// A thaw its context ended may still land in the runtime, under a row that stays paused. The settle
 				// record leaves it to the pause sweep, which freezes a sandbox whose row is paused (settlePauses).
 				nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
-				s.notePauseSettle(nctx, run.ID)
+				s.notePauseSettleOrRetry(nctx, run.ID)
 				ncancel()
+				s.notePauseSettleLater(run.ID)
 			}
 			data["error"] = err.Error()
-			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
+			s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 				run.ID.String(), "failure", mustJSON(data)))
 			return err
 		}
 	}
-	cleared, err := pauser.ClearRunPaused(ctx, run.ID)
+	cleared, err := heldWrite(ctx, func(ctx context.Context) (bool, error) { return pauser.ClearRunPaused(ctx, run.ID) })
 	if err != nil {
 		return err
 	}
 	if cleared {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
+		s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 			run.ID.String(), "success", mustJSON(data)))
 	}
 	return nil
@@ -748,22 +752,25 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			// record leaves it to the pause sweep, which thaws a sandbox whose row is not paused (settlePauses).
 			nctx, ncancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 			defer ncancel()
-			s.notePauseSettle(nctx, run.ID)
+			s.notePauseSettleOrRetry(nctx, run.ID)
+			s.notePauseSettleLater(run.ID)
 		}
 		return
 	}
 	applied, err := false, error(nil)
 	if s.leaseCurrent(ctx) {
-		applied, err = pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+		applied, err = heldWrite(ctx, func(ctx context.Context) (bool, error) {
+			return pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+		})
 	}
 	if err == nil && applied {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
+		s.recordAuditHeld(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"reason": reason, "quiet_sec": int64(quiet.Seconds()), "active_at": run.ActiveAt,
 			})))
 		// A paused run holds no Azure DevOps token; its resume creates one.
 		// After the mark, so a resolve racing it sees the pause and creates none.
-		s.revokeRunPATs(ctx, run.ID, adoPATRevokePause)
+		heldCall(ctx, heldRevokeBound, func(ctx context.Context) { s.revokeRunPATs(ctx, run.ID, adoPATRevokePause) })
 		return
 	}
 	// The compensation outlives a lease lost mid-pass: a freeze must not be

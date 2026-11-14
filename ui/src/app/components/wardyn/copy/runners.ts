@@ -208,6 +208,10 @@ export const RUN_RECORDING = {
   policy_off: "Recording off. Nothing is captured. The audit log still shows what happened.",
 } as const;
 
+// The opening words of the back error a forced end records when it keeps the sandbox for its copy back
+// (forcedKeptForCopyBack, internal/api/run_kept_stop_forced.go); runs.wire.fields.test.ts pins the match.
+export const FORCED_KEEP_PREFIX = "Kept for its copy back";
+
 // The run's folder from the person's computer (M4, #2982, owner-approved 2026-10-19): its first sync and,
 // for Both ways, the pass that brings changes back when the run ends.
 export const RUN_COMPUTER_FOLDER = {
