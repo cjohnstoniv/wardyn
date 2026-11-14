@@ -208,3 +208,49 @@ func swapRaceRoot(t *testing.T) (link, denied string) {
 	}
 	return link, denied
 }
+
+// TestWriteEnvAsCode_KeepsACaseVariantOfAnEmittedName: a project's own nuget.config is the same file as
+// the emitted NuGet.Config to NuGet, and to a clone on a case-insensitive disk. The write keeps the
+// project's file, reports the emitted name skipped, and adds no second spelling beside it, at the root
+// and in a subdirectory.
+func TestWriteEnvAsCode_KeepsACaseVariantOfAnEmittedName(t *testing.T) {
+	root := t.TempDir()
+	const own = "<configuration><packageSources><add key=\"own\" value=\"https://feed.example/v3/index.json\" /></packageSources></configuration>\n"
+	if err := os.MkdirAll(filepath.Join(root, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"nuget.config", ".devcontainer/DevContainer.json"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(own), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skipped, err := writeEnvAsCode(root, map[string]string{
+		"NuGet.Config":                    "<configuration />\n",
+		".devcontainer/devcontainer.json": "{}\n",
+		"AGENTS.md":                       "# agents\n",
+	})
+	if err != nil {
+		t.Fatalf("writeEnvAsCode: %v", err)
+	}
+	if want := []string{".devcontainer/devcontainer.json", "NuGet.Config"}; !slices.Equal(skipped, want) {
+		t.Fatalf("skipped = %v, want %v", skipped, want)
+	}
+	for dir, want := range map[string][]string{".": {".devcontainer", "AGENTS.md", "nuget.config"}, ".devcontainer": {"DevContainer.json"}} {
+		ents, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		if !slices.Equal(names, want) {
+			t.Errorf("%s holds %v, want %v (no second spelling)", dir, names, want)
+		}
+	}
+	for _, rel := range []string{"nuget.config", ".devcontainer/DevContainer.json"} {
+		if got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))); err != nil || string(got) != own {
+			t.Errorf("%s = (%q, %v), want the project's own file kept", rel, got, err)
+		}
+	}
+}
