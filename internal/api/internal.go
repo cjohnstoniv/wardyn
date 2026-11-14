@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -245,6 +246,9 @@ const (
 //     rejected (the sensor cannot forge an egress./credential./identity. event).
 //   - run_id NULL is allowed (unmapped events + heartbeat + blind events).
 func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request) {
+	// arrived is when the batch reached this server. An exec's raw arguments
+	// in it are split only against a corpus read after this moment.
+	arrived := time.Now()
 	var batch groundtruthBatch
 	// Byte ceiling under maxBatch below: 1000 kernel events legitimately exceed
 	// maxJSONBody, so this stream gets its own larger cap rather than 413ing a
@@ -275,6 +279,38 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// read-only (kernel-prefix check + run_id existence), so doing it up front is
 	// cheap and side-effect-free.
 	var ownNamespaces []string // the control plane's own runs namespace, resolved on the first Kubernetes event
+	// corpusFresh reports whether this server has read every masking value any
+	// server committed before the batch arrived. It is asked once, by the first
+	// exec that carries raw arguments: a value another replica registered a
+	// moment ago is not in this one's cache until it reads it.
+	var fresh *bool
+	corpusFresh := func() bool {
+		if fresh == nil {
+			ok := s.cfg.MaskRegistry.Fresh(arrived)
+			fresh = &ok
+		}
+		return *fresh
+	}
+	// runCovered reports whether this server holds run's complete masking
+	// manifest, asked once per run in the batch. The values a run was started
+	// with are committed to its manifest, not to the shared registry, so a
+	// server that did not dispatch the run holds them only once Covered has
+	// loaded them. With no manifests kept, or no run, there is nothing to prove.
+	covered := map[uuid.UUID]bool{}
+	runCovered := func(run uuid.UUID) bool {
+		m := s.cfg.MaskManifests
+		if m == nil || run == uuid.Nil {
+			return true
+		}
+		ok, asked := covered[run]
+		if !asked {
+			ctx, cancel := context.WithTimeout(r.Context(), maskCheckTimeout)
+			ok = m.Covered(ctx, run)
+			cancel()
+			covered[run] = ok
+		}
+		return ok
+	}
 	for i := range batch.Events {
 		ev := &batch.Events[i]
 		// Enforce the kernel.* namespace (fail closed): the host sensor may only
@@ -294,28 +330,42 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// that event's attribution instead of every co-batched event (and any
 		// heartbeat) behind it. Only a genuine store failure stays a hard
 		// error (fail closed).
+		//
+		// maskRun is the run whose secrets the event is masked with: the run it
+		// names, once that run is found, even when the event then loses it, so
+		// a late event's secrets stay hidden on its unmapped row. An event
+		// naming no run masks with the process-wide values only, as any
+		// run-less row does; an unknown id never reaches the registry.
+		maskRun := uuid.Nil
 		if ev.RunID != nil {
 			run, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID)
-			if err != nil {
-				if !errors.Is(err, store.ErrNotFound) {
-					writeServerError(w, r, "validate run_id", err)
-					return
-				}
+			switch {
+			case errors.Is(err, store.ErrNotFound):
 				ev.RunID = nil
 				ev.Data = downgradeToUnmapped(ev.Data, "run_id_not_found")
-				continue
-			}
-			// A Kubernetes event (data.pod set) is held to where and when the
-			// run's pod could exist. Downgrades, never rejects, as above.
-			if pod := groundtruthEventPod(ev.Data); pod != "" {
-				if ownNamespaces == nil && run.RunnerID == nil && run.RunnerPoolExecutor == "" {
-					ownNamespaces = groundtruthRunsNamespaces()
+			case err != nil:
+				writeServerError(w, r, "validate run_id", err)
+				return
+			default:
+				maskRun = *ev.RunID
+				// A Kubernetes event (data.pod set) is held to where and when the
+				// run's pod could exist. Downgrades, never rejects, as above.
+				if pod := groundtruthEventPod(ev.Data); pod != "" {
+					if ownNamespaces == nil && run.RunnerID == nil && run.RunnerPoolExecutor == "" {
+						ownNamespaces = groundtruthRunsNamespaces()
+					}
+					if reason := s.groundtruthPodRefusal(run, pod, ownNamespaces); reason != "" {
+						ev.RunID = nil
+						ev.Data = downgradeToUnmapped(ev.Data, reason)
+					}
 				}
-				if reason := s.groundtruthPodRefusal(run, pod, ownNamespaces); reason != "" {
-					ev.RunID = nil
-					ev.Data = downgradeToUnmapped(ev.Data, reason)
-				}
 			}
+		}
+		// A heartbeat carries counts and a node name, never a run's data. It
+		// stays as the sensor sent it for the health write in phase 2; the
+		// masking recorder masks its row.
+		if ev.Action != groundtruth.ActionSensorHeartbeat {
+			s.maskGroundtruthEvent(ev, maskRun, func() bool { return corpusFresh() && runCovered(maskRun) })
 		}
 	}
 
@@ -502,6 +552,28 @@ func downgradeToUnmapped(data json.RawMessage, reason string) json.RawMessage {
 		return data
 	}
 	return out
+}
+
+// maskGroundtruthEvent masks ev's data and target with maskRun's secrets
+// (uuid.Nil: the process-wide values only) and finishes its argv: an exec's raw
+// arguments are masked whole before they are split (groundtruth.MaskData). The
+// split is the one step no later masking can repair, so it waits on vouched: a
+// read of every value committed to the shared registry before the batch
+// arrived, and the named run's complete manifest held here. When either fails
+// the arguments are stored as the placeholder, as a chunk that cannot be
+// vouched for is. The masking recorder masks the row again with the run it is
+// recorded under; this pass is what keeps the named run's masking on an event
+// that lost it.
+func (s *Server) maskGroundtruthEvent(ev *types.AuditEvent, maskRun uuid.UUID, vouched func() bool) {
+	// Looked up on each use: the reads behind vouched may have just added values.
+	mask := func(b []byte) []byte { return s.cfg.MaskRegistry.JSONVariantMasker(maskRun).Mask(b) }
+	ev.Data = groundtruth.MaskData(ev.Data, mask, func(args []byte) []byte {
+		if !vouched() {
+			return secretmask.Placeholder()
+		}
+		return mask(args)
+	})
+	ev.Target = string(mask([]byte(ev.Target)))
 }
 
 // recordGroundtruthAudit records a ground-truth event and RETURNS the Recorder
