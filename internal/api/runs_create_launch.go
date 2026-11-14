@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/google/uuid"
@@ -104,6 +105,9 @@ const createRunInternalError = "This run hit an internal error while starting â€
 // always has.
 func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 	runID := l.created.ID
+	// The workspace image this launch selects stays held until its dispatch returns (runner.HoldImages).
+	ctx, releaseImages := runner.HoldImages(ctx)
+	defer releaseImages()
 	// Contain a panic so a launch bug cannot take the daemon down. Fail from the
 	// run's CURRENT state: by the time anything can realistically panic,
 	// dispatchRun has CASed PENDING->STARTING, and failAndRevoke's non-applied

