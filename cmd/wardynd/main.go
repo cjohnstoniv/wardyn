@@ -42,7 +42,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
-	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // also registers the "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -206,7 +206,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
+	// After the secret store's clean-ups: a boot step that fails right after a Put
+	// (a boot key, a device credential) exits here, and pool.Close alone would cut a
+	// clean-up that has not taken its connection.
+	defer secretstorepg.CloseAfterCleanUps(pool, api.BackgroundShutdownBudget)
 
 	// One instance per database, enforced at RUNTIME — the Helm chart's
 	// replicas>1 refusal is render-time only. Claimed here, immediately after

@@ -93,6 +93,10 @@ type Store struct {
 	ext        secretstore.External
 	writeExt   bool
 	extTimeout time.Duration // bounds each call to ext
+	// cleanUpLimit caps the clean-ups running at once (afterPut), at
+	// cleanUpCap of the pool; 0, a Store made outside register.go as tests
+	// make one, sets no cap.
+	cleanUpLimit int64
 	// owner is the secretstore.Store.For namespace this view is scoped to;
 	// "" is the operator namespace.
 	owner string

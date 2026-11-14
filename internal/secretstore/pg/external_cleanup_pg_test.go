@@ -23,8 +23,9 @@ import (
 // rotExt is an external store that rotates object names like Azure Key Vault:
 // a Put with no previous object writes "A", one that already has "A" moves to
 // "B", and any other moves back to "A". Its first Delete of "A" after pause()
-// stops until resume() — the cleanup of a replaced object in flight. A Delete
-// on an ended context fails, as a real store's call does.
+// stops until resume() — the cleanup of a replaced object in flight — or until
+// its context ends. A Delete on an ended context fails, as a real store's call
+// does. Walk lists every object it holds.
 type rotExt struct {
 	mu      sync.Mutex
 	vals    map[string][]byte
@@ -78,7 +79,10 @@ func (r *rotExt) Delete(ctx context.Context, _, _, ref string) error {
 	r.mu.Unlock()
 	if gate {
 		close(entered)
-		<-release
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -88,7 +92,15 @@ func (r *rotExt) Delete(ctx context.Context, _, _, ref string) error {
 	delete(r.vals, obj)
 	return nil
 }
-func (r *rotExt) Walk(context.Context) ([]secretstore.ExternalEntry, error) { return nil, nil }
+func (r *rotExt) Walk(context.Context) ([]secretstore.ExternalEntry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var all []secretstore.ExternalEntry
+	for obj := range r.vals {
+		all = append(all, secretstore.ExternalEntry{Ref: obj})
+	}
+	return all, nil
+}
 
 // A Put's cleanup of the object it replaced waits for the row's lock, so a
 // delete and re-add that reuse that object while the cleanup is in flight land
@@ -182,7 +194,7 @@ func TestPG_PutExternal_AnswersBeforeTheReplacedObjectsRemoval(t *testing.T) {
 	}
 	cancel()
 	resume()
-	WaitForCleanUps()
+	WaitForCleanUps(t.Context())
 	if _, err := ext.Get(t.Context(), "bob", "tok", "A"); err == nil {
 		t.Fatal("the replaced object is still there: its removal ended with the caller's context")
 	}
@@ -236,7 +248,7 @@ func TestPG_PutExternal_RemovalOfAMissedValueSparesALaterPutOfIt(t *testing.T) {
 		t.Fatal("the later Put did not land")
 	}
 	resume()
-	WaitForCleanUps()
+	WaitForCleanUps(t.Context())
 	if got := rowOf(t, pool, "bob", "tok"); got.kekID != "vaultkv:A" {
 		t.Fatalf("row = %+v; want it pointing at object A", got)
 	}
@@ -290,11 +302,44 @@ func TestPG_PutExternal_ACleanUpBehindADeleteStillRemovesTheOldObject(t *testing
 	case <-time.After(10 * time.Second):
 		t.Fatal("the Delete never ran")
 	}
-	WaitForCleanUps()
+	WaitForCleanUps(t.Context())
 	for _, obj := range []string{"A", "B"} {
 		if _, err := ext.Get(t.Context(), "bob", "tok", obj); err == nil {
 			t.Errorf("object %s is still in the store; want it removed, as no row names it", obj)
 		}
+	}
+}
+
+// A clean-up still running when the wait for it ends is cut, as at wardynd's
+// shutdown: the value it was removing stays, and Reconcile lists it as a value
+// no row points to.
+func TestPG_PutExternal_ACutCleanUpLeavesItsValueForReconcile(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ext := newRotExt()
+	s := mixedStore(t, pool, mustIdentity(t), false, ext, true)
+	mustPut(t, s, "bob", "tok", "v1") // object A
+	ext.pause()
+	t.Cleanup(sync.OnceFunc(func() { close(ext.release) }))
+	mustPut(t, s, "bob", "tok", "v2") // object B; the removal of A stops in its Delete
+	select {
+	case <-ext.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the removal of the replaced object never started")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := WaitForCleanUps(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForCleanUps with the removal held = %v; want DeadlineExceeded", err)
+	}
+	if err := WaitForCleanUps(t.Context()); err != nil { // the cut removal ends at once
+		t.Fatal(err)
+	}
+	if _, err := ext.Get(t.Context(), "bob", "tok", "A"); err != nil {
+		t.Fatalf("the cut removal took the value anyway: %v", err)
+	}
+	rep, err := s.Reconcile(t.Context())
+	if err != nil || len(rep.Dangling) != 0 || len(rep.Orphans) != 1 || secretstore.RefObject(rep.Orphans[0].Ref) != "A" {
+		t.Fatalf("Reconcile = %+v, %v; want object A as the one value no row points to", rep, err)
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -548,7 +549,22 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 	// still live. WaitBackground carries its own bound (killCascadeTimeout plus
 	// a margin) and logs if it hits it, so this cannot turn an orderly stop
 	// into a hang.
+	//
+	// The secret store's clean-ups (removing a value a save replaced, or one
+	// whose row was not written) run detached from the save, so neither the
+	// drain nor WaitBackground waits for them. They are waited for beside
+	// WaitBackground, within its budget, so the grace period does not grow; one
+	// still running at the budget's end is cut, and the value it was removing
+	// stays for `wardynd -reconcile` to list.
+	cleanCtx, stopCleanWait := context.WithTimeout(context.Background(), api.BackgroundShutdownBudget)
+	defer stopCleanWait()
+	cleaned := make(chan error, 1)
+	go func() { cleaned <- secretstorepg.WaitForCleanUps(cleanCtx) }()
 	srv.WaitBackground()
+	if err := <-cleaned; err != nil {
+		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+			slog.Duration("budget", api.BackgroundShutdownBudget))
+	}
 
 	// The forwarder goroutine bootHybrid started on rootCtx is already
 	// stopping (it selects on the same rootCtx.Done() this function's own

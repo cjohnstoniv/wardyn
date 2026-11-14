@@ -54,6 +54,6 @@ func (s *Store) putOverPointer(ctx context.Context, name string, r sealedRow) er
 			slog.String("secret", ref), slog.String("store", store))
 		return nil
 	}
-	s.afterPut(ctx, func(ctx context.Context) { s.removeOld(ctx, name, loc) })
+	s.afterPut(ctx, name, func(ctx context.Context) { s.removeOld(ctx, name, loc) })
 	return nil
 }

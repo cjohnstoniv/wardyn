@@ -40,7 +40,7 @@ func TestPutExternal_ALostCommitReplyKeepsTheCommittedValue(t *testing.T) {
 	if err := s.For("bob").Put(ctx, "slow", []byte("the-value")); !errors.Is(err, secretstore.ErrRowNotWritten) || !strings.Contains(err.Error(), "is unknown") {
 		t.Fatalf("Put whose commit reply was lost = %v; want ErrRowNotWritten saying whether the row was written is unknown", err)
 	}
-	WaitForCleanUps()
+	WaitForCleanUps(t.Context())
 	if n := ext.deletes(); n != 0 {
 		t.Fatalf("%d external deletes; want none — the committed row points to the value", n)
 	}

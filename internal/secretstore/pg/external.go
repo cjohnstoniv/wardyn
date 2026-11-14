@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -132,7 +134,7 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	newObject := secretstore.RefObject(loc) != secretstore.RefObject(prev)
 	if err == nil {
 		if prev != "" && newObject {
-			s.afterPut(ctx, func(ctx context.Context) { s.removeOld(ctx, name, prev) })
+			s.afterPut(ctx, name, func(ctx context.Context) { s.removeOld(ctx, name, prev) })
 		}
 		return nil
 	}
@@ -149,7 +151,7 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		// names, as the migration's cleanup does: the row names loc if the
 		// commit landed, prev if it did not, and neither if a Delete queued on
 		// the lock ran first, which leaves both for removal.
-		s.afterPut(ctx, func(ctx context.Context) {
+		s.afterPut(ctx, name, func(ctx context.Context) {
 			s.removeOld(ctx, name, loc)
 			if prev != "" {
 				s.removeOld(ctx, name, prev)
@@ -159,24 +161,58 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	}
 	// The row's lock ends with this Put, so a later Put may reuse loc's object
 	// before the removal runs: removeOld leaves an object the row names.
-	s.afterPut(ctx, func(ctx context.Context) { s.removeOld(ctx, name, loc) })
+	s.afterPut(ctx, name, func(ctx context.Context) { s.removeOld(ctx, name, loc) })
 	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it is removed again after this call: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
 }
 
-// cleanUps counts the clean-ups afterPut started that have not ended.
-var cleanUps sync.WaitGroup
+// cleanUps counts the clean-ups afterPut started in this process that have
+// not ended; afterPut caps it. Ending cut ends every one still running
+// (WaitForCleanUps, once its ctx ends first); cutMu guards the swap to a
+// fresh cut.
+var (
+	cleanUps    atomic.Int64
+	cutMu       sync.Mutex
+	cut, cutAll = context.WithCancel(context.Background())
+)
 
-// afterPut runs cleanUp once the Put that calls it has answered, on a context
-// detached from the caller's: the caller's cancellation does not stop it, and
-// the locks the caller holds around the Put do not wait for it. It is bounded
-// on its own, at bounded's six per-call timeouts, plus the 2 s release of a
-// row lock it holds. A process exit cuts it short: the value it was removing
-// stays, and `wardynd -reconcile` lists it if no row points to it. A panic in
-// it is logged and ends that clean-up only: no caller's recovery covers this
-// goroutine, so it would otherwise end the process.
-func (s *Store) afterPut(ctx context.Context, cleanUp func(context.Context)) {
+// cleanUpCap is how many clean-ups may run at once beside a pool of pool's
+// size. Each holds one pooled connection, and the row's lock, for up to
+// bounded's six per-call timeouts plus a 2 s release, and its Put no longer
+// waits for it, so nothing else slows the next one. A quarter of the pool, and
+// at least one: at the default of 10 connections (db.DefaultPoolMaxConns), 2
+// run at once and 8 stay for requests, the sweeps and the Puts themselves; at
+// 4, 1 runs and 3 stay. 0 (no pool) sets no cap.
+func cleanUpCap(pool *pgxpool.Pool) int64 {
+	if pool == nil {
+		return 0
+	}
+	return max(1, int64(pool.Stat().MaxConns())/4)
+}
+
+// afterPut runs cleanUp once the Put of name that calls it has answered, on a
+// context detached from the caller's: the caller's cancellation does not stop
+// it, and the locks the caller holds around the Put do not wait for it. It is
+// bounded on its own, at bounded's six per-call timeouts, plus the 2 s release
+// of a row lock it holds. A cut or a process exit ends it early, and with
+// cleanUpLimit clean-ups already running it is skipped, never waited for: in
+// each case the value it was removing stays, and `wardynd -reconcile` lists it
+// if no row points to it. A panic in it is logged and ends that clean-up only:
+// no caller's recovery covers this goroutine, so it would otherwise end the
+// process.
+func (s *Store) afterPut(ctx context.Context, name string, cleanUp func(context.Context)) {
+	if n := cleanUps.Add(1); s.cleanUpLimit > 0 && n > s.cleanUpLimit {
+		cleanUps.Add(-1)
+		slog.Warn("pg secretstore: too many clean-ups are running, so this Put's is skipped; the value it would remove stays, and `wardynd -reconcile` lists it if no row points to it",
+			slog.String("secret", rowRef(s.owner, name)), slog.Int64("limit", s.cleanUpLimit))
+		return
+	}
 	ctx, cancel := s.bounded(context.WithoutCancel(ctx))
-	cleanUps.Go(func() {
+	cutMu.Lock()
+	stop := context.AfterFunc(cut, cancel)
+	cutMu.Unlock()
+	go func() {
+		defer cleanUps.Add(-1)
+		defer stop()
 		defer cancel()
 		defer func() {
 			if r := recover(); r != nil {
@@ -185,13 +221,42 @@ func (s *Store) afterPut(ctx context.Context, cleanUp func(context.Context)) {
 			}
 		}()
 		cleanUp(ctx)
-	})
+	}()
 }
 
-// WaitForCleanUps returns once every clean-up a Put left running has ended,
-// each by its own bound. Tests call it, while no Put runs, before they read
-// what a clean-up removes.
-func WaitForCleanUps() { cleanUps.Wait() }
+// WaitForCleanUps returns nil once no clean-up a Put left is running. If ctx
+// ends first, it cuts every one still running and returns ctx's error. Puts
+// may run while it waits. wardynd's shutdown calls it beside the wait for its
+// background work; tests call it before they read what a clean-up removes.
+func WaitForCleanUps(ctx context.Context) error {
+	for cleanUps.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			cutMu.Lock()
+			cutAll()
+			cut, cutAll = context.WithCancel(context.Background())
+			cutMu.Unlock()
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// CloseAfterCleanUps waits up to bound for the clean-ups Puts left, cutting
+// any still running then, and closes pool. A command that may exit soon after
+// a Put closes its pool this way: pool.Close waits only for a clean-up that
+// already holds a connection, and one that has not taken it yet would fail on
+// the closed pool and leave its value.
+func CloseAfterCleanUps(pool interface{ Close() }, bound time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
+	defer cancel()
+	if err := WaitForCleanUps(ctx); err != nil {
+		slog.Warn("pg secretstore: closing the pool with a Put's clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+			slog.Duration("bound", bound))
+	}
+	pool.Close()
+}
 
 // bounded bounds one store-mode write, including the wait for the row's
 // lock, at six times the per-call timeout: it holds a pooled connection and

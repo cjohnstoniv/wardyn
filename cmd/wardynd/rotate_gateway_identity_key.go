@@ -14,10 +14,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -83,7 +85,8 @@ func withRotationStore(f *bootFlags, mode string, other bool, rotate func(ctx co
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer pool.Close()
+	// The rotation exits right after its Put, so the pool closes after the Put's clean-up.
+	defer secretstorepg.CloseAfterCleanUps(pool, api.BackgroundShutdownBudget)
 
 	// Each lock on a session of its own, as claimSingleInstance holds it: the mode's work below asks
 	// this pool for connections while both are held, and a hold on a pooled connection is the nested
