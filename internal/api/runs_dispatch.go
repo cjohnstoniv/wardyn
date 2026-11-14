@@ -345,7 +345,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
-	upstreamProxyURL := s.resolveRunUpstreamProxy(ctx, run.ID, siteCfg, siteCfgErr)
+	// A No network run, and a run on a person's runner, get none.
+	upstreamProxyURL := s.resolveRunUpstreamProxy(ctx, run.ID, siteCfg, siteCfgErr, upstreamNoHopReason(run))
 
 	// LLM-inspection detection corpus: resolve WorkspaceSecretNames -> VALUES
 	// from the secret store onto THIS dispatch's local policy copy only (never

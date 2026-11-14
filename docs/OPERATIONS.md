@@ -2412,9 +2412,12 @@ The run's proxy refuses its config, naming the entry, and the run does not start
 Three things in a run's audit trail say which hop its connections took and why one died, and the proxy's log adds a fourth.
 
 - **`run.upstream_proxy.resolve` says whether an upstream proxy was in effect for the run.**
-  - It is written on every dispatch that gets as far as building the run's proxy config, and again when a revived run's proxy config is refreshed from the deployment.
+  - Dispatch writes it while building the run's proxy config, and a revive writes it again when it refreshes that config.
   - `in_effect: true` (outcome `success`) means the run's proxy config carries an upstream URL.
-  - `in_effect: false` with `reason: not-configured` (outcome `success`) means none is configured, so an absent row now means the dispatch failed before that point, not "none configured".
+  - `in_effect: false` with `reason: not-configured` (outcome `success`) means none is configured, so an absent row means the dispatch failed before that point.
+  - `in_effect: false` with `reason: no-network` (outcome `success`) means a No network run, which never uses one.
+  - `in_effect: false` with `reason: not-sent-to-runner` (outcome `success`) means a run on a person's runner, never sent the organisation's upstream; a Docker runner's `--upstream-proxy` shows as the proxy's `builtin:upstream-proxy` row.
+    - The organisation-side proxy for its `via_org` destinations writes its own row each time it is built (`in_effect: true` when the site's upstream resolves), then a `builtin:upstream-proxy` row.
   - `in_effect: false` with outcome `failure` means the run's egress is direct although it may not have been meant to be.
     - `site-config-read-error` says the site config could not be read, so whether an upstream is configured is unknown; `unsupported-scheme`, `unloadable-upstream-url`, `reserved-secret-name`, `no-secret-store` and `secret-not-found` say one was configured and was dropped.
     - `upstream-url-host-refused` is the exception: the URL was delivered, not dropped. A proxy given it refuses its config, so a dispatched run does not start and a revive is refused.

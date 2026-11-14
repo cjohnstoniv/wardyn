@@ -624,6 +624,7 @@ What the check does and does not settle:
   - The preview leaves that choice open and answers `no_network_needs_egress`. Your model sign-in is never read before `no_network_needs_egress`.
   - A repository to clone is a source, a brokered GitHub one too. The policy's git grants are one only with a repository, and a component only when it needs a host.
   - The proxy refuses every request (`policy:no-network`) but still reaches the control plane, the seal empties the allowlist, and every approval is refused.
+  - The run uses no upstream proxy. None is resolved from your site settings, and a proxy of this release drops a runner's own `--upstream-proxy`, so the audit has no `builtin:upstream-proxy` allow. Its `run.upstream_proxy.resolve` row says `in_effect` `false`, reason `no-network`.
 - Start a run with one using `wardyn run --wall-preset <name|id>`, which also goes with `--file`. A name is looked up across the audiences open to you. A name in more than one is refused with the audiences listed: use its id.
 - Manage them with `wardyn walls presets`:
 

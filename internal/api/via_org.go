@@ -431,7 +431,12 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	cfg.SelfLapse, cfg.DecisionSink, cfg.HardDeny = false, nil, nil
 	cfg.InternalHosts = viaOrgInternalHosts(proxyInternalHosts(sc.InternalHosts), hosts)
 	cfg.TrustedCAPEM = s.cfg.TrustedCAPEM
-	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil)
+	// The org-side engine does chain through the organisation's upstream, so only No network has no hop here.
+	noHop := ""
+	if cfg.NoNetwork {
+		noHop = upstreamNoHopNoNetwork
+	}
+	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil, noHop)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
 	return cfg, nil
 }
