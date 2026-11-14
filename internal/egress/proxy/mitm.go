@@ -503,6 +503,7 @@ func networkBodyUnread(r *http.Request) bool {
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	r = trackNetworkBody(r)
 	p.stripGatewayHeaders(r.Header)
+	removeConnectionNominated(r.Header) // every gate below judges the headers the forward sends
 	// A via_org destination: the inner request's own Host goes to the
 	// organisation, which refuses one that is not the grant's destination.
 	if route, ok := p.viaOrgRouteForHost(host); ok {

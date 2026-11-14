@@ -125,7 +125,8 @@ func TestParsePush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(p.Refs, []string{"refs/heads/a"}) || !slices.Equal(p.Paths, []string{".github/workflows/x.yml", "infra", "stage"}) || len(p.Digest) != 64 {
+	if !slices.Equal(p.Refs, []string{"refs/heads/a"}) || !slices.Equal(p.Paths, []string{".github/workflows/x.yml", "infra", "stage"}) || len(p.Digest) != 64 ||
+		!slices.Equal(p.Unsized, []string{"infra"}) {
 		t.Errorf("ParsePush = %+v", p)
 	}
 	for name, bad := range map[string]string{
@@ -146,12 +147,12 @@ func TestParsePush(t *testing.T) {
 	}
 }
 
-// The Azure DevOps REST push path (egress/proxy/ado_content.go) applies the
-// push content rules' path matching but not push_rules.max_file_size_mib: it
-// relies on refusing any body larger than MaxBodyPeek, which is below the
-// smallest limit a policy can set (1 MiB). Raising MaxBodyPeek past that would
-// let a REST push carry a file the size rule never saw; apply the size rule
-// there first.
+// The Azure DevOps REST push path (egress/proxy/ado_content.go) takes a file
+// whose content the body carries as under push_rules.max_file_size_mib because
+// no body larger than MaxBodyPeek is read, and that is below the smallest limit
+// a policy can set (1 MiB). A change that carries no content (Push.Unsized) is
+// refused under the limit instead. Raising MaxBodyPeek past 1 MiB would let a
+// carried file pass the size rule unmeasured; measure it there first.
 func TestMaxBodyPeekStaysBelowTheSmallestPushSizeLimit(t *testing.T) {
 	if MaxBodyPeek > 1<<20 {
 		t.Fatalf("MaxBodyPeek = %d, above the 1 MiB smallest push_rules.max_file_size_mib; the REST push path would skip the size rule", MaxBodyPeek)
