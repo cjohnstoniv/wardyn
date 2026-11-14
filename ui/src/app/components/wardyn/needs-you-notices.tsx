@@ -12,11 +12,12 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
+import { getAuthGeneration } from "../../lib/api/core";
 import { runs as runsApi } from "../../lib/api/runs";
 import { isHeld, runHeadline } from "../../lib/types";
 import { runPath, useConsoleMode } from "./console-view";
 import { NEEDS_YOU } from "./copy/needs-you";
-import { usePrincipal } from "./operator-context";
+import { useRequestIdentity } from "./operator-context";
 
 const POLL_MS = 15_000;
 const SEEN_KEY = "wardyn.needs-you.seen";
@@ -40,11 +41,28 @@ function remember(ids: Set<string>) {
 export function NeedsYouNotices() {
   const navigate = useNavigate();
   const view = useConsoleMode();
-  const principal = usePrincipal();
+  const { principal, authGeneration } = useRequestIdentity();
+  // Every notice this mount raised. One mount serves one person: another person signing in reloads the
+  // page, and signing out unmounts the shell, so unmounting closes exactly this person's notices.
+  const raised = React.useRef(new Map<string, Notification | undefined>());
+  React.useEffect(() => {
+    const shown = raised.current;
+    return () => {
+      for (const [id, note] of shown) {
+        toast.dismiss(id);
+        note?.close();
+      }
+      shown.clear();
+    };
+  }, []);
   React.useEffect(() => {
     let alive = true;
     const seen = seenIds();
+    // A read answers for the person confirmed at authGeneration: after a sign-out, or any auth change the
+    // shell has not yet confirmed as the same person, its answer is dropped unshown.
+    const current = () => alive && authGeneration === getAuthGeneration();
     const check = async () => {
+      if (!current()) return;
       let rows;
       try {
         rows = await approvalsApi.listApprovals("PENDING", "", view);
@@ -52,12 +70,14 @@ export function NeedsYouNotices() {
         return; // a missed poll is retried on the next tick
       }
       for (const ap of rows) {
-        if (!alive || seen.has(ap.id)) continue;
+        if (!current()) return;
+        if (seen.has(ap.id)) continue;
         // A takeover request, or a hold (egress to a named host) that has frozen the person's own run.
         const takeover = ap.kind === "human_takeover";
         const host = typeof ap.requested_scope.host === "string" ? ap.requested_scope.host : "";
         if (!takeover && !(isHeld(ap) && host)) continue;
         const run = await runsApi.getRun(ap.run_id).catch(() => undefined);
+        if (!current()) return;
         if (!takeover && run?.created_by !== principal) {
           // Someone else's run is final, so it is fetched once; a run that could not be fetched is retried.
           if (run) {
@@ -70,6 +90,7 @@ export function NeedsYouNotices() {
         remember(seen);
         const name = run ? runHeadline(run) : ap.run_id;
         const open = () => void navigate(runPath(view, ap.run_id));
+        raised.current.set(`needs-you-${ap.id}`, undefined);
         if (!takeover) {
           toast(NEEDS_YOU.toast.holdTitle(name, host), {
             id: `needs-you-${ap.id}`,
@@ -89,7 +110,10 @@ export function NeedsYouNotices() {
           cancel: { label: NEEDS_YOU.toast.later, onClick: () => undefined },
         });
         if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
-          new Notification(NEEDS_YOU.toast.browserTitle(name), { body: reason, tag: `needs-you-${ap.id}` });
+          raised.current.set(
+            `needs-you-${ap.id}`,
+            new Notification(NEEDS_YOU.toast.browserTitle(name), { body: reason, tag: `needs-you-${ap.id}` }),
+          );
         }
       }
     };
@@ -99,6 +123,6 @@ export function NeedsYouNotices() {
       alive = false;
       window.clearInterval(t);
     };
-  }, [navigate, view, principal]);
+  }, [navigate, view, principal, authGeneration]);
   return null;
 }

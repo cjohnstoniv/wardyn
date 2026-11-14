@@ -29,7 +29,7 @@ import { cn } from "../ui/utils";
 import { EmptyState, ErrorState, failureSentence } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
-import { useRole } from "../wardyn/operator-context";
+import { useRequestIdentity, useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { RunsComposer } from "./runs/runs-composer";
 import { RunsFilterBar } from "./runs/runs-filter-bar";
@@ -113,9 +113,12 @@ export function RunsScreen() {
   // H-8: built-ins first, then whatever this browser has saved. Loaded once
   // (localStorage is synchronous) and refreshed locally on Save — no fetch,
   // no server round trip, per design.md §3.6.
+  // Saved views belong to the person the shell confirmed; with no one confirmed, nothing is read or kept.
+  const { principal, operatorResolved } = useRequestIdentity();
+  const viewsOwner = operatorResolved ? principal : "";
   const [savedViews, setSavedViews] = React.useState<SavedRunsView[]>(() => [
     ...BUILTIN_RUNS_VIEWS,
-    ...loadSavedRunsViews(),
+    ...loadSavedRunsViews(viewsOwner),
   ]);
 
   // a slow response for an earlier keystroke's request must not
@@ -316,7 +319,7 @@ export function RunsScreen() {
               setSearchParams(applySavedViewOwner(search, adminView, filters.scope), { replace: true })
             }
             onSaveView={(name) => {
-              setSavedViews([...BUILTIN_RUNS_VIEWS, ...saveRunsView(name, searchParams.toString())]);
+              setSavedViews([...BUILTIN_RUNS_VIEWS, ...saveRunsView(viewsOwner, name, searchParams.toString())]);
               toast(runsViewSaved(name));
             }}
           />
