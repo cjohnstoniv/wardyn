@@ -353,6 +353,27 @@ func TestKeepStartSandboxAlreadyRunningIsANoOp(t *testing.T) {
 	}
 }
 
+func TestKeepStartSandboxRefusesAPodStillBeingDeleted(t *testing.T) {
+	r := newKeptRig(t, nil)
+	obj, err := r.cs.Tracker().Get(podsGVR, testNamespace, r.ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := obj.(*corev1.Pod).DeepCopy()
+	now := metav1.Now()
+	pod.DeletionTimestamp = &now
+	if err := r.cs.Tracker().Update(podsGVR, pod, testNamespace); err != nil {
+		t.Fatal(err)
+	}
+	err = r.k.StartSandbox(context.Background(), r.ref)
+	if err == nil || !strings.Contains(err.Error(), "still being deleted") {
+		t.Fatalf("StartSandbox = %v, want the refusal: a pod the end is deleting still shows a running container", err)
+	}
+	if n := len(podPatches(r.cs)); n != 0 {
+		t.Errorf("pod patches = %d, want none", n)
+	}
+}
+
 func TestKeptPodReadsStopped(t *testing.T) {
 	r := newKeptRig(t, nil)
 	r.end(t)
