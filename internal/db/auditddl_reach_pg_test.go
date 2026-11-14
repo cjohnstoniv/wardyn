@@ -33,6 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/testfloor"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 func TestPG_AuditDDLBypassRoutesCountWhatTheAppRoleCanReach(t *testing.T) {
@@ -106,9 +107,12 @@ func TestPG_AuditDDLBypassRoutesCountWhatTheAppRoleCanReach(t *testing.T) {
 		must(t, `GRANT EXECUTE ON FUNCTION audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb) TO `+app)
 		return app, adm, connect(t, app, nil)
 	}
+	// begin opens the transaction on a session of its own, as p's role: each subtest
+	// asks p for the routes while the transaction is still open, and a second
+	// acquire from this goroutine trips WARDYN_TEST_POOL_GUARD.
 	begin := func(t *testing.T, p *pgxpool.Pool) pgx.Tx {
 		t.Helper()
-		tx, err := p.Begin(ctx)
+		tx, err := testutil.PGConn(t, p).Begin(ctx)
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}
