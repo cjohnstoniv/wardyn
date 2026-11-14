@@ -103,6 +103,17 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 		t.Fatalf("create the shadowing audit_append in %s: %v", appSchema, err)
 	}
 
+	// The app schema records the migrator's migrations, as a copy of it would, so the boot's check that
+	// both pools record the same ones passes and the refusal below is the canary's.
+	first, err := connectAndMigrate(t.Context(), schemaDSN(migrateSchema), "", 30*time.Second, 2*time.Minute, false)
+	if err != nil {
+		t.Fatalf("migrate %s: %v", migrateSchema, err)
+	}
+	first.Close()
+	if _, err := admin.Exec(ctx, `CREATE TABLE `+appSchema+`.schema_migrations AS SELECT * FROM `+migrateSchema+`.schema_migrations`); err != nil {
+		t.Fatalf("copy schema_migrations into %s: %v", appSchema, err)
+	}
+
 	pool, err := connectAndMigrate(t.Context(), schemaDSN(appSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute, false)
 	if pool != nil {
 		pool.Close()
@@ -114,8 +125,8 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 			"which the verify sweep reports as a broken log for as long as the process runs",
 			migrateSchema, appSchema)
 	}
-	if !strings.Contains(err.Error(), "app role") {
-		t.Fatalf("error = %q, want the refusal to name the app role, so an operator knows WHICH of the two DSNs to look at", err)
+	if !strings.Contains(err.Error(), "audit chain on the app role") {
+		t.Fatalf("error = %q, want the canary's refusal naming the app role, so an operator knows WHICH of the two DSNs to look at", err)
 	}
 
 	// SCOPED: the same split-role boot with both DSNs on the migrated schema
@@ -191,6 +202,8 @@ func TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend(t *testin
 		fmt.Sprintf(`GRANT SELECT ON %s.audit_events TO %s`, schema, role),
 		// The canary reads the recorded chain head (0130) as the app role does.
 		fmt.Sprintf(`GRANT SELECT ON %s.audit_partition_meta TO %s`, schema, role),
+		// The boot compares the app pool's applied migrations with the migrator's.
+		fmt.Sprintf(`GRANT SELECT ON %s.schema_migrations TO %s`, schema, role),
 	} {
 		if _, err := admin.Exec(ctx, q); err != nil {
 			t.Fatalf("%s: %v", q, err)

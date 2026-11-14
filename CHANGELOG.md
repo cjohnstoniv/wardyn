@@ -59,6 +59,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Linux VM sandboxes: a run with more than 64 folders and drives is now refused before anything starts. Before, the folder servers past the 64th could stay behind after the run ended or failed to start.
 - On Kubernetes, the runner's relay now lets at most 64 connections wait to be matched to a run, and gives each 10 seconds in all for that lookup and its first byte. Before, a Kubernetes API server that did not answer let such connections pile up with no limit.
 - macOS VM admission now treats an entry file with a negative disk reservation as damage, which holds a VM slot until it is removed, as an unreadable entry does, and its sums of entries' memory and disk stop at their largest value instead of wrapping. Before, an entry file another local account wrote could make the Mac look as if it had more free disk or memory than it has.
+- With `WARDYN_PG_MIGRATE_DSN` set, wardynd now refuses to start when the schema `WARDYN_PG_DSN` reaches records different applied migrations from the schema the migrate role just migrated, for example a restore a newer release migrated, and the refusal names `WARDYN_PG_DSN`. Before, only the migrate role's schema was checked. The app role needs `SELECT` on `schema_migrations`, which the role split in the operations guide grants.
+- With `WARDYN_HA`, two replicas starting together for the first time after the upgrade that removed the shared Azure DevOps credentials could delete a person's own Azure DevOps token saved in between. A replica now waits for another one's removal to finish and then skips it.
 
 ### Security
 
