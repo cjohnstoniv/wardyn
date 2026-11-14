@@ -28,6 +28,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
 - A live egress edit (`PATCH /api/v1/runs/{id}/egress`) now has one deadline on every substrate: counted from the server's own time limits, and not counting a stalled database read, it answers within 8 minutes, including for a run with a computer folder. If the edit runs out of time while it stops the run, the rest of the run's end, such as copying the folder back and stopping the sandbox, finishes after the answer. An ingress in front of the server needs a proxy read timeout of at least 530 seconds for it.
 - The macOS downloads are now built with Go 1.27, so they need macOS 13 or later; rc.20's ran on macOS 12.
+- Go SDK: `DeleteMyDrive` now returns a `*MyDriveDeleteUnfinishedError` when the server took the delete of a disk drive on a Mac without removing its files (deferred while the Mac is offline, or record only once the Mac is no longer registered); before, it returned `nil`, as for a finished delete. The new `DeleteMyDriveResult` returns the server's `reason` and `message`.
 
 ### Fixed
 
@@ -153,6 +154,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a Docker runner, a proxy stop, end or proxy replacement refused because the run's proxy belongs to a newer policy generation no longer makes the runner stop that newer proxy afterwards.
 - A run scheduled for later no longer starts at once when scheduled runs are turned off while its Name dialog is open: the Run step, Review and the dialog say it is held, with the reason, Launch waits, and the run starts now only when you choose Run now. A start time that the clocks skip or repeat on a daylight-saving change is now refused, in the console and by `POST /runs` (`start_at_invalid` with `detail` `clock_change`), instead of being moved to another time; an RFC 3339 `start_at` with its UTC offset still names one occurrence of a repeated hour.
 - `GET /api/v1/scim/status` now reports a purge delay under one second as `purge_after_seconds: 1` instead of 0, which the console showed as off while the purge still ran.
+- Go SDK: the new `WorkloadHistoryPage` also returns the server's `X-Wardyn-Truncated` signal, which `WorkloadHistory` drops; with no limit given, a history longer than 200 events comes back as one page of 200 events with no sign that more exist.
 
 ### Security
 

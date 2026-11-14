@@ -189,8 +189,8 @@ func TestListPersonInvitationsAndServiceListsSurfaceTruncation(t *testing.T) {
 	}
 }
 
-// TestListWorkloadsSurfaceTruncation pins X-Wardyn-Truncated on the workload Page forms, and its
-// absence as false.
+// TestListWorkloadsSurfaceTruncation pins X-Wardyn-Truncated on the workload Page forms, the history's
+// included, and its absence as false.
 func TestListWorkloadsSurfaceTruncation(t *testing.T) {
 	ctx := context.Background()
 	for _, truncated := range []bool{true, false} {
@@ -200,6 +200,9 @@ func TestListWorkloadsSurfaceTruncation(t *testing.T) {
 		}
 		if rows, tr, err := c.ListWorkloadBindingsPage(ctx); err != nil || tr != truncated || len(rows) != 1 {
 			t.Errorf("ListWorkloadBindingsPage = %d rows, truncated %v, err %v; want 1, %v", len(rows), tr, err, truncated)
+		}
+		if rows, tr, err := c.WorkloadHistoryPage(ctx, "w", "service:ci"); err != nil || tr != truncated || len(rows) != 1 {
+			t.Errorf("WorkloadHistoryPage = %d rows, truncated %v, err %v; want 1, %v", len(rows), tr, err, truncated)
 		}
 	}
 }
