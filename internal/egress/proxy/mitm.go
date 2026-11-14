@@ -539,6 +539,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	defer release()
+	// A route's host and port is sent only what a route covers: refused here, before a gate below can hold it.
+	if p.gatewayOffRouteRefusedInTunnel(w, r, host, port) {
+		return
+	}
 	// The run's allowed_models judges a model host's request before any door, gate or scan sees it.
 	// A method the policy refuses is left to serveAdmittedMITMRequest, which keeps its policy:method row.
 	releaseModels, modelRefused := noopRelease, false

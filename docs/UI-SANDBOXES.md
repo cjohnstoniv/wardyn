@@ -724,9 +724,12 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     - Over plain HTTP a browser refuses every `__Host-` cookie, so the plain names are used and a relayed page can plant them: the login-CSRF gap (#1258) stays open there only.
   - Host mode keeps each run on a host
     of its own under that site.
-  - `X-Forwarded-*` is removed and deliberately not
-    re-added — the sandbox has no business learning the operator's IP — and every
-    gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
+  - Every `X-Forwarded-*` header, `Forwarded`, `X-Real-IP` and the caller-address and
+    sign-in headers common ingresses add are removed and not re-added
+    (`uiStripIngressHeaders`): the sandbox has no business learning the operator's IP.
+  - A front proxy that names the caller under any other header passes it to the app,
+    so do not send such a header to the relay.
+  - Every gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
     ticket cannot leak to whatever the app links to.
 - **Liveness.** Every new connection reloads the run: a stopped or killed run
   stops serving with a 409 naming its state, not a hang.

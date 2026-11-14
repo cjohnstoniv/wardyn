@@ -116,6 +116,11 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		p.denyAttributed(w, "host not granted to this run", http.StatusForbidden)
 		return
 	}
+	// Git never carries the run's identity, so a host an identity route has is sent none: refused here,
+	// before the push rules can read the forge or hold the push and before a credential is resolved.
+	if p.gatewayUnsignedRefused(w, r, host, 443, ruleSourcePATDenied) {
+		return
+	}
 	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the
 	// two pack endpoints, nothing else, or this broker becomes a credentialed
 	// proxy to the whole forge. The forge path is arbitrarily deep (gitlab

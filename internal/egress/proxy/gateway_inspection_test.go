@@ -136,14 +136,15 @@ func TestGatewayInspection_RunsOwnSecretsStayChecked(t *testing.T) {
 	}
 }
 
-// Requests that do not go to the route keep the whole policy: the same host off the
-// route's path, a path with a dot segment, and the plain lane, which attaches no token.
-func TestGatewayInspection_TrafficOffTheRouteKeepsFullInspection(t *testing.T) {
+// A request that does not go to the route never leaves a check to the gateway. At the route's host
+// and port, off its path or with a dot segment, it is not sent at all (gatewayOffRouteRefused), so
+// nothing is inspected or deferred. The plain lane, which attaches no token, keeps the whole policy.
+func TestGatewayInspection_TrafficOffTheRouteIsNotLeftToTheGateway(t *testing.T) {
 	for _, path := range []string{"/v2/messages", "/v1/../v2/messages", "/v1/./messages", "/v1x/messages"} {
 		t.Run(path, func(t *testing.T) {
 			g := newInspectRig(t, deferredRoutes(), inspSpec(true))
-			if rec := inspSend(t, g, "mitm", path, "this is "+inspMarker); rec.Code != http.StatusForbidden {
-				t.Fatalf("%s: %d %s; off the route the marker must be refused", path, rec.Code, rec.Body)
+			if rec := inspSend(t, g, "mitm", path, "this is "+inspMarker); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), gatewayOffRouteFix) {
+				t.Fatalf("%s: %d %s; off the route at its host and port the call must not be sent", path, rec.Code, rec.Body)
 			}
 			for _, s := range inspScans(t, g) {
 				if s.DeferredTo != "" {

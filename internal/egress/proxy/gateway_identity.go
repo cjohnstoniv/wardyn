@@ -151,6 +151,129 @@ func (p *Proxy) gatewayRouteFor(host string, port int, path string) *GatewayIden
 	return nil
 }
 
+// gatewayOffRouteFix ends every answer gatewayOffRouteRefused gives: what the sender or the operator
+// changes so such a call can be sent. A dot segment or a backslash is never sent, whatever the prefix.
+const gatewayOffRouteFix = "Remove any dot segments or backslashes. For a path outside these routes, widen the intended route's path prefix or give the other service its own host and port."
+
+// gatewayOffRouteRefused answers a request to a route's host and port that no route covers, and
+// reports whether it did. The proxy cannot know every path a gateway serves a route's calls
+// under (another casing, an alias, a path it normalises), so there it sends only what carries
+// the token: an uncovered call would arrive with the credential and no identity, and a lenient
+// gateway would take it as anonymous. A request to any other host or port, and every request on
+// a run with no route, passes untouched. path is the decoded path covers reads. The answer names
+// each route on that host and port, a model provider's or an MCP server's alike.
+func (p *Proxy) gatewayOffRouteRefused(w http.ResponseWriter, r *http.Request, host string, port int, path, ruleSource string) bool {
+	cause := p.gatewayOffRouteCause(host, port, path)
+	if cause == "" {
+		return false
+	}
+	if p.sink != nil {
+		log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+		log.Cause = cause
+		p.sink.emit(log)
+	}
+	if shape := p.shapeOf(r, host); shape != shapePlain {
+		writeProviderError(w, shape, http.StatusBadRequest, reasonUnsupportedPath, "wardyn: "+cause, nil)
+		return true
+	}
+	http.Error(w, cause, http.StatusBadRequest)
+	return true
+}
+
+// gatewayUnsignedRefused answers a request from a lane that never carries the run's identity (a git
+// broker, an API door other than the AWS SigV4 one), bound for a host and port an identity route has,
+// and reports whether it did. Such a call is refused whatever its path: covered by a route there or
+// not, it would arrive with a credential and no token. Each lane runs it before it resolves a
+// credential or holds the call for a person. The answer is plain text, for a git client or a CLI.
+func (p *Proxy) gatewayUnsignedRefused(w http.ResponseWriter, r *http.Request, host string, port int, ruleSource string) bool {
+	cause := p.gatewayUnsignedCause(host, port)
+	if cause == "" {
+		return false
+	}
+	if p.sink != nil {
+		log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+		log.Cause = cause
+		p.sink.emit(log)
+	}
+	http.Error(w, cause, http.StatusBadRequest)
+	return true
+}
+
+// gatewayUnsignedCause is why a call that never carries the run's identity is not sent to host and
+// port, or "" when no identity route is there: the text gatewayUnsignedRefused answers with, for a
+// sender that answers in its own way (the push comparison's forge read, the GitHub token hand-back).
+func (p *Proxy) gatewayUnsignedCause(host string, port int) string {
+	routes := p.gatewayRoutesAt(host, port)
+	if len(routes) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("the call was not sent: run identity is on at this host and port (%s), and this kind of call does not carry it. Give the other service its own host and port.",
+		strings.Join(routes, "; "))
+}
+
+// gatewayOffRouteRefusedInTunnel is the refusal for a request inside a terminated tunnel, run as the
+// request arrives (serveMITMRequest): before the allowed_models gate and before a host rule can hold
+// it for a person, as the plain lane runs it before its hold. An API door's host takes
+// gatewayUnsignedRefused, every other host gatewayOffRouteRefused. The row carries the rule source the
+// tunnel's forward writes. A method the policy refuses is left to its policy:method row. An AWS SigV4
+// host gets that door's own refusal (awsSigV4GatewayRefused), here rather than after the hold.
+func (p *Proxy) gatewayOffRouteRefusedInTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	if !p.evaluator.MethodAllowed(r.Method) {
+		return false
+	}
+	if p.isAWSSigV4Host(host) && p.sigv4.scopes[hostKey(host)].signHost != "" {
+		_, refused := p.awsSigV4GatewayRefused(w, r, host, port)
+		return refused
+	}
+	source := ruleSourceArtifactMITM
+	if p.isLLMHost(host) {
+		source = ruleSourceLLMMITM
+	}
+	if p.unsignedDoorHost(host) {
+		return p.gatewayUnsignedRefused(w, r, host, port, source)
+	}
+	return p.gatewayOffRouteRefused(w, r, host, port, "/"+strings.TrimPrefix(r.URL.Path, "/"), source)
+}
+
+// unsignedDoorHost reports whether an API door that never carries the run's identity serves host: each
+// door serveAPIDoor runs but the AWS SigV4 one on a gateway entry, which signs on its route and refuses
+// elsewhere itself (the caller answers that one first). A host AWS serves is re-signed as the person only.
+func (p *Proxy) unsignedDoorHost(host string) bool {
+	_, pat := p.patAPI[patAPIHost(host)]
+	return pat || p.isGitHubAPIHost(host) || p.isAzureARMHost(host) || p.isKubeAPIHost(host) || p.isAWSSigV4Host(host)
+}
+
+// gatewayRoutesAt names each identity route on host and port, a model provider's or an MCP server's,
+// as the refusals list them.
+func (p *Proxy) gatewayRoutesAt(host string, port int) []string {
+	var routes []string
+	for _, rt := range p.gatewayRoutes {
+		if hostKey(rt.Host) == hostKey(host) && rt.Port == port {
+			owner := "provider " + rt.ProviderID
+			if rt.MCPKey != "" {
+				owner = "MCP server " + rt.MCPKey
+			}
+			where := "the whole host and port"
+			if prefix := strings.TrimSuffix(rt.PathPrefix, "/"); prefix != "" {
+				where = "path prefix " + prefix
+			}
+			routes = append(routes, owner+", "+where)
+		}
+	}
+	return routes
+}
+
+// gatewayOffRouteCause is why a request to host, port and path is not sent, or "" when it may be:
+// the text gatewayOffRouteRefused answers with, for a lane that writes its own row (the MCP broker).
+func (p *Proxy) gatewayOffRouteCause(host string, port int, path string) string {
+	routes := p.gatewayRoutesAt(host, port)
+	if len(routes) == 0 || p.gatewayRouteFor(host, port, path) != nil {
+		return ""
+	}
+	return fmt.Sprintf("the call was not sent: run identity is on at this host and port, and this path is outside every route here (%s) or has a dot segment or a backslash. %s",
+		strings.Join(routes, "; "), gatewayOffRouteFix)
+}
+
 // deferredScan is what a route that leaves prompt inspection to its gateway still
 // runs: eng checks the run's own secret values, exact match, and nothing else. A
 // nil eng is a policy with no such check, so nothing runs there.
