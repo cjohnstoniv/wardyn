@@ -424,7 +424,7 @@ func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, 
 	if errors.Is(err, store.ErrIdentityRebound) {
 		ident, forms, keys, err = s.suspendStepOne(ctx, st, id, resumeOf)
 	}
-	if errors.Is(err, store.ErrSuperseded) {
+	if superseded(ctx, err, id) {
 		return nil
 	}
 	if err != nil {
@@ -442,15 +442,14 @@ func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, 
 		s.killStep(ctx, st, id, forms.targets),
 	)
 	// A suspension begun after a reactivation owns the ledger now (finishStep): it finishes and audits itself.
-	if errors.Is(stepErr, store.ErrSuperseded) {
-		slog.WarnContext(ctx, "api: a suspension tail stopped for a newer suspension; its step errors are not in the answer", slog.String("identity", id.String()), slog.Any("err", stepErr))
+	if superseded(ctx, stepErr, id) {
 		return nil
 	}
 	if stepErr != nil {
 		slog.WarnContext(ctx, "api: a suspension step failed and stays pending", slog.String("identity", id.String()), slog.Any("err", stepErr))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, stepErr)
 	}
-	if err := unlessSuperseded(s.auditSuspension(ctx, st, id, slot, forms.notErased)); err != nil {
+	if err := unlessSuperseded(ctx, s.auditSuspension(ctx, st, id, slot, forms.notErased), id); err != nil {
 		slog.WarnContext(ctx, "api: a suspension's audit rows were not written and stay pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
