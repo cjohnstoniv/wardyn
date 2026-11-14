@@ -16,11 +16,13 @@ import (
 )
 
 // cutsAtTheStartLock is a Locker whose wait for one run's start lock first runs cut, which ends the waiting
-// context, and then answers as a wait that context ended does. Every other key is the wrapped Locker's.
+// context, and then answers as a wait that context ended does, or with err when it is set (a wait that ended on
+// its own bound as the context ended). Every other key is the wrapped Locker's.
 type cutsAtTheStartLock struct {
 	db.Locker
 	key db.LockKey
 	cut func()
+	err error
 }
 
 func (l *cutsAtTheStartLock) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
@@ -28,6 +30,9 @@ func (l *cutsAtTheStartLock) Lock(ctx context.Context, k db.LockKey, wait time.D
 		return l.Locker.Lock(ctx, k, wait)
 	}
 	l.cut()
+	if l.err != nil {
+		return nil, nil, l.err
+	}
 	<-ctx.Done()
 	return nil, nil, ctx.Err()
 }
@@ -79,16 +84,19 @@ func TestSSHGateway_AStartFailureRowLandsWhenTheClientIsGone(t *testing.T) {
 
 // An sftp start its client's own channel close cuts is the client's end, as a close under the running sftp-server
 // is (bridgeOutcome): a success that names no error. One the daemon's stop cuts (the connection's context ends
-// first, and with it the channel's, under that context's cause) is a failure with the cut in it. Catches: the
-// outcome read from the start's error alone, which is the same cut in both.
+// first, and with it the channel's, under that context's cause) is a failure with the cut in it, and so is one the
+// fence's own wait bound refuses as the client closes. Catches: the outcome read from the start's error alone,
+// which is the same cut in the first two, and a fence refusal read as the close because the close came too.
 func TestSSHGateway_AnSFTPStartItsClientsCloseCutIsNotAFailedTransfer(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		shutdown bool
+		timedOut bool
 		outcome  string
 	}{
-		{"the client closed the channel", false, "success"},
-		{"the daemon stopped", true, "failure"},
+		{"the client closed the channel", false, false, "success"},
+		{"the daemon stopped", true, false, "failure"},
+		{"the lock wait timed out as the client closed", false, true, "failure"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			conn, stop := context.WithCancel(t.Context())
@@ -101,13 +109,16 @@ func TestSSHGateway_AnSFTPStartItsClientsCloseCutIsNotAFailedTransfer(t *testing
 				}
 				closeCh(errSSHChannelClosed) // the request stream ends either way, as handleSSHSessionChannel's does
 			})
+			if c.timedOut {
+				srv.locks.override.(*cutsAtTheStartLock).err = db.ErrLockBusy
+			}
 			srv.bridgeSSHSFTP(ch, run.ID, principal, &stubChannel{})
 			ev := findAudit(rec.snapshot(), run.ID, "ssh.sftp.transfer", c.outcome)
 			if ev == nil {
 				t.Fatalf("no ssh.sftp.transfer %s row; events=%s", c.outcome, auditDump(rec.snapshot(), run.ID))
 			}
 			want := any(nil)
-			if c.shutdown {
+			if c.outcome == "failure" {
 				want = lockUnavailableMsg
 			}
 			if d := sshAuditData(t, ev); d["error"] != want {

@@ -9,7 +9,9 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -109,9 +111,9 @@ func TestSSHGateway_ForwardToAClosedPortIsAFailedForward(t *testing.T) {
 func TestSSHGateway_ClientClosedFirstIsNotAFailedTransfer(t *testing.T) {
 	for _, c := range []struct {
 		name, action string
-		end          func(t *testing.T, client *ssh.Client)
+		end          func(t *testing.T, client *ssh.Client, started <-chan struct{})
 	}{
-		{"sftp, the channel closed", "ssh.sftp.transfer", func(t *testing.T, client *ssh.Client) {
+		{"sftp, the channel closed", "ssh.sftp.transfer", func(t *testing.T, client *ssh.Client, started <-chan struct{}) {
 			sess, err := client.NewSession()
 			if err != nil {
 				t.Fatal(err)
@@ -119,9 +121,17 @@ func TestSSHGateway_ClientClosedFirstIsNotAFailedTransfer(t *testing.T) {
 			if err := sess.RequestSubsystem("sftp"); err != nil {
 				t.Fatal(err)
 			}
+			// The subsystem's reply comes before its process starts: close only once it runs, so the close is
+			// the one under the running process this test is about, never one that cuts the start (its own pin
+			// is TestSSHGateway_AnSFTPStartItsClientsCloseCutIsNotAFailedTransfer).
+			select {
+			case <-started:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the sftp-server never started")
+			}
 			_ = sess.Close()
 		}},
-		{"forward, the connection closed", "ssh.forward", func(t *testing.T, client *ssh.Client) {
+		{"forward, the connection closed", "ssh.forward", func(t *testing.T, client *ssh.Client, _ <-chan struct{}) {
 			if _, err := client.Dial("tcp", "127.0.0.1:9999"); err != nil {
 				t.Fatalf("forward to sandbox loopback: %v", err)
 			}
@@ -134,7 +144,10 @@ func TestSSHGateway_ClientClosedFirstIsNotAFailedTransfer(t *testing.T) {
 			st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
 			// The process runs until the bridge closes its session, as a real one does.
 			stdoutR, stdoutW := io.Pipe()
+			started := make(chan struct{})
+			markStarted := sync.OnceFunc(func() { close(started) })
 			fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+				markStarted()
 				return &runner.ExecSession{Stdout: stdoutR, Close: stdoutW.Close,
 					Wait: func() (int, error) { return 0, fmt.Errorf("exec wait: %w", context.Canceled) }}, nil
 			}}
@@ -144,7 +157,7 @@ func TestSSHGateway_ClientClosedFirstIsNotAFailedTransfer(t *testing.T) {
 				t.Fatalf("dial: %v", err)
 			}
 			defer client.Close()
-			c.end(t, client)
+			c.end(t, client, started)
 			ev := waitForAudit(t, h.audit, run.ID, c.action, "success")
 			if ev == nil {
 				t.Fatalf("no successful %s; events=%s", c.action, auditDump(h.audit.snapshot(), run.ID))
