@@ -2233,7 +2233,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   "syslog":  {"network": "udp", "addr": "localhost:514"},
   "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
   "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3},
-  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100}
+  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100},
+  "otlp_metrics": {"endpoint": "https://otel.example.com:4318", "interval": "60s"}
 }
 ```
 
@@ -2269,6 +2270,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | Attributes | `wardyn.run_id` (run-scoped rows), `wardyn.actor`, `wardyn.target` (when set), `wardyn.outcome`, `wardyn.correlation_id` (when the row's `data` carries one, at most 128 characters) |
 
 - Nothing else from the row is sent: not `data`, `source_ip`, the hashes or the row id. The webhook sink's payload is the ceiling.
+
+#### OpenTelemetry metrics (`otlp_metrics`)
+
+- Not an audit sink: it sends no audit row. Each wardynd replica POSTs its `/metrics` series as OTLP/HTTP JSON to `<endpoint>/v1/metrics`; see [monitoring](operations/monitoring.md#opentelemetry-metrics).
+- The block is independent of `otlp`: set either one, or both with different endpoints.
+
+| Field | Default | Notes |
+|---|---|---|
+| `endpoint` | (required) | collector base URL, `http://` or `https://`; `/v1/metrics` is added to its path |
+| `bearer_token`, `headers`, `timeout` | as `otlp` | same meaning and limits |
+| `interval` | `60s` | how often the series are pushed; at least `1s` |
 
 #### Acknowledged delivery (`delivery: acknowledged`)
 

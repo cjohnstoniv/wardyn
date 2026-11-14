@@ -19,15 +19,15 @@ import (
 // otlpTracesPath is the OTLP/HTTP path spans go to; it sits beside the logs path.
 const otlpTracesPath = "/v1/traces"
 
-// tracesTarget is the collector URL spans are POSTed to: the logs target with its
-// final /v1/logs swapped for /v1/traces, so the endpoint's query and any path
-// prefix carry over.
-func tracesTarget(logsTarget string) string {
+// signalTarget is the collector URL another signal is POSTed to: the logs target
+// with its final /v1/logs swapped for path (otlpTracesPath, otlpMetricsPath), so
+// the endpoint's query and any path prefix carry over.
+func signalTarget(logsTarget, path string) string {
 	u, err := url.Parse(logsTarget)
 	if err != nil {
 		return logsTarget
 	}
-	setEscapedPath(u, strings.TrimSuffix(u.EscapedPath(), otlpLogsPath)+otlpTracesPath)
+	setEscapedPath(u, strings.TrimSuffix(u.EscapedPath(), otlpLogsPath)+path)
 	return u.String()
 }
 

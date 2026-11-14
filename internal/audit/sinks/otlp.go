@@ -184,7 +184,7 @@ func NewOTLPSink(cfg OTLPConfig) (*OTLPSink, error) {
 	}
 	var traces string
 	if cfg.Traces {
-		traces = tracesTarget(target)
+		traces = signalTarget(target, otlpTracesPath)
 	}
 	return &OTLPSink{
 		cfg:       cfg,
@@ -319,9 +319,13 @@ func (o *OTLPSink) dropEncode(n int, err error) {
 // abandoned by shutdown mid-backoff, adds n to the drop counter and is not
 // re-queued.
 func (o *OTLPSink) sendWithRetry(ctx context.Context, target string, body []byte, n int) {
+	signal := signalLogs
+	if target == o.traces {
+		signal = signalTraces
+	}
 	delay := o.baseDelay
 	for attempt := 1; attempt <= o.cfg.MaxRetries; attempt++ {
-		rejected, err := o.postTo(ctx, target, body, target == o.traces)
+		rejected, err := o.postTo(ctx, target, body, signal)
 		if err == nil {
 			o.countRejected(rejected, n)
 			return
@@ -369,11 +373,21 @@ func (o *OTLPSink) countRejected(rejected int64, batchLen int) {
 // endpoint (net/http's *url.Error embeds it, query included) appears in the
 // returned error.
 func (o *OTLPSink) post(ctx context.Context, body []byte) (int64, error) {
-	return o.postTo(ctx, o.target, body, false)
+	return o.postTo(ctx, o.target, body, signalLogs)
 }
 
-// postTo is post to an explicit collector URL: the logs target, or the traces one when spans is true.
-func (o *OTLPSink) postTo(ctx context.Context, target string, body []byte, spans bool) (int64, error) {
+// otlpSignal is the OTLP signal a request carries; it names the partialSuccess
+// field a reply's rejected count is read from.
+type otlpSignal int
+
+const (
+	signalLogs otlpSignal = iota
+	signalTraces
+	signalMetrics
+)
+
+// postTo is post to an explicit collector URL carrying signal: the logs, traces or metrics target.
+func (o *OTLPSink) postTo(ctx context.Context, target string, body []byte, signal otlpSignal) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return 0, fmt.Errorf("build request: %w", withoutURL(err))
@@ -395,27 +409,31 @@ func (o *OTLPSink) postTo(ctx context.Context, target string, body []byte, spans
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, fmt.Errorf("http post: unexpected status %d", resp.StatusCode)
 	}
-	return rejectedRecords(reply, spans), nil
+	return rejectedRecords(reply, signal), nil
 }
 
-// rejectedRecords reads partialSuccess.rejectedSpans from an
-// ExportTraceServiceResponse when spans is true, else
-// partialSuccess.rejectedLogRecords from an ExportLogsServiceResponse. The
-// protocol's JSON mapping writes the int64 as a string; a number is read too.
-// Anything unparseable reads as 0.
-func rejectedRecords(reply []byte, spans bool) int64 {
+// rejectedRecords reads the partialSuccess count for signal:
+// rejectedLogRecords from an ExportLogsServiceResponse, rejectedSpans from an
+// ExportTraceServiceResponse, rejectedDataPoints from an
+// ExportMetricsServiceResponse. The protocol's JSON mapping writes the int64 as
+// a string; a number is read too. Anything unparseable reads as 0.
+func rejectedRecords(reply []byte, signal otlpSignal) int64 {
 	var r struct {
 		PartialSuccess struct {
-			RejectedLogs  json.Number `json:"rejectedLogRecords"`
-			RejectedSpans json.Number `json:"rejectedSpans"`
+			RejectedLogs   json.Number `json:"rejectedLogRecords"`
+			RejectedSpans  json.Number `json:"rejectedSpans"`
+			RejectedPoints json.Number `json:"rejectedDataPoints"`
 		} `json:"partialSuccess"`
 	}
 	if json.Unmarshal(reply, &r) != nil {
 		return 0
 	}
 	rejected := r.PartialSuccess.RejectedLogs
-	if spans {
+	switch signal {
+	case signalTraces:
 		rejected = r.PartialSuccess.RejectedSpans
+	case signalMetrics:
+		rejected = r.PartialSuccess.RejectedPoints
 	}
 	n, err := rejected.Int64()
 	if err != nil {
