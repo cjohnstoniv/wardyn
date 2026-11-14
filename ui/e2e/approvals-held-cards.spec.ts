@@ -113,11 +113,12 @@ test.describe("Approvals: a card with a decision out is held", () => {
     try {
       await openApprovals(page);
       const waiting = page.getByRole("tab", { name: /^Waiting on you/ });
-      await expect(waiting).toHaveText(/Waiting on you\s*1/);
+      await expect(waiting).toHaveText(/Waiting on you\s*1(?!\d)/);
       await waiting.click();
       const approve = page.getByRole("button", { name: "Approve", exact: true });
       const deny = page.getByRole("button", { name: "Deny", exact: true });
       await expect(approve).toBeEnabled();
+      await expect(page.getByText("Elevate dana.reyes@acme.example to Payments for 4 hours")).toBeVisible();
 
       const posted = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/governance/requests/e2e-held-1/approve"));
       await approve.click();
