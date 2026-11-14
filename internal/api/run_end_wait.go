@@ -162,7 +162,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		// The claim's grace test reads the database's clock after the lock wait, not the request's earlier read.
-		at, err := s.dbNow(lctx)
+		at, err := heldRead(lctx, s.dbNow)
 		if err != nil {
 			unlock()
 			writeServerError(w, r, "read the database's clock", err)
