@@ -37,8 +37,10 @@ type ApprovalService interface {
 	// the transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
 	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error)
-	// ExpireOne moves one still-PENDING approval to EXPIRED (a no-op once decided):
-	// wardyn-toolgate's give-up signal (#811). actor is the withdrawing agent.
+	// ExpireOne moves one still-PENDING approval to EXPIRED (once decided, it changes nothing and
+	// answers ErrApprovalAlreadyDecided): wardyn-toolgate's give-up signal (#811). actor is the
+	// withdrawing agent's SPIFFE ID; any other actor is the server ending a row nobody can answer,
+	// audited as the system's.
 	ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error
 	// CountForRun returns how many approvals a run has raised, in ANY state —
 	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses

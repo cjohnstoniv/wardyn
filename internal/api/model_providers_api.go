@@ -158,6 +158,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "put site config", err)
 		return
 	}
+	s.endUnanswerableSignIns(ctx, existing.ModelProviders, saved.ModelProviders)
 	savedBlock := storedModelProviders(saved)
 	datum := modelProviderAuditData(storedModelProviders(existing), savedBlock)
 	datum["per_user_credentials_invalidated"] = invalidated

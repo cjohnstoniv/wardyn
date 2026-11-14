@@ -199,7 +199,7 @@ func TestResolveAWSSSOInjection_NearExpiryRenewsOnDemand(t *testing.T) {
 }
 
 // The renewer renews only for what the resolve would serve: an ended run, or a
-// run whose provider pin moved since dispatch, gets no renewal.
+// run whose provider pin or region moved since dispatch, gets no renewal.
 func TestAWSSSORenewer_SkipsEndedAndDriftedRuns(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -209,6 +209,11 @@ func TestAWSSSORenewer_SkipsEndedAndDriftedRuns(t *testing.T) {
 		{"provider pin moved", func(f *reauthFixture) {
 			p := reauthProvider()
 			p.Bedrock.SSORoleName = "SomeOtherRole"
+			f.st.site = reauthProviderSite(p)
+		}},
+		{"provider moved to another region", func(f *reauthFixture) {
+			p := reauthProvider()
+			p.Bedrock.Region = "us-west-2"
 			f.st.site = reauthProviderSite(p)
 		}},
 		{"another person's run", func(f *reauthFixture) { f.st.run.CreatedBy = "mallory@example.com" }},

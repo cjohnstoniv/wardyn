@@ -559,10 +559,11 @@ func TestExpireOne_MovesPendingToExpired(t *testing.T) {
 	}
 }
 
-// TestExpireOne_AlreadyDecidedIsSilent proves the idempotent race handling: a
-// row a human (or the periodic sweep) already decided must not error and must
-// not emit a second, contradicting audit row.
-func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
+// TestExpireOne_AlreadyDecidedSaysSo proves the race handling: a row a human (or
+// the periodic sweep, or another end) already decided is left as it is, emits no
+// second, contradicting audit row, and answers ErrAlreadyDecided, so a caller
+// counts only the end that moved the row.
+func TestExpireOne_AlreadyDecidedSaysSo(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
 	runID := uuid.New()
@@ -575,8 +576,8 @@ func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
 	}
 	before := len(st.audit)
 
-	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
-		t.Fatalf("expire one on an already-decided row must be a silent no-op, got: %v", err)
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != approval.ErrAlreadyDecided {
+		t.Fatalf("expire one on an already-decided row = %v, want ErrAlreadyDecided", err)
 	}
 	got, _ := st.GetApproval(ctx, ap.ID)
 	if got.State != types.ApprovalApproved {
@@ -584,6 +585,37 @@ func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
 	}
 	if len(st.audit) != before {
 		t.Errorf("expected no new audit event for a no-op race, got %d new", len(st.audit)-before)
+	}
+}
+
+// TestExpireOne_AServerEndIsTheSystems: a row the server ends because it can no longer be
+// answered (an AWS sign-in request whose provider now signs in elsewhere) is recorded as the
+// system's, never as an agent's.
+func TestExpireOne_AServerEndIsTheSystems(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	ap, _ := approval.RequestApproval(ctx, st, newReq(uuid.New(), types.ApprovalCredentialReauth, json.RawMessage(`{"owner":"alice"}`)))
+	if err := approval.ExpireOne(ctx, st, ap.ID, "wardynd", "provider_sign_in_changed"); err != nil {
+		t.Fatalf("expire one: %v", err)
+	}
+	if got, _ := st.GetApproval(ctx, ap.ID); got.State != types.ApprovalExpired {
+		t.Errorf("want EXPIRED, got %s", got.State)
+	}
+	n := 0
+	for _, ev := range st.audit {
+		if ev.Action != "approval.expire" {
+			continue
+		}
+		n++
+		if ev.ActorType != types.ActorSystem || ev.Actor != "wardynd" {
+			t.Errorf("want actor system wardynd, got %s %s", ev.ActorType, ev.Actor)
+		}
+		if !strings.Contains(string(ev.Data), `"reason":"provider_sign_in_changed"`) {
+			t.Errorf("want reason provider_sign_in_changed in data, got %s", ev.Data)
+		}
+	}
+	if n != 1 {
+		t.Errorf("expected 1 expire audit event, got %d", n)
 	}
 }
 

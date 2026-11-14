@@ -208,7 +208,7 @@ func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, clai
 	ap types.ApprovalRequest, l types.PushPathList) bool {
 	stored, err := s.cfg.Store.(store.PushPathListStore).RecordPushPathList(r.Context(), ap.ID, ap.RunID, l, maxPushPathListsPerRun)
 	if errors.Is(err, store.ErrPushPathListCap) {
-		if xerr := s.cfg.Approvals.ExpireOne(r.Context(), ap.ID, claims.SPIFFEID, "push_path_list_cap"); xerr != nil {
+		if xerr := s.cfg.Approvals.ExpireOne(r.Context(), ap.ID, claims.SPIFFEID, "push_path_list_cap"); xerr != nil && !errors.Is(xerr, types.ErrApprovalAlreadyDecided) {
 			writeServerError(w, r, "expire a push_content approval past the path-list cap", xerr)
 			return false
 		}
