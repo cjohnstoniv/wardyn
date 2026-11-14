@@ -29,12 +29,12 @@ var errSensorBeatReadBusy = errors.New("api: sensor heartbeat read already runni
 
 // groundtruthNoRecentEvents is the idle reason for a sensor whose node row
 // shows no rise in its counts within store.GroundtruthEvidenceWindow.
-const groundtruthNoRecentEvents = "no new kernel events in the last 15 minutes"
+const groundtruthNoRecentEvents = "No new kernel events in the last 15 minutes"
 
 // groundtruthNotYetKnown is the idle reason for a fresh beat with counts but no
 // rise in them on record: a first beat, a rise across a gap longer than the
 // window, or no node row at all. Lifetime counts prove nothing about now.
-const groundtruthNotYetKnown = "whether new kernel events still arrive is not yet known"
+const groundtruthNotYetKnown = "Whether new kernel events still arrive is not yet known"
 
 // sensorCause is why one sensor reads as it does. A capture note is picked from
 // the causes, never from the reason text, which with several node sensors only

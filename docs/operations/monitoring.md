@@ -139,8 +139,8 @@ With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each n
 - With 0 or 1 live nodes the verdict comes from the newest node row of the last 7 days. With no such row the sensor's latest heartbeat is read, at most once every 30 seconds per server.
 - If that read fails or takes over half a second, `/healthz` reports `unavailable` with "Sensor heartbeat could not be read", to anonymous callers too. `unavailable` with no reason means no heartbeat is on record.
 - `healthy` needs fresh heartbeats whose kernel event counts (`observed_total` plus `dropped_unmapped`) rose in the last 15 minutes. A sensor that stops can read `healthy` for up to 15 minutes after its last such heartbeat.
-- A fresh heartbeat whose counts last rose over 15 minutes ago reads `idle` with "no new kernel events in the last 15 minutes". Tetragon or its export may have stopped, or the host ran nothing Tetragon exports.
-- With no rise on record it reads `idle` with "whether new kernel events still arrive is not yet known". That is a node's first heartbeat, the first after a gap of over 15 minutes, and any heartbeat with no node row. After upgrading to this version, every sensor reads so until its counts next rise.
+- A fresh heartbeat whose counts last rose over 15 minutes ago reads `idle` with "No new kernel events in the last 15 minutes". Tetragon or its export may have stopped, or the host ran nothing Tetragon exports.
+- With no rise on record it reads `idle` with "Whether new kernel events still arrive is not yet known". That is a node's first heartbeat, the first after a gap of over 15 minutes, and any heartbeat with no node row. After upgrading to this version, every sensor reads so until its counts next rise.
 - The node's row keeps when its counts last rose, so every server reads the same verdict, one that just started included.
 - A failed write of a node's row is logged and does not fail the heartbeat.
 - With two or more live nodes, a run's recent kernel events are read from the node its newest event came from, and are empty if it has none.
