@@ -902,7 +902,11 @@ func TestDesktopExec_JoinsItsStdinCopyWhenTheExitStatusIsLost(t *testing.T) {
 	in := newStuckStdin()
 	var closes atomic.Int32
 	e.srv.cfg.Runner = &sshFakeRunner{execFn: stuckExec(in, &closes)}
-	code, err := e.srv.desktopExec(context.Background(), e.run, desktopUploadScript, strings.NewReader("abcdef"), nil, "in.txt", "6")
+	h, err := e.srv.lockStart(context.Background(), e.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := e.srv.desktopExec(context.Background(), e.run, h, desktopUploadScript, strings.NewReader("abcdef"), nil, "in.txt", "6")
 	if code != -1 || err == nil {
 		t.Fatalf("desktopExec = %d, %v; want -1 and the lost exit status", code, err)
 	}
@@ -928,9 +932,13 @@ func TestDesktopExec_ClosesItsSessionWhenItsReaderPanics(t *testing.T) {
 			Close: func() error { closes.Add(1); return nil },
 		}, nil
 	}}
+	h, err := e.srv.lockStart(context.Background(), e.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	func() {
 		defer func() { _ = recover() }()
-		_, _ = e.srv.desktopExec(context.Background(), e.run, desktopListScript, nil, func(io.Reader) error { panic("reader failed") }, "1")
+		_, _ = e.srv.desktopExec(context.Background(), e.run, h, desktopListScript, nil, func(io.Reader) error { panic("reader failed") }, "1")
 	}()
 	if n := closes.Load(); n != 1 {
 		t.Fatalf("the session was closed %d times after a panic, want once", n)
