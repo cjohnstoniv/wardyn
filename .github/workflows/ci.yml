@@ -321,9 +321,9 @@ jobs:
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
       # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
-      # extra swap lets that peak page out instead of the runner being shut down.
+      # extra swap lets that peak page out instead of the runner being shut down. No `if:`: the docs- or
+      # console-only step below compiles internal/api's tests too.
       - name: Add swap for the coverage compile
-        if: needs.changes.outputs.backend != 'false'
         run: |
           swapon --show
           sudo fallocate -l 8G /swapfile-wardyn
@@ -439,6 +439,17 @@ jobs:
           restore-keys: |
             go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-lint-${{ runner.os }}-
+      # The internal/api test compile and staticcheck's whole-tree pass take about all
+      # of the hosted runner's memory; without extra swap the runner is shut down mid-step
+      # (exit 143, or no log and a timeout 5 min past the limit). Same step as the go legs.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
       # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
       # added anywhere is picked up with no list to edit. Unraced and uncached,
@@ -1908,6 +1919,15 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
+      # See go-lint: the internal/api compile in internal-hosts-docker.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -2484,6 +2504,15 @@ jobs:
       # a pass without running the test. Keep the build cache, drop the results.
       - name: Drop cached test results
         run: go clean -testcache
+      # See go-lint: the internal/api test compile.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -2986,6 +3015,16 @@ jobs:
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+      # See go-lint: staticcheck's whole-tree pass.
+      - name: Add swap for the memory peak
+        if: matrix.gate == 'staticcheck'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
