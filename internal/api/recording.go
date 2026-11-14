@@ -102,19 +102,25 @@ var recordingUploadReadWindow = 60 * time.Second
 
 // readWindow arms the connection's read deadline at the body's first Read. A
 // store that queues saves reads only once it has admitted one, so queue time is
-// not charged.
+// not charged. A save that ends before its first Read arms it as it ends (storeUpload).
 type readWindow struct {
 	io.ReadCloser
 	rc    *http.ResponseController
 	armed bool
 }
 
+// arm sets the read deadline once; later calls keep the first deadline.
+func (b *readWindow) arm() error {
+	if b.armed {
+		return nil
+	}
+	b.armed = true
+	return b.rc.SetReadDeadline(time.Now().Add(recordingUploadReadWindow))
+}
+
 func (b *readWindow) Read(p []byte) (int, error) {
-	if !b.armed {
-		b.armed = true
-		if err := b.rc.SetReadDeadline(time.Now().Add(recordingUploadReadWindow)); err != nil {
-			return 0, err
-		}
+	if err := b.arm(); err != nil {
+		return 0, err
 	}
 	return b.ReadCloser.Read(p)
 }
@@ -132,7 +138,8 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	// log is cut at the masked limit with the server's marker and answered 2xx, and when masking lengthens it
 	// so the masked output reaches the limit before the raw stream passes the upload cap, the raw overrun is
 	// never read and the cut log is stored all the same.
-	limited := http.MaxBytesReader(w, &readWindow{ReadCloser: r.Body, rc: rc}, maxRecordingUploadBytes)
+	window := &readWindow{ReadCloser: r.Body, rc: rc}
+	limited := http.MaxBytesReader(w, window, maxRecordingUploadBytes)
 
 	// PRIMARY masking point: read the upload body through a MaskingWriter so
 	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
@@ -162,7 +169,12 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	} else {
 		err = s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
 	}
-	return refusalBeforeErasure(err, body)
+	err = refusalBeforeErasure(err, body)
+	// A save that failed before its first Read (a store failure, or a run whose masking cover was gone at
+	// the first Read) left the body unread, and net/http reads up to 256 KiB more of it before it writes the
+	// answer. The same window bounds that read. Its error is not checked: this connection took a deadline above.
+	_ = window.arm()
+	return err
 }
 
 // refusalBeforeErasure keeps the size and masking refusals ahead of an erased run's 410, the route's
