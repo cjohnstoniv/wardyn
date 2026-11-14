@@ -491,7 +491,7 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 	// The agent stand-in, asked once before the reboot: a stand-in the proxy does not admit must not pass
 	// the new-address case below by reaching nothing.
 	standIn := newAgentStandIn(t, cs, ns, s.spec.RunID)
-	assertStandInNarrowed(t, ns, standIn, pinnedProxy)
+	assertStandInNarrowed(t, ns, standIn, pinnedProxy, false)
 	node := s.pod.Spec.NodeName
 	oldNodeIP := dockerNodeIP(t, node)
 
@@ -568,32 +568,39 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 	// 7. The agent-side check. The agent pod has RestartPolicy Never, so a node reboot usually leaves it
 	// dead; then the stand-in, which the kubelet starts again, is asked in its place. A phase alone can still
 	// read Running from before the node went down, so both are read for a container started after the restart.
+	// A stand-in probe that needs a proxy reply to pass asks again while none came back (standInAnswer's retry):
+	// the run's policies may not yet admit the stand-in's new address.
 	waitFor(t, 3*time.Minute, "the agent stand-in to start again after the node restart", func() bool {
 		p, err := cs.CoreV1().Pods(ns).Get(ctx, standIn, metav1.GetOptions{})
 		return err == nil && startedSince(p, restartedAt)
 	})
-	ask, who := func(host string) string { return proxyAnswer(t, r, s.sb.Ref, host) }, "agent"
+	ask, who := func(host string, _ bool) string { return proxyAnswer(t, r, s.sb.Ref, host) }, "agent"
 	agent, err := cs.CoreV1().Pods(ns).Get(ctx, "wardyn-agent-"+s.spec.RunID.String(), metav1.GetOptions{})
 	if err != nil || !startedSince(agent, restartedAt) {
-		ask, who = func(host string) string { return standInAnswer(t, ns, standIn, pinnedProxy, host) }, "agent stand-in"
+		ask, who = func(host string, retry bool) string { return standInAnswer(t, ns, standIn, pinnedProxy, host, retry) }, "agent stand-in"
 		t.Log("node-restart: agent-side check from the agent stand-in")
 	}
 	if pod, err = cs.CoreV1().Pods(ns).Get(ctx, s.pod.Name, metav1.GetOptions{}); err != nil {
 		t.Fatalf("read the proxy pod again: %v", err)
 	}
 	if pod.Status.PodIP == ip {
-		if got := ask(narrowedHost); !strings.Contains(got, deniedBy) {
+		if got := ask(narrowedHost, true); !strings.Contains(got, deniedBy) {
 			t.Errorf("the %s's answer for %s lacks %q:\n%s", who, narrowedHost, deniedBy, got)
 		}
-		if got := ask(otherHost); strings.Contains(got, deniedBy) {
+		if got := ask(otherHost, true); strings.Contains(got, deniedBy) {
 			t.Errorf("the proxy refused %s to the %s by policy, which the narrowing did not name:\n%s", otherHost, who, got)
 		}
 		return
 	}
+	// The rebooted proxy's deny list, asked from the agent's position at the proxy's address now: the run's
+	// policies admit the agent's labels to the proxy's wherever its pod landed. It is asked before the old
+	// address: its refusal shows the policies admit the stand-in again, so no reply below is the old
+	// address's answer, not a policy that has yet to catch up.
+	assertStandInNarrowed(t, ns, standIn, pod.Status.PodIP, true)
 	// The pinned address reaches no proxy now: neither host may get through. Each probe must show it ran,
-	// so an exec that printed nothing does not pass.
+	// so an exec that printed nothing does not pass. No reply is the passing answer here, so it is asked once.
 	for _, host := range []string{narrowedHost, otherHost} {
-		got := ask(host)
+		got := ask(host, false)
 		switch {
 		case !strings.Contains(got, probeDone):
 			t.Errorf("the %s's probe for %s at the old address printed no end marker, so it proves nothing:\n%s", who, host, got)
@@ -601,9 +608,6 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 			t.Errorf("the %s reached a proxy for %s at the old address: %s", who, host, got)
 		}
 	}
-	// The rebooted proxy's deny list, asked from the agent's position at the proxy's address now: the run's
-	// policies admit the agent's labels to the proxy's wherever its pod landed.
-	assertStandInNarrowed(t, ns, standIn, pod.Status.PodIP)
 	t.Logf("the proxy pod came back on %s; the %s reaches no proxy at the old address, and the proxy still refuses %s", pod.Status.PodIP, who, narrowedHost)
 }
 

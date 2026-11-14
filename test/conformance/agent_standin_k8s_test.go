@@ -83,30 +83,43 @@ func standInClients(t *testing.T) (*rest.Config, *kubernetes.Clientset) {
 	return restCfg, cs
 }
 
+// standInAttempt is the time a stand-in probe needs left before standInAnswer asks again: nc's 5 s and the
+// exec's round trips.
+const standInAttempt = 20 * time.Second
+
 // standInAnswer is proxyAnswer asked from the stand-in over the exec subresource, of the proxy at proxyAddr
 // (pinnedProxy, or an address): what it gets back for an https CONNECT to host, lower-cased, followed by
-// probeDone.
-func standInAnswer(t *testing.T, ns, pod, proxyAddr, host string) string {
+// probeDone. With retry set it asks again while no proxy reply came back, since after a node restart the
+// run's policies may not yet admit the stand-in's new address. A reply is final, so one without the refusal
+// still fails, and every attempt shares the probe's one minute.
+func standInAnswer(t *testing.T, ns, pod, proxyAddr, host string, retry bool) string {
 	t.Helper()
 	restCfg, cs := standInClients(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	script := fmt.Sprintf(`printf 'CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n' | nc -w 5 %s 3128; echo %s`, host, host, proxyAddr, probeDone)
-	out, err := execInPod(ctx, restCfg, cs, ns, pod, standInContainer, []string{"sh", "-c", script}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatalf("exec in the agent stand-in (ask the proxy at %s for %s): %v\n%s", proxyAddr, host, err, out)
+	for {
+		out, err := execInPod(ctx, restCfg, cs, ns, pod, standInContainer, []string{"sh", "-c", script}, &bytes.Buffer{})
+		if err != nil {
+			t.Fatalf("exec in the agent stand-in (ask the proxy at %s for %s): %v\n%s", proxyAddr, host, err, out)
+		}
+		got := strings.ToLower(out)
+		if deadline, _ := ctx.Deadline(); !retry || strings.Contains(got, "http/1.") || time.Until(deadline) < standInAttempt {
+			return got
+		}
+		time.Sleep(2 * time.Second)
 	}
-	return strings.ToLower(out)
 }
 
-// assertStandInNarrowed is assertNarrowed asked from the stand-in, of the proxy at proxyAddr. The narrowed
-// host's refusal is the proxy's own reply, so it also proves the stand-in reaches that proxy.
-func assertStandInNarrowed(t *testing.T, ns, pod, proxyAddr string) {
+// assertStandInNarrowed is assertNarrowed asked from the stand-in, of the proxy at proxyAddr, with retry as
+// standInAnswer takes it. The narrowed host's refusal is the proxy's own reply, so it also proves the
+// stand-in reaches that proxy.
+func assertStandInNarrowed(t *testing.T, ns, pod, proxyAddr string, retry bool) {
 	t.Helper()
-	if got := standInAnswer(t, ns, pod, proxyAddr, narrowedHost); !strings.Contains(got, deniedBy) {
+	if got := standInAnswer(t, ns, pod, proxyAddr, narrowedHost, retry); !strings.Contains(got, deniedBy) {
 		t.Errorf("the stand-in's answer from %s for %s lacks %q:\n%s", proxyAddr, narrowedHost, deniedBy, got)
 	}
-	if got := standInAnswer(t, ns, pod, proxyAddr, otherHost); strings.Contains(got, deniedBy) {
+	if got := standInAnswer(t, ns, pod, proxyAddr, otherHost, retry); strings.Contains(got, deniedBy) {
 		t.Errorf("the proxy at %s refused %s to the stand-in by policy, which the narrowing did not name:\n%s", proxyAddr, otherHost, got)
 	}
 }
