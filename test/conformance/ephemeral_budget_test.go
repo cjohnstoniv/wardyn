@@ -93,7 +93,7 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 // It is a source assertion and not an execution: running busybox here would need
 // Docker, and the thing that broke was not the shell but WHERE it wrote. So the
 // two facts asserted are the two that were wrong: the target is not $HOME (which
-// is `/` for uid 1000 on the agent image, and root-owned), and the open is probed
+// is `/`, root-owned, for uid 1000 in an image with no passwd entry for it), and the open is probed
 // under its own code so an unwritable target cannot be reported as a substrate
 // that does not enforce.
 //
@@ -113,7 +113,7 @@ func TestEphemeralFillScriptCodesAreDistinct(t *testing.T) {
 		sawTmp = sawTmp || strings.HasPrefix(target.path, "/tmp/")
 		sawSubstrateOwned = sawSubstrateOwned || target.substrateOwned
 		if strings.Contains(script, "$HOME") {
-			t.Errorf("target %s writes under $HOME, which runc answers as `/` for the agent image's uid 1000 — "+
+			t.Errorf("target %s writes under $HOME, which runc answers as `/` for uid 1000 in an image with no passwd entry for it — "+
 				"root-owned, so every fill dies `Permission denied` with exit 1, the coded skip never fires, and "+
 				"the case reports a substrate that does not enforce. Spell the path out.", target.name)
 		}

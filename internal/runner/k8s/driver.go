@@ -115,6 +115,10 @@ type Config struct {
 	// SandboxTemplate in each runs namespace whose prefixed annotations the agent pod takes; placement stays Wardyn's
 	// (agentsandbox_template.go). Empty takes none.
 	AgentSandboxTemplate string
+	// AgentSandboxKeep is WARDYN_K8S_AGENT_SANDBOX_KEEP (experimental, needs AgentSandbox): an ended interactive run whose
+	// work folder is a kept drive is kept and can be revived, and such a run reaches its proxy through its own Service
+	// (agentsandbox_keep.go).
+	AgentSandboxKeep bool
 	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the
 	// read-back passed and before the gate is removed, while the pod is still unscheduled. Nil in
 	// production; an error refuses the run.

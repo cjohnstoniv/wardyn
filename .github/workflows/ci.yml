@@ -1413,7 +1413,8 @@ jobs:
   # conclusion is failure, which green-by-tree.sh refuses as release evidence for that tree.
   conformance-k8s-agent-sandbox:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/')) }}
+    # TEMPORARY for the sandbox-pools branches: the lead removes this before the train PR.
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/021-sandbox-pools'))) }}
     runs-on: ubuntu-26.04
     # Until measured: conformance-k8s's 35 (the Makefile's 30m suite timeout plus the bring-up) plus 10 for
     # the controller fetch, two trivy scans, its install, the policies, can-i and seven real-pod cases.
@@ -1692,7 +1693,8 @@ jobs:
           fail=0
           for t in TestAgentSandboxBackendIsReallyOn TestAgentSandboxNetworkPolicyFirst TestAgentSandboxSquatterPodIsRefused \
                    TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission \
-                   TestAgentSandboxStagedSecretStarts; do
+                   TestAgentSandboxStagedSecretStarts \
+                   TestAgentSandboxKeepProxyThroughService TestAgentSandboxKeepEndpointSliceElsewhereIsDropped TestAgentSandboxKeepLiveReplaceProxy TestAgentSandboxKeepAPISequence; do
             if grep -qF "\"Action\":\"pass\",\"Package\":\"github.com/cjohnstoniv/wardyn/test/conformance\",\"Test\":\"$t\"" "$out"; then
               echo "passed: $t"
             else

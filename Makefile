@@ -477,7 +477,7 @@ test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_T
 # builder-stage duplicate) into a throwaway build context — mirrors
 # test-envbuild-integration's own tools-staging recipe.
 CONFORMANCE_AGENT_IMAGE ?= wardyn/conformance-agent:local
-build-conformance-agent-image: ## Build the busybox+wardyn-rec conformance agent image (deploy/kind/Dockerfile.conformance-agent)
+build-conformance-agent-image: ## Build the conformance agent image: busybox, wardyn-rec and an idle agent-run stub (deploy/kind/Dockerfile.conformance-agent)
 	@echo "Building the conformance agent image ($(CONFORMANCE_AGENT_IMAGE))..."
 	@set -eu; \
 	tools_dir="$$(mktemp -d)"; \
