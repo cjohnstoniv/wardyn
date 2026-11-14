@@ -73,7 +73,7 @@ func (s *Server) recoverRunOutput(ctx context.Context, st store.RunOutputStore, 
 		s.declineAgentOutput(ctx, run, reason)
 		return
 	}
-	tw := s.openRecoveryTail(run)
+	tw := s.openRecoveryTail(ctx, run)
 	if tw == nil {
 		// Erased, or coverage lost between the check and the open.
 		s.writeGapRow(ctx, st, run.ID, "mask_uncovered")
@@ -121,8 +121,8 @@ func (s *Server) recoveryOwed(ctx context.Context, st store.RunOutputStore, run 
 // re-read replace the capture, never append to one. A macOS VM task run's re-read
 // is recorded as agent-recovered (attachAgentCast), beside any agent cast the
 // process that dispatched it saved.
-func (s *Server) openRecoveryTail(run types.AgentRun) *tailWriter {
-	w := s.openExecOutput(run, false)
+func (s *Server) openRecoveryTail(ctx context.Context, run types.AgentRun) *tailWriter {
+	w := s.openExecOutputOn(ctx, run, false)
 	tw, _ := w.(*tailWriter)
 	if tw == nil {
 		return nil
@@ -219,7 +219,7 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 	if owed, _ := s.recoveryOwed(ctx, st, run); !owed || !s.maskCovered(ctx, runID) {
 		return
 	}
-	tw := s.openRecoveryTail(run)
+	tw := s.openRecoveryTail(ctx, run)
 	if tw == nil {
 		return
 	}
