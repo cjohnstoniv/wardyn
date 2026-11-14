@@ -55,7 +55,8 @@ const (
 	// uiDesktopRecheck is how often an open desktop stream re-checks its person and its run.
 	uiDesktopRecheck = 30 * time.Second
 	// uiDesktopRecheckWait bounds one re-check's reads, so a store that hangs can't leave a stream relaying
-	// unchecked up to its session's bound while the check waits.
+	// unchecked up to its session's bound while the check waits. It bounds every command start's last read under
+	// the run's start lock too (startRead).
 	uiDesktopRecheckWait = 10 * time.Second
 	uiDesktopViewer      = "desktop.html"
 	uiDesktopRFB         = "/__rfb"

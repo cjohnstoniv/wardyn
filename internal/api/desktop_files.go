@@ -179,7 +179,7 @@ func (s *Server) desktopAdmit(w http.ResponseWriter, r *http.Request, run types.
 		writeLockRefused(w, r, err)
 		return types.AgentRun{}, startHold{}, false
 	}
-	fresh, err = s.cfg.Store.GetRun(h.ctx, run.ID)
+	fresh, err = startRead(s, h, func(ctx context.Context) (types.AgentRun, error) { return s.cfg.Store.GetRun(ctx, run.ID) })
 	switch {
 	case err != nil:
 		writeServerError(w, r, "get run", err)

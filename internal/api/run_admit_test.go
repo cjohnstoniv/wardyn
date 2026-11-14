@@ -416,6 +416,41 @@ func TestAbortQueuedRun_AFailedKillIsTriedAgain(t *testing.T) {
 	}
 }
 
+// TestStartFresh_AHungLastReadFreesTheStartLock: a start's last read of the run under its start lock runs on the
+// start's context, which may have no deadline (an SSH channel, a request). A read that never answers ends at
+// uiDesktopRecheckWait: the start is refused as a failed read, nothing is started, and the run's start lock is free,
+// so an end of the run does not wait out the fence. Catches: the read on the hold's own context.
+func TestStartFresh_AHungLastReadFreesTheStartLock(t *testing.T) {
+	f := newPauseFixture(t, time.Minute)
+	f.srv.cfg.Store = &hungGetPauseStore{f.st}
+	f.srv.uiDesktop.recheckWait = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel) // ends a read the bound did not, so a red run leaks nothing
+	var started atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		_, err := startFresh(f.srv, ctx, f.run.ID, execLiveRunWords, execStartBudget, func(context.Context, types.AgentRun) (int, error) {
+			started.Store(true)
+			return 0, nil
+		}, func(int) {})
+		done <- err
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a start whose last read never answers held the run's start lock past its bound")
+	}
+	if err == nil || err.Error() != execLiveRunWords.notFound || started.Load() {
+		t.Fatalf("start = %v, started %v; want refused unstarted as a failed read (%q)", err, started.Load(), execLiveRunWords.notFound)
+	}
+	_, release, ok, lerr := f.srv.locker().TryLock(context.Background(), runStartKey(f.run.ID))
+	if lerr != nil || !ok {
+		t.Fatalf("the run's start lock is still held after the refused start (ok %v, err %v)", ok, lerr)
+	}
+	release()
+}
+
 // runEndWrites are the store writes that end a RUNNING run or mark it kept, called from internal/api and
 // cmd/wardynd. Each must run under the run's start fence.
 var runEndWrites = []string{"UpdateRunStateIf", "UpdateRunStateIfIdle", "UpdateRunStateIfCreatedBefore",
@@ -512,6 +547,50 @@ func TestRunEndWritersHoldTheStartFence(t *testing.T) {
 		if !seen[name] {
 			t.Errorf("no call of %s found: drop it from runEndWrites or name the write that replaced it", name)
 		}
+	}
+}
+
+// TestCasRunStateHeldCallersEndARunningRun: casRunStateHeld takes the start fence around every write it makes
+// (run_held_store.go), which a write needs only when it ends a RUNNING run, so every call of it in the non-test files
+// of internal/api and cmd/wardynd passes from = types.RunRunning. Catches: a held write from another state, which
+// would wait for a fence it does not need.
+func TestCasRunStateHeldCallersEndARunningRun(t *testing.T) {
+	files, _ := filepath.Glob("*.go")
+	more, _ := filepath.Glob("../../cmd/wardynd/*.go")
+	calls := 0
+	for _, path := range append(files, more...) {
+		if len(path) > 8 && path[len(path)-8:] == "_test.go" {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			c, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := c.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "casRunStateHeld" {
+				return true
+			}
+			calls++
+			running := false
+			if len(c.Args) == 4 {
+				if from, ok := c.Args[2].(*ast.SelectorExpr); ok {
+					x, ok := from.X.(*ast.Ident)
+					running = ok && x.Name == "types" && from.Sel.Name == "RunRunning"
+				}
+			}
+			if !running {
+				t.Errorf("%s: casRunStateHeld from a state other than types.RunRunning", fset.Position(c.Pos()))
+			}
+			return true
+		})
+	}
+	if calls == 0 {
+		t.Error("no call of casRunStateHeld found: drop this pin or name the write that replaced it")
 	}
 }
 
