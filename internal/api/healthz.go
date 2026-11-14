@@ -491,9 +491,9 @@ func (s *Server) groundtruthBeatVerdict(at time.Time, hb groundtruthBeat, eviden
 		// of waiting fixes. The reason is anonymous, so it names the failure and
 		// not the count: that is wardyn_groundtruth_dropped_unmapped_total.
 		if hb.DroppedUnmapped > 0 {
-			return "idle", "kernel events observed but none correlated to a run", sensorNoEvents, nil
+			return "idle", groundtruthNoneCorrelated, sensorNoEvents, nil
 		}
-		return "idle", "no kernel events observed", sensorNoEvents, nil
+		return "idle", groundtruthNoKernelEvents, sensorNoEvents, nil
 	case evidence == nil:
 		// The ingest keeps beating its lifetime counts after Tetragon or its
 		// export stops, so counts alone prove nothing about now, and with no

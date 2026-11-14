@@ -364,7 +364,7 @@ func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 	if gt["state"] != "idle" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want idle (heartbeat alive but zero kernel events observed = blind, not healthy)", gt["state"])
 	}
-	if gt["reason"] != "no kernel events observed" {
+	if gt["reason"] != "No kernel events observed" {
 		t.Errorf("reason = %v, want the blind-sensor reason", gt["reason"])
 	}
 }

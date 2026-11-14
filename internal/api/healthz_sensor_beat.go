@@ -27,6 +27,13 @@ const sensorBeatCacheFor = 30 * time.Second
 // wait on another caller's read.
 var errSensorBeatReadBusy = errors.New("api: sensor heartbeat read already running")
 
+// groundtruthNoKernelEvents is the idle reason for a fresh beat that has seen no kernel events at all.
+const groundtruthNoKernelEvents = "No kernel events observed"
+
+// groundtruthNoneCorrelated is the idle reason for a fresh beat that has seen kernel events and tied none
+// of them to a run.
+const groundtruthNoneCorrelated = "Kernel events observed but none correlated to a run"
+
 // groundtruthNoRecentEvents is the idle reason for a sensor whose node row
 // shows no rise in its counts within store.GroundtruthEvidenceWindow.
 const groundtruthNoRecentEvents = "No new kernel events in the last 15 minutes"
