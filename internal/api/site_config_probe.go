@@ -375,25 +375,6 @@ func curlFailureDetail(exitCode int) string {
 	return fmt.Sprintf("curl exit code %d", exitCode)
 }
 
-// upstreamResolveFailDetail names resolveUpstreamProxyURL's (runs_bedrock.go)
-// failReason codes in the same human-readable style as curlFailureDetail.
-var upstreamResolveFailDetail = map[string]string{
-	"unsupported-scheme": "it is not an http:// URL (https is not supported)",
-	// The sidecar's own loader (proxy.ValidUpstreamProxyURL) refused the
-	// authority — in practice a port outside 1-65535, or no host at all.
-	"unloadable-upstream-url": "the proxy sidecar's own loader refuses it (check the host and port)",
-	"reserved-secret-name":    "its secret ref names a reserved secret",
-	"no-secret-store":         "no secret store is configured",
-	"secret-not-found":        "its secret ref does not resolve to a stored secret",
-}
-
-func upstreamFailDetail(reason string) string {
-	if d, ok := upstreamResolveFailDetail[reason]; ok {
-		return d
-	}
-	return reason
-}
-
 // probeRunResult is what a throwaway site-config probe run actually observed,
 // resolved from its own audit trail -- never inferred. A COMPLETED run always
 // reports hasExitCode=true, exitCode=0; a FAILED run reports the real exit

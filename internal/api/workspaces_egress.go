@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -91,6 +92,9 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 				if !hostrules.ValidApprovedHost(d) {
 					return nil, reasonWorkspaceApprovedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
+				if err := proxy.ValidConfigHost(d); err != nil {
+					return nil, reasonWorkspaceApprovedEgressInvalid, "domains: " + err.Error()
+				}
 				if deadApprovedEgressHost(deadHosts, d) {
 					return nil, reasonWorkspaceApprovedEgressDeadHost, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
 				}
@@ -137,11 +141,13 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 // consults as a plain ApprovedEgress entry, so promoting one is dead weight —
 // and it carries no model-provider guard. Copying it would make this PUT a
 // SECOND, unguarded door to that brick, on the one route whose entire job is
-// to be the escape hatch FROM that brick. So this validates only
-// hostrules.ValidApprovedHost (plain lowercase dotted host, no scheme/port/
-// wildcard) and nothing else — deliberately unguarded, on purpose, because a
-// deny-direction guard here would remove the only way to undo an over-broad
-// one.
+// to be the escape hatch FROM that brick. So this validates only the host's
+// shape — hostrules.ValidApprovedHost (plain lowercase dotted host, no scheme/
+// port/wildcard) and proxy.ValidConfigHost (a spelling the proxy refuses in
+// every request, which stops each run of the workspace at load) — and nothing
+// else: no deny-direction guard, on purpose, because one here would remove the
+// only way to undo an over-broad one. A list that leaves such a host out always
+// passes, so the spelling check never blocks that undo.
 func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 	type body struct {
 		Domains []string `json:"domains"`
@@ -160,6 +166,9 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !hostrules.ValidApprovedHost(d) {
 					return nil, reasonWorkspaceDeniedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+				}
+				if err := proxy.ValidConfigHost(d); err != nil {
+					return nil, reasonWorkspaceDeniedEgressInvalid, "domains: " + err.Error()
 				}
 				set[d] = struct{}{}
 			}

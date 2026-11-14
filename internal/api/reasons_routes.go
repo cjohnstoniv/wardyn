@@ -197,6 +197,9 @@ const (
 	// (internal_live_run.go) — the shared /internal/* liveness gate every
 	// sidecar door runs through.
 	reasonInternalLivenessReadFailed = "internal_liveness_read_failed"
+	// reasonViaOrgUpstreamProxyRefused is the via_org route's 503 when the run's engine cannot be built because
+	// the site's upstream proxy URL writes its host in a spelling the proxy refuses (via_org.go): no retry helps.
+	reasonViaOrgUpstreamProxyRefused = "via_org_upstream_proxy_refused"
 )
 
 // The credential-injection sinks' own closed set (injection.go's

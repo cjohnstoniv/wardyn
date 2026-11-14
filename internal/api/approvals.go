@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -908,6 +909,12 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	if !hostrules.ValidApprovedHost(host) {
 		writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysInvalidHost,
 			"invalid domain (plain lowercase host, no scheme/port/wildcard): "+host)
+		return uuid.Nil, false
+	}
+	// A host in a spelling the proxy refuses in every request, which a sidecar that lies or one older than
+	// step 0 can raise: written to the workspace, it would stop each of its runs at load.
+	if err := proxy.ValidConfigHost(host); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysInvalidHost, "host "+err.Error()+"; decide it run or once instead")
 		return uuid.Nil, false
 	}
 	ws, err := s.cfg.Store.GetWorkspace(r.Context(), target)

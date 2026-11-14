@@ -917,7 +917,7 @@ func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byt
 	if err != nil {
 		return nil, err
 	}
-	return runner.WithProxyConfigKeys(b, map[string]any{"self_lapse": true, "decision_sink": sink, "hard_deny": d.hardDeny})
+	return runner.WithProxyConfigKeys(b, d.runnerProxyKeys(sink))
 }
 
 // openSink makes the run's sink key, persists its hash in the run's record, then registers it with

@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -142,7 +143,19 @@ func (s *Server) admitViaOrg(w http.ResponseWriter, r *http.Request, run *viaOrg
 	for range 2 {
 		g, routes, err := s.viaOrgEngine(r.Context(), run, claims.RunID)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "api: build the via_org engine", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
+			// A refusal the run remembers was logged as an error when its build failed: once per run for each setting.
+			level := slog.LevelError
+			if errors.As(err, new(viaOrgRefusalRemembered)) {
+				level = slog.LevelDebug
+			}
+			slog.Log(r.Context(), level, "api: build the via_org engine", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
+			// The site's upstream proxy host in a refused spelling is permanent, so it is not answered as a retry. The
+			// answer names no host: the organisation's network configuration is never sent to a person's runner.
+			if errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonViaOrgUpstreamProxyRefused, "the organisation's egress for this run cannot be built: "+
+					"the site's upstream proxy URL writes its host in a spelling the proxy refuses in every request, so it stays refused until an operator rewrites the URL")
+				return nil, nil, "", false
+			}
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "the organisation's egress for this run could not be built; retry")
 			return nil, nil, "", false
 		}
@@ -275,12 +288,18 @@ func (s *Server) denyViaOrg(w http.ResponseWriter, r *http.Request, claims *iden
 }
 
 // viaOrgEngine is the run's engine, built once from its stored config and grants, and the routes
-// the run was dispatched with.
+// the run was dispatched with. A build refused for the site's upstream proxy host is remembered for the
+// setting it read, so the run's later requests neither build it again nor audit its resolve again; a
+// rewrite of the setting is read on the next request. Any other build failure is tried again each time.
 func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UUID) (*viaOrgGen, []proxy.ViaOrgRoute, error) {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	if run.engine != nil {
 		return run.engine, run.routes, nil
+	}
+	setting, named := s.viaOrgUpstreamSetting(ctx)
+	if refused, ok := run.upstreamRefused[setting]; named && ok {
+		return nil, nil, viaOrgRefusalRemembered{refused}
 	}
 	cfg, err := s.viaOrgEngineConfig(ctx, runID)
 	if err != nil {
@@ -293,6 +312,16 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 		Dial:   s.viaOrgDial, LookupIP: s.viaOrgLookupIP,
 	})
 	if err != nil {
+		if named && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
+			// The build read the setting itself, after this one: a refusal is remembered only when both
+			// reads agree, so none is held for a setting that was rewritten while it was built.
+			if after, ok := s.viaOrgUpstreamSetting(ctx); ok && after == setting {
+				if run.upstreamRefused == nil {
+					run.upstreamRefused = map[viaOrgUpstreamSetting]error{}
+				}
+				run.upstreamRefused[setting] = err
+			}
+		}
 		return nil, nil, err
 	}
 	if run.isClosed() { // ended while it was built: releaseViaOrgRun will not see it
@@ -304,6 +333,34 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	run.idleSince = time.Now() // a fresh engine is not idle: it has the whole timeout to admit its stream
 	run.smu.Unlock()
 	return run.engine, routes, nil
+}
+
+// viaOrgRefusalRemembered is a build's refusal answered again from the run's state, with no build.
+type viaOrgRefusalRemembered struct{ error }
+
+func (e viaOrgRefusalRemembered) Unwrap() error { return e.error }
+
+// viaOrgUpstreamSetting is the site's upstream proxy setting as an engine build reads it, named without a
+// secret's value: the URL as written, or the secret ref and its row's revision.
+type viaOrgUpstreamSetting struct{ url, secretRef, revision string }
+
+// viaOrgUpstreamSetting reads the site's upstream proxy setting. named is false when it cannot be named
+// without reading a secret (the site config does not read, or the secret's store keeps no revision), and a
+// refusal is then not remembered.
+func (s *Server) viaOrgUpstreamSetting(ctx context.Context) (setting viaOrgUpstreamSetting, named bool) {
+	sc, err := s.siteConfigForDispatch(ctx)
+	if err != nil {
+		return setting, false
+	}
+	setting.url, setting.secretRef = sc.UpstreamProxyURL, sc.UpstreamProxySecretRef
+	if setting.secretRef != "" && s.cfg.Secrets != nil {
+		rev, ok, err := secretstore.RevisionOf(ctx, s.cfg.Secrets.For(""), setting.secretRef)
+		if err != nil || !ok {
+			return setting, false
+		}
+		setting.revision = rev
+	}
+	return setting, true
 }
 
 // viaOrgEngineConfig reduces the run's stored config to its via_org grants (design §7.3): each

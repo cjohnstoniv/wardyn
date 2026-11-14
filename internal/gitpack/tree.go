@@ -144,30 +144,39 @@ type commitInfo struct {
 func parseCommit(data []byte, hashLen int) (commitInfo, error) {
 	var c commitInfo
 	inParentBlock := true
-	for _, line := range strings.Split(headersOf(data), "\n") {
-		key, val, found := strings.Cut(line, " ")
+	for head := headersOf(data); len(head) > 0; {
+		var line []byte
+		line, head, _ = bytes.Cut(head, []byte("\n"))
+		key, raw, found := bytes.Cut(line, []byte(" "))
 		switch {
 		case !found:
 			inParentBlock = false
 			continue
-		case key == "tree":
+		case string(key) == "tree":
 			if c.tree != "" {
 				return commitInfo{}, fmt.Errorf("%w: the commit object carries more than one tree header",
 					ErrUninspectable)
 			}
-			c.tree = val
-		case key == "parent":
+		case string(key) == "parent":
 			if !inParentBlock {
 				return commitInfo{}, fmt.Errorf("%w: the commit object carries a parent header git would not read",
 					ErrUninspectable)
 			}
-			c.parents = append(c.parents, val)
+			if len(c.parents) == maxCommitParents {
+				return commitInfo{}, ErrTooManyParents
+			}
 		default:
 			inParentBlock = false
 			continue
 		}
-		if len(val) != hashLen*2 || !isHex(val) {
-			return commitInfo{}, fmt.Errorf("gitpack: commit header %q is not an object id of this format", line)
+		if len(raw) != hashLen*2 || !isHex(string(raw)) { // the length first: one header line may be megabytes
+			return commitInfo{}, fmt.Errorf("gitpack: commit header %q is not an object id of this format", line[:min(len(line), 160)])
+		}
+		val := string(raw)
+		if string(key) == "tree" {
+			c.tree = val
+		} else {
+			c.parents = append(c.parents, val)
 		}
 	}
 	if c.tree == "" {
@@ -178,16 +187,23 @@ func parseCommit(data []byte, hashLen int) (commitInfo, error) {
 
 // tagTarget is the object id an annotated tag points at.
 func tagTarget(data []byte, hashLen int) (string, bool) {
-	for _, line := range strings.Split(headersOf(data), "\n") {
-		if val, ok := strings.CutPrefix(line, "object "); ok {
-			return val, len(val) == hashLen*2 && isHex(val)
+	for head := headersOf(data); len(head) > 0; {
+		var line []byte
+		line, head, _ = bytes.Cut(head, []byte("\n"))
+		if raw, ok := bytes.CutPrefix(line, []byte("object ")); ok {
+			if len(raw) != hashLen*2 || !isHex(string(raw)) { // the length first, as in parseCommit
+				return "", false
+			}
+			return string(raw), true
 		}
 	}
 	return "", false
 }
 
-func headersOf(data []byte) string {
-	head, _, _ := strings.Cut(string(data), "\n\n")
+// headersOf is the object's headers, to the first blank line, as a view of data: one object may be
+// 32 MiB of short lines, so its readers walk them in place rather than copying or splitting them first.
+func headersOf(data []byte) []byte {
+	head, _, _ := bytes.Cut(data, []byte("\n\n"))
 	return head
 }
 

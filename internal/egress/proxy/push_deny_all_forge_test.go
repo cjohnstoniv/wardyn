@@ -128,16 +128,17 @@ func TestPushDenyAllForge_PlainlyAllowedPublicHostRefused(t *testing.T) {
 	}
 }
 
-// Another spelling of a known host is the same host: case, a trailing dot and
-// an internationalised spelling that maps onto it.
+// Another spelling of a known host is the same host: case and a trailing dot.
+// An internationalised spelling that maps onto it is refused at step 0 first.
 func TestPushDenyAllForge_HostSpellings(t *testing.T) {
 	r := newForgeRig(t, types.RunPolicySpec{AllowAllEgress: true, PushRules: &types.PushRulesSpec{DenyAll: true}}, nil)
 	r.refusedConnect(t, "GitHub.COM.:443", "github.com")
 	r.refusedConnect(t, "UPLOADS.github.com..:443", "uploads.github.com")
-	for _, host := range []string{"ｇｉｔｈｕｂ.com", "GITHUB.com.", "Dev.Azure.Com"} {
+	// A full-width spelling never reaches the forge guard: step 0 refuses every non-ASCII host first.
+	for host, want := range map[string]string{"ｇｉｔｈｕｂ.com": ruleSourceNonASCIIHost, "GITHUB.com.": ruleSourceGitPushDenyAllForge, "Dev.Azure.Com": ruleSourceGitPushDenyAllForge} {
 		d, _, log := r.p.evaluate(context.Background(), host, 443, http.MethodConnect, "")
-		if d != egress.Deny || log == nil || log.RuleSource != ruleSourceGitPushDenyAllForge {
-			t.Errorf("%q: decision %v %+v, want a %s deny", host, d, log, ruleSourceGitPushDenyAllForge)
+		if d != egress.Deny || log == nil || log.RuleSource != want {
+			t.Errorf("%q: decision %v %+v, want a %s deny", host, d, log, want)
 		}
 	}
 }

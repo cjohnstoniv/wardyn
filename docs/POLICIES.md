@@ -89,11 +89,12 @@
 - To wall off plain Azure DevOps egress, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`.
 - Empty under default-deny: no egress.
 - Each entry must be a shape the proxy's matcher can match.
-- Writes reject a mid-label wildcard, a URL, a bad `:port` or a non-ASCII spelling.
+- Writes reject a mid-label wildcard, a URL, a bad `:port`, a non-ASCII spelling or an IP address in a non-standard spelling (`134744072`, `010.0.0.1`).
 - Type internationalised hosts as punycode (`xn--…`).
 - A policy stored before that check can still carry a dead entry.
 - Each sidecar's boot `WARN` names every dead entry in both lists.
 - Never a refusal: failing a run over a long-inert entry is worse.
+- An entry in a spelling the proxy refuses in every request is the exception, since it binds nothing: an IP address in a non-standard spelling, or a host with a character outside ASCII. A run whose stored policy holds one does not start, and the proxy's log names each with its standard or ASCII form.
 - It matters most on `denied_domains`: it denies nothing.
 - Capped at **256 entries**, a hostile-input ceiling; more is a write-time `400`.
 
@@ -207,8 +208,10 @@
 - A deny entry that IS a literal IP is the one case where the key is not the raw string: host strings and policy entries alike are canonicalized through `net.IP` first.
 - Denying `93.184.216.34` also denies `::ffff:93.184.216.34` and every other spelling of that same address — a different ADDRESS is still a different key.
 - Under the default posture that changes nothing — an unlisted host is `always_deny`.
-- But under `allow_all_egress` a literal public IP is allowed (private, loopback, link-local and metadata ranges are denied regardless of policy).
+- But under `allow_all_egress` a literal public IP in its standard spelling is allowed (private, loopback, link-local and metadata ranges are denied regardless of policy).
 - To refuse those too, set `refuse_ip_literals: true`. An IP address listed exactly in `allowed_domains` is still allowed; `refuse_ip_literals` refuses every other IP literal, in any spelling.
+- An address written any other way than dotted decimal or the IPv6 text form (`134744072`, `0x8080808`, `010.0.0.1`, a zoned IPv6 address) is refused on every run whatever the policy allows. Programs differ on which address it names; its `rule_source` is `builtin:ip-spelling`.
+- A host with a character outside ASCII (`８.８.８.８`, a full-width `example.com`) is refused on every run too, `rule_source: builtin:non-ascii-host`, because programs map it to different names or addresses. A client sends an internationalised name in its `xn--` form, which the lists match.
 - There is one operator-authored exception: a private-range literal named EXACTLY in `allowed_domains`, which is what an `egress_redirects` `to` on a private endpoint adds for the runs it covers, is reachable and audited as `rule_source: site-config:egress-redirect`.
 - A wildcard never qualifies and a deny still wins.
 - A member's own entry does not create that exception under an `allow_all_egress` ceiling: run create drops it, with a `clamp_warnings` line, unless the ceiling lists the same address for every port the entry names.
@@ -1230,7 +1233,7 @@ Rules for what a run may send to one host: which methods, on which paths. `host_
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `rules` | `[]HostRule` | — (required) | The set's rules, read in order. At most 64 rules per set and 16 sets per policy, the sets other layers add included. |
-| `host` | `string` | — (required) | One exact host, lowercase, with no wildcard, port or path. |
+| `host` | `string` | — (required) | One exact host, lowercase, with no wildcard, port or path. An IPv4 address is written as four decimal numbers with no leading zeros; a stored rule in another spelling stops the run from starting. |
 | `methods` | `[]string` | `[]` (all) | Uppercase HTTP methods the rule matches. |
 | `paths` | `[]string` | `[]` (all) | Paths the rule matches, each with the paths below it: `/repos` matches `/repos` and `/repos/a`, not `/reposx`. Written in normal form (below), with no query or fragment. |
 
@@ -1332,6 +1335,7 @@ Residual: a rule constrains requests addressed to its host name, not every route
 | A file the push introduces is over `max_file_size_mib`, or its size is not carried by the pack and the forge cannot show it unchanged | `403` | `brokered:git:push-rules` | Remove or shrink those files, or have an operator raise `max_file_size_mib` (`0` turns it off; off github.com that is the only remedy besides pushing through a GitHub lane). Names up to ten files; a deny, so it wins over `require_review_paths`. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
 | The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
+| A commit in the push names more than 1024 parents, another compiled-in ceiling | `413` | `brokered:git:push-too-large` | Merge fewer branches in one commit. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |

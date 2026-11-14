@@ -437,11 +437,18 @@ func rearmBodyDeadline(w http.ResponseWriter, r *http.Request) { rearmBodyDeadli
 // Only while network body bytes remain unread: once a request has no body left, net/http reads the
 // connection in the background with no deadline, and a deadline set then ends that read mid-handler,
 // cancelling the request and failing every later request on the connection.
+//
+// Once r's context has ended the deadline is now instead, checked after the set: a re-arm that races the
+// cancel (interruptBodyReadOnCancel) cannot push the deadline back out past it.
 func rearmBodyDeadlineAfter(w http.ResponseWriter, r *http.Request, wait time.Duration) {
 	if !networkBodyUnread(r) {
 		return
 	}
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(wait + mitmReadTimeout))
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(wait + mitmReadTimeout))
+	if r.Context().Err() != nil {
+		_ = rc.SetReadDeadline(time.Now())
+	}
 }
 
 // networkBody is the state of the body a request arrived with, kept in its context so it outlives a

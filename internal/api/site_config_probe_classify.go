@@ -289,3 +289,25 @@ func (s *Server) probeRecordingWarning(ctx context.Context, state string, runID 
 		"complete and their recordings will be lost. Check WARDYN_CONTROL_PLANE_URL (%s) is reachable from the runs "+
 		"namespace (the proxy pod uploads recordings there).", s.cfg.ControlPlaneURL)
 }
+
+// upstreamResolveFailDetail names resolveUpstreamProxyURL's (runs_bedrock.go)
+// failReason codes in the same human-readable style as curlFailureDetail.
+var upstreamResolveFailDetail = map[string]string{
+	"unsupported-scheme": "it is not an http:// URL (https is not supported)",
+	// The sidecar's own loader (proxy.ValidUpstreamProxyURL) refused the
+	// authority — in practice a port outside 1-65535, or no host at all.
+	"unloadable-upstream-url": "the proxy sidecar's own loader refuses it (check the host and port)",
+	"reserved-secret-name":    "its secret ref names a reserved secret",
+	"no-secret-store":         "no secret store is configured",
+	"secret-not-found":        "its secret ref does not resolve to a stored secret",
+
+	// Delivered, not dropped: the run's proxy refuses its config, so no run starts until it is rewritten.
+	upstreamURLHostRefused: "its host is written in a spelling the proxy refuses in every request, so no run starts until it is rewritten",
+}
+
+func upstreamFailDetail(reason string) string {
+	if d, ok := upstreamResolveFailDetail[reason]; ok {
+		return d
+	}
+	return reason
+}

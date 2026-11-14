@@ -154,6 +154,16 @@ func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
 	return client
 }
 
+// ErrUpstreamProxyHostRefused marks a server build refused because its upstream proxy's host is written in a
+// spelling the proxy refuses in every request. It is permanent: no retry builds the server until the URL is
+// rewritten. The error's own text is the host's refusal, which names the host and never the URL's user info.
+var ErrUpstreamProxyHostRefused = errors.New("the upstream proxy's host is written in a spelling the proxy refuses")
+
+// upstreamHostRefusal keeps the host's refusal text and is ErrUpstreamProxyHostRefused to errors.Is.
+type upstreamHostRefusal struct{ error }
+
+func (upstreamHostRefusal) Is(target error) bool { return target == ErrUpstreamProxyHostRefused }
+
 // upstreamProxyFor parses and validates the upstream/parent corp proxy
 // (optional) and registers any embedded credential in the mask registry so it
 // can never leak into a decision log or stdout. The credential is held
@@ -164,6 +174,11 @@ func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*ups
 		return nil, err
 	}
 	if up != nil {
+		// Config load holds this host to the spelling rule; this is the backstop for a Config whose URL was
+		// set after its load, as the via_org engine's is: the hop is dialed with no step 0 of its own.
+		if err := ValidConfigHost(up.host); err != nil {
+			return nil, upstreamHostRefusal{err}
+		}
 		for _, v := range up.maskValues() {
 			procMaskFor(maskKey, v)
 		}

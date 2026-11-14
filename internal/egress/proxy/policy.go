@@ -292,12 +292,25 @@ func ValidDomainEntry(d string) error {
 	// no request host can end with.
 	case strings.Contains(wild, ":"):
 		return bad(`the ":port" qualifier must be a number in 1..65535`)
-	// Charset. See domain_charset.go.
+	// Charset. See domain_charset.go. An entry with a character outside ASCII is named in its ASCII form
+	// where IDNA gives one.
 	case deadCharsetEntry(exact, wild):
+		if a, ok := types.ASCIIHostForm(domainEntryHost(d)); ok && nonASCIIHost(exact+wild) {
+			return bad(charsetWhy + "; its ASCII form is " + a)
+		}
 		return bad(charsetWhy)
+	// An address in a non-standard spelling: step 0 refuses every request written that way
+	// (nonStandardIPSpelling), and a request for the address in its standard spelling is another key, so
+	// the entry binds nothing. A deny written this way would be silently void.
+	case nonStandardIPSpelling(exact):
+		return bad(ipSpellingWhy)
 	}
 	return nil
 }
+
+// ipSpellingWhy is the reason ValidDomainEntry gives for an address entry in a non-standard spelling.
+const ipSpellingWhy = "an IP address is written in standard form: four decimal numbers from 0 to 255 with no leading zeros " +
+	`("8.8.8.8", not "134744072", "0x8080808" or "010.0.0.1"), or an IPv6 address`
 
 // evalHost returns the policy-only verdict for a host+port. Deny always wins.
 // A bare allow/deny entry matches any port; a port-qualified entry ("host:443")
@@ -305,17 +318,13 @@ func ValidDomainEntry(d string) error {
 func (p *Policy) evalHost(host string, port int) hostDecision {
 	host = domainmatch.CanonHost(host)
 	key := hostPortKey(host, port)
-	if p.live.denies(host, port) {
+	// Deny beats allow, unconditionally. A spelling net.ParseIP refuses but a resolver or a corporate
+	// upstream reads as an address (nonCanonicalLiteralIP) is denied when that address is; deny only,
+	// so it never inherits an allow.
+	if p.deniesHost(host, port) {
 		return hostDeny
 	}
-	// Deny beats allow, unconditionally.
-	if _, ok := p.deniedExact[host]; ok {
-		return hostDeny
-	}
-	if _, ok := p.deniedExactPort[key]; ok {
-		return hostDeny
-	}
-	if domainmatch.MatchWild(host, p.deniedWild) || domainmatch.MatchWildPort(host, port, p.deniedWildPort) {
+	if ip := nonCanonicalLiteralIP(host); ip != nil && p.deniesHost(ip.String(), port) {
 		return hostDeny
 	}
 	if _, ok := p.allowedExact[host]; ok {
@@ -345,6 +354,20 @@ func (p *Policy) evalHost(host string, port int) hostDecision {
 		return hostAllow
 	}
 	return hostUnknown
+}
+
+// deniesHost is evalHost's deny half for one spelling: the live list, then denied_domains.
+func (p *Policy) deniesHost(host string, port int) bool {
+	if p.live.denies(host, port) {
+		return true
+	}
+	if _, ok := p.deniedExact[host]; ok {
+		return true
+	}
+	if _, ok := p.deniedExactPort[hostPortKey(host, port)]; ok {
+		return true
+	}
+	return domainmatch.MatchWild(host, p.deniedWild) || domainmatch.MatchWildPort(host, port, p.deniedWildPort)
 }
 
 // methodAllowed reports whether a plain-HTTP method passes the method
@@ -574,6 +597,9 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind, h
 		// for it. Where the decoded address is in a liftable range, the way out is to
 		// write it canonically; where it is never liftable, that is the sentence.
 		if dec := nonCanonicalLiteralIP(h); dec != nil {
+			if kind == blockHardDeny {
+				return neverLiftableDetail("literal IP "+h+", which decodes to "+dec.String()+",", kind)
+			}
 			if k, _ := isBlockedIP(dec); neverLiftableClass[k] == "" {
 				return "literal IP " + h + " is a non-standard way to write " + dec.String() + ". The proxy refuses every non-standard spelling, " +
 					"and no internal_hosts entry lifts that; write the address as " + dec.String() + "."
@@ -690,6 +716,12 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 	case "builtin:resolve-failed":
 		w.Header().Set(egressHeaderDetail, resolveFailedDetail)
 		detail = "egress denied: " + resolveFailedDetail
+	case ruleSourceIPSpelling:
+		w.Header().Set(egressHeaderDetail, ipSpellingDetail)
+		detail = "egress denied: " + ipSpellingDetail
+	case ruleSourceNonASCIIHost:
+		w.Header().Set(egressHeaderDetail, nonASCIIHostDetail)
+		detail = "egress denied: " + nonASCIIHostDetail
 	case ruleSourcePort:
 		w.Header().Set(egressHeaderDetail, portRuleDetail)
 		detail = "egress denied: " + portRuleDetail

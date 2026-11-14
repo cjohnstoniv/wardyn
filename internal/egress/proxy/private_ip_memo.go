@@ -4,8 +4,6 @@
 package proxy
 
 import (
-	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -171,7 +169,7 @@ func (p *Proxy) privateIPMemoed(host string, port int) bool {
 // detail names the hard deny rather than a missing allowed_domains entry. The
 // second result is the memoed internal_hosts lift hint.
 func (p *Proxy) privateIPBlockKind(host string, port int) (blockKind, string) {
-	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
+	if ip := literalHostIP(host); ip != nil {
 		if p.hardDeny.ip(ip) {
 			return blockHardDeny, ""
 		}

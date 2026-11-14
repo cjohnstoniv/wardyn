@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -88,6 +89,27 @@ func TestStageProxyConfig_RefusesInvalidJSONAndLeavesNoFile(t *testing.T) {
 
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
 		t.Errorf("dst exists after a refused stage: stat err = %v, want IsNotExist", err)
+	}
+}
+
+// The sidecar refuses to start on a config whose policy holds an address in a non-standard spelling, at
+// both doors it loads through: the k8s init container's stage, which leaves no file, and the boot's load.
+func TestStartRefusesAnEntryInANonStandardIPSpelling(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "source-config.json"), filepath.Join(dir, "config.json")
+	raw := strings.Replace(string(validProxyConfigJSON(t)), `"listen":`, `"policy": {"allow_all_egress": true, "denied_domains": ["134744072"]}, "listen":`, 1)
+	if err := os.WriteFile(src, []byte(raw), 0o440); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	const want = `config: policy.denied_domains[0]: "134744072" writes an IP address in a non-standard spelling`
+	if err := StageProxyConfig(src, dst); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("StageProxyConfig: %v, want %q", err, want)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("dst exists after a refused stage: stat err = %v, want IsNotExist", err)
+	}
+	if _, _, err := loadConfig(src, nil); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("loadConfig: %v, want %q", err, want)
 	}
 }
 

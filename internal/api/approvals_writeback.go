@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -255,6 +256,15 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
 			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
 				"source": "verify:" + ap.RunID.String(), "detail": detail,
+			})))
+		return
+	}
+	// Never learned: a requirement row in a spelling the proxy refuses in every request would stop each
+	// run of the workspace at load. Only a sidecar that lies, or one older than step 0, raises one.
+	if err := proxy.ValidConfigHost(host); err != nil {
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
+			run.WorkspaceID.String(), "failure", auditWorkspaceDataFor(by, s.workspaceOwner(ctx, *run.WorkspaceID), map[string]any{
+				"source": "verify:" + ap.RunID.String(), "detail": err.Error(),
 			})))
 		return
 	}
