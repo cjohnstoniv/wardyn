@@ -286,6 +286,11 @@ func TestRemoteSink_CloseWaitsForTheDrainedReplyOfARecordLostAfterIt(t *testing.
 	if d := readUntil(t, c, FrameDrained); d.Consumed != 0 {
 		t.Fatalf("drained %+v; want nothing consumed", d)
 	}
+	eventually(t, "the drained reply marked as written", func() bool { // so only the loss can owe it again
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
+		return !rs.drainedOwed
+	})
 	rs.emit(egress.DecisionLog{Request: egress.Request{Host: "unsent.test"}, Decision: egress.Deny}) // stopped
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
