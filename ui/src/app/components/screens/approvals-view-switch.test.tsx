@@ -356,3 +356,55 @@ describe("ApprovalsScreen: a decision the server refuses as already decided", ()
     expect(within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ })).toBeEnabled();
   });
 });
+
+// A request with a decision out is held in every view: the card's own busy state is lost when a view switch remounts it,
+// and is already clear when the read after a decision starts, so the screen holds the request from the click until that
+// read has answered.
+describe("ApprovalsScreen: a request with a decision out has no live buttons in any view", () => {
+  const cardButtons = () => {
+    const card = within(screen.getByTestId("push-content-card"));
+    return [card.getByRole("button", { name: /^Approve$/ }), card.getByRole("button", { name: /^Deny$/ })];
+  };
+
+  it("a view switched to while the decision is out shows the card with both buttons off", async () => {
+    const approve = later<unknown>();
+    approveMock.mockReset().mockReturnValueOnce(approve.promise);
+    pendingFor.user.mockReset().mockResolvedValue([push("p1")]);
+    pendingFor.admin.mockReset().mockResolvedValueOnce([push("p1")]).mockResolvedValue([]);
+    await mount("/approvals");
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    await switchTo("/admin/approvals");
+    for (const button of cardButtons()) expect(button).toBeDisabled();
+    await act(async () => approve.answer({}));
+    await flush();
+    expect(screen.queryByTestId("push-content-card")).toBeNull();
+  });
+
+  it("after a decision that went through the card stays off until the read after it has answered", async () => {
+    const again = later<ApprovalRequest[]>();
+    approveMock.mockReset().mockResolvedValueOnce({});
+    pendingFor.user.mockReset().mockResolvedValueOnce([push("p1")]).mockReturnValueOnce(again.promise);
+    await mount("/approvals");
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    expect(pendingFor.user).toHaveBeenCalledTimes(2);
+    for (const button of cardButtons()) expect(button).toBeDisabled();
+    await act(async () => again.answer([push("p1")]));
+    await flush();
+    for (const button of cardButtons()) expect(button).toBeEnabled();
+  });
+
+  it("a decision the server refuses for any other reason frees the card at once, and a second click goes out", async () => {
+    approveMock.mockReset().mockRejectedValueOnce(new HttpError(500, "internal error")).mockResolvedValueOnce({});
+    pendingFor.user.mockReset().mockResolvedValue([push("p1")]);
+    await mount("/approvals");
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    expect(pendingFor.user).toHaveBeenCalledTimes(1);
+    for (const button of cardButtons()) expect(button).toBeEnabled();
+    fireEvent.click(cardButtons()[0]);
+    await flush();
+    expect(approveMock).toHaveBeenCalledTimes(2);
+  });
+});

@@ -602,6 +602,26 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     else return false;
     return true;
   };
+  // The requests with a decision out, from the click until the read after it has answered. The card's own busy state
+  // is lost when a view switch remounts it, and is already clear when the unawaited read after a decision starts, so
+  // this screen-level set keeps every view's card for the request disabled through both.
+  const [deciding, setDeciding] = React.useState<ReadonlySet<string>>(() => new Set());
+  const markDeciding = (id: string) => setDeciding((cur) => new Set(cur).add(id));
+  const releaseDeciding = (id: string) =>
+    setDeciding((cur) => {
+      if (!cur.has(id)) return cur;
+      const next = new Set(cur);
+      next.delete(id);
+      return next;
+    });
+  // The read after a decision that went through: the request stays held until it has answered, or failed, in which
+  // case the next poll tick catches the view up.
+  const readAfterDecision = (id: string): Promise<void> =>
+    fetchAllRef.current()
+      .catch(() => {
+        /* transient refresh failure: the decision itself already succeeded */
+      })
+      .finally(() => releaseDeciding(id));
   // The server's 409 for a request that is no longer pending: someone else decided it, or it ended. The card on screen
   // is stale, so the lists are read again at once, and the caller waits: the card stays busy until that read answers.
   const refreshIfDecided = async (err: unknown): Promise<boolean> => {
@@ -615,6 +635,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
 
   const decide = async (reason: string, decisionScope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!prompt) return false;
+    const id = prompt.id;
+    markDeciding(id);
     try {
       const args = decisionArgs(decisionScope, until);
       if (prompt.action === "approve") await api.approve(prompt.id, reason, ...args);
@@ -627,9 +649,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       // uses instead; a refresh failure here is not fatal — the decide
       // itself already succeeded, and the next poll tick will catch the
       // view up.
-      fetchAllRef.current().catch(() => {
-        /* transient refresh failure — decide() itself already succeeded */
-      });
+      void readAfterDecision(id);
       onChanged?.();
       return true;
     } catch (err) {
@@ -642,6 +662,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       }
       // The dialog is for a request that is decided, so it closes with the card.
       if (await refreshIfDecided(err)) setPrompt(null);
+      releaseDeciding(id);
       return false;
     }
   };
@@ -653,20 +674,23 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // decision_scope — see ado-capability-card.tsx's adoDecisionArgs for why a
   // bodyless decide can't be used here. The push card passes no opts at all.
   const decideAdoDirect = async (id: string, approve: boolean, opts: [] | [DecisionOptions]): Promise<void> => {
+    markDeciding(id);
     try {
       if (approve) await api.approve(id, "approved", ...opts);
       else await api.deny(id, "denied", ...opts);
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      fetchAllRef.current().catch(() => {
-        /* transient refresh failure — the decide itself already succeeded */
-      });
+      void readAfterDecision(id);
       onChanged?.();
     } catch (err) {
-      if (refusalToast(err)) return;
+      if (refusalToast(err)) {
+        releaseDeciding(id);
+        return;
+      }
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
       await refreshIfDecided(err);
+      releaseDeciding(id);
     }
   };
 
@@ -679,15 +703,15 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
 
   // #2963 — a "Needs you" request's Decline: not a decide() verb (approvals_takeover.go).
   const declineTakeover = async (id: string): Promise<void> => {
+    markDeciding(id);
     try {
       await api.decline(id);
-      fetchAllRef.current().catch(() => {
-        /* transient refresh failure — the decline itself already succeeded */
-      });
+      void readAfterDecision(id);
       onChanged?.();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
       await refreshIfDecided(err);
+      releaseDeciding(id);
     }
   };
 
@@ -702,8 +726,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     onChanged?.();
   };
   // data-focus-row: when a decision removes the card whose button opened the dialog, focus moves to the next card.
+  // A disabled fieldset turns off every button in the card, whatever its kind, while a decision for it is out.
   const approvalCard = (a: ApprovalRequest, waiting: boolean) => (
-    <div key={a.id} data-focus-row>
+    <fieldset key={a.id} data-focus-row disabled={deciding.has(a.id)} className="m-0 min-w-0 border-0 p-0">
       <ApprovalCard
         item={wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a}
         presetBlocked={presetRefused.has(a.id)}
@@ -715,7 +740,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         onDecline={declineTakeover}
         refused={refused.has(a.id)}
       />
-    </div>
+    </fieldset>
   );
 
   const waitingCount = (waitingStatus === "ready" ? waitingRows.length : 0) + deciderRequests.length;
