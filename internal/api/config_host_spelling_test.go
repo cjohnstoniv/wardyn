@@ -284,7 +284,7 @@ func TestAnUpstreamProxyURLInARefusedSpellingIsDeliveredSoTheRunStops(t *testing
 		h := newHarness(t)
 		h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte(raw)}}
 		runID := uuid.New()
-		if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, sc, nil); got != raw {
+		if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, sc, nil, ""); got != raw {
 			t.Errorf("site config %+v: resolveRunUpstreamProxy = %q, want the URL delivered", sc, got)
 		}
 		ev := findAudit(h.audit.events, runID, "run.upstream_proxy.resolve", "failure")
@@ -299,7 +299,7 @@ func TestAnUpstreamProxyURLInARefusedSpellingIsDeliveredSoTheRunStops(t *testing
 		}
 	}
 	h := newHarness(t)
-	if got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:0"}, nil); got != "" {
+	if got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:0"}, nil, ""); got != "" {
 		t.Errorf("a URL whose port the proxy refuses: %q, want it dropped", got)
 	}
 }
