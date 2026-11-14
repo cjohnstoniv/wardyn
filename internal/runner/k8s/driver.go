@@ -249,6 +249,8 @@ type Driver struct {
 	// stopRecheck stops the re-check loop and waits for it; nil until it starts.
 	stopRecheck func()
 
+	warm warmState // warm pool reconcile state (warm_reconcile.go)
+
 	// linuxVM is set by EnableLinuxVM; unset, every non-container kind is refused.
 	linuxVM atomic.Bool
 
