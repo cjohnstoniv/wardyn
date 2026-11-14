@@ -71,6 +71,17 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fenced 
 	return nil, reason, err
 }
 
+// errSSHChannelClosed is the cause a session channel's context ends with when its request stream ends while the
+// connection's context is still live: the client closed the channel or its whole connection.
+var errSSHChannelClosed = errors.New("the client closed the SSH channel")
+
+// sshClientClosedFirst reports whether ctx, a session channel's context, ended because its client closed the channel
+// or its connection (errSSHChannelClosed), not because the daemon stopped, which ends the connection's context and so
+// the channel's with that context's own cause.
+func sshClientClosedFirst(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errSSHChannelClosed)
+}
+
 // sftpServerMissing is the image contract a missing sftp-server breaks.
 const sftpServerMissing = "sftp unavailable: the sandbox image has no " + sftpServerPath
 
