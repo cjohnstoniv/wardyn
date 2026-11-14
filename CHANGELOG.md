@@ -174,6 +174,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Handing back a takeover now wakes a run that was paused for being idle while the person had control, and the pause sweep wakes it if that did not run. A hand back that lands while the sweep is pausing the run leaves it running.
 - A takeover whose desktop did not open now says the person has control and keeps Hand back, with an Open the desktop button to try again, instead of saying the takeover failed.
 - After a hand back, a new takeover request on the same run page now shows its Take over instead of the finished banner.
+- A copy offer already showing in a run's terminal when the page learns that the run keeps its content in now closes, and its Copy copies nothing. Before, it still copied under the line saying copying out of this terminal is off. When the page cannot read the run's `data_out` rule, the terminal now keeps copying off and says it could not read the rule; before, a failed read left copying on.
 
 ### Security
 

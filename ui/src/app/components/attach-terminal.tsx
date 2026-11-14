@@ -144,8 +144,8 @@ export interface AttachTerminalProps {
   /** The run's own policy (GET /runs/{id}), for the Request access remedy
    *  beside a refusal. Never an error envelope. */
   policy?: PolicyRef;
-  /** The run's data_out rule keeps its content in: no copy offer, the terminal's own copy is swallowed, and one line says so. */
-  keepsIn?: boolean;
+  /** The run's data_out rule keeps its content in, or the page could not read it ("unreadable"): no copy offer, the terminal's own copy is swallowed, and one line says which. */
+  keepsIn?: boolean | "unreadable";
 }
 
 export interface AttachTerminalHandle {
@@ -216,6 +216,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const copyGateRef = React.useRef<CopyGate | null>(null);
   const keepsInRef = React.useRef(!!keepsIn);
   keepsInRef.current = !!keepsIn;
+  // The run's data_out rule can arrive after an offer was made: drop the offer, so none outlives copying being off.
+  React.useEffect(() => {
+    if (keepsIn) copyGateRef.current?.dismiss();
+  }, [keepsIn]);
   // A clicked terminal link awaiting the confirm dialog.
   const [linkTarget, setLinkTarget] = React.useState<URL | null>(null);
   // Renderer: the per-browser choice, the live control, and what is actually drawing.
@@ -564,7 +568,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
 
       {keepsIn && (
         <p data-testid="terminal-keeps-in" className="border-b border-border bg-muted/40 px-3 py-1.5 text-meta text-muted-foreground">
-          {DATA_OUT_RUN.TERMINAL}
+          {keepsIn === "unreadable" ? DATA_OUT_RUN.TERMINAL_UNREAD : DATA_OUT_RUN.TERMINAL}
         </p>
       )}
 
@@ -626,6 +630,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             onDone={() => copyGateRef.current?.dismiss()}
             onHold={(held) => copyGateRef.current?.hold(held)}
             copyRef={offerCopyRef}
+            keepsIn={() => keepsInRef.current}
           />
         ) : null}
         {readOnly && (

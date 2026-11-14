@@ -63,7 +63,7 @@ export function TerminalPane({
   // (#1476: the run's person, or an admin on a run no person owns).
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
-  // The run's data_out rule, read only for a terminal that could open. Unknown draws nothing.
+  // The run's data_out rule, read only for a terminal that could open. Unknown draws nothing; a failed read turns copying off under its own line.
   const dataOut = useRunDataOut(run.id, attachable);
   // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
   const watchable = !recordingDisabled && run.has_recording !== false;
@@ -110,7 +110,7 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    const terminal = <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} keepsIn={dataOut === "review" || dataOut === "blocked"} />;
+    const terminal = <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} keepsIn={dataOut === "unreadable" ? "unreadable" : dataOut === "review" || dataOut === "blocked"} />;
     // A macOS VM run is RUNNING while its setup runs: the terminal opens at once, so say the setup is still going.
     if (!run.macos_preparing) return terminal;
     return (
