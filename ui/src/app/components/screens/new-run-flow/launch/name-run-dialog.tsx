@@ -180,6 +180,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
           </div>
           <Input
             id="name-run-title"
+            required
             value={title}
             placeholder={NR_LAUNCH.TITLE_PLACEHOLDER}
             onChange={(e) => dispatch({ type: "launchFields", patch: { title: e.target.value } })}
