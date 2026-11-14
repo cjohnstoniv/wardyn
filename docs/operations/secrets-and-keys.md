@@ -323,7 +323,7 @@ Read from agentgateway v1.7.0's source, not run:
 `wardynd -rotate-gateway-identity-key` is a **maintenance mode, not a server start**, with no environment pair.
 
 1. Stop every replica. Without `WARDYN_HA` the mode refuses while a daemon holds the single-instance lock. With it no lock can tell, so this step is yours: a replica left serving keeps signing with the key it loaded.
-2. Run the mode. It writes the new key, writes a `secret.rekey` audit row and exits. With no key row it refuses, and it never makes a first key.
+2. Run the mode. It writes the new key, then rotates the client certificate CA when one exists, writes a `secret.rekey` audit row for each and exits. With no key row it refuses, and it never makes a first key.
 3. Start `wardynd`, then restart each gateway.
 
 The old key stays published until 15 minutes after the rotation: the longest token lifetime, 10 minutes, plus a 5-minute overlap for refetches and clock skew. The key set stops publishing it then, restart or not.
@@ -339,6 +339,25 @@ Signing moves to the new key at once, so a gateway that has not refetched answer
 - **The outage.** The rotation stops every replica, so a recovery is an outage. Gateway calls stay refused until the replicas are back and the gateways have reloaded.
 
 To find the row, read the audit log for action `secret.rekey` with target `wardyn-gateway-identity-key`. Its `actor` is `wardyn/rotate-gateway-identity-key`. Its data holds `kid`, `replaced_kid`, `retired_previous`, and `previous_retire_at` on a planned rotation.
+
+## The AI gateway client certificate CA
+
+The CA that signs each run's gateway client certificate ([The run's client certificate](ai-gateway.md#the-runs-client-certificate)).
+
+| Part | What it is |
+|---|---|
+| Storage | One secret-store row, `wardyn-gateway-client-ca`, holding the CA's P-256 key, its certificate, and the previous certificate with its retire time. It is separate from `wardyn-gateway-identity-key`, so a gateway that trusts one trusts nothing the other signs. |
+| When it is made | At the save that first turns run identity on, beside the signing key; on an install whose signing key already exists, at the next start. Never on an install that has not turned identity on. |
+| Bundle | Anonymous `GET /.well-known/wardyn-experimental/gateway-client-ca.pem`, under `WARDYN_BASE_PATH` when set, gated like the key set. |
+
+- **A row that fails to decrypt or parse fails closed.** It is never made again, so certificate mints and the bundle answer 503 until a person restores the row. Tokens are not affected.
+- **Rotation.** `wardynd -rotate-gateway-identity-key` rotates this CA after the signing key, under the same steps. The old CA certificate stays in the bundle for 15 minutes; with `-retire-previous` it leaves at once.
+- **New certificates are refused until each gateway reloads the bundle.** From its next start wardynd signs every new certificate with the new CA. A gateway's trust store does not fetch a CA it lacks, so a gateway that requires the certificate refuses each one until it reloads the bundle. Step 3 of [Rotating the key](#rotating-the-key), restarting each gateway, ends that.
+- **With `-retire-previous`, a live run keeps its old certificate for up to 5 minutes.** Its proxy presents the old CA's certificate until its first new handshake after half-life, so a gateway that has reloaded refuses that run's new connections until then.
+- **An unreadable CA row stops the mode after the signing key is rotated.** The new signing key and its audit row are already written. Restore the CA row before you run the mode again. That run rotates the signing key again, and a second rotation inside 15 minutes removes the older key early ([Rotating the key](#rotating-the-key)).
+- **If the CA key is stolen.** A thief can sign a certificate naming any run, accepted by every gateway that trusts this bundle until the gateway refetches it after a `-retire-previous` rotation. A gateway that also checks the token still refuses a call that carries no token the signing key made.
+
+To find the row, read the audit log for action `secret.rekey` with target `wardyn-gateway-client-ca`. Its `actor` is `wardyn/rotate-gateway-identity-key`. Its data holds `serial`, `replaced_serial`, `retired_previous`, and `previous_retire_at` on a planned rotation.
 
 ## The audit receipt key
 

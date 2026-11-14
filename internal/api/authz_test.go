@@ -223,7 +223,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// Public keys only, fetched by an AI gateway that holds no Wardyn credential;
 	// with no key it answers as a path no route holds (handleGatewayJWKS). Walked on
 	// the console's router; a headless one serves it from mountUI's NotFound.
-	"GET /.well-known/wardyn-experimental/gateway-jwks.json": {class: classAnonymous},
+	"GET /.well-known/wardyn-experimental/gateway-jwks.json":     {class: classAnonymous},
+	"GET /.well-known/wardyn-experimental/gateway-client-ca.pem": {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
 	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the

@@ -139,6 +139,7 @@
   - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
   - The gateway sees `wardyn-proxy` as its caller. Unless a provider opts in, Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
   - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
+  - A gateway that asks for a client certificate also gets [one naming the run](operations/ai-gateway.md#the-runs-client-certificate).
   - The token format is `1`, and the key set's address is stable through 0.11.
   - A Bedrock key provider opts in with its gateway in `bedrock.base_url`. A Bedrock SSO provider cannot.
   - Without it, a per-person limit can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key. With it, a rule can key on the token's `sub`, `wardyn_run` and `wardyn_runner`.

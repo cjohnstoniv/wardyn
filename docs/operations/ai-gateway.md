@@ -220,10 +220,10 @@ A model call crosses three TLS hops. Only the first two are Wardyn's.
 | Hop | Who terminates TLS | Who trusts what | What each side sees |
 |---|---|---|---|
 | 1. Sandbox to `wardyn-proxy` | `wardyn-proxy`, with a leaf from the run's own certificate authority. It terminates only a host it is set to intercept; any other `CONNECT` is an opaque tunnel | The sandbox trusts the run's authority plus the `WARDYN_TRUSTED_CA_FILE` roots | The proxy reads the whole request, the person's bearer included. The sandbox never holds the identity token, and the proxy deletes any `X-Wardyn-Identity` the sandbox sends on a run with a route |
-| 2. `wardyn-proxy` to the gateway | The gateway | The proxy trusts the system roots plus the `WARDYN_TRUSTED_CA_FILE` bundle. It presents no client certificate | The gateway sees `wardyn-proxy` as its caller, with `X-Wardyn-Identity`, `X-Wardyn-Call-Id` and the person's bearer |
+| 2. `wardyn-proxy` to the gateway | The gateway | The proxy trusts the system roots plus the `WARDYN_TRUSTED_CA_FILE` bundle. When the gateway asks for a client certificate, the proxy presents one naming the run ([below](#the-runs-client-certificate)) | The gateway sees `wardyn-proxy` as its caller, with `X-Wardyn-Identity`, `X-Wardyn-Call-Id` and the person's bearer |
 | 3. The gateway to the model vendor | The vendor | Whatever the gateway's own config says | Nothing on this hop is Wardyn's |
 
-- Identity is a header, not a client certificate. The gateway checks the token's signature against the key set, and nothing at the TLS layer names the caller.
+- Identity is always the header: the gateway checks the token's signature against the key set. A gateway that asks for a client certificate also gets one naming the run, so it can check the caller at the TLS layer too.
 - With an upstream proxy set, hop 2 is a `CONNECT` through it, unless the gateway host is on `upstream_proxy_no_proxy`.
 
 > [!WARNING]
@@ -236,6 +236,38 @@ To exempt the gateway host from the upstream proxy:
 3. Start a run and confirm the gateway's access log shows the call.
 
 - The list and its matching rules are under "[Upstream proxy: the bypass list](../OPERATIONS.md#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)".
+
+## The run's client certificate
+
+A gateway that asks for a client certificate in the TLS handshake gets one naming the run. It comes with run identity, with no setting of its own.
+
+| Part | What it is |
+|---|---|
+| The certificate | An X.509 certificate with one URI SAN, the run's SPIFFE ID `spiffe://<trust domain>/agent-run/<run id>`: the same value as the token's `act.sub`. It is for client authentication only, and it is not a CA. |
+| Its key | A P-256 key that `wardyn-proxy` makes in memory. wardynd sees only its public half. |
+| Its lifetime | The shortest `token_lifetime_seconds` among the run's routes, 600 seconds when none is set. The proxy gets a new one on the first new handshake after half-life. |
+| Who signs it | A CA of its own, the secret-store row `wardyn-gateway-client-ca`, apart from the token's signing key. |
+| The bundle | Anonymous `GET /.well-known/wardyn-experimental/gateway-client-ca.pem` on wardynd, under `WARDYN_BASE_PATH` when set, with `max-age=60`. It holds the current CA certificate and, for 15 minutes after a rotation, the previous one. Off, it answers as a path no route holds. |
+| When it is sent | Only to the host and port of one of the run's routes, and only when that gateway asks. A gateway that does not ask gets no certificate, and none is made. |
+| When none is sent | When wardynd does not sign one, or the gateway names only other CAs. A gateway that requires one then refuses the connection, and the proxy's log carries its TLS alert. |
+
+To check it at the gateway:
+
+1. Fetch the bundle and set it as the gateway's trusted client CA.
+2. Require a client certificate on the listener the run's proxy reaches. Where a TLS front sits before the gateway, the front is what must ask for it and check it. A TLS front that asks for a certificate but does not require one lets the call through.
+3. Check that the certificate's URI SAN equals the token's `act.sub`, so a certificate and a token from two different runs are refused.
+
+- **The certificate never stands alone: check the token on every call.** The proxy presents the certificate on any connection to a route's host and port, and it names only the run, not the person or the audience.
+- **A connection keeps its certificate.** Connections are reused, so a certificate can be older than the call it carries. The token is what reflects a cut run, a suspended person or a changed provider.
+- **No revocation list.** The certificate's short life is the limit, as with the token. On the normal path a run's end stops its proxy, and the key goes with it. A run whose stop is not confirmed keeps its proxy, but wardynd signs no new certificate for it.
+- **A sandbox's own tunnel has no certificate.** A gateway that requires one refuses a sandbox that reaches it through an opaque tunnel.
+- **A TLS-inspecting proxy on hop 2 breaks it.** The inspector ends TLS, so the gateway sees the inspector's connection, not the run's certificate. Use the bypass recipe above.
+- **A gateway that asks only after the handshake gets none.** TLS renegotiation is not supported.
+- **A front that checks against another CA still refuses.** The proxy sends the certificate to a front that only asks when the front names no CA, or names one called the same as Wardyn's, such as another Wardyn install's. If that front then checks against a CA other than this install's, it refuses the connection.
+- **Tested against Go's own TLS server only.** No run against LiteLLM, Portkey, agentgateway, OpenRouter or another named gateway has checked it.
+- **Not SPIRE.** The certificate carries a SPIFFE ID, but Wardyn runs no SPIFFE Workload API and publishes no SPIFFE federation bundle. A gateway that reads a PEM trust bundle can use it.
+- **The bundle's address is experimental.** Unlike the key set's, it carries no stability promise.
+- **Rotation.** `wardynd -rotate-gateway-identity-key` rotates the CA with the signing key ([The AI gateway client certificate CA](secrets-and-keys.md#the-ai-gateway-client-certificate-ca)).
 
 ## Joining a run's audit rows to the gateway's log
 
