@@ -543,6 +543,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	uiCallerHeaders(pr.Out.Header, sess)
 	if uiDesktopApp(sess.App) {
 		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
+		pr.Out = desktopConnTrace(pr.Out)
 	}
 }
 
@@ -724,12 +725,8 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, uiFail(ctx, http.StatusNotFound, reasonRunNotFound, "run not found")
 	}
-	if run.State != types.RunRunning || run.SandboxRef == "" {
-		return nil, uiFail(ctx, http.StatusConflict, reasonUIGatewayNotRunning, "run is not RUNNING; the UI app is gone (state="+string(run.State)+")")
-	}
-	// A kept run is RUNNING with its agent stopped: the UI app is gone.
-	if runIsKept(run) {
-		return nil, uiFail(ctx, http.StatusConflict, reasonUIGatewayRunKept, "run has ended; the UI app is gone")
+	if de := uiRunGone(run); de != nil {
+		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
 	// A macOS VM's loopback also holds Screen Sharing (5900-5909): the desktop door, which the window's
 	// session and recording accounting covers. Refused here, before any launcher probe, relay exec or

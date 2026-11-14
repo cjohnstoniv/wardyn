@@ -32,6 +32,12 @@ func (s faultHintStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRu
 }
 func (faultHintStore) TouchRun(context.Context, uuid.UUID) error { return nil }
 
+// SetEndedRunFailureHint is the hint write a run that is over takes (store.PG.SetEndedRunFailureHint), read
+// back like the other.
+func (s faultHintStore) SetEndedRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error {
+	return s.SetRunFailureHint(ctx, id, hint)
+}
+
 // exitRunner ends the agent with a chosen exit code.
 type exitRunner struct {
 	*fakeRunner

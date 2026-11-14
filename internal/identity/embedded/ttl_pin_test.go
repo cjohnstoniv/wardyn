@@ -115,6 +115,10 @@ func TestExpiredVerifyCarriesTheRunID(t *testing.T) {
 	if exp.RunID != runID {
 		t.Errorf("ExpiredTokenError.RunID = %s, want %s", exp.RunID, runID)
 	}
+	// The expiry it carries is the token's own, which internal/api bounds its decision-door row by.
+	if want := id.Expiry.Truncate(time.Second); !exp.Expiry.Equal(want) {
+		t.Errorf("ExpiredTokenError.Expiry = %v, want the token's expiry %v", exp.Expiry, want)
+	}
 	if !errors.Is(verr, jwt.ErrExpired) {
 		t.Errorf("the typed error must still unwrap to jwt.ErrExpired; got %v", verr)
 	}
@@ -133,5 +137,21 @@ func TestExpiredVerifyCarriesTheRunID(t *testing.T) {
 	}
 	if errors.As(verr, &exp) {
 		t.Errorf("a wrong-audience refusal came back as an expiry (run %s) — only expiry names a run", exp.RunID)
+	}
+
+	// The same once that token has expired, and for an expired token another key signed: the run id an
+	// expiry names comes only from a token whose signature and audience are good, because internal/api
+	// writes a row on that run for it (run.identity.expire, and run.report.drop at the decision door).
+	p.now = func() time.Time { return base.Add(tokenTTL + time.Minute + time.Second) }
+	if _, verr = p.Verify(ctx, fresh.Token, "wardyn-groundtruth"); verr == nil || errors.As(verr, &exp) {
+		t.Errorf("an expired token for another audience: err = %v; want a refusal that names no run", verr)
+	}
+	foreign, err := New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), &recordingRecorder{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	foreign.now = p.now
+	if _, verr = foreign.Verify(ctx, id.Token, "wardyn-internal"); verr == nil || errors.As(verr, &exp) {
+		t.Errorf("an expired token another key signed: err = %v; want a refusal that names no run", verr)
 	}
 }

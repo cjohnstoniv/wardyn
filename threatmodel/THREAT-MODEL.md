@@ -688,6 +688,16 @@ is not the deployment described above.**
     render at 2048 reads.
 - Each part is masked with the secrets registered when it arrives, so a value printed before it is
   registered stays in an earlier part.
+- A revoked run token still reaches its own run's decision door inside the five-minute grace after
+  each end of the run, and after a later server write to the ended run's row, until it expires
+  (about an hour), even after a kill for compromise. A holder can add egress, content-scan, DNS
+  and model token-count rows to that run only, set its failure hint to a Bedrock one (a fixed
+  sentence naming at most an HTTP status and an error class) or clear such a hint, and write at
+  most one refusal (`authz.denied`) row on it in each 65 minutes from each server process. A
+  holder of the run's revoked or expired token can also write at most one `run.report.drop` row on
+  it in each 65 minutes from each server process: with a revoked token only by a malformed report
+  inside that grace, or while the run, or its runner's pending actions, cannot be read, and with
+  an expired one only until about two hours after the run is over.
 - Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked);
 - honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`);
 - host eBPF is blind inside CC3/Kata (`kernel.sensor.bypass`).

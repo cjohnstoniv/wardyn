@@ -154,11 +154,27 @@ type Spool struct {
 	manifestWrites uint64
 }
 
-// queuedAppend is one appender's record and the channel its outcome is sent on.
+// queuedAppend is one appender's record, what kind of record it is, and the channel its outcome is sent on.
 type queuedAppend struct {
 	decision egress.DecisionLog
+	kind     appendKind
 	done     chan error
 }
+
+// appendKind is what a local producer's record may take, and what it means when it does not fit (commit).
+type appendKind uint8
+
+const (
+	// appendRefusable is Append's: a record of a request that was not sent. It stays out of the loss reserve,
+	// and one that does not fit is a refused admission, counted in Drops (replayed as builtin:spool-full).
+	appendRefusable appendKind = iota
+	// appendSent is AppendAdmitted's: a record of a request that was sent. It stays out of the loss reserve, and
+	// one that does not fit is lost, never counted as a refusal; its producer reports the loss.
+	appendSent
+	// appendLossRow is AppendLoss's: the producer's own report of what it lost, which may take the loss reserve.
+	// One that does not fit is not counted.
+	appendLossRow
+)
 
 // Open refuses unsafe or corrupt existing state. A missing directory starts a
 // new private stream; an existing stream never silently resets its cursor.
@@ -363,21 +379,31 @@ func (s *Spool) writeManifest(m manifest) error {
 
 // Append commits before returning. An unreserved producer must refuse on any
 // error; the proxy separately reserves capacity before forwarding requests.
+// The record is one of a request that was not sent: one that does not fit is a
+// refused admission (Drops).
 func (s *Spool) Append(ctx context.Context, decision egress.DecisionLog) error {
-	return s.append(ctx, decision)
+	return s.append(ctx, decision, appendRefusable)
 }
 
-// AppendAdmitted finishes a request whose proxy already reserved capacity.
-// Overflow refuses new requests, never discards this previously admitted tail.
+// AppendAdmitted writes a record of a request that was sent. One that does not
+// fit is lost, and ErrFull says so: it is not a refused admission, so Drops does
+// not count it, and its producer must report the loss itself.
 func (s *Spool) AppendAdmitted(ctx context.Context, decision egress.DecisionLog) error {
-	return s.append(ctx, decision)
+	return s.append(ctx, decision, appendSent)
+}
+
+// AppendLoss writes the producer's own report of what it lost, the one local
+// record that may take the last record slot and LossReserveBytes. One that does
+// not fit is not counted.
+func (s *Spool) AppendLoss(ctx context.Context, decision egress.DecisionLog) error {
+	return s.append(ctx, decision, appendLossRow)
 }
 
 // append refuses only a record that does not fit. A refusal counted earlier
 // waits in Drops for replay to report it; it does not close a spool with room,
 // which a dropped runner link would otherwise keep closed until reconnect.
-func (s *Spool) append(ctx context.Context, decision egress.DecisionLog) error {
-	q := &queuedAppend{decision: decision, done: make(chan error, 1)}
+func (s *Spool) append(ctx context.Context, decision egress.DecisionLog, kind appendKind) error {
+	q := &queuedAppend{decision: decision, kind: kind, done: make(chan error, 1)}
 	s.qmu.Lock()
 	s.queue = append(s.queue, q)
 	s.qmu.Unlock()
@@ -426,7 +452,16 @@ func (s *Spool) commit(batch []*queuedAppend, errs []error) error {
 			errs[i] = err
 			continue
 		}
-		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes+int64(len(b)) > MaxBytes || len(b) > MaxRecordBytes {
+		// Only a loss row takes the last record slot and LossReserveBytes, as a remote grant leaves them (grantRoom).
+		records, bytes := int64(MaxRecords-1), int64(MaxBytes-LossReserveBytes)
+		if q.kind == appendLossRow {
+			records, bytes = MaxRecords, MaxBytes
+		}
+		if m.Last-m.Ack.Seq >= records || m.Bytes+int64(len(b)) > bytes || len(b) > MaxRecordBytes {
+			if q.kind != appendRefusable {
+				errs[i] = ErrFull
+				continue
+			}
 			if m.Drops == ^uint64(0) {
 				errs[i] = errors.New("spool overflow counter exhausted")
 				continue

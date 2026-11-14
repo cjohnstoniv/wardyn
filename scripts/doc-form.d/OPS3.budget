@@ -219,7 +219,7 @@ docs/operations/api-tokens.md=6928 share=35 # 6911 measured (+128: the portal un
 # docs/operations/denials.md 5717 adds 1 over 5716, measured (rc.12): git_push_withheld in the runner proxy-setting list.
 # docs/operations/denials.md 5718 adds 1 over 5717, measured (rc.12): forge_hosts in the runner proxy settings list.
 # docs/operations/denials.md 5573 adds 73 over 5500, measured at the rc.16 w3 batch B train: the merged lanes' additions together.
-docs/operations/denials.md=5573 share=35 # 5500 measured (+60: the not_a_decider and decision_scope_above_rule rows); earlier: release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
+docs/operations/denials.md=5649 share=35 # 5649 measured (+76: the decision door joins the tail-upload doors, takes a revoked run token, and writes its refusal once per run); earlier: 5500 measured (+60: the not_a_decider and decision_scope_above_rule rows); earlier: release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

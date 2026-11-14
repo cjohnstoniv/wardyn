@@ -132,6 +132,12 @@ func cutText(typ byte, text string) []byte {
 // handshake38 runs an RFB 3.8, security None session up to the normal phase.
 func (h *harness) handshake38() {
 	h.t.Helper()
+	h.handshake38With(serverInit())
+}
+
+// handshake38With is handshake38 with init as the server's ServerInit.
+func (h *harness) handshake38With(init []byte) {
+	h.t.Helper()
 	steps := []struct {
 		fromServer bool
 		msg        []byte
@@ -142,7 +148,7 @@ func (h *harness) handshake38() {
 		{false, []byte{1}},
 		{true, be32(0)},
 		{false, []byte{1}},
-		{true, serverInit()},
+		{true, init},
 	}
 	for _, s := range steps {
 		var got []byte

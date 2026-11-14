@@ -40,6 +40,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -469,7 +470,8 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
-	filtered := s.desktopClipboardFilter(ctx, sess, rules, viewOnly, s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}}))
+	recorded, rec := s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}})
+	filtered := s.desktopClipboardFilter(ctx, sess, rules, viewOnly, rec, recorded)
 	defer func() { _ = filtered.Close() }()
 	// A window waits for this stream's control to end (yielded), so its input stops before the close frame goes.
 	windowOpened := func() {
@@ -599,13 +601,15 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 // so no cut text flows today; the filter holds the rules for when one does. viewOnly also keeps the
 // viewer's input from the display. A background run's watch moves nothing but the picture, whatever the run's
 // rules and the Mac's caps say, and this filter holds that independently of the helper's.
-func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, viewOnly bool, display io.ReadWriteCloser) *rfbfilter.Conn {
+func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, viewOnly bool, rec *recording.RFBRecorder, display io.ReadWriteCloser) *rfbfilter.Conn {
 	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed, ViewOnly: viewOnly}
 	if sess.backgroundWatch() {
 		rules = rfbfilter.Rules{ViewOnly: true}
 	}
+	rules.Recorded = rec != nil // recordVMDisplay's recorder sits under the filter (Rules.Recorded)
 	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)
+		stopRefusedRecording(rec, err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {
 			s.auditUISession(sess, "ui.clipboard.transfer", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
 		}

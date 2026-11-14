@@ -159,6 +159,7 @@ const (
 // surface, not the member-facing API.
 const (
 	reasonInternalDecisionLogInvalid = "internal_decision_log_invalid" // the egress decision log body did not decode
+	reasonInternalDecisionUnrecorded = "internal_decision_unrecorded"  // the decision's egress row was neither written nor spooled; retry
 	reasonGroundtruthBatchInvalid    = "groundtruth_batch_invalid"     // the ground-truth batch body did not decode
 	reasonGroundtruthBatchTooLarge   = "groundtruth_batch_too_large"   // the batch named more than 1000 events
 	reasonGroundtruthActionNotKernel = "groundtruth_action_not_kernel" // an event's action lacks the required kernel. prefix

@@ -178,7 +178,7 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
         </div>
         {stoppedMs !== undefined && (
           <p role="status" className="border-b border-border px-3.5 py-2 text-meta text-muted-foreground" data-testid="desktop-replay-stopped">
-            {C.STOPPED_AT(at(stoppedMs))}
+            {C.STOPPED_AT(at(stoppedMs), pb.stop_reason)}
           </p>
         )}
         <div className="relative p-3.5">

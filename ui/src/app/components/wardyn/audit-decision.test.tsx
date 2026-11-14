@@ -137,8 +137,8 @@ describe("ruleSourceLabel", () => {
     for (const s of ["policy:denied", "policy:default-deny", "policy:method", "policy:evaluator-error"]) {
       expect(ruleSourceLabel(s), s).toEqual({ label: "Refused by policy", tone: "danger" });
     }
-    // builtin:upstream-proxy is an ALLOW (recorded once per run at proxy
-    // construction), not a refusal — the one builtin:* value the generic
+    // builtin:upstream-proxy is an ALLOW (recorded once per proxy as it
+    // starts), not a refusal — the one builtin:* value the generic
     // "Refused by the built-in guard" bucket must not catch.
     expect(ruleSourceLabel("builtin:upstream-proxy")).toEqual({
       label: "Corp upstream proxy in path",

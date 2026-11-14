@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -114,6 +115,23 @@ func TestRecordingOutput_GapThenLateCommittedUpload(t *testing.T) {
 	}
 	if _, got := f.get(t); got.Output != "late marker\n" {
 		t.Fatalf("invalid replacement lost %q", got.Output)
+	}
+}
+
+// A later part that cannot be read makes the recovery a gap, not a shorter cast stored as the run's output:
+// a gap is read again later (repairRecordingOutput), a recovered row is not.
+func TestRecordingOutput_ALaterPartReadErrorIsAGap(t *testing.T) {
+	f, rs := newRecordingOutputFixture(t)
+	saveOutputCast(t, rs, f.run.ID, partsHeader+`[0,"o","part one marker\n"]`+"\n")
+	rs.open = func(ctx context.Context, key string) (io.ReadCloser, error) {
+		if strings.HasSuffix(key, recording.PartSuffix(2)) {
+			return io.NopCloser(iotest.ErrReader(errors.New("part 2: input/output error"))), nil
+		}
+		return rs.Store.OpenCast(ctx, key)
+	}
+	f.srv.FinishRunOutput(t.Context(), f.run.ID)
+	if r := f.finalRow(t); !r.CaptureGap || len(r.Output) != 0 {
+		t.Fatalf("row = %+v, want a gap with no output", r)
 	}
 }
 

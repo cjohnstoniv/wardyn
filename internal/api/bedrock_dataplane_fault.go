@@ -66,7 +66,11 @@ func bedrockRefusalHint(fault string) (string, bool) {
 }
 
 // noteBedrockDataPlaneFault records fault (a class, or "recovered") on the
-// run's failure_hint. Best-effort, like every other hint write.
+// run's failure_hint. Best-effort, like every other hint write. A run that is
+// over (runIsOver) takes it on a write that leaves updated_at, which its tail
+// grace is counted from (runEndedHintSetter), so a late report that carries a
+// fault cannot open that grace again; a store without that write leaves the
+// hint unwritten.
 func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID, fault string) {
 	setter, ok := s.cfg.Store.(runFailureHintSetter)
 	if !ok {
@@ -97,10 +101,24 @@ func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID,
 		// hint is the watcher having won the race with this row's post.
 		return
 	}
-	if err := setter.SetRunFailureHint(ctx, runID, hint); err != nil {
+	set := setter.SetRunFailureHint
+	if runIsOver(run, s.cfg.Now().UTC()) {
+		ended, ok := s.cfg.Store.(runEndedHintSetter)
+		if !ok {
+			return
+		}
+		set = ended.SetEndedRunFailureHint
+	}
+	if err := set(ctx, runID, hint); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not persist bedrock data-plane hint",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
+}
+
+// runEndedHintSetter writes a run's failure_hint without moving updated_at
+// (store.PG.SetEndedRunFailureHint), for a run that is over.
+type runEndedHintSetter interface {
+	SetEndedRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error
 }
 
 // bedrockFaultHintSet is bedrockFaultHints' values, for "is this hint ours".

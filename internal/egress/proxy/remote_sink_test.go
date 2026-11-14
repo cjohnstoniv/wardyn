@@ -91,7 +91,7 @@ func startedSink(t *testing.T) (*remoteSink, *fakeRunnerd) {
 	t.Helper()
 	f := &fakeRunnerd{t: t, sessions: make(chan net.Conn, 4)}
 	rs := &remoteSink{runID: uuid.New(), key: testKey(), instance: "0123456789abcdef0123456789abcdef", dial: f.dial,
-		retry: 20 * time.Millisecond, drainFor: 200 * time.Millisecond, res: map[uuid.UUID]spoolReservation{}}
+		retry: 20 * time.Millisecond, drainFor: 200 * time.Millisecond, res: map[uuid.UUID]spoolReservation{}, granted: make(chan struct{})}
 	rs.cond = sync.NewCond(&rs.mu)
 	go rs.run()
 	t.Cleanup(func() {
@@ -199,6 +199,180 @@ func TestRemoteSink_RefusalsCountedOnlyWhenFull(t *testing.T) {
 	rs.emit(egress.DecisionLog{Decision: egress.Deny})
 	if refusedTotal(rs) != 1 {
 		t.Fatalf("refused=%d: a drain refusal or a post-drain emit was counted", refusedTotal(rs))
+	}
+}
+
+// TestRemoteSink_CountsAnUnsentRecordItCannotCarryAsLost (I2): a record of a
+// request that was not sent, which the sink drops with no grant yet, while it
+// drains, once it stopped or once it closed, is counted as lost, never as a
+// refusal: the drained reply's consumed carries it into the exact loss, and goes
+// again for one lost after it.
+func TestRemoteSink_CountsAnUnsentRecordItCannotCarryAsLost(t *testing.T) {
+	rs, f := startedSink(t)
+	rs.mu.Lock()
+	rs.drainFor = 5 * time.Second // the drain ends when the held reservation's record comes
+	rs.mu.Unlock()
+	deny := egress.DecisionLog{Request: egress.Request{Host: "unsent.test"}, Decision: egress.Deny}
+	rs.emit(deny) // no grant yet
+	c := accept(t, rs, f.next(), 1, 0, 1, 1<<20)
+	id, err := rs.reserve(t.Context(), 100) // the grant's one record
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	rs.mu.Lock()
+	for !rs.draining {
+		rs.cond.Wait()
+	}
+	rs.mu.Unlock()
+	rs.emit(deny) // draining, with the grant used up
+	rs.emit(egress.DecisionLog{Request: egress.Request{AuditReservation: id, Host: "sent.test"}, Decision: egress.Allow})
+	if d := readUntil(t, c, FrameDrained); d.FinalSeq != 1 || d.Consumed-uint64(d.FinalSeq) != 2 {
+		t.Fatalf("drained %+v; want the two records lost before it in the exact loss", d)
+	}
+	rs.emit(deny) // stopped
+	if d := readUntil(t, c, FrameDrained); d.Consumed-uint64(d.FinalSeq) != 3 {
+		t.Fatalf("drained again %+v; want the record lost after it in the exact loss too", d)
+	}
+	if refusedTotal(rs) != 0 {
+		t.Fatalf("refused=%d: a record no full grant refused was counted as a refusal", refusedTotal(rs))
+	}
+	if err := rs.close(short(t)); err != nil {
+		t.Fatal(err)
+	}
+	rs.emit(deny) // closed
+	rs.mu.Lock()
+	lost := rs.lost
+	rs.mu.Unlock()
+	if lost != 4 {
+		t.Fatalf("lost=%d; want each of the four records the sink dropped counted", lost)
+	}
+}
+
+// TestRemoteSink_CountsARecordThatWouldNotEncodeAsLost (I2, residual 16): a
+// record that does not encode is dropped, so it is counted as lost, the record
+// of an admitted request too while the sink has not stopped: its reservation
+// is gone, so the drained reply would otherwise not hold it. A masked value
+// that takes the host's quotes with it leaves bytes that do not decode.
+func TestRemoteSink_CountsARecordThatWouldNotEncodeAsLost(t *testing.T) {
+	rs, f := startedSink(t)
+	c := accept(t, rs, f.next(), 1, 0, 4, 1<<20)
+	key := uuid.New()
+	procMaskFor(key, []byte(`"unencodable.test"`))
+	t.Cleanup(func() { procRegistry.Evict(key) })
+	id, err := rs.reserve(t.Context(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.emit(egress.DecisionLog{Request: egress.Request{AuditReservation: id, Host: "unencodable.test"}, Decision: egress.Allow})
+	rs.emit(egress.DecisionLog{Request: egress.Request{Host: "unencodable.test"}, Decision: egress.Deny})
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	if d := readUntil(t, c, FrameDrained); d.FinalSeq != 0 || d.Consumed != 2 {
+		t.Fatalf("drained %+v; want no record sent and both that would not encode in the exact loss", d)
+	}
+	if refusedTotal(rs) != 0 {
+		t.Fatalf("refused=%d: a record that would not encode was counted as a refusal", refusedTotal(rs))
+	}
+}
+
+// TestRemoteSink_CloseWaitsForTheDrainedReplyOfARecordLostAfterIt (I2): a
+// record lost once the sink stopped raises the drained reply's consumed, and
+// close does not end a live session before that reply is written again, so a
+// record the proxy drops as it shuts down still reaches the exact loss.
+func TestRemoteSink_CloseWaitsForTheDrainedReplyOfARecordLostAfterIt(t *testing.T) {
+	rs, f := startedSink(t)
+	c := accept(t, rs, f.next(), 1, 0, 4, 1<<20)
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	if d := readUntil(t, c, FrameDrained); d.Consumed != 0 {
+		t.Fatalf("drained %+v; want nothing consumed", d)
+	}
+	eventually(t, "the drained reply marked as written", func() bool { // so only the loss can owe it again
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
+		return !rs.drainedOwed
+	})
+	rs.emit(egress.DecisionLog{Request: egress.Request{Host: "unsent.test"}, Decision: egress.Deny}) // stopped
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- rs.close(ctx) }()
+	select {
+	case err := <-closed:
+		t.Fatalf("close returned (%v) before the drained reply was written again", err)
+	case <-time.After(50 * time.Millisecond): // the session is a pipe: nothing is written until it is read
+	}
+	if d := readUntil(t, c, FrameDrained); d.Consumed != 1 {
+		t.Fatalf("drained again %+v; want the record lost after the first reply in the exact loss", d)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRemoteSink_CloseWaitsForARequestStillServed: close waits for a request still being served, so a
+// record it writes after the drained reply is counted in that reply, sent again, before the session ends.
+func TestRemoteSink_CloseWaitsForARequestStillServed(t *testing.T) {
+	rs, f := startedSink(t)
+	c := accept(t, rs, f.next(), 1, 0, 4, 1<<20)
+	done := rs.enter()
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	if d := readUntil(t, c, FrameDrained); d.Consumed != 0 {
+		t.Fatalf("drained %+v; want nothing consumed", d)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- rs.close(ctx) }()
+	rs.emit(egress.DecisionLog{Request: egress.Request{Host: "late.test"}, Decision: egress.Deny}) // stopped
+	if d := readUntil(t, c, FrameDrained); d.Consumed != 1 {
+		t.Fatalf("drained again %+v; want the record of the request still served in the exact loss", d)
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("close returned (%v) while a request was still being served", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	done()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close kept waiting once the request ended")
+	}
+}
+
+// TestRemoteSink_CloseEndsAnAdmissionWaitingForCredit: close refuses an admission still waiting for credit
+// at once, so the request waiting on it ends rather than holding close to that admission's own timeout.
+func TestRemoteSink_CloseEndsAnAdmissionWaitingForCredit(t *testing.T) {
+	rs, f := startedSink(t)
+	accept(t, rs, f.next(), 1, 0, 1, 1<<20)
+	if _, err := rs.reserve(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	done := rs.enter() // the request whose admission waits
+	refused := make(chan error, 1)
+	go func() {
+		_, err := rs.reserve(t.Context(), 100)
+		done()
+		refused <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // it waits for credit the exhausted grant does not have
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- rs.close(ctx) }()
+	select {
+	case err := <-refused:
+		if !errors.Is(err, runnerspool.ErrFull) {
+			t.Fatalf("an admission waiting when the sink began to close = %v, want ErrFull", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("an admission waiting for credit kept waiting once the sink began to close")
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -401,7 +575,7 @@ func TestRemoteSink_DrainEndsInFlightMITMRequest(t *testing.T) {
 // disconnect, not an end: the proxy reconnects, the accept's durable seq drops
 // what runnerd already has, the unacked tail is resent at the new gen with
 // identical bodies, and a drain answers final_seq and consumed (one held
-// reservation is the exact loss).
+// reservation is the exact loss), again on the session after it.
 func TestRemoteSink_ReconnectResendsAtNewGenAndDrains(t *testing.T) {
 	rs, f := startedSink(t)
 	c := accept(t, rs, f.next(), 1, 0, 10, 1<<20)
@@ -436,6 +610,12 @@ func TestRemoteSink_ReconnectResendsAtNewGenAndDrains(t *testing.T) {
 	d := readFrame(t, c)
 	if d.T != FrameDrained || d.Gen != 2 || d.FinalSeq != 3 || d.Consumed != 4 {
 		t.Fatalf("drained = %+v", d)
+	}
+	c.Close() // a transport loss after the reply: the next session is told it again
+
+	c = accept(t, rs, f.next(), 3, 3, 12, 1<<20)
+	if d := readFrame(t, c); d.T != FrameDrained || d.Gen != 3 || d.FinalSeq != 3 || d.Consumed != 4 {
+		t.Fatalf("drained on the next session = %+v", d)
 	}
 }
 

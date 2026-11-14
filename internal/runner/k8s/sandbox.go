@@ -346,10 +346,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 				// The proxy binds its listener only once it serves: after its startup resolve has
-				// succeeded and, on a runner (self_lapse), after its first renew. A connect to it is that
-				// proof: without a probe the container is Ready as soon as it runs, and waitPodIP can
-				// return before a failing resolve exits it, or start an agent whose requests the proxy
-				// still refuses, a short run's recording upload among them.
+				// succeeded and, on a runner (self_lapse), after its first renew and its decision sink's
+				// first grant. A connect to it is that proof: without a probe the container is Ready as
+				// soon as it runs, and waitPodIP can return before a failing resolve exits it, or start an
+				// agent whose requests the proxy still refuses, a short run's recording upload among them.
 				ReadinessProbe: &corev1.Probe{
 					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
 					PeriodSeconds: 1,

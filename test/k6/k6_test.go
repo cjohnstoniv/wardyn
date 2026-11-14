@@ -26,6 +26,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -129,7 +130,7 @@ func TestK6(t *testing.T) {
 	if err := json.Unmarshal([]byte(must(t, "K6_RUNNERD_SELECTOR")), &e.peerLabels); err != nil {
 		t.Fatalf("K6_RUNNERD_SELECTOR: %v", err)
 	}
-	e.sink = newFakeSink(e.relayIP)
+	e.sink = newFakeSink(t, e.cp.ip)
 	nodes, err := e.admin.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -367,8 +368,67 @@ func randHex() string {
 	return hex.EncodeToString(b[:])
 }
 
-func newFakeSink(relayIP string) *fakeSink {
-	return &fakeSink{pin: randHex(), url: "tls://" + relayIP + ":8444", gone: map[uuid.UUID]int{}}
+// newFakeSink stands in for runnerd's decision sink: a TLS listener on this process's kind-network address,
+// beside fakeControlPlane's, that accepts each proxy's session, grants it ample credit and acks its records.
+// A runner-mode proxy listens only once its sink has granted it credit, so without it no proxy becomes ready.
+func newFakeSink(t *testing.T, ip string) *fakeSink {
+	t.Helper()
+	now := time.Now()
+	blob, err := hoptls.NewCA(now)
+	if err != nil {
+		t.Fatalf("fake sink: CA: %v", err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatalf("fake sink: parse CA: %v", err)
+	}
+	cert, err := ca.ServingCert(ip, now)
+	if err != nil {
+		t.Fatalf("fake sink: serving cert for %s: %v", ip, err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("fake sink: parse serving cert: %v", err)
+	}
+	ln, err := tls.Listen("tcp", net.JoinHostPort(ip, "8444"), &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{proxy.SinkALPN}, MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatalf("fake sink: listen on %s:8444: %v", ip, err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	s := &fakeSink{pin: hex.EncodeToString(sum[:]), url: "tls://" + ln.Addr().String(), gone: map[uuid.UUID]int{}}
+	var gen atomic.Uint64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go s.serve(c, gen.Add(1))
+		}
+	}()
+	return s
+}
+
+// serve is one proxy session: accept and a grant, then an ack for every record until the proxy hangs up.
+func (s *fakeSink) serve(c net.Conn, gen uint64) {
+	defer c.Close()
+	if h, err := proxy.ReadSinkFrame(c); err != nil || h.T != proxy.FrameHello {
+		return
+	}
+	if proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameAccept, Gen: gen}) != nil ||
+		proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameGrant, Gen: gen, Through: 1 << 30, Bytes: 1 << 40}) != nil {
+		return
+	}
+	for {
+		f, err := proxy.ReadSinkFrame(c)
+		if err != nil {
+			return
+		}
+		if f.T == proxy.FrameRecord && proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameAck, Gen: gen, Seq: f.Seq}) != nil {
+			return
+		}
+	}
 }
 
 func (s *fakeSink) NewKey() (string, [32]byte, error) {

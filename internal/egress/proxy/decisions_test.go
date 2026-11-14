@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,7 +30,8 @@ import (
 func TestDecisionSinkEmitCloseRace(t *testing.T) {
 	log := decisionLog(egress.Request{Host: "x.test"}, egress.Allow, "policy:allowed")
 	for iter := 0; iter < 50; iter++ {
-		s := &decisionSink{ch: make(chan egress.DecisionLog, 4)} // out=nil: mirror is a no-op
+		// out=nil: mirror is a no-op. The client is for close's last summary, which fails fast here.
+		s := &decisionSink{ch: make(chan egress.DecisionLog, 4), endpoint: "http://127.0.0.1:0", client: &http.Client{Timeout: time.Second}}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -307,4 +309,68 @@ func TestDecisionSinkCountsARefusedPostAsDropped(t *testing.T) {
 			"it entirely — no individual record, and nothing in the dropped summary either")
 	}
 	_ = s.close(context.Background())
+}
+
+// A decision emitted once the sink has closed is counted as dropped, and one counted while the worker posts
+// its final summary is in none of the worker's summaries: close posts one more for those, so every drop is
+// summarized.
+func TestDecisionSinkSummarizesDropsCountedAfterItsLastReport(t *testing.T) {
+	for _, giveUp := range []bool{false, true} {
+		t.Run(fmt.Sprintf("close gives up waiting %v", giveUp), func(t *testing.T) {
+			var summarized atomic.Int64
+			inFirst, inSummary := make(chan struct{}), make(chan struct{})
+			releaseFirst, releaseSummary := make(chan struct{}), make(chan struct{})
+			var summaries atomic.Int32
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var d egress.DecisionLog
+				_ = json.NewDecoder(r.Body).Decode(&d)
+				if n, ok := strings.CutPrefix(d.RuleSource, "egress:dropped-decisions-"); ok {
+					var k int64
+					_, _ = fmt.Sscan(n, &k)
+					if summaries.Add(1) == 1 {
+						close(inSummary)
+						<-releaseSummary
+					}
+					summarized.Add(k)
+				} else {
+					close(inFirst)
+					<-releaseFirst
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer cp.Close()
+			s := newDecisionSink(cp.URL, newTokenSource("tok"), 4, cp.Client(), nil)
+			s.emit(decisionLog(egress.Request{Host: "x.test"}, egress.Allow, "policy:allowed"))
+			<-inFirst // the worker is posting the one queued decision
+			ctx, cancel := context.WithCancel(context.Background())
+			if giveUp {
+				cancel() // close stops waiting at once; the worker goes on posting
+			}
+			defer cancel()
+			closed := make(chan error, 1)
+			go func() { closed <- s.close(ctx) }()
+			for {
+				s.mu.Lock()
+				c := s.closed
+				s.mu.Unlock()
+				if c {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			s.emit(decisionLog(egress.Request{Host: "x.test"}, egress.Deny, "policy:denied")) // counted: the sink is closed
+			close(releaseFirst)
+			<-inSummary // the worker's final summary, of that one drop, is in flight
+			// Counted after the worker's final summary read the count.
+			s.emit(decisionLog(egress.Request{Host: "x.test"}, egress.Deny, "policy:denied"))
+			close(releaseSummary)
+			<-closed
+			for deadline := time.Now().Add(5 * time.Second); summarized.Load() < 2 && time.Now().Before(deadline); {
+				time.Sleep(time.Millisecond)
+			}
+			if got := summarized.Load(); got != 2 {
+				t.Fatalf("summarized %d dropped decisions, want 2: a drop counted after the worker's last summary went unreported", got)
+			}
+		})
+	}
 }

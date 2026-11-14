@@ -352,7 +352,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: p,
+		Handler: p.countedHandler(),
 		// SECURITY: the agent-facing listener is the untrusted side of the
 		// boundary. With ReadTimeout 0 there is NO header deadline unless this
 		// is set, so a partial-header connection would pin a goroutine
@@ -462,9 +462,9 @@ func (s *Server) ListenAndServe() error {
 // ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
 // the container's attach stream, which works on any engine, to know the agent may start. It means
 // "listening", nothing more. A proxy with a first-renewal gate (a self-lapsing one, Config self_lapse, or a
-// replacement the runner started with FirstRenewGateEnv) binds only after its first token renewal
-// (awaitOpen), so its marker already follows that renewal and the agent never starts behind a proxy that
-// will refuse it.
+// replacement the runner started with FirstRenewGateEnv) binds only after its first token renewal, and one
+// with a runner sink only after that sink's first grant (awaitOpen), so its marker already follows them and
+// the agent never starts behind a proxy that will refuse it.
 const ReadyMarker = "wardyn-proxy: ready"
 
 // OnListening sets fn to run once the main listener is bound, before the first connection is
@@ -483,22 +483,34 @@ func (s *Server) listen(addr string) (net.Listener, error) {
 	return &trackedListener{Listener: ln, set: &s.live}, nil
 }
 
-// awaitOpen holds a proxy with a first-renewal gate (a self-lapsing one on the k8s runner, or a replacement
-// the runner started with FirstRenewGateEnv) off its listeners until its first renew: it refuses every
-// request until then, so it listens only once it serves, and a connect to it (the runner's readiness
-// probe) is proof of that for this proxy and an older one alike. False when Shutdown comes first, which a
-// lapse before that renew ends in too. A gate-less proxy goes on at once.
+// awaitOpen holds a proxy off its listeners until it serves: one with a first-renewal gate (a self-lapsing
+// one on the k8s runner, or a replacement the runner started with FirstRenewGateEnv) until its first renew,
+// and one whose decisions go to a runner sink until that sink's first grant, as it refuses every request
+// before either. So a connect to it (the runner's readiness probe) is proof that it serves, for this proxy
+// and an older one alike, and a proxy that never had a sink session served nothing, which is why settling
+// it owes no loss (runnerspool's Spool.SettleLoss). On a runner sink it then writes the upstream proxy
+// hop's row (auditUpstreamHop). False when Shutdown comes first, which a lapse before that renew ends in
+// too. A proxy with neither goes on at once.
 func (s *Server) awaitOpen() bool {
-	g := s.proxy.lapse
-	if g == nil {
-		return true
+	var renewed <-chan struct{}
+	if g := s.proxy.lapse; g != nil {
+		renewed = g.open
 	}
-	select {
-	case <-g.open:
-		return true
-	case <-s.stopped:
-		return false
+	granted := s.proxy.sinkGranted()
+	for _, open := range []<-chan struct{}{renewed, granted} {
+		if open == nil {
+			continue
+		}
+		select {
+		case <-open:
+		case <-s.stopped:
+			return false
+		}
 	}
+	if granted != nil {
+		s.proxy.auditUpstreamHop() // held back by newProxy until a session can carry it
+	}
+	return true
 }
 
 // watchShutdown arms s.stopped. net/http runs only the hooks registered before Shutdown, so this is
@@ -534,6 +546,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		defer cancel()
 	}
 	httpErr := s.http.Shutdown(httpCtx)
+	// http.Shutdown leaves hijacked tunnels open, and requests still running at its deadline: end them, so
+	// their last records are written while the sink can still carry them (a runner sink waits for them).
+	s.live.closeAll()
 	// End any open credential re-auth hold: its poll loop is detached from the
 	// request that opened it (so a hung-up SDK can't end a hold its owner is
 	// still signing in for), which also means nothing else would stop it

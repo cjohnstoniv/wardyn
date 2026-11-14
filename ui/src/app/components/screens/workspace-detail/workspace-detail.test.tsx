@@ -616,6 +616,42 @@ describe("WorkspaceDetailScreen — approveHosts merges onto the freshest overla
   });
 });
 
+// The server takes a stamped clean replay back on a later read when a decision of its run lands late, so the
+// page keeps reading for a while after the stamp (cleanVerdictMayMove) and shows the verdict it now holds; a
+// replay stamped long ago is not read again.
+describe("WorkspaceDetailScreen — a clean replay the server takes back", () => {
+  const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+  const replay = (finishedAgoMs: number): RecordResult => ({
+    run_id: "vr1", label: "build & test", mode: "interactive", confined: true, status: "recorded",
+    clean: true, caught: 0, finished_at: new Date(Date.now() - finishedAgoMs).toISOString(),
+  });
+  const withReplay = (rr: RecordResult) => ws({ record_results: { "build-test": learning, "verify:build-test": rr } });
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps reading a clean verdict stamped a minute ago, and shows it taken back", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const clean = replay(60_000);
+    getWorkspaceMock.mockResolvedValueOnce(withReplay(clean)).mockResolvedValue(withReplay({ ...clean, clean: false, caught: 1 }));
+    renderDetail();
+    expect(await screen.findByText("Replayed clean")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(await screen.findByText("Replayed — caught 1")).toBeInTheDocument();
+    expect(screen.queryByText("Replayed clean")).not.toBeInTheDocument();
+    const reads = getWorkspaceMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3 * 2500);
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(reads);
+  });
+
+  it("does not read again a clean verdict stamped eleven minutes ago", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    getWorkspaceMock.mockResolvedValue(withReplay(replay(11 * 60_000)));
+    renderDetail();
+    expect(await screen.findByText("Replayed clean")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3 * 2500);
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 // This screen never read useOperator at all — a viewer saw enabled
 // Delete/lane toggles/record controls that all 403 server-side.
 // UT-7b: GET /permissions/availability is securityOps, so the card (and its

@@ -76,8 +76,9 @@ func fastFinalRetry(t *testing.T) {
 
 // TestRun_ShortRunDeliversThroughARefusalThatMayPass: a run that ends before its
 // first part has one delivery, at exit. A refusal there that may pass (the run's
-// proxy unable to record the request yet, the relay to the organisation down, no
-// answer at all) is retried, so the command's output is stored as its recording.
+// proxy unable to record the request yet, the relay to the organisation down, the
+// recording store failing once, no answer at all) is retried, so the command's
+// output is stored as its recording.
 func TestRun_ShortRunDeliversThroughARefusalThatMayPass(t *testing.T) {
 	fastFinalRetry(t)
 	for _, c := range []struct {
@@ -87,6 +88,7 @@ func TestRun_ShortRunDeliversThroughARefusalThatMayPass(t *testing.T) {
 	}{
 		{"cast after 503", true, http.StatusServiceUnavailable},
 		{"cast after 502", true, http.StatusBadGateway},
+		{"cast after 500", true, http.StatusInternalServerError},
 		{"cast after no answer", true, 0},
 		{"log after 503", false, http.StatusServiceUnavailable},
 	} {

@@ -235,8 +235,18 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
 
     getDesktopRecording.mockResolvedValue(doc({ stopped_ms: 30_000 }));
     const second = tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
-    expect(await screen.findByTestId("desktop-replay-stopped")).toHaveTextContent(`Screen recording stopped at ${clock(30_000)};`);
+    expect((await screen.findByTestId("desktop-replay-stopped")).textContent).toBe(`Screen recording stopped at ${clock(30_000)}; the action log continues.`);
     second.unmount();
+
+    // A recording its relay stopped says why, in the recording's own words (stop_reason).
+    const why =
+      "Wardyn refused a pixel format the replay cannot read: 8 bits per pixel, depth 8, little-endian true colour, maxima of 7, 7 and 3 and shifts of 5, 2 and 0 for red, green and blue";
+    getDesktopRecording.mockResolvedValue(doc({ stopped_ms: 30_000, stop_reason: why }));
+    const refused = tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    expect((await screen.findByTestId("desktop-replay-stopped")).textContent).toBe(
+      `Screen recording stopped at ${clock(30_000)}; the action log continues. ${why}.`,
+    );
+    refused.unmount();
 
     getDesktopRecording.mockResolvedValue(doc({}));
     tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });

@@ -53,6 +53,9 @@ type RFBPlayback struct {
 	ClipboardOmitted int `json:"clipboard_omitted,omitempty"`
 	// StoppedMS is when the stream stopped being one the recorder could follow; nothing after it is kept.
 	StoppedMS int64 `json:"stopped_ms,omitempty"`
+	// StopReason says why the recording stopped at StoppedMS when the relay stopped it (Stop: a pixel format
+	// the relay refused) rather than the recorder; it is empty otherwise.
+	StopReason string `json:"stop_reason,omitempty"`
 }
 
 type rfbState int
@@ -88,6 +91,9 @@ type RFBRecorder struct {
 	stream  *rfbStream // the RFB stream after a 101
 	stopped int64
 	seen    int64 // every byte Write was given
+
+	stopReason string
+	halted     bool // Stop ran: nothing read after it is kept
 
 	// A frame holds whole server messages only, so a pause leaves out whole messages and what is kept
 	// still decodes. pending is the kept bytes of the message being read, out the whole messages the
@@ -130,6 +136,9 @@ func (r *RFBRecorder) Write(p []byte) (int, error) {
 	defer r.mu.Unlock()
 	n := len(p)
 	r.seen += int64(n)
+	if r.halted {
+		return n, nil
+	}
 	for len(p) > 0 {
 		switch r.state {
 		case rfbHeader:
@@ -355,6 +364,25 @@ func (r *RFBRecorder) StoppedMS() int64 {
 	return r.stopped
 }
 
+// Stop ends the recording now, for reason: the relay closes a stream it refused (a pixel format), and the
+// playback's StoppedMS and StopReason say where and why rather than the frames just ending. Nothing read
+// after it is kept. A recording already stopped keeps its first stop.
+func (r *RFBRecorder) Stop(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped == 0 {
+		r.stopped, r.stopReason = max(r.ms(), 1), reason
+	}
+	r.halted = true
+}
+
+// StopReason is the playback's StopReason.
+func (r *RFBRecorder) StopReason() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopReason
+}
+
 // Pause stops keeping frames and opens a gap; it reports false when already paused.
 func (r *RFBRecorder) Pause(reason string) bool {
 	r.mu.Lock()
@@ -394,7 +422,7 @@ func (r *RFBRecorder) Playback() (doc []byte, hadFrames bool) {
 	defer r.mu.Unlock()
 	pb := RFBPlayback{Version: 1, Format: "novnc-playback", Encoding: "base64", StartedAt: r.start.UTC(),
 		Frames: append([]string{}, r.frames...), Gaps: append([]RFBGap(nil), r.gaps...), Truncated: r.truncated,
-		StoppedMS: r.stopped}
+		StoppedMS: r.stopped, StopReason: r.stopReason}
 	if r.stream != nil {
 		pb.ClipboardOmitted = r.stream.cutTexts
 	}
