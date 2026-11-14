@@ -55,6 +55,8 @@ export interface AdminMintedToken {
   disposition?: TokenDisposition;
   /** The service identity the token was linked to, set on a moved token. */
   service_identity?: string;
+  /** Set on a live token that authentication refuses for its owner: it authenticates nothing now. */
+  owner_refused?: boolean;
 }
 
 export interface EraseResult {

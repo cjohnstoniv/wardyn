@@ -684,6 +684,10 @@ type APIToken struct {
 	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
 	// a token that has a move row (#1508); empty on any other token.
 	ServiceIdentity string `json:"service_identity,omitempty"`
+	// OwnerRefused marks a live token in the admin-minted inventory that apiTokenAuth refuses for its
+	// owner: a reserved principal, a deactivated or purged owner, a revocation cutoff on its owner after it
+	// was made, or a role stamp older than WARDYN_ROLE_STAMP_TTL. False on any other row.
+	OwnerRefused bool `json:"owner_refused,omitempty"`
 	// Inbound marks a token of APITokenKindInbound: it calls the inbound ports that name its principal as a
 	// caller, through the app gateway, and authenticates nothing on the API. Read from Kind.
 	Inbound bool   `json:"inbound,omitempty"`

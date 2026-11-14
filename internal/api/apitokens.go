@@ -614,12 +614,14 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 				return t.MintedBy == "" || t.MintedBy == t.Principal || (finished && !withRevoked)
 			})
 		}
-		// Only the still-work view: include_revoked lists every row, finished or not, whoever owns it.
+		// The still-work view drops a token authentication refuses for its owner; include_revoked lists every
+		// row, whoever owns it, and the row says so instead.
+		if err := s.markOwnerRefusals(r.Context(), tokens, now); err != nil {
+			writeServerError(w, r, "list api tokens", err)
+			return
+		}
 		if !withRevoked {
-			if tokens, err = s.dropDeactivatedOwners(r.Context(), tokens); err != nil {
-				writeServerError(w, r, "list api tokens", err)
-				return
-			}
+			tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool { return t.OwnerRefused })
 		}
 		for i := range tokens {
 			tokens[i].Token = ""
@@ -632,27 +634,24 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, tokens)
 }
 
-// dropDeactivatedOwners removes the tokens whose owner's identity is deactivated or purged: apiTokenAuth
-// refuses them, so the admin-minted inventory must not count them as tokens that still work. The answer is
-// the owner's, so each owner is asked once.
-func (s *Server) dropDeactivatedOwners(ctx context.Context, tokens []types.APIToken) ([]types.APIToken, error) {
-	if s.cfg.SessionRevocations == nil {
-		return tokens, nil
-	}
-	deactivated := map[string]bool{}
-	var err error
-	tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
-		key := t.Principal + "\x00" + t.Email
-		dead, asked := deactivated[key]
-		if !asked && err == nil {
-			var status oidc.SessionStatus
-			status, err = oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
-			dead = status == oidc.SessionDeactivated
-			deactivated[key] = dead
+// markOwnerRefusals sets OwnerRefused on each live token (neither revoked nor expired) that apiTokenAuth
+// refuses for its owner, by asking personTokenRefusal, the check verifyAPIToken itself runs, so the
+// inventory never counts a token authentication refuses as one that still works. Each token is asked on
+// its own: a revocation cutoff is measured against the token's own issue. A service identity's token is
+// left unmarked: authentication checks it against the identity and its sponsor, not as a person's.
+func (s *Server) markOwnerRefusals(ctx context.Context, tokens []types.APIToken, now time.Time) error {
+	for i := range tokens {
+		t := &tokens[i]
+		if t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now)) || isServicePrincipal(t.Principal) {
+			continue
 		}
-		return dead
-	})
-	return tokens, err
+		refusal, err := s.personTokenRefusal(ctx, *t, now)
+		if err != nil {
+			return err
+		}
+		t.OwnerRefused = refusal != personAccepted
+	}
+	return nil
 }
 
 // handleRevokeAPIToken is DELETE /api/v1/me/tokens/{id}: revoke one of the
