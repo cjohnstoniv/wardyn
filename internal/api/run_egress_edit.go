@@ -59,8 +59,10 @@ var (
 // ends by that deadline plus killCascadeTimeout, the edit's hard end. The census pin
 // (TestEgressEditBudget_CoversEveryWindowAfterTheClaim) checks that a revive's own windows fit before the call
 // budget, and that every window after a claim made by then closes before the hard end. Past the hard end only
-// calls that do not honour a done ctx remain: lock checks and releases, and Docker's sandbox stop. The answer
-// comes within 454 s, stated as 8 minutes (docs/operations/run-lifetime.md). Variables so a test can shorten them.
+// calls that do not honour a done ctx remain. The longest chain of them is lock checks and releases, Docker's
+// sandbox stop, and the audit sinks' 2 s read for each of the two stop-failure rows: 458 s, stated as 8 minutes
+// (docs/operations/run-lifetime.md). A kept run's store of a renewed Azure sign-in (heldStoreCallBound) makes a
+// shorter chain. Variables so a test can shorten them.
 var (
 	egressEditCallBudget = 230 * time.Second
 	egressEditBudget     = 350 * time.Second

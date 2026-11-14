@@ -79,9 +79,9 @@ MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 CURL_MAX_TIME=15
 # A live egress edit answers within one total on every branch, with or without a computer folder: its
 # request calls end by 230 s (egressEditCallBudget), its readback wait by 350 s (egressEditBudget), and every
-# window and run's end it opens by 380 s, its hard end. Past that only lock checks and releases and Docker's
-# 60 s sandbox stop remain: 454 s, stated as 8 minutes (docs/operations/run-lifetime.md). 480 s plus 10%,
-# rounded up to a multiple of 10.
+# window and run's end it opens by 380 s, its hard end. Past that the longest chain is lock checks and
+# releases, Docker's 60 s sandbox stop and the audit sinks' 2 s read for each of two failure rows: 458 s,
+# stated as 8 minutes (docs/operations/run-lifetime.md). 480 s plus 10%, rounded up to a multiple of 10.
 PATCH_MAX_TIME=530
 RUNS_NAMESPACE="wardyn-runs"
 EVIDENCE_DIR="${WARDYN_KIND_CI_MODEL_EVIDENCE:-${ROOT}/local/evidence/kind-ci-model-run}"
