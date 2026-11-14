@@ -68,8 +68,9 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 | Event | What happens |
 |---|---|
 | Keep | `--keep-machine` makes the machine when the run starts, on your own Mac, from its base. The run must be an interactive macOS VM run you start yourself |
-| Stop | A normal stop scrubs the disk (up to 60 seconds) and keeps the machine. Its expiry date is the stop time plus the idle days the run was admitted with, as the Mac recorded them |
+| Stop | A normal stop ends every program of `agent`, then scrubs the disk (up to 60 seconds) and keeps the machine. Its expiry is the stop time plus the idle days the run was admitted with, as the Mac recorded them |
 | A stop without a scrub | A kill by you, a restart of the Mac, lost network, a runner upgrade or a low disk keeps the machine too. The scrub did not run, so the machine shows `scrubbed: false` and is scrubbed when it next starts |
+| A scrub that fails | A program of `agent` that will not end, or one the check immediately after the scrub finds running, fails it. The machine shows `scrubbed: false` and is scrubbed when it next starts |
 | A kill by someone else | A kill by an admin or a service identity, who is not the run's owner, deletes the machine |
 | Resume | `--resume-machine` starts a new run from the disk. Before it boots, the Mac brings the machine's tools up to date if they are behind ([The tools update](#the-tools-update-of-a-kept-machine)) |
 | Fresh start | `--resume-machine <id\|name> --fresh` deletes what is on the machine and starts again from the Mac's current base, under the same name and base |
