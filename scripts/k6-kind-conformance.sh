@@ -655,10 +655,17 @@ EOF
     set -e
     grep -E '^\s*--- (FAIL|PASS|SKIP)|^(FAIL|ok) |panic:' "$WORK/test-$1-$VERSION.log" | tail -60 || true
     grep '^K6-CASE' "$WORK/test-$1-$VERSION.log" | sed "s/^K6-CASE/$VERSION/" >>"$SUMMARY" || true
-    if [ "$trc" != 0 ]; then
-      rc=1
-      # go test -v prints a failed case's messages above its --- FAIL line, as file:line.
-      grep -E '_test\.go:[0-9]+:|panic:' "$WORK/test-$1-$VERSION.log" | tail -120 || true
+    if [ "$trc" != 0 ]; then rc=1; fi
+    # A case that ends INCONCLUSIVE skips, so its suite still exits 0: its messages print as a failed
+    # suite's do, whenever a case's row is one the verdict below refuses.
+    if [ "$trc" != 0 ] || awk -F'\t' '/^K6-CASE/ && $3 != "PASS" && $3 != "IN-PROCESS" { f = 1 } END { exit !f }' "$WORK/test-$1-$VERSION.log"; then
+      # go test -v prints a failed case's messages above its --- FAIL line, each as file:line, and a
+      # message's later lines (every failure dump section's body) indented 8 spaces under it, with no
+      # file:line: keep them with their message, or each dump section prints as its header alone. No
+      # tail: the dump bounds each of its sources, and a tail would cut a case's failure line, which
+      # comes before its dump.
+      awk '/_test\.go:[0-9]+:|panic:/ { keep = 1; print; next } keep && /^        / { print; next } { keep = 0 }' \
+        "$WORK/test-$1-$VERSION.log" || true
     fi
     if [ -n "${K6_KEEP_LOGS:-}" ]; then cp "$WORK/test-$1-$VERSION.log" "$K6_KEEP_LOGS/" || true; fi
   }
