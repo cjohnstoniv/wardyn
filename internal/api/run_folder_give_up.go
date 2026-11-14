@@ -13,6 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // folderResumeFor is the resume a pass back that owes changes starts from (folderBackResume), given the one before
@@ -79,6 +80,110 @@ func (s *Server) giveUpFolder(ctx context.Context, run types.AgentRun, d1 bool, 
 // folderStatusUnreadable when the read that decided the give-up failed (tailStepOf), so the give-up says it did not
 // wait on that read, and its given_up row names it; "" for a give-up decided on reads that all answered.
 func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 bool, st types.RunLocalFolderStatus, note string) (final bool, err error) {
+	p := store.GiveUpParams{Cap: s.pendingCap()}
+	if d1 {
+		p.D1, p.Lag, p.Unsupported = true, containmentLag, true
+	}
+	return s.giveUpFolderWith(ctx, run, st, note, p)
+}
+
+// giveUpFolderStopped gives up the copy back still owed by a terminal run whose sandbox a boot sweep
+// (reconcileOrphanedRun), the forced stop's retry (retryForcedStop) or a run's end tail (giveUpFolderEnded)
+// stopped, and whose ref the caller is about to clear: with no ref no pass runs again, so the keep ends now
+// (a zero cap) and the final record and its given_up row keep what was left behind. final says the ref may be
+// cleared: nothing was owed (no resume, and no pass owed that never ran: keepsSandboxForFolder's two halves), or
+// the record is final. A record or rule that cannot be read, or a give-up that left the record open, is not final.
+func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (final bool, err error) {
+	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
+		return true, nil
+	}
+	st, err := ss.RunLocalFolderStatus(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return true, nil
+	case err != nil:
+		return false, err
+	}
+	owed := st.Resume != nil
+	if !owed {
+		if owed, err = s.folderOwed(ctx, run, st); err != nil {
+			return false, err
+		}
+	}
+	if !owed {
+		return true, nil
+	}
+	return s.giveUpFolderWith(ctx, run, st, "", store.GiveUpParams{})
+}
+
+// giveUpFolderEnded is giveUpFolderStopped for a run's end tail (finalizeRunEffects), which has the run's id
+// alone: the run is read here, and only from a store that keeps folder records. A run that is gone is final; a
+// run that cannot be read is not. A record that cannot be read is decided as the tail owner decides it
+// (tailStepOf): a run that the owed checks needing no record say owes nothing is final, and otherwise (owed, or
+// a folder seed or data_out rule that cannot be read either) the copy back is given up once its keep has run out
+// (noted folderStatusUnreadable), by the statement that also finds a record already final without decoding it.
+// Inside the keep that is not final, so a read that fails for a while throws no count away. Answering not final
+// for every such record would keep the ref for good, and the tail owner's give-up past the keep would stop the
+// sandbox again on every tick.
+func (s *Server) giveUpFolderEnded(ctx context.Context, id uuid.UUID) (final bool, err error) {
+	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok {
+		return true, nil
+	}
+	run, err := s.cfg.Store.GetRun(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return true, nil
+	case err != nil:
+		return false, err
+	}
+	if _, serr := ss.RunLocalFolderStatus(ctx, id); serr != nil && !errors.Is(serr, store.ErrNotFound) {
+		if owed, oerr := s.folderOwed(ctx, run, types.RunLocalFolderStatus{}); oerr == nil && !owed {
+			return true, nil
+		}
+		return s.giveUpFolderNoted(ctx, run, false, types.RunLocalFolderStatus{}, folderStatusUnreadable)
+	}
+	return s.giveUpFolderStopped(ctx, run)
+}
+
+// giveUpKeptUnquiesced gives up the copy back of a terminal run whose sandbox was kept for a resume (rec, its
+// record at the generation the pass back owns, holds one) and that its pass back could not quiesce: gone, or its
+// agent or egress would not stop. The sandbox is stopped after this, so its keep ends here, and the record keeps
+// what the resume counted, with its given_up row, as when a stop ends any keep (giveUpFolderStopped). A give-up
+// not made final leaves the resume and its count in place, with the generation settled (nothing was sent), so the
+// end's give-up after the stop (giveUpFolderEnded) tries again, and a ref kept while that fails keeps it owed.
+// true says the pass back is decided here and the sandbox is stopped; false is no resume, or a run not ended, and
+// the pass back then records its own outcome.
+func (s *Server) giveUpKeptUnquiesced(ctx context.Context, run types.AgentRun, rec types.RunLocalFolderStatus) bool {
+	if rec.Resume == nil || !isTerminalRunState(run.State) {
+		return false
+	}
+	gctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	if final, err := s.giveUpFolderWith(gctx, run, rec, "", store.GiveUpParams{}); !final {
+		slog.WarnContext(gctx, "wardynd: giving up a kept sandbox's copy back failed; its resume stays for the give-up after the stop",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		s.writeComputerFolderStatus(gctx, run.ID, rec.Gen, func(st *types.RunLocalFolderStatus) { st.Settled = rec.Gen })
+	}
+	return true
+}
+
+// folderUnquiescedText is the record of a pass back that did not run because its sandbox's agent and egress could
+// not be stopped first (qerr): a sandbox that had already stopped says so, and a person's bring-back says its agent
+// is still running.
+func folderUnquiescedText(ctx context.Context, qerr error) string {
+	if errors.Is(qerr, errSandboxStopped) {
+		return "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"
+	}
+	if _, ok := bringBackBy(ctx); ok {
+		return bringBackAgentRunningMsg
+	}
+	return folderBackGivenUp("no pass ran", "its agent and egress could not be stopped first: "+qerr.Error(), 0)
+}
+
+// giveUpFolderWith is giveUpFolderNoted with the statement's dues in p; the final record it writes is built here.
+func (s *Server) giveUpFolderWith(ctx context.Context, run types.AgentRun, st types.RunLocalFolderStatus, note string, p store.GiveUpParams) (final bool, err error) {
 	ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
 		return false, errors.New("this server's store cannot keep a folder record")
@@ -90,10 +195,7 @@ func (s *Server) giveUpFolderNoted(ctx context.Context, run types.AgentRun, d1 b
 	defer cancel()
 	back := s.folderGivenUpRecord(st)
 	back.Error += note
-	p := store.GiveUpParams{Back: back, Cap: s.pendingCap()}
-	if d1 {
-		p.D1, p.Lag, p.Unsupported = true, containmentLag, true
-	}
+	p.Back = back
 	out, err := ss.GiveUpRunLocalFolder(ctx, run.ID, p)
 	if err != nil {
 		return false, err

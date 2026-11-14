@@ -839,10 +839,11 @@ func TestForceKeptStop_AnUnsettledRecordOffTheServerStopsTheSandbox(t *testing.T
 			f := newForced(t)
 			f.s.cfg.Store = bumpRefusedStore{f.s.cfg.Store.(markedStore)}
 			f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 2, Resume: &types.FolderResume{Unsynced: 1}})
+			f.cs.giveUpApplies = true // the stop ends the keep: the owed copy back is given up before the ref is cleared
 			set(f)
 			f.end(f.s)
-			if f.sb.stopCount() != 1 {
-				t.Errorf("%d sandbox stops, want 1: it cannot be kept with its proxy stopped alone", f.sb.stopCount())
+			if f.sb.stopCount() != 1 || len(f.cs.giveUps) != 1 {
+				t.Errorf("%d sandbox stops, %d give-ups; want 1 and 1: it cannot be kept with its proxy stopped alone", f.sb.stopCount(), len(f.cs.giveUps))
 			}
 			if rows := forcedRows(t, f.audit, "run.ended.expired"); len(rows) != 1 || !rows[0].Stopped || f.leaser.markCount() != 0 {
 				t.Errorf("rows %+v, %d marks; want one row, stopped, mark cleared", rows, f.leaser.markCount())
@@ -1515,6 +1516,7 @@ func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsIsStoppedNotKept(t *tes
 		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0: both stops failed, so the retry waits", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
 	}
 	f.sb.stopErr = nil
+	f.cs.giveUpApplies = true // the stop ends the keep: the owed copy back is given up before the ref is cleared
 	f.tick(t, f.s)
 	if f.leaser.markCount() != 0 || f.sb.stopCount() != 1 {
 		t.Errorf("%d marks, %d sandbox stops; want 0 and 1: the proxy stop still fails, so the sandbox is stopped, not kept", f.leaser.markCount(), f.sb.stopCount())

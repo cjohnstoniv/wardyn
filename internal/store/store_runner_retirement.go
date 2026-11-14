@@ -233,6 +233,34 @@ func readRetirementTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (runnerRe
 	return t, nil
 }
 
+// retirementFolderKeepSQL is true for a run (r, its agent_runs row) whose sandbox retirement must not kill, as it is
+// kept for its computer folder's copy back (the server's keepsSandboxForFolder, read from the same columns): while
+// the run still holds its sandbox ref, a record holding a resume, folder settings that do not read as an object, or
+// a folder copied back both ways through a runner and seeded, on a run that was not killed, whose copy back was not
+// given up and either has no back that reads as one (it has not run) or is at a generation past the settled one (a
+// pass sent and not answered). A run with no ref is never kept: every ref clear follows a confirmed stop or kill,
+// and once the ref is gone nothing resumes or gives up its record (the tail owner and the give-up read only runs
+// that hold one), so a resume left behind would hold the retirement open for good. It reads the stored JSON with
+// no casts, so no record can fail the statement, and an answer it cannot give (NULL) keeps the sandbox.
+const retirementFolderKeepSQL = `COALESCE((r.sandbox_ref <> '' AND (COALESCE(r.local_folder_status->'resume', 'null'::jsonb) <> 'null'::jsonb
+		OR (r.local_folder IS NOT NULL AND (jsonb_typeof(r.local_folder) <> 'object'
+			OR (r.state <> 'KILLED' AND COALESCE(r.local_folder->>'direction', '') = 'both' AND COALESCE(r.local_folder->>'runner_id', '') <> ''
+				AND r.local_folder_seeded_at IS NOT NULL
+				AND COALESCE(jsonb_typeof(r.local_folder_status->'back'->'given_up_at'), 'null') <> 'string'
+				AND (COALESCE(jsonb_typeof(r.local_folder_status->'back'), 'null') <> 'object'
+					OR COALESCE(r.local_folder_status->'gen', '0'::jsonb) <> COALESCE(r.local_folder_status->'settled', '0'::jsonb))))))), true)`
+
+// retirementFolderKeptTx is retirementFolderKeepSQL for runID, read in tx. Its caller holds the run's row lock
+// (lockRunnerActionRun), and every write of a run's folder record, ref or state updates that row, so none commits
+// between this read and what the caller queues after it. A read that fails answers kept, with its error.
+func retirementFolderKeptTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (bool, error) {
+	var kept bool
+	if err := tx.QueryRow(ctx, `SELECT `+retirementFolderKeepSQL+` FROM agent_runs r WHERE r.id = $1`, runID).Scan(&kept); err != nil {
+		return true, fmt.Errorf("store: read run folder keep: %w", err)
+	}
+	return kept, nil
+}
+
 // RunnerRetirementCandidate is one run the retirement producer may advance,
 // with the runner that holds it.
 type RunnerRetirementCandidate struct {
@@ -244,7 +272,9 @@ type RunnerRetirementCandidate struct {
 // retire_run (retire_capable), a watermark row, a spool cursor, and a snapshot
 // still open or none yet with a live ref. A closed snapshot makes a run
 // permanently ineligible. A run whose obligation has an action still waiting
-// for the runner is left out until the runner answers it.
+// for the runner is left out until the runner answers it, and so is a run
+// whose sandbox is kept for its computer folder's copy back
+// (retirementFolderKeepSQL).
 func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementCandidate, error) {
 	return collect(ctx, s.Pool, "list", "runner retirement candidates", `WITH open_set AS (
 			SELECT run_id FROM runner_retirements WHERE state IN ('kill', 'retire')
@@ -260,6 +290,7 @@ func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementC
 		LEFT JOIN runner_retirements t ON t.run_id = r.id
 		WHERE NOT (r.state = ANY($1)) AND (t.state IN ('kill', 'retire') OR (t.run_id IS NULL AND r.sandbox_ref <> ''))
 			AND NOT EXISTS (SELECT 1 FROM runner_pending_actions p WHERE p.run_id = r.id AND p.obligation_id = t.obligation_id AND p.applied_at IS NULL)
+			AND NOT `+retirementFolderKeepSQL+`
 		ORDER BY r.id`, []any{nonTerminalStates()}, func(row pgx.Row) (RunnerRetirementCandidate, error) {
 		var c RunnerRetirementCandidate
 		return c, row.Scan(&c.RunID, &c.RunnerID)
@@ -281,7 +312,8 @@ func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementC
 //     are all in.
 //
 // Anything else (an action still open, another obligation fencing the run, a
-// run not terminal or not eligible, a closed snapshot) is RetirementIdle.
+// run not terminal or not eligible, a sandbox kept for its computer folder's
+// copy back, a closed snapshot) is RetirementIdle.
 func (s PG) AdvanceRunnerRetirement(ctx context.Context, runID uuid.UUID,
 	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (string, error) {
 	if prepare == nil {
@@ -319,6 +351,11 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 	}
 	if !run.State.IsTerminal() || !eligible {
 		return RetirementIdle, nil
+	}
+	// A sandbox kept for its computer folder's copy back is never killed. The keep is read again here, under the
+	// run's row lock, so a run kept since the producer listed it gets nothing opened or queued.
+	if kept, err := retirementFolderKeptTx(ctx, tx, run.ID); err != nil || kept {
+		return RetirementIdle, err
 	}
 	t, err := openRetirementTx(ctx, tx, run)
 	if errors.Is(err, ErrNotFound) || (err == nil && !t.open()) {

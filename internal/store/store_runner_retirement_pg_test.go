@@ -697,3 +697,120 @@ func TestPG_RunnerRetirementCandidates_MatchesTheWatermarkDrivenQuery(t *testing
 		t.Fatalf("candidates = %d runs, the watermark-driven query returns %d (want equal, and a corpus that selects some)", len(ids), len(want))
 	}
 }
+
+// Computer folder records as stored (types.RunLocalFolderStatus), for the retirement keep.
+const (
+	keepTestSeed       = `"seed":{"at":"2026-11-13T00:00:00Z","files":1,"bytes":1,"refused":[]}`
+	keepTestOwed       = `{` + keepTestSeed + `,"gen":1,"settled":1}`
+	keepTestInFlight   = `{` + keepTestSeed + `,"back":{"at":"2026-11-13T00:01:00Z","files":0,"bytes":0,"refused":[],"error":"the pass back failed"},"gen":3,"settled":2}`
+	keepTestResume     = `{` + keepTestSeed + `,"back":{"at":"2026-11-13T00:01:00Z","files":2,"bytes":5,"refused":[],"error":"cut short"},"resume":{"stalled":0},"gen":2,"settled":2}`
+	keepTestSettled    = `{` + keepTestSeed + `,"back":{"at":"2026-11-13T00:01:00Z","files":3,"bytes":10,"refused":[]},"gen":2,"settled":2}`
+	keepTestGivenUp    = `{` + keepTestSeed + `,"back":{"at":"2026-11-20T00:00:00Z","files":0,"bytes":0,"refused":[],"error":"given up","given_up_at":"2026-11-20T00:00:00Z"},"gen":3,"settled":2}`
+	keepTestUnreadBack = `{"back":5,"gen":1,"settled":1}`
+)
+
+// setKeepTestFolder gives run a computer folder whose settings are folder, seeded, with status as its record.
+func (f actionFixture) setKeepTestFolder(t *testing.T, runID uuid.UUID, folder, status string) {
+	t.Helper()
+	if _, err := f.pool.Exec(t.Context(), `UPDATE agent_runs SET local_folder = $2::jsonb, local_folder_seeded_at = now(),
+		local_folder_status = $3::jsonb WHERE id = $1`, runID, folder, status); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// keepTestFolder is folder settings a copy back runs for: both ways, through the fixture's runner.
+func (f actionFixture) keepTestFolder() string {
+	return `{"name":"proj","remote_dir":"/workspace/proj","runner_id":"` + f.rn.ID.String() + `","path":"/home/p/proj","direction":"both"}`
+}
+
+// Retirement leaves alone a sandbox kept for its computer folder's copy back, both in the candidate list and in the
+// step itself under the run's lock: a run that ended before its first copy back, one whose pass is in flight, one
+// whose record holds a resume, and one whose folder settings or copy back record do not read. A settled or given-up
+// copy back, and an owed record or a resume left after its sandbox was stopped and its ref cleared, retire as before.
+func TestPG_Retirement_KeepsASandboxKeptForItsFolder(t *testing.T) {
+	f := newActionFixture(t)
+	f.reportRetireCapable(t)
+	rows := []struct {
+		name, folder, status string
+		cleared, retires     bool
+	}{
+		{"terminal before the first pass", f.keepTestFolder(), keepTestOwed, false, false},
+		{"a pass in flight", f.keepTestFolder(), keepTestInFlight, false, false},
+		{"a persisted keep", f.keepTestFolder(), keepTestResume, false, false},
+		{"a resume left after its ref was cleared", f.keepTestFolder(), keepTestResume, true, true},
+		{"a copy back record that does not read", f.keepTestFolder(), keepTestUnreadBack, false, false},
+		{"folder settings that do not read", `"x"`, keepTestSettled, false, false},
+		{"a settled copy back", f.keepTestFolder(), keepTestSettled, false, true},
+		{"a given-up copy back", f.keepTestFolder(), keepTestGivenUp, false, true},
+		{"an owed record whose sandbox was stopped", f.keepTestFolder(), keepTestOwed, true, true},
+	}
+	ids := make([]uuid.UUID, len(rows))
+	for i, row := range rows {
+		run, _ := f.endedRetirementRun(t, false)
+		f.setKeepTestFolder(t, run.ID, row.folder, row.status)
+		if row.cleared {
+			if err := f.st.ClearSandboxRefRetaining(t.Context(), run.ID); err != nil {
+				t.Fatalf("%s: %v", row.name, err)
+			}
+		}
+		ids[i] = run.ID
+	}
+	got, err := f.st.RunnerRetirementCandidates(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[uuid.UUID]bool{}
+	for _, c := range got {
+		listed[c.RunID] = true
+	}
+	for i, row := range rows {
+		want := store.RetirementIdle
+		if row.retires {
+			want = store.RetirementKill
+		}
+		if listed[ids[i]] != row.retires {
+			t.Errorf("%s: listed = %v, want %v", row.name, listed[ids[i]], row.retires)
+		}
+		// Asked directly too, as a run listed before its keep began would be: the step reads the keep again.
+		if step, err := f.st.AdvanceRunnerRetirement(t.Context(), ids[i], prepareSpoolTest); err != nil || step != want {
+			t.Errorf("%s: advance = %q %v, want %q", row.name, step, err, want)
+		}
+		if kills := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE run_id = $1 AND kind = 'kill'`, ids[i]); (kills == 1) != row.retires || kills > 1 {
+			t.Errorf("%s: %d kills queued", row.name, kills)
+		}
+	}
+}
+
+// A kill queued before the run's sandbox was kept for its computer folder's copy back is held back from the
+// runner's PENDING page while the keep lasts, and handed over once the copy back settles; the retirement then goes
+// on as before. Another run's queued kill, whose sandbox is not kept, is handed over throughout.
+func TestPG_Retirement_HoldsAKillQueuedBeforeTheFolderWasKept(t *testing.T) {
+	f := newActionFixture(t)
+	f.reportRetireCapable(t)
+	kept, _ := f.endedRetirementRun(t, false)
+	plain, _ := f.endedRetirementRun(t, false)
+	f.advance(t, kept.ID, store.RetirementKill)
+	f.advance(t, plain.ID, store.RetirementKill)
+	kill := f.tip(t, kept.ID)
+	pending := func() (keptKill, plainKill bool) {
+		t.Helper()
+		page, _, err := f.st.ListPendingRunnerActions(t.Context(), f.rn.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(page, func(a types.RunnerPendingAction) bool { return a.ID == kill.ID }),
+			slices.ContainsFunc(page, func(a types.RunnerPendingAction) bool { return a.RunID == plain.ID })
+	}
+	f.setKeepTestFolder(t, kept.ID, f.keepTestFolder(), keepTestResume)
+	if k, p := pending(); k || !p {
+		t.Fatalf("PENDING while kept: the kept run's kill %v, the other run's %v; want it held and the other handed over", k, p)
+	}
+	f.setKeepTestFolder(t, kept.ID, f.keepTestFolder(), keepTestSettled)
+	if k, p := pending(); !k || !p {
+		t.Fatalf("PENDING once settled: the kept run's kill %v, the other run's %v; want both handed over", k, p)
+	}
+	if err := f.result(t, kill, types.RunnerActionSuccess); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(t, kept.ID, store.RetirementRetire)
+}

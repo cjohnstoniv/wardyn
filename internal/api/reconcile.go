@@ -428,6 +428,17 @@ func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun, a
 	if !torn {
 		return // still stuck; audited above, ref stays set for the next boot
 	}
+	// A copy back still owed is given up first, while the ref the give-up needs is set: once the ref is cleared no
+	// pass runs again, and the record would still show the changes as owed with no given_up row. A record not final
+	// yet keeps the ref, and the next boot tries again (the teardown is idempotent).
+	var final bool
+	var gerr error
+	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { final, gerr = s.giveUpFolderStopped(ctx, run) })
+	if !final {
+		slog.WarnContext(ctx, "wardynd: orphan sweep tore down a sandbox whose folder copy back could not be given up; its ref stays",
+			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+		return
+	}
 	var serr error
 	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { serr = s.clearSandboxRef(ctx, run.ID) })
 	if serr != nil {

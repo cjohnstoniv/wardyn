@@ -99,14 +99,29 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// LAST because reconcileRecordRun above still reads run.SandboxRef to tell
 	// "the sandbox never started" from "capture was empty". Success-only because
 	// the boot orphan sweep keys on a terminal run STILL carrying a ref — after
-	// this line that means exactly "teardown failed", the case it exists for.
+	// this line that means "teardown failed", the case it exists for, or a
+	// copy back not yet given up (below).
 	// The kill tail clears the ref after a confirmed kill (killTeardownTail); the
 	// idle stop tears down on its own path and does not, and the evidence
 	// endpoints' terminal-state guard covers those runs. A failed clear is
 	// deliberately ignored: it degrades to the pre-clear behavior the boot
 	// sweep already retries.
+	// A computer folder's copy back still owed once the sandbox is stopped (its
+	// pass did not run, or its reads or its record failed) is given up first,
+	// while the ref the give-up needs is set: with no ref no pass runs again, and
+	// the record would show the changes owed with no given_up row. A record not
+	// final keeps the ref, as a failed clear does; the boot sweep, the tail owner
+	// and a forced end's retry (its mark stays: forcedStopConfirmed) try again.
 	if teardownOK && s.cfg.Store != nil {
-		settleAfterTeardown(ctx, func(sctx context.Context) { errs = append(errs, s.clearSandboxRef(sctx, runID)) })
+		final, gerr := false, error(nil)
+		settleAfterTeardown(ctx, func(sctx context.Context) { final, gerr = s.giveUpFolderEnded(sctx, runID) })
+		if final {
+			settleAfterTeardown(ctx, func(sctx context.Context) { errs = append(errs, s.clearSandboxRef(sctx, runID)) })
+		} else {
+			slog.WarnContext(ctx, "wardynd: a run end stopped a sandbox whose folder copy back could not be given up; its ref stays",
+				slog.String("run_id", runID.String()), slog.Any("err", gerr))
+			errs = append(errs, errors.New("the sandbox's ref is kept: its computer folder's owed copy back is not given up yet"), gerr)
+		}
 	}
 	return errors.Join(append(errs, cmp.Or(ctx.Err(), context.Cause(tctx)))...)
 }

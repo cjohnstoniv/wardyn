@@ -322,6 +322,9 @@ func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.
 }
 
 func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return store.GiveUpOutcome{}, err
+	}
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	s.giveUps = append(s.giveUps, p)
