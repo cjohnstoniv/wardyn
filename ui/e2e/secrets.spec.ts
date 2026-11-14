@@ -154,7 +154,10 @@ test.describe("Secrets screen", () => {
 
     // The dialog stays open after a validation failure.
     await expect(dlg).toBeVisible();
+    // Closing with typed text asks first; Discard changes closes the dialog.
     await dlg.getByRole("button", { name: "Cancel" }).click();
+    await expect(dlg.getByText("Clear this draft?")).toBeVisible();
+    await dlg.getByRole("button", { name: "Discard changes" }).click();
     await expect(addDialog(page)).toBeHidden();
   });
 
@@ -234,7 +237,10 @@ test.describe("Secrets screen", () => {
     await expect(dlg.getByText(/already exists\. Saving will overwrite/i)).toBeHidden();
     await expect(dlg.getByRole("button", { name: "Save secret" })).toBeVisible();
 
+    // Closing with typed text asks first; Discard changes closes the dialog.
     await dlg.getByRole("button", { name: "Cancel" }).click();
+    await expect(dlg.getByText("Clear this draft?")).toBeVisible();
+    await dlg.getByRole("button", { name: "Discard changes" }).click();
     await expect(addDialog(page)).toBeHidden();
   });
 
