@@ -135,14 +135,7 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 			consecutiveErrs = 0
 			res.State = run.State
 			if run.State.IsTerminal() {
-				if run.State == types.RunFailed {
-					msg := fmt.Sprintf("run %s FAILED before it was ready", runID)
-					if reason := runFailureReason(waitCtx, c, runID); reason != "" {
-						msg += ": " + reason
-					}
-					return res, &exitError{code: 1, err: errors.New(msg)}
-				}
-				return res, &exitError{code: 2, err: fmt.Errorf("run %s terminated before it was ready: %s", runID, run.State)}
+				return res, terminalBeforeReady(waitCtx, c, runID, run.State)
 			}
 			if run.State == types.RunRunning {
 				if run.Repo != "" {
@@ -193,6 +186,19 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 		case <-time.After(waitPollInterval):
 		}
 	}
+}
+
+// terminalBeforeReady is waitForRunReady's exit for a run that ended before it
+// was ready: FAILED exits 1 with its reason, any other terminal state exits 2.
+func terminalBeforeReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, state types.RunState) error {
+	if state == types.RunFailed {
+		msg := fmt.Sprintf("run %s FAILED before it was ready", runID)
+		if reason := runFailureReason(ctx, c, runID); reason != "" {
+			msg += ": " + reason
+		}
+		return &exitError{code: 1, err: errors.New(msg)}
+	}
+	return &exitError{code: 2, err: fmt.Errorf("run %s terminated before it was ready: %s", runID, state)}
 }
 
 // filesErrIsPermanent reports whether a RunFiles error cannot be fixed by
