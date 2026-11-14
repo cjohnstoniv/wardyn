@@ -439,4 +439,14 @@ func TestTeardownKeepDeletesServiceAndSlices(t *testing.T) {
 	if _, err := cs.CoreV1().Services(testNamespace).Get(context.Background(), keepServiceName(asRunID), metav1.GetOptions{}); !isNotFound(err) {
 		t.Errorf("the run's Service is still there (get err %v)", err)
 	}
+	// The fake deletes nothing on an EndpointSlice delete-collection, so the selector is read from the call itself.
+	selector := "no delete-collection on endpointslices"
+	for _, a := range cs.Actions() {
+		if dc, ok := a.(clienttesting.DeleteCollectionActionImpl); ok && a.GetResource().Resource == "endpointslices" {
+			selector = dc.GetListOptions().LabelSelector
+		}
+	}
+	if want := labelRun + "=" + asRunID.String(); selector != want {
+		t.Errorf("EndpointSlice delete-collection selector = %q, want %q: this run's slices and no others", selector, want)
+	}
 }
