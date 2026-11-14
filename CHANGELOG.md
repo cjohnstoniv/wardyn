@@ -56,6 +56,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM helper log that fails to rotate once now writes again as soon as a rotation works; only the lines written while it could not rotate are lost. Before, one failed rotation left the log closed, and every later line was lost until the helper restarted.
 - At startup wardynd now counts the audit spool's backlog and its quarantine file through a fixed buffer instead of reading each file into memory, so a large backlog no longer needs memory of its size before the drain starts.
 - The audit spool now syncs its directory at startup, after a compaction replaces the spool file and after it moves a line to `<spool>.quarantine`, so on a filesystem that supports a directory sync a host crash no longer undoes those files' names once that sync has succeeded. If the sync fails during a move, the line stays in the spool and the move is tried again; a failed sync at startup or after a compaction is logged. A spool directory that wardynd has just created is not itself synced into its parent directory.
+- Linux VM sandboxes: a run with more than 64 folders and drives is now refused before anything starts. Before, the folder servers past the 64th could stay behind after the run ended or failed to start.
+- On Kubernetes, the runner's relay now lets at most 64 connections wait to be matched to a run, and gives each 10 seconds in all for that lookup and its first byte. Before, a Kubernetes API server that did not answer let such connections pile up with no limit.
+- macOS VM admission now treats an entry file with a negative disk reservation as damage, which holds a VM slot until it is removed, as an unreadable entry does, and its sums of entries' memory and disk stop at their largest value instead of wrapping. Before, an entry file another local account wrote could make the Mac look as if it had more free disk or memory than it has.
 
 ### Security
 
