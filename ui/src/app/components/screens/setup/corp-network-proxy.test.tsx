@@ -239,12 +239,26 @@ describe("Host proxy tab — panel states", () => {
     const field = screen.getByLabelText(/proxy url/i);
     await userEvent.type(field, "http://ops-egress:secret123@proxy.corp.acme.com:8080");
     await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("upstream-proxy-url", "http://ops-egress:secret123@proxy.corp.acme.com:8080"));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("upstream-proxy-url", "http://ops-egress:secret123@proxy.corp.acme.com:8080", { createOnly: true }));
     await waitFor(() =>
       expect(saveSiteConfig).toHaveBeenCalledWith(
         expect.objectContaining({ upstream_proxy_secret_ref: "upstream-proxy-url", upstream_proxy_url: undefined }),
       ),
     );
+  });
+
+  it("cred: a proxy secret name already stored: the first Save stores nothing and warns; Overwrite secret replaces it", async () => {
+    setSecretMock.mockReset().mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+    const { saveSiteConfig } = renderStep();
+    const url = "http://ops-egress:secret123@proxy.corp.acme.com:8080";
+    await userEvent.type(screen.getByLabelText(/proxy url/i), url);
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("upstream-proxy-url", url, { createOnly: true }));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(saveSiteConfig).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /^overwrite secret$/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenLastCalledWith("upstream-proxy-url", url, { createOnly: false }));
+    await waitFor(() => expect(saveSiteConfig).toHaveBeenCalledWith(expect.objectContaining({ upstream_proxy_secret_ref: "upstream-proxy-url" })));
   });
 
   it("secret: a siteConfig with only a secret ref opens the disclosure and never shows the URL (write-only)", () => {

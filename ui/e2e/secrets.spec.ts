@@ -278,7 +278,7 @@ test.describe("Secrets screen", () => {
     await openSecrets(page);
 
     let deletes = 0;
-    await page.route(`**/api/v1/secrets/${encodeURIComponent(victim)}`, async (route) => {
+    await page.route(`**/api/v1/shared-secrets/${encodeURIComponent(victim)}`, async (route) => {
       if (route.request().method() !== "DELETE") return route.fallback();
       deletes += 1;
       // Slow enough that the second click lands while the first is in flight.
@@ -318,7 +318,7 @@ test.describe("Secrets screen", () => {
     // DeleteConfirmDialog toasts getErrorMessage(e) as the description — the raw
     // status is never formatted into the message. So assert on the detail body.
     const serverDetail = "secret store unavailable";
-    await page.route(`**/api/v1/secrets/${encodeURIComponent(victim)}`, async (route) => {
+    await page.route(`**/api/v1/shared-secrets/${encodeURIComponent(victim)}`, async (route) => {
       if (route.request().method() === "DELETE") {
         await route.fulfill({ status: 500, contentType: "text/plain", body: serverDetail });
       } else {
@@ -349,7 +349,7 @@ test.describe("Secrets screen", () => {
     // (A tr locator, not getByRole: the open dialog marks the page behind it aria-hidden.)
     await expect(page.locator("tr").filter({ hasText: victim })).toBeVisible();
 
-    await page.unroute(`**/api/v1/secrets/${encodeURIComponent(victim)}`);
+    await page.unroute(`**/api/v1/shared-secrets/${encodeURIComponent(victim)}`);
 
     // Cleanup: now actually delete it (intercept removed).
     await page.request.delete(`/api/v1/secrets/${encodeURIComponent(victim)}`, {

@@ -149,3 +149,14 @@ export const OWN_SECRETS = {
   FROM_ADMIN: "Provided by your admin",
   FROM_ADMIN_TITLE: "Your admin stored this secret. You can't change or remove it here.",
 } as const;
+
+/** The Secrets page and its Add secret dialog, for everyone. */
+export const SECRETS_PAGE = {
+  // The API refuses the old model key names (anthropic-api-key, openai-api-key): a model key has its own place, which
+  // is a different Settings section in each view (an admin's Model providers, a person's own model connections).
+  MODEL_KEYS_HINT: {
+    ADMIN: "A model provider key goes under Settings → Model providers, not here.",
+    USER: "A model key goes under Settings → Your model connections, not here.",
+  },
+  ADD_WAITS_FOR_LIST: "Add secret is off until this list loads, so Wardyn can check which names are already listed.",
+} as const;

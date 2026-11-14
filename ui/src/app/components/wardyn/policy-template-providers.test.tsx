@@ -12,6 +12,7 @@ vi.mock("../../lib/api/runs", () => ({
 
 import { POLICY_TEMPLATES, PolicyPanel, minimalSpec, policyTemplates } from "./policy-panel";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
+import { FIELD_HELP } from "./policy-field-help";
 import type { SetupModelProvider } from "../../lib/types";
 
 const prov = (kind: string, host: string, extra: Partial<SetupModelProvider> = {}): SetupModelProvider => ({
@@ -29,9 +30,7 @@ describe("provider-aware policy templates", () => {
   it.each([undefined, [], [{ ...BEDROCK, disabled: true }]])("no counted provider keeps today's templates (%#)", (ps) => {
     expect(policyTemplates(ps as SetupModelProvider[] | undefined)).toEqual(POLICY_TEMPLATES);
     expect(hosts(ps as SetupModelProvider[] | undefined, "minimal")).toEqual(["api.anthropic.com"]);
-    const grants = byId(ps as SetupModelProvider[] | undefined, "model-provider").spec.eligible_grants!;
-    expect(grants).toHaveLength(1);
-    expect(grants[0].kind).toBe("api_key");
+    expect(byId(ps as SetupModelProvider[] | undefined, "model-provider").spec.eligible_grants).toEqual([]);
     expect(byId(undefined, "model-provider").hint).toBe(C.MODEL_PROVIDER_HINT_KEY);
   });
 
@@ -50,14 +49,22 @@ describe("provider-aware policy templates", () => {
   it.each([
     ["anthropic_api_key", "api.anthropic.com", "x-api-key"],
     ["openai_api_key", "api.openai.com", "Authorization"],
-  ])("%s keeps its vendor host and key grant", (kind, host, header) => {
+  ])("%s keeps its vendor host and the key hint", (kind, host) => {
     const ps = [prov(kind, host)];
     expect(hosts(ps, "model-provider")).toEqual([host]);
-    const g = byId(ps, "model-provider").spec.eligible_grants!;
-    expect(g).toHaveLength(1);
-    expect(g[0].scope).toMatchObject({ host, header });
     expect(byId(ps, "model-provider").hint).toBe(C.MODEL_PROVIDER_HINT_KEY);
   });
+
+  // The API refuses to store either name, and dispatch drops any grant on a model host, so such a grant could
+  // never deliver a key: no template and no help snippet offers one.
+  it.each([undefined, [prov("anthropic_api_key", "api.anthropic.com"), prov("openai_api_key", "api.openai.com")]])(
+    "no template grants a model key or names a retired model key secret (%#)",
+    (ps) => {
+      const text = JSON.stringify([policyTemplates(ps), FIELD_HELP]);
+      for (const retired of ["anthropic-api-key", "openai-api-key"]) expect(text).not.toContain(retired);
+      for (const t of policyTemplates(ps)) expect(t.spec.eligible_grants ?? []).toEqual([]);
+    },
+  );
 
   it.each(["anthropic_subscription", "bedrock_bearer", "custom_endpoint"])("%s is host only, proxy hint", (kind) => {
     const ps = [prov(kind, "gw.example.test")];
@@ -66,10 +73,9 @@ describe("provider-aware policy templates", () => {
     expect(byId(ps, "model-provider").hint).toBe(C.MODEL_PROVIDER_HINT_PROXY);
   });
 
-  it("two providers: every host, one grant per key kind, plural hints", () => {
+  it("two providers: every host, plural hints", () => {
     const ps = [prov("anthropic_api_key", "api.anthropic.com"), BEDROCK];
     expect(hosts(ps, "minimal")).toEqual(["api.anthropic.com", BEDROCK.host]);
-    expect(byId(ps, "model-provider").spec.eligible_grants).toHaveLength(1);
     expect(byId(ps, "model-provider").hint).toBe(C.MODEL_PROVIDER_HINT_MANY(2));
     expect(byId(ps, "minimal").hint).toBe(C.MINIMAL_HINT_MANY);
   });
