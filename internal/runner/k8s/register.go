@@ -47,6 +47,7 @@ func buildConfig(d substrate.Deps) Config {
 
 		// Experimental: the SandboxTemplate the agent pod takes its annotations from (agentsandbox_template.go).
 		AgentSandboxTemplate: os.Getenv("WARDYN_K8S_AGENT_SANDBOX_TEMPLATE"),
+		AgentSandboxKeep:     cliutil.EnvBool("WARDYN_K8S_AGENT_SANDBOX_KEEP", false),
 	}
 }
 
@@ -59,6 +60,9 @@ func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
 	}
 	cfg := buildConfig(d)
 	if err := checkAgentSandboxTemplate(cfg); err != nil {
+		return nil, err
+	}
+	if err := checkAgentSandboxKeep(cfg); err != nil {
 		return nil, err
 	}
 	if cfg.AgentSandbox {
@@ -80,6 +84,9 @@ func init() {
 	substrate.Register("k8s", func(d substrate.Deps) (substrate.Substrate, error) {
 		cfg := buildConfig(d)
 		if err := checkAgentSandboxTemplate(cfg); err != nil {
+			return nil, err
+		}
+		if err := checkAgentSandboxKeep(cfg); err != nil {
 			return nil, err
 		}
 		peer, err := controlPlanePeerFromEnv()

@@ -121,6 +121,9 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 		named.Name = cfg.AgentSandboxTemplate
 		access = append(slices.Clone(access), named)
 	}
+	if cfg.AgentSandboxKeep {
+		access = append(slices.Clone(access), keepAddressAccess...)
+	}
 	served, err := cs.Discovery().ServerResourcesForGroupVersion(agentSandboxAPIVersion)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX is on, but the cluster does not serve %s (install agent-sandbox, or unset it): %w", agentSandboxAPIVersion, err)
