@@ -157,9 +157,10 @@ func TestJSONFieldsAreEncodingJSONs(t *testing.T) {
 		Deep
 		Tagged Inner `json:"tagged"`
 		Skip   int   `json:"-"`
-		Dash   int   `json:"-,"`
-		Omit   int   `json:"omit,omitempty"`
-		Str    int   `json:",string"`
+		//lint:ignore SA5008 the "-," tag is the point: encoding/json names the field "-"
+		Dash   int `json:"-,"`
+		Omit   int `json:"omit,omitempty"`
+		Str    int `json:",string"`
 		Top    int
 		hidden int
 	}
