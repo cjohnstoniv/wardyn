@@ -55,8 +55,9 @@ func (s *Server) reviveAdvanceHeld(ctx, lockCtx context.Context, run types.Agent
 }
 
 // reviveReplaceFailed is reviveRunProxy's answer to a proxy replace that failed after the claim: a live run whose old proxy was never touched keeps it,
-// and otherwise the run is lost again.
-func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string, gen int, start proxyStartRec, source []byte,
+// and otherwise the run is lost again. The failed replace has already abandoned its start, on a bound of its own
+// (replaceRevivedProxyHashed), so the start is not abandoned again here, on the claim's longer bound.
+func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string, gen int, source []byte,
 	retiring, freshJTI string, renewed renewedTokens, err error) (reviveResult, *reviveError) {
 	data["error"] = err.Error()
 	if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
@@ -67,7 +68,7 @@ func (s *Server) reviveReplaceFailed(ctx context.Context, run types.AgentRun, da
 		// untouched proxy on a token that can neither renew nor decide,
 		// while its allowlisted egress keeps flowing audit-dark for up to
 		// the lapsed-token sweep's ~1h05m window.
-		return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, retiring, gen, start, source, freshJTI, renewed, err)
+		return reviveResult{}, s.reviveKeptAfterAdvance(ctx, run, data, actorType, actor, retiring, gen, proxyStartRec{}, source, freshJTI, renewed, err)
 	}
 	// The old proxy is, or may be, gone: nothing is left to serve on the
 	// retiring token, so revoking it here is safe (F4).

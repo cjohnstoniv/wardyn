@@ -352,7 +352,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	proxyHash, err := s.replaceRevivedProxyHashed(replaceCtx, rv, run, cfgJSON, start) // abandons start on an error
 	endReplace()
 	if err != nil {
-		return s.reviveReplaceFailed(ctx, run, data, actorType, actor, gen, start, source, retiring, freshJTI, renewed, err)
+		return s.reviveReplaceFailed(ctx, run, data, actorType, actor, gen, source, retiring, freshJTI, renewed, err)
 	}
 	// The new proxy is up behind the fresh token: the retiring one is no
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
