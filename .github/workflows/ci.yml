@@ -1669,7 +1669,8 @@ jobs:
           grep -qx 'core pods patch' <<<"$rules" || { echo "::error::the rendered Role has no pods patch"; fail=1; }
           grep -qx 'agents.x-k8s.io sandboxes create' <<<"$rules" || { echo "::error::the rendered Role has no sandboxes create"; fail=1; }
           for q in "agents.x-k8s.io sandboxes update" "agents.x-k8s.io sandboxes patch" "agents.x-k8s.io sandboxes watch" \
-                   "agents.x-k8s.io sandboxes deletecollection" "agents.x-k8s.io sandboxes/status update" "core pods update"; do
+                   "agents.x-k8s.io sandboxes deletecollection" "agents.x-k8s.io sandboxes/status update" "core pods update" \
+                   "core services list" "core services watch"; do
             read -r g r v <<<"$q"
             got=$(ask "$g" "$r" "$v")
             echo "must not hold: can-i $v $r ($g): $got"
