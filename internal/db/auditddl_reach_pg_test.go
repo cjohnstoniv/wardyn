@@ -78,7 +78,9 @@ func TestPG_AuditDDLBypassRoutesCountWhatTheAppRoleCanReach(t *testing.T) {
 		for k, v := range params {
 			q[k] = v
 		}
-		u.RawQuery = q.Encode()
+		// pgx reads a query value's "+" as a plus sign, not a space: "-c+role=x" names a
+		// parameter "+role". Encode writes a literal "+" as %2B, so every "+" left is a space.
+		u.RawQuery = strings.ReplaceAll(q.Encode(), "+", "%20")
 		p, err := Connect(ctx, u.String())
 		if err != nil {
 			skipOrFatal(t, mustNotSkip, "cannot connect as the app role (pg_hba may not password-auth a new role): %v", err)
