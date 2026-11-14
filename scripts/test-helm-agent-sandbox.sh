@@ -13,7 +13,7 @@
 #   - on with k8s.agentSandbox.template adds only get on that one sandboxtemplate and WARDYN_K8S_AGENT_SANDBOX_TEMPLATE;
 #     the template without the backend is refused;
 #   - keep off (k8s.agentSandbox.keep absent, null, false) renders the same bytes as on without it; keep on adds only the
-#     services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP; keep on without the backend is refused;
+#     services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP, and the rest of the render is on's, document for document; keep on without the backend is refused;
 #   - keep on also renders two ValidatingAdmissionPolicies and two bindings, <fullname>-keep-service (Services only) and
 #     <fullname>-keep-endpoints (EndpointSlices only), selected on wardynd's identity; keep off, or the backend off, renders none;
 #   - on without k8s.enabled, or with an unenforced-NetworkPolicy or ambient-default-deny override (value, env, extraEnv or valueFrom), is refused.
@@ -125,6 +125,12 @@ render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.ke
 [[ "$(y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP") | .value' "$TMP/keep.out")" == "true" ]] \
   || die "keep: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_KEEP=true"
 grep -q 'WARDYN_K8S_AGENT_SANDBOX_KEEP\|endpointslices' "$TMP/on.out" && die "on without keep: a keep marker rendered"
+# Whole documents: keep.out less its two rules, its env and its policy objects is on.out, so nothing else changed.
+y 'select((.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") and (.metadata.name | test("keep-")) | not)
+  | del(.rules[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io"))
+  | del(.spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP"))' "$TMP/keep.out" >"$TMP/keep-less.out"
+y '.' "$TMP/on.out" >"$TMP/on-whole.out"
+diff "$TMP/on-whole.out" "$TMP/keep-less.out" >"$TMP/keep-diff" || { cat "$TMP/keep-diff" >&2; die "keep: the render differs from on in more than its two rules, its env and its policy objects"; }
 ok "keep: off (absent, false, null) renders the same bytes; on adds services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP"
 
 # Keep's two admission policies: one per kind, each selected on wardynd's identity, Deny on the runs namespace.
