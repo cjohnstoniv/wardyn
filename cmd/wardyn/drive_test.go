@@ -638,11 +638,25 @@ func TestOperatorOtherSetCommandsIgnoreTrailingDocument(t *testing.T) {
 func TestDriveMemberDelete_RefusesWithoutYes(t *testing.T) {
 	cs := newCmdServer(t, http.StatusOK, map[string]any{})
 	err := execCmd(t, "--url", cs.URL, "drive", "member", "delete", uuid.NewString())
-	if err == nil || !strings.Contains(err.Error(), "--yes") {
-		t.Fatalf("err = %v, want a refusal naming --yes", err)
+	if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "a Mac disk image may stay") {
+		t.Fatalf("err = %v, want a refusal naming --yes and that a Mac disk image may stay", err)
 	}
 	if len(cs.reqs) != 0 {
 		t.Errorf("the unconfirmed command reached the daemon: %v", cs.reqs)
+	}
+}
+
+// TestDriveMemberDelete_HelpNamesWhatAMacKeeps: a Mac deletes its own disk
+// image, so the help names the outcomes that leave the files in place.
+func TestDriveMemberDelete_HelpNamesWhatAMacKeeps(t *testing.T) {
+	out, err := execCmdCapture(t, "drive", "member", "delete", "--help")
+	if err != nil {
+		t.Fatalf("drive member delete --help: %v", err)
+	}
+	for _, want := range []string{"Mac disk", "deferred", "record_only", "a Mac disk image may stay"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help lacks %q:\n%s", want, out)
+		}
 	}
 }
 

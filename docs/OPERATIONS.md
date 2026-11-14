@@ -4880,6 +4880,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - `GET /api/v1/drives/member` lists every person's drives with owner, object and state. `wardyn drive member list` does the same. `GET /drives` does not list them.
 - `DELETE /api/v1/drives/member/{id}` deletes one and its files. `wardyn drive member delete <id> --yes` does the same.
+- A disk drive kept on a Mac is the exception, because that Mac deletes the image. While the Mac can't be reached, the answer is `202` with outcome `deferred` and the delete waits for the Mac. If the Mac is no longer registered, the outcome is `record_only`: only the record goes and the image stays on that Mac.
 - A person deletes their own with `DELETE /api/v1/me/drives/{id}`.
 - Every attempt is audited as `drive.member.delete`, with `by` set to `owner` or `admin`.
 

@@ -139,4 +139,16 @@ describe("DesktopReviewRow", () => {
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
     expect(onRefused).not.toHaveBeenCalled();
   });
+
+  it("Download approved revokes the object URL only after the click's task, so the browser has the file first", async () => {
+    downloadMock.mockResolvedValue({ blob: new Blob(["x"]), sha256: SHA });
+    const atClick: number[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+      setTimeout(() => atClick.push(vi.mocked(URL.revokeObjectURL).mock.calls.length), 0); // a task queued at the click
+    });
+    renderRow(row({ state: "APPROVED", decided_by: "lee.chen@acme.example", decided_at: aheadByHours(-0.5) }));
+    await userEvent.click(screen.getByRole("button", { name: C.downloadApproved }));
+    await vi.waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:x"));
+    expect(atClick).toEqual([0]);
+  });
 });

@@ -366,6 +366,18 @@ describe("Audit → Retention", () => {
         expect(exportMock).toHaveBeenCalledWith("audit_events_legacy", "raw");
       });
 
+      it("an export revokes the object URL only after the click's task, so the browser has the file first", async () => {
+        exportMock.mockResolvedValue(new Blob(["x"]));
+        const atClick: number[] = [];
+        vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+          setTimeout(() => atClick.push(vi.mocked(URL.revokeObjectURL).mock.calls.length), 0); // a task queued at the click
+        });
+        const dialog = await openDrop();
+        await userEvent.click(within(dialog).getByRole("button", { name: "Readable export" }));
+        await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:archive"));
+        expect(atClick).toEqual([0]);
+      });
+
       it("a row's Export menu offers both forms, and a failed export says so", async () => {
         exportMock.mockRejectedValue(new HttpError(409, "That partition can still receive rows."));
         await openRetention();
