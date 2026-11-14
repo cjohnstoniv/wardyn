@@ -156,10 +156,29 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	if run.CreatedBy != "" && !run.OperatorOwned {
 		ctx = recording.WithAdmissionGroup(ctx, "owner:"+run.CreatedBy)
 	}
+	var err error
 	if part == 1 {
-		return s.cfg.RecordingStore.SaveCast(ctx, runID.String(), body)
+		err = s.cfg.RecordingStore.SaveCast(ctx, runID.String(), body)
+	} else {
+		err = s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
 	}
-	return s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
+	return refusalBeforeErasure(err, body)
+}
+
+// refusalBeforeErasure keeps the size and masking refusals ahead of an erased run's 410, the route's
+// documented refusal order. The file store (recording.FSStore) refuses an erased run before it reads any
+// of the body, so the rest of the body is read here, into nothing, and an upload over the cap, or for
+// a run its masking no longer covers, answers as it would have. Any other read failure leaves the erasure as the answer.
+func refusalBeforeErasure(err error, body io.Reader) error {
+	if !errors.Is(err, recording.ErrErased) {
+		return err
+	}
+	_, rerr := io.Copy(io.Discard, body)
+	var maxErr *http.MaxBytesError
+	if errors.As(rerr, &maxErr) || errors.Is(rerr, errMaskUncovered) {
+		return rerr
+	}
+	return err
 }
 
 // handleUploadRecording accepts a PUT /api/v1/internal/recordings/{runID} from
