@@ -284,6 +284,14 @@ type ReconcileReport struct {
 // (design §2.3a.1). It reads store metadata only, never a value, and deletes
 // nothing. A transient store failure aborts it: a half-checked report would
 // read as drift that isn't there.
+//
+// It may run beside a serving daemon, whose saves and deletes land between its
+// reads of the rows and of the store. So each disagreement is read again under
+// its row's lock, which every such write holds from its store change to its
+// row change: a row whose value is gone is reported only if that row still
+// points at a missing value under the lock, and a value no row points to only
+// if no row points to it under the lock and the store still lists it after
+// every such check. Each recheck runs once; nothing is retried.
 func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	var rep ReconcileReport
 	if s.ext == nil {
@@ -302,43 +310,147 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		return rep, fmt.Errorf("pg secretstore: reconcile scan: %w", err)
 	}
 	pointed := map[string]bool{}
+	var suspects []envelope
 	for _, e := range all {
-		ref := rowRef(e.ownedBy, e.name)
 		store, loc := splitRef(e.kekID)
-		if !s.reachable(store) {
-			rep.Dangling = append(rep.Dangling, fmt.Sprintf("%s: stored in %q, which this wardynd is not configured to reach", ref, store))
-			continue
+		if s.reachable(store) {
+			rep.Checked++
+			// A row claims the path its owner and name DERIVE, never the one it
+			// records: a forged pointer cannot hide another value from the orphan
+			// list. It claims it whether or not the value is live: a soft-deleted
+			// value behind a row is dangling, not an orphan as well.
+			if want, err := s.ext.Ref(e.ownedBy, e.name, loc); err == nil {
+				pointed[want] = true
+			}
 		}
-		rep.Checked++
-		// A row claims the path its owner and name DERIVE, never the one it
-		// records: a forged pointer cannot hide another value from the orphan
-		// list. It claims it whether or not the value is live: a soft-deleted
-		// value behind a row is dangling, not an orphan as well.
-		if want, err := s.ext.Ref(e.ownedBy, e.name, loc); err == nil {
-			pointed[want] = true
+		why, err := s.dangling(ctx, e)
+		if err != nil {
+			return rep, err
 		}
-		err := s.ext.Check(ctx, e.ownedBy, e.name, loc)
-		switch {
-		case errors.Is(err, secretstore.ErrUnavailable):
-			return rep, fmt.Errorf("pg secretstore: reconcile aborted at %s: %w", ref, err)
-		case err != nil:
-			rep.Dangling = append(rep.Dangling, fmt.Sprintf("%s: %v", ref, err))
+		if why != "" {
+			suspects = append(suspects, e)
 		}
 	}
 	found, err := s.ext.Walk(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("pg secretstore: reconcile list %s: %w", s.ext.Name(), err)
 	}
+	var strays []secretstore.ExternalEntry
 	for _, f := range found {
 		switch {
 		case pointed[secretstore.RefObject(f.Ref)]:
 		case f.SoftDeleted:
 			rep.SoftDeleted = append(rep.SoftDeleted, f)
 		default:
+			strays = append(strays, f)
+		}
+	}
+	for _, e := range suspects {
+		why, err := s.recheckDangling(ctx, e.ownedBy, e.name)
+		if err != nil {
+			return rep, err
+		}
+		if why != "" {
+			rep.Dangling = append(rep.Dangling, why)
+		}
+	}
+	var unnamed []secretstore.ExternalEntry
+	for _, f := range strays {
+		named, err := s.namedUnderLock(ctx, f)
+		if err != nil {
+			return rep, err
+		}
+		if !named {
+			unnamed = append(unnamed, f)
+		}
+	}
+	if len(unnamed) == 0 {
+		return rep, nil
+	}
+	// A value a failed save wrote, or a replaced one, is removed again by its
+	// writer: only a value the store still lists is reported.
+	again, err := s.ext.Walk(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("pg secretstore: reconcile list %s: %w", s.ext.Name(), err)
+	}
+	listed := map[string]bool{}
+	for _, f := range again {
+		if !f.SoftDeleted {
+			listed[secretstore.RefObject(f.Ref)] = true
+		}
+	}
+	for _, f := range unnamed {
+		if listed[secretstore.RefObject(f.Ref)] {
 			rep.Orphans = append(rep.Orphans, f)
 		}
 	}
 	return rep, nil
+}
+
+// dangling says why the pointer row e has no usable value, or "" when it has
+// one. A store that does not answer aborts the reconcile.
+func (s *Store) dangling(ctx context.Context, e envelope) (string, error) {
+	ref := rowRef(e.ownedBy, e.name)
+	store, loc := splitRef(e.kekID)
+	if !s.reachable(store) {
+		return fmt.Sprintf("%s: stored in %q, which this wardynd is not configured to reach", ref, store), nil
+	}
+	err := s.ext.Check(ctx, e.ownedBy, e.name, loc)
+	switch {
+	case errors.Is(err, secretstore.ErrUnavailable):
+		return "", fmt.Errorf("pg secretstore: reconcile aborted at %s: %w", ref, err)
+	case err != nil:
+		return fmt.Sprintf("%s: %v", ref, err), nil
+	}
+	return "", nil
+}
+
+// recheckDangling reads the row (owner, name) again under its lock, so no save
+// or delete of it is part way, and says why it is dangling now, or "" when it
+// is gone, no longer a pointer, or its value is there.
+func (s *Store) recheckDangling(ctx context.Context, owner, name string) (string, error) {
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	conn, release, err := s.lockExternalRow(ctx, owner, name)
+	if err != nil {
+		return "", fmt.Errorf("pg secretstore: reconcile recheck %s: %w", rowRef(owner, name), err)
+	}
+	defer release()
+	e := envelope{ownedBy: owner, name: name}
+	err = conn.QueryRow(ctx, `SELECT kek_id FROM secrets WHERE owned_by=$1 AND name=$2 AND enc_version=$3`, owner, name, extVersion).Scan(&e.kekID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("pg secretstore: reconcile recheck %s: %w", rowRef(owner, name), err)
+	}
+	return s.dangling(ctx, e)
+}
+
+// namedUnderLock reports whether the row the listed value f names, read under
+// that row's lock, now points to f: a save that wrote f has then finished.
+func (s *Store) namedUnderLock(ctx context.Context, f secretstore.ExternalEntry) (bool, error) {
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	conn, release, err := s.lockExternalRow(ctx, f.Owner, f.Name)
+	if err != nil {
+		return false, fmt.Errorf("pg secretstore: reconcile recheck %s: %w", rowRef(f.Owner, f.Name), err)
+	}
+	defer release()
+	var kekID string
+	err = conn.QueryRow(ctx, `SELECT kek_id FROM secrets WHERE owned_by=$1 AND name=$2 AND enc_version=$3`, f.Owner, f.Name, extVersion).Scan(&kekID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("pg secretstore: reconcile recheck %s: %w", rowRef(f.Owner, f.Name), err)
+	}
+	store, loc := splitRef(kekID)
+	if !s.reachable(store) {
+		return false, nil
+	}
+	want, err := s.ext.Ref(f.Owner, f.Name, loc)
+	return err == nil && secretstore.RefObject(want) == secretstore.RefObject(f.Ref), nil
 }
 
 // UnderivedPointers counts the pointer rows into the configured external store
