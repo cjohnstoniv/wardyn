@@ -338,6 +338,48 @@ func TestLoginOverAProfileThatCannotBeReadSignsOutItsOwnStoreFirst(t *testing.T)
 			}
 		})
 	}
+	// With no sign-in in the file, a login that chose the file still does not read the keychain: the
+	// keychain's sign-in is neither signed out nor removed (DESIGN.md, residual 1).
+	t.Run("file with none in the file", func(t *testing.T) {
+		f := newSignInOrg(t)
+		dir := cliEnv(t, nil)
+		approve := approveInBrowser(t, f, nil)
+		openBrowser = func(a string) error { go approve(a); return nil }
+		if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+			t.Fatalf("keychain login: %v", err)
+		}
+		raw, err := keyring.Get(cliKeyringService, f.srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, cliprofile.FileName), []byte("{"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		reads := 0
+		keyring.MockInitWithError(errors.New("the keychain is locked")) // so the store chosen is the file
+		openBrowser = func(a string) error {
+			// The keychain answers again once the store is chosen; each read of it from here counts.
+			keyring.MockInit()
+			if err := keyring.Set(cliKeyringService, f.srv.URL, raw); err != nil {
+				t.Error(err)
+			}
+			keychainReady = func() error { reads++; return nil }
+			go approve(a)
+			return nil
+		}
+		if _, stderr, err := runCLI(t, "", "login", f.srv.URL); err != nil || strings.Contains(stderr, "could not be") {
+			t.Fatalf("second login: %v, stderr %q", err, stderr)
+		}
+		if reads != 0 {
+			t.Errorf("the keychain was read %d times after the file was chosen, want 0", reads)
+		}
+		if now, err := keyring.Get(cliKeyringService, f.srv.URL); err != nil || now != raw {
+			t.Errorf("the keychain's sign-in was changed or removed (%v)", err)
+		}
+		if _, ok, err := (fileStore{dir}).get(f.srv.URL); !ok || err != nil {
+			t.Errorf("the file holds no sign-in (found=%v, %v)", ok, err)
+		}
+	})
 }
 
 // TestOrgTransportsBoundTheHeaderWait: the transport a stored sign-in's requests go through, and an

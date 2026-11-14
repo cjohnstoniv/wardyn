@@ -315,10 +315,10 @@ func (l *login) store(kind string, it cliItem, stepUp bool) (prev cliItem, repla
 // store holding it, the item, whether it is live, and the error reading it from the store the profile names.
 // When the profile names no store (a first sign-in, or a profile cliprofile.Write replaced because it could
 // not be read), it is the item found first in kind, whose item the put overwrites, then, when kind is the
-// keychain, in the file; a store that cannot be read is no sign one was stored. The keychain is not read when
-// kind is the file: chooseStore picked the file because the keychain could not be read, and reading it again
-// can ask to unlock it while cli.lock is held. A profile that cannot be read now is no error here:
-// WriteSessionStore refuses it, and the login fails.
+// keychain, in the file; a store that cannot be read is no sign one was stored. When the profile names no
+// store and kind is the file, the keychain is not read: chooseStore picked the file because the keychain
+// could not be read, and reading it again can ask to unlock it while cli.lock is held. A profile that cannot
+// be read now is no error here: WriteSessionStore refuses it, and the login fails.
 func (l *login) previous(kind string) (string, cliItem, bool, error) {
 	named, err := cliprofile.ReadSessionStore(l.dir, l.origin)
 	if err != nil {
