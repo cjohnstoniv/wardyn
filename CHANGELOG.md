@@ -76,8 +76,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
   `principal_identity_unbinds` and `run_teardown_holds`. Without the first, unbinding an identity fails, and so do
   erasing a person or their credentials, a SCIM purge, and reading any audit row that names a person by subject
-  (`WARDYN_AUDIT_SEAL=full`). Without the second, a Mac runner that holds a kill or end has its state pages refused,
-  so it does not come back online. An
+  (`WARDYN_AUDIT_SEAL=full`). Without the second, the server cannot queue a kill, end or proxy stop for an offline
+  runner of any kind, retires no finished run from its runner, and fails `GET /runs/{id}/containment`. A runner whose
+  state page makes the server queue a proxy stop, and a Mac runner that holds or has held a kill or end, have their
+  state pages refused, so they do not come back online. An
   upgrade from before 0.10.0-rc.18 also needs the 0.10.0-rc.18 grant: `SELECT, INSERT, UPDATE` on `run_proxy_starts`.
   An upgrade from before 0.10.0-rc.17 also needs the 0.10.0-rc.16 grants: `SELECT, INSERT, UPDATE, DELETE` on
   `governance_unit_deciders` and `governance_envelopes`. An upgrade from
