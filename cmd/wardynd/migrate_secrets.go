@@ -184,9 +184,11 @@ func migrateMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recorde
 			slog.String("store", from), slog.Int("soft_deleted", res.SoftDeleted))
 	}
 	if err != nil {
-		// Every abort is recorded, with how many rows were committed before it;
-		// the error itself (which names the row) goes to the operator only.
-		data["reason"] = "aborted"
+		// Every failure is recorded, with how many rows were committed before
+		// it (reason unknown when the failing row's own commit returned an
+		// error, so that row may have moved too); the error itself (which names
+		// the row) goes to the operator only.
+		data["reason"] = failureReason(err)
 		emitMaintenanceAudit(ctx, rec, migrateActor, "secret.migrate", to, "failure", data)
 		return err
 	}

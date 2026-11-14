@@ -253,7 +253,10 @@ func (s *Store) commitPrincipalRow(ctx context.Context, before rowSnapshot, afte
 	if err := replaceSnapshot(ctx, tx, before, after); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("this row's own commit: %w, so the row may have moved: %w", ErrCommitOutcomeUnknown, err)
+	}
+	return nil
 }
 
 // sealV1ToPrincipal unwraps a v1 row's data key under its KEK and seals it
