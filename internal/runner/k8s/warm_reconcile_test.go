@@ -277,6 +277,22 @@ func TestWarmPlaceholderCC2TakesThePinnedRuntimeClass(t *testing.T) {
 	}
 }
 
+func TestWarmPlaceholderCC2WithNoRuntimeClassIsRefusedAndNothingIsCreated(t *testing.T) {
+	cc2 := warmTestPool("a", 1)
+	cc2.Class = "CC2"
+	d, cs := warmTestDriver(t, cc2)
+	if _, err := d.warmPlaceholderPod(context.Background(), cc2, testNamespace, 0); !errors.Is(err, errRuntimeClassUnavailable) {
+		t.Fatalf("warmPlaceholderPod error %v, want errRuntimeClassUnavailable", err)
+	}
+	d.reconcileWarmPools(context.Background())
+	if n := countOf(warmSeq(cs), "create pods"); n != 0 {
+		t.Fatalf("a CC2 pool with no RuntimeClass made %d create calls, want none", n)
+	}
+	if !d.warmBackedOff("a") {
+		t.Fatal("the pool is not backed off after the refused placeholder")
+	}
+}
+
 func TestWarmPlaceholderCarriesThePullSecret(t *testing.T) {
 	d, _ := newTestDriver(t, Config{ImagePullSecret: "regcred"})
 	pod, err := d.warmPlaceholderPod(context.Background(), warmTestPool("a", 1), testNamespace, 0)
