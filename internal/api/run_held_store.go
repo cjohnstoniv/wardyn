@@ -81,12 +81,17 @@ func (s *Server) settleRunWrite(ctx context.Context, runID uuid.UUID, from, to t
 }
 
 // casRunStateHeld is casRunState for a holder of the run's lock whose context may have no deadline, on
-// heldWriteBound, its outcome settled by settleRunWrite.
+// heldWriteBound, its outcome settled by settleRunWrite. Each caller ends a RUNNING run, so the write and its settle
+// run under the start fence (fenced), as casRunState's end does: a COMMIT not answered has landed or not before a
+// start can read the run. The fence's wait, at most runStartFenceWait, comes before heldWriteBound starts.
 func (s *Server) casRunStateHeld(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
-	applied, err := heldWrite(ctx, func(ctx context.Context) (bool, error) {
-		return s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
+	applied, err := s.fenced(ctx, runID, func() (bool, error) {
+		applied, err := heldWrite(ctx, func(ctx context.Context) (bool, error) {
+			return s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
+		})
+		return s.settleRunWrite(ctx, runID, from, to, applied, err)
 	})
-	if applied, err = s.settleRunWrite(ctx, runID, from, to, applied, err); err != nil {
+	if err != nil {
 		return false, err
 	}
 	s.runStateMoved(runID, from, to, applied)
