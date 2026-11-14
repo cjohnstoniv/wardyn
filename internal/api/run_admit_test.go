@@ -594,6 +594,54 @@ func TestCasRunStateHeldCallersEndARunningRun(t *testing.T) {
 	}
 }
 
+// TestStartLockHoldersBoundTheirLastRead: every function in the non-test files of internal/api that takes a run's
+// start lock (lockStart) reads the run after it through startRead or desktopBoundedRunCheck, which bound that read.
+// Catches: a start's last read back on the hold's own context, which may have no deadline.
+func TestStartLockHoldersBoundTheirLastRead(t *testing.T) {
+	callee := func(c *ast.CallExpr) string {
+		switch f := c.Fun.(type) {
+		case *ast.Ident:
+			return f.Name
+		case *ast.SelectorExpr:
+			return f.Sel.Name
+		}
+		return ""
+	}
+	files, _ := filepath.Glob("*.go")
+	holders := 0
+	for _, path := range files {
+		if len(path) > 8 && path[len(path)-8:] == "_test.go" {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			calls := callsIn(fn.Body)
+			at := slices.IndexFunc(calls, func(c *ast.CallExpr) bool { return callee(c) == "lockStart" })
+			if at < 0 {
+				continue
+			}
+			holders++
+			lock := calls[at].Pos()
+			if !slices.ContainsFunc(calls, func(c *ast.CallExpr) bool {
+				return c.Pos() > lock && (callee(c) == "startRead" || callee(c) == "desktopBoundedRunCheck")
+			}) {
+				t.Errorf("%s: %s takes the start lock and reads the run with no bound (startRead)", fset.Position(lock), fn.Name.Name)
+			}
+		}
+	}
+	if holders == 0 {
+		t.Error("no call of lockStart found: drop this pin or name the lock that replaced it")
+	}
+}
+
 // callsIn lists the calls in n.
 func callsIn(n ast.Node) []*ast.CallExpr {
 	var calls []*ast.CallExpr
