@@ -287,7 +287,7 @@ func TestAnUpstreamProxyURLInARefusedSpellingIsDeliveredSoTheRunStops(t *testing
 		if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, sc, nil, ""); got != raw {
 			t.Errorf("site config %+v: resolveRunUpstreamProxy = %q, want the URL delivered", sc, got)
 		}
-		ev := findAudit(h.audit.events, runID, "run.upstream_proxy.resolve", "failure")
+		ev := findAudit(h.audit.snapshot(), runID, "run.upstream_proxy.resolve", "failure")
 		var data struct {
 			InEffect *bool  `json:"in_effect"`
 			Reason   string `json:"reason"`

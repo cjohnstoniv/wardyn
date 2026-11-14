@@ -231,9 +231,9 @@ func TestResolveRunUpstreamProxy_NoHopReasons(t *testing.T) {
 			if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, siteCfg, nil, reason); got != "" {
 				t.Fatalf("resolveRunUpstreamProxy = %q, want \"\"", got)
 			}
-			ev := findAudit(h.audit.events, runID, "run.upstream_proxy.resolve", "success")
+			ev := findAudit(h.audit.snapshot(), runID, "run.upstream_proxy.resolve", "success")
 			if ev == nil {
-				t.Fatalf("no run.upstream_proxy.resolve success event; events=%s", auditDump(h.audit.events, runID))
+				t.Fatalf("no run.upstream_proxy.resolve success event; events=%s", auditDump(h.audit.snapshot(), runID))
 			}
 			if string(ev.Data) != `{"in_effect":false,"reason":"`+reason+`"}` {
 				t.Errorf("event data = %s, want in_effect false and reason %s", ev.Data, reason)
@@ -243,8 +243,8 @@ func TestResolveRunUpstreamProxy_NoHopReasons(t *testing.T) {
 			if got := h.srv.resolveRunUpstreamProxy(context.Background(), errID, siteCfg, errors.New("site config unreadable"), reason); got != "" {
 				t.Fatalf("resolveRunUpstreamProxy with a site config read error = %q, want \"\"", got)
 			}
-			if ev := findAudit(h.audit.events, errID, "run.upstream_proxy.resolve", "success"); ev == nil || string(ev.Data) != `{"in_effect":false,"reason":"`+reason+`"}` {
-				t.Errorf("with a site config read error: event = %v, want success, in_effect false and reason %s; events=%s", ev, reason, auditDump(h.audit.events, errID))
+			if ev := findAudit(h.audit.snapshot(), errID, "run.upstream_proxy.resolve", "success"); ev == nil || string(ev.Data) != `{"in_effect":false,"reason":"`+reason+`"}` {
+				t.Errorf("with a site config read error: event = %v, want success, in_effect false and reason %s; events=%s", ev, reason, auditDump(h.audit.snapshot(), errID))
 			}
 		})
 	}
