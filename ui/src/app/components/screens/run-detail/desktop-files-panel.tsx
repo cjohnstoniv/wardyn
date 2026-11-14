@@ -10,7 +10,7 @@ import * as React from "react";
 import { RotateCw } from "lucide-react";
 import { desktopFiles, type DesktopFilesView } from "../../../lib/api/desktop-files";
 import { approvals as approvalsApi } from "../../../lib/api/approvals";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, waitEnded } from "../../../lib/api/core";
 import { shortTime } from "../../../lib/format";
 import type { ApprovalRequest, FileDownloadScope } from "../../../lib/types/approvals";
 import { usePoll } from "../../../lib/use-poll";
@@ -101,10 +101,12 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
       } else {
         // A dropped connection or a 5xx may pass on its own, so it gets a plain sentence and a retry; a refusal
         // the server worded (4xx) is printed as it is and is not retried, because asking again gets the same answer.
+        // The api client reports a dropped connection or a timeout as an HttpError with no status (waitEnded).
         const unreadable = e instanceof HttpError && e.reason === "data_out_unreadable";
-        const transient = !(e instanceof HttpError) || e.status >= 500;
+        const transient = waitEnded(e) || !(e instanceof HttpError) || e.status >= 500;
         setLoadError({ text: transient && !unreadable ? C.loadFailed : message(e), retry: transient || unreadable });
-        setPaused(null);
+        // A paused run's poll carries on through a passing failure, so the panel comes back by itself; a refusal ends it.
+        if (!transient) setPaused(null);
       }
     }
   }, [runId, loadRequests]);
