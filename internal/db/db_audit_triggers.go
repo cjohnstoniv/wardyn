@@ -134,6 +134,34 @@ func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapa
 	return tamperCapable, other, nil
 }
 
+// auditPathlessTriggers names, as "trigger (schema.function)", each armed trigger on the audit_events tree or its
+// two bookkeeping tables that Wardyn does not ship and whose function sets no search_path: since 0285 such a
+// function runs with pg_catalog, pg_temp, the path of the audit function that fires it. audit_events must exist.
+// A function of PostgreSQL's own (pg_catalog) is left out: it resolves no bare name, and the clone of a foreign
+// key's trigger on a partition counts as a user trigger here.
+func auditPathlessTriggers(ctx context.Context, db migrationExecutor) (names []string, err error) {
+	err = db.QueryRow(ctx, `WITH RECURSIVE tree(oid) AS (
+			SELECT 'audit_events'::regclass::oid
+			UNION ALL
+			SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid)
+		SELECT COALESCE(array_agg(DISTINCT format('%I (%I.%I)', t.tgname, n.nspname, p.proname)), ARRAY[]::text[])
+		  FROM pg_catalog.pg_trigger t
+		  JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+		  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+		 WHERE `+auditUserTrigger+` AND t.tgenabled <> 'D' AND n.nspname <> 'pg_catalog'
+		   AND NOT EXISTS (SELECT 1 FROM pg_catalog.unnest(p.proconfig) AS s(v) WHERE s.v LIKE 'search\_path=%')
+		   AND (t.tgrelid IN (SELECT oid FROM tree) AND t.tgname <> ALL($1)
+		        OR t.tgrelid IN (SELECT c.oid FROM pg_catalog.pg_class c
+		             WHERE c.relname IN ('audit_partition_meta', 'audit_chain_anchors')
+		               AND c.relnamespace = (SELECT relnamespace FROM pg_catalog.pg_class WHERE oid = 'audit_events'::regclass)))`,
+		append([]string{auditChainTrigger}, auditAppendOnlyTriggers...),
+	).Scan(&names)
+	if err != nil {
+		return nil, fmt.Errorf("db: read audit triggers whose function sets no search_path: %w", err)
+	}
+	return names, nil
+}
+
 // auditTriggerNames returns the FIRING row/statement triggers on audit_events (and on every partition
 // under it, see auditTreeCTE), or nil when the table
 // doesn't exist. Disabled is treated as absent on purpose: DISABLE TRIGGER leaves the catalog row in
