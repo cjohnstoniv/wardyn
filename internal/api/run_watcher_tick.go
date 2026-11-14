@@ -72,6 +72,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	if now := s.cfg.Now(); now.Sub(*lastUndispatched) >= undispatchedGrace {
 		*lastUndispatched = now
 		pass("undispatched run reconcile", s.finalizeUndispatchedRuns(ctx))
+		// A claim whose launch died before its run row was written: no run end will release it.
+		pass("stranded run claim release", s.releaseStrandedRunClaims(ctx))
 		// Same slow cadence as the undispatched pass (both are unbounded
 		// full-table reads whose eligibility only changes on the
 		// undispatchedGrace timescale), and AFTER it, so a just-finalized

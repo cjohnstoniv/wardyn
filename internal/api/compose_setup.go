@@ -144,7 +144,13 @@ func (s *Server) setupMemberView(ctx context.Context, owner string, present map[
 				tier = workspaceReadSecurity
 			}
 		}
-		read = append(read, redactWorkspaceForRead(ws, tier))
+		shown := ws
+		if tier == workspaceReadFull {
+			// The owner's own workspace: its inherited rows as the owner reads them (withholdInheritedRows).
+			// Only the read copy: the egress copy keeps every row, as it does for the other tiers.
+			shown = withholdInheritedRequirements(ws)
+		}
+		read = append(read, redactWorkspaceForRead(shown, tier))
 		if tier == workspaceReadMember {
 			ws.Profile = withoutProfileKeys(ws.Profile, "suggested_egress")
 		}

@@ -434,7 +434,7 @@ func TestPG_DeleteSourceInUse(t *testing.T) {
 
 	// Refused: ws-a/ws-b would be orphaned. Nothing detaches — not even ws-c,
 	// which would have survived on its own (all-or-nothing per force call).
-	err = s.DeleteSource(ctx, src.ID, true)
+	_, err = s.DeleteSource(ctx, src.ID, true)
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("force delete with a would-be-orphaned workspace = %v, want ErrConflict", err)
 	}
@@ -460,7 +460,7 @@ func TestPG_DeleteSourceInUse(t *testing.T) {
 			t.Fatalf("delete %s: %v", name, err)
 		}
 	}
-	if err := s.DeleteSource(ctx, src.ID, true); err != nil {
+	if _, err := s.DeleteSource(ctx, src.ID, true); err != nil {
 		t.Fatalf("force delete once nothing would be orphaned: %v", err)
 	}
 	left, err = s.WorkspacesAttaching(ctx, src.ID)
@@ -496,10 +496,10 @@ func findWorkspaceIDByName(ctx context.Context, t *testing.T, s store.PG, name s
 func TestPG_DeleteSourceUnknownIDIs404(t *testing.T) {
 	s := hydrateStore(t)
 	ctx := context.Background()
-	if err := s.DeleteSource(ctx, uuid.New(), false); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.DeleteSource(ctx, uuid.New(), false); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown id (non-force) = %v, want ErrNotFound", err)
 	}
-	if err := s.DeleteSource(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.DeleteSource(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown id (force) = %v, want ErrNotFound", err)
 	}
 }
@@ -535,11 +535,11 @@ func TestPG_DeleteBaseImageInUse(t *testing.T) {
 	if len(names) != 2 || names[0] != "ws-a" || names[1] != "ws-b" {
 		t.Fatalf("using = %v, want both names, sorted", names)
 	}
-	if err := s.DeleteBaseImage(ctx, img.ID, false); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.DeleteBaseImage(ctx, img.ID, false); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("non-force delete while in use = %v, want ErrConflict", err)
 	}
 	// Force-detach then delete: references cleared, catalog row gone.
-	if err := s.DeleteBaseImage(ctx, img.ID, true); err != nil {
+	if _, err := s.DeleteBaseImage(ctx, img.ID, true); err != nil {
 		t.Fatalf("force delete: %v", err)
 	}
 	left, err := s.WorkspacesUsingBaseImage(ctx, img.ID)
@@ -640,10 +640,10 @@ func TestPG_UpdateBaseImageName_Renames(t *testing.T) {
 func TestPG_DeleteBaseImageUnknownIDIs404(t *testing.T) {
 	s := hydrateStore(t)
 	ctx := context.Background()
-	if err := s.DeleteBaseImage(ctx, uuid.New(), false); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.DeleteBaseImage(ctx, uuid.New(), false); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown id (non-force) = %v, want ErrNotFound", err)
 	}
-	if err := s.DeleteBaseImage(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.DeleteBaseImage(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown id (force) = %v, want ErrNotFound", err)
 	}
 }

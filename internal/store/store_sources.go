@@ -142,8 +142,8 @@ func scanName(row pgx.Row) (string, error) {
 // legacy `sources` column, silently un-deleting the source (STORE-1). A
 // workspace with an ephemeral attachment alongside this source is excluded
 // (attachments stays non-empty).
-func (s PG) workspacesOrphanedBySource(ctx context.Context, id uuid.UUID) ([]string, error) {
-	return collect(ctx, s.Pool, "list", "workspaces orphaned by source detach", `
+func workspacesOrphanedBySource(ctx context.Context, q Querier, id uuid.UUID) ([]string, error) {
+	return collect(ctx, q, "list", "workspaces orphaned by source detach", `
 		SELECT name FROM workspaces
 		WHERE attachments @> jsonb_build_array(jsonb_build_object('source_id', $1::text))
 		  AND NOT EXISTS (
@@ -153,40 +153,52 @@ func (s PG) workspacesOrphanedBySource(ctx context.Context, id uuid.UUID) ([]str
 		ORDER BY name`, []any{id.String()}, scanName)
 }
 
-// DeleteSource removes a library source. detach=true strips every workspace
-// attachment referencing it (?force=1) UNLESS that would leave a workspace
-// with zero attachments (workspacesOrphanedBySource) — '[]' must stay
-// unreachable (STORE-1). The check and the detach are two statements, so this
-// only narrows, never closes (STORE-2), the race against a concurrent
-// attach; same residual race as the detach=false path below.
-func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
+// DeleteSource removes a library source and returns the names of the workspaces it detached,
+// sorted. detach=true strips every workspace attachment referencing it (?force=1) UNLESS that would
+// leave a workspace with zero attachments (workspacesOrphanedBySource) — '[]' must stay
+// unreachable (STORE-1). The check, the detach and the delete are one transaction: the names are
+// the rows the detach changed, so an attach that landed after the caller's own listing is named
+// too, and a delete that fails leaves every workspace attached. An attach committed after the
+// check still narrows, never closes (STORE-2), the race; same residual race as the detach=false
+// path below, which detaches nothing and names no workspace.
+func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) ([]string, error) {
 	if detach {
-		orphaned, err := s.workspacesOrphanedBySource(ctx, id)
+		var detached []string
+		err := s.inTx(ctx, func(tx Querier) error {
+			orphaned, err := workspacesOrphanedBySource(ctx, tx, id)
+			if err != nil {
+				return fmt.Errorf("store: check source detach: %w", err)
+			}
+			if len(orphaned) > 0 {
+				return fmt.Errorf("%w: force-deleting would leave workspace(s) with no attachments: %s",
+					ErrConflict, strings.Join(orphaned, ", "))
+			}
+			if detached, err = collect(ctx, tx, "detach", "source", `
+				WITH d AS (
+					UPDATE workspaces
+					SET attachments = COALESCE((
+						SELECT jsonb_agg(e) FROM jsonb_array_elements(attachments) e
+						WHERE e->>'source_id' IS DISTINCT FROM $1
+					), '[]'::jsonb), updated_at = now()
+					WHERE attachments @> jsonb_build_array(jsonb_build_object('source_id', $1::text))
+					RETURNING name
+				)
+				SELECT name FROM d ORDER BY name`, []any{id.String()}, scanName); err != nil {
+				return err
+			}
+			tag, err := tx.Exec(ctx, `DELETE FROM sources WHERE id=$1`, id)
+			if err != nil {
+				return fmt.Errorf("store: delete source: %w", err)
+			}
+			if tag.RowsAffected() == 0 {
+				return ErrNotFound
+			}
+			return nil
+		})
 		if err != nil {
-			return fmt.Errorf("store: check source detach: %w", err)
+			return nil, err
 		}
-		if len(orphaned) > 0 {
-			return fmt.Errorf("%w: force-deleting would leave workspace(s) with no attachments: %s",
-				ErrConflict, strings.Join(orphaned, ", "))
-		}
-		if _, err := s.Pool.Exec(ctx, `
-			UPDATE workspaces
-			SET attachments = COALESCE((
-				SELECT jsonb_agg(e) FROM jsonb_array_elements(attachments) e
-				WHERE e->>'source_id' IS DISTINCT FROM $1
-			), '[]'::jsonb), updated_at = now()
-			WHERE attachments @> jsonb_build_array(jsonb_build_object('source_id', $1::text))`,
-			id.String()); err != nil {
-			return fmt.Errorf("store: detach source: %w", err)
-		}
-		tag, err := s.Pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, id)
-		if err != nil {
-			return fmt.Errorf("store: delete source: %w", err)
-		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
-		}
-		return nil
+		return detached, nil
 	}
 	// Non-force: NOT EXISTS runs atomically WITH the DELETE, narrowing — not
 	// closing (STORE-2) — the race against a concurrent attach still open
@@ -198,19 +210,19 @@ func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 			WHERE attachments @> jsonb_build_array(jsonb_build_object('source_id', $1::text))
 		)`, id)
 	if err != nil {
-		return fmt.Errorf("store: delete source: %w", err)
+		return nil, fmt.Errorf("store: delete source: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		var exists bool
 		if perr := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sources WHERE id=$1)`, id).Scan(&exists); perr != nil {
-			return fmt.Errorf("store: probe source existence: %w", perr)
+			return nil, fmt.Errorf("store: probe source existence: %w", perr)
 		}
 		if !exists {
-			return ErrNotFound
+			return nil, ErrNotFound
 		}
-		return ErrConflict
+		return nil, ErrConflict
 	}
-	return nil
+	return []string{}, nil
 }
 
 // ClaimSourceActiveRun fences a source's in-flight scan run, mirroring
@@ -502,26 +514,44 @@ func (s PG) WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]strin
 		`SELECT name FROM workspaces WHERE base_image_id=$1 ORDER BY name`, []any{id}, scanName)
 }
 
-// DeleteBaseImage removes a catalog row; detach=true drops every workspace
-// reference first (falling back to the derived recommended build — NULL is
-// the marker, so "detach" is honest, not destructive). detach=false mirrors
-// DeleteSource's residual race (STORE-2): a concurrent commit between the
-// NOT EXISTS check and delete is instead caught by the base_image_id FK
-// (0031:61), surfacing as 23503 — mapped to ErrConflict below.
-func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error {
+// DeleteBaseImage removes a catalog row and returns the names of the workspaces it detached,
+// sorted; detach=true drops every workspace reference first (falling back to the derived recommended
+// build — NULL is the marker, so "detach" is honest, not destructive), in one transaction with the
+// delete, so a delete that fails leaves every workspace on the image. detach=false detaches nothing
+// and mirrors DeleteSource's residual race (STORE-2): a concurrent commit between the NOT EXISTS
+// check and delete is instead caught by the base_image_id FK (0031:61), surfacing as 23503 — mapped
+// to ErrConflict below.
+func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) ([]string, error) {
 	if detach {
-		if _, err := s.Pool.Exec(ctx,
-			`UPDATE workspaces SET base_image_id=NULL, updated_at=now() WHERE base_image_id=$1`, id); err != nil {
-			return fmt.Errorf("store: detach base image: %w", err)
-		}
-		tag, err := s.Pool.Exec(ctx, `DELETE FROM base_images WHERE id=$1`, id)
+		var detached []string
+		err := s.inTx(ctx, func(tx Querier) error {
+			var err error
+			if detached, err = collect(ctx, tx, "detach", "base image", `
+				WITH d AS (
+					UPDATE workspaces SET base_image_id=NULL, updated_at=now() WHERE base_image_id=$1 RETURNING name
+				)
+				SELECT name FROM d ORDER BY name`, []any{id}, scanName); err != nil {
+				return err
+			}
+			tag, err := tx.Exec(ctx, `DELETE FROM base_images WHERE id=$1`, id)
+			if err != nil {
+				// A workspace pointed at the image after the detach and committed first: the FK
+				// refuses the delete, and the rollback puts the detached workspaces back.
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+					return ErrConflict
+				}
+				return fmt.Errorf("store: delete base image: %w", err)
+			}
+			if tag.RowsAffected() == 0 {
+				return ErrNotFound
+			}
+			return nil
+		})
 		if err != nil {
-			return fmt.Errorf("store: delete base image: %w", err)
+			return nil, err
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
-		}
-		return nil
+		return detached, nil
 	}
 	// Non-force: same narrowed-not-closed guarantee as DeleteSource (STORE-2).
 	// Zero rows affected means "still in use" or "no such id"; the follow-up
@@ -535,21 +565,21 @@ func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) erro
 		// instead of NOT EXISTS — map to the same clean 409, not a raw 500.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			return ErrConflict
+			return nil, ErrConflict
 		}
-		return fmt.Errorf("store: delete base image: %w", err)
+		return nil, fmt.Errorf("store: delete base image: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		var exists bool
 		if perr := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM base_images WHERE id=$1)`, id).Scan(&exists); perr != nil {
-			return fmt.Errorf("store: probe base image existence: %w", perr)
+			return nil, fmt.Errorf("store: probe base image existence: %w", perr)
 		}
 		if !exists {
-			return ErrNotFound
+			return nil, ErrNotFound
 		}
-		return ErrConflict
+		return nil, ErrConflict
 	}
-	return nil
+	return []string{}, nil
 }
 
 // The verify-approve merge writer

@@ -375,7 +375,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 		out := make([]types.Workspace, 0, len(rows))
 		for _, ws := range rows {
 			ws = s.rejudgedForList(r.Context(), ws) // a clean replay's verdict taken again, as the detail read does
-			ws = redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))
+			ws = s.withholdInheritedRows(r, redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
 			if stamp != nil {
 				ws = stamp(ws)
 			}
@@ -488,7 +488,7 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 // projection (workspaceWriteEcho), plus the server-owned `admitted` flag the
 // list also carries and #1267's available_to_you.
 func (s *Server) workspaceForResponse(r *http.Request, ws types.Workspace) types.Workspace {
-	out := redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))
+	out := s.withholdInheritedRows(r, redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
 	if stamp := s.admissionStamper(r.Context()); stamp != nil {
 		out = stamp(out)
 	}
@@ -502,7 +502,7 @@ func (s *Server) workspaceForResponse(r *http.Request, ws types.Workspace) types
 // stamps: a write response carries no `admitted` and no available_to_you key
 // (the console would read an absent-turned-false flag as a refusal).
 func (s *Server) workspaceWriteEcho(r *http.Request, ws types.Workspace) types.Workspace {
-	return s.pinStamper(r.Context())(redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
+	return s.pinStamper(r.Context())(s.withholdInheritedRows(r, redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))))
 }
 
 // pinStamper projects a workspace's model-provider pin for this caller: a pin
@@ -677,7 +677,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// can enable a provider row actually is, so this is the sentence that has to
 	// reach them here rather than waiting for whoever launches the first run.
 	// Over req.Sources — exactly the locators admission read.
-	writeJSON(w, http.StatusCreated, workspaceResponse{Workspace: created,
+	writeJSON(w, http.StatusCreated, workspaceResponse{Workspace: s.withholdInheritedRows(r, created),
 		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
 }
 
@@ -872,7 +872,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// Same door, same sentence: an edit is how a source MOVES onto a legacy host,
 	// so the warning belongs on this response too.
 	// A member's own workspace can carry a pin an admin set on it.
-	updated = s.pinStamper(r.Context())(updated)
+	updated = s.pinStamper(r.Context())(s.withholdInheritedRows(r, updated))
 	writeJSON(w, http.StatusOK, workspaceResponse{Workspace: updated,
 		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
 }
