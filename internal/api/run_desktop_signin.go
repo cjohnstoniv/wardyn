@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -375,9 +376,9 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := se.SignalMain(ctx, run.SandboxRef, "SIGSTOP"); err != nil {
-		if ctx.Err() != nil && !errors.Is(err, runner.ErrSigninUnsupported) {
-			// The request was cancelled while the stop was sent, so it may have
-			// landed: continue pid 1 and close the row, as when pause-agent never ran.
+		if !errors.Is(err, runner.ErrSigninUnsupported) {
+			// Any other answer can follow a stop that landed, or come before one dockerd
+			// still applies: continue pid 1 and close the row, as when pause-agent never ran.
 			s.abandonDesktopSignin(ctx, se, run, si, principal)
 		} else {
 			s.endUnstartedDesktopSignin(ctx, st, run, si)
@@ -446,10 +447,11 @@ func (s *Server) rollbackDesktopSignin(ctx context.Context, run types.AgentRun, 
 }
 
 // abandonDesktopSignin ends a sign-in whose pause-agent never ran, or whose
-// request was cancelled while pid 1's stop was sent: at most pid 1 was
-// stopped, so a bare SIGCONT resumes the agent. When even that fails, the
+// SIGSTOP answered an error: at most pid 1 was stopped, so a bare SIGCONT
+// resumes the agent. When pid 1 is not read running after it (continueMain), the
 // row is left at the "continue" stage, and the sweep retries only that
-// SIGCONT (continueDesktopSignin), never the helper. It runs on its own
+// SIGCONT (continueDesktopSignin), never the helper; a state that cannot be
+// read closes the row with agent_resumed false. It runs on its own
 // bounded context, since the begin's request may be gone.
 func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExecer, run types.AgentRun, si types.DesktopSignin, principal string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
@@ -458,9 +460,9 @@ func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExece
 	if !ok {
 		return
 	}
-	err := se.SignalMain(ctx, run.SandboxRef, "SIGCONT")
-	if err == nil {
-		_ = s.closeDesktopSignin(ctx, st, run, si, signinEndFailed, types.ActorHuman, principal, true)
+	err := s.continueMain(ctx, se, run.SandboxRef)
+	if err == nil || errors.Is(err, errSigninStateUnread) {
+		_ = s.closeDesktopSignin(ctx, st, run, si, signinEndFailed, types.ActorHuman, principal, err == nil)
 		return
 	}
 	slog.WarnContext(ctx, "wardynd: desktop sign-in did not end", "run_id", run.ID, "stage", signinStageContinue, "err", err)
@@ -480,11 +482,13 @@ func (s *Server) continueDesktopSignin(ctx context.Context, st store.DesktopSign
 	made int, reason string, actorType types.ActorType, actor string) error {
 	if made < signinContinueTries {
 		var err error
+		resumed := false // a runner that cannot be read has not shown the agent running
 		if se, ok := s.cfg.Runner.(runner.SigninExecer); ok {
-			err = se.SignalMain(ctx, run.SandboxRef, "SIGCONT")
+			err = s.continueMain(ctx, se, run.SandboxRef)
+			resumed = err == nil
 		}
-		if err == nil {
-			return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, true)
+		if err == nil || errors.Is(err, errSigninStateUnread) {
+			return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, resumed)
 		}
 		made++
 		slog.WarnContext(ctx, "wardynd: desktop sign-in could not continue the agent", "run_id", run.ID, "tries", made, "err", err)
@@ -499,6 +503,52 @@ func (s *Server) continueDesktopSignin(ctx context.Context, st store.DesktopSign
 		return errors.Join(err, rerr)
 	}
 	return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, false)
+}
+
+// signinSettleGaps space the reads of pid 1's state after its SIGCONT. dockerd
+// applies a kill whose client has gone (ContainerKill takes no context), in the
+// order the handlers take the container's lock, so a SIGSTOP that answered an
+// error can land after the SIGCONT; one held back for longer than this is missed.
+var signinSettleGaps = [...]time.Duration{100 * time.Millisecond, 400 * time.Millisecond}
+
+// signinMainState is pid 1's stat line, read in the pid namespace its signals land in.
+var signinMainState = []string{"/bin/cat", "/proc/1/stat"}
+
+var errSigninStateUnread = errors.New("the agent's state could not be read")
+
+// continueMain sends pid 1 a SIGCONT, then reads its state through
+// signinSettleGaps: nil only when the last read finds it running, and a read
+// that finds it stopped sends one more SIGCONT. errSigninStateUnread: the
+// SIGCONT was accepted and a read could not be made. The read runs as the
+// person's uid, whose exec the agent can neither signal, trace nor write to.
+func (s *Server) continueMain(ctx context.Context, se runner.SigninExecer, ref string) error {
+	if err := se.SignalMain(ctx, ref, "SIGCONT"); err != nil {
+		return err
+	}
+	for i := 0; ; i++ {
+		out, err := s.sandboxExec(ctx, ref, true, nil, 4<<10, signinMainState)
+		line := string(out)
+		j := strings.LastIndexByte(line, ')')
+		if err != nil || j < 0 || j+2 >= len(line) {
+			return errors.Join(errSigninStateUnread, err)
+		}
+		stopped := line[j+2] == 'T' // a job-control stop, which SIGCONT ends
+		switch {
+		case i == len(signinSettleGaps) && stopped:
+			return errors.New("the agent is still stopped")
+		case i == len(signinSettleGaps):
+			return nil
+		case stopped:
+			if err := se.SignalMain(ctx, ref, "SIGCONT"); err != nil {
+				return err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(errSigninStateUnread, ctx.Err())
+		case <-time.After(signinSettleGaps[i]):
+		}
+	}
 }
 
 type desktopSigninShareRequest struct {
@@ -679,12 +729,15 @@ func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si
 	if _, err := s.signinExec(ctx, run.SandboxRef, false, rec, 4<<10, "resume-agent"); err != nil {
 		return failed("resume", err)
 	}
+	resumed := false // a runner that cannot be read has not shown the agent running
 	if se, ok := s.cfg.Runner.(runner.SigninExecer); ok {
-		if err := se.SignalMain(ctx, run.SandboxRef, "SIGCONT"); err != nil {
+		err := s.continueMain(ctx, se, run.SandboxRef)
+		if err != nil && !errors.Is(err, errSigninStateUnread) {
 			return failed("resume", err)
 		}
+		resumed = err == nil
 	}
-	return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, true)
+	return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, resumed)
 }
 
 func (s *Server) closeDesktopSignin(ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, si types.DesktopSignin,
@@ -707,9 +760,15 @@ func (s *Server) closeDesktopSignin(ctx context.Context, st store.DesktopSigninS
 // (asPerson) or as the container's own user (the agent), with stdin, and
 // returns its stdout. A non-zero exit, or more than maxOut bytes, is an error.
 func (s *Server) signinExec(ctx context.Context, ref string, asPerson bool, stdin []byte, maxOut int, args ...string) ([]byte, error) {
+	return s.sandboxExec(ctx, ref, asPerson, stdin, maxOut, append([]string{signinBinary}, args...))
+}
+
+// sandboxExec is signinExec for a whole argv of two words or more.
+func (s *Server) sandboxExec(ctx context.Context, ref string, asPerson bool, stdin []byte, maxOut int, argv []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, signinExecTimeout)
 	defer cancel()
-	spec := runner.ExecSpec{Argv: append([]string{signinBinary}, args...)}
+	spec := runner.ExecSpec{Argv: argv}
+	name := path.Base(argv[0]) + " " + argv[1]
 	var (
 		sess *runner.ExecSession
 		err  error
@@ -754,13 +813,13 @@ func (s *Server) signinExec(ctx context.Context, ref string, asPerson bool, stdi
 		return nil, err
 	}
 	if code == 126 || code == 127 {
-		return nil, fmt.Errorf("%w: wardyn-signin %s exited %d: %s", errSigninNotStarted, args[0], code, strings.TrimSpace(string(stderr)))
+		return nil, fmt.Errorf("%w: %s exited %d: %s", errSigninNotStarted, name, code, strings.TrimSpace(string(stderr)))
 	}
 	if code != 0 {
-		return nil, fmt.Errorf("wardyn-signin %s exited %d: %s", args[0], code, strings.TrimSpace(string(stderr)))
+		return nil, fmt.Errorf("%s exited %d: %s", name, code, strings.TrimSpace(string(stderr)))
 	}
 	if len(out) > maxOut {
-		return nil, fmt.Errorf("wardyn-signin %s: output over %d bytes", args[0], maxOut)
+		return nil, fmt.Errorf("%s: output over %d bytes", name, maxOut)
 	}
 	return out, nil
 }

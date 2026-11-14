@@ -240,6 +240,10 @@ type signinFakeRunner struct {
 	stdout  map[string]string
 	// contFail is how many of the next SIGCONTs fail.
 	contFail int
+	// states answers the reads of pid 1's state in order, one stat letter each (T is stopped), then S;
+	// readErr fails every read. Reads are not in calls.
+	states  string
+	readErr error
 }
 
 var _ runner.SigninExecer = (*signinFakeRunner)(nil)
@@ -250,6 +254,19 @@ func newSigninFakeRunner() *signinFakeRunner {
 }
 
 func (f *signinFakeRunner) exec(who string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if who == "person" && slices.Equal(spec.Argv, signinMainState) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.readErr != nil {
+			return nil, f.readErr
+		}
+		state := "S"
+		if f.states != "" {
+			state, f.states = f.states[:1], f.states[1:]
+		}
+		return &runner.ExecSession{Stdout: strings.NewReader("1 (agent) " + state + " 0 1"), Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { return 0, nil }}, nil
+	}
 	if len(spec.Argv) < 2 || spec.Argv[0] != signinBinary {
 		return nil, runner.ErrExecStreamUnsupported
 	}

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -397,6 +398,138 @@ func TestDesktopSignin_ABeginWhoseInsertLandedAndAnsweredAnErrorClosesItsRow(t *
 	}
 	if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
 		t.Errorf("desktop.recording rows: %d pause, %d resume, want one of each", p, r)
+	}
+}
+
+// signinStopLostRunner is signinFakeRunner whose SIGSTOP lands and still answers an error, as one whose
+// answer is lost on its way back does.
+type signinStopLostRunner struct{ *signinFakeRunner }
+
+func (r signinStopLostRunner) SignalMain(ctx context.Context, ref, signal string) error {
+	if err := r.signinFakeRunner.SignalMain(ctx, ref, signal); err != nil || signal != "SIGSTOP" {
+		return err
+	}
+	return errors.New("the stop's answer was lost")
+}
+
+// TestDesktopSignin_AStopThatAnsweredAnErrorIsContinuedAndReadBack: a begin whose SIGSTOP answered an
+// error continues pid 1 and reads its state back. A stop that lands after the SIGCONT gets one more; a
+// pid 1 still read stopped leaves the row at stage continue for the sweep; agent_resumed is true only
+// when pid 1 was read running.
+func TestDesktopSignin_AStopThatAnsweredAnErrorIsContinuedAndReadBack(t *testing.T) {
+	for name, tc := range map[string]struct {
+		lost    bool // the stop landed and answered an error, its request live; else the request was cancelled
+		states  string
+		readErr error
+		calls   []string
+		closed  bool   // the row closed, else it is open at stage continue
+		close   string // the one desktop_signin.close row: its outcome and agent_resumed
+	}{
+		"a stop that landed, its answer lost": {lost: true, calls: []string{"signal:SIGSTOP", "signal:SIGCONT"}, closed: true, close: "success true"},
+		"a stop that lands after the SIGCONT": {states: "T", calls: []string{"signal:SIGCONT", "signal:SIGCONT"}, closed: true, close: "success true"},
+		"pid 1 stays stopped":                 {states: "TTT", calls: []string{"signal:SIGCONT", "signal:SIGCONT", "signal:SIGCONT"}, close: "failure false"},
+		"a state that cannot be read":         {readErr: errors.New("exec refused"), calls: []string{"signal:SIGCONT"}, closed: true, close: "success false"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSigninFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f.rn.states, f.rn.readErr = tc.states, tc.readErr
+			f.srv.cfg.Runner = signinCancelStopRunner{signinFakeRunner: f.rn, cancel: cancel}
+			if tc.lost {
+				f.srv.cfg.Runner = signinStopLostRunner{f.rn}
+			}
+			w := doSSOCtx(t, f.srv, ctx, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/desktop-signin", f.cookie, "")
+			if w.Code != http.StatusBadGateway {
+				t.Fatalf("begin = %d %s, want 502", w.Code, w.Body.String())
+			}
+			if got := f.rn.seen(); !slices.Equal(got, tc.calls) {
+				t.Fatalf("calls = %v, want %v", got, tc.calls)
+			}
+			si := f.st.only(t)
+			if closed := si.EndedAt != nil; closed != tc.closed || !closed && si.EndStage != signinStageContinue {
+				t.Fatalf("sign-in row = ended %v, stage %q; want closed %t, else stage %q", si.EndedAt, si.EndStage, tc.closed, signinStageContinue)
+			}
+			var closes []string
+			for _, ev := range f.h.audit.snapshot() {
+				if ev.Action == "desktop_signin.close" {
+					closes = append(closes, ev.Outcome+" "+strconv.FormatBool(strings.Contains(string(ev.Data), `"agent_resumed":true`)))
+				}
+			}
+			if !slices.Equal(closes, []string{tc.close}) {
+				t.Fatalf("desktop_signin.close rows = %v, want [%s]", closes, tc.close)
+			}
+		})
+	}
+}
+
+// signinCloseRows is the desktop_signin.close rows of f as "outcome agent_resumed".
+func signinCloseRows(f *signinFixture) []string {
+	var rows []string
+	for _, ev := range f.h.audit.snapshot() {
+		if ev.Action == "desktop_signin.close" {
+			rows = append(rows, ev.Outcome+" "+strconv.FormatBool(strings.Contains(string(ev.Data), `"agent_resumed":true`)))
+		}
+	}
+	return rows
+}
+
+// TestDesktopSignin_ANormalEndReadsTheAgentBackToo: the end of a sign-in that went well reads pid 1's state
+// after its SIGCONT as the abandon does. A SIGCONT that was accepted while every read finds pid 1 stopped
+// leaves the row open and writes a failure row with agent_resumed false; a read that finds it running
+// after one more SIGCONT closes the row with agent_resumed true.
+func TestDesktopSignin_ANormalEndReadsTheAgentBackToo(t *testing.T) {
+	for name, tc := range map[string]struct {
+		states  string
+		conts   int    // SIGCONTs sent by the end
+		endCode int    // the end's answer
+		closed  bool   // the row closed, else it is open for the sweep
+		close   string // the one desktop_signin.close row
+	}{
+		"every read finds pid 1 stopped": {states: "TTT", conts: 3, endCode: http.StatusBadGateway, close: "failure false"},
+		"a read finds pid 1 running":     {states: "T", conts: 2, endCode: http.StatusNoContent, closed: true, close: "success true"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSigninFixture(t)
+			f.begin(t)
+			f.rn.mu.Lock()
+			f.rn.states = tc.states
+			f.rn.mu.Unlock()
+			if code, body := f.post(t, "/desktop-signin/end", ""); code != tc.endCode {
+				t.Fatalf("end = %d %s, want %d", code, body, tc.endCode)
+			}
+			if n := strings.Count(strings.Join(f.rn.seen(), " "), "signal:SIGCONT"); n != tc.conts {
+				t.Fatalf("SIGCONTs sent by the end = %d, want %d: %v", n, tc.conts, f.rn.seen())
+			}
+			if si := f.st.only(t); (si.EndedAt != nil) != tc.closed {
+				t.Fatalf("sign-in row ended = %v, want %t", si.EndedAt, tc.closed)
+			}
+			if got := signinCloseRows(f); !slices.Equal(got, []string{tc.close}) {
+				t.Fatalf("desktop_signin.close rows = %v, want [%s]", got, tc.close)
+			}
+		})
+	}
+}
+
+// TestDesktopSignin_AContinueOnARunnerThatCannotBeReadClosesWithAgentResumedFalse: the sweep's continue
+// retry on a runner that is not a SigninExecer sends no SIGCONT and reads nothing, so its close row does
+// not claim the agent was resumed.
+func TestDesktopSignin_AContinueOnARunnerThatCannotBeReadClosesWithAgentResumedFalse(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	f.srv.cfg.Runner = f.rn.sshFakeRunner
+	st, ok := f.srv.desktopSigninStore()
+	if !ok {
+		t.Fatal("desktop sign-ins are off")
+	}
+	if err := f.srv.continueDesktopSignin(context.Background(), st, f.run, f.st.only(t), 0, signinEndDone, types.ActorSystem, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if si := f.st.only(t); si.EndedAt == nil {
+		t.Fatal("the row did not close")
+	}
+	if got := signinCloseRows(f); !slices.Equal(got, []string{"success false"}) {
+		t.Fatalf("desktop_signin.close rows = %v, want [success false]", got)
 	}
 }
 
