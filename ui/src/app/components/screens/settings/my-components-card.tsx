@@ -98,7 +98,11 @@ export function MyComponentsCard({ secretsPath = "/secrets" }: { secretsPath?: s
             component={editing ?? undefined}
             residentAllowed={data.resident_delivery_allowed}
             secretsPath={secretsPath}
-            onClose={() => setEditing(undefined)}
+            onClose={() => {
+              setEditing(undefined);
+              // A save refused because the row changed is followed by a close: the next open reads the saved row.
+              load();
+            }}
             onSaved={load}
           />
         </React.Suspense>

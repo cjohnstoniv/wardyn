@@ -163,7 +163,8 @@ docs/operations/capabilities.md=5172 share=35 # 5172 measured (+9 over 5163, mea
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
 # docs/operations/custom-components.md 1283 adds 14 over 1269, measured: a line links the brokered operations recipes.
 # docs/operations/custom-components.md 1464 adds 181 over 1283, measured: the pinned-to-a-unit block and the revive sentence for component_unit_pinned.
-docs/operations/custom-components.md=1464 share=35
+# docs/operations/custom-components.md 1496 adds 32 over 1464, measured: expected_version on a component PUT.
+docs/operations/custom-components.md=1496 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
 # docs/operations/api-tokens.md 5475 adds 9 over 5466 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.

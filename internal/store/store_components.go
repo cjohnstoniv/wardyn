@@ -82,17 +82,24 @@ func (s PG) CreateComponentCapped(ctx context.Context, c types.Component, max in
 	return out, nil
 }
 
+// ErrComponentStale is UpdateComponent's answer when the row is not at the version the caller read.
+var ErrComponentStale = errors.New("store: the component changed since the caller read it")
+
 // UpdateComponent — see ComponentStore.
-func (s PG) UpdateComponent(ctx context.Context, c types.Component) (types.Component, error) {
+func (s PG) UpdateComponent(ctx context.Context, c types.Component, expected int) (types.Component, error) {
 	def, err := marshalComponentDefinition(c.Definition)
 	if err != nil {
 		return types.Component{}, err
 	}
 	const q = `
 		UPDATE components SET name = $3, definition = $4, version = version + 1, updated_at = now()
-		WHERE id = $1 AND owner = $2
+		WHERE id = $1 AND owner = $2 AND ($5::integer = 0 OR version = $5::integer)
 		RETURNING ` + componentCols
-	return scanComponent(s.Pool.QueryRow(ctx, q, c.ID, c.Owner, c.Name, def))
+	out, err := scanComponent(s.Pool.QueryRow(ctx, q, c.ID, c.Owner, c.Name, def, expected))
+	if errors.Is(err, ErrNotFound) && expected != 0 {
+		return types.Component{}, ErrComponentStale
+	}
+	return out, err
 }
 
 // DeleteComponent — see ComponentStore.

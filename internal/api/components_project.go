@@ -6,6 +6,7 @@ package api
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -34,6 +35,20 @@ func orgComponentView(c types.Component) client.OrgComponentView {
 	v.Category = "api"
 	if cli := c.Definition.CLI; cli != nil {
 		v.Category, v.CLI = "cli", cliView(cli)
+	}
+	if m := c.Definition.MCP; m != nil {
+		v.Category, v.MCP = "mcp", mcpView(m)
+	}
+	return v
+}
+
+// mcpView is the non-secret face of an MCP block: its transport and a remote server's origin. The
+// URL's path and query stay with the admin, since a server's key can be written into either; the
+// launch command and the gateway audience stay too.
+func mcpView(m *types.ComponentMCP) *client.MCPView {
+	v := &client.MCPView{Transport: m.Transport}
+	if u, err := url.Parse(m.URL); err == nil && u.Host != "" {
+		v.URL = (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
 	}
 	return v
 }
