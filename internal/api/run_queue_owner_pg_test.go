@@ -237,6 +237,42 @@ func TestPG_QueueEndsAuditOnlyWhatTheyEnded(t *testing.T) {
 	}
 }
 
+// A start whose heartbeat lands after the stale-lease pass listed it keeps its run: the pass's own
+// transition re-checks the lease, so there is no failure, no hint, no revoke and no start_lost row.
+func TestPG_QueueStaleLeaseSparesAStartWhoseHeartbeatRecovered(t *testing.T) {
+	ctx := context.Background()
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, "")
+	e.exec(`DELETE FROM agent_runs WHERE id = $1`, occupant.ID)
+	promoted, _, err := e.pg.PromoteRunQueue(ctx, store.PromotePass{PoolID: pool.ID, ScanLimit: 10, WatcherOwner: "live-replica"},
+		func(context.Context, types.RunnerPool, store.RunQueueEntry) (store.QueueVerdict, error) {
+			return store.QueueVerdict{Admit: true}, nil
+		})
+	if err != nil || len(promoted) != 1 || promoted[0].Run.ID != waiting.ID {
+		t.Fatalf("promote by hand: %v %v", promoted, err)
+	}
+	// The pass lists the start while its lease is stale...
+	e.exec(`UPDATE agent_runs SET watcher_heartbeat = now() - interval '2 minutes' WHERE id = $1`, waiting.ID)
+	listed, err := e.pg.StalePromotedRuns(ctx, queueLeaseStale)
+	if err != nil || len(listed) != 1 || listed[0].ID != waiting.ID {
+		t.Fatalf("stale list = %v, %v; want the promoted run", listed, err)
+	}
+	// ...and the start's heartbeat lands before the pass's transition.
+	e.exec(`UPDATE agent_runs SET watcher_heartbeat = now() WHERE id = $1`, waiting.ID)
+	e.srv.cfg.Store = &queueFaultStore{PG: e.pg, stale: listed}
+	if err := e.srv.failStalePromoted(ctx); err != nil {
+		t.Fatalf("failStalePromoted = %v; a start that recovered is no failure", err)
+	}
+	if got := e.run(waiting.ID); got.State != types.RunPending || got.FailureHint != "" {
+		t.Errorf("the recovered start's run = %s %q; want it still PENDING with no hint", got.State, got.FailureHint)
+	}
+	if rows := e.audits(waiting.ID, "run.queue.start"); len(rows) != 0 {
+		t.Errorf("run.queue.start rows = %d; want none for a run the pass did not end", len(rows))
+	}
+}
+
 // Revoking every session and cutting only one person's browser sessions also stop a run that person
 // queued from a session: the start asks both with the moment the run was queued.
 func TestPG_QueueRevokeAllAndSessionCutStopAWaitingRun(t *testing.T) {

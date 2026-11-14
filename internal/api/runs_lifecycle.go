@@ -576,54 +576,61 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		return false
 	}
 	if applied {
-		// The cascade is conditional on `from`, and the condition is load-bearing.
-		//
-		// from == RUNNING: CASCADE. This path is NOT only the create side.
-		// runs_dispatch.go fails a run with from=RunRunning three times
-		// AFTER the STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed
-		// `agent-run --selftest` (up to 2 minutes of a vendor image's own
-		// entrypoint), and a failed task Exec — and by then the sandbox and the
-		// proxy sidecar are UP, so an egress_domain approval can already be
-		// PENDING. Skipping the cascade there left the operator's queue holding a
-		// dead question for up to 24h, expiring as "nobody answered" rather than
-		// "the run failed".
-		//
-		// from != RUNNING: EXEMPT, and still pinned by a negative test. Before the
-		// run reaches RUNNING no approval can exist: the broker raises a credential
-		// approval only from a mint the sandbox asks for, and the egress/tool
-		// approvals come from the proxy sidecar and the toolgate, neither of which
-		// is running yet. Cascading there would be one list-all-PENDING read per
-		// failed dispatch that can only ever find nothing.
-		//
-		// The census of transitions that can strand an approval is four:
-		// finalizeRunTail's (the completion watcher, the boot reconciler, the
-		// probe reclaim and the lease's stopKeptRun all route through it),
-		// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
-		// cmd/wardynd (which reaches the cascade through
-		// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
-		// BECAUSE its agent is parked on a wait_for_review hold), and this one on
-		// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
-		// them so a new writer reds instead of silently stranding.
-		if hint != "" {
-			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
-			// the ~30 test doubles that embed store.Store never implement it, so a
-			// core method would nil-panic in every one that reaches this path. The
-			// real PG store implements it; a double that wants to observe the hint
-			// declares the method and is picked up here.
-			if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
-				if herr := setter.SetRunFailureHint(ctx, runID, hint); herr != nil {
-					slog.WarnContext(ctx, "wardynd: could not persist run failure hint",
-						slog.String("run_id", runID.String()), slog.Any("err", herr))
-				}
-			}
-		}
-		s.revokeRunCascade(ctx, runID)
-		if from == types.RunRunning {
-			s.cancelRunApprovals(ctx, runID)
-		}
-		s.FinishRunOutput(ctx, runID)
+		s.failedRunEffects(ctx, runID, from, hint)
 	}
 	return applied
+}
+
+// failedRunEffects is what a won transition to FAILED owes, in order: the hint, the revoke cascade, the
+// run's approvals when it had reached RUNNING, and its output. failAndRevoke and the queue's failStaleStart
+// call it only after their own transition won, so a run another writer ended is never handled twice.
+func (s *Server) failedRunEffects(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) {
+	// The cascade is conditional on `from`, and the condition is load-bearing.
+	//
+	// from == RUNNING: CASCADE. This path is NOT only the create side.
+	// runs_dispatch.go fails a run with from=RunRunning three times
+	// AFTER the STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed
+	// `agent-run --selftest` (up to 2 minutes of a vendor image's own
+	// entrypoint), and a failed task Exec — and by then the sandbox and the
+	// proxy sidecar are UP, so an egress_domain approval can already be
+	// PENDING. Skipping the cascade there left the operator's queue holding a
+	// dead question for up to 24h, expiring as "nobody answered" rather than
+	// "the run failed".
+	//
+	// from != RUNNING: EXEMPT, and still pinned by a negative test. Before the
+	// run reaches RUNNING no approval can exist: the broker raises a credential
+	// approval only from a mint the sandbox asks for, and the egress/tool
+	// approvals come from the proxy sidecar and the toolgate, neither of which
+	// is running yet. Cascading there would be one list-all-PENDING read per
+	// failed dispatch that can only ever find nothing.
+	//
+	// The census of transitions that can strand an approval is four:
+	// finalizeRunTail's (the completion watcher, the boot reconciler, the
+	// probe reclaim and the lease's stopKeptRun all route through it),
+	// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
+	// cmd/wardynd (which reaches the cascade through
+	// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
+	// BECAUSE its agent is parked on a wait_for_review hold), and this one on
+	// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
+	// them so a new writer reds instead of silently stranding.
+	if hint != "" {
+		// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
+		// the ~30 test doubles that embed store.Store never implement it, so a
+		// core method would nil-panic in every one that reaches this path. The
+		// real PG store implements it; a double that wants to observe the hint
+		// declares the method and is picked up here.
+		if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
+			if herr := setter.SetRunFailureHint(ctx, runID, hint); herr != nil {
+				slog.WarnContext(ctx, "wardynd: could not persist run failure hint",
+					slog.String("run_id", runID.String()), slog.Any("err", herr))
+			}
+		}
+	}
+	s.revokeRunCascade(ctx, runID)
+	if from == types.RunRunning {
+		s.cancelRunApprovals(ctx, runID)
+	}
+	s.FinishRunOutput(ctx, runID)
 }
 
 // runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to

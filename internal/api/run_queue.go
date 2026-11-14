@@ -58,6 +58,7 @@ type queueStore interface {
 	QueueDepth(ctx context.Context) (map[uuid.UUID]int, error)
 	PoolSlotsUsed(ctx context.Context) (map[uuid.UUID]int, error)
 	StalePromotedRuns(ctx context.Context, staleAfter time.Duration) ([]types.AgentRun, error)
+	FailStalePromotedRun(ctx context.Context, id uuid.UUID, staleAfter time.Duration) (bool, error)
 	StartQueuedRun(ctx context.Context, id uuid.UUID, st store.QueueStart) (types.AgentRun, bool, error)
 	SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 	SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map[uuid.UUID]string) error
