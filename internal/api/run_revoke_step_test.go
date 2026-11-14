@@ -76,20 +76,3 @@ func TestRevoke_AMarkThatCouldNotBeRecordedIsWrittenAgain(t *testing.T) {
 		t.Fatalf("%d mark calls, want 4: two that failed inline, one that failed in the loop, one that landed", n)
 	}
 }
-
-// TestPauseSettle_ACutFreezeIsRecordedAgainLater: a freeze cut at its bound may land after the pause sweep settled
-// its first record; a second write of the record, pauseLateSettleAfter later, has the sweep look again.
-func TestPauseSettle_ACutFreezeIsRecordedAgainLater(t *testing.T) {
-	oldCall, oldLate := pauseRuntimeCallTimeout, pauseLateSettleAfter
-	pauseRuntimeCallTimeout, pauseLateSettleAfter = 50*time.Millisecond, 50*time.Millisecond
-	t.Cleanup(func() { pauseRuntimeCallTimeout, pauseLateSettleAfter = oldCall, oldLate })
-	f := newPauseFixture(t, pauseWaitingAfter+time.Minute)
-	f.st.open, f.st.waiting = true, true
-	notes := failNotes(f, 0) // fails nothing; counts each write down from zero
-	f.srv.cfg.Runner = &hungRuntime{pauseRunner: f.rn}
-	f.sweep(t)
-	waitFor(t, "the cut freeze's settle record, written a second time", func() bool { return notes.fails.Load() <= -2 })
-	if n := f.st.owing(); n != 1 {
-		t.Fatalf("%d settle records, want 1", n)
-	}
-}

@@ -60,15 +60,22 @@ func retrying(ctx context.Context, fn func() error) error {
 // re-reads the row and moves the sandbox to it, freezing a run marked paused
 // that this compensation may have thawed and thawing one nobody marked.
 //
-// It fails closed. It writes the settle record before anything else and thaws
-// nothing without it, so a replica that dies mid-way still leaves the run to
-// the pause sweep (settlePauses). A row it cannot read is never a reason to
-// thaw. A read, a runtime call or a lock it still cannot get after a few tries
-// ends the compensation with the sandbox as it is and the record kept. The
-// record is deleted only by a round that read the row and moved the sandbox to
-// it with its lock held throughout.
-func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run types.AgentRun, reason types.PauseReason) {
-	due, recorded := s.notePauseSettleOrRetry(ctx, run.ID)
+// It fails closed. The pause wrote the settle record before its freeze, or
+// found one held (pauseRun), and due is that record's due_at, so a replica
+// that dies mid-way still leaves the run to the pause sweep (settlePauses).
+// Writing the record again first moves its due past this compensation's own
+// deadline. A write that fails leaves the record as it stood, unless the lock
+// was lost and another holder has deleted the record since. A row it cannot
+// read is never a reason to thaw. A read, a runtime call or a lock it still
+// cannot get after a few tries ends the compensation with the sandbox as it is
+// and the record kept. The record is deleted only by a round that read the row
+// and moved the sandbox to it with its lock held throughout, and only when own
+// says the pause wrote it: a record held before the pause may be an earlier
+// cut call's, whose late look (pauseLateSettleAfter) is the sweep's to finish.
+func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run types.AgentRun, reason types.PauseReason, due time.Time, own bool) {
+	if d, ok := s.notePauseSettle(ctx, run.ID); ok {
+		due = d
+	}
 	release := func() {}
 	defer func() { release() }()
 	thawed := false
@@ -79,23 +86,19 @@ func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run typ
 				slog.String("run_id", run.ID.String()), slog.Bool("thawed", thawed))
 			lctx, unlock, err := s.lockRunOp(ctx, run.ID)
 			if err != nil {
-				s.pauseUnsettled(ctx, run.ID, recorded, "take its run lock again", err)
+				s.pauseUnsettled(ctx, run.ID, "take its run lock again", err)
 				return
 			}
 			hold, release = lctx, unlock
 		}
 		cur, err := s.readRunRetrying(ctx, run.ID)
 		if err != nil {
-			s.pauseUnsettled(ctx, run.ID, recorded, "read the run", err)
+			s.pauseUnsettled(ctx, run.ID, "read the run", err)
 			return
 		}
 		paused := cur.PausedAt != nil
 		if paused && !thawed {
 			break // a newer pause holds the run frozen: nothing of this one is left to undo
-		}
-		if !paused && !recorded {
-			s.pauseUnsettled(ctx, run.ID, false, "record its settle before the thaw", nil)
-			return
 		}
 		if db.LockHeld(hold) != nil {
 			continue
@@ -108,14 +111,16 @@ func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run typ
 						"reason": reason, "thaw_error": err.Error(),
 					})))
 			}
-			s.pauseUnsettled(ctx, run.ID, recorded, "move the sandbox to its row", err)
+			s.pauseUnsettled(ctx, run.ID, "move the sandbox to its row", err)
 			return
 		}
 		if db.LockHeld(hold) == nil {
 			break
 		}
 	}
-	s.clearPauseSettle(ctx, run.ID, due)
+	if own {
+		s.clearPauseSettle(ctx, run.ID, due)
+	}
 }
 
 // moveSandbox freezes the sandbox when paused, else thaws it, trying a few
@@ -158,11 +163,61 @@ func (s *Server) notePauseSettle(ctx context.Context, id uuid.UUID) (due time.Ti
 		return err
 	})
 	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: a pause could not record its settle; its compensation thaws nothing",
+		slog.ErrorContext(ctx, "wardynd: a pause could not write its settle record",
 			slog.String("run_id", id.String()), slog.Any("err", err))
 		return time.Time{}, false
 	}
 	return due, true
+}
+
+// notePauseIntent writes run id's settle record before a pause's freeze (pauseRun), unless one is already held, on
+// a bound of its own: the caller holds the run's lock. The record comes due once the freeze's bound and the mark's
+// have passed, so the sweep does not settle it while the pause that wrote it may still be freezing or marking. ok is
+// false when the store keeps such records and this one could be neither written nor read; the pause then freezes
+// nothing. wrote reports whether this call wrote it.
+func (s *Server) notePauseIntent(ctx context.Context, id uuid.UUID) (due time.Time, wrote, ok bool) {
+	st, has := s.cfg.Store.(store.PauseSettler)
+	if !has {
+		return time.Time{}, false, true
+	}
+	ctx, cancel := context.WithTimeout(ctx, heldStoreCallBound)
+	defer cancel()
+	err := retrying(ctx, func() (err error) {
+		due, wrote, err = st.NotePauseIntent(ctx, id, pauseRuntimeCallTimeout+heldWriteBound)
+		return err
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: a pause could not record its intent before the freeze; it freezes nothing until a later pass",
+			slog.String("run_id", id.String()), slog.Any("err", err))
+		return time.Time{}, false, false
+	}
+	return due, wrote, true
+}
+
+// errPauseUnsettled is settleOwedPause's answer for a sandbox it could not move to its row.
+var errPauseUnsettled = errors.New("the run's sandbox could not be moved to its pause state")
+
+// settleOwedPause settles run id now when a settle record is held for it, for a person's thaw (thawForExec) under
+// the run's lock the caller holds on ctx. A row that is not paused can sit over a frozen sandbox: a pause that died
+// between its freeze and its mark leaves only its record to say so, and the sweep acts on it only once it is due. A
+// record that cannot be read, or a sandbox that cannot be moved, is an error, so the caller never answers that the
+// run is not paused over a frozen agent. The record is kept whatever the outcome: a runtime call still in flight when
+// this settle runs (a freeze cut at its bound, or one a pause that lost its lock is still making) can land after it,
+// and only the sweep's settle, once the record is due, comes after that call's deadline.
+func (s *Server) settleOwedPause(ctx context.Context, id uuid.UUID) error {
+	st, ok := s.cfg.Store.(store.PauseSettler)
+	f, canFreeze := s.cfg.Runner.(runner.Freezer)
+	if !ok || !canFreeze {
+		return nil
+	}
+	due, err := heldRead(ctx, func(ctx context.Context) (time.Time, error) { return st.PauseSettleFor(ctx, id) })
+	if err != nil || due.IsZero() {
+		return err
+	}
+	if !s.settlePauseHeld(ctx, ctx, f, id) {
+		return errPauseUnsettled
+	}
+	return nil
 }
 
 // pauseSettleRetryEvery is how long notePauseSettleOrRetry's loop waits before each new write of a settle record that
@@ -236,34 +291,15 @@ func (s *Server) retryPauseSettle(base context.Context, id uuid.UUID) bool {
 	return err == nil
 }
 
-// pauseLateSettleAfter is how long after a cut freeze or thaw notePauseSettleLater writes its settle record again. A
-// runtime call its context cut can still land after the pause sweep has settled the first record (the runtime need
-// not stop at the cut), and nothing would record that; the later record has the sweep look once more. A variable
-// only so a test can shorten it.
-var pauseLateSettleAfter = 2 * time.Minute
+// pauseLateSettleAfter is how long the pause sweep keeps a settle record past its due_at. A runtime call its context
+// cut can still land after the sweep's first settle (the runtime need not stop at the cut), so every pass until then
+// settles the run again, and the first pass after it settles it a last time and deletes the record. The record is in
+// the database, so a server that restarts meanwhile still looks.
+const pauseLateSettleAfter = 2 * time.Minute
 
-// notePauseSettleLater writes run id's settle record again pauseLateSettleAfter from now, in a tracked goroutine
-// (goBackground), unless the daemon stops first.
-func (s *Server) notePauseSettleLater(id uuid.UUID) {
-	base := s.cfg.BaseCtx
-	if base == nil {
-		return
-	}
-	s.goBackground(func() {
-		select {
-		case <-base.Done():
-			return
-		case <-time.After(pauseLateSettleAfter):
-		}
-		ctx, cancel := context.WithTimeout(base, pauseCompensateTimeout)
-		defer cancel()
-		s.notePauseSettleOrRetry(ctx, id)
-	})
-}
-
-// clearPauseSettle deletes the settle record a compensation wrote, once its
-// sandbox is settled. A failure only leaves the sweep a settle that changes
-// nothing.
+// clearPauseSettle deletes run id's settle record while it still reads due: a
+// pause's intent once its mark lands, or a compensation's once its sandbox is
+// settled. A failure only leaves the sweep a settle that changes nothing.
 func (s *Server) clearPauseSettle(ctx context.Context, id uuid.UUID, due time.Time) {
 	st, has := s.cfg.Store.(store.PauseSettler)
 	if !has || due.IsZero() {
@@ -277,33 +313,32 @@ func (s *Server) clearPauseSettle(ctx context.Context, id uuid.UUID, due time.Ti
 
 // pauseUnsettled reports a compensation that ends with the run's sandbox
 // perhaps not matching its row.
-func (s *Server) pauseUnsettled(ctx context.Context, id uuid.UUID, recorded bool, what string, err error) {
-	msg := "wardynd: a pause compensation could not " + what + "; the pause sweep settles the run once it is due"
-	if !recorded {
-		msg = "wardynd: a pause compensation could not " + what + "; the sandbox is left as it is until its settle record, written again in the background, lets the pause sweep settle it"
-	}
-	slog.ErrorContext(ctx, msg, slog.String("run_id", id.String()), slog.Any("err", err))
+func (s *Server) pauseUnsettled(ctx context.Context, id uuid.UUID, what string, err error) {
+	slog.ErrorContext(ctx, "wardynd: a pause compensation could not "+what+"; the pause sweep settles the run if its settle record is still held",
+		slog.String("run_id", id.String()), slog.Any("err", err))
 }
 
-// settlePauses settles every run whose settle record is due: what a pause
-// compensation left (undoFreeze). Under the run's lock it reads the row and
-// freezes the sandbox of a run marked paused or thaws one that is not, then
-// deletes the record. Like the compensation, it never acts on a row it could
-// not read and keeps the record unless its lock was held throughout, so a
-// failure is tried again on the next pass. A run that is no longer running has
-// no sandbox to settle.
+// settlePauses settles every run whose settle record is due: what a pause, or
+// its compensation, left (pauseRun, undoFreeze). Under the run's lock it reads
+// the row and freezes the sandbox of a run marked paused or thaws one that is
+// not. It deletes the record only on a pass pauseLateSettleAfter or more past
+// its due_at; until then each pass settles the run again, so a freeze or thaw
+// that lands after its cut is moved back to the row. Like the compensation, it
+// never acts on a row it could not read and keeps the record unless its lock
+// was held throughout, so a failure is tried again on the next pass. A run
+// that is no longer running has no sandbox to settle.
 func (s *Server) settlePauses(ctx context.Context, f runner.Freezer) {
 	st, ok := s.cfg.Store.(store.PauseSettler)
 	if !ok {
 		return
 	}
-	due, err := st.DuePauseSettles(ctx)
+	due, err := st.DuePauseSettles(ctx, pauseLateSettleAfter)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: listing the runs whose pause is unsettled failed", slog.Any("err", err))
 		return
 	}
 	for _, d := range due {
-		if !s.settlePause(ctx, f, d.RunID) {
+		if !s.settlePause(ctx, f, d.RunID) || !d.Last {
 			continue
 		}
 		if err := st.ClearPauseSettle(ctx, d.RunID, d.DueAt); err != nil {
@@ -321,6 +356,11 @@ func (s *Server) settlePause(ctx context.Context, f runner.Freezer, id uuid.UUID
 		return false
 	}
 	defer unlock()
+	return s.settlePauseHeld(ctx, lctx, f, id)
+}
+
+// settlePauseHeld is settlePause with the run's lock held on lctx; ctx carries its logs.
+func (s *Server) settlePauseHeld(ctx, lctx context.Context, f runner.Freezer, id uuid.UUID) bool {
 	cur, err := heldRead(lctx, func(ctx context.Context) (types.AgentRun, error) { return s.readRunRetrying(ctx, id) })
 	switch {
 	case errors.Is(err, store.ErrNotFound):
