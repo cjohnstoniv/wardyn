@@ -311,6 +311,8 @@ func (s *Server) handleClaimInvitation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The claim's token insert counts the claimer's live tokens again under their cap lock.
+	ctx = store.WithAdmissionCap(ctx, apiTokenMaxPerPrincipal)
 	row.ID = uuid.New()
 	plaintext := newBearer(apiTokenPrefix)
 	claimed, err := is.ClaimInvitation(mintGuard(ctx, row), store.InvitationClaim{ID: inv.ID, Target: sub, Now: authorizedAt, Token: row, Raw: plaintext})

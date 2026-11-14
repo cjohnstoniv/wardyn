@@ -212,7 +212,7 @@ func TestLockOrderIsTheDocumentedOne(t *testing.T) {
 	}
 	seen := map[int32]bool{}
 	for _, c := range []int32{LoginSupersedeLockClass, SecretRowLockClass, PushPathListLockClass, RunOutputLockClass, RecordingLockClass,
-		MemberDriveLockClass} {
+		MemberDriveLockClass, ApprovalRunCapLockClass, APITokenCapLockClass, SSHKeyCapLockClass, LaunchPresetLockClass} {
 		seen[c] = true
 	}
 	for _, c := range LockOrder {

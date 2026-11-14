@@ -705,15 +705,9 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 		return types.ApprovalRequest{}, fmt.Errorf("store: begin approval tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var profileID *uuid.UUID
-	if notify.Enabled() {
-		if _, err := tx.Exec(ctx, notify.BudgetLockSQL, a.RunID.String()); err != nil {
-			return types.ApprovalRequest{}, fmt.Errorf("store: lock the run's notification budget: %w", err)
-		}
-		// Read in the approval's own transaction, so a concurrent profile change cannot route it by stale data.
-		if err := tx.QueryRow(ctx, notify.UnitSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return types.ApprovalRequest{}, fmt.Errorf("store: read run profile: %w", err)
-		}
+	profileID, err := admitApproval(ctx, tx, a.RunID)
+	if err != nil {
+		return types.ApprovalRequest{}, err
 	}
 	// INSERT omits decision_scope/decision_expires_at: their SQL DEFAULTs already
 	// mean "no decision"; RETURNING names them so the caller sees those defaults.

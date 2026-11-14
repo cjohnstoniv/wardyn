@@ -126,14 +126,17 @@ func (s *Server) handleRequestDesktopReview(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if count >= maxApprovalsPerRun {
-		writeErrorReason(w, http.StatusTooManyRequests, reasonInternalApprovalCapReached, "this run has raised too many approvals; no more will be accepted")
+		writeCapReached(w, store.ErrApprovalRunCap)
 		return
 	}
 	raw, _ := json.Marshal(scope)
 	req := types.ApprovalRequest{ID: uuid.New(), RunID: run.ID, Kind: types.ApprovalFileDownload, RequestedScope: raw}
-	created, err := s.cfg.Approvals.Request(r.Context(), req)
+	created, err := s.cfg.Approvals.Request(store.WithAdmissionCap(r.Context(), maxApprovalsPerRun), req)
 	if errors.Is(err, types.ErrDuplicatePendingApproval) || (err == nil && created.ID != req.ID) {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopReviewPending, "a review of this file is already waiting; it is released once a person approves it")
+		return
+	}
+	if writeCapReached(w, err) {
 		return
 	}
 	if err != nil {
