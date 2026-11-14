@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -51,7 +52,9 @@ func TestPG_QueuePromotedRunStartsConcurrentlyWithAStuckWaitWrite(t *testing.T) 
 	next := e.queuedLaunch(e.person, p, `,"placement":"local"`)
 	// The held run still says the pool's cap, so the pass's wait for it (a is full) is a write.
 	e.exec(`UPDATE agent_runs SET status_detail = $2 WHERE id = $1`, held.ID, statusDetailQueuePrefix+string(runnerpool.WaitAtCapacity))
-	lock, err := e.pool.Begin(ctx)
+	// The row lock runs on a session outside e.pool (testutil.PGConn): this goroutine reads and writes through
+	// e.pool while it holds the lock, and a pool connection held across that is a nested acquire the pool guard exits on.
+	lock, err := testutil.PGConn(t, e.pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
