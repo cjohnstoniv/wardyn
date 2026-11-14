@@ -23,6 +23,7 @@ import { StepShell, useAnnounce } from "../steps/step-shell";
 import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { importRunDocument, type ImportDocument } from "./import-door";
+import { withLegacyRunModeInCarriers } from "./legacy-run-mode";
 import { exampleDocumentText, MAX_DOCUMENT_BYTES, placeDiagnostics, runDocumentText, tooLarge, type DocumentFormat } from "./run-document";
 import { ValidationPanel, type DocumentStatus } from "./validation-panel";
 
@@ -152,7 +153,8 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const proceed = async (to: NewRunLocation) => {
     const document = await validate();
     if (!document) return;
-    dispatch({ type: "commitDoc", intent: document.intent as RunIntent });
+    // A document in the older run-mode fields is committed in the carriers when it says the same run there.
+    dispatch({ type: "commitDoc", intent: withLegacyRunModeInCarriers(document.intent as RunIntent) });
     go(to);
   };
 

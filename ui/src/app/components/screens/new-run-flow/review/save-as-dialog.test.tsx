@@ -40,6 +40,33 @@ const saveButton = (kind = "template") => screen.getByRole("button", { name: SAV
 const sent = (save: ReturnType<typeof setup>["save"], call = 0) => save.mock.calls[call][0];
 
 describe("SaveAsDialog", () => {
+  // The seed leaves a harness start out of a VM draft: the dialog says a template of it has neither that start nor its
+  // first message, while the draft still has no place for them.
+  it("says a harness start the draft was opened without is not saved, only while it has no place in the draft", () => {
+    const vm = { shape: "agent_task", experience: "interactive", machine_kind: "linux_vm" } as RunIntent;
+    const shown = (over: Partial<SaveAsDialogProps>) => {
+      setup({ intent: vm, startLeftOut: true, ...over });
+      const there = screen.queryByText(NR_SAVE.START_NOT_SAVED) !== null;
+      cleanup();
+      return there;
+    };
+    expect(SAVE_AS_COPY.startNotSaved).toBe(NR_SAVE.START_NOT_SAVED);
+    expect(shown({})).toBe(true);
+    expect(shown({ intent: { ...vm, machine_kind: "macos_vm", experience: undefined } })).toBe(true);
+    expect(shown({ startLeftOut: undefined })).toBe(false);
+    expect(shown({ kind: "policy" })).toBe(false);
+    expect(shown({ intent: { ...vm, machine_kind: undefined } })).toBe(false);
+    expect(shown({ intent: { ...vm, startup: { kind: "command", command: "make dev" } } })).toBe(false);
+    // Autonomous has no start either: it is told too, until its task carries a message, which is saved.
+    expect(shown({ intent: { ...vm, experience: "background" } })).toBe(true);
+    expect(shown({ intent: { ...vm, experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: " " } } })).toBe(true);
+    expect(shown({ intent: { ...vm, experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: "fix it" } } })).toBe(false);
+    // A harness's own task is saved too: the first message of a start in a second harness becomes one.
+    const second = (task: string) => ({ ...vm, experience: "background" as const, tools: [{ id: "claude-code", kind: "harness" as const }, { id: "codex-cli", kind: "harness" as const, task }] });
+    expect(shown({ intent: second("fix it") })).toBe(false);
+    expect(shown({ intent: second(" ") })).toBe(true);
+  });
+
   it("opens with the focus on Name (U20)", async () => {
     setup();
     await waitFor(() => expect(screen.getByLabelText("Name")).toHaveFocus());

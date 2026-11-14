@@ -14,7 +14,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { Notice } from "../../../../wardyn/notice";
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
-import { addHarness, agentTask, clearStarter, removeHarness, setAgentTask, setStartPrompt, setStarter, swapHarness } from "../../lenses/harness-lens";
+import { addHarness, agentTask, clearStarter, heldKey, removeHarness, setAgentTask, setStartPrompt, setStarter, startWithHeld, swapHarness, swapHeld } from "../../lenses/harness-lens";
 import { harnessIds } from "../../lenses/lens-keys";
 import { modeOf } from "../../lenses/shape-lens";
 import { isVMKind } from "../../../../../lib/types/machine-kind";
@@ -57,6 +57,16 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   // Several agents side by side only in an Autonomous run, and only where the server has the switch on.
   const multi = mode === "autonomous" && roster.multiAgent === true;
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
+  // A harness the person starts takes the text a switch to Interactive held for it as its first message, once.
+  const held = draft.guided.heldText;
+  const start = (id: string, then: (i: RunIntent) => RunIntent = (i) => i) => {
+    const key = heldKey(held, id);
+    if (held && key !== undefined) {
+      const { [key]: _given, ...rest } = held;
+      dispatch({ type: "guided", patch: { heldText: Object.keys(rest).length ? rest : undefined } });
+    }
+    edit((i) => startWithHeld(then(i), id, held));
+  };
 
   const taken = mode === "autonomous" ? [] : ids;
   const blocked = roster.harnesses.filter((h) => !ids.includes(h.id)).flatMap((h) => {
@@ -123,13 +133,16 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             started={intent.startup?.kind === "harness" && intent.startup.tool === id}
             vm={vm}
             text={mode === "autonomous" ? agentTask(intent, id) : intent.startup?.tool === id ? intent.startup.prompt ?? "" : ""}
-            onSwap={(to) => edit((i) => swapHarness(i, id, to))}
+            onSwap={(to) => {
+              dispatch({ type: "guided", patch: { heldText: swapHeld(held, id, to) } });
+              edit((i) => swapHarness(i, id, to));
+            }}
             onRemove={() => {
               edit((i) => removeHarness(i, id));
               announce(NR_HARNESSES.REMOVED);
               document.getElementById(ADD_ID)?.focus();
             }}
-            onStart={(on) => edit((i) => (on ? setStarter(i, id) : clearStarter(i)))}
+            onStart={(on) => (on ? start(id) : edit(clearStarter))}
             onText={(text) => edit((i) => (mode === "autonomous" ? setAgentTask(i, id, text) : setStartPrompt(i, text)))}
           />
         ))}
@@ -147,7 +160,10 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             onClick={() => {
               if (!addable) return;
               focusNew.current = ids.length;
-              edit((i) => addHarness(i, addable.id, multi));
+              const add = (i: RunIntent) => addHarness(i, addable.id, multi);
+              // An Interactive run that starts in no harness starts the one added when text is held for it.
+              if (mode === "interactive" && !vm && !intent.startup && heldKey(held, addable.id) !== undefined) start(addable.id, add);
+              else edit(add);
               announce(NR_HARNESSES.ADDED);
             }}
           >

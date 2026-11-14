@@ -14,6 +14,8 @@ import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NEW_RUN_SCREENS, NewRunRoute, useNewRunDraft, type NewRunScreenName, type NewRunScreenProps } from "../new-run-route";
 import { NR_DOCUMENT as C } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { LEGACY_RUN_MODE_FIELDS } from "../../../../lib/run-mode-map";
+import { intentToWire } from "../draft/intent-to-wire";
 import { DocumentScreen, type DocumentDeps } from "./document-screen";
 import { MAX_DOCUMENT_BYTES } from "./run-document";
 
@@ -298,6 +300,53 @@ describe("run document editor", () => {
     press(C.CONTINUE_REVIEW);
     await waitFor(() => expect(text("path")).toContain("step=review"));
     expect(text("intent")).toBe('{"agent":"claude-code"}');
+  });
+
+  // A document that says its run mode in the older fields (agent, task, interactive) is valid at the import door,
+  // but the console sends the contract marker, beside which the server refuses those fields and no Guided step
+  // removes them. Catches a commit that leaves them in the draft, so Review can never send the run.
+  it.each([
+    ["a background agent task", { agent: "codex-cli", task: "fix the flaky test", interactive: false, image: "registry.example/tools:1" },
+      { shape: "agent_task", experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: "fix the flaky test" },
+        tools: [{ id: "codex-cli", kind: "harness" }], image: "registry.example/tools:1" }],
+    ["an interactive environment with no agent", { interactive: true }, { shape: "environment", experience: "interactive" }],
+    ["a harness started with its first message", { agent: "claude-code", task: "review the diff", interactive: true, interactive_start: "agent" },
+      { shape: "agent_task", experience: "interactive", tools: [{ id: "claude-code", kind: "harness" }],
+        startup: { kind: "harness", tool: "claude-code", prompt: "review the diff" } }],
+    // No interactive key is a background run: as `wardyn run --file` reads the document, and as the SDK writes a
+    // request (a false interactive left out, agent and repo written even when empty).
+    ["a `wardyn run --file` agent task with no interactive key", { agent: "codex-cli", task: "fix the flaky test" },
+      { shape: "agent_task", experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: "fix the flaky test" },
+        tools: [{ id: "codex-cli", kind: "harness" }] }],
+    ["an SDK-written command with no interactive key", { agent: "", repo: "", task: "make test", task_mode: "exec" },
+      { shape: "application", experience: "background", workload: { kind: "command", command: "make test" }, repo: "" }],
+  ])("Open in Guided commits %s from the older run-mode fields in the carriers, which Review sends", async (_name, legacy, carried) => {
+    open({ importDocument: async () => answers([], legacy) });
+    await screen.findByRole("textbox");
+    type(MOCK_YAML);
+    press(C.OPEN_IN_GUIDED);
+    await waitFor(() => expect(text("path")).toContain("step=shape"));
+    const intent = JSON.parse(text("intent")!);
+    expect(intent).toEqual(carried);
+    const { body, unsupported } = intentToWire(intent);
+    expect(unsupported).toEqual([]);
+    expect(body.experience).toBe(carried.experience);
+    for (const field of LEGACY_RUN_MODE_FIELDS) expect(body).not.toHaveProperty(field);
+  });
+
+  it.each([
+    // An interactive task with no interactive_start may be a first prompt or a startup command: it is never turned
+    // into a shell command, so the draft keeps the document's words and Review names the field to change.
+    ["only the person can say what the task is", { agent: "claude-code", task: "npm ci", interactive: true }],
+    // A background agent with no task is not yet a whole run.
+    ["the run has no task yet", { agent: "codex-cli" }],
+  ])("keeps the older run-mode fields when %s", async (_name, legacy) => {
+    open({ importDocument: async () => answers([], legacy) });
+    await screen.findByRole("textbox");
+    type(MOCK_YAML);
+    press(C.OPEN_IN_GUIDED);
+    await waitFor(() => expect(text("path")).toContain("step=shape"));
+    expect(JSON.parse(text("intent")!)).toEqual(legacy);
   });
 
   it("Ctrl+Enter validates and continues", async () => {
