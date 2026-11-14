@@ -34,6 +34,9 @@ import (
 // desktopReviewMaxBytes bounds one reviewed download (types.MaxReviewedDownloadBytes); a var so a test can lower it.
 var desktopReviewMaxBytes int64 = types.MaxReviewedDownloadBytes
 
+// reviewedSendReader is what a released file is sent from: the checked file itself; a var so a test can fail a read part way.
+var reviewedSendReader = func(f *os.File) io.Reader { return f }
+
 // fileDownloadSecondHumanSwitch names the second-person rule every file_download decision is held to, in its
 // refusal and in the break-glass audit row the admin token's decision writes.
 const fileDownloadSecondHumanSwitch = "desktop.download review"
@@ -236,9 +239,10 @@ func (s *Server) serveReviewedDownload(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	desktopDownloadHeaders(w, name)
-	if _, err := io.Copy(w, tmp); err != nil {
+	if _, err := io.Copy(w, reviewedSendReader(tmp)); err != nil {
 		s.auditDesktopReview(r, run, "failure", "released", n, got)
-		return
+		_ = http.NewResponseController(w).Flush() // the 200 is committed: cut it off, never no response at all
+		panic(http.ErrAbortHandler)
 	}
 	s.auditDesktopReview(r, run, "success", "released", n, got)
 }

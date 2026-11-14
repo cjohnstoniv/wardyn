@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -456,5 +459,25 @@ func TestDesktopDownloadBlockedAndAllowedUnchanged(t *testing.T) {
 	e = newReviewEnv(t, types.TransferAllowed)
 	if w := doSSO(t, e.srv, http.MethodGet, e.path(reviewFile), e.ses["owner"], ""); w.Code != http.StatusOK || w.Body.String() != "agent,wrote,this\n" {
 		t.Fatalf("allowed: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A released file whose send fails part way is cut off: the client's read fails, so it cannot take the bytes
+// so far for the whole file, and the release is audited as a failure. Catches a send failure that ends the
+// response cleanly, or ends it before any response at all.
+func TestDesktopReviewReleaseThatFailsPartWayIsCutOff(t *testing.T) {
+	e := newReviewEnv(t, types.TransferReview)
+	id := e.seed(types.ApprovalFileDownload, e.run.ID, reviewFile, types.ApprovalApproved)
+	prev := reviewedSendReader
+	reviewedSendReader = func(f *os.File) io.Reader {
+		return io.MultiReader(io.LimitReader(f, 5), iotest.ErrReader(errors.New("spool read failed")))
+	}
+	t.Cleanup(func() { reviewedSendReader = prev })
+	status, body, readErr := downloadOverHTTP(t, e.desktopFilesEnv, reviewFile+"?approval="+id.String())
+	if status != http.StatusOK || !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("status %d, read error %v after %q, want the committed 200 and io.ErrUnexpectedEOF", status, readErr, body)
+	}
+	if got := e.reviewRows(); !slices.Equal(got, []string{"released/failure"}) {
+		t.Errorf("download rows = %v", got)
 	}
 }

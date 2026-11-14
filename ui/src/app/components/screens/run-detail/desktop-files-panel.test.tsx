@@ -101,6 +101,19 @@ describe("DesktopFilesPanel", () => {
     expect(big.textContent).toContain(C.tooLargeSub);
   });
 
+  it("a failed upload says Upload failed with the server's sentence, never Not sent", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    const sentence = "the upload to ~/Transfers failed, and some bytes may remain there.";
+    uploadMock.mockRejectedValueOnce(new HttpError(502, sentence, "desktop_transfer_failed"));
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.upload(within(panel).getByLabelText(C.choose), new File(["a,b,c"], "notes.csv"));
+    const row = await within(panel).findByTestId("desktop-upload");
+    await waitFor(() => expect(row.textContent).toContain(C.uploadFailed));
+    expect(row.textContent).toContain(sentence);
+    expect(row.textContent).not.toContain("Not sent");
+  });
+
   it("lists the folder with a Download button when download is allowed", async () => {
     listMock.mockResolvedValue({ folder: "~/Transfers", rules: { ...defaults, download: "allowed" }, files: [{ name: "refund-report.csv", bytes: 12 * 1024 }] });
     render(<DesktopFilesPanel runId="r1" />);
