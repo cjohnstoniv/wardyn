@@ -170,6 +170,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn drive member delete` now says before you confirm that a Mac disk image may stay: the outcome is `deferred` while the Mac can't be reached and `record_only` when the Mac is no longer registered.
 - A download from a desktop's Files panel and an audit partition export now release the downloaded file's browser link on the next tick, as recording downloads already did, instead of right after the click.
 - A local runner's spool records that the server refuses now keep the run's replay receipt to the same last 64 records as the records it takes; before, each refused record added one more entry to the receipt, and the server rewrote the whole receipt for every one.
+- `wardyn needs-you` now returns when the person hands control back: the sandbox's read of its request carries `handed_back_at`, and still not who held control or decided.
+- Handing back a takeover now wakes a run that was paused for being idle while the person had control, and the pause sweep wakes it if that did not run. A hand back that lands while the sweep is pausing the run leaves it running.
+- A takeover whose desktop did not open now says the person has control and keeps Hand back, with an Open the desktop button to try again, instead of saying the takeover failed.
+- After a hand back, a new takeover request on the same run page now shows its Take over instead of the finished banner.
 
 ### Security
 

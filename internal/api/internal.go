@@ -824,8 +824,9 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 }
 
 // sandboxApproval is the approval as the sandbox reads it: only what the sidecar and
-// wardyn-toolgate consume. The stored row also names the deciding human and the note they typed,
-// which an untrusted process must not read.
+// wardyn-toolgate consume. The stored row also names the deciding human, the note they typed and
+// a takeover's holder, which an untrusted process must not read. HandedBackAt is when a takeover was
+// handed back: `wardyn needs-you` returns on it.
 type sandboxApproval struct {
 	ID                uuid.UUID           `json:"id"`
 	Kind              types.ApprovalKind  `json:"kind"`
@@ -835,11 +836,13 @@ type sandboxApproval struct {
 	ExpiresAt         *time.Time          `json:"expires_at,omitempty"`
 	Held              bool                `json:"held,omitempty"`
 	HeldUntil         *time.Time          `json:"held_until,omitempty"`
+	HandedBackAt      *time.Time          `json:"handed_back_at,omitempty"`
 }
 
 func sandboxApprovalView(ap types.ApprovalRequest) sandboxApproval {
 	return sandboxApproval{ID: ap.ID, Kind: ap.Kind, State: ap.State, DecisionScope: ap.DecisionScope,
-		DecisionExpiresAt: ap.DecisionExpiresAt, ExpiresAt: ap.ExpiresAt, Held: ap.Held, HeldUntil: ap.HeldUntil}
+		DecisionExpiresAt: ap.DecisionExpiresAt, ExpiresAt: ap.ExpiresAt, Held: ap.Held, HeldUntil: ap.HeldUntil,
+		HandedBackAt: ap.HandedBackAt}
 }
 
 // handleInternalExpireApproval lets wardyn-toolgate close its OWN tool_call

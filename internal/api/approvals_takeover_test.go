@@ -518,6 +518,91 @@ func TestTakeover_TakeOverThawsAPausedRunAndCountsOnce(t *testing.T) {
 	}
 }
 
+// TestTakeover_HandBackThawsARunFrozenIdleWhileHeld: an idle freeze is admitted while a person holds control
+// (a held takeover is no open request), so the hand back thaws the run, or the agent's `wardyn needs-you`
+// would wait in a frozen sandbox until someone pressed Resume. It counts no second decision.
+func TestTakeover_HandBackThawsARunFrozenIdleWhileHeld(t *testing.T) {
+	f, _, id, owner := pausedTakeover(t)
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	f.st.mu.Lock()
+	frozen := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &frozen, types.PauseIdle
+	f.st.mu.Unlock()
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("hand back = %d %s", w.Code, w.Body.String())
+	}
+	if at, _ := f.st.paused(); at != nil {
+		t.Errorf("run still paused at %v after the hand back", at)
+	}
+	if _, thaws := f.rn.counts(); thaws != 2 {
+		t.Errorf("thaws = %d, want 2 (the take over's and the hand back's)", thaws)
+	}
+	if n := approvalsCounted(f, "approved") + approvalsCounted(f, "denied"); n != 1 {
+		t.Errorf("decisions counted = %d after the hand back, want still 1", n)
+	}
+}
+
+// TestTakeover_HandBackThawsARunWhoseOwnThawIsBackingOff: the hand back's presence stamp thaws nothing while
+// an earlier failed thaw of the run is backing off, so approvalClosed is what wakes the run. Without it the
+// run stays frozen idle until the backoff has passed and someone touches it.
+func TestTakeover_HandBackThawsARunWhoseOwnThawIsBackingOff(t *testing.T) {
+	f, _, id, owner := pausedTakeover(t)
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	f.st.mu.Lock()
+	frozen := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &frozen, types.PauseIdle
+	f.st.mu.Unlock()
+	// Seven failed thaws put the backoff at its 60 s cap, well past this test's run time.
+	for range 7 {
+		f.srv.pause.thawFailed(f.run.ID, f.srv.cfg.Now())
+	}
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("hand back = %d %s", w.Code, w.Body.String())
+	}
+	if at, _ := f.st.paused(); at != nil {
+		t.Errorf("run still paused at %v after the hand back", at)
+	}
+	if _, thaws := f.rn.counts(); thaws != 2 {
+		t.Errorf("thaws = %d, want 2 (the take over's and the hand back's)", thaws)
+	}
+	if rows := f.rows("run.resume", "success"); len(rows) != 2 || rows[1].Actor != "wardynd" {
+		t.Errorf("run.resume rows = %+v, want the second by wardynd (request_closed), not the person's presence", rows)
+	}
+}
+
+// TestTakeover_HandBackDuringASweepPassLeavesTheRunRunning: a sweep pass lists the run as idle while the
+// person holds control, and the hand back lands between its freeze and its mark. The hand back finds the
+// run not paused, so it thaws nothing; its presence stamp makes the mark fail, and the sweep undoes its
+// freeze. Without the stamp the run stays frozen idle with nothing to wake it: its pause began after the
+// hand back.
+func TestTakeover_HandBackDuringASweepPassLeavesTheRunRunning(t *testing.T) {
+	f, _, id, owner := pausedTakeover(t)
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	f.st.mu.Lock()
+	f.st.run.RunLimits.PauseIdleAfterSec = 60
+	f.st.mu.Unlock()
+	f.rn.cpu = pct(0)
+	f.rn.onFreeze = func() {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+			t.Errorf("hand back = %d %s", w.Code, w.Body.String())
+		}
+	}
+	f.sweep(t)
+	freezes, thaws := f.rn.counts()
+	if at, reason := f.st.paused(); at != nil || freezes != 1 || thaws != 2 {
+		t.Fatalf("paused %v %q, freezes %d thaws %d; want the freeze undone (thaws: the take over's and the undo)", at, reason, freezes, thaws)
+	}
+	if rows := f.rows("run.pause", "success"); len(rows) != 0 {
+		t.Errorf("run.pause rows = %+v, want none", rows)
+	}
+}
+
 // TestTakeover_EntryShapes: the three verbs keep the attach ticket's entry shapes. A super admin on
 // a run that is not theirs gets the 403 naming why; a security admin, who also sees every run, gets
 // the missing approval's 404 like any stranger; and a Background run's owner gets 409

@@ -25,6 +25,7 @@ vi.mock("./operator-context", () => ({
 }));
 
 import { NeedsYouBanner, activeTakeover } from "./needs-you-banner";
+import { health } from "../../lib/api/health";
 
 const REASON = "I reached the staging portal's sign-in page. It sends a code to a phone, so I can't finish it.";
 const run = { id: "run-1", created_by: "dev-sub", state: "RUNNING" } as unknown as RunDetail;
@@ -157,6 +158,23 @@ describe("NeedsYouBanner", () => {
     expect(cb.onGoAudit).toHaveBeenCalled();
   });
 
+  it("a second request after a hand back on the same page shows its Take over, not the done banner", async () => {
+    const decided = new Date(Date.now() - 60_000).toISOString();
+    const a = request({ state: "APPROVED", decided_at: decided, takeover_holder: "dev-sub" });
+    api.handBack.mockResolvedValue({ ...a, handed_back_at: new Date().toISOString() });
+    const cb = { onChanged: vi.fn(), onOpenTerminal: vi.fn(), onGoAudit: vi.fn() };
+    const { rerender } = render(<NeedsYouBanner run={run} approvals={[a]} {...cb} />);
+    await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.strip.handBack }));
+    expect(screen.getByTestId("needs-you-done")).toBeInTheDocument();
+    const b = request({ id: "ap-2", requested_at: new Date().toISOString() });
+    rerender(<NeedsYouBanner run={run} approvals={[{ ...a, handed_back_at: new Date().toISOString() }, b]} {...cb} />);
+    expect(screen.queryByTestId("needs-you-done")).toBeNull();
+    expect(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver })).toBeInTheDocument();
+    // B declined and gone: A's done banner does not come back.
+    rerender(<NeedsYouBanner run={run} approvals={[{ ...a, handed_back_at: new Date().toISOString() }]} {...cb} />);
+    expect(screen.queryByTestId("needs-you-done")).toBeNull();
+  });
+
   it("a run that is not recorded says Recording off, and nothing about pausing", () => {
     mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "dev-sub" })], {
       ...run,
@@ -278,6 +296,28 @@ describe("NeedsYouBanner", () => {
       await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
       expect(toastError).toHaveBeenCalledWith(NEEDS_YOU.failed.takeOver, { description: RUN_SSH.POPUP_BLOCKED });
       expect(api.takeOver).not.toHaveBeenCalled();
+    });
+
+    it("a takeover whose desktop did not open says control is held, re-reads it, and offers Open the desktop", async () => {
+      api.takeOver.mockResolvedValue({ ...request({ state: "APPROVED", takeover_holder: "dev-sub" }), surface: "desktop" });
+      vi.mocked(health.health).mockRejectedValueOnce(new Error("health down"));
+      const cb = mount([request()], vmRun);
+      await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
+      expect(toastError).toHaveBeenCalledWith(NEEDS_YOU.failed.openDesktop, { description: "health down" });
+      expect(toastError).not.toHaveBeenCalledWith(NEEDS_YOU.failed.takeOver, expect.anything());
+      expect(cb.onChanged).toHaveBeenCalled();
+      expect(tabStub.close).toHaveBeenCalled();
+    });
+
+    it("while you hold a desktop takeover, Open the desktop opens it again inside the click", async () => {
+      vi.mocked(health.health).mockRejectedValueOnce(new Error("health down"));
+      mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "dev-sub" })], vmRun);
+      const strip = screen.getByTestId("needs-you-control");
+      expect(within(strip).getByRole("button", { name: NEEDS_YOU.strip.handBack })).toBeInTheDocument();
+      await userEvent.click(within(strip).getByRole("button", { name: NEEDS_YOU.strip.openDesktop }));
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(health.health).toHaveBeenCalled();
+      expect(toastError).toHaveBeenCalledWith(NEEDS_YOU.failed.openDesktop, { description: "health down" });
     });
 
     it("opens no tab for a run whose takeover is the terminal", async () => {
