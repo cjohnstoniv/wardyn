@@ -347,11 +347,10 @@ func (s *spoolSink) handle(c *tls.Conn) {
 		s.ended(ss)
 		return
 	}
+	// pump only returns on a disconnect, so its error is always the reason.
 	err = s.pump(ctx, ss)
 	s.ended(ss)
-	if err != nil {
-		slog.Info("runnerd: decision sink session disconnected", slog.String("run_id", r.id.String()), slog.Any("err", err))
-	}
+	slog.Info("runnerd: decision sink session disconnected", slog.String("run_id", r.id.String()), slog.Any("err", err))
 }
 
 func grantFrame(g runnerspool.Grant, epoch uuid.UUID) proxy.SinkFrame {

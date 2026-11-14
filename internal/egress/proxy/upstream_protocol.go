@@ -135,8 +135,11 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	// serves peers that never negotiate it.
 	//lint:ignore SA1019 see h2Fallback
 	p.h2.transport = &http2.Transport{
+		//lint:ignore SA1019 see h2Fallback
 		TLSClientConfig: base.Clone(),
+		//lint:ignore SA1019 see h2Fallback
 		IdleConnTimeout: 60 * time.Second,
+		//lint:ignore SA1019 see h2Fallback
 		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 			tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
 			if err != nil {
