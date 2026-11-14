@@ -89,7 +89,7 @@ func TestLoadedReport_RetriesAfterADroppedFirstPOST(t *testing.T) {
 	p := reportProxy(t, cp)
 	r := LoadedReport{ConfigSHA256: ConfigSHA256([]byte(`{"run_id":"x"}`)), ProxyVersion: "0.10.0", Switches: map[string]string{"WARDYN_LLM_SCAN": "off"}}
 	done := make(chan struct{})
-	go func() { p.reportLoaded(context.Background(), r); close(done) }()
+	go func() { p.reportLoaded(context.Background(), r, loadedReportTiming()); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -116,7 +116,7 @@ func TestLoadedReport_StopsWithTheProxy(t *testing.T) {
 	p := reportProxy(t, cp)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { p.reportLoaded(ctx, LoadedReport{ConfigSHA256: "x"}); close(done) }()
+	go func() { p.reportLoaded(ctx, LoadedReport{ConfigSHA256: "x"}, loadedReportTiming()); close(done) }()
 	time.Sleep(50 * time.Millisecond)
 	select {
 	case <-done:
@@ -146,7 +146,7 @@ func TestLoadedReport_StopsOnAnOlderControlPlane(t *testing.T) {
 		}))
 		done := make(chan struct{})
 		go func() {
-			reportProxy(t, cp).reportLoaded(context.Background(), LoadedReport{ConfigSHA256: "x"})
+			reportProxy(t, cp).reportLoaded(context.Background(), LoadedReport{ConfigSHA256: "x"}, loadedReportTiming())
 			close(done)
 		}()
 		select {
