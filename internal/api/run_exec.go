@@ -150,7 +150,10 @@ func (s *Server) execFreshRun(ctx context.Context, runID uuid.UUID, principal st
 	if err != nil {
 		return types.AgentRun{}, startHold{}, lockUnavailableMsg
 	}
-	if run, msg = s.liveRunForExec(h.ctx, runID, execLiveRunWords); msg != "" {
+	run, msg = startRead(s, h, func(ctx context.Context) (types.AgentRun, string) {
+		return s.liveRunForExec(ctx, runID, execLiveRunWords)
+	})
+	if msg != "" {
 		h.release()
 		return types.AgentRun{}, startHold{}, msg
 	}

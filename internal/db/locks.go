@@ -296,7 +296,9 @@ var longLockHolds atomic.Uint64
 func LongLockHolds() uint64 { return longLockHolds.Load() }
 
 // watchHold starts the watchdog on a new hold of k and returns its stop, which the hold's release
-// calls. Only a run's lock is watched: it is the one a holder keeps across runtime and store calls.
+// calls. Only a run's lock is watched: a holder keeps it across many runtime and store calls. A
+// start keeps the run's start lock (RunStartLockClass) across its last read of the run and one
+// runtime call, each cut at a bound that also ends the hold, so that lock is not watched.
 // Past LockHoldLimit the watchdog counts the hold once and logs it with the functions that took it;
 // at release it logs how long such a hold lasted. It frees nothing and cancels nothing.
 func watchHold(k LockKey) (stop func()) {

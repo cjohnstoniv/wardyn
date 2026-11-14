@@ -33,8 +33,9 @@ import (
 // heldStoreCallBound, the revoke on heldRevokeBound (a revoke cut there stays owed for the revoke queue once its owed
 // mark is written; otherwise the mark is written again in the background until it lands), the output's drain and persist on
 // killCascadeTimeout, and the agent stop before a pass on bringBackExecBound. Together they can take 150 to 165 s of
-// endHoldDedicated's 180 s; with a macOS VM run's status read or a pass on top, the stop can reach B and is then left
-// to the tail owner and the terminal sweep, which repeat it with a full hold. The holder's own state write and reads
+// endHoldDedicated's 180 s, after the state write's wait for the run's start fence (FenceRunStarts, up to 60 s);
+// with that wait, a macOS VM run's status read or a pass on top, the stop can reach B and is then left to the tail
+// owner and the terminal sweep, which repeat it with a full hold. The holder's own state write and reads
 // still run on its ctx. The readers (the containment loop and the tail owner) finish the run from there. Each B is the
 // holder's own, and a macOS VM run's gets macOSVMTeardownBudget more (endHoldBudget) for its sandbox stop; a pass back
 // still running can leave that stop less, and the next sweep then repeats the stop with a full hold.

@@ -162,6 +162,28 @@ func TestThawForExec_AHungPresenceStampFreesTheRunLock(t *testing.T) {
 	})
 }
 
+// TestThawForExec_AHungReReadFreesTheRunLock: a thaw before an exec reads a run its caller saw paused again under the
+// run's lock, on a request's context with no deadline. A read that never answers ends at heldStoreCallBound, and the
+// thaw returns that error with the run's lock free. Catches: the re-read on the caller's context.
+func TestThawForExec_AHungReReadFreesTheRunLock(t *testing.T) {
+	old := heldStoreCallBound
+	heldStoreCallBound = 50 * time.Millisecond
+	t.Cleanup(func() { heldStoreCallBound = old })
+	f := newPauseFixture(t, time.Minute)
+	f.srv.cfg.Store = &hungGetPauseStore{f.st}
+	// The caller's read saw the run paused; the store's stamp reads it not paused, so the stamp resumes nothing and
+	// the thaw goes on to its own re-read.
+	run, paused := f.run, time.Now().UTC()
+	run.PausedAt = &paused
+	var err error
+	lockFreesWithin(t, f.srv, f.run.ID, "a thaw's re-read of a paused run", func(ctx context.Context) {
+		err = f.srv.thawForExec(ctx, run, types.ActorHuman, pauseOwner, "presence")
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("thaw = %v, want the re-read cut at its bound (context.DeadlineExceeded)", err)
+	}
+}
+
 // hungAbandonStore is readbackStore whose abandon of a proxy start never answers.
 type hungAbandonStore struct {
 	*readbackStore

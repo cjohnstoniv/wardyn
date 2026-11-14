@@ -200,6 +200,16 @@ func (s *Server) lockStart(ctx context.Context, id uuid.UUID) (startHold, error)
 	return startHold{ctx: hctx, release: sync.OnceFunc(func() { release(); leave() })}, nil
 }
 
+// startRead runs read, a start's last read of the run under its start lock h, on uiDesktopRecheckWait, as the desktop
+// dial's own read runs (desktopBoundedRunCheck): a read that runs out of it is a read that failed. With the start's
+// budget after it, the hold ends within runStartFenceWait, so an end of the run never waits out the fence behind a
+// read that does not answer.
+func startRead[T, U any](s *Server, h startHold, read func(context.Context) (T, U)) (T, U) {
+	ctx, cancel := context.WithTimeout(h.ctx, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait))
+	defer cancel()
+	return read(ctx)
+}
+
 // startAdmitted runs start, one command start under h, and lets the fence go beside the started command, never
 // while it runs. start runs on a context of ctx's that is cut at budget, which also lets the fence go, or when h's
 // lock is lost. A value start returns after either, or once a check on the lock's own connection
@@ -253,7 +263,7 @@ func startFresh[T any](s *Server, ctx context.Context, id uuid.UUID, words liveR
 	if err != nil {
 		return zero, err
 	}
-	run, msg := s.liveRunForExec(h.ctx, id, words)
+	run, msg := startRead(s, h, func(ctx context.Context) (types.AgentRun, string) { return s.liveRunForExec(ctx, id, words) })
 	if msg != "" {
 		h.release()
 		return zero, startRefused(msg)
