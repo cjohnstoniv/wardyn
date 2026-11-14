@@ -164,6 +164,7 @@ func TestStoreMode_RolloverRemovesTheOldGeneration(t *testing.T) {
 	if err := s.Put(ctx, "k", []byte("c")); err != nil {
 		t.Fatal(err)
 	}
+	secretstorepg.WaitForCleanUps()
 	now := kekID(t, pool, "", "k")
 	if secretstore.RefObject(now) == secretstore.RefObject(old) || !strings.HasSuffix(now, "#1") {
 		t.Fatalf("kek_id %q after %q; want a new generation", now, old)
@@ -268,6 +269,7 @@ func TestStoreMode_RowFailureNeverDeletesTheRowsOwnName(t *testing.T) {
 	if err := s.Put(ctx, "boom-new", []byte("v")); !errors.Is(err, secretstore.ErrRowNotWritten) || !strings.Contains(err.Error(), "removed again") {
 		t.Fatalf("Put of a new row with the row refused = %v; want ErrRowNotWritten, the value removed again", err)
 	}
+	secretstorepg.WaitForCleanUps()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.secrets) != 1 || len(f.deleted) != 0 {

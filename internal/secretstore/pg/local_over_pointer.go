@@ -14,8 +14,8 @@ import (
 
 // putOverPointer is a local Put on a store that still reads an external store's pointer rows. Under
 // the row lock it notes the object the row points to, writes the local row and commits; the old
-// object, which no row names any more, is then removed with removeOldExternal's recheck. The Put has
-// succeeded by then, so a failed removal is logged, as putExternal's removeOld logs one.
+// object, which no row names any more, is then removed after the Put returns (afterPut), with
+// removeOld's recheck, which logs a failed removal.
 func (s *Store) putOverPointer(ctx context.Context, name string, r sealedRow) error {
 	ref := rowRef(s.owner, name)
 	tx, err := beginReadCommitted(ctx, s.pool)
@@ -53,9 +53,6 @@ func (s *Store) putOverPointer(ctx context.Context, name string, r sealedRow) er
 			slog.String("secret", ref), slog.String("store", store))
 		return nil
 	}
-	if _, _, err := s.removeOldExternal(context.WithoutCancel(ctx), s.owner, name, store, loc); err != nil {
-		slog.Warn("pg secretstore: a replaced value's old object was not removed; `wardynd -reconcile` lists it",
-			slog.String("secret", ref), slog.String("store", store), slog.Any("err", err))
-	}
+	s.afterPut(ctx, func(ctx context.Context) { s.removeOld(ctx, name, loc) })
 	return nil
 }
