@@ -306,7 +306,14 @@ export function AddSSHKeyDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    // A key still being added keeps its dialog: closed and opened again, the answer would close the new one.
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o && saving) return;
+        onOpenChange(o);
+      }}
+    >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add key</DialogTitle>
@@ -318,6 +325,7 @@ export function AddSSHKeyDialog({
             <Input
               id="ssh-key-name"
               placeholder="laptop"
+              disabled={saving}
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoComplete="off"
@@ -327,6 +335,7 @@ export function AddSSHKeyDialog({
             <Textarea
               id="ssh-key-value"
               placeholder="ssh-ed25519 AAAA…"
+              disabled={saving}
               value={publicKey}
               onChange={(e) => setPublicKey(e.target.value)}
               rows={4}
@@ -344,7 +353,7 @@ export function AddSSHKeyDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={save} disabled={saving || !publicKey.trim()} variant="info">

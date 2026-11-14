@@ -34,14 +34,14 @@ vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.f
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn() } }));
 vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: vi.fn() } }));
 
-import { HarnessLoginPane } from "./harness-login-pane";
+import { HarnessLoginPane, type HarnessLoginPaneHandle } from "./harness-login-pane";
 import { confirmCaptureWithServer, serverConfirmsProviderCapture } from "./capture-confirm";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { makeRun } from "../../../../test/factories";
 import { MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
-import type { AuditEvent } from "../../../lib/types";
+import type { AuditEvent, SetupStatus } from "../../../lib/types";
 
 const RUN = "3f1b7c26-0000-4000-8000-000000000001";
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60);
@@ -145,5 +145,37 @@ describe("serverConfirmsProviderCapture — this run's audit row, and the provid
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// The door's Escape reaches the pane's cancel through paneRef. A capture that answers after that belongs to a
+// closed door: completing would close and complete whichever door is open by then.
+describe("a capture that answers after the door was dismissed", () => {
+  it("a Claude token stored after the dismissal does not complete", async () => {
+    let answer: (() => void) | undefined;
+    captureSignIn.mockReturnValue(new Promise<void>((done) => (answer = done)));
+    const onDone = vi.fn();
+    const pane = React.createRef<HarnessLoginPaneHandle>();
+    render(<HarnessLoginPane provider="anthropic" modelProvider="claude-sub" paneRef={pane} onDone={onDone} onCancel={vi.fn()} />);
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.(`Your OAuth token: ${TOKEN}\r\n`));
+    expect(captureSignIn).toHaveBeenCalledTimes(1);
+    act(() => pane.current?.cancel());
+    await act(async () => answer?.());
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("an AWS capture confirmed after the dismissal does not complete", async () => {
+    let answer: ((s: SetupStatus) => void) | undefined;
+    vi.mocked(setupApi.getSetupStatus).mockReturnValue(new Promise<SetupStatus>((done) => (answer = done)));
+    const onDone = vi.fn();
+    const pane = React.createRef<HarnessLoginPaneHandle>();
+    render(<HarnessLoginPane provider="aws" modelProvider="bedrock-prod" paneRef={pane} onDone={onDone} onCancel={vi.fn()} />);
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+    await waitFor(() => expect(setupApi.getSetupStatus).toHaveBeenCalled());
+    act(() => pane.current?.cancel());
+    await act(async () => answer?.(providerStatus([{ provider: MODEL_PROVIDERS.bedrock, state: "live", sourceRunId: RUN }])));
+    expect(onDone).not.toHaveBeenCalled();
   });
 });

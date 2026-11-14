@@ -98,6 +98,8 @@
 #      broke every PR's compose job, so each job names the image its runs were proven on.
 #  31. release.yml's runner-pkg job reads the release stamp back from the packaged guest agent with
 #      scripts/check-release-stamp.sh, and that script's test refuses an unstamped binary (#3636).
+#  32. go.mod sets `godebug x509sslcertoverrideplatform=0` exactly once and no //go:debug line sets it, so
+#      macOS and Windows builds keep the system trust store when SSL_CERT_FILE or SSL_CERT_DIR is set.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -161,7 +163,7 @@ NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurre
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
 # and release.yml's watched= (green-by-tree.sh matches a matrix job's "name (leg)" rows, #3439), or the
 # date is renewed in a reviewed change. Empty while no job is waiting.
-NOTIFY_EXEMPT_UNTIL="ssh-editors-live=2026-11-20 ai-gateway-kind=2026-11-15 kind-node-restart=2026-11-24"
+NOTIFY_EXEMPT_UNTIL="ssh-editors-live=2026-11-20 ai-gateway-kind=2026-11-28 kind-node-restart=2026-11-24"
 # notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
 notify_exempt_until_problems() {
     local pair job until max
@@ -978,6 +980,16 @@ if [ -n "$floating" ]; then
 ${floating}"
 else
     ok "every workflow job names its runner image (no ubuntu-latest)"
+fi
+
+# ── 32. the trust-store godebug line stays in go.mod ─────────────────────────
+# A go 1.27 go line makes macOS and Windows builds load roots from SSL_CERT_FILE or SSL_CERT_DIR instead of
+# the system store; the doctor's fix text and wardyn-runnerd's own wording describe the go 1.26 behaviour.
+# Nothing else fails when the line goes: the build stays green and only `go version -m` shows the change.
+if [ "$(grep -cE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=' go.mod)" = 1 ] && grep -qE '^[[:space:]]*(godebug[[:space:]]+)?x509sslcertoverrideplatform=0[[:space:]]*(//.*)?$' go.mod && ! git grep -qE '^[[:space:]]*//go:debug[[:space:]]+x509sslcertoverrideplatform=' -- '*.go'; then
+    ok "go.mod sets godebug x509sslcertoverrideplatform=0 once and no //go:debug line sets it"
+else
+    bad "go.mod must set godebug x509sslcertoverrideplatform=0 exactly once, and no //go:debug line may set it: otherwise macOS and Windows builds stop using the system trust store when SSL_CERT_FILE or SSL_CERT_DIR is set"
 fi
 
 # Guards 26-29 and 31 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they

@@ -36,6 +36,8 @@ import { RECORDING_FOOTER_MACOS, RECORDING_REPLAY, RECORDING_STRIP, recordingLev
 import { RUN_RECORDING } from "../../wardyn/copy/runners";
 import { clockTime } from "../../../lib/format";
 import { DesktopReplay, desktopSessions } from "./desktop-replay";
+import { RECORDING_INDEX_INCOMPLETE } from "../../wardyn/copy/lookup-failures";
+import type { RecordingIndex } from "./use-run-detail";
 
 // The level the run is recorded at, in the run strip's words (M7-RunStrip states 1, 3, 4 and 5). A run with a
 // screen says at Screen and actions what that keeps. A macOS VM task run marked runner_declined (its agent's
@@ -77,6 +79,8 @@ export function RecordingTab({
   interactive = false,
   ended = false,
   recordingAudit = [],
+  recordingIndex = "complete",
+  onRetryIndex,
   onGoAudit,
   refusal,
 }: {
@@ -106,6 +110,10 @@ export function RecordingTab({
   ended?: boolean;
   /** The run's session.recording and desktop.recording rows, for the desktop recordings and gaps. */
   recordingAudit?: AuditEvent[];
+  /** Whether that index may be missing recordings: its latest read failed, or a list of them filled its page. */
+  recordingIndex?: RecordingIndex;
+  /** Reads the index again (offered when its read failed). */
+  onRetryIndex?: () => void;
   /** Opens the run's Audit tab (the desktop replay's "Open in Audit"). */
   onGoAudit?: () => void;
 }) {
@@ -119,6 +127,23 @@ export function RecordingTab({
   return (
     <div className="max-w-4xl">
       <LevelStrip level={level} notRecorded={notRecorded} storeOff={recordingDisabled} macOS={macOS} screen={screen} />
+      {/* A list that could not be read, or was cut at its page, is never shown as the run's whole set. */}
+      {recordingIndex !== "complete" && (
+        <div className="mb-3" data-testid="recording-index-incomplete">
+          <Notice
+            tone="warning"
+            actions={
+              recordingIndex === "failed" && onRetryIndex ? (
+                <Button variant="outline" size="sm" onClick={onRetryIndex} aria-label={RECORDING_INDEX_INCOMPLETE.RETRY_LABEL}>
+                  <RotateCw className="size-3.5" /> {RECORDING_INDEX_INCOMPLETE.RETRY}
+                </Button>
+              ) : undefined
+            }
+          >
+            {RECORDING_INDEX_INCOMPLETE.NOTE}
+          </Notice>
+        </div>
+      )}
       {/* The picker sits ABOVE the body on purpose: a run whose OWN cast is
           missing still has to be able to reach its attach sessions. */}
       {sessions.length + desktop.length > 0 && (

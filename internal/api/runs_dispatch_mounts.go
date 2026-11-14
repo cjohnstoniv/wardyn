@@ -128,9 +128,20 @@ func boundRunnerOf(member userMountPosture, src string) string {
 // behavior) plus an audit event; none of them fail the run, crash dispatch, or
 // ship a config that exits the wardyn-proxy sidecar 1 at startup — the sidecar
 // exiting at container start would take the run's whole egress path with it
-// instead of degrading to this audited fallback.
+// instead of degrading to this audited fallback. The exception is a URL refused
+// for its host's spelling alone (upstreamURLHostRefused): it is returned with
+// the failure audited, so the sidecar refuses its config and the run stops
+// rather than going around the proxy the operator named.
 // Extracted verbatim from dispatchRun.
-func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
+//
+// noHop is why the run has no upstream hop whatever the site config holds (upstreamNoHopReason), or "": none is
+// resolved, no secret is read, and the row says so with that reason.
+func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error, noHop string) string {
+	if noHop != "" {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
+			runID.String(), "success", mustJSON(map[string]any{"in_effect": false, "reason": noHop})))
+		return ""
+	}
 	if siteCfgErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 			runID.String(), "failure", mustJSON(map[string]any{"in_effect": false, "reason": "site-config-read-error"})))
@@ -169,7 +180,7 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 		detail["in_effect"] = false
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 			runID.String(), "failure", mustJSON(detail)))
-		return ""
+		return resolved // "" (direct egress), or a URL refused for its host's spelling, which stops the run
 	}
 	detail["in_effect"] = resolved != ""
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",

@@ -26,6 +26,7 @@ type GovernanceRequest struct {
 	UnitName  string                     `json:"unit_name,omitempty"`
 	Duration  string                     `json:"duration,omitempty"` // as max_elevation is stored: "4h", "1h30m"
 	EndsAt    *time.Time                 `json:"ends_at,omitempty"`  // an applied elevation's end
+	NoEnd     bool                       `json:"no_end,omitempty"`   // an applied elevation held with no end
 	Image     string                     `json:"image,omitempty"`
 	Mine      bool                       `json:"mine"`
 	Decidable bool                       `json:"decidable"`

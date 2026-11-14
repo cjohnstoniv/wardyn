@@ -60,3 +60,21 @@ func TestCodexAgentRun_HarnessSandboxFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// TestCodexAgentRun_ManagedLineSaysWhatIsDelivered: a run bound to Codex's own sandbox gets
+// /etc/codex/requirements.toml beside WARDYN_HARNESS_SANDBOX, so agent-run's launch line says the
+// requirements are delivered and never that codex has no managed settings; an unbound run's line
+// says none is delivered. Catches a launch log that denies the inner wall the run carries.
+func TestCodexAgentRun_ManagedLineSaysWhatIsDelivered(t *testing.T) {
+	const bound, unbound = "managed requirements delivered — /etc/codex/requirements.toml", "no managed agent-side settings"
+	for mode, want := range map[string]string{"": unbound, "read-only": bound, "workspace-write": bound} {
+		t.Run(mode, func(t *testing.T) {
+			home, binDir, codexLog := cxArgvCodex(t)
+			out := cxRunTask(t, home, binDir, codexLog, "WARDYN_HARNESS_SANDBOX="+mode, "WARDYN_AUTONOMY_LEVEL=L2")
+			other := map[string]string{bound: unbound, unbound: bound}[want]
+			if !strings.Contains(out, want) || strings.Contains(out, other) {
+				t.Errorf("agent-run output under WARDYN_HARNESS_SANDBOX=%q = %q, want %q and not %q", mode, out, want, other)
+			}
+		})
+	}
+}

@@ -73,13 +73,7 @@ func TestBoot_NoOverlayKeepsBytes(t *testing.T) {
 }
 
 func TestBoot_OverlayApplied(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	staged := stagedConfig(t, addr, "blocked.example", "fine.example")
+	staged := stagedConfig(t, "127.0.0.1:0", "blocked.example", "fine.example")
 	dir := shortDir(t)
 	writeList(t, dir, `["Blocked.example"," b.example "]`)
 	eff, base, err := applyLiveDenies(staged, dir)
@@ -107,6 +101,8 @@ func TestBoot_OverlayApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	listening := make(chan struct{})
+	srv.OnListening(func() { close(listening) })
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
 	t.Cleanup(func() {
@@ -115,6 +111,13 @@ func TestBoot_OverlayApplied(t *testing.T) {
 		_ = srv.Shutdown(sctx)
 		<-served
 	})
+	// The config listens on port 0, so the kernel picks the port at the bind and no other process holds it first.
+	select {
+	case <-listening:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the proxy never listened")
+	}
+	addr := srv.BoundAddr().String()
 	// The list denies blocked.example by policy; fine.example, allowed and not listed, is never denied by policy
 	// (this machine cannot resolve it, so its CONNECT still fails, for another reason).
 	for host, denied := range map[string]bool{"blocked.example:443": true, "fine.example:443": false} {

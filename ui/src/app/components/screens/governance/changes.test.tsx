@@ -8,7 +8,7 @@
 // decisions: the diff is the server's, Approve is disabled on the viewer's own proposal, the server's own
 // refusal sentence is shown verbatim, and a 202 at a write site is "submitted", never "saved".
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { toast } from "sonner";
@@ -18,7 +18,7 @@ const poolMembersMock = vi.fn();
 vi.mock("../../../lib/api/runner-pools", () => ({
   runnerPools: { get: (...a: unknown[]) => poolGetMock(...a), members: (...a: unknown[]) => poolMembersMock(...a) },
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
 const approveMock = vi.fn();
 const rejectMock = vi.fn();
@@ -81,6 +81,7 @@ beforeEach(() => {
   approveMock.mockReset();
   rejectMock.mockReset();
   vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.warning).mockClear();
 });
 
 describe("the Changes tab", () => {
@@ -174,6 +175,23 @@ describe("the Changes tab", () => {
     renderTab([change()]);
     expect(screen.queryByTestId("changes-empty")).toBeNull();
     expect(screen.getByText(CHANGES.LEAD)).toBeInTheDocument();
+  });
+
+  // The server cuts the queue at 500 changes the viewer may see and says so in its header; exactly 500 rows
+  // without it is the whole queue.
+  it("says the list was cut only when the server says so, never from 500 rows alone", () => {
+    const many = Array.from({ length: 500 }, (_, i) => change({ id: `c${i}`, target_key: `team-${i}` }));
+    const { unmount } = render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} principal="bo@example.com">
+          <ChangesTab changes={many} loadError={null} onChanged={vi.fn()} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText(CHANGES.TRUNCATED)).toBeNull();
+    unmount();
+    renderTab(Object.assign([...many], { truncated: true }));
+    expect(screen.getByText(CHANGES.TRUNCATED)).toBeInTheDocument();
   });
 });
 
@@ -301,6 +319,31 @@ describe("the change drawer", () => {
     expect(approveMock).toHaveBeenCalledWith("c1");
     expect(toast.success).toHaveBeenCalledWith(CHANGES.TOAST_APPROVED);
     expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("an approved change whose token revocation did not finish keeps the server's remedy until dismissed", async () => {
+    const detail = "The change is saved, but Wardyn could not revoke every API token that may still hold the old role.";
+    approveMock.mockResolvedValue({ ...change({ state: "applied" }), tokens_revocation_failed: true, detail });
+    const { onChanged } = renderTab([change()]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
+    expect(toast.warning).toHaveBeenCalledWith(detail, { duration: Infinity });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("a decision still out keeps its drawer, so its answer cannot close the next one opened", async () => {
+    let answer: ((c: GovernanceChange) => void) | undefined;
+    approveMock.mockReturnValue(new Promise((done) => (answer = done)));
+    renderTab([change()]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    await act(async () => answer?.(change({ state: "applied" })));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("rejects with the typed reason", async () => {

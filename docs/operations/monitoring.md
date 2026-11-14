@@ -19,7 +19,9 @@
 | `wardyn_audit_spool_quarantined_total` | Events the store permanently refused, moved aside by the drain. Non-zero means the trail is missing those events even though the spool drained. |
 | `wardyn_audit_spool_torn_total` | Spool lines dropped as unparseable, such as a torn tail from an ENOSPC or a partial write. Distinct from a store refusal: these never parsed far enough to be replayed, so they are not in the quarantine count. |
 | `wardyn_audit_outcome_refused_total` | Audit events refused before the store because their `outcome` was not `success`, `failure` or `denied`, each also logged at error level with its action. Non-zero is a code defect: report the logged action. |
+| `wardyn_lock_holds_over_limit_total` | Counter, per replica. Holds of a run's lock past their 10-minute limit, each counted once and logged at WARN with the functions that took it. The watchdog never frees the lock or cancels the holder's work. |
 | `wardyn_audit_sink_drops_total{sink}` | Events an off-box SIEM sink dropped (buffer overflow or retry exhaustion), even though Postgres, the primary, still got the row. Non-zero means SIEM-side loss only. |
+| `wardyn_otlp_metrics_push_failures_total` | OTLP metrics pushes that did not reach the collector: an encode error, a transport error or a non-2xx reply. Present only with an `otlp_metrics` block; per replica. See [OpenTelemetry metrics](#opentelemetry-metrics). |
 | `wardyn_audit_checkpoint_lag_rows` | Gauge. Audit rows appended since the last signed checkpoint, as of this replica's last signer tick. Process-local: only the replica that signs a tick updates it, so read it from every replica. Staying high means signing stopped or fell behind. |
 | `wardyn_audit_checkpoint_last_timestamp_seconds` | Gauge, Unix seconds this replica last wrote a signed checkpoint; 0 if it never did. Process-local. |
 | `wardyn_audit_checkpoint_failures_total{reason}` | Counter by `key_unavailable`, `chain_break`, `foreign_row`, `write`. `chain_break` and `foreign_row` stop signing until restart, except a late retired-key checkpoint: it counts, and signing continues from a new genesis ([details](../OPERATIONS.md#signed-checkpoints-and-receipts)). Process-local. |
@@ -29,7 +31,7 @@
 | `wardyn_audit_delivery_halted{destination}` | Gauge. 1 when the collector answered a terminal 4xx (not 408 or 429) and delivery is halted until wardynd restarts or another replica takes over delivery. The checkpoint's `last_error` holds the status, never the token. |
 | `wardyn_audit_delivery_resets_total{destination}` | Counter. Times retention or a table reset removed the row at the checkpoint and delivery resent from the oldest retained row. Each one is also an `audit.delivery.reset` audit row. Non-zero means the collector may have missed events; see [Acknowledged delivery](../ENV.md#acknowledged-delivery-delivery-acknowledged). |
 | `wardyn_approval_notify_failed_total{channel}` | Approval notifications dead on a channel: five failed sends, a non-retryable response, or still unsent an hour after due. Each also writes an `approval.notify.failed` audit row. Present only while `WARDYN_APPROVAL_NOTIFY` is set; per replica. |
-| `wardyn_approval_notify_suppressed_total{channel}` | Approval raises that created no notification because the run already had 25 tier-0 outbox rows in the last hour. The approval itself still exists and shows in the console. Only present while `WARDYN_APPROVAL_NOTIFY` is set; per replica. See [Approval notifications](../OPERATIONS.md#approval-notifications). |
+| `wardyn_approval_notify_suppressed_total{channel}` | Approval raises that created no notification because their route's past hour held too many tier-0 outbox rows for them. The approval itself still exists and shows in the console. Only present while `WARDYN_APPROVAL_NOTIFY` is set; per replica. See [Approval notifications](../OPERATIONS.md#approval-notifications). |
 | `wardyn_runs_active{state}`, `wardyn_runs_unschedulable`, `wardyn_runs_cpu_millis_held{runner}`, `wardyn_runs_memory_mib_held{runner}`, `wardyn_runs_oldest_active_seconds` | Gauges. The fleet from a 15-second snapshot per replica, with no owner label. Aggregate with `max()` across replicas, never `sum()`. A scrape whose snapshot cannot refresh omits them, never writes zero (read `wardyn_store_up`). |
 | `wardyn_drive_refusals_total{reason}` | Runs refused their user drive, by reason. A signal for the drive-claim allocator, not the audit pipeline. |
 | `wardyn_drive_probe_errors_total` | Counter. Docker `host_path` drive agent-readability probes that could not run at all. The probe fails open: the caller falls back to "cannot tell" rather than refusing (`WARDYN_DRIVE_PROBE_IMAGE`, [ENV.md](../ENV.md)). |
@@ -39,12 +41,12 @@
 | `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`, `spent`, `transport_error` or `unavailable`. It graphs the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check make. |
 | `wardyn_credential_reauth_total{outcome}` | Counter. Mid-run model-credential re-auth workflows, by outcome: `requested`, `resolved`, `expired`, `cancelled` or `timeout`. The timeout series is the one to watch for a sign-in nobody answered; the egress deny counter does not count it. |
 | `wardyn_credential_reauth_wait_seconds` | Summary (sum and count). How long a re-auth request stayed open, from the raise to the sign-in that answered it. |
-| `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. They are only here: `/healthz` publishes the verdict only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and the reason sentence still names the unmapped-drop count. Omitted entirely when no sensor has ever beaten. |
+| `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. They are only here: `/healthz` publishes the verdict only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and `reason` omits the unmapped-drop count. Omitted while `ebpf_groundtruth` reads `unavailable`. |
 | `wardyn_auth_failed_suppressed_total` | Audit rows a rate limiter dropped: `auth.fail` and SSH or ticket refusals. The trail stops describing the volume, so a credential-stuffing run reads quieter than a few typos. Alert on this series, not the audit row count. |
 | `wardyn_auth_store_errors_total` | Requests an authentication path couldn't decide because its store read failed and answered `503`. The SSO path records `auth.fail`; every other path records nothing. |
 | `wardyn_ssh_connections_refused_total{bound}` | SSH gateway connections closed at a [bound](../SSH.md#bounds): `handshake`, `source`, `established` or `principal`; per replica. |
 | `wardyn_device_ingest_failures_suppressed_total` | Counter. Refused device audit pushes whose `device.audit.ingest` row was folded into a streak or dropped by the per-device rate limit. |
-| `wardyn_model_tokens_total{vendor,direction}` | Model tokens counted from providers' answers. `vendor`: `anthropic`, `openai`, `bedrock`, `ollama` or `other`. `direction`: `input`, `output`, `cache_read`, `cache_write` or `reasoning`. No run label. |
+| `wardyn_model_tokens_total{vendor,direction}` | Model tokens counted from providers' answers. `vendor`: `anthropic`, `openai`, `bedrock`, `ollama` or `other`. `direction`: `input`, `output`, `cache_read`, `cache_write` or `reasoning`. No run label. A count that would pass 9,223,372,036,854,775,807 is left out. |
 | `wardyn_org_federation_lag` | Gauge, on a hybrid laptop only. Local audit rows the organisation has not yet acknowledged. See [Managed laptops](hybrid-laptops.md). |
 
 - The `wardyn_runner_up` probe is one read-only call (Kubernetes: a namespaced pod list of limit 1, which the chart's Role already grants; Docker: a daemon ping), cached for 5 seconds and bounded by a 3-second deadline.
@@ -66,6 +68,7 @@
 | An answer whose `usage` is missing, for example from a gateway that omits it | uncounted, `no_usage` |
 | A body over 8 MiB, one that does not parse, or a coding Wardyn cannot decode | uncounted, `body_oversize`, `parse_error`, `undecodable` |
 | The meter itself failing | uncounted, `meter_error` |
+| The calls of a model line whose counts add up past 9,223,372,036,854,775,807, or would take a total of the view past it | uncounted, `count_out_of_range`, in the line and the totals |
 | Batch APIs, whose results are fetched later as files, and upgraded (WebSocket) sessions | not seen |
 | An answer that is not a success | not billed, so not recorded |
 
@@ -77,7 +80,26 @@
   - A correlation id that is a valid W3C `traceparent` puts the span in the caller's trace, under the caller's span. Valid means `00-<32 hex>-<16 hex>-<2 hex>`, lowercase, with a trace id and parent id that are not all zeros.
   - Any other correlation id gives a trace id derived from it. A run with none uses its run id. A row with no run has no span.
   - Spans use the logs' batching, retries and drop counter, counted per span. A row's ids are fixed by the row, so a retry sends the same ones.
-- The sink exports no metrics. `/metrics` is the Prometheus surface.
+- The sink exports no metrics. The separate `otlp_metrics` block does; see [OpenTelemetry metrics](#opentelemetry-metrics).
+
+## OpenTelemetry metrics
+
+- An `otlp_metrics` block in `WARDYN_AUDIT_SINKS` makes each wardynd replica POST its `/metrics` body to `<endpoint>/v1/metrics` as OTLP/HTTP JSON every `interval` (default `60s`, at least `1s`). Off by default. Setup is in [ENV.md](../ENV.md#opentelemetry-metrics-otlp_metrics).
+- The block is separate from the `otlp` sink and sends no audit row, so the metrics collector need not receive audit logs.
+- The push reads the counters the scrape reads, so the two never count separately. The scrape is unchanged.
+- Each series keeps its name and its HELP text as the description; labels become attributes.
+
+| Prometheus type | OTLP metric |
+| --- | --- |
+| counter | cumulative monotonic sum, starting when wardynd started |
+| gauge | gauge |
+| summary (`_sum`, `_count`, any `quantile` samples) | summary |
+| histogram (`_bucket`, `_sum`, `_count`) | cumulative histogram with the same bucket bounds |
+
+- Six counters carry counts that outlive a wardynd restart, so they are sent with no start time: the four `wardyn_groundtruth_*_total` series, `wardyn_audit_delivery_resets_total` and `wardyn_audit_spool_quarantined_total`.
+- The resource is `service.name=wardynd` and `service.instance.id`: the host name, or `<WARDYN_AUDIT_SOURCE>/<host name>` when the source is set. Each replica pushes its own totals under its own id.
+- A sample whose value is NaN or infinite, or a line that does not parse, is left out of the push.
+- A failed push is logged, counted in `wardyn_otlp_metrics_push_failures_total` and not retried; the next push carries the same running totals. Changes after the last push are not sent at shutdown.
 
 ## Substrate and sweep health
 
@@ -95,23 +117,23 @@
 - Each background sweep records when it last tried and last finished cleanly.
 - A tick that returns an error moves `attempt` but not `success`, and a tick that panics leaves `success` where it was.
 
-These are the sweeps, with the interval each ticks at:
+Each sweep and its interval:
 
 | `sweep` | Interval | Runs when |
 | --- | --- | --- |
 | `idle_reaper` | `WARDYN_AUTOSTOP_INTERVAL`, default 1m | A runner exists and the interval is above 0 |
 | `terminal_sandbox` | 5m | A runner exists |
 | `approval_expiry` | `WARDYN_APPROVAL_EXPIRY_INTERVAL`, default 10m | The interval is above 0 |
-| `run_secret` | 15m | Always, on every replica |
+| `run_secret` | 15m | Always, on every replica; only the leader records `success` |
 | `credential_expiry` | 24h | Always |
 | `recording_retention` | 1h | The recording store can sweep and `WARDYN_RECORDING_RETENTION_DAYS` is above 0 (default 0, off) |
-| `run_watcher` | 1m | A runner exists, on every replica |
+| `run_watcher` | 1m | A runner exists, on every replica; only the leader records `success` |
 | `orphaned_build` | 30m | The image builder can sweep orphaned builds |
 | `run_output` | 1m | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |
 | `run_queue` | 10s | Always: ends waiting runs past their wait, fails promoted runs whose start died, and promotes for every pool with waiting runs. Runs on the sweeper leader |
 | `aws_sso_renewal` | 1m | Always: renews a live run's captured AWS SSO session inside `WARDYN_AWS_SSO_REFRESH_SKEW` of its expiry. Runs on the sweeper leader |
 
-- Every replica registers every sweep whose condition holds on the install, whichever replica holds the sweeper lock, so a follower notices a leader that stopped ticking.
+- Every replica registers every sweep whose condition holds, whichever replica holds the sweeper lock, so a follower notices a stopped leader.
 - A sweep whose condition does not hold has no series and can never be stale.
 - A sweep with no success on record warns only once three of its intervals have passed since this process started.
 
@@ -127,7 +149,7 @@ With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each n
 
 | Live nodes | `/healthz` `ebpf_groundtruth` |
 |---|---|
-| None heard from, ever | `unavailable` |
+| No heartbeat on record | `unavailable` |
 | 0 or 1 | One verdict from the newest beat of any node, as before per-node health existed. No `sensors[]`, and a node that went silent is not shown |
 | 2 or more | The worst live node's state (`degraded`, then `idle`, then `partial`, then `healthy`) and `sensors[]` |
 
@@ -135,7 +157,13 @@ With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each n
 - A signed-in caller gets `sensors[]`, because node names describe your cluster. An anonymous caller gets the verdict, `last_heartbeat`, `reason` and `missing_kinds`, and no node list.
 - The counters never reach `/healthz`. With two or more live nodes the `wardyn_groundtruth_*` series on `/metrics` sum the live nodes.
 - When the worst state is not `healthy`, `reason` reads like "1 of 2 node sensors degraded", so an anonymous caller sees a node count only then.
-- If the node list cannot be read, the failure is logged. If any heartbeat was ever recorded, `/healthz` reports `degraded` with "Node sensor health could not be read", to anonymous callers too. With no heartbeat on record it reports `unavailable`.
+- If the node list cannot be read, the failure is logged. If a heartbeat is on record, `/healthz` reports `degraded` with "Node sensor health could not be read", to anonymous callers too. With no heartbeat on record it reports `unavailable`.
+- With 0 or 1 live nodes the verdict comes from the newest node row of the last 7 days. With no such row the sensor's latest heartbeat is read, at most once every 30 seconds per server.
+- If that read fails or takes over half a second, `/healthz` reports `unavailable` with "Sensor heartbeat could not be read", to anonymous callers too. `unavailable` with no reason means no heartbeat is on record.
+- `healthy` needs fresh heartbeats whose kernel event counts (`observed_total` plus `dropped_unmapped`) rose in the last 15 minutes. A sensor that stops can read `healthy` for up to 15 minutes after its last such heartbeat.
+- A fresh heartbeat whose counts last rose over 15 minutes ago reads `idle` with "No new kernel events in the last 15 minutes". Tetragon or its export may have stopped, or the host ran nothing Tetragon exports.
+- With no rise on record it reads `idle` with "Whether new kernel events still arrive is not yet known". That is a node's first heartbeat, the first after a gap of over 15 minutes, and any heartbeat with no node row. After upgrading to this version, every sensor reads so until its counts next rise.
+- The node's row keeps when its counts last rose, so every server reads the same verdict, one that just started included.
 - A failed write of a node's row is logged and does not fail the heartbeat.
 - With two or more live nodes, a run's recent kernel events are read from the node its newest event came from, and are empty if it has none.
 

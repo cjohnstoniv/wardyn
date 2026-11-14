@@ -12,6 +12,7 @@ import { setField } from "../../../../../../test/set-field";
 import { SCENARIO_POOLS, SHARED, TEAM_LAPTOPS, barrierOptions, effectiveLimits, unavailablePool } from "../../../../../lib/new-run-fixtures/scenarios/pools";
 import { HttpError } from "../../../../../lib/api/core";
 import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
+import { SCHEDULE_REFUSAL } from "../../../../../lib/schedule-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -175,6 +176,54 @@ describe("Run step: pool select", () => {
     expect(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS })).toBeChecked();
     expect(load).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledWith("background", expect.any(AbortSignal));
+  });
+
+  // A template that leaves its run mode to the person, in the older fields: its task is the Autonomous carrier too.
+  it("names a template's older agent and task Autonomous when the step mounts with no mode, in the run-mode fields, and keeps the task across a mode switch", async () => {
+    const { load } = show({ shape: "agent_task", agent: "codex-cli", task: "fix the flaky test" });
+    await poolSelect();
+    expect(intentNow()).toMatchObject({
+      experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: "fix the flaky test" }, tools: [{ id: "codex-cli", kind: "harness" }],
+    });
+    expect(intentNow()).not.toHaveProperty("agent");
+    expect(intentNow()).not.toHaveProperty("task");
+    expect(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS })).toBeChecked();
+    expect(load).toHaveBeenCalledWith("background", expect.any(AbortSignal));
+    // Switching the mode keeps the task: Interactive starts the harness with it as the first message, and back.
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_INTERACTIVE }));
+    expect(intentNow()).toMatchObject({ experience: "interactive", startup: { kind: "harness", tool: "codex-cli", prompt: "fix the flaky test" } });
+    expect(intentNow().workload).toBeUndefined();
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS }));
+    expect(intentNow()).toMatchObject({ experience: "background", workload: { kind: "agent_task", agent: "codex-cli", task: "fix the flaky test" } });
+    expect(intentNow().startup).toBeUndefined();
+  });
+
+  // Interactive has no place for a task with no harness to start, or on a VM, which starts none: the draft holds it
+  // beside the run, never in it, and a switch back to Autonomous gives it back.
+  it.each<[string, RunIntent]>([
+    ["the Runs composer's task", { shape: "agent_task", workload: { kind: "agent_task", task: "fix the flaky test" } }],
+    ["a template's task with no agent", { shape: "agent_task", task: "fix the flaky test" }],
+    ["a task on a VM", { shape: "agent_task", machine_kind: "linux_vm", tools: [{ id: "codex-cli", kind: "harness" }], workload: { kind: "agent_task", agent: "codex-cli", task: "fix the flaky test" } }],
+  ])("keeps %s across a switch to Interactive and back", async (_name, seeded) => {
+    show(seeded);
+    await poolSelect();
+    expect(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_INTERACTIVE }));
+    expect(intentNow()).toMatchObject({ experience: "interactive" });
+    expect(intentNow().workload).toBeUndefined();
+    expect(intentNow().startup).toBeUndefined();
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS }));
+    expect(intentNow()).toMatchObject({ experience: "background", workload: { kind: "agent_task", task: "fix the flaky test" } });
+  });
+
+  // The older `interactive: true` is the draft's own word: its task does not make the run Autonomous.
+  it("keeps Interactive as the default for an older task whose draft states interactive", async () => {
+    const { load } = show({ shape: "agent_task", agent: "claude-code", task: "npm ci", interactive: true });
+    await poolSelect();
+    expect(intentNow()).toMatchObject({ experience: "interactive", agent: "claude-code", task: "npm ci", interactive: true });
+    expect(intentNow().workload).toBeUndefined();
+    expect(screen.getByRole("radio", { name: NR_RUN.MODE_INTERACTIVE })).toBeChecked();
+    expect(load).toHaveBeenLastCalledWith("interactive", expect.any(AbortSignal));
   });
 
   it("never shows the answer for the run type it replaced, however late it arrives", async () => {
@@ -660,28 +709,26 @@ describe("Run step: Schedule for later", () => {
     }
   });
 
-  it("shows no start when the switch is off, even for a draft that holds one", async () => {
-    function Holds() {
-      const dispatch = useNewRunDispatch();
-      React.useEffect(() => dispatch({ type: "schedule", schedule: { date: "2026-10-21", time: "02:00", zone: "UTC" } }), [dispatch]);
-      return null;
+  it("says a start the draft still holds as held when the switch is off or not known, never as Run now, and Run now clears it", async () => {
+    // Not known: no status yet (null), or the stand-in the console makes up when the server cannot be reached.
+    const unreachable = { unreachable: true } as SetupStatus;
+    for (const [status, text] of [[{} as SetupStatus, SCHEDULE_REFUSAL.OFF()], [null, NR_RUN.START_HELD_UNKNOWN], [unreachable, NR_RUN.START_HELD_UNKNOWN]] as const) {
+      show(AUTONOMOUS, MEMBER, status, { date: "2026-10-21", time: "02:00", zone: "UTC" });
+      await poolSelect();
+      expect(screen.getByText(text)).toHaveAttribute("role", "status");
+      // The sentence gives way from 20rem, so Run now sits beside it on a wide row and wraps under it on a narrow one.
+      expect(screen.getByText(text)).toHaveClass("min-w-0", "flex-[1_1_20rem]");
+      expect(screen.queryByText(NR_RUN.TIMING_NOW_BODY, { exact: false })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: NR_RUN.TIMING_NOW }));
+      expect(scheduleNow()).toBeNull();
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
+      const now = screen.getByText(new RegExp(NR_RUN.TIMING_NOW_BODY)).closest("p");
+      await waitFor(() => expect(now).toHaveFocus());
+      // Not a control: focus lands on it so it does not fall to the page, and no ring says "press this".
+      expect(now).toHaveClass("outline-none");
+      cleanup();
     }
-    document.head.append(sheet);
-    render(
-      <MemoryRouter>
-        <ModelAccessProvider status={{} as SetupStatus} onRefresh={() => {}}>
-          <NewRunDraftProvider owner="alice">
-            <Seeded intent={AUTONOMOUS}>
-              <RunStep location={{ screen: "step", step: "run" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: async () => MEMBER }} />
-              <Holds />
-            </Seeded>
-          </NewRunDraftProvider>
-        </ModelAccessProvider>
-      </MemoryRouter>,
-    );
-    await poolSelect();
-    expect(screen.getByText(NR_RUN.TIMING_NOW)).toBeInTheDocument();
-    expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
   });
 
   it("opens Date, Time and Time zone when on, losing its Coming soon, and tells nothing until a field is touched", async () => {
@@ -731,10 +778,13 @@ describe("Run step: Schedule for later", () => {
     }
   });
 
-  it("comes back with values already typed telling their problem at once", async () => {
-    show(AUTONOMOUS, MEMBER, ON, { date: "2020-01-01", time: "02:00", zone: "UTC" });
+  it("comes back with values already typed telling their problem at once, politely, and as an alert only once typed in", async () => {
+    show(AUTONOMOUS, MEMBER, ON, { date: "2025-03-30", time: "01:30", zone: "Europe/London" });
     await poolSelect();
-    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_PAST);
+    expect(screen.getByText(NR_RUN.START_CLOCK)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    setField(screen.getByLabelText(NR_RUN.START_TIME), "01:45");
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_CLOCK);
   });
 
   it("sets the earliest date from the picked zone's today and keeps the browser's zone first in the list", async () => {

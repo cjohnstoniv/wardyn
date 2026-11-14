@@ -27,14 +27,17 @@ import (
 // reads before the tail were slow, since tailFinalize starts its own ctx only after them. A runner exit's, the
 // reaper's and the lease sweep's own ctx ends the pass before B. A pass that ends past B is not recorded and its
 // sandbox is not stopped here.
-// The deadline does not cancel the holder's other calls either: the audit of the end, the revoke of the run's
-// credentials and approvals, the output's drain and persist, the model-access note and the agent stop before a pass
-// run on the holder's own ctx, and the lock is released when they return. The completion watcher's and a person's
-// bring-back's ctx has no deadline, so their release is bounded only by those calls' own limits, as it was before
-// the hold: a revoke cut at B would be worse than a long hold. The readers (the containment loop and the tail owner)
-// finish the run from there. Each B is the holder's own, and a macOS VM run's gets macOSVMTeardownBudget more
-// (endHoldBudget) for its sandbox stop; a pass back still running can leave that stop less, and the next sweep then
-// repeats the stop with a full hold.
+// The deadline does not cut the holder's other calls either: a revoke cut at B would be worse than a long hold. Each
+// has a bound of its own instead (heldCall), so the lock is released even on a holder whose ctx has no deadline (the
+// completion watcher, a person's bring-back): the end's audit, the approvals' cancel and the model-access note on
+// heldStoreCallBound, the revoke on heldRevokeBound (a revoke cut there stays owed for the revoke queue once its owed
+// mark is written; otherwise the mark is written again in the background until it lands), the output's drain and persist on
+// killCascadeTimeout, and the agent stop before a pass on bringBackExecBound. Together they can take 150 to 165 s of
+// endHoldDedicated's 180 s; with a macOS VM run's status read or a pass on top, the stop can reach B and is then left
+// to the tail owner and the terminal sweep, which repeat it with a full hold. The holder's own state write and reads
+// still run on its ctx. The readers (the containment loop and the tail owner) finish the run from there. Each B is the
+// holder's own, and a macOS VM run's gets macOSVMTeardownBudget more (endHoldBudget) for its sandbox stop; a pass back
+// still running can leave that stop less, and the next sweep then repeats the stop with a full hold.
 const (
 	endHoldSweep     = 60 * time.Second // a sweep's end: reconcile finalize, a lease or kept run's end, a Mac-prep failure
 	endHoldDedicated = 3 * time.Minute  // the completion watcher, a person's bring-back and the tail owner
@@ -68,6 +71,10 @@ func holdPassed(ctx context.Context) bool {
 	dl, ok := holdDeadline(ctx)
 	return ok && !time.Now().Before(dl)
 }
+
+// EndHoldPassed is holdPassed for cmd/wardynd's idle and max-age stop, whose ctx carries the hold LockRunEnd took:
+// true once that hold's deadline has passed, when the stop is left to the readers.
+func EndHoldPassed(ctx context.Context) bool { return holdPassed(ctx) }
 
 // endHoldSlots is the end-hold semaphore: at most maxEndHolds taken at once. Zero value is ready to use.
 type endHoldSlots struct {

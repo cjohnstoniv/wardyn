@@ -29,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // signInOrg is an organisation with CLI sign-in on, speaking the wire internal/api/cli_sign_in.go and
@@ -65,6 +66,7 @@ type signInOrg struct {
 	refreshes int
 	inflight  chan struct{}
 	bearers   []string // every Authorization header seen
+	requests  int      // every request received, with a bearer or none
 }
 
 type fakeSignIn struct {
@@ -121,6 +123,7 @@ func newSignInOrg(t *testing.T) *signInOrg {
 	mux.HandleFunc("GET /api/v1/audit", func(w http.ResponseWriter, _ *http.Request) { writeFake(w, http.StatusOK, []types.AuditEvent{}) })
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		f.requests++
 		if a := r.Header.Get("Authorization"); a != "" {
 			f.bearers = append(f.bearers, a)
 		}
@@ -730,7 +733,7 @@ func TestSessionFileFallbackWithNoBus(t *testing.T) {
 // the second waits for the lock and reads the rotated item, so the server never sees a replayed secret.
 func TestSessionRefreshUnderLockIsOne(t *testing.T) {
 	f := newSignInOrg(t)
-	cliEnv(t, nil)
+	dir := cliEnv(t, nil)
 	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
 	// The file store: go-keyring's mock is a map with no lock, where a real keychain is a store two
 	// processes share; the lock under test is the same for both.
@@ -740,6 +743,10 @@ func TestSessionRefreshUnderLockIsOne(t *testing.T) {
 		t.Fatalf("login: %v", err)
 	}
 	f.refreshBarrier = time.Second
+	started, _, err := (fileStore{dir}).get(f.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	got := make([]storedSession, 2)
 	errs := make([]error, 2)
@@ -747,7 +754,8 @@ func TestSessionRefreshUnderLockIsOne(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got[i], errs[i] = loadSession(context.Background(), f.srv.URL)
+			// Each runs as a command that started with this session: the other's rotation keeps it.
+			got[i], errs[i] = loadSession(context.Background(), f.srv.URL, started.SessionID)
 		}()
 	}
 	wg.Wait()
@@ -1055,7 +1063,7 @@ func TestLoginAdminStepUpKeepsTheSecretARefreshRotated(t *testing.T) {
 	f.refreshLife = 0
 	openBrowser = func(approve string) error {
 		go func() {
-			if _, err := loadSession(context.Background(), f.srv.URL); err != nil {
+			if _, err := loadSession(context.Background(), f.srv.URL, uuid.Nil); err != nil {
 				t.Errorf("the other command's refresh: %v", err)
 			}
 			approveInBrowser(t, f, nil)(approve)
@@ -1164,7 +1172,7 @@ func TestLogoutUsesTheTokenStoredNow(t *testing.T) {
 		it := storedItem(t, f.srv.URL)
 		it.AccessExpiresAt = time.Now()
 		_ = (keychainStore{}).put(f.srv.URL, it)
-		if _, err := loadSession(context.Background(), f.srv.URL); err != nil {
+		if _, err := loadSession(context.Background(), f.srv.URL, uuid.Nil); err != nil {
 			t.Errorf("the other command's refresh: %v", err)
 		}
 	}
@@ -1294,5 +1302,309 @@ func TestLongCommandRenewsTheStoredSignIn(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.posts != 1 {
 		t.Errorf("the refused POST was sent %d times, want once", f.posts)
+	}
+}
+
+// TestLongCommandKeepsTheSignInItStartedWith: run --wait keeps the CLI session it started with. A few polls
+// in, its access token comes inside the renewal margin just after another command renewed that session,
+// signed it out, or replaced it with a new sign-in, which may be another person's. A renewal of the same
+// session carries on. After a sign-out or a replacement the command stops: no later request leaves, so none
+// carries the replacement's bearer or goes out with none, and the replacement is not renewed.
+func TestLongCommandKeepsTheSignInItStartedWith(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// elsewhere is the other command's change, made with f.mu held; it returns the bearer it stored.
+		elsewhere func(f *signInOrg, dir string, started cliItem) string
+		changed   bool
+	}{
+		{"same session renewed", func(f *signInOrg, dir string, started cliItem) string {
+			sess := f.sessions[started.SessionID]
+			sess.secret = "wdc_" + uuid.NewString()
+			g := f.grant(started.SessionID, types.APITokenKindCLIAccess, time.Hour)
+			g.Secret = sess.secret
+			started.applyGrant(g)
+			_ = (fileStore{dir}).put(f.srv.URL, started)
+			return g.AccessToken
+		}, false},
+		{"signed out", func(f *signInOrg, dir string, started cliItem) string {
+			f.sessions[started.SessionID].ended = types.CLISessionEndSignedOut
+			_ = (fileStore{dir}).del(f.srv.URL)
+			_ = cliprofile.WriteSessionStore(dir, f.srv.URL, "")
+			return ""
+		}, true},
+		{"replaced by another sign-in", func(f *signInOrg, dir string, started cliItem) string {
+			return signInElsewhere(f, started, func(it cliItem) error { return (fileStore{dir}).put(f.srv.URL, it) })
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setWaitPollInterval(t, 50*time.Millisecond)
+			f := newSignInOrg(t)
+			dir := cliEnv(t, approveInBrowser(t, f, nil))
+			// The file store: the change is made on the fake server's goroutine, and a file is not memory
+			// the command's goroutine shares, where go-keyring's mock is an unlocked map.
+			keychainReady = func() error { return errors.New("no session bus") }
+			advance := skewClock(t)
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			started, _, err := (fileStore{dir}).get(f.srv.URL)
+			if err != nil || started.AccessToken == "" {
+				t.Fatalf("stored sign-in: %+v, %v", started, err)
+			}
+			var stored string
+			var sentAtChange int
+			f.atPoll = func(n int) {
+				if n == 5 {
+					advance(intoMargin)
+					stored = tc.elsewhere(f, dir, started)
+					sentAtChange = f.requests
+				}
+			}
+			f.expire = true
+			_, errOut, err := runCLI(t, "", "run", "--url", f.srv.URL, "--agent", "claude-code", "--wait")
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if !tc.changed {
+				if err != nil || f.polls != 21 || f.refreshes != 0 {
+					t.Fatalf("run --wait: err %v after %d polls and %d refreshes, want the renewed token used to the end\n%s",
+						err, f.polls, f.refreshes, errOut)
+				}
+				return
+			}
+			if !errors.Is(err, errSessionChanged) || exitCodeFor(err) != 1 || dialHint(err) != "" {
+				t.Fatalf("run --wait: err %v (exit %d), want the changed sign-in refused, exit 1 and no dial hint\n%s",
+					err, exitCodeFor(err), errOut)
+			}
+			if f.polls != 5 || f.refreshes != 0 || f.requests != sentAtChange {
+				t.Errorf("%d polls, %d refreshes and %d requests after the change reached the server, want 5, none and none",
+					f.polls, f.refreshes, f.requests-sentAtChange)
+			}
+			for _, b := range f.bearers {
+				if stored != "" && b == "Bearer "+stored {
+					t.Fatal("a request carried the replacement's bearer")
+				}
+			}
+		})
+	}
+}
+
+// signInElsewhere is another `wardyn login` on this computer, made with f.mu held: the started session is
+// ended and a new one, which may be another person's, is stored in its place with put. It returns the new
+// session's bearer.
+func signInElsewhere(f *signInOrg, started cliItem, put func(cliItem) error) string {
+	f.sessions[started.SessionID].ended = types.CLISessionEndSignedOut
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	id := uuid.New()
+	f.sessions[id] = &fakeSession{pub: pub, secret: "wdc_" + uuid.NewString()}
+	g := f.grant(id, types.APITokenKindCLIAccess, time.Hour)
+	g.Secret = f.sessions[id].secret
+	other := cliItem{KeySeed: base64.RawURLEncoding.EncodeToString(priv.Seed()), Machine: started.Machine}
+	other.applyGrant(g)
+	_ = put(other)
+	return g.AccessToken
+}
+
+// TestRunningCommandSendsNothingItCannotSign: a command's requests go through sessionTransport, made one at a
+// time on the test's goroutine, with the keychain unreadable on the reads the test picks. A read that fails
+// refuses that request; once the stored sign-in is another session, every later request is refused, the
+// keychain readable or not. The fake counts every request it receives, so "nothing sent" is counted, not
+// read from the error.
+func TestRunningCommandSendsNothingItCannotSign(t *testing.T) {
+	type env struct {
+		get     func() error // one request to the organisation
+		replace func()       // another sign-in stored in place of the command's
+		advance func(time.Duration)
+		locked  atomic.Bool  // every keychain read fails
+		failOn  atomic.Int32 // the keychain call that many calls from now fails; 0 = none
+		f       *signInOrg
+	}
+	for _, tc := range []struct {
+		name  string
+		steps func(t *testing.T, e *env)
+		sends int // requests that reach the server once the token is inside the renewal margin
+	}{
+		{"replaced, then unreadable", func(t *testing.T, e *env) {
+			e.replace()
+			wantChanged(t, e.get())
+			e.locked.Store(true)
+			wantChanged(t, e.get())
+		}, 0},
+		{"unreadable before any change, then readable, then replaced", func(t *testing.T, e *env) {
+			e.locked.Store(true)
+			wantUnread(t, e.get())
+			e.locked.Store(false)
+			if err := e.get(); err != nil {
+				t.Fatalf("the same session readable again: %v", err)
+			}
+			e.f.mu.Lock()
+			refreshes := e.f.refreshes
+			e.f.mu.Unlock()
+			if refreshes != 1 {
+				t.Fatalf("%d refreshes, want the same session renewed once", refreshes)
+			}
+			e.advance(intoMargin)
+			e.replace()
+			wantChanged(t, e.get())
+		}, 2}, // the renewal and its request
+		{"re-read under the lock fails, then replaced", func(t *testing.T, e *env) {
+			e.failOn.Store(2) // the first read finds the session; the read after the lock fails
+			wantUnread(t, e.get())
+			e.replace()
+			wantChanged(t, e.get())
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSignInOrg(t)
+			cliEnv(t, approveInBrowser(t, f, nil))
+			e := &env{f: f, advance: skewClock(t)}
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			keychainReady = func() error {
+				if e.locked.Load() || e.failOn.Add(-1) == 0 {
+					return errors.New("the keychain is locked")
+				}
+				return nil
+			}
+			started := storedItem(t, f.srv.URL)
+			sess := &sessionState{}
+			sess.resolve(context.Background(), f.srv.URL)
+			_, origin, err := sess.bearer(context.Background())
+			if err != nil || origin == "" {
+				t.Fatalf("resolved sign-in: origin %q, %v", origin, err)
+			}
+			hc := &http.Client{Transport: sessionTransport{base: http.DefaultTransport, origin: origin, sess: sess}}
+			e.get = func() error {
+				resp, err := hc.Get(f.srv.URL + "/api/v1/me")
+				if err == nil {
+					_ = resp.Body.Close()
+				}
+				return err
+			}
+			var replacement string
+			e.replace = func() {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				replacement = signInElsewhere(f, started, func(it cliItem) error { return (keychainStore{}).put(f.srv.URL, it) })
+			}
+			e.advance(intoMargin)
+			f.mu.Lock()
+			before := f.requests
+			f.mu.Unlock()
+			tc.steps(t, e)
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if got := f.requests - before; got != tc.sends {
+				t.Errorf("%d requests reached the server, want %d", got, tc.sends)
+			}
+			for _, b := range f.bearers {
+				if b == "Bearer "+replacement {
+					t.Fatal("a request carried the replacement's bearer")
+				}
+			}
+		})
+	}
+}
+
+// wantChanged is a request refused because the command's sign-in changed: exit 1, no dial hint.
+func wantChanged(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, errSessionChanged) || exitCodeFor(err) != 1 || dialHint(err) != "" {
+		t.Fatalf("err %v (exit %d), want the changed sign-in refused, exit 1 and no dial hint", err, exitCodeFor(err))
+	}
+}
+
+// wantUnread is a request refused because the stored sign-in could not be read: refused here, exit 1, and
+// not reported as a changed sign-in.
+func wantUnread(t *testing.T, err error) {
+	t.Helper()
+	if !errors.As(err, new(*sessionRefusal)) || errors.Is(err, errSessionChanged) || exitCodeFor(err) != 1 || dialHint(err) != "" {
+		t.Fatalf("err %v (exit %d), want the unreadable sign-in refused here, exit 1 and no dial hint", err, exitCodeFor(err))
+	}
+}
+
+// TestWaitStopsAtAChangedSignIn: once the sign-in a command started with has changed, run --wait and run
+// wait-ready stop at the first refused poll with that cause and exit 1, even with a timeout that ends the
+// wait before the polls a passing error is given.
+func TestWaitStopsAtAChangedSignIn(t *testing.T) {
+	setWaitPollInterval(t, 20*time.Millisecond)
+	var sent atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { sent.Add(1) }))
+	t.Cleanup(srv.Close)
+	origin, err := cliprofile.Normalize(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &sessionState{s: storedSession{origin: origin, kind: types.CLIStoreFile}, refused: &sessionRefusal{errSessionChanged}}
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Transport: sessionTransport{base: http.DefaultTransport, origin: origin, sess: sess}}}
+	for name, wait := range map[string]func() error{
+		"run --wait": func() error { return waitForRun(context.Background(), io.Discard, c, fakeRunID, 50*time.Millisecond) },
+		"run wait-ready": func() error {
+			_, err := waitForRunReady(context.Background(), io.Discard, c, fakeRunID, 50*time.Millisecond, false)
+			return err
+		},
+		"apply --wait": func() error {
+			return waitForRunRunning(context.Background(), io.Discard, c, fakeRunID, 50*time.Millisecond)
+		},
+	} {
+		if err := wait(); !errors.Is(err, errSessionChanged) || exitCodeFor(err) != 1 {
+			t.Errorf("%s: err %v (exit %d), want the changed sign-in and exit 1", name, err, exitCodeFor(err))
+		}
+	}
+	if n := sent.Load(); n != 0 {
+		t.Errorf("%d requests were sent", n)
+	}
+}
+
+// TestSignInWithNoSessionIDIsNotUsed: resolve pins the session it read. A stored item with no session id, or
+// one signed out between resolve's two reads, gives no pin: the command sends no bearer and never reads the
+// store again, so a sign-in stored later is not adopted.
+func TestSignInWithNoSessionIDIsNotUsed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		before func(t *testing.T, origin string, started cliItem, advance func(time.Duration))
+	}{
+		{"stored with no session id", func(t *testing.T, origin string, started cliItem, _ func(time.Duration)) {
+			started.SessionID = uuid.Nil
+			if err := (keychainStore{}).put(origin, started); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"signed out between the two reads", func(_ *testing.T, origin string, _ cliItem, advance func(time.Duration)) {
+			advance(intoMargin)
+			reads := 0
+			keychainReady = func() error {
+				if reads++; reads == 2 {
+					_ = keyring.Delete(cliKeyringService, origin)
+				}
+				return nil
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSignInOrg(t)
+			cliEnv(t, approveInBrowser(t, f, nil))
+			advance := skewClock(t)
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			started := storedItem(t, f.srv.URL)
+			tc.before(t, f.srv.URL, started, advance)
+			sess := &sessionState{}
+			sess.resolve(context.Background(), f.srv.URL)
+			f.mu.Lock()
+			signInElsewhere(f, started, func(it cliItem) error { return (keychainStore{}).put(f.srv.URL, it) })
+			before := f.requests
+			f.mu.Unlock()
+			advance(intoMargin)
+			if tok, origin, err := sess.bearer(context.Background()); tok != "" || origin != "" || err != nil {
+				t.Fatalf("bearer %q for %q, %v: want none, and the later sign-in not adopted", tok, origin, err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.requests != before {
+				t.Errorf("%d requests reached the server, want none", f.requests-before)
+			}
+		})
 	}
 }

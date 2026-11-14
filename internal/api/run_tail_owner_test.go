@@ -1762,6 +1762,7 @@ func TestSweepForcedStops_AnOwedPassIsKeptOnlyOnAConfirmedCut(t *testing.T) {
 			f.claimOnly(t)
 			f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 3})
 			f.release()
+			f.cs.giveUpApplies = true // a stop on a cut that is not confirmed ends the keep: the owed pass is given up before the ref is cleared
 			f.tick(t, f.s)
 			if f.sb.stopCount() != tc.stops || f.leaser.markCount() != 0 {
 				t.Errorf("%d stops, %d marks; want %d and 0", f.sb.stopCount(), f.leaser.markCount(), tc.stops)

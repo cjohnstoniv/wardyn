@@ -114,7 +114,7 @@ function RunDetailPage({ id }: { id: string }) {
   const principal = usePrincipal();
 
   const {
-    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, loadMessage, tab, setTab,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, recordingIndex, status, loadMessage, tab, setTab,
     recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
@@ -440,6 +440,8 @@ function RunDetailPage({ id }: { id: string }) {
               runId={id}
               sessions={attachSessions(recordingAudit)}
               recordingAudit={recordingAudit}
+              recordingIndex={recordingIndex}
+              onRetryIndex={() => void load(false)}
               level={run.recording_level}
               notRecorded={run.not_recorded}
               macOS={isMacOSVM(run)}

@@ -122,6 +122,25 @@ got="$(stat -c '%a' "${mode_env}")"
 [ "$got" = "600" ] || fail "env_set's append path left ${mode_env} mode ${got}, want 600"
 grep -q '^WARDYN_AGE_KEY=AGE-SECRET-KEY-1TESTONLY$' "${mode_env}" || fail "env_set lost unrelated lines while preserving the mode"
 
+# 3d2) env_set's rewrite temp is new, never a leftover or planted FILE.tmp. With
+# the fixed name, `cp -p` and `>` followed a symlink there (writing the store
+# key to its target) and the mv then made the link the .env itself.
+for plant in file symlink; do
+  sym_env="${dir}/.env-${plant}"; elsewhere="${dir}/elsewhere-${plant}"
+  printf 'WARDYN_AGE_KEY=AGE-SECRET-KEY-1TESTONLY\nWARDYN_DEFAULT_POLICY=/a.json\n' > "${sym_env}"
+  chmod 600 "${sym_env}"; : > "${elsewhere}"
+  if [ "${plant}" = symlink ]; then ln -s "${elsewhere}" "${sym_env}.tmp"
+  else : > "${sym_env}.tmp"; chmod 644 "${sym_env}.tmp"; fi
+  env_set "${sym_env}" WARDYN_DEFAULT_POLICY /b.json
+  { [ ! -L "${sym_env}" ] && [ "$(stat -c '%a' "${sym_env}")" = 600 ]; } \
+    || fail "env_set over a ${plant} ${sym_env}.tmp left $(ls -l "${sym_env}")"
+  { [ ! -s "${elsewhere}" ] && [ ! -s "${sym_env}.tmp" ]; } \
+    || fail "env_set wrote WARDYN_AGE_KEY through a planted ${plant} ${sym_env}.tmp"
+  [ "$(env_get "${sym_env}" WARDYN_DEFAULT_POLICY)" = /b.json ] || fail "env_set did not replace the value over a ${plant} .tmp"
+  [ -z "$(find "${dir}" -maxdepth 1 -name ".env-${plant}.?*" ! -name ".env-${plant}.tmp")" ] \
+    || fail "env_set left a rewrite temp beside ${sym_env}"
+done
+
 # 3e) B12b-F2 — .env must be born 0600, not chmod'd 600 after the fact. Between
 # the old `cp .env.example .env` (born at the caller's umask, 0644 by default)
 # and cmd_up's first `chmod 600`, ensure_age_key_or_die ran and wrote

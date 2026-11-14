@@ -24,10 +24,15 @@ package proxy
 // branch this push updates or of the default branch (contains). An updated
 // branch counts only at the tip the forge reports, and only when that tip
 // is the old value the push states (updatedTip): neither the branch name
-// nor the old value the push asserts is taken on trust. A
+// nor the old value the push asserts is taken on trust. Nor does every
+// commit the pack carries count: one outside the history of every ref the
+// push sets builds on nothing the push builds on, so a base counts only when
+// the history the pack carries for some ref's new commit names it (Reaches). A
 // merge passes an entry matching ANY counted parent: demanding all would
-// refuse merging the default branch in after it changed a denied path, and
-// closes nothing a single-parent commit on the same base couldn't already.
+// refuse merging the default branch into a branch the push creates after it
+// changed a denied path. A counted parent can be older than the tip of a
+// branch the push updates, so for deny_paths and require_review_paths that
+// branch is also compared with its own tip (push_forge_tip.go).
 //
 // WHAT THE PACK RE-SENDS. git leaves out of a pack only what is reachable
 // from the tips the forge advertises that the client also has. A clone
@@ -58,6 +63,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -158,16 +164,27 @@ func (p *Proxy) patForge(host, rest string, g PATGrant) *forgeRepo {
 // deny_new_executables.
 type forgeClear func(f *forgeRepo, ctx context.Context, roots []string, c gitpack.Change) (bool, error)
 
+// packReaches is gitpack.Result.Reaches. A var so a test can cut a walk short.
+var packReaches = gitpack.Result.Reaches
+
 // unchanged returns the entries clear could NOT clear, and why.
 func (f *forgeRepo) unchanged(ctx context.Context, entries []gitpack.Change, res gitpack.Result, clear forgeClear) ([]gitpack.Change, string) {
 	if f == nil {
 		return entries, whyNoForgeReader
 	}
-	if f.ado != nil && !fastForwards(res) {
+	named, whole := packReaches(res)
+	if f.ado != nil && !fastForwards(res.Commands, named, whole) {
+		if !whole {
+			return entries, whyCutShort // a walk cut short shows no move either way
+		}
 		return entries, whyForced
 	}
 	var roots []string
 	for _, base := range res.Bases {
+		// A parent named only by a commit outside every pushed ref's history is nothing this push builds on.
+		if !slices.ContainsFunc(named, func(n map[string]bool) bool { return n[base] }) {
+			continue
+		}
 		root, err := f.vouch(ctx, base, res.Commands)
 		if err != nil {
 			return entries, f.unread(whyUnread, err)
@@ -534,6 +551,10 @@ func (f *forgeRepo) read(ctx context.Context, host, path string, authorize func(
 		return 0, none, fmt.Errorf("the comparison needs more than %d reads of the forge", maxForgeReads)
 	}
 	f.reads++
+	// This read carries the forge's credential and never the run's identity (gatewayUnsignedCause).
+	if cause := f.p.gatewayUnsignedCause(host, 443); cause != "" {
+		return 0, none, errors.New(cause)
+	}
 	target, _, err := f.p.egressTarget(host, 443)
 	if err != nil {
 		return 0, none, err

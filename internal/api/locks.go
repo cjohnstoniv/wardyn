@@ -9,11 +9,13 @@ package api
 // and Azure DevOps sign-in refresh single-flights) are taken here, in the one
 // order db.LockOrder documents.
 //
-// No caller proceeds unlocked. A lock that cannot be taken is a refusal: an
-// HTTP door answers 503 reasonLockUnavailable (retry), a redemption answers as
-// it does for any transient failure, and a sweep skips the item. The context a
-// lock returns is the one the guarded work must use: it is cancelled if the
-// lock's connection is lost.
+// No caller proceeds unlocked, except a write that ends a run or marks it
+// kept: refused its start fence, it writes anyway, unfenced and logged
+// (run_admit.go). A lock that cannot be taken is a refusal: an HTTP door
+// answers 503 reasonLockUnavailable (retry), a redemption answers as it does
+// for any transient failure, and a sweep skips the item. The context a lock
+// returns is the one the guarded work must use: it is cancelled if the lock's
+// connection is lost.
 
 import (
 	"context"
@@ -37,6 +39,8 @@ type lockState struct {
 	// held replaces db.LockHeld. Set by tests only, to lose a hold the
 	// in-process locker never loses.
 	held func(context.Context) error
+	// starts is the per-run turn a command start takes before it asks for its start lock (run_admit.go).
+	starts startGates
 }
 
 // lockHeld is db.LockHeld: nil only while every lock ctx carries is held.
@@ -172,4 +176,23 @@ func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID, b time.Duration) 
 // hold budget (endHoldReaper).
 func (s *Server) LockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
 	return s.lockRunEnd(ctx, id, endHoldReaper)
+}
+
+// heldStoreCallBound bounds one store call, or one audit row, that a holder of a run's lock makes on a context that
+// may have no deadline of its own; a variable only so a test can shorten it.
+var heldStoreCallBound = runTeardownBudget
+
+// heldRevokeBound bounds a revoke of a run's credentials made under the run's lock: the boot pass's budget for one
+// teardown call. A revoke cut at it stays owed for the revoke queue once its owed mark is written;
+// otherwise the mark is written again in the background until it lands (settleRevokeOwed). A variable only so a test can
+// shorten it.
+var heldRevokeBound = reconcileFinalizeTimeout
+
+// heldCall runs fn on ctx bounded by d: one call a holder of a run's lock makes under it. Without a bound of its own,
+// a call that never answers, on a holder whose context has no deadline (the completion watcher, a person's
+// bring-back, an operator's sweep, the boot pass), would hold the lock until it does.
+func heldCall(ctx context.Context, d time.Duration, fn func(context.Context)) {
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	fn(ctx)
 }

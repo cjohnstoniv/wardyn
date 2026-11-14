@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -158,6 +159,32 @@ func TestGovCovSameGovernanceHuman(t *testing.T) {
 			ch := types.GovernanceChange{ProposedBy: c.proposedBy, ProposedByEmail: c.proposedMail}
 			if got := sameGovernanceHuman(ch, c.principal, c.email); got != c.want {
 				t.Errorf("sameGovernanceHuman = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Ownership, unlike the same-human refusal, follows a mailbox only when sign-in vouches for it.
+func TestGovCovOwnsGovernanceChange(t *testing.T) {
+	for _, c := range []struct {
+		name                     string
+		trusted                  bool
+		proposedBy, proposedMail string
+		principal, email         string
+		want                     bool
+	}{
+		{"the same principal owns it", false, "sub-a", "alice@corp.example", "sub-a", "other@corp.example", true},
+		{"an unvouched mailbox under another principal does not", false, "sub-a", "Alice@Corp.Example", "sub-b", "alice@corp.example", false},
+		{"a vouched mailbox under another principal does", true, "sub-a", "Alice@Corp.Example", "sub-b", "alice@corp.example", true},
+		{"two different people do not, vouched or not", true, "sub-a", "alice@corp.example", "sub-b", "bob@corp.example", false},
+		{"empty mailboxes never match, vouched or not", true, "sub-a", "", "sub-b", "", false},
+		{"empty principals never match", false, "", "alice@corp.example", "", "bob@corp.example", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := govCovServer(t, &govCovStore{}, func(cfg *Config) { cfg.AllowEmailMappings = c.trusted })
+			ch := types.GovernanceChange{ProposedBy: c.proposedBy, ProposedByEmail: c.proposedMail}
+			if got := s.ownsGovernanceChange(ch, c.principal, c.email); got != c.want {
+				t.Errorf("ownsGovernanceChange = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -660,5 +687,42 @@ func TestGovCovListChangesSaysWhenTheStoreHitItsCap(t *testing.T) {
 	w = do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
 	if w.Header().Get("X-Wardyn-Truncated") != "" {
 		t.Errorf("a short read set X-Wardyn-Truncated %q", w.Header().Get("X-Wardyn-Truncated"))
+	}
+}
+
+// The pending queue is cut after the caller's filter, never before it: an older change the caller may see,
+// behind more than the bound of newer ones they may not, is listed, and a list of exactly the bound they
+// may see is complete. A history read the store cut still says so, whatever the caller may see of it.
+func TestGovCovListChangesCutsThePendingQueueAfterTheFilter(t *testing.T) {
+	hidden := make([]types.GovernanceChange, store.MaxGovernanceChangeList+1)
+	for i := range hidden {
+		hidden[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: "no_such_kind"} // no caller may see it
+	}
+	older := types.GovernanceChange{ID: uuid.New(), TargetKind: govKindUnit}
+	st := &govCovStore{changes: append(slices.Clone(hidden), older)}
+	s, _ := govCovServer(t, st)
+	w := do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	var got []types.GovernanceChange
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != 1 || got[0].ID != older.ID {
+		t.Errorf("the older visible change behind %d hidden ones: got %d rows (err %v), want it alone", len(hidden), len(got), err)
+	}
+	if w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Errorf("a pending queue that holds every change the caller may see set X-Wardyn-Truncated %q", w.Header().Get("X-Wardyn-Truncated"))
+	}
+
+	visible := make([]types.GovernanceChange, store.MaxGovernanceChangeList)
+	for i := range visible {
+		visible[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: govKindUnit}
+	}
+	st.changes = append(slices.Clone(visible), hidden...)
+	w = do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != store.MaxGovernanceChangeList || w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Errorf("exactly the bound visible: %d rows, X-Wardyn-Truncated %q (err %v), want %d and unset", len(got), w.Header().Get("X-Wardyn-Truncated"), err, store.MaxGovernanceChangeList)
+	}
+
+	st.changes = append(slices.Clone(hidden), older)
+	w = do(t, s, http.MethodGet, govCovChangesPath+"?state=applied", adminToken, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != 0 || w.Header().Get("X-Wardyn-Truncated") != "true" {
+		t.Errorf("a history read past the bound: %d rows, X-Wardyn-Truncated %q (err %v), want none listed and true", len(got), w.Header().Get("X-Wardyn-Truncated"), err)
 	}
 }

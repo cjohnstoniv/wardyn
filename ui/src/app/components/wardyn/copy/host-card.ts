@@ -12,7 +12,8 @@ export const HOST_CARD = {
   RECHECK: "Re-check host",
   RECHECKING: "Re-checking…",
   CHECKED_JUST_NOW: "Checked just now",
-  // Settings could not read /setup/status at all (a 5xx or a dead network): nothing on the page would be true.
-  UNREACHABLE_TITLE: "Couldn't reach Wardyn",
-  UNREACHABLE_BODY: "Settings didn't get an answer, so nothing here would be accurate. Try again in a moment.",
+  // The page could not read /setup/status (a 5xx, a 404 or a dead network): nothing on it would be true. A 5xx or
+  // a 404 is an answer, so neither line says Wardyn could not be reached.
+  UNREACHABLE_TITLE: "Couldn't load setup status",
+  UNREACHABLE_BODY: "Wardyn's setup status couldn't be read, so nothing here would be accurate. Try again in a moment.",
 } as const;

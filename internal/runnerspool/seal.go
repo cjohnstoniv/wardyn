@@ -135,8 +135,9 @@ func (s *Spool) Liability(ctx context.Context) (out Liability, err error) {
 	return
 }
 
-// Drained is a proxy's drained reply: its last sequence and the credit units it
-// consumed (sequences plus reservations still held).
+// Drained is a proxy's drained reply: its last sequence and what it consumed:
+// sequences, reservations still held, and the records it dropped that hold no
+// reservation and that no full grant refused.
 type Drained struct {
 	Gen      uint64
 	FinalSeq int64
@@ -156,7 +157,12 @@ const settledInstance = "00000000000000000000000000000000"
 // (completion evidence; never a NotFound alone): exact when drained answered at
 // the current generation with every sequence committed, else the upper bound
 // Grant.Through - Producer.Seq. One write adds it to pending_loss and clears
-// the grant; a settled producer is never accepted again.
+// the grant; a settled producer is never accepted again. A spool with no
+// producer settles with no loss: a proxy whose decisions go to this spool
+// (an egress proxy image of this release or later) writes no row before a
+// session has accepted it, and listens only once that session has granted
+// it credit (the egress proxy's Server.awaitOpen). The session's Accept named
+// it the producer first, so a proxy that never had one wrote nothing.
 func (s *Spool) SettleLoss(ctx context.Context, drained *Drained) (loss Loss, err error) {
 	err = s.locked(ctx, func() error {
 		m, err := s.readManifest()

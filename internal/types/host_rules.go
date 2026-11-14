@@ -6,6 +6,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 )
@@ -72,6 +73,9 @@ func validHostRule(r HostRule) error {
 	switch {
 	case h == "":
 		return fmt.Errorf("host: required")
+	// The proxy refuses every request host with a character outside ASCII, so such a rule binds nothing.
+	case nonASCIIHost(h):
+		return fmt.Errorf("host: %q: %s", h, NonASCIIHostWhy(h))
 	case h != strings.ToLower(h):
 		return fmt.Errorf("host: %q must be lowercase (%q)", h, strings.ToLower(h))
 	case strings.ContainsAny(h, "*"):
@@ -79,6 +83,9 @@ func validHostRule(r HostRule) error {
 	case strings.ContainsFunc(h, func(c rune) bool { return c <= ' ' || c >= 0x7f || strings.ContainsRune(":/?#[]@\\%", c) }),
 		strings.HasSuffix(h, "."), strings.HasPrefix(h, "."):
 		return fmt.Errorf("host: %q: a host name or IPv4 address, with no port, path or trailing dot", h)
+	// The proxy refuses every request written this way, and one for the standard spelling is another host.
+	case numericHost(h) && net.ParseIP(h) == nil:
+		return fmt.Errorf("host: %q: an IPv4 address is written as four decimal numbers from 0 to 255 with no leading zeros", h)
 	}
 	for k, m := range r.Methods {
 		if m == "" || !isHTTPToken(m) {

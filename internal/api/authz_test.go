@@ -2352,7 +2352,7 @@ func (s *authzStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, err
 	return types.RunPolicy{}, store.ErrNotFound
 }
 func (s *authzStore) ListPolicies(context.Context) ([]types.RunPolicy, error) { return nil, nil }
-func (s *authzStore) UpdatePolicy(context.Context, uuid.UUID, string, types.RunPolicySpec) (types.RunPolicy, error) {
+func (s *authzStore) UpdatePolicy(context.Context, uuid.UUID, time.Time, string, types.RunPolicySpec) (types.RunPolicy, error) {
 	return types.RunPolicy{}, store.ErrNotFound
 }
 func (s *authzStore) DeletePolicy(context.Context, uuid.UUID) error { return nil }
@@ -2510,7 +2510,9 @@ func (s *authzStore) UpdateSourceConfig(context.Context, uuid.UUID, string, map[
 func (s *authzStore) WorkspacesAttaching(context.Context, uuid.UUID) ([]string, error) {
 	return nil, nil
 }
-func (s *authzStore) DeleteSource(context.Context, uuid.UUID, bool) error              { return nil }
+func (s *authzStore) DeleteSource(context.Context, uuid.UUID, bool) ([]string, error) {
+	return []string{}, nil
+}
 func (s *authzStore) ClaimSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (s *authzStore) ClearSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (s *authzStore) SetSourceScanResult(context.Context, uuid.UUID, []byte, types.WorkspaceStatus, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Source, error) {
@@ -2533,7 +2535,9 @@ func (s *authzStore) ListBaseImages(context.Context) ([]types.BaseImageEntry, er
 func (s *authzStore) WorkspacesUsingBaseImage(context.Context, uuid.UUID) ([]string, error) {
 	return nil, nil
 }
-func (s *authzStore) DeleteBaseImage(context.Context, uuid.UUID, bool) error { return nil }
+func (s *authzStore) DeleteBaseImage(context.Context, uuid.UUID, bool) ([]string, error) {
+	return []string{}, nil
+}
 func (s *authzStore) GetBaseImage(context.Context, uuid.UUID) (types.BaseImageEntry, error) {
 	return types.BaseImageEntry{}, store.ErrNotFound
 }
@@ -2582,7 +2586,7 @@ func (s *authzStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.
 func (s *authzStore) QueryRecentAuditEvents(context.Context, int) ([]types.AuditEvent, error) {
 	return nil, nil
 }
-func (s *authzStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (s *authzStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	return types.AuditEvent{}, store.ErrNotFound
 }
 

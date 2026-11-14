@@ -358,9 +358,32 @@ describe("HarnessLoginPane — the sign-in's own markers", () => {
       }
 
       const alertBox = screen.getByRole("alert");
-      expect(alertBox).toHaveTextContent("Wardyn couldn't reach the server to verify this sign-in — try again.");
+      expect(alertBox).toHaveTextContent("Wardyn couldn't verify this sign-in with the server — try again.");
       expect(alertBox).not.toHaveTextContent("the server does not have");
       expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+      expect(onDone).not.toHaveBeenCalled();
+    });
+
+    // A 5xx is an answer, not a lost connection: the real getSetupStatus turns it into the
+    // made-up `unreachable` status, so the sentence must not say the server couldn't be reached.
+    it("a 5xx status check says the sign-in couldn't be verified, never that the server couldn't be reached", async () => {
+      const { setup: realSetup } = await vi.importActual<typeof import("../../../lib/api/setup")>("../../../lib/api/setup");
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
+      getSetupStatusMock.mockImplementation(() => realSetup.getSetupStatus());
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        await attachAwsRunUnderFakeTimers(onDone);
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await advanceUnderFakeTimers(2_000);
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+
+      expect(screen.getByRole("alert")).toHaveTextContent("Wardyn couldn't verify this sign-in with the server — try again.");
+      expect(screen.queryByText(/couldn.t reach/i)).toBeNull();
       expect(onDone).not.toHaveBeenCalled();
     });
 

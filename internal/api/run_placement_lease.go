@@ -80,8 +80,9 @@ const (
 	leaseWait        = leaseSendTimeout + time.Second
 )
 
-// reviveRunnerTimeout bounds everything a revive of a run on a runner does under the run's lock, so a
-// runner that stops answering cannot hold the lock or a lock connection past it.
+// reviveRunnerTimeout bounds what a revive does under the run's lock before its claim, on any run, and its
+// runner calls after it, on a run on a runner, so a substrate that stops answering cannot hold the lock or a
+// lock connection past it.
 var reviveRunnerTimeout = 3 * time.Minute
 
 // withRunnerDeadline bounds ctx by deadline for a run on a runner; any other run is left as it is.
@@ -136,14 +137,16 @@ func (s *Server) leaseRunnerExecution(ctx context.Context, run types.AgentRun, p
 		return runnerExecution{}, err
 	}
 	defer unlock()
-	renewed, err := s.leaseSendable(ctx, st, run)
+	renewed, err := heldRead(ctx, func(ctx context.Context) (time.Time, error) { return s.leaseSendable(ctx, st, run) })
 	if err != nil {
 		return runnerExecution{}, err
 	}
 	e := runnerExecution{runnerID: *run.RunnerID, runID: run.ID, operation: operation}
 	if operation != "" {
 		e.generation = uuid.New()
-		if _, err := st.BeginRunnerExecution(ctx, e.runnerID, run.ID, previous, e.generation, operation); err != nil {
+		if _, err := heldWrite(ctx, func(ctx context.Context) (store.RunnerExecution, error) {
+			return st.BeginRunnerExecution(ctx, e.runnerID, run.ID, previous, e.generation, operation)
+		}); err != nil {
 			return runnerExecution{}, err
 		}
 	}
@@ -245,19 +248,19 @@ func (s *Server) renewRunnerLeaseHeld(ctx context.Context, st store.PG, run type
 		return errRunnerLeaseBusy
 	}
 	defer unlock()
-	run, err := st.GetRun(ctx, run.ID)
+	run, err := heldRead(ctx, func(ctx context.Context) (types.AgentRun, error) { return st.GetRun(ctx, run.ID) })
 	if err != nil {
 		return err
 	}
 	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
 		return nil
 	}
-	renewed, err := s.leaseSendable(ctx, st, run)
+	renewed, err := heldRead(ctx, func(ctx context.Context) (time.Time, error) { return s.leaseSendable(ctx, st, run) })
 	if err != nil {
 		return err
 	}
 	var generation uuid.UUID
-	switch cur, err := st.RunnerExecutionOf(ctx, run.ID); {
+	switch cur, err := heldRead(ctx, func(ctx context.Context) (store.RunnerExecution, error) { return st.RunnerExecutionOf(ctx, run.ID) }); {
 	case err == nil:
 		generation = cur.Generation
 	case !errors.Is(err, store.ErrNotFound):
@@ -445,6 +448,13 @@ func (s *Server) bindRunnerExecution(ctx context.Context, e runnerExecution, exe
 	if err != nil {
 		return err
 	}
+	// The bind takes the run's lock (up to db.LockWait) and writes under it in one transaction; its caller's context
+	// may have no deadline (dispatch detaches it from the request), so the two get one bound past the write's own
+	// limit. Its callers answer a bind that fails or is cut as a start that failed, never retried: dispatch stops the
+	// sandbox and fails the run, a revive marks the run lost again and stops what it started. A cut bind that
+	// commits late binds a run that is ending or lost.
+	ctx, cancel := context.WithTimeout(ctx, db.LockWait+heldWriteBound)
+	defer cancel()
 	return st.BindRunnerExecution(ctx, e.runnerID, e.runID, e.generation, cmp.Or(execID, runner.MainProcessExecID))
 }
 

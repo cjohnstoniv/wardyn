@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -271,6 +270,10 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 			if err := printPoolCreated(cmd.OutOrStdout(), p, asJSON, len(runners) > 0); err != nil || len(runners) == 0 {
 				return err
 			}
+			if asJSON {
+				// --json prints the pool and nothing else on stdout: the lines about its runners go to stderr.
+				cmd.SetOut(cmd.ErrOrStderr())
+			}
 			return poolMembers(cmd, c, p, runners, true, true, "")
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")
@@ -389,8 +392,8 @@ func poolIDArg(cmd *cobra.Command, client clientFn, arg string) (uuid.UUID, erro
 	return uuid.Nil, fmt.Errorf("%d pools in your list are named %q; name it by id", len(ids), arg)
 }
 
-// readPoolLimits reads a limits block from path ("-" is stdin); "" is none. Unknown fields are refused
-// here, so a misspelled limit fails before it reaches the server.
+// readPoolLimits reads a limits block from path ("-" is stdin); "" is none. Unknown fields, and anything
+// after the block, are refused here, so a misspelled limit fails before it reaches the server.
 func readPoolLimits(path string) (*sdk.RunnerPoolLimits, error) {
 	if path == "" {
 		return nil, nil
@@ -405,10 +408,8 @@ func readPoolLimits(path string) (*sdk.RunnerPoolLimits, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read limits file: %w", err)
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
 	var l sdk.RunnerPoolLimits
-	if err := dec.Decode(&l); err != nil {
+	if err := decodeOneJSONStrict(bytes.NewReader(raw), &l); err != nil {
 		return nil, fmt.Errorf("parse limits file: %w", err)
 	}
 	return &l, l.Validate()

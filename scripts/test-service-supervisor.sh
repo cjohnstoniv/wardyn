@@ -11,6 +11,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ROOT/deploy/images/common/agent-run-lib.sh"
+# shellcheck source=scripts/lib/common.sh
+source "$ROOT/scripts/lib/common.sh"
 
 tmp="$(mktemp -d)"
 sups=()
@@ -59,7 +61,11 @@ stop() {
 
 state() { cat "$tmp/$1.json" 2>/dev/null; }
 
-free_port() { echo $((20000 + RANDOM % 20000)); }
+# free_port — set port to a free one (pick_free_port), never one an earlier case was given: a failing-probe
+# case needs nothing listening on its port.
+used=""
+# shellcheck disable=SC2086 # one word per port
+free_port() { port="$(pick_free_port $used)"; used+=" $port"; }
 
 # 1) exit 0 ends the service: the run completes, nothing restarts.
 rc=0
@@ -128,7 +134,7 @@ if [[ $rc == 3 ]] && ! alive "$tmp/orphannever.pids"; then ok "restart=never kil
 else bad "restart=never orphan: rc=$rc state=$(state orphannever) pids=$(cat "$tmp/orphannever.pids" 2>/dev/null)"; fi
 
 # 5) failing probe past the threshold with restart=never: unhealthy, still running.
-port="$(free_port)"
+free_port
 start probenever 'sleep 300' WARDYN_SERVICE_RESTART=never WARDYN_SERVICE_PORT="$port" \
     WARDYN_SERVICE_HEALTH_INTERVAL=1 WARDYN_SERVICE_HEALTH_THRESHOLD=2
 if wait_state probenever '"health":"starting"' 2; then ok "a probed service starts as starting"
@@ -143,7 +149,7 @@ fi
 stop "$sup"
 
 # 6) failing probe past the threshold with on_failure: TERM the group, restart.
-port="$(free_port)"
+free_port
 start probe 'sleep 300' WARDYN_SERVICE_PORT="$port" \
     WARDYN_SERVICE_HEALTH_INTERVAL=1 WARDYN_SERVICE_HEALTH_THRESHOLD=2
 if wait_state probe '"restarts":1' 8; then
@@ -161,7 +167,7 @@ stop "$sup"
 
 # 7) passing probes: TCP connect, and HTTP 2xx on the health path.
 if command -v socat >/dev/null 2>&1; then
-    port="$(free_port)"
+    free_port
     start tcp "exec socat TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork EXEC:/bin/true" \
         WARDYN_SERVICE_PORT="$port" WARDYN_SERVICE_HEALTH_INTERVAL=1 WARDYN_SERVICE_HEALTH_THRESHOLD=2
     if wait_state tcp '"health":"healthy"' 6; then ok "TCP probe passes: healthy"
@@ -170,7 +176,7 @@ if command -v socat >/dev/null 2>&1; then
 
     printf '#!/bin/sh\nread -r l\nprintf "HTTP/1.0 %%s\\r\\n\\r\\n" "$1"\n' > "$tmp/http.sh"
     chmod +x "$tmp/http.sh"
-    port="$(free_port)"
+    free_port
     start http200 "exec socat TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork SYSTEM:'$tmp/http.sh \"204 No Content\"'" \
         WARDYN_SERVICE_PORT="$port" WARDYN_SERVICE_HEALTH_PATH=/healthz \
         WARDYN_SERVICE_HEALTH_INTERVAL=1 WARDYN_SERVICE_HEALTH_THRESHOLD=2
@@ -178,7 +184,7 @@ if command -v socat >/dev/null 2>&1; then
     else bad "HTTP 2xx probe: $(state http200) $(cat "$tmp/http200.log")"; fi
     stop "$sup"
 
-    port="$(free_port)"
+    free_port
     start http500 "exec socat TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork SYSTEM:'$tmp/http.sh \"500 Oops\"'" \
         WARDYN_SERVICE_PORT="$port" WARDYN_SERVICE_HEALTH_PATH=/healthz WARDYN_SERVICE_RESTART=never \
         WARDYN_SERVICE_HEALTH_INTERVAL=1 WARDYN_SERVICE_HEALTH_THRESHOLD=2

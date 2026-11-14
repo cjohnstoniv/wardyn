@@ -115,14 +115,30 @@ func (l *driveLive) volume(name string) string {
 	return out
 }
 
-// mounts is what driveMount gives the run, with the run's image.
+// mounts is what a run's drive gives it, with the run's image (mountAndSeed).
 func (l *driveLive) mounts(drive *types.DriveMount) []mount.Mount {
 	l.t.Helper()
-	ms, err := l.d.driveMount(l.ctx, drive, uuid.New(), l.image, false)
+	ms, err := l.mountAndSeed(drive, l.image)
 	if err != nil {
-		l.t.Fatalf("driveMount: %v", err)
+		l.t.Fatalf("driveMount and seed: %v", err)
 	}
 	return ms
+}
+
+// mountAndSeed is agentMounts for one drive, in its order: driveMount's mounts,
+// the run's hold on the volume, then the drive's seed with image under that
+// hold. The hold is removed before it returns, so cleanup can remove the volume.
+func (l *driveLive) mountAndSeed(drive *types.DriveMount, image string) ([]mount.Mount, error) {
+	ms, vol, err := l.d.driveMount(l.ctx, drive, false)
+	if err != nil {
+		return nil, err
+	}
+	run := uuid.New()
+	if err := l.d.pinDriveVolumes(l.ctx, run, []judgedVolume{{drive: drive, vol: *vol}}); err != nil {
+		return nil, err
+	}
+	defer l.d.dropDrivePin(run)
+	return ms, l.d.seedDriveVolume(l.ctx, run, image, drive)
 }
 
 // A read-only team allocation copies nothing from the run's image into an
@@ -161,7 +177,7 @@ func TestTeamDrive_WritableLeavesAnEmptyVolumeEmpty_RealDocker(t *testing.T) {
 func TestTeamDrive_VolumeHoldingFilesIsUntouched_RealDocker(t *testing.T) {
 	l := newDriveLive(t)
 	drive := l.drive(runner.SharedRoot+"/eng", true, false)
-	if err := ensureDriveVolume(l.ctx, l.d.cli, drive); err != nil {
+	if _, err := ensureDriveVolume(l.ctx, l.d.cli, drive); err != nil {
 		t.Fatal(err)
 	}
 	if code, out := l.run("busybox:latest", "0", []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: "/v",
@@ -201,9 +217,9 @@ func TestTeamDrive_AnotherAgentUIDIsRefused_RealDocker(t *testing.T) {
 	l := newDriveLive(t)
 	other := commitImage(l.ctx, t, l.d, driveLiveImageScript, "1001")
 	drive := l.drive(runner.SharedRoot+"/eng", true, false)
-	_, err := l.d.driveMount(l.ctx, drive, uuid.New(), other, false)
+	_, err := l.mountAndSeed(drive, other)
 	if err == nil || !strings.Contains(err.Error(), "this image runs the agent as uid 1001 (USER \"1001\")") {
-		t.Fatalf("driveMount = %v, want the uid refusal", err)
+		t.Fatalf("driveMount and seed = %v, want the uid refusal", err)
 	}
 	if got := l.volume(drive.ObjectName); got != "0:0:755" {
 		t.Errorf("team volume after the refusal = %q, want it empty and untouched (0:0:755)", got)
@@ -225,7 +241,7 @@ func TestTeamDrive_ConcurrentSeedsAreIdempotent_RealDocker(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				_, errs[i] = l.d.driveMount(l.ctx, drive, uuid.New(), l.image, false)
+				_, errs[i] = l.mountAndSeed(drive, l.image)
 			}()
 		}
 		close(start)

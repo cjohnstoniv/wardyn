@@ -20,7 +20,8 @@ import (
 //	  "syslog":  {"network": "udp", "addr": "localhost:514"},
 //	  "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
 //	  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3},
-//	  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100}
+//	  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100},
+//	  "otlp_metrics": {"endpoint": "https://otel.example.com:4318", "interval": "60s"}
 //	}
 //
 // Omitting a top-level key disables that sink entirely.
@@ -29,6 +30,9 @@ type Config struct {
 	Webhook *WebhookConfig `json:"webhook,omitempty"`
 	File    *FileConfig    `json:"file,omitempty"`
 	OTLP    *OTLPConfig    `json:"otlp,omitempty"`
+	// OTLPMetrics is not an audit sink: it pushes the /metrics series (OTLPMetrics)
+	// and sends no audit row, so metrics can go to a collector without the logs.
+	OTLPMetrics *OTLPMetricsConfig `json:"otlp_metrics,omitempty"`
 }
 
 // Source (WARDYN_AUDIT_SOURCE), when set, is stamped as an extra "source"
@@ -123,6 +127,14 @@ func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
 			return out, fmt.Errorf("sinks.ParseSinks: otlp: %w", err)
 		}
 		out = append(out, s)
+	}
+
+	if cfg.OTLPMetrics != nil {
+		// Not a fan-out sink; NewOTLPMetrics builds the push. Checked here so a bad
+		// block refuses boot rather than leaving the push off.
+		if _, err := cfg.OTLPMetrics.settings(); err != nil {
+			return out, fmt.Errorf("sinks.ParseSinks: otlp_metrics: %w", err)
+		}
 	}
 
 	return out, nil

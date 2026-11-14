@@ -117,6 +117,13 @@ describe("Add an MCP server", () => {
     expect(dialog.queryByText(NR_TOOLS.MCP_LOCAL_SOON)).toBeNull();
   });
 
+  // jsdom does no layout: this pins the class that stacks the two tabs below 400px, where they scrolled inside their track.
+  it("its Remote and sandbox tabs stack on a phone", async () => {
+    on();
+    const dialog = await openMcp();
+    expect(dialog.getByRole("button", { name: NR_TOOLS.MCP_REMOTE }).parentElement).toHaveClass("max-[399px]:flex-col");
+  });
+
   it("the local tab says where it runs: this run's sandbox, and its own sandbox as Coming soon", async () => {
     on();
     const dialog = await openMcp();

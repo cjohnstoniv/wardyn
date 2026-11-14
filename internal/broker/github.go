@@ -165,7 +165,7 @@ func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string
 	}
 	tok, _, err := client.Apps.CreateInstallationToken(ctx, instID, opts)
 	if err != nil {
-		m.dropStaleInstallation(owner, err)
+		m.dropStaleInstallation(client, owner, err)
 		return "", time.Time{}, fmt.Errorf("broker: create installation token: %w", err)
 	}
 	exp := time.Now().Add(defaultMaxTTL)
@@ -281,7 +281,7 @@ func (m *githubMinter) InstallationPermissions(ctx context.Context, repo string)
 	}
 	inst, _, err := client.Apps.GetInstallation(ctx, instID)
 	if err != nil {
-		m.dropStaleInstallation(owner, err)
+		m.dropStaleInstallation(client, owner, err)
 		return nil, githubRefusal(fmt.Errorf("broker: read installation for %s: %w", owner, err))
 	}
 	b, err := json.Marshal(inst.GetPermissions())
@@ -309,7 +309,9 @@ func githubRefusal(err error) error {
 }
 
 // installationID resolves (and caches) the installation id for owner via the
-// repository installation lookup.
+// repository installation lookup. The lookup runs outside the lock, so a
+// rotation can replace client meanwhile: the id is cached only while client is
+// still the current one, never under the App that replaced it.
 func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, owner, repo string) (int64, error) {
 	m.mu.Lock()
 	if id, ok := m.installByOrg[owner]; ok {
@@ -327,17 +329,23 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 		return 0, fmt.Errorf("%w: broker: no installation for %s", ErrGitHubRefused, owner)
 	}
 	m.mu.Lock()
-	m.installByOrg[owner] = id
+	if m.appClient == client {
+		m.installByOrg[owner] = id
+	}
 	m.mu.Unlock()
 	return id, nil
 }
 
-// dropStaleInstallation forgets owner's cached installation id when err says it no longer
-// resolves, so the NEXT call re-resolves it.
-func (m *githubMinter) dropStaleInstallation(owner string, err error) {
+// dropStaleInstallation forgets owner's cached installation id when err, an
+// answer to a call made through client, says it no longer resolves, so the NEXT
+// call re-resolves it. A rotation's replaced client drops nothing: the cache
+// then holds the new App's ids.
+func (m *githubMinter) dropStaleInstallation(client *gh.Client, owner string, err error) {
 	if isStaleInstallation(err) {
 		m.mu.Lock()
-		delete(m.installByOrg, owner)
+		if m.appClient == client {
+			delete(m.installByOrg, owner)
+		}
 		m.mu.Unlock()
 	}
 }

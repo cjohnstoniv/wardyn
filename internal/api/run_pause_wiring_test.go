@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -225,6 +226,71 @@ func TestRunPause_SSHChannelThawsFirst(t *testing.T) {
 	}
 	if paused, _ := st.state(); paused {
 		t.Error("the run is still marked paused after an ssh channel thawed it")
+	}
+}
+
+// TestRunPause_ExecThawsABackgroundRun: POST /runs/{id}/exec's fresh read (execFreshRun) thaws a paused run
+// before its command execs, a background run included, while sshFreshRun refuses that run before any thaw.
+func TestRunPause_ExecThawsABackgroundRun(t *testing.T) {
+	srv, st, fr, run := newWiredPauseServer(t)
+	run.Experience = types.ExperienceBackground
+	st.authzStore.mu.Lock()
+	st.authzStore.runs[run.ID] = run
+	st.authzStore.mu.Unlock()
+	st.paused = true
+	if _, msg := srv.sshFreshRun(context.Background(), run.ID, holderOwner); msg == "" {
+		t.Fatal("sshFreshRun took a background run")
+	}
+	if n := fr.thawCount(); n != 0 {
+		t.Fatalf("thaws after a refused ssh channel = %d, want 0", n)
+	}
+	_, start, msg := srv.execFreshRun(context.Background(), run.ID, holderOwner)
+	if msg != "" {
+		t.Fatalf("execFreshRun refused: %s", msg)
+	}
+	start.release()
+	if n := fr.thawCount(); n != 1 {
+		t.Fatalf("thaws = %d, want 1 before the command execs", n)
+	}
+	if paused, _ := st.state(); paused {
+		t.Error("the run is still marked paused after a command thawed it")
+	}
+}
+
+// TestRunPause_ExecNeverThawsARunThatEndedAtItsLock: a paused run that ends while a command waits for its lock is
+// refused and never thawed, so an end that keeps the sandbox for its computer folder's pass back finds it as it
+// left it. Catches: the thaw given the row read before the lock.
+func TestRunPause_ExecNeverThawsARunThatEndedAtItsLock(t *testing.T) {
+	srv, st, fr, run := newWiredPauseServer(t)
+	st.paused = true
+	lockEndsRun(srv, run.ID, func() { endRun(st.authzStore, run.ID, func(r *types.AgentRun) { r.State = types.RunCompleted }) })
+	if _, _, msg := srv.execFreshRun(context.Background(), run.ID, holderOwner); msg != fmt.Sprintf(execLiveRunWords.notRunning, types.RunCompleted) {
+		t.Fatalf("execFreshRun = %q, want the ended run's refusal", msg)
+	}
+	if n := fr.thawCount(); n != 0 {
+		t.Errorf("thaws = %d, want 0 for a run that ended before its lock", n)
+	}
+	if paused, _ := st.state(); !paused {
+		t.Error("the ended run's pause mark was cleared")
+	}
+}
+
+// TestRunPause_ThawNeverResumesARunThatEndedAtItsLock: past a presence stamp that resumes nothing (one went out
+// within presenceStampEvery), a door's thaw reads the run again under its operation lock, and a run that ended while
+// it waited for that lock is never thawed.
+func TestRunPause_ThawNeverResumesARunThatEndedAtItsLock(t *testing.T) {
+	srv, st, fr, run := newWiredPauseServer(t)
+	st.paused = true
+	at := time.Now()
+	run.PausedAt = &at
+	endRun(st.authzStore, run.ID, func(r *types.AgentRun) { r.PausedAt = &at })
+	srv.pause.stamped(true, run.ID, srv.cfg.Now())
+	lockEndsRun(srv, run.ID, func() { endRun(st.authzStore, run.ID, func(r *types.AgentRun) { r.State = types.RunCompleted }) })
+	if err := srv.thawForExec(context.Background(), run, types.ActorHuman, holderOwner, "presence"); err != nil {
+		t.Fatalf("thaw = %v, want none owed by an ended run", err)
+	}
+	if n := fr.thawCount(); n != 0 {
+		t.Errorf("thaws = %d, want 0 for a run that ended at its lock", n)
 	}
 }
 

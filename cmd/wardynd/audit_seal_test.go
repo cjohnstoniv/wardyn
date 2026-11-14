@@ -230,6 +230,12 @@ func (d oneSubject) AuditPrincipalOf(_ context.Context, id string) (string, bool
 func (oneSubject) AuditKeyDestroyedAt(context.Context, string) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
+func (oneSubject) AuditSubjectEras(context.Context, string) ([]audit.SubjectEra, error) {
+	return nil, nil
+}
+func (oneSubject) AuditSubjectReleased(context.Context, string, time.Time) (string, bool, error) {
+	return "", false, nil
+}
 
 // fullSealer is a SealFull Sealer over alice, its keys down, holding pending
 // rows under pending.

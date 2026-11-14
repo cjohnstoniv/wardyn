@@ -336,6 +336,114 @@ func TestPG_RunPause_ListsARequestDecidedSincePause(t *testing.T) {
 	since("decided after the pause", true)
 }
 
+// TestPG_RunPause_ListsAHandBackSincePause: a takeover handed back after an idle freeze that came while it
+// was held is "since" the pause, so the backstop wakes a run whose hand back committed but whose thaw did not
+// run; one handed back before the pause is not.
+func TestPG_RunPause_ListsAHandBackSincePause(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef, run.WaitBudgetSec = "ref-handback", 3600
+	persistRun(t, ctx, pool, run)
+	since := func(step string, want bool) {
+		t.Helper()
+		if c := pauseCandidate(t, pg, run.ID); c == nil || c.RequestDecidedSincePause != want {
+			t.Errorf("%s: candidate = %+v; want RequestDecidedSincePause = %v", step, c, want)
+		}
+	}
+	takeover := func() uuid.UUID {
+		t.Helper()
+		ap := newApproval(run.ID, time.Now().UTC())
+		ap.Kind = types.ApprovalHumanTakeover
+		created, err := pg.CreateApproval(ctx, ap)
+		if err != nil {
+			t.Fatalf("create takeover: %v", err)
+		}
+		if _, _, err := pg.TakeOverApproval(ctx, created.ID, "holder"); err != nil {
+			t.Fatalf("take over: %v", err)
+		}
+		return created.ID
+	}
+	pause := func() {
+		t.Helper()
+		fresh, _ := pg.GetRun(ctx, run.ID)
+		if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, fresh.ActiveAt); err != nil || !ok {
+			t.Fatalf("idle pause while held = %v, %v; want true", ok, err)
+		}
+	}
+
+	early := takeover()
+	if _, err := pg.HandBackApproval(ctx, early, "holder", time.Now().UTC()); err != nil {
+		t.Fatalf("hand back: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	held := takeover()
+	pause()
+	since("handed back before the pause, another still held", false)
+	time.Sleep(10 * time.Millisecond)
+	if _, err := pg.HandBackApproval(ctx, held, "holder", time.Now().UTC()); err != nil {
+		t.Fatalf("hand back: %v", err)
+	}
+	since("handed back after the pause", true)
+}
+
+// TestPG_RunPause_AHandBackIsReadOnTheDatabaseClock: paused_at is the database's now(), so a hand back
+// stamped from an app clock an hour behind it would read as before every pause and the backstop would never
+// wake the run, and one an hour ahead would read as after a pause that followed it.
+func TestPG_RunPause_AHandBackIsReadOnTheDatabaseClock(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		skew time.Duration
+	}{{"app clock an hour behind", -time.Hour}, {"app clock an hour ahead", time.Hour}} {
+		pg := store.NewPG(pool)
+		pg.Now = func() time.Time { return time.Now().Add(tc.skew) }
+		run := newRun(types.RunRunning)
+		run.SandboxRef, run.WaitBudgetSec = "ref-handback-"+tc.skew.String(), 3600
+		persistRun(t, ctx, pool, run)
+		since := func(step string, want bool) {
+			t.Helper()
+			if c := pauseCandidate(t, pg, run.ID); c == nil || c.RequestDecidedSincePause != want {
+				t.Errorf("%s, %s: candidate = %+v; want RequestDecidedSincePause = %v", tc.name, step, c, want)
+			}
+		}
+		heldThenBack := func(handBack bool) uuid.UUID {
+			t.Helper()
+			ap := newApproval(run.ID, time.Now().UTC())
+			ap.Kind = types.ApprovalHumanTakeover
+			created, err := pg.CreateApproval(ctx, ap)
+			if err != nil {
+				t.Fatalf("%s: create takeover: %v", tc.name, err)
+			}
+			if _, _, err := pg.TakeOverApproval(ctx, created.ID, "holder"); err != nil {
+				t.Fatalf("%s: take over: %v", tc.name, err)
+			}
+			if handBack {
+				if _, err := pg.HandBackApproval(ctx, created.ID, "holder", pg.Now().UTC()); err != nil {
+					t.Fatalf("%s: hand back: %v", tc.name, err)
+				}
+			}
+			return created.ID
+		}
+
+		heldThenBack(true)
+		time.Sleep(10 * time.Millisecond)
+		held := heldThenBack(false)
+		fresh, _ := pg.GetRun(ctx, run.ID)
+		if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, fresh.ActiveAt); err != nil || !ok {
+			t.Fatalf("%s: idle pause while held = %v, %v; want true", tc.name, ok, err)
+		}
+		since("handed back before the pause", false)
+		time.Sleep(10 * time.Millisecond)
+		if _, err := pg.HandBackApproval(ctx, held, "holder", pg.Now().UTC()); err != nil {
+			t.Fatalf("%s: hand back: %v", tc.name, err)
+		}
+		since("handed back after the pause", true)
+	}
+}
+
 func pauseCandidate(t *testing.T, pg store.PG, id uuid.UUID) *store.PauseCandidate {
 	t.Helper()
 	cands, now, err := pg.ListPauseCandidates(context.Background())
@@ -367,7 +475,7 @@ func TestPG_RunPauseSettles(t *testing.T) {
 
 	due := func() []store.PauseSettle {
 		t.Helper()
-		got, err := pg.DuePauseSettles(ctx)
+		got, err := pg.DuePauseSettles(ctx, time.Minute)
 		if err != nil {
 			t.Fatalf("DuePauseSettles: %v", err)
 		}
@@ -413,5 +521,73 @@ func TestPG_RunPauseSettles(t *testing.T) {
 	var left int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_pause_settles`).Scan(&left); err != nil || left != 0 {
 		t.Errorf("settles left after the run's deletion = %d (%v), want 0", left, err)
+	}
+}
+
+// TestPG_RunPauseIntent pins the pause's intent write: it records a settle only
+// when none is held, never moves a due_at already there, and says whether it
+// wrote; PauseSettleFor reads the record, or the zero time when there is none.
+func TestPG_RunPauseIntent(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef = "ref-intent"
+	persistRun(t, ctx, pool, run)
+
+	if got, err := pg.PauseSettleFor(ctx, run.ID); err != nil || !got.IsZero() {
+		t.Fatalf("PauseSettleFor with no record = %v, %v; want the zero time", got, err)
+	}
+	first, wrote, err := pg.NotePauseIntent(ctx, run.ID, time.Hour)
+	if err != nil || !wrote {
+		t.Fatalf("an intent with no record held = %v, %v, %v; want it written", first, wrote, err)
+	}
+	if got, err := pg.PauseSettleFor(ctx, run.ID); err != nil || !got.Equal(first) {
+		t.Fatalf("PauseSettleFor = %v, %v; want %v", got, err, first)
+	}
+	if again, wrote, err := pg.NotePauseIntent(ctx, run.ID, 2*time.Hour); err != nil || wrote || !again.Equal(first) {
+		t.Errorf("a second intent = %v, %v, %v; want the held due_at %v returned and nothing written", again, wrote, err, first)
+	}
+	if err := pg.ClearPauseSettle(ctx, run.ID, first); err != nil {
+		t.Fatalf("ClearPauseSettle: %v", err)
+	}
+	if got, err := pg.PauseSettleFor(ctx, run.ID); err != nil || !got.IsZero() {
+		t.Fatalf("PauseSettleFor after the clear = %v, %v; want the zero time", got, err)
+	}
+	if _, wrote, err := pg.NotePauseIntent(ctx, uuid.New(), time.Hour); err == nil || wrote {
+		t.Errorf("an intent for a run that does not exist = %v, %v; want an error", wrote, err)
+	}
+}
+
+// TestPG_RunPauseSettleLateLook pins the late look on the database's clock: a
+// due record is listed with Last unset until its due_at is lookFor in the past,
+// and with Last set from then on.
+func TestPG_RunPauseSettleLateLook(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef = "ref-late-look"
+	persistRun(t, ctx, pool, run)
+	if _, err := pg.NotePauseSettle(ctx, run.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	last := func(ago time.Duration) bool {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE run_pause_settles SET due_at = now() - make_interval(secs => $2) WHERE run_id = $1`,
+			run.ID, ago.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+		got, err := pg.DuePauseSettles(ctx, 2*time.Minute)
+		if err != nil || len(got) != 1 || got[0].RunID != run.ID {
+			t.Fatalf("DuePauseSettles = %+v, %v; want the run's record", got, err)
+		}
+		return got[0].Last
+	}
+	if last(time.Second) {
+		t.Error("a record due a second ago is listed as its last settle; want it looked at again until two minutes past due")
+	}
+	if !last(2*time.Minute + time.Second) {
+		t.Error("a record due two minutes and a second ago is not listed as its last settle")
 	}
 }

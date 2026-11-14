@@ -61,6 +61,7 @@ func TestToolsPosture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer l.Close()
 	rig.t.sshAddr = l.Addr().String()
 	read := func() ToolsPosture {
 		t.Helper()
@@ -79,7 +80,7 @@ func TestToolsPosture(t *testing.T) {
 	if !slices.Equal(rig.ran[0], []string{"/usr/bin/dscl", ".", "-list", "/Users", "UniqueID"}) {
 		t.Errorf("ran %v", rig.ran[0])
 	}
-	_ = l.Close()
+	rig.t.sshAddr = "127.0.0.1:1" // nothing listens there; a freed port could be taken by another process
 	if p := read(); p.RemoteLogin {
 		t.Error("Remote Login reads on with nothing listening")
 	}

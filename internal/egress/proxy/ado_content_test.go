@@ -233,6 +233,15 @@ func TestADORESTPushRulesSeeTheEffectiveMethod(t *testing.T) {
 			}
 		})
 	}
+	t.Run("ref update with the override named in Connection", func(t *testing.T) {
+		h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, caps...)
+		target := "/acme/proj/_apis/git/repositories/app/refs?filter=" + strings.TrimPrefix(h.branch(), "refs/") + "&api-version=7.1"
+		body := `[{"name":"` + h.branch() + `","oldObjectId":"` + zeroOID + `","newObjectId":"` + strings.Repeat("a", 40) + `"}]`
+		rec := h.do(t, http.MethodPost, target, body, map[string]string{"X-HTTP-Method-Override": http.MethodPatch, "Connection": "X-HTTP-Method-Override"})
+		if rec.Code != http.StatusForbidden || len(h.fake.Requests()) != 0 || !strings.Contains(h.log(), `"`+ruleSourceGitPackBlind+`"`) {
+			t.Fatalf("status = %d body %s, upstream %d; want a 403 %s and nothing forwarded", rec.Code, rec.Body.String(), len(h.fake.Requests()), ruleSourceGitPackBlind)
+		}
+	})
 	t.Run("pull request created with auto-complete", func(t *testing.T) {
 		h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, caps...)
 		rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pullrequests?api-version=7.1",
@@ -241,4 +250,50 @@ func TestADORESTPushRulesSeeTheEffectiveMethod(t *testing.T) {
 			t.Fatalf("status = %d body %s; want a 403 %s and nothing forwarded", rec.Code, rec.Body.String(), ruleSourceGitPackBlind)
 		}
 	})
+}
+
+// With max_file_size_mib set, a REST push that renames a file is refused: the
+// renamed file keeps content the body does not carry, so its size is unproved.
+// A file the body carries is under the limit, so that push is forwarded.
+func TestADORESTPushSizeLimitRefusesARename(t *testing.T) {
+	caps := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}
+	spec := types.RunPolicySpec{PushRules: &types.PushRulesSpec{MaxFileSizeMiB: 1}}
+	h, _ := newADORESTRules(t, spec, types.ApprovalApproved, caps...)
+	rename := `{"refUpdates":[{"name":"` + h.branch() + `","oldObjectId":"` + zeroOID + `"}],"commits":[{"comment":"x",` +
+		`"changes":[{"changeType":"rename","sourceServerItem":"/big.bin","item":{"path":"/moved.bin"}}]}]}`
+	rec := h.do(t, http.MethodPost, restPushTarget, rename, nil)
+	if rec.Code != http.StatusForbidden || len(h.fake.Requests()) != 0 || !strings.Contains(rec.Body.String(), "moved.bin") ||
+		!strings.Contains(h.log(), `"`+ruleSourceGitRules+`"`) {
+		t.Fatalf("status = %d body %s, upstream %d; want a 403 %s naming moved.bin and nothing forwarded",
+			rec.Code, rec.Body.String(), len(h.fake.Requests()), ruleSourceGitRules)
+	}
+	ok, _ := newADORESTRules(t, spec, types.ApprovalApproved, caps...)
+	if rec := ok.do(t, http.MethodPost, restPushTarget, restPush(ok.branch(), "/src/main.go"), nil); rec.Code/100 != 2 {
+		t.Fatalf("a push carrying its file: status = %d body %s, want it forwarded", rec.Code, rec.Body.String())
+	}
+	// An edit whose newContent is not an object with a string content carries nothing either, and a rename shows no
+	// size whatever newContent says. Each harness is a new run, so the body names that run's own branch.
+	for _, ch := range []string{`"changeType":"edit","newContent":{}`, `"changeType":"edit","newContent":{"content":null}`,
+		`"changeType":"edit","newContent":""`, `"changeType":"edit","newContent":false`, `"changeType":"edit","newContent":0`,
+		`"changeType":"edit","newContent":[]`, `"changeType":"rename","sourceServerItem":"/big.bin","newContent":{"content":"x"}`} {
+		h, _ := newADORESTRules(t, spec, types.ApprovalApproved, caps...)
+		body := `{"refUpdates":[{"name":"` + h.branch() + `","oldObjectId":"` + zeroOID + `"}],"commits":[{"comment":"x",` +
+			`"changes":[{` + ch + `,"item":{"path":"/moved.bin"}}]}]}`
+		rec := h.do(t, http.MethodPost, restPushTarget, body, nil)
+		if rec.Code != http.StatusForbidden || len(h.fake.Requests()) != 0 || !strings.Contains(h.log(), `"`+ruleSourceGitRules+`"`) {
+			t.Fatalf("change %s: status = %d body %s, upstream %d; want a 403 %s and nothing forwarded",
+				ch, rec.Code, rec.Body.String(), len(h.fake.Requests()), ruleSourceGitRules)
+		}
+	}
+	// The refusal names at most maxDeniedPathsInBody paths and says how many there are.
+	many, _ := newADORESTRules(t, spec, types.ApprovalApproved, caps...)
+	changes := make([]string, maxDeniedPathsInBody+2)
+	for i := range changes {
+		changes[i] = `{"changeType":"rename","sourceServerItem":"/big.bin","item":{"path":"/moved-` + string(rune('a'+i)) + `.bin"}}`
+	}
+	rec = many.do(t, http.MethodPost, restPushTarget, `{"refUpdates":[{"name":"`+many.branch()+`","oldObjectId":"`+zeroOID+
+		`"}],"commits":[{"comment":"x","changes":[`+strings.Join(changes, ",")+`]}]}`, nil)
+	if got := rec.Body.String(); rec.Code != http.StatusForbidden || !strings.Contains(got, "moved-j.bin (12 path(s) in all)") || strings.Contains(got, "moved-k.bin") {
+		t.Fatalf("status = %d body %s; want a 403 naming ten of the twelve paths and their count", rec.Code, got)
+	}
 }

@@ -28,8 +28,8 @@ const keptEndHoldOffLimit = 5 * time.Minute
 
 // forceKeptStop is stopKeptRun's answer to a lock it found held (a refusal to take it is not that, and
 // does not reach here). Until the run's due end is keptEndHoldOffLimit past, it does nothing, and the next
-// pass retries the end. Whether the limit has passed is the database's answer (ForcedStopper's
-// KeptHoldOffPassed on now()), never this server's clock. The due end is read from the run's fresh row,
+// pass retries the end. Whether the limit has passed is the database's answer (the forced claim,
+// StopKeptRunForcedIf, compares it with now()), never this server's clock. The due end is read from the run's fresh row,
 // so neither a slow sweep, a chain of lock holders nor a restart moves it; only a change to the stored end
 // does (an extension, or a revive that claimed before expiry). A gone run, or a lost one with no end, is due when it was lost.
 //
@@ -53,8 +53,8 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	}
 	// An end that cannot be kept (data says kept: false) is held off from its end, not from its keep grace.
 	// The hold-off is counted on the database's clock: the due end is the stored time it counts from (lost_at,
-	// or ends_at for a lost run kept until its end plus the grace) plus the offset to it, and ForcedStopper
-	// asks the database whether that, plus keptEndHoldOffLimit, is past now().
+	// or ends_at for a lost run kept until its end plus the grace) plus the offset to it, and the forced claim
+	// (StopKeptRunForcedIf) lands only when that, plus keptEndHoldOffLimit, is past now() in the same statement.
 	until, ok := s.keptUntil(cur)
 	from, fromLostAt := *cur.LostAt, true
 	switch {
@@ -63,18 +63,10 @@ func (s *Server) forceKeptStop(ctx context.Context, leaser store.RunLeaser, run 
 	case cur.LostReason != types.LostEnded:
 		from, fromLostAt = *cur.EndsAt, false // keptUntil's ends_at branch
 	}
-	past, err := fs.KeptHoldOffPassed(ctx, run.ID, fromLostAt, until.Sub(from)+keptEndHoldOffLimit)
-	if err != nil {
-		slog.WarnContext(ctx, "wardynd: reading a kept run's hold-off failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return
-	}
-	if !past {
-		return
-	}
 	// past_due_sec below is a report, not a decision: it may read this server's clock.
 	now := s.cfg.Now()
-	stamp, applied, err := fs.StopKeptRunForcedIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
+	stamp, applied, err := fs.StopKeptRunForcedIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt,
+		fromLostAt, until.Sub(from)+keptEndHoldOffLimit)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: forcing a kept run's end failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -406,6 +398,20 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 		}
 	}
 	if stopped {
+		// A copy back still owed is given up first, while the ref the give-up needs is set: once the ref is cleared
+		// no pass runs again, and the record would still show the changes as owed with no given_up row. Without the
+		// lock too: the give-up moves the record's generation on, so a pass still holding it writes nothing. A record
+		// not final yet keeps the ref and the mark for this tick. The next tick decides the sandbox again: while its
+		// cut is still not confirmed it stops again (a stop of a gone sandbox answers success) and tries the give-up
+		// again; once a cut is confirmed the sandbox counts as kept, and the tail owner's pass closes the record.
+		final, gerr := false, error(nil)
+		settleAfterTeardown(ctx, func(sctx context.Context) { final, gerr = s.giveUpFolderStopped(sctx, run) })
+		if !final {
+			slog.WarnContext(ctx, "wardynd: forced stop retry stopped a sandbox whose folder copy back could not be given up; its ref and mark stay",
+				slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+			s.clearForcedMarkIf(ctx, fs, run.ID, m.At, false, nil)
+			return
+		}
 		// One success row per confirmed stop across replicas: only the clear that changed the row writes it,
 		// whatever the revoke does (the empty-ref clear that follows a failed revoke writes none). A store that
 		// is not Postgres has one writer, and counts as the one that cleared. A clear that errored writes none.
@@ -511,7 +517,10 @@ func (s *Server) reviveExpiryDue(ctx context.Context, id uuid.UUID) *reviveError
 		// A failed read, or a run no longer lost, is the claim's to refuse (reasonReviveRunChanged).
 		return nil
 	}
-	now := s.cfg.Now()
+	now, err := s.dbNow(ctx)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "read the database's clock", err))
+	}
 	until, ok := s.keptUntil(cur)
 	past := ok && !now.Before(until)
 	switch {

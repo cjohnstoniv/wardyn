@@ -1,6 +1,6 @@
 # Wardyn
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Status: pre-alpha](https://img.shields.io/badge/Status-pre--alpha-orange.svg)](#status) [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod) [![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Status: pre-alpha](https://img.shields.io/badge/Status-pre--alpha-orange.svg)](#status) [![Go 1.27](https://img.shields.io/badge/Go-1.27-00ADD8.svg)](go.mod) [![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
 
 - **The open-source governed-sandbox control plane for any workload — identity, controls, and audit are the product; the sandbox is a pluggable commodity.**
 - Anything you run under your own credentials inherits your full blast radius. Wardyn is the layer in between — per-run identity, credentials scoped to each run, one audited path off-host. Most credential kinds are added at the proxy and never placed in the sandbox ([which ones](docs/CREDENTIALS.md)).
@@ -25,7 +25,7 @@
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.19/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.20/install.sh | sh
 ```
 
 - Cosign-signed, not tip-of-`main` — the script installs its own release (`WARDYN_VERSION` overrides).
@@ -79,7 +79,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 
 - **Docker** + `compose` v2 (Postgres rides in the compose file).
   - Fence/CC1 needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` + Kata — `wardyn setup wall|vault` prints the steps for your host.
-- **Go 1.26+**, **Node 22 + pnpm 9** — only to build from source: clone, then `make setup` ([CONTRIBUTING.md](CONTRIBUTING.md)). A failed image pull falls back to building from the checkout; `WARDYN_BUILD_LOCAL=1` forces it.
+- **Go 1.27+**, **Node 22 + pnpm 9** — only to build from source: clone, then `make setup` ([CONTRIBUTING.md](CONTRIBUTING.md)). A failed image pull falls back to building from the checkout; `WARDYN_BUILD_LOCAL=1` forces it.
 - The **CLI** needs no toolchain: each release publishes `wardyn-<os>-<arch>` ([runner install](docs/runner-registration.md#set-up-a-runner)). `go install …/cmd/wardyn@latest` builds it yourself; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
 
 ## First governed run

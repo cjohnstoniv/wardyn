@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,10 +37,11 @@ func takeEndHolds(t *testing.T, s *Server, n int) {
 }
 
 // A finalize whose end hold has passed makes no stop and no teardown record: the runner is not called, the run's
-// ref is kept and no run.complete row is written, and the caller hears the hold ran out. The tail owner's finalize,
-// which holds no end hold, then stops the sandbox and clears the ref. The holder's other calls, which run on its own
-// ctx and ignore the deadline (the audit of the end, the revoke, the output's drain), are not asserted here.
-// Catches a stop or a teardown record made past the hold.
+// ref is kept and no run.complete row is written, and the caller hears from the guard itself that the sandbox was not
+// stopped because the hold ran out, not only through the ctx's timer. The tail owner's finalize, which holds no end
+// hold, then stops the sandbox and clears the ref. The holder's other calls, which run on its own ctx and ignore the
+// deadline (the audit of the end, the revoke, the output's drain), are not asserted here. Catches a stop or a
+// teardown record made past the hold, and a skip the caller hears only once the timer has fired.
 func TestEndHold_PastDeadlineNoStopNoRecord(t *testing.T) {
 	pool, cfg, _, run, _, probe := runnerExitAPIFixture(t)
 	srv := New(cfg)
@@ -48,8 +50,8 @@ func TestEndHold_PastDeadlineNoStopNoRecord(t *testing.T) {
 		t.Fatalf("fixture run %+v, %v: want one with a sandbox", got, err)
 	}
 	ctx := withHoldDeadline(t.Context(), time.Now().Add(-time.Second))
-	if err := srv.finalizeRunEffects(ctx, run.ID, got.SandboxRef, "run.complete", nil, false, false); !errors.Is(err, errHoldPassed) {
-		t.Errorf("finalize past the hold = %v, want it to say the hold ran out", err)
+	if err := srv.finalizeRunEffects(ctx, run.ID, got.SandboxRef, "run.complete", nil, false, false); !errors.Is(err, errHoldPassed) || !strings.Contains(err.Error(), "the sandbox was not stopped") {
+		t.Errorf("finalize past the hold = %v, want it to say the sandbox was not stopped because the hold ran out", err)
 	}
 	if n := probe.calls.Load(); n != 0 {
 		t.Errorf("StopSandbox reached %d times past the hold, want 0", n)
@@ -381,8 +383,8 @@ func TestEndHold_RunnerExitIsAHold(t *testing.T) {
 
 // A first pass back under an end hold with less time left than the teardown's 15 s is still sent, with the budget it
 // has without a hold (a deadline past the hold's), and is recorded: the hold caps the stop and the writes after the
-// pass, not the pass. Catches a pass budget that reads the hold's deadline: that pass is never sent, is recorded
-// settled as "no time was left", and its sandbox is stopped with the changes still in it. Also catches the cap
+// pass, not the pass. Catches a pass budget that reads the hold's deadline: that pass is never sent, and is left
+// owed for a later sweep instead of brought back now. Also catches the cap
 // applied only inside computerFolderPassWithin, which would send the pass a deadline inside the hold.
 func TestEndHold_PassBackKeepsItsBudgetUnderAShortHold(t *testing.T) {
 	f := newPassFixture(t, 2, 2, nil)

@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -101,16 +100,8 @@ func proxyThatAnswers(t *testing.T, status int) string {
 	return srv.URL
 }
 
-func closedAddr(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	_ = l.Close()
-	return addr
-}
+// closedAddr is an address nothing listens on. A port picked and freed could be taken by another process.
+func closedAddr(*testing.T) string { return "127.0.0.1:1" }
 
 // TestEveryStageNamesItsSetting fakes one failure per stage and checks that the failing line names the setting
 // that fixes it, in the plain output as well as in the stage.

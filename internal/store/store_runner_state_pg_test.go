@@ -489,7 +489,7 @@ func TestPG_RunnerSandboxGoneThenExitIsReceipt(t *testing.T) {
 }
 
 // probeRig is goneRig for a status check (#3667 F1): a present page opens the runner's session, and
-// clock and note are RunnerProbeClock and NoteRunnerSandboxProbe for the rig's run.
+// clock and note are DatabaseNow and NoteRunnerSandboxProbe for the rig's run.
 type probeRig struct{ *goneRig }
 
 func newProbeRig(t *testing.T) probeRig {
@@ -501,7 +501,7 @@ func newProbeRig(t *testing.T) probeRig {
 
 func (g probeRig) clock() time.Time {
 	g.t.Helper()
-	at, err := g.st.RunnerProbeClock(g.t.Context())
+	at, err := g.st.DatabaseNow(g.t.Context())
 	if err != nil {
 		g.t.Fatal(err)
 	}

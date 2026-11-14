@@ -146,6 +146,7 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 	} else {
 		args[2] = anchor.Translate(r.UpdatedAt)
 	}
+	stampRunTimes(anchor, r, args)
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)

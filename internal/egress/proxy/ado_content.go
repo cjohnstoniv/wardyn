@@ -112,10 +112,8 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 		writeADORefusal(w, http.StatusForbidden, "GitPushRulesException", deniedPathsBody(denied, ""))
 		return false
 	}
-	if err == nil && rules.denyNewExec {
-		// A REST push names paths but no modes, and a rename keeps a file's mode at its new path.
-		return refuse(ruleSourceGitPackBlind, "Wardyn refused this Azure DevOps request: this run's push rules refuse new "+
-			"executable files, and a REST push does not say which files it leaves executable. Push the change with git instead.")
+	if src, msg := adoRESTUnproved(rules, push); err == nil && msg != "" {
+		return refuse(src, msg)
 	}
 	var review []string
 	if err == nil {
@@ -132,6 +130,24 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 		cmds[i] = gitpack.Command{Ref: ref, New: push.Digest}
 	}
 	return p.holdPush(w, r, rules, pushReview{paths: review, cmds: cmds}, p.adoRESTTarget(host, grant, t.RepoPath), subject, deny)
+}
+
+// adoRESTUnproved is the rule source and sentence refusing a REST push that the
+// size or the executable rule cannot be applied to, or "" for both. A file whose
+// content the body carries is under any size limit (adoscope.MaxBodyPeek), but
+// one it does not carry, such as a renamed file, shows no size. A REST push
+// names no modes at all, and a rename keeps a file's mode at its new path.
+func adoRESTUnproved(rules *pushRuleSet, push adoscope.Push) (src, msg string) {
+	switch {
+	case rules.maxFileBytes > 0 && len(push.Unsized) > 0:
+		shown := push.Unsized[:min(len(push.Unsized), maxDeniedPathsInBody)]
+		return ruleSourceGitRules, fmt.Sprintf("Wardyn refused this Azure DevOps request: this run's push rules limit file size, and this push "+
+			"puts content it does not carry at %s (%d path(s) in all), so that size cannot be checked.", strings.Join(shown, ", "), len(push.Unsized))
+	case rules.denyNewExec:
+		return ruleSourceGitPackBlind, "Wardyn refused this Azure DevOps request: this run's push rules refuse new " +
+			"executable files, and a REST push does not say which files it leaves executable. Push the change with git instead."
+	}
+	return "", ""
 }
 
 // adoPushDenyAllRefusal is the REST door's sentence for a write deny_all refused.

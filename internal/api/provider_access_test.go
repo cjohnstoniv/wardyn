@@ -210,6 +210,21 @@ func TestProviderAccess_BedrockSSO(t *testing.T) {
 	if got = h.srv.providerAccessFor(context.Background(), moved, paOwner); got.State != modelAccessLive {
 		t.Errorf("same portal spelled differently: state = %q, want live", got.State)
 	}
+
+	// A session for another region than the provider's, which no sign-in stores (a secret store
+	// restored apart from the database): dispatch refuses it as no session, so this row must not
+	// read live beside it either.
+	otherRegion, _ := json.Marshal(awsSSOBlob{AccessToken: "sso-tok-alice", StartURL: "https://acme.awsapps.com/start",
+		Region: "eu-central-1", AccountID: "123456789012", RoleName: "BedrockUser", ExpiresAt: now.Add(48 * time.Hour)})
+	_ = sec.For(paOwner).Put(context.Background(), providerSecretName(p.UID, providerSSOPart), otherRegion)
+	got = h.srv.providerAccessFor(context.Background(), p, paOwner)
+	if got.State != modelAccessExpiredSignin || got.Deadline != "" || got.Action != modelAccessSignInAction {
+		t.Fatalf("session for another region: got %+v, want expired_signin, no deadline, action %q", got, modelAccessSignInAction)
+	}
+	_, d, err = h.srv.providerBedrockRefusal(context.Background(), p, "claude-code", paOwner, false)
+	if err != nil || !strings.Contains(d.msg, mpBRNotSignedIn) || !d.credential {
+		t.Fatalf("dispatch on the same credential: refusal=%+v err=%v, want the not-signed-in refusal, a credential one", d, err)
+	}
 }
 
 // TestProviderAccess_MechanismPrincipalIsNotApplicable: the shared admin

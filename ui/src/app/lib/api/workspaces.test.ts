@@ -216,6 +216,15 @@ describe("workspace client methods", () => {
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/workspaces/ws%2Fid%20%3F${suffix}`, expect.objectContaining({ method: verb }));
   });
 
+  it("buildWorkspace asks for a fresh build only when told to, so Rebuild is not answered from the cached image", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ state: "building" })));
+    await workspaces.buildWorkspace("ws-1", true);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({ refresh: true });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ state: "done" })));
+    await workspaces.buildWorkspace("ws-1");
+    expect(fetchMock.mock.calls[1][1].body).toBeUndefined();
+  });
+
   it("getWorkspace distinguishes missing workspaces from service failures", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
     await expect(workspaces.getWorkspace("missing")).resolves.toBeUndefined();
@@ -259,6 +268,13 @@ describe("workspace client methods", () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(ws), { headers: { "X-Wardyn-Record-Skipped-Hosts": "a.example.com, b.example.com" } }));
     await expect(workspaces.promoteRecordEgress("ws-1", "build", ["a.example.com", "b.example.com", "c.example.com"]))
       .resolves.toEqual({ ...ws, skipped_hosts: ["a.example.com", "b.example.com"] });
+  });
+
+  it("recordTask carries the refusal's reason, so a no-runner 503 is told from a failed read", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "needs a runner", reason: "record_no_runner" }), { status: 503 }));
+    await expect(workspaces.recordTask("ws-1", "verify")).resolves.toEqual({
+      ok: false, status: 503, detail: "needs a runner", reason: "record_no_runner",
+    });
   });
 
   it.each([409, 422, 503])("recordTask returns an actionable %s refusal without claiming a run", async (status) => {

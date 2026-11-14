@@ -321,9 +321,9 @@ jobs:
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
       # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
-      # extra swap lets that peak page out instead of the runner being shut down.
+      # extra swap lets that peak page out instead of the runner being shut down. No `if:`: the docs- or
+      # console-only step below compiles internal/api's tests too.
       - name: Add swap for the coverage compile
-        if: needs.changes.outputs.backend != 'false'
         run: |
           swapon --show
           sudo fallocate -l 8G /swapfile-wardyn
@@ -439,12 +439,28 @@ jobs:
           restore-keys: |
             go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-lint-${{ runner.os }}-
+      # The internal/api test compile and staticcheck's whole-tree pass take about all
+      # of the hosted runner's memory; without extra swap the runner is shut down mid-step
+      # (exit 143, or no log and a timeout 5 min past the limit). Same step as the go legs.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
       # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
       # added anywhere is picked up with no list to edit. Unraced and uncached,
       # WARDYN_TEST_PG unset, like the guard-package step of the `go` job. Every
       # package runs even after one fails, so a push shows all the red guards.
+      # Four green runs on 2026-11-13 took 9-10 min for the whole list. A package
+      # gets 8 min, so a stuck one fails by name with a goroutine dump, and the
+      # step 20, so an overrun fails here with its log instead of the job being
+      # cancelled at its limit with none.
       - name: Whole-tree guard tests (every Go test that reads the repository)
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           out="$(python3 -I scripts/lib/candidate-tests.py guards)"
@@ -452,13 +468,13 @@ jobs:
           rc=0
           while IFS=$'\t' read -r dir names; do
             echo "::group::./$dir"
-            WARDYN_TEST_PG='' go test -count=1 -run "^(${names})\$" "./$dir" || rc=1
+            WARDYN_TEST_PG='' go test -count=1 -timeout 8m -run "^(${names})\$" "./$dir" || rc=1
             echo "::endgroup::"
           done <<<"$out"
           exit "$rc"
       # `make lint` also runs the console's ESLint (ui/eslint.config.js), so this
       # job sets up pnpm and node.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -619,7 +635,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -670,7 +686,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -824,7 +840,7 @@ jobs:
       # a pass without running the test. Keep the build cache, drop the results.
       - name: Drop cached test results
         run: go clean -testcache
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -950,7 +966,7 @@ jobs:
           [ -z "$running" ] || docker start $running >/dev/null
           docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       - name: helm lint + template (must render load-bearing objects)
@@ -1021,7 +1037,7 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         if: needs.changes.outputs.backend != 'false'
         with:
           version: latest
@@ -1061,7 +1077,7 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
       - uses: ./.github/actions/kind-binary
         if: needs.changes.outputs.backend != 'false'
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         if: needs.changes.outputs.backend != 'false'
         with:
           cluster_name: wardyn-test
@@ -1335,7 +1351,7 @@ jobs:
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
       - uses: ./.github/actions/kind-binary
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
@@ -1477,7 +1493,7 @@ jobs:
           cache-from: type=gha,scope=wardyn-proxy
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
       # Kubernetes v1.30 by digest, with the kind release that image was built for: the docs claim the
@@ -1486,7 +1502,7 @@ jobs:
       - uses: ./.github/actions/kind-binary
         with:
           version: v0.23.0
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           version: v0.23.0
           node_image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
@@ -1908,6 +1924,15 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
         run: make build-conformance-agent-image
+      # See go-lint: the internal/api compile in internal-hosts-docker.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -2098,6 +2123,7 @@ jobs:
   #   - the helper signed ad hoc with its one entitlement, read back with codesign
   #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
+  #   - the folder sync's copy pins on an exFAT disk image, a filesystem without hard links
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
   macos:
@@ -2141,6 +2167,9 @@ jobs:
           # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
           export TMPDIR=/private/tmp
           go test -race -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The folder sync's one-step swap and move-aside on APFS: -v and the grep prove the pins ran, not just compiled.
+          go test -count=1 -timeout 5m -v -run '^TestPass_ALaptop' ./internal/foldersync/ | tee "$RUNNER_TEMP/foldersync.out"
+          test "$(grep -c -- '^--- PASS: TestPass_ALaptop' "$RUNNER_TEMP/foldersync.out")" = 4
           # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
           go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
           sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
@@ -2150,12 +2179,62 @@ jobs:
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
           # The pairing key's root-only mode, proven with a sudo-made file: a skip here is a failure.
           grep -q -- '^--- PASS: TestDarwinPairKeyIsReadableByRootOnly' "$RUNNER_TEMP/guestagent.out"
+          # The sign-in hold's macOS pieces as root: the console owner, the IOPlatformUUID read, auto-login
+          # written to and read back from the loginwindow file, and the carry's copy as another account. They
+          # restore what they change; a skip here is a failure. No guest boots: order and the pane are unproven.
+          go test -c -o "$RUNNER_TEMP/guestagent.test" ./internal/vm/guestagent/
+          sudo env TMPDIR="$TMPDIR" WARDYN_LOGINWINDOW_PIN=1 "$RUNNER_TEMP/guestagent.test" -test.count=1 -test.v -test.run '^TestDarwinLoginHold' | tee "$RUNNER_TEMP/loginhold-root.out"
+          for t in ConsoleOwner IoregUUID AutoLoginWriteAndReadBack CarryCopiesAsAnotherAccount; do
+            grep -q -- "^--- PASS: TestDarwinLoginHold$t " "$RUNNER_TEMP/loginhold-root.out"
+          done
       - name: Live suite self-tests (its P-rows skip on a hosted Mac)
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           export TMPDIR=/private/tmp
           go test -count=1 -tags macvm_live ./test/conformance/macvm/
+      # The folder sync's copy into a laptop name, where hard links are refused, on a real exFAT volume: the pins
+      # in Tests run on APFS with links made to fail, and exFAT may number a file by its directory entry, which
+      # the copy's same-file checks rely on. hdiutil ships with macOS. The test binary is built on the runner's
+      # disk; only the tests' temp dirs (TMPDIR, and GOTMPDIR, which t.TempDir reads first) are on the image.
+      - name: Attach an exFAT disk image
+        id: exfat
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          img="$RUNNER_TEMP/exfat.dmg"
+          mnt="$RUNNER_TEMP/exfat"
+          hdiutil create -size 64m -fs ExFAT -volname WEXFAT "$img"
+          mkdir "$mnt"
+          hdiutil attach -nobrowse -noautoopen -mountpoint "$mnt" "$img"
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          # The pins' premise: this volume refuses a hard link.
+          : >"$mnt/link-probe"
+          if ln "$mnt/link-probe" "$mnt/link-probe-2"; then echo "::error::the exFAT volume made a hard link"; exit 1; fi
+          rm -f "$mnt/link-probe"
+      - name: Folder sync copy pins on the exFAT image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mnt="$RUNNER_TEMP/exfat"
+          # Still the exFAT volume: a plain directory at this path would run the pins on APFS, and they would pass.
+          mount | grep -F " on $(cd "$mnt" && pwd -P) (exfat"
+          pins='TestInstall_AFailedCopyOrLinkRefusesThePush|TestPass_AFailedCopyNeverRemovesAnEditorsSave'
+          pins+='|TestPass_ACopyNeverStampsOrClaimsAnEditorsSave|TestPass_ASecondSaveIsNeverTakenForTheFailedCopy'
+          pins+='|TestPass_APutBackNamesALaterSaveItsFailedCopyMovedAside|TestPass_APartialCopyThatCannotBeMovedAsideIsNamed'
+          pins+='|TestPass_APutBackCopyWhoseNameIsGoneKeepsTheSave|TestPass_ALaptopSaveAfterAPullDeletesLookIsKept'
+          pins+='|TestPass_ALaptopFileMadeDuringAPullDeletesMoveBackIsKept'
+          go test -c -o "$RUNNER_TEMP/foldersync.test" ./internal/foldersync/
+          (cd internal/foldersync && env TMPDIR="$mnt" GOTMPDIR="$mnt" "$RUNNER_TEMP/foldersync.test" \
+            -test.count=1 -test.v -test.timeout 5m -test.run "^($pins)\$") | tee "$RUNNER_TEMP/foldersync-exfat.out"
+          # -v and the count prove all nine ran and passed, not just compiled: a skip prints no PASS line.
+          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 9
+      - name: Detach the exFAT disk image
+        if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
+        timeout-minutes: 2
+        run: hdiutil detach -force "$RUNNER_TEMP/exfat"
       - name: Build the darwin runnerd
         if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
@@ -2484,6 +2563,15 @@ jobs:
       # a pass without running the test. Keep the build cache, drop the results.
       - name: Drop cached test results
         run: go clean -testcache
+      # See go-lint: the internal/api test compile.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -2916,7 +3004,7 @@ jobs:
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh notices
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2986,6 +3074,16 @@ jobs:
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+      # See go-lint: staticcheck's whole-tree pass.
+      - name: Add swap for the memory peak
+        if: matrix.gate == 'staticcheck'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)

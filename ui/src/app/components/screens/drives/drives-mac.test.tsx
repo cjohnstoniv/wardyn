@@ -9,12 +9,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
+import { DRIVE_REFUSAL } from "../../../lib/drive-refusals";
 import type { MemberDriveAdminItem, UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
 import { aheadByHours } from "../../../lib/test-clock";
-import { DRIVES } from "../../../lib/user-drives-copy";
+import { DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
 import { MAC_DRIVES } from "../../wardyn/copy/mac-drives";
 import { MEMBER_DRIVES as T } from "../../wardyn/copy/member-drives";
 import { NR_FILES } from "../../wardyn/copy/new-run/files";
+import { NR_SHARED } from "../../wardyn/copy/new-run/shared";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { DrivesScreen } from "./drives-screen";
 
@@ -144,7 +146,8 @@ describe("people's drives", () => {
     const s = await section();
     await userEvent.click(await s.findByRole("button", { name: `${DRIVES.DELETE} Investigation files` }));
     const dialog = within(await screen.findByRole("alertdialog"));
-    expect(dialog.getByText(NR_FILES.DELETE_CONFIRM("Investigation files"))).toBeInTheDocument();
+    // A disk on a Mac: the confirm says, before the click, that an offline or unregistered Mac keeps the disk.
+    expect(dialog.getByText(T.DELETE_CONFIRM_MAC("Investigation files"))).toBeInTheDocument();
     listMemberDrives.mockResolvedValue({ drives: [BUSY, mine({})], total: 2 });
     await userEvent.click(dialog.getByRole("button", { name: DRIVES.DELETE }));
     await waitFor(() => expect(deleteMemberDrive).toHaveBeenCalledWith("m2"));
@@ -160,5 +163,62 @@ describe("people's drives", () => {
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: DRIVES.DELETE }));
     expect(await screen.findByRole("alert")).toHaveTextContent("delete refused: a run of the drive's owner is starting");
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  // A disk drive whose Mac is no longer registered loses only its record; the row goes, the disk stays on that Mac,
+  // which the runner list no longer names. Catches a confirm that closes as if the files were deleted.
+  it("a delete that removed only the record says the disk stays on its Mac", async () => {
+    deleteMemberDrive.mockResolvedValue({ outcome: "record_only" });
+    listRunners.mockResolvedValue([{ id: "r-kofi", name: "kofi-mbp" }]);
+    render(<DrivesScreen />);
+    const s = await section();
+    await s.findByText("Investigation files");
+    await waitFor(() => expect(listRunners).toHaveBeenCalled());
+    await userEvent.click(s.getByRole("button", { name: `${DRIVES.DELETE} Investigation files` }));
+    listMemberDrives.mockResolvedValue({ drives: [BUSY, mine({})], total: 2 });
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: DRIVES.DELETE }));
+    const dialog = within(screen.getByRole("alertdialog"));
+    expect(await dialog.findByText(T.RECORD_ONLY_UNNAMED)).toBeInTheDocument();
+    expect(dialog.queryByText(T.DELETE_CONFIRM_MAC("Investigation files"))).toBeNull();
+    expect(dialog.queryByRole("button", { name: DRIVES.DELETE })).toBeNull();
+    await waitFor(() => expect(s.queryByText("Investigation files")).toBeNull());
+    await userEvent.click(dialog.getByRole("button", { name: NR_SHARED.CLOSE_DIALOG }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  // The last of people's drives, record only: the list is then empty, but the sentence stays until it is closed.
+  // Catches a section that unmounts the confirm with the answer still unread.
+  it("a record-only delete of the last drive still says the disk stays on its Mac", async () => {
+    deleteMemberDrive.mockResolvedValue({ outcome: "record_only" });
+    render(<DrivesScreen />);
+    const s = await section();
+    await s.findByText("mac-studio-07");
+    await userEvent.click(s.getByRole("button", { name: `${DRIVES.DELETE} Investigation files` }));
+    listMemberDrives.mockResolvedValue({ drives: [], total: 0 });
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: DRIVES.DELETE }));
+    await waitFor(() => expect(screen.queryByText("Investigation files")).toBeNull());
+    expect(screen.getByText(DRIVE_REFUSAL.MEMBER_RECORD_ONLY("mac-studio-07"))).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CLOSE_DIALOG }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByTestId("member-drives")).toBeNull();
+  });
+
+  // Catches a confirm that can be closed while its delete is in flight, after which the delete's answer would land on
+  // whatever confirm is open by then.
+  it("the confirm cannot be closed while its delete is in flight", async () => {
+    let answer: (v: unknown) => void = () => {};
+    deleteMemberDrive.mockReturnValue(new Promise((r) => { answer = r; }));
+    render(<DrivesScreen />);
+    const s = await section();
+    await userEvent.click(await s.findByRole("button", { name: `${DRIVES.DELETE} Notes` }));
+    const dialog = within(await screen.findByRole("alertdialog"));
+    // A drive that is not on a Mac keeps the plain confirm.
+    expect(dialog.getByText(NR_FILES.DELETE_CONFIRM("Notes"))).toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: DRIVES.DELETE }));
+    expect(dialog.getByRole("button", { name: PEOPLE.CANCEL })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    answer({ outcome: "deleted" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   });
 });

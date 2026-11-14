@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
-import { asJson, asNoContent, errEnvelope, errText, HttpError } from "./core";
+import { describe, it, expect, vi } from "vitest";
+import { asJson, asNoContent, errEnvelope, errText, HttpError, wfetch } from "./core";
 
 // The envelope's second field. `{"error":"…"}` is what every non-2xx carries;
 // a few refusals a console surface ACTS on add `"reason":"<class>"` —
@@ -24,6 +24,26 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect((err as HttpError).reason).toBe("model_credential");
   });
 
+  it("asJson keeps the envelope's sentence as `said`, and none for a raw body or a bare status text", async () => {
+    const said = async (res: Response) => ((await asJson(res).catch((e: unknown) => e)) as HttpError).said;
+    expect(await said(new Response(JSON.stringify({ error: "Token store is restarting." }), { status: 503 }))).toBe("Token store is restarting.");
+    expect(await said(new Response("upstream timed out", { status: 504 }))).toBe("");
+    expect(await said(new Response("", { status: 403, statusText: "Forbidden" }))).toBe("");
+    // An unclassified 500 names its handler ("list elevation offers"), not a sentence.
+    expect(await said(new Response(JSON.stringify({ error: "list elevation offers", reason: "internal_error" }), { status: 500 }))).toBe("");
+  });
+
+  it("wfetch's answered 401 carries no sentence: \"Unauthorized\" is the status word", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "session expired" }), { status: 401 })));
+    try {
+      const err = (await wfetch("/governance/requests").catch((e: unknown) => e)) as HttpError;
+      expect(err.message).toBe("Unauthorized");
+      expect(err.said).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('{"error":"x"} -> reason "" (the envelope every other refusal sends)', async () => {
     const res = new Response(JSON.stringify({ error: "x" }), { status: 422 });
     const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
@@ -36,6 +56,13 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect(((await asJson(withCause).catch((e: unknown) => e)) as HttpError).cause).toBe("token_expired");
     const bare = new Response(JSON.stringify({ error: "x", reason: "git_credential" }), { status: 422 });
     expect(((await asJson(bare).catch((e: unknown) => e)) as HttpError).cause).toBe("");
+  });
+
+  it("a refusal's detail rides the HttpError; absent is absent", async () => {
+    const withDetail = new Response(JSON.stringify({ error: "x", reason: "start_at_invalid", detail: "clock_change" }), { status: 400 });
+    expect(((await asJson(withDetail).catch((e: unknown) => e)) as HttpError).detail).toBe("clock_change");
+    const bare = new Response(JSON.stringify({ error: "x", reason: "start_at_invalid" }), { status: 400 });
+    expect(((await asJson(bare).catch((e: unknown) => e)) as HttpError).detail).toBeUndefined();
   });
 
   it("a non-string reason is ignored, never rendered", async () => {

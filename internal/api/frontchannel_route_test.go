@@ -22,30 +22,38 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// memSessionSIDs is the sid -> person store in memory, keyed issuer + " " + sid.
+// memSessionSIDs is the sid -> person store in memory, keyed issuer + " " + sid; writes counts each
+// row's records, its version.
 type memSessionSIDs struct {
-	mu   sync.Mutex
-	rows map[string]string
+	mu     sync.Mutex
+	rows   map[string]string
+	writes map[string]int
 }
 
 func (m *memSessionSIDs) RecordOIDCSessionSID(_ context.Context, issuer, sid, sub string, _ time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.writes == nil {
+		m.writes = map[string]int{}
+	}
 	m.rows[issuer+" "+sid] = sub
+	m.writes[issuer+" "+sid]++
 	return nil
 }
 
-func (m *memSessionSIDs) LookupOIDCSessionSID(_ context.Context, issuer, sid string) (string, bool, error) {
+func (m *memSessionSIDs) LookupOIDCSessionSID(_ context.Context, issuer, sid string) (string, string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sub, ok := m.rows[issuer+" "+sid]
-	return sub, ok, nil
+	return sub, fmt.Sprint(m.writes[issuer+" "+sid]), ok, nil
 }
 
-func (m *memSessionSIDs) ForgetOIDCSessionSID(_ context.Context, issuer, sid string) error {
+func (m *memSessionSIDs) ForgetOIDCSessionSID(_ context.Context, issuer, sid, version string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.rows, issuer+" "+sid)
+	if fmt.Sprint(m.writes[issuer+" "+sid]) == version {
+		delete(m.rows, issuer+" "+sid)
+	}
 	return nil
 }
 

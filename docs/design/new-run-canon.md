@@ -137,6 +137,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `START_MISSING` | deviation (FEAT-2 board F2SCHED-1) | Choose a date and time. |
 | `START_PAST` | deviation (FEAT-2 board F2SCHED-1) | Choose a time in the future. |
 | `START_FAR(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Choose a time up to {n} days ahead. |
+| `START_CLOCK` | deviation (a wall time the clocks skip or repeat names no single start) | That time is skipped or repeated when the clocks change. Choose another time. |
+| `START_HELD_UNKNOWN` | deviation (a Later start is held while the server has not said whether scheduled runs are on) | The server has not said yet whether scheduled runs are on. Wait for it to answer, or start the run now. |
 | `STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Starts {when} |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
@@ -987,6 +989,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CONFIRM_POLICY` | mock | Save policy |
 | `NOTHING_PICKED` | deviation (lead wording 2026-10-17, FUG-L771) | Choose at least one part to include. |
 | `OWN_DRIVES_LEFT_OUT` | deviation (DS-2, FUG-L771) | Your own drives are left out of shared templates. |
+| `START_NOT_SAVED` | deviation (lead wording 2026-11-13, template save note) | A virtual machine starts no harness, so the harness start this draft was opened with, and its first message, are not saved with the template. |
 | `SAVED(kind)` | mock | {kind} saved without changing the draft. |
 | `NAME_TAKEN` | server | reason template_name_taken (Go owns the sentence) |
 | `LIMIT_REACHED` | server | reason template_limit_reached (Go owns the sentence) |

@@ -17,7 +17,7 @@ import { Button } from "../../ui/button";
 import { ELEV } from "../../wardyn/copy/elevation";
 import { IMG } from "../../wardyn/copy/image-request";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { answeredSentence, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { weekdayClock } from "../run-detail/run-ends-row";
 import { shortDigest, splitImageRef } from "./image-ref";
 import { decidersPhrase, lengthWords } from "./request-phrases";
@@ -29,6 +29,9 @@ const listed = (r: GovernanceRequest) => r.mine && (r.kind === "elevation" || r.
 
 // A requester's own reject is a withdrawal: the view has no flag for it, so it is a rejection the proposer made.
 const withdrawn = (r: GovernanceRequest) => r.state === "rejected" && r.decided_by === r.proposed_by;
+// Who decided and when; a decider the server no longer names leaves just the time.
+const decidedLine = (r: GovernanceRequest) =>
+  [r.decided_by, relativeTime(r.decided_at ?? r.proposed_at)].filter(Boolean).join(" · ");
 
 function shown(r: GovernanceRequest): Shown | null {
   const unit = r.unit_name ?? "";
@@ -40,13 +43,14 @@ function shown(r: GovernanceRequest): Shown | null {
   if (r.state === "rejected") {
     const when = relativeTime(r.decided_at ?? r.proposed_at);
     if (withdrawn(r)) return { chip: IMG.STATE_WITHDRAWN, tone: "neutral", line: IMG.LINE_WITHDRAWN(when) };
-    const by = r.decided_by ?? "";
-    return { chip: ELEV.STATE_DENIED, tone: "danger", line: r.reason ? ELEV.LINE_DENIED(by, r.reason, when) : `${by} · ${when}` };
+    return { chip: ELEV.STATE_DENIED, tone: "danger", line: r.reason ? ELEV.LINE_DENIED(r.decided_by ?? "", r.reason, when) : decidedLine(r) };
   }
   if (r.state === "stale") return { chip: IMG.STATE_STALE, tone: "warning", line: IMG.LINE_STALE };
   if (r.state === "expired") return { chip: ELEV.STATE_EXPIRED, tone: "neutral", line: ELEV.LINE_EXPIRED(relativeTime(r.expires_at)) };
   if (r.state === "applied") {
-    if (image) return { chip: ELEV.STATE_APPROVED, tone: "success", line: IMG.LINE_APPROVED };
+    // An image grant is not read back and an admin can delete it, so the row says who approved and when, not that it
+    // launches now. An elevation held with no end has no end to state, and it has not ended.
+    if (image || r.no_end) return { chip: ELEV.STATE_APPROVED, tone: "success", line: decidedLine(r) };
     if (r.ends_at && Date.parse(r.ends_at) > Date.now()) {
       return {
         chip: ELEV.STATE_APPROVED,
@@ -107,9 +111,12 @@ function Row({ r, onReload }: { r: GovernanceRequest; onReload: () => void }) {
 
 export function MyElevationRequests({
   list,
+  error,
   onReload,
 }: {
   list: GovernanceRequestList | null | "loading" | "error";
+  /** What the failed read threw, for the "error" state's sentence. */
+  error?: unknown;
   onReload: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -151,7 +158,14 @@ export function MyElevationRequests({
         )}
       </div>
       {list === "loading" && <TableSkeleton rows={2} cols={3} />}
-      {list === "error" && <ErrorState size="compact" title={IMG.LIST_FAILED_TITLE} message={IMG.LIST_FAILED_BODY} onRetry={onReload} />}
+      {list === "error" && (
+        <ErrorState
+          size="compact"
+          title={IMG.LIST_FAILED_TITLE}
+          message={answeredSentence(error, IMG.LIST_LOAD_FAILED) ?? IMG.LIST_FAILED_BODY}
+          onRetry={onReload}
+        />
+      )}
       {ready && rows.length === 0 && <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{IMG.LIST_EMPTY}</p>}
       {rows.map((r) => (
         <Row key={r.id} r={r} onReload={onReload} />

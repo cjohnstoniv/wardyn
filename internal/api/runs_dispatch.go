@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -346,7 +345,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
-	upstreamProxyURL := s.resolveRunUpstreamProxy(ctx, run.ID, siteCfg, siteCfgErr)
+	// A No network run, and a run on a person's runner, get none.
+	upstreamProxyURL := s.resolveRunUpstreamProxy(ctx, run.ID, siteCfg, siteCfgErr, upstreamNoHopReason(run))
 
 	// LLM-inspection detection corpus: resolve WorkspaceSecretNames -> VALUES
 	// from the secret store onto THIS dispatch's local policy copy only (never
@@ -392,8 +392,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBSoft = diskSoft
 	if run.LifetimeCapAt != nil {
-		// The run pods' deadline follows this run's own cap, not a driver-wide one.
-		resources.LifetimeCap = max(run.LifetimeCapAt.Sub(s.cfg.Now()), time.Second)
+		// The run pods' deadline follows this run's own cap, not a driver-wide one (podLifetimeCap).
+		resources.LifetimeCap = s.podLifetimeCap(ctx, *run.LifetimeCapAt)
 	}
 	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
 	// with each narrowed grant's scope read from its stored row — and, with every

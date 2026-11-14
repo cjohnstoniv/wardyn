@@ -535,24 +535,14 @@ func newProxy(opts Options) *Proxy {
 	// resolve at the token-expiry boundary is not failed closed early.
 	p.localClient = &http.Client{Transport: p.controlTransport, Timeout: controlPlaneCallTimeout}
 
-	// Audit the deliberate private-IP-guard relaxation for the operator-
-	// configured upstream proxy hop (one record per run; each real destination
-	// still gets its own per-request decision).
-	if p.upstream != nil && p.sink != nil {
-		req := egress.Request{
-			RunID:  p.runID,
-			Host:   p.upstream.host,
-			Port:   p.upstream.port,
-			Method: http.MethodConnect,
-			Time:   now(),
-		}
-		p.sink.emit(decisionLog(req, egress.Allow, egress.RuleSourceUpstreamProxy))
+	// The upstream proxy hop's row (auditUpstreamHop); on a runner sink it waits for the first grant.
+	if p.sink == nil || p.sink.remote == nil {
+		p.auditUpstreamHop()
 	}
 	return p
 }
 
-// ServeHTTP routes between CONNECT tunneling, brokered LOCAL routes, and
-// plain-HTTP forwarding.
+// ServeHTTP routes between CONNECT tunneling, brokered LOCAL routes, and plain-HTTP forwarding.
 //
 // The local brokered routes (/wardyn/...) are reachable ONLY via
 // origin-form requests addressed to the proxy listener itself — i.e. the
@@ -564,6 +554,7 @@ func newProxy(opts Options) *Proxy {
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = trackNetworkBody(r)
+	removeConnectionNominated(r.Header) // every gate below judges the headers the forward sends
 	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
 	if !p.lapse.serving() {
 		refuseClosed(w)

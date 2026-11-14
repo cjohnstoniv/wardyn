@@ -255,12 +255,7 @@ func rancherLimaV324Arm64() *fakeEngine {
 func serveWith(t *testing.T, engine *fakeEngine, relayListen, hostTarget string) error {
 	t.Helper()
 	if engine == nil {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Setenv("DOCKER_HOST", "tcp://"+ln.Addr().String())
-		_ = ln.Close()
+		t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1") // nothing listens there; a freed port could be taken by another process
 	} else {
 		engine.start(t)
 	}

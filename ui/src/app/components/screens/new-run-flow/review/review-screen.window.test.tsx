@@ -8,10 +8,11 @@
 // without it; a refusal that only shares a reason holds Launch as any refusal does and keeps the choice.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_WINDOW } from "../../../wardyn/copy/new-run/window";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import type { RunIntent } from "../draft/run-intent";
@@ -112,5 +113,29 @@ describe("Review: a refused window on the Mac", () => {
     open(MAC);
     expect(await screen.findByText(NR_WINDOW.REVIEW_SEVERAL_MACS)).toBeInTheDocument();
     expect(lastBody()).toMatchObject({ desktop_window: "at_start" });
+  });
+});
+
+// A draft opened on a VM without the harness start its run names (the seed leaves it out): Save as template says the
+// new template has neither that start nor its first message.
+describe("Review: Save as template after the seed left a harness start out", () => {
+  it("says the start and its first message are not saved, and says nothing when the draft was opened without one", async () => {
+    checks.current = { ...refused("", "", ""), preflightError: null, preflightResult: SCENARIO_PREFLIGHT.member };
+    const { workload: _none, desktop_window: _window, ...vm } = MAC;
+    // An Autonomous draft takes a first message as its task, which is saved: it is told when the start had none.
+    for (const [experience, prompt] of [["interactive", "fix it"], ["background", undefined]] as const) {
+      open({ ...vm, experience, startup: { kind: "harness", tool: "claude-code", ...(prompt && { prompt }) } });
+      fireEvent.click(await screen.findByRole("button", { name: NR_REVIEW.SAVE_TEMPLATE }));
+      expect(within(await screen.findByRole("dialog")).getByText(NR_SAVE.START_NOT_SAVED), experience).toBeInTheDocument();
+      cleanup();
+    }
+    // Opened without a start, or with a start in a second harness, whose first message is that harness's own task and is saved.
+    const second = { ...vm, experience: "background" as const, tools: [...(vm.tools ?? []), { id: "codex-cli", kind: "harness" as const }], startup: { kind: "harness" as const, tool: "codex-cli", prompt: "fix it" } };
+    for (const intent of [vm, second]) {
+      open(intent);
+      fireEvent.click(await screen.findByRole("button", { name: NR_REVIEW.SAVE_TEMPLATE }));
+      expect(within(await screen.findByRole("dialog")).queryByText(NR_SAVE.START_NOT_SAVED)).toBeNull();
+      cleanup();
+    }
   });
 });

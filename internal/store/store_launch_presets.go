@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -43,7 +44,9 @@ func (s PG) GetLaunchPreset(ctx context.Context, name string) (types.LaunchPrese
 // of that name reached), or replaces the named row and moves its version by one. A write identical to the stored row changes nothing, not
 // even the version, so re-applying an unchanged document is a no-op. The
 // comparison and the bump are one statement, so two concurrent writers cannot
-// both land on the same version.
+// both land on the same version. It holds the name's lock (db.LaunchPresetLockClass)
+// from before that statement to commit, as DeleteLaunchPreset does: a create that
+// waited for a delete reads the floor the delete committed, not the one before it.
 func (s PG) PutLaunchPreset(ctx context.Context, p types.LaunchPreset) (types.LaunchPreset, PresetWrite, error) {
 	const q = `
 		INSERT INTO launch_presets (name, version, description, user_types, request, created_by, updated_by)
@@ -63,26 +66,39 @@ func (s PG) PutLaunchPreset(ctx context.Context, p types.LaunchPreset) (types.La
 		userTypes = []string{}
 	}
 	var out types.LaunchPreset
-	var created bool
-	err := s.Pool.QueryRow(ctx, q, p.Name, p.Description, userTypes, []byte(p.Request), p.CreatedBy).Scan(
-		&out.Name, &out.Version, &out.Description, &out.UserTypes, &out.Request,
-		&out.CreatedAt, &out.UpdatedAt, &out.CreatedBy, &out.UpdatedBy, &created)
-	if errors.Is(err, pgx.ErrNoRows) {
-		out, err = s.GetLaunchPreset(ctx, p.Name)
-		return out, PresetUnchanged, err
-	}
+	write := PresetUpdated
+	err := s.inTx(ctx, func(tx Querier) error {
+		if err := lockScope(ctx, tx, db.LaunchPresetLockClass, p.Name); err != nil {
+			return err
+		}
+		var created bool
+		err := tx.QueryRow(ctx, q, p.Name, p.Description, userTypes, []byte(p.Request), p.CreatedBy).Scan(
+			&out.Name, &out.Version, &out.Description, &out.UserTypes, &out.Request,
+			&out.CreatedAt, &out.UpdatedAt, &out.CreatedBy, &out.UpdatedBy, &created)
+		if errors.Is(err, pgx.ErrNoRows) {
+			write = PresetUnchanged
+			out, err = scanLaunchPreset(tx.QueryRow(ctx, `SELECT `+launchPresetCols+` FROM launch_presets WHERE name = $1`, p.Name))
+			return err
+		}
+		if err != nil {
+			return fmt.Errorf("store: put launch preset: %w", err)
+		}
+		if created {
+			write = PresetCreated
+		}
+		return nil
+	})
 	if err != nil {
-		return types.LaunchPreset{}, "", fmt.Errorf("store: put launch preset: %w", err)
+		return types.LaunchPreset{}, "", err
 	}
-	if created {
-		return out, PresetCreated, nil
-	}
-	return out, PresetUpdated, nil
+	return out, write, nil
 }
 
 // DeleteLaunchPreset removes a preset by name, returning the removed row, or
 // ErrNotFound. Runs launched from it keep their preset/preset_version stamp, and
-// the name keeps its version floor so a recreated preset never reuses a version.
+// the name keeps its version floor so a recreated preset never reuses a version:
+// the delete and the floor commit together under the name's lock, which
+// PutLaunchPreset takes before it reads the floor.
 func (s PG) DeleteLaunchPreset(ctx context.Context, name string) (types.LaunchPreset, error) {
 	const q = `
 		WITH gone AS (DELETE FROM launch_presets WHERE name = $1 RETURNING ` + launchPresetCols + `),
@@ -91,7 +107,16 @@ func (s PG) DeleteLaunchPreset(ctx context.Context, name string) (types.LaunchPr
 			ON CONFLICT (name) DO UPDATE SET version = GREATEST(launch_preset_version_floor.version, EXCLUDED.version)
 		)
 		SELECT ` + launchPresetCols + ` FROM gone`
-	return scanLaunchPreset(s.Pool.QueryRow(ctx, q, name))
+	var out types.LaunchPreset
+	err := s.inTx(ctx, func(tx Querier) error {
+		if err := lockScope(ctx, tx, db.LaunchPresetLockClass, name); err != nil {
+			return err
+		}
+		var err error
+		out, err = scanLaunchPreset(tx.QueryRow(ctx, q, name))
+		return err
+	})
+	return out, err
 }
 
 func scanLaunchPreset(row pgx.Row) (types.LaunchPreset, error) {

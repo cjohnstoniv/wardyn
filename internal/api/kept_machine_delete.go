@@ -371,8 +371,7 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 		}
 		return s.keepKeptMachine(ctx, ks, store.KeptMachineStop{ID: m.ID, RunnerID: m.RunnerID, RunID: *m.RunID,
 			Scrubbed: on.Scrubbed, DiskBytes: on.Bytes, ExpiresAt: exp}, keptMachineStopUnreported, nil)
-	case !listed && m.State == types.KeptMachineCreating &&
-		(gone || run.EndedAt != nil && s.cfg.Now().Sub(*run.EndedAt) > keptMachineUnstartedAfter):
+	case !listed && m.State == types.KeptMachineCreating && (gone || s.keptMachineUnstartedPast(ctx, run)):
 		if err := ks.DropUnstartedKeptMachine(ctx, m.ID, *m.RunID); err != nil && !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
@@ -397,8 +396,10 @@ func (s *Server) claimKill(ctx context.Context, run types.AgentRun, killerType t
 	}
 	var intent store.KeptMachineDeletion
 	applied, err := s.claimKillTransitionWith(ctx, run, func() (bool, error) {
+		release := s.FenceRunStarts(ctx, run.ID)
 		applied, d, err := ks.KillRunMarkingKeptMachine(ctx, run.ID, run.State, keptMachineByNonOwnerKill, killer,
 			types.CanonicalUserSubject(killer))
+		release()
 		s.runStateMoved(run.ID, run.State, types.RunKilled, applied)
 		intent = d
 		return applied, err
@@ -555,4 +556,14 @@ func (s *Server) eraseKeptMachinesOf(ctx context.Context, person string) (int, e
 		}
 	}
 	return deleted, errors.Join(errs...)
+}
+
+// keptMachineUnstartedPast reports whether run ended more than keptMachineUnstartedAfter ago on the database's
+// clock, the clock that stamped ended_at. A failed read is not past: the machine is kept for the next pass.
+func (s *Server) keptMachineUnstartedPast(ctx context.Context, run types.AgentRun) bool {
+	if run.EndedAt == nil {
+		return false
+	}
+	now, err := s.dbNow(ctx)
+	return err == nil && now.Sub(*run.EndedAt) > keptMachineUnstartedAfter
 }

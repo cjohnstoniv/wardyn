@@ -316,6 +316,8 @@ export function AgentsTab({
   const [writeDropped, clearWriteDropped] = useWriteDropped("agent-providers");
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
+  // Discard reads /me and then the agents, whose answer replaces the draft: the rows stay read-only until it lands.
+  const [reloading, setReloading] = React.useState(false);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -328,11 +330,17 @@ export function AgentsTab({
         setEtag(snap.etag);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch(() => setStatus("error"))
+      .finally(() => setReloading(false));
   }, []);
   React.useEffect(load, [load]);
 
-  const discard = useDiscardReload(load);
+  const discardReload = useDiscardReload(load);
+  const discard = () => {
+    if (reloading) return; // a second reload's earlier answer would end the read-only window while the other is still out
+    setReloading(true);
+    discardReload();
+  };
 
   const agents = draft?.agents ?? [];
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
@@ -471,7 +479,9 @@ export function AgentsTab({
         </div>
       )}
 
-      <div className="space-y-3">
+      {/* Read-only while a save is in flight: its answer becomes the draft, so a switch flipped meanwhile
+          would be dropped. */}
+      <fieldset disabled={saving || reloading} className="m-0 min-w-0 space-y-3 border-0 p-0">
         {roster.map((h) => (
           <Row
             key={h.id}
@@ -479,11 +489,11 @@ export function AgentsTab({
             row={resolvedRow(agents, h)}
             enabled={rowEnabled(agents, h)}
             providers={providers}
-            operator={operator}
+            operator={operator && !saving && !reloading}
             onUpdate={(next) => updateRow(h.id, next)}
           />
         ))}
-      </div>
+      </fieldset>
 
       {/* A daemon that legitimately reports an EMPTY roster is a different
           case from an absent one — the lead still reads, and the rows are
@@ -504,7 +514,7 @@ export function AgentsTab({
               {REAUTH_DIALOG.WRITE_DROPPED}
             </span>
           )}
-          <Button disabled={!operator || saving} onClick={save}>
+          <Button disabled={!operator || saving || reloading} onClick={save}>
             {PROVIDERS.SAVE_CTA}
           </Button>
         </div>

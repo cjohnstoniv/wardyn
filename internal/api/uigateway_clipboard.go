@@ -52,7 +52,12 @@ func uiDesktopApp(app string) bool { return app == "novnc" || app == desktopSign
 // uiFilterUpgrade puts the clipboard filter on a desktop's relayed WebSocket. That socket is RFB
 // or it closes (rfbfilter): a desktop whose server does not speak RFB is closed and audited. A 101
 // that negotiates an extension is refused: uiRewrite offers none on a desktop, and a compressed
-// frame would hide the RFB stream from the filter. Other apps' sockets pass untouched.
+// frame would hide the RFB stream from the filter. The browser's frames are checked first, as a
+// WebSocket server checks a client's (rfbfilter.CheckBrowserFrames): one that breaks the protocol is
+// refused here, and named, rather than passed on to the desktop's own server.
+// The check is on ReverseProxy's writes to the desktop, so every byte the desktop gets goes through it,
+// and it checks them up to the browser's close frame; what net/http buffered past the upgrade request is
+// not relayed at all. Other apps' sockets pass untouched.
 func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 	if !uiDesktopApp(sess.App) {
 		return nil
@@ -71,8 +76,14 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 		return uiFail(ctx, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 	}
 	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed}
+	// The dialed socket under body is the one recordDesktopConn records (Rules.Recorded). A run that cannot be
+	// read is taken as recorded: that only refuses pixels in a format the browser does not ask for.
+	run, rerr := s.cfg.Store.GetRun(ctx, sess.Run)
+	rules.Recorded = rerr != nil || s.recordsDesktopApp(run, sess)
+	rec := desktopConnRecorder(resp.Request)
 	filtered := rfbfilter.Wrap(body, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: ui relay closed a desktop socket it could not follow", "run_id", sess.Run, "app", sess.App, "err", err)
+		stopRefusedRecording(rec, err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {
 			s.auditUISession(sess, "ui.clipboard.transfer", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
 		}
@@ -80,7 +91,7 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 	if s.uiDesktopSink != nil {
 		filtered.SetSink(s.uiDesktopSink(sess))
 	}
-	resp.Body = filtered
+	resp.Body = filtered.CheckBrowserFrames()
 	return nil
 }
 

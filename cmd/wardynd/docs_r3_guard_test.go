@@ -82,8 +82,11 @@ func TestMigrationFailureIsDocumentedAsHalfApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
+	// "down" must be a whole word of the name, a word being a run of letters: "teardown" is not a down
+	// migration, and "down2", "x down" and "downgrade" are.
 	for _, e := range entries {
-		if strings.Contains(strings.ToLower(e.Name()), "down") {
+		words := strings.FieldsFunc(strings.ToLower(e.Name()), func(r rune) bool { return r < 'a' || r > 'z' })
+		if slices.Contains(words, "down") || slices.Contains(words, "downgrade") {
 			t.Errorf("a down migration exists (%s) — the runbook says the dump is the only rollback", e.Name())
 		}
 	}

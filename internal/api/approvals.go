@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -252,9 +252,16 @@ func (s *Server) refuseIfRunEnded(
 	}
 	// A run at its lifetime cap is being ended by the lease sweep, whose kill cancels this row. It is not
 	// decided in between: an approve now would hand a credential or a host to a run that is over.
-	if haveRun && pastLifetimeCap(run, s.cfg.Now()) && (ap.State == "" || ap.State == types.ApprovalPending) {
-		writeErrorReason(w, http.StatusConflict, reasonApprovalRunPastLifetime, approvalRunPastLifetimeBody)
-		return "run_past_lifetime"
+	if haveRun && run.LifetimeCapAt != nil && (ap.State == "" || ap.State == types.ApprovalPending) {
+		now, err := s.dbNow(r.Context()) // lifetime_cap_at is the database's stamp
+		if err != nil {
+			writeServerError(w, r, "read the database's clock", err)
+			return "clock_unreadable" // nothing is decided; the person can retry
+		}
+		if pastLifetimeCap(run, now) {
+			writeErrorReason(w, http.StatusConflict, reasonApprovalRunPastLifetime, approvalRunPastLifetimeBody)
+			return "run_past_lifetime"
+		}
 	}
 	return ""
 }
@@ -648,7 +655,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 // truncated body leaves Scope == "", which Normalize() reads as `run` — a
 // client that meant `once` would get a run-wide grant and a 200.
 // io.ErrUnexpectedEOF still catches the truncation; only the genuinely empty
-// body (io.EOF) stays tolerated.
+// body (io.EOF) stays tolerated. A second value after the first, or a key
+// written twice, is a 400 too: the decode would keep the last, so a body that
+// wrote `once` could be read as a wider scope written after it.
 //
 // The reason is bounded here, before any row is read or written, and refused
 // rather than truncated: it is the audit explanation, and a decided row keeps it
@@ -661,7 +670,7 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 	if r.Body == nil {
 		return body, true
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDecisionBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxDecisionBody), &body, false); err != nil && !errors.Is(err, io.EOF) {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRequestBodyTooLarge, "request body exceeds size limit")
@@ -907,6 +916,12 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	if !hostrules.ValidApprovedHost(host) {
 		writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysInvalidHost,
 			"invalid domain (plain lowercase host, no scheme/port/wildcard): "+host)
+		return uuid.Nil, false
+	}
+	// A host in a spelling the proxy refuses in every request, which a sidecar that lies or one older than
+	// step 0 can raise: written to the workspace, it would stop each of its runs at load.
+	if err := proxy.ValidConfigHost(host); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonDecisionAlwaysInvalidHost, "host "+err.Error()+"; decide it run or once instead")
 		return uuid.Nil, false
 	}
 	ws, err := s.cfg.Store.GetWorkspace(r.Context(), target)

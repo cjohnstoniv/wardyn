@@ -18,6 +18,7 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { getExpectedPrincipal } from "../../../lib/api/core";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
@@ -97,6 +98,9 @@ export function RunLifetimeBanner({
   containmentPending?: boolean;
 }) {
   const [action, setAction] = React.useState<Action>(null);
+  // The last action's failure, under the banner until the next action: a toast alone was gone before it could be
+  // read, and the banner's buttons stay to try again.
+  const [failure, setFailure] = React.useState<string | null>(null);
   // The stage and end it was dismissed at: a later stage or an extended end warns again.
   const [dismissed, setDismissed] = React.useState<string | null>(null);
   const [changeOpen, setChangeOpen] = React.useState(false);
@@ -122,8 +126,9 @@ export function RunLifetimeBanner({
 
   const revive = async () => {
     setAction("revive");
+    setFailure(null);
     try {
-      if (await reviveWithToasts(run.id, "Couldn't revive this run")) onChanged();
+      if (await reviveWithToasts(run.id, "Couldn't revive this run", undefined, setFailure)) onChanged();
     } finally {
       setAction(null);
     }
@@ -131,12 +136,13 @@ export function RunLifetimeBanner({
 
   const extend = async (ms: number) => {
     setAction("extend");
+    setFailure(null);
     try {
       const base = run.ends_at && Date.parse(run.ends_at) > Date.now() ? Date.parse(run.ends_at) : Date.now();
       await runsApi.setRunEndAndWait(run.id, { endsAt: new Date(base + ms).toISOString() });
       onChanged();
     } catch (err) {
-      toast.error("Couldn't extend this run", { description: getErrorMessage(err) });
+      setFailure(`Couldn't extend this run: ${getErrorMessage(err)}`);
     } finally {
       setAction(null);
     }
@@ -149,15 +155,18 @@ export function RunLifetimeBanner({
   // warning banner's own "Extend 1 day" always offers).
   const extendAndRevive = async () => {
     setAction("revive");
+    // The revive waits on the end change: it goes out as the person who clicked, never as whoever signs in meanwhile.
+    const person = getExpectedPrincipal();
+    setFailure(null);
     try {
       const defaultMs = (run.run_limits?.default_end_sec ?? 24 * 60 * 60) * 1000;
       try {
         await runsApi.setRunEndAndWait(run.id, { endsAt: new Date(Date.now() + defaultMs).toISOString() });
       } catch (err) {
-        toast.error("Couldn't extend and revive this run", { description: getErrorMessage(err) });
+        setFailure(`Couldn't extend and revive this run: ${getErrorMessage(err)}`);
         return;
       }
-      await reviveWithToasts(run.id, "Couldn't extend and revive this run");
+      await reviveWithToasts(run.id, "Couldn't extend and revive this run", person, setFailure);
       // The end has moved whatever the revive did, so the page re-reads either way.
       onChanged();
     } finally {
@@ -167,12 +176,13 @@ export function RunLifetimeBanner({
 
   const endRun = async () => {
     setAction("endRun");
+    setFailure(null);
     try {
       await runsApi.killRun(run.id);
       toast.success(RL.ENDING(RL.toastRunName(run)));
       onChanged();
     } catch (err) {
-      toast.error(RL.COULDNT_END(RL.toastRunName(run)), { description: getErrorMessage(err) });
+      setFailure(`${RL.COULDNT_END(RL.toastRunName(run))}: ${getErrorMessage(err)}`);
     } finally {
       setAction(null);
     }
@@ -180,11 +190,12 @@ export function RunLifetimeBanner({
 
   const resume = async () => {
     setAction("resume");
+    setFailure(null);
     try {
       await runsApi.resumeRun(run.id);
       onChanged();
     } catch (err) {
-      toast.error("Couldn't resume this run", { description: getErrorMessage(err) });
+      setFailure(`Couldn't resume this run: ${getErrorMessage(err)}`);
     } finally {
       setAction(null);
     }
@@ -457,6 +468,11 @@ export function RunLifetimeBanner({
   return (
     <>
       {renderPrimary()}
+      {failure !== null && (
+        <p role="alert" data-testid="run-lifetime-failure" className="mx-4 mt-2 shrink-0 rounded-md border border-danger/40 bg-danger-subtle px-2.5 py-2 text-xs text-danger">
+          {failure}
+        </p>
+      )}
       <KillRunDialog
         runId={confirmEnd ? run.id : null}
         title={run.title?.trim() || run.task}
@@ -473,7 +489,11 @@ export function RunLifetimeBanner({
         open={changeOpen}
         onOpenChange={setChangeOpen}
         run={run}
-        onChanged={onChanged}
+        onChanged={() => {
+          // A change saved in the dialog supersedes a banner action's earlier failure.
+          setFailure(null);
+          onChanged();
+        }}
         maxDays={limits?.max_end_ahead_sec ? Math.ceil(limits.max_end_ahead_sec / (24 * 3600)) : undefined}
         allowNoEnd={allowNoEnd}
       />

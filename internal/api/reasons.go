@@ -172,7 +172,7 @@ const (
 	reasonRunModeInvalid     = "run_mode_invalid"     // a run-mode carrier is malformed
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
-	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, interactive exec, SSH, UI gateway, desktop
 	// Several agents in one background run (run_multi_agent.go).
 	reasonMultiAgentTasksOff = "multi_agent_tasks_off" // tools[].task while WARDYN_MULTI_AGENT_TASKS is off
 	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
@@ -237,6 +237,7 @@ const (
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run ended or kept moving between the read and the write
+	reasonRunKillStarted                       = "run_kill_started"                         // a kill with not_started=true found the run past QUEUED: nothing was ended
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
 	// Watching a background macOS run's desktop (run_background_watch.go, run_background_watch_limit.go). A
@@ -445,6 +446,7 @@ const (
 	reasonSecretValueTooShort     = "secret_value_too_short"     // the value is below the mask's minimum length
 	reasonSecretCapReached        = "secret_cap_reached"         // the owner already holds the maximum number of secrets
 	reasonSecretNotFound          = "secret_not_found"           // that owner holds no secret by that name
+	reasonSecretExists            = "secret_exists"              // a create-only write named a secret its namespace already holds
 
 	// /api/v1/people.
 	reasonPeopleStoreUnavailable  = "people_store_unavailable"  // pre-created people require the Postgres store backend
@@ -803,7 +805,7 @@ const (
 // POST /runs/{id}/exec (run_exec.go) and strict audit (audit_strict.go).
 const (
 	reasonRunExecInvalid     = "run_exec_invalid"     // command is empty or over 128 KiB, or timeout_sec is outside 1 to 300
-	reasonRunExecUnavailable = "run_exec_unavailable" // the run cannot take a command now: no runner, not running, ended, a background task, or paused and not resumed
+	reasonRunExecUnavailable = "run_exec_unavailable" // the run cannot take a command now: no runner, not running, ended, or paused and not resumed
 	reasonRunExecFailed      = "run_exec_failed"      // the runner could not start the command, or lost it before it ended
 	reasonRunExecBusy        = "run_exec_busy"        // 429: the run already holds its most SSH channels and commands at once (WARDYN_SSH_MAX_SESSIONS_PER_RUN)
 	reasonAuditUnavailable   = "audit_unavailable"    // strict audit is on and the change's intent row could not be written first; nothing was changed
@@ -892,6 +894,7 @@ const (
 	reasonAuditReceiptNotFound         = "audit_receipt_not_found"         // 404: no such audit event, or the run has no audit rows
 	reasonAuditReceiptPending          = "audit_receipt_pending"           // 409: newer than the last signed checkpoint; retry after Retry-After
 	reasonAuditReceiptUnchained        = "audit_receipt_unchained"         // 409: in no checkpoint and will never be (no row hash, or before signing began)
+	reasonAuditReceiptProofUnavailable = "audit_receipt_proof_unavailable" // 409: its checkpoint's stored rows no longer match what was signed
 	reasonAuditReceiptTooLarge         = "audit_receipt_too_large"         // 413: more events or checkpoints than one receipt carries
 	reasonAuditReceiptSigningOff       = "audit_receipt_signing_off"       // 503: checkpoint signing is off, or its key could not be loaded
 	reasonAuditReceiptStoreUnavailable = "audit_receipt_store_unavailable" // 501: needs the Postgres store

@@ -689,12 +689,14 @@ describe("AdminSettingsScreen — the shell's no-barrier Re-check (#3342)", () =
 
 // rc.12 admin settings pass: UXA-2, 32, 34, 39, 77.
 describe("AdminSettingsScreen — an unreachable daemon is an error, not host facts (UXA-2)", () => {
-  it("shows Couldn't reach Wardyn with Retry, and none of the made-up Host facts", async () => {
+  // A 5xx or a 404 lands the same made-up status, and either is an answer: the page says the check failed.
+  it("says the check failed, with Retry, and none of the made-up Host facts", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ unreachable: true, runner: { driver: "none", confinement_classes: [] } }));
     renderScreen();
     expect(await screen.findByText(HOST_CARD.UNREACHABLE_TITLE)).toBeInTheDocument();
-    expect(HOST_CARD.UNREACHABLE_TITLE).toBe("Couldn't reach Wardyn");
-    expect(screen.getByText("Settings didn't get an answer, so nothing here would be accurate. Try again in a moment.")).toBeInTheDocument();
+    expect(HOST_CARD.UNREACHABLE_TITLE).toBe("Couldn't load setup status");
+    expect(screen.getByText("Wardyn's setup status couldn't be read, so nothing here would be accurate. Try again in a moment.")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t reach/i)).toBeNull();
     expect(screen.queryByText(HOST_CARD.CANT_LAUNCH)).toBeNull();
     expect(screen.queryByText(/No barrier installed/)).toBeNull();
     expect(screen.queryByTestId("host-card")).toBeNull();

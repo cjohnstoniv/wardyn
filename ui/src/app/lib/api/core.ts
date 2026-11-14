@@ -13,7 +13,7 @@ import { CC_ORDER, type ConfinementClass, type GovernanceChange, type SetupItem 
 import { apiURL } from "../base-path";
 import type { PolicyRef } from "./health";
 import { announceAuthChange, noteIdentityRead, onRemoteAuthChange, type AuthEventKind } from "./auth-sync";
-import { ACTIVITY_HEADER, noteSessionExpiry, recentlyActive, SESSION_EXPIRES_HEADER } from "./session-activity";
+import { ACTIVITY_HEADER, noteSessionExpiry, recentlyActive, resetSessionExpiry, SESSION_EXPIRES_HEADER } from "./session-activity";
 
 const TOKEN_KEY = "wardyn_admin_token";
 
@@ -106,6 +106,10 @@ let _expectedPrincipal = "";
 export function setExpectedPrincipal(principal: string): void {
   _expectedPrincipal = principal;
 }
+/** The person this tab last confirmed; "" before /me has answered. */
+export function getExpectedPrincipal(): string {
+  return _expectedPrincipal;
+}
 
 // #483: while the console is signed out mid-page — the dialog or the
 // read-only bar — no write leaves this tab. Whoever holds a session by then
@@ -128,10 +132,12 @@ export function isSignedOutHold(): boolean {
  *  never a global release: a Save clicked during the logout stays held; and
  *  `asPerson` (DR-0034): the request submits a draft composed under the person
  *  this tab confirmed, so it names them and the server refuses it if the shared
- *  cookie now names someone else. */
+ *  cookie now names someone else. A string names the person a save of several
+ *  requests began under (getExpectedPrincipal, read before its first request):
+ *  a later step must not go out as whoever has signed in since. */
 // superseded: true once a newer request has taken over this one's question (a session probe, App.tsx), so its answer,
 // a 401 included, is nobody's to act on.
-export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true; superseded?: () => boolean };
+export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true | string; superseded?: () => boolean };
 
 // H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
 // serves index.html with no path cleaning, so `GET //evil.com` 200s and
@@ -183,7 +189,11 @@ export function setToken(token: string | null, remember = false): void {
     ssSet(TOKEN_KEY, token);
     lsSet(TOKEN_KEY, null);
   }
-  if (getToken() !== previous) notifyAuthChange();
+  if (getToken() !== previous) {
+    // A token session names no expiry of its own, so one an earlier session named must not stay with it.
+    if (token) resetSessionExpiry();
+    notifyAuthChange();
+  }
 }
 
 export function onUnauthorized(fn: (refused: Refused) => void): void {
@@ -228,6 +238,9 @@ export class HttpError extends Error {
   /** The capability feature a capability_feature refusal is about (such as `inbound`), absent on any
    *  other refusal: the console branches on this, never on the sentence. */
   feature?: string;
+  /** The envelope's `detail`, where a reason covers several causes (start_at_invalid's clock_change), absent when
+   *  the body carries none: the console branches on this, never on the sentence. */
+  detail?: string;
   /** The policy a governance refusal came from and how to ask for a change
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
@@ -237,6 +250,9 @@ export class HttpError extends Error {
   /** A preflight model_credential refusal's setup rows (runs.preflightRunWire): the checklist the
    *  server resolved before the provider refused, so Review keeps those blockers. */
   declare setupItems?: SetupItem[];
+  /** The server's own sentence for this failure, "" when the answer named none (see serverSentence). Set by asJson
+   *  and on wfetch's answered 401; undefined on an HttpError built anywhere else, whose message stands as the sentence. */
+  declare said?: string;
   constructor(
     status: number,
     message: string,
@@ -249,6 +265,7 @@ export class HttpError extends Error {
     cause = "",
     field = "",
     feature = "",
+    detail = "",
   ) {
     super(message);
     this.status = status;
@@ -261,6 +278,7 @@ export class HttpError extends Error {
     this.field = field;
     if (policy) this.policy = policy;
     if (feature) this.feature = feature;
+    if (detail) this.detail = detail;
     this.name = "HttpError";
   }
 }
@@ -281,7 +299,7 @@ export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as Confinement
 // useMeta -> App.tsx's roleResolved), so one stalled read is a permanent
 // spinner with no error, no retry and nothing a reload changes. The deadline
 // turns that into the rejection every caller already handles: the shell's
-// "Control plane unreachable" banner, sign-in's "Could not reach the control
+// "Control plane not available" banner, sign-in's "Could not reach the control
 // plane.", a launch button that un-disables.
 //
 // 60s, not a snappy 5-10s: this bounds a HANG, it is not a latency budget, and
@@ -373,6 +391,10 @@ export async function wfetch(
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
+  // Read before the hold below: a write held for an identity check names the person this tab had confirmed when it
+  // was made, not whoever is confirmed by the time it leaves. "" is a save begun before /me had answered: it names
+  // whoever is confirmed when this request is made, as `true` does, never nobody.
+  const madeAs = asPerson === true || asPerson === "" ? _expectedPrincipal : asPerson;
   // Already refused by the signed-out hold: no waiting on a check that cannot change that.
   if (refused.write && !endsSession && !_signedOutHold) {
     const held = writesMayLeave();
@@ -392,9 +414,8 @@ export async function wfetch(
     headers.set("Content-Type", "application/json");
   }
   headers.set("Accept", headers.get("Accept") ?? "application/json");
-  if (asPerson && _expectedPrincipal) {
-    headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(_expectedPrincipal));
-  }
+  const person = madeAs || (asPerson === undefined ? "" : _expectedPrincipal);
+  if (person) headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(person));
   if (recentlyActive()) headers.set(ACTIVITY_HEADER, "1");
 
   let res: Response;
@@ -426,6 +447,8 @@ export async function wfetch(
     throw e;
   } finally {
     if (method === "POST" && (endsSession || path === "/me/view")) {
+      // The ended session's expiry is not the next one's: a token sign-in names none of its own.
+      if (endsSession) resetSessionExpiry();
       bumpAuthGeneration();
       // The other tabs hear of it only once the server has answered: a request that never got there changed nothing.
       if (answered) announceAuthChange(endsSession ? "signed_out" : "changed");
@@ -438,10 +461,11 @@ export async function wfetch(
   if (res.status === 401) {
     // The body is read, which also completes the request (drainBody); the reason rides the error.
     const { reason } = await errEnvelope(res);
-    // Reconciliation can invalidate /me before its 401 reaches the shell.
+    // A read sent before an auth event (a sign-out, the next sign-in, another tab's) answers for that earlier
+    // session, so its 401 is its caller's alone: the session signed in now is not signed out by it.
     // A refused write still belongs to its caller, even after an auth change.
     const stale =
-      (path === "/me" && method === "GET" && (generation !== authGeneration || init.signal?.aborted)) || !!superseded?.();
+      (!refused.write && generation !== authGeneration) || (path === "/me" && method === "GET" && !!init.signal?.aborted) || !!superseded?.();
     // A REAL 401 means the bearer THIS REQUEST sent was rejected
     // (expired/revoked/foreign admin token) — leaving it stored would replay
     // the same rejected credential on every request from here to sign-in.
@@ -461,7 +485,10 @@ export async function wfetch(
       if (token && getToken() === token) setToken(null);
       _unauthorized?.(refused);
     }
-    throw new HttpError(401, "Unauthorized", reason);
+    // "Unauthorized" is the status word, not a sentence: a site that words its own failure shows its line.
+    const err = new HttpError(401, "Unauthorized", reason);
+    err.said = "";
+    throw err;
   }
   if (res.status === 403) _forbidden?.();
   return res;
@@ -481,8 +508,11 @@ export class PendingChangeError extends Error {
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind, policy, tool, cause, field, feature } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause, field, feature);
+    const { envelope, said } = await readFailure(res);
+    const { message, reason, org, provider, kind, policy, tool, cause, field, feature, detail } = envelope;
+    const err = new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause, field, feature, detail);
+    err.said = said;
+    throw err;
   }
   const body = await res.json();
   if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
@@ -536,6 +566,7 @@ type ErrEnvelope = {
   cause: string;
   field: string;
   feature?: string;
+  detail?: string;
 };
 
 // The envelope's `policy` object, kept only when it is an object naming its
@@ -570,6 +601,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         cause?: unknown;
         field?: unknown;
         feature?: unknown;
+        detail?: unknown;
         message?: unknown;
       };
       // The host-capacity 503 keeps its older shape (error = the code, reason = the measured
@@ -589,6 +621,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
           cause: field(j.cause),
           field: field(j.field),
           feature: field(j.feature) || undefined,
+          detail: field(j.detail) || undefined,
         };
       }
     } catch {
@@ -602,6 +635,26 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
 
 export async function errText(res: Response): Promise<string> {
   return (await errEnvelope(res)).message;
+}
+
+// A failed answer, read once: its envelope, and the sentence the envelope named, or "" when the body was empty, not
+// JSON (markup included) or only the status text: a raw body or a bare status text is not shown as Wardyn's words.
+// Nor is an unclassified 500's message: internal_error carries the handler's name ("list api tokens"), not a sentence
+// (internal/api/writeservererror.go), the rule failureSentence already keeps.
+async function readFailure(res: Response): Promise<{ envelope: ErrEnvelope; said: string }> {
+  let body = "";
+  try {
+    body = await res.text();
+  } catch {
+    /* no body to read */
+  }
+  const envelope = await errEnvelope({ text: async () => body, statusText: res.statusText } as Response);
+  const unworded = envelope.message === body || envelope.message === res.statusText || envelope.reason === "internal_error";
+  return { envelope, said: unworded ? "" : envelope.message };
+}
+
+export async function serverSentence(res: Response): Promise<string> {
+  return (await readFailure(res)).said;
 }
 
 // Explicit page size for the console's list polls. wardynd paginates every list

@@ -393,8 +393,8 @@ describe("RunDetailScreen — a long trail's oldest page is read once per run", 
   it("polls the newest page again but not the oldest", async () => {
     const oldest = Array.from({ length: 1000 }, (_, i) => row(i));
     listAuditMock.mockReset();
-    listAuditMock.mockImplementation(async (_id: string, o?: { newest?: boolean; actionPrefix?: string }) => {
-      if (o?.actionPrefix) return [];
+    listAuditMock.mockImplementation(async (_id: string, o?: { newest?: boolean; actionPrefix?: string; action?: string }) => {
+      if (o?.actionPrefix || o?.action) return [];
       return o?.newest ? [row(5000)] : oldest;
     });
     renderRun({ ...RUN, state: "RUNNING" });
@@ -408,5 +408,81 @@ describe("RunDetailScreen — a long trail's oldest page is read once per run", 
     await vi.advanceTimersByTimeAsync(12_000);
     expect(newestReads()).toBeGreaterThan(newestBefore);
     expect(oldestReads()).toBe(1);
+  });
+});
+
+// A finished run whose computer folder is still settling keeps refreshing: the copy back of kept changes and the
+// sandbox stop after it both change on the server with nothing to press on this page.
+describe("RunDetailScreen — a terminal run's computer folder settles without a reload", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const FOLDER = { name: "payments-service", runner: "laptop-7f2", remote_dir: "/home/agent/work", direction: "both", state: "synced" };
+  const ended = (folder?: Record<string, unknown>) => ({ ...RUN, state: "COMPLETED", ...(folder && { computer_folder: { ...FOLDER, ...folder } }) });
+  const KEPT = ended({ fate: "retained", sandbox_copy: "kept" });
+  // act, so the page has taken each answer in before the next reading of the clock.
+  const wait = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const polled = async (ms: number) => {
+    const before = getRunMock.mock.calls.length;
+    await wait(ms);
+    return getRunMock.mock.calls.length - before;
+  };
+
+  it("polls while the changes are kept, then given up, and stops once the sandbox copy is deleted", async () => {
+    renderRun(KEPT);
+    await screen.findAllByText(RUN.task);
+    expect(await polled(4100)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(ended({ fate: "given_up", sandbox_copy: "kept" }));
+    expect(await polled(8200)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(ended({ fate: "given_up", sandbox_copy: "deleted" }));
+    await wait(4100);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it("once the changes are copied back, polls through the sandbox's stop and stops at the confirmed deletion", async () => {
+    renderRun(KEPT);
+    await screen.findAllByText(RUN.task);
+    getRunMock.mockResolvedValue(ended({ fate: "complete", sandbox_copy: "kept" }));
+    await wait(4100);
+    expect(await polled(8200)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(ended({ fate: "complete", sandbox_copy: "deleted" }));
+    await wait(4100);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it("a stop that is never confirmed is waited for two minutes, not for ever", async () => {
+    renderRun(ended({ fate: "complete", sandbox_copy: "kept" }));
+    await screen.findAllByText(RUN.task);
+    expect(await polled(8200)).toBeGreaterThan(0);
+    await wait(124_000);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it("an answer that lost the fate of kept changes keeps polling, for two minutes at most, and a later fate is taken", async () => {
+    renderRun(KEPT);
+    await screen.findAllByText(RUN.task);
+    getRunMock.mockResolvedValue(ended({}));
+    await wait(4100);
+    expect(await polled(8200)).toBeGreaterThan(0);
+    getRunMock.mockResolvedValue(KEPT);
+    await wait(4100);
+    getRunMock.mockResolvedValue(ended({}));
+    await wait(4100);
+    await wait(116_000);
+    expect(await polled(4100)).toBeGreaterThan(0);
+    expect(await polled(20_000)).toBe(0);
+  });
+
+  it.each([
+    ["no computer folder", undefined],
+    ["a folder whose server reports no fate", {}],
+  ])("does not poll a finished run with %s", async (_name, folder) => {
+    renderRun(ended(folder));
+    await screen.findAllByText(RUN.task);
+    expect(await polled(20_000)).toBe(0);
   });
 });

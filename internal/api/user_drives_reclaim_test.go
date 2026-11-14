@@ -220,6 +220,41 @@ func TestReclaimUserDriveRefusesWhileARunHoldsIt(t *testing.T) {
 	}
 }
 
+// TestReclaimUserDriveRefusesWhileARunOfThePersonsIsStarting: a run of the person's still STARTING may have
+// checked the object and not yet mounted it, so the reclaim is refused before the substrate is asked, and
+// audited; a store that cannot say refuses too. Another person's starting run does not hold this object.
+func TestReclaimUserDriveRefusesWhileARunOfThePersonsIsStarting(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		starting map[string]bool
+		err      error
+		code     int
+		outcome  string
+		calls    int
+	}{
+		{"this person's run is starting", map[string]bool{reclaimSubject: true}, nil, http.StatusConflict, driveReclaimOutcomeRefused, 0},
+		{"the starting runs cannot be read", nil, errors.New("store: read the owner's starting runs: conn reset"), http.StatusInternalServerError, driveReclaimOutcomeFailed, 0},
+		{"another person's run is starting", map[string]bool{"sub-drive-carol": true}, nil, http.StatusOK, string(runner.DriveReclaimDeleted), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := reclaimDrive(nil)
+			rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+			srv, st, audit := reclaimServer(t, d, nil, rn)
+			st.starting, st.startingErr = tc.starting, tc.err
+			w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+reclaimSubject+`"}`)
+			if w.Code != tc.code {
+				t.Fatalf("reclaim = %d, want %d: %s", w.Code, tc.code, w.Body.String())
+			}
+			if len(rn.calls) != tc.calls {
+				t.Errorf("substrate calls = %d, want %d", len(rn.calls), tc.calls)
+			}
+			if _, data := reclaimRow(t, audit); data["outcome"] != tc.outcome || data["subject"] != reclaimSubject {
+				t.Errorf("audit row = %v, want outcome %q for %s", data, tc.outcome, reclaimSubject)
+			}
+		})
+	}
+}
+
 // TestReclaimUserDriveAuditsASubstrateFailure: a 500 is audited too. The
 // operator has to be able to tell "the substrate said no" from "the substrate
 // broke", and on Kubernetes the second is what a stock install answers — the

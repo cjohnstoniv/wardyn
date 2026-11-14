@@ -90,7 +90,7 @@ func joinKinds() []joinKind {
 			store: func(st secretstore.Store, p types.ModelProvider) error {
 				return st.Put(context.Background(), providerSecretName(p.UID, providerSSOPart), brBlob(brOwnerToken, "123456789012", "BedrockUser", later))
 			},
-			grantHost: "portal.sso.us-east-1.amazonaws.com", grantName: types.AWSSSOAccessTokenSecret,
+			grantHost: "portal.sso.us-west-2.amazonaws.com", grantName: types.AWSSSOAccessTokenSecret,
 			env: bedrockEnv, noEnv: []string{"ANTHROPIC_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "WARDYN_CLAUDE_MANAGED_B64"}},
 		{p: bearer, agent: "claude-code", store: putKey, credState: mpRunNoKey,
 			grantHost: "vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com", grantName: providerSecretName("uid-bearer", providerKeyPart),
@@ -179,7 +179,7 @@ func (k joinKind) joinLegacy(withLaneHost bool) (legacy []runner.InjectionGrant,
 		ig(otherVendor, "operator-other-vendor-key"), // still a model credential on the other harness's vendor host
 		ig("api.anthropic.com", types.SubscriptionOAuthSecret),
 		ig("api.anthropic.com", types.ManagedOAuthSecret),
-		ig("portal.sso.us-east-1.amazonaws.com", types.AWSSSOAccessTokenSecret),
+		ig("portal.sso.us-west-2.amazonaws.com", types.AWSSSOAccessTokenSecret),
 		ig("bedrock-runtime.us-west-2.amazonaws.com", bedrockAPIKeySecret),
 		ig("evil.example", providerSecretName(k.p.UID, providerKeyPart)),
 		ig("evil.example", providerSecretName(k.p.UID, providerOAuthPart)),

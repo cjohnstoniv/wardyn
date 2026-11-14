@@ -161,8 +161,13 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 			// The tombstone: this entry stays in p.calls until the runner's REPLY
 			// removes it; the runner answers every CALL it received on a live link.
 			// A resume carries it, and the resumed peer retires it once that REPLY
-			// can no longer come (retireUnanswerable). Its events are dropped.
-			pc.abandoned = true
+			// can no longer come (retireUnanswerable). Its events are dropped. A REPLY
+			// that onReply took first has removed the entry and left the streams the
+			// call opened to this caller: the entry stays unabandoned, so the deferred
+			// cleanup resets them instead of leaving them parked.
+			if p.calls[id] == pc {
+				pc.abandoned = true
+			}
 			p.mu.Unlock()
 			pc.stop()
 			_ = p.send(p.ctx, Frame{Type: TypeReset, Stream: id, Payload: EncodeReset(ResetCancelled)})

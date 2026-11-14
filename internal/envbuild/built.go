@@ -8,6 +8,7 @@ package envbuild
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/containerd/errdefs"
@@ -16,8 +17,8 @@ import (
 )
 
 // Built is what a successful build produced. ID is the image ID the daemon's build stream
-// reported ("" when the stream carried none); BaseDigest is the digest a BYOI wrap built FROM
-// ("" when the base had none, and for the generated and repo lanes). PinFile is the claude-code pin
+// reported ("" when the stream carried none); BaseDigest is the digest the image a BYOI wrap built FROM
+// was pulled as ("" when the base had none, and for the generated and repo lanes). PinFile is the claude-code pin
 // file the generated lane reads from its image (nil for every other lane, and when it is missing or
 // oversized); see readPinFile.
 type Built struct {
@@ -75,3 +76,6 @@ func repoDigestFor(baseRef string, repoDigests []string) string {
 	}
 	return first
 }
+
+// imageIDPattern is a daemon image ID, the only form a BYOI wrap's FROM takes (assertWrapSafeBase).
+var imageIDPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)

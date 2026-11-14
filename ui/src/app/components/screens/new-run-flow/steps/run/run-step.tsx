@@ -12,6 +12,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { isVMKind } from "../../../../../lib/types/machine-kind";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
+import { giveBackText, textLeft } from "../../lenses/harness-lens";
 import { harnessIds } from "../../lenses/lens-keys";
 import { stepIssues } from "../../lenses/local-issues";
 import { keepRunning, mayKeepRunning, setHealth, setPort, setProbe, setRestart } from "../../lenses/service-lens";
@@ -55,9 +56,10 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
   const agent = intent.shape === "agent_task";
   // The server never infers a mode, so an agent run that has not chosen one gets one and the draft says so. A task
-  // already in the draft (the Runs composer's) is the Autonomous carrier, so the draft is named Autonomous and keeps it.
+  // already in the draft (the Runs composer's, or a template's in the older `task` field) is the Autonomous carrier, so
+  // the draft is named Autonomous and keeps it. A draft that states `interactive: true` beside its task is not.
   const unnamed = agent && intent.experience === undefined;
-  const fallback: RunMode = intent.workload?.kind === "agent_task" ? "autonomous" : "interactive";
+  const fallback: RunMode = intent.workload?.kind === "agent_task" || (!intent.interactive && intent.task?.trim()) ? "autonomous" : "interactive";
   React.useEffect(() => {
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
@@ -111,6 +113,9 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     // The window goes with macOS (chooseMachineKind), and its cleared notice with it.
     if (kind !== "macos_vm" && draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
     if (kind !== "macos_vm" && draft.guided.windowCleared) dispatch({ type: "guided", patch: { windowCleared: undefined } });
+    // A VM starts no harness (chooseMachineKind): the first message that start had is held, as on a switch to Interactive.
+    const left = textLeft(intent, chooseMachineKind(intent, kind));
+    if (left) dispatch({ type: "guided", patch: { heldText: { ...draft.guided.heldText, ...left } } });
     edit((i) => {
       const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" ? dropMinimum(i, fill) : i;
       const next = chooseMachineKind(poolId ? choosePool(leaving, poolId) : leaving, kind);
@@ -139,7 +144,10 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
       {agent && <ModeSection mode={modeOf(intent) ?? fallback} onChange={(mode) => {
           // The machine goes with an interactive run: leaving it says so.
           if (intent.machine && mode !== "interactive") dispatch({ type: "guided", patch: { machineCleared: KEEP_NEW_RUN.INTERACTIVE_ONLY } });
-          edit((i) => chooseMode(i, mode));
+          // Text Interactive has no place for is held beside the draft, never in it, and Autonomous gives it back.
+          const held = draft.guided.heldText;
+          if (mode === "interactive") dispatch({ type: "guided", patch: { heldText: textLeft(intent, chooseMode(intent, mode)) } });
+          edit((i) => (mode === "interactive" ? chooseMode(i, mode) : giveBackText(chooseMode(i, mode), held)));
         }} />}
       {agent && modeOf(intent) === "autonomous" && <TimingSection schedule={draft.schedule} onSchedule={(schedule) => dispatch({ type: "schedule", schedule })} />}
       {intent.shape === "application" && (

@@ -8,6 +8,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,6 +21,12 @@ import (
 var destructiveRunnerCalls = map[string]bool{
 	"StopSandbox": true, "StopProxy": true, "KillSandbox": true, "EndSandbox": true,
 	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true,
+}
+
+// destructiveWrappers are the functions that make one of those calls for their caller. A reference to one is a site
+// of the census too, so a new caller of a wrapper must be listed with its guard, as a new direct call must.
+var destructiveWrappers = map[string]bool{
+	"stopSandboxOrAudit": true, "stopLostSandbox": true, "endSandbox": true, "cutAgent": true, "finalizeRunEffects": true,
 }
 
 // destructiveSite is one function's references to one destructive call. "teardown" is a call of a teardown verb
@@ -33,7 +41,7 @@ type destructiveRow struct {
 // The guards a site may name. A site with none names the Known issues line that tells users, as "unguarded: "
 // and the line's ids.
 const (
-	guardChecked        = "lockLost/holdPassed checked"    // the lock's loss (and, under an end hold, its deadline) is asked just before the call
+	guardChecked        = "lockLost/holdPassed checked"    // the lock's loss (and, under an end hold, its deadline) is asked just before the call, by lockLost and holdPassed or by the hold context's own Err
 	guardHeldReread     = "under a held lock with re-read" // the run's lock is held and the run read again under it
 	guardFenced         = "generation-fenced"              // the runner refuses a call for an older proxy generation
 	guardNotReplaceable = "not replaceable"                // the kill path, or a ref no revive can take (a terminal run)
@@ -86,6 +94,35 @@ var destructiveCallCensus = map[destructiveSite]destructiveRow{
 	{"internal/api/reconcile.go", "boundedTeardown", "teardown"}:        {1, guardChecked},
 	// The idle and max-age stop: the lock's loss is asked before the call, not during it.
 	{"cmd/wardynd/adapters.go", "lifecycleStopper.stop", "StopSandbox"}: {1, "unguarded: K16"},
+
+	// The wrappers' callers. Each carries its wrapper's guard; a caller with a stronger guard of its own may name
+	// that instead.
+	{"internal/api/run_kept_stop_forced.go", "Server.retryForcedStop", "stopSandboxOrAudit"}:                         {1, "unguarded: K11, K12"},
+	{"internal/api/run_local_folder.go", "Server.failLocalFolderRun", "stopSandboxOrAudit"}:                          {1, "unguarded: K11, K12"},
+	{"internal/api/run_proxy_readback.go", "Server.abortUnconfirmedSandbox", "stopSandboxOrAudit"}:                   {1, "unguarded: K11, K12"},
+	{"internal/api/run_proxy_readback.go", "Server.stopTerminalSandbox", "stopSandboxOrAudit"}:                       {1, "unguarded: K11, K12"},
+	{"internal/api/run_proxy_readback.go", "Server.stopUnconfirmedProxyAt", "stopSandboxOrAudit"}:                    {3, "unguarded: K11, K12"},
+	{"internal/api/runs_dispatch.go", "Server.dispatchRun", "stopSandboxOrAudit"}:                                    {1, "unguarded: K11, K12"},
+	{"internal/api/runs_dispatch_byoi.go", "Server.byoiExecLessRefused", "stopSandboxOrAudit"}:                       {1, "unguarded: K11, K12"},
+	{"internal/api/runs_dispatch_mounts.go", "Server.abortUnrecordedSandbox", "stopSandboxOrAudit"}:                  {1, "unguarded: K11, K12"},
+	{"internal/api/runs_dispatch_start.go", "Server.prepareMacOSInteractive", "stopSandboxOrAudit"}:                  {1, "unguarded: K11, K12"},
+	{"internal/api/runs_dispatch_start.go", "Server.startAgentsOrIdle", "stopSandboxOrAudit"}:                        {3, "unguarded: K11, K12"},
+	{"internal/api/run_lease.go", "Server.leaseRun", "stopLostSandbox"}:                                              {1, "unguarded: K11, K14"},
+	{"internal/api/run_lost_at_gen.go", "Server.stopLostSandboxAt", "stopLostSandbox"}:                               {2, "unguarded: K11, K14"},
+	{"internal/api/run_lease.go", "Server.endRun", "endSandbox"}:                                                     {1, "unguarded: K11"},
+	{"internal/api/run_lease.go", "Server.leaseRun", "endSandbox"}:                                                   {1, "unguarded: K11"},
+	{"internal/api/run_lost.go", "Server.stopLostSandbox", "endSandbox"}:                                             {1, "unguarded: K11"},
+	{"internal/api/run_agent_cut.go", "Server.copyBackCut", "cutAgent"}:                                              {1, guardNotReplaceable},
+	{"internal/api/run_computer_folder.go", "Server.quiesceKeptSandbox", "cutAgent"}:                                 {2, guardNotReplaceable},
+	{"internal/api/run_contain.go", "Server.containCutItem", "cutAgent"}:                                             {1, guardNotReplaceable},
+	{"internal/api/run_contain_d1.go", "Server.d1LastCut", "cutAgent"}:                                               {1, guardNotReplaceable},
+	{"internal/api/run_kept_stop_forced.go", "Server.forceKeptStop", "cutAgent"}:                                     {1, guardNotReplaceable},
+	{"internal/api/run_kept_stop_forced.go", "Server.retryForcedStop", "cutAgent"}:                                   {1, guardNotReplaceable},
+	{"internal/api/run_kept_stop_forced.go", "Server.settleUnsettledForcedFolder", "cutAgent"}:                       {1, guardNotReplaceable},
+	{"internal/api/run_computer_folder_bring_back.go", "Server.handleBringComputerFolderBack", "finalizeRunEffects"}: {1, "unguarded: K16"},
+	{"internal/api/run_tail_owner.go", "Server.tailFinalize", "finalizeRunEffects"}:                                  {1, "unguarded: K16"},
+	{"internal/api/runner_exits.go", "Server.applyRunnerExit", "finalizeRunEffects"}:                                 {1, "unguarded: K16"},
+	{"internal/api/runs_lifecycle.go", "Server.finalizeRunTailOrdered", "finalizeRunEffects"}:                        {1, "unguarded: K16"},
 }
 
 // destructiveCallSites counts each function's destructive references in files, keyed by their path.
@@ -109,7 +146,7 @@ func destructiveCallSites(files map[string]*ast.File) map[destructiveSite]int {
 			ast.Inspect(d, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.SelectorExpr:
-					if destructiveRunnerCalls[x.Sel.Name] {
+					if destructiveRunnerCalls[x.Sel.Name] || destructiveWrappers[x.Sel.Name] {
 						out[destructiveSite{path, fn, x.Sel.Name}]++
 					}
 				case *ast.CallExpr:
@@ -166,28 +203,47 @@ func destructiveGuardProblem(guard string) string {
 	return ""
 }
 
-// parseDestructiveTree parses the non-test files of internal/api and cmd/wardynd, keyed by their repo path.
+// parseDestructiveTree parses the non-test files of internal/api and cmd/wardynd, and of every folder below them,
+// keyed by their repo path.
 func parseDestructiveTree(t *testing.T) map[string]*ast.File {
 	t.Helper()
-	fset := token.NewFileSet()
 	files := map[string]*ast.File{}
 	for dir, repo := range map[string]string{".": "internal/api", "../../cmd/wardynd": "cmd/wardynd"} {
-		names, err := filepath.Glob(filepath.Join(dir, "*.go"))
-		if err != nil || len(names) == 0 {
-			t.Fatalf("no Go files in %s (%v)", dir, err)
-		}
-		for _, name := range names {
-			if strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
-			if err != nil {
-				t.Fatalf("parse %s: %v", name, err)
-			}
-			files[repo+"/"+filepath.Base(name)] = f
-		}
+		parseDestructiveDir(t, dir, repo, files)
 	}
 	return files
+}
+
+// parseDestructiveDir adds the non-test Go files under root, in every folder below it, to files, keyed by repo and
+// their path under root. A testdata folder is skipped, as the go tool skips it.
+func parseDestructiveDir(t *testing.T, root, repo string, files map[string]*ast.File) {
+	t.Helper()
+	fset := token.NewFileSet()
+	n := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && d.Name() == "testdata":
+			return filepath.SkipDir
+		case d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files[repo+"/"+filepath.ToSlash(rel)] = f
+		n++
+		return nil
+	})
+	if err != nil || n == 0 {
+		t.Fatalf("no Go files under %s (%v)", root, err)
+	}
 }
 
 // Every destructive runner call in internal/api and cmd/wardynd is in the frozen census with its guard, or with
@@ -210,6 +266,7 @@ func (s *Server) plantedStop(ref string) {
 	_ = s.cfg.Runner.StopSandbox(nil, ref)
 	stop := s.cfg.Runner.KillSandbox
 	_ = stop
+	s.endSandbox(nil, ref)
 }
 `
 		f, err := parser.ParseFile(token.NewFileSet(), "planted.go", src, parser.SkipObjectResolution)
@@ -221,13 +278,40 @@ func (s *Server) plantedStop(ref string) {
 			withPlant[k] = v
 		}
 		problems := destructiveCensusProblems(destructiveCallSites(withPlant), destructiveCallCensus)
-		var stop, kill bool
+		var stop, kill, wrap bool
 		for _, p := range problems {
 			stop = stop || strings.Contains(p, "planted.go Server.plantedStop: 1 unlisted StopSandbox")
 			kill = kill || strings.Contains(p, "planted.go Server.plantedStop: 1 unlisted KillSandbox")
+			wrap = wrap || strings.Contains(p, "planted.go Server.plantedStop: 1 unlisted endSandbox")
 		}
-		if !stop || !kill || len(problems) != 2 {
-			t.Errorf("problems %q, want exactly the planted call and the planted method value", problems)
+		if !stop || !kill || !wrap || len(problems) != 3 {
+			t.Errorf("problems %q, want exactly the planted call, the planted method value and the planted wrapper call", problems)
+		}
+	})
+
+	t.Run("a call in a folder below is found and testdata is skipped", func(t *testing.T) {
+		root := t.TempDir()
+		const src = `package sub
+
+func (s *Server) nestedStop(ref string) {
+	_ = s.cfg.Runner.StopSandbox(nil, ref)
+}
+`
+		for _, name := range []string{"sub/nested.go", "testdata/planted.go"} {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		nested := map[string]*ast.File{}
+		parseDestructiveDir(t, root, "tmp", nested)
+		found := destructiveCallSites(nested)
+		want := destructiveSite{"tmp/sub/nested.go", "Server.nestedStop", "StopSandbox"}
+		if len(found) != 1 || found[want] != 1 {
+			t.Errorf("found %v, want only %v once", found, want)
 		}
 	})
 

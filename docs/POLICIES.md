@@ -31,6 +31,8 @@
 
 - The console has three places a policy gets written, and all three resolve to this same JSON through this same validator — there is no separate UI schema.
 - **The [`/admin/policies`](../ui) editor.** Operator-gated. Writes a stored, named, reusable policy (`POST`/`PUT /policies`).
+  - A `PUT` must send the `updated_at` it read as `expected_updated_at`. When the policy has been saved since, it answers `409` `policy_stale` and writes nothing. Without the field it answers `400` `policy_revision_required`.
+  - `wardyn policy set <id> -f` sends the `updated_at` of the file `wardyn policy get` printed; `--overwrite` replaces the policy as it is now.
 - **The run screen's Custom policy.** An `inline_policy` on the create-run request, member-authored — this editor carries no operator gate.
   - `composer.Clamp` is the enforcement net, and a member's clamp warnings are visible before launch.
   - Preflight (`POST /runs/preflight`) runs on its own as the run is edited, and the **Check again** button runs it on demand.
@@ -89,11 +91,12 @@
 - To wall off plain Azure DevOps egress, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`.
 - Empty under default-deny: no egress.
 - Each entry must be a shape the proxy's matcher can match.
-- Writes reject a mid-label wildcard, a URL, a bad `:port` or a non-ASCII spelling.
+- Writes reject a mid-label wildcard, a URL, a bad `:port`, a non-ASCII spelling or an IP address in a non-standard spelling (`134744072`, `010.0.0.1`).
 - Type internationalised hosts as punycode (`xn--…`).
 - A policy stored before that check can still carry a dead entry.
 - Each sidecar's boot `WARN` names every dead entry in both lists.
 - Never a refusal: failing a run over a long-inert entry is worse.
+- An entry in a spelling the proxy refuses in every request is the exception, since it binds nothing: an IP address in a non-standard spelling, or a host with a character outside ASCII. A run whose stored policy holds one does not start, and the proxy's log names each with its standard or ASCII form.
 - It matters most on `denied_domains`: it denies nothing.
 - Capped at **256 entries**, a hostile-input ceiling; more is a write-time `400`.
 
@@ -207,8 +210,10 @@
 - A deny entry that IS a literal IP is the one case where the key is not the raw string: host strings and policy entries alike are canonicalized through `net.IP` first.
 - Denying `93.184.216.34` also denies `::ffff:93.184.216.34` and every other spelling of that same address — a different ADDRESS is still a different key.
 - Under the default posture that changes nothing — an unlisted host is `always_deny`.
-- But under `allow_all_egress` a literal public IP is allowed (private, loopback, link-local and metadata ranges are denied regardless of policy).
+- But under `allow_all_egress` a literal public IP in its standard spelling is allowed (private, loopback, link-local and metadata ranges are denied regardless of policy).
 - To refuse those too, set `refuse_ip_literals: true`. An IP address listed exactly in `allowed_domains` is still allowed; `refuse_ip_literals` refuses every other IP literal, in any spelling.
+- An address written any other way than dotted decimal or the IPv6 text form (`134744072`, `0x8080808`, `010.0.0.1`, a zoned IPv6 address) is refused on every run whatever the policy allows. Programs differ on which address it names; its `rule_source` is `builtin:ip-spelling`.
+- A host with a character outside ASCII (`８.８.８.８`, a full-width `example.com`) is refused on every run too, `rule_source: builtin:non-ascii-host`, because programs map it to different names or addresses. A client sends an internationalised name in its `xn--` form, which the lists match.
 - There is one operator-authored exception: a private-range literal named EXACTLY in `allowed_domains`, which is what an `egress_redirects` `to` on a private endpoint adds for the runs it covers, is reachable and audited as `rule_source: site-config:egress-redirect`.
 - A wildcard never qualifies and a deny still wins.
 - A member's own entry does not create that exception under an `allow_all_egress` ceiling: run create drops it, with a `clamp_warnings` line, unless the ceiling lists the same address for every port the entry names.
@@ -619,6 +624,7 @@ What the check does and does not settle:
   - The preview leaves that choice open and answers `no_network_needs_egress`. Your model sign-in is never read before `no_network_needs_egress`.
   - A repository to clone is a source, a brokered GitHub one too. The policy's git grants are one only with a repository, and a component only when it needs a host.
   - The proxy refuses every request (`policy:no-network`) but still reaches the control plane, the seal empties the allowlist, and every approval is refused.
+  - The run uses no upstream proxy. None is resolved from your site settings, and a proxy of this release drops a runner's own `--upstream-proxy`, so the audit has no `builtin:upstream-proxy` allow. Its `run.upstream_proxy.resolve` row says `in_effect` `false`, reason `no-network`.
 - Start a run with one using `wardyn run --wall-preset <name|id>`, which also goes with `--file`. A name is looked up across the audiences open to you. A name in more than one is refused with the audiences listed: use its id.
 - Manage them with `wardyn walls presets`:
 
@@ -1230,7 +1236,7 @@ Rules for what a run may send to one host: which methods, on which paths. `host_
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `rules` | `[]HostRule` | — (required) | The set's rules, read in order. At most 64 rules per set and 16 sets per policy, the sets other layers add included. |
-| `host` | `string` | — (required) | One exact host, lowercase, with no wildcard, port or path. |
+| `host` | `string` | — (required) | One exact host, lowercase, with no wildcard, port or path. An IPv4 address is written as four decimal numbers with no leading zeros; a stored rule in another spelling stops the run from starting. |
 | `methods` | `[]string` | `[]` (all) | Uppercase HTTP methods the rule matches. |
 | `paths` | `[]string` | `[]` (all) | Paths the rule matches, each with the paths below it: `/repos` matches `/repos` and `/repos/a`, not `/reposx`. Written in normal form (below), with no query or fragment. |
 
@@ -1332,6 +1338,7 @@ Residual: a rule constrains requests addressed to its host name, not every route
 | A file the push introduces is over `max_file_size_mib`, or its size is not carried by the pack and the forge cannot show it unchanged | `403` | `brokered:git:push-rules` | Remove or shrink those files, or have an operator raise `max_file_size_mib` (`0` turns it off; off github.com that is the only remedy besides pushing through a GitHub lane). Names up to ten files; a deny, so it wins over `require_review_paths`. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
 | The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
+| A commit in the push names more than 1024 parents, another compiled-in ceiling | `413` | `brokered:git:push-too-large` | Merge fewer branches in one commit. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
@@ -1394,7 +1401,9 @@ So an entry a pattern matches is judged one of two ways:
 - A parent counts only when GitHub's compare API places it in the **current** history of
   - the repository's default branch, or
   - a branch the push updates (for the run's own branch, that is the run's earlier pushes).
-- A merge passes an entry that matches any counted parent, so merging the default branch in after it changed a workflow is not refused.
+- A merge passes an entry matching any counted parent, so a branch the push creates may merge a default branch that changed a workflow.
+- On a branch the push updates, an entry at a `deny_paths` or `require_review_paths` path must be the one its tip holds, with or without commits in the push. A merge that takes another version is refused or held, and so is deleting a branch.
+- `max_file_size_mib` and `deny_new_executables` still take any counted parent, so a merge can restore older files or executable bits.
 
 **History the push re-sends.**
 
@@ -1407,6 +1416,7 @@ So an entry a pattern matches is judged one of two ways:
 - That is a `git_pat` grant for a host that is neither GitHub nor Azure DevOps Services, or an Azure DevOps remote whose repository it cannot name.
 - No parent counts; or a read fails, answers other than `200`, comes back truncated or paged, needs more than 64 reads, or takes longer than 20 seconds.
 - On Azure DevOps, a push that moves a branch other than forward from the tip it states is not compared either: the commit it builds on does not show what the branch loses.
+- On Azure DevOps, a push that names more history than the broker follows (1,000,000 parent links, counted across every ref it sets) is not compared either.
 - The reads happen only for a push the pack alone would refuse, while it holds the sidecar's inspection slot, and the credential is normally the one the push's own discovery request already minted.
 - In the refusal, a path ending in `/` names a directory the push does not carry, and `/` alone names the whole tree.
 

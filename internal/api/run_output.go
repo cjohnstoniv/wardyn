@@ -158,6 +158,8 @@ func newExecOutputTail(max int, now func() time.Time) *execOutputTail {
 type execOutputTails struct {
 	mu sync.Mutex
 	m  map[uuid.UUID]*execOutputTail
+	// sweep is where the next pass of the two oldest-first output sweeps starts (run_output_final.go).
+	sweep outputSweepCursors
 }
 
 func (t *execOutputTails) pruneLocked(now time.Time, ttl time.Duration) {
@@ -191,21 +193,28 @@ func (s *Server) runOutputStore() store.RunOutputStore {
 // openExecOutput starts runID's tail and returns the writer dispatch hands the
 // runner (runner.SandboxSpec.ExecOutput), or nil when this run keeps none.
 func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer {
-	if s.cfg.ExecOutputTailOff || interactive || runIsUnrecordable(run) || s.execOutputUncaptured(context.Background(), run) {
+	return s.openExecOutputOn(context.Background(), run, interactive)
+}
+
+// openExecOutputOn is openExecOutput with its capture check, its coverage check
+// and its pending row on ctx. A caller that holds the run's lock (the re-read at
+// a run's end) passes its bounded context, so none of the three outlasts it.
+func (s *Server) openExecOutputOn(ctx context.Context, run types.AgentRun, interactive bool) io.Writer {
+	if s.cfg.ExecOutputTailOff || interactive || runIsUnrecordable(run) || s.execOutputUncaptured(ctx, run) {
 		return nil
 	}
 	runID := run.ID
 	// Door 3 of five (mask_manifest.go): the relay keeps nothing for a run whose
 	// masking corpus this server cannot prove whole, and its writer drops a
 	// chunk the moment that stops being true.
-	if !s.maskCovered(context.Background(), runID) {
-		s.refuseExecRelay(runID)
+	if !s.maskCovered(ctx, runID) {
+		s.refuseExecRelay(ctx, runID)
 		return nil
 	}
 	// The pending row is the durable record that a capture is owed. A failed
 	// insert is logged and does not fail the run: the final UPSERT still writes
 	// the row. A tombstone means the run's output was erased: keep nothing.
-	if s.owePendingOutput(runID) {
+	if s.owePendingOutput(ctx, runID) {
 		return nil
 	}
 	e := newExecOutputTail(s.cfg.RunOutputTailBytes, s.cfg.Now)
@@ -225,12 +234,12 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 
 // owePendingOutput records that runID's capture is owed and reports whether the
 // run's output was erased, in which case nothing is kept.
-func (s *Server) owePendingOutput(runID uuid.UUID) (erased bool) {
+func (s *Server) owePendingOutput(ctx context.Context, runID uuid.UUID) (erased bool) {
 	st := s.runOutputStore()
 	if st == nil {
 		return false
 	}
-	err := st.InsertPendingRunOutput(context.Background(), runID)
+	err := st.InsertPendingRunOutput(ctx, runID)
 	if errors.Is(err, store.ErrRunOutputErased) {
 		s.fenceRunOutput(runID)
 		return true
@@ -245,10 +254,10 @@ func (s *Server) owePendingOutput(runID uuid.UUID) (erased bool) {
 // the denial is audited, and the pending row still goes in, so a process that
 // dies before the run's finalisation leaves the sweeper a capture gap to write
 // with its reason, not a run that owes nothing.
-func (s *Server) refuseExecRelay(runID uuid.UUID) {
+func (s *Server) refuseExecRelay(ctx context.Context, runID uuid.UUID) {
 	slog.Warn("wardynd: the exec output relay is refused: the run's masking corpus is not provably whole", slog.String("run_id", runID.String()))
-	s.auditUncovered(context.Background(), runID, types.ActorSystem, "wardynd", "exec.relay")
-	s.owePendingOutput(runID)
+	s.auditUncovered(ctx, runID, types.ActorSystem, "wardynd", "exec.relay")
+	s.owePendingOutput(ctx, runID)
 }
 
 // releasedHoldback is what a masker's withheld bytes become once no more output
@@ -443,7 +452,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	v, kept := s.readExecOutput(id, limit, run.State.IsTerminal())
 	// No tail in this process: the replica that holds it has been writing it to run_output_chunks.
-	if !kept && s.readSharedOutput(w, r, id, limit) {
+	if !kept && s.readSharedOutput(w, r, run, limit) {
 		return
 	}
 	if kept {

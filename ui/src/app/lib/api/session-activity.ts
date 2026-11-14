@@ -53,6 +53,17 @@ export function noteSessionExpiry(value: string | null | undefined, requestedAt:
   for (const listener of expiryListeners) listener();
 }
 
+/**
+ * Forget the expiry of a session this tab has ended (core.ts, the logout): the next sign-in may be a token, which
+ * names none, and an answer to a request sent before now still names the old one, so it is ignored too.
+ */
+export function resetSessionExpiry(): void {
+  namedBy = Date.now();
+  if (expiresAt === null) return;
+  expiresAt = null;
+  for (const listener of expiryListeners) listener();
+}
+
 /** The session expiry the server last named, in epoch milliseconds; null while it names none. */
 export function sessionExpiry(): number | null {
   return expiresAt;

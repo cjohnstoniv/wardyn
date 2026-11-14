@@ -56,7 +56,7 @@ const UNREACHABLE = 4004;
 // One wheel notch per this many pixels of scroll, so a light trackpad flick is not dozens of lines.
 const WHEEL_NOTCH_PX = 50;
 
-type Phase = "starting" | "reconnecting" | "connected" | "closed" | "expired" | "run_ended" | "watch_ended" | "window_open" | "refused";
+type Phase = "starting" | "reconnecting" | "connected" | "failed" | "closed" | "expired" | "run_ended" | "watch_ended" | "window_open" | "refused";
 
 export function DesktopViewer({ boot, connect = openSocket, small }: { boot: Boot; connect?: (path: string) => DesktopSocket; small?: boolean }) {
   if (boot.state === "refused") return <LinkRefused said={boot.said} />;
@@ -71,7 +71,8 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
   const [phase, setPhase] = React.useState<Phase>("starting");
   const [fit, setFit] = React.useState(true);
   const [closeFailed, setCloseFailed] = React.useState(false);
-  const [said, setSaid] = React.useState<string | null>(null); // the gateway's reason, once a dial has failed twice
+  const [said, setSaid] = React.useState<string | null>(null); // the gateway's reason once a dial has failed twice, or the viewer's own
+  const [attempt, setAttempt] = React.useState(0); // Try again's count: a new value dials afresh
   const [focused, setFocused] = React.useState(false);
   const pressed = React.useRef(new Map<string, number>()); // the keysym each held key went down with
   const wheel = React.useRef({ x: 0, y: 0 }); // scroll pixels not yet sent as a notch
@@ -88,6 +89,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       socket.current = ws;
       ws.binaryType = "arraybuffer";
       let opened = false;
+      let broke = false; // the viewer could not go on with what the desktop sent
       ws.onopen = () => {
         opened = true;
       };
@@ -99,14 +101,23 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           setSaid(null);
           setPhase("connected");
         },
-        failed: () => ws.close(),
+        // The same desktop would most likely send the same thing again, so this waits for Try again.
+        failed: (why) => {
+          broke = true;
+          setSaid(why);
+          setPhase("failed");
+          ws.close();
+        },
       });
       client.current = rfb;
       ws.onmessage = (ev) => rfb.receive(ev.data as ArrayBuffer);
       ws.onclose = (ev) => {
-        client.current = null;
-        pressed.current.clear(); // the next connection starts with nothing held
-        if (!live) return;
+        // A socket Try again replaced can close after the next dial: only the current one clears.
+        if (client.current === rfb) {
+          client.current = null;
+          pressed.current.clear(); // the next connection starts with nothing held
+        }
+        if (!live || broke) return;
         if (closing.current || ev.code === NOT_AUTHORIZED) setPhase("closed");
         else if (ev.code === WINDOW_OPEN || (ev.code === SESSION_ENDED && ev.reason?.startsWith(WINDOW_OPEN_LEGACY_REASON))) setPhase("window_open");
         else if (ev.code === SESSION_ENDED) setPhase("expired");
@@ -137,7 +148,13 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       clearTimeout(retry);
       socket.current?.close();
     };
-  }, [boot.rfb, connect]);
+  }, [boot.rfb, connect, attempt]);
+
+  const tryAgain = () => {
+    setSaid(null);
+    setPhase("starting");
+    setAttempt((n) => n + 1);
+  };
 
   // The desktop stays open until the gateway answers 204: any other answer (503: the Close was not stored)
   // leaves the session valid, so the person is told and can try again. closing is set only then, so a socket
@@ -220,15 +237,16 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           }}
           {...input}
         />
-        {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} />}
+        {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} onTryAgain={tryAgain} />}
       </main>
     </div>
   );
 }
 
-function Notice({ phase, macOS, said }: { phase: Exclude<Phase, "connected">; macOS: boolean; said: string | null }) {
+function Notice({ phase, macOS, said, onTryAgain }: { phase: Exclude<Phase, "connected">; macOS: boolean; said: string | null; onTryAgain: () => void }) {
   const [title, body] =
     phase === "starting" ? [macOS ? DESKTOP.startingMacOS : DESKTOP.starting, DESKTOP.startingBody]
+    : phase === "failed" ? [DESKTOP.failedTitle, DESKTOP.failedBody]
     : phase === "reconnecting" ? [DESKTOP.reconnecting, DESKTOP.reconnectingBody]
     : phase === "window_open" ? [DESKTOP.windowOpenTitle, DESKTOP.windowOpenBody]
     : phase === "expired" ? [DESKTOP.sessionEnded, DESKTOP.sessionEndedBody]
@@ -241,6 +259,12 @@ function Notice({ phase, macOS, said }: { phase: Exclude<Phase, "connected">; ma
       <p className="text-sm font-medium text-white">{title}</p>
       {body && <p className="max-w-md text-xs text-neutral-400">{body}</p>}
       {said && (phase === "starting" || phase === "reconnecting") && <p className="max-w-md text-xs text-neutral-400">{DESKTOP.stillTrying(said)}</p>}
+      {phase === "failed" && (
+        <>
+          {said && <p className="max-w-md text-xs text-neutral-400">{DESKTOP.failedReason(said)}</p>}
+          <Button size="sm" variant="outline" onClick={onTryAgain}>{DESKTOP.tryAgain}</Button>
+        </>
+      )}
     </div>
   );
 }

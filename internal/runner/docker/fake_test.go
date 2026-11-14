@@ -123,6 +123,8 @@ type fakeDocker struct {
 	imageArch map[string]string
 	// imageMeta overlays RepoDigests, Os, Variant and Descriptor on the ImageInspect result per ref.
 	imageMeta map[string]image.InspectResponse
+	// imageIDs is the image ID ImageInspect reports per ref; absent = the ref itself.
+	imageIDs map[string]string
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 	// subnets is each network's IPv4 subnet: the one its create asked for, or
@@ -263,6 +265,9 @@ type fakeDocker struct {
 	// user drive's volume carries). Pre-seed an entry to model a volume that
 	// already exists.
 	volumes map[string]client.VolumeCreateOptions
+	// mountMakesVolumes, when set, makes a volume mount of a name this fake does not hold create that
+	// volume with the mount's labels, as a real daemon does; off, a test sees only what VolumeCreate made.
+	mountMakesVolumes bool
 	// volumeCreates counts VolumeCreate calls, so a test can prove the SECOND
 	// run against one drive creates nothing (idempotence is the contract, not
 	// merely the observable end state).
@@ -556,7 +561,7 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	defer f.mu.Unlock()
 	if f.images[imageID] {
 		m := f.imageMeta[imageID]
-		resp := image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
+		resp := image.InspectResponse{ID: f.imageIDFor(imageID), Architecture: f.imageArch[imageID],
 			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}
 		if !f.legacyProxyImages[imageID] {
 			resp.Config = &dockerspec.DockerOCIImageConfig{}
@@ -574,6 +579,14 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
+}
+
+// imageIDFor is the image ID ref names now (f.mu held).
+func (f *fakeDocker) imageIDFor(ref string) string {
+	if id := f.imageIDs[ref]; id != "" {
+		return id
+	}
+	return ref
 }
 
 func (f *fakeDocker) ImageRemove(ctx context.Context, imageID string, _ client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
@@ -806,6 +819,17 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 			merged.Volumes[v] = struct{}{}
 		}
 		cfg = &merged
+	}
+	if f.mountMakesVolumes && opts.HostConfig != nil {
+		for _, m := range opts.HostConfig.Mounts {
+			if _, held := f.volumes[m.Source]; m.Type == mount.TypeVolume && !held {
+				v := client.VolumeCreateOptions{Name: m.Source, Driver: driveVolumeDriver}
+				if m.VolumeOptions != nil {
+					v.Labels = m.VolumeOptions.Labels
+				}
+				f.volumes[m.Source] = v
+			}
+		}
 	}
 	c := &createdContainer{
 		name:  name,

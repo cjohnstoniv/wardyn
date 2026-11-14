@@ -44,7 +44,7 @@ func (s *Server) advanceRevivePolicyAndStart(ctx context.Context, run types.Agen
 		}
 		return gen, proxyStartRec{}, err
 	}
-	start, err := s.beginProxyStart(ctx, run, gen, fresh)
+	start, err := s.beginProxyStart(ctx, run, gen, fresh, false)
 	if err != nil {
 		noop, aerr := s.abandonRunPolicyGeneration(ctx, run, gen, source)
 		switch {
@@ -108,7 +108,12 @@ func (s *Server) replaceRevivedProxyHashed(ctx context.Context, rv runner.ProxyR
 		sha, err = "", s.replaceRevivedProxy(ctx, rv, run, cfgJSON)
 	}
 	if err != nil {
-		s.abandonProxyStart(context.WithoutCancel(ctx), run.ID, start)
+		// Detached from the replace's end, so a cut replace still abandons its start, and bounded: it runs under the
+		// run's lock. One its bound cuts stays the run's pending start until the reconcile tick's deadline pass
+		// (sweepOverdueProxyStarts) expires it.
+		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), heldStoreCallBound)
+		s.abandonProxyStart(actx, run.ID, start)
+		cancel()
 	}
 	return sha, err
 }

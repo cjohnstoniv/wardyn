@@ -292,3 +292,22 @@ func TestWorkspaceBuildCmd_RefusesRefreshWithStatus(t *testing.T) {
 		t.Errorf("refused build still sent %d POSTs", api.builds)
 	}
 }
+
+// A workspace name is a member's text and reaches an operator's table: a control character, line break
+// or tab in it is shown escaped, so it can neither change the screen nor forge a row or a column.
+func TestWorkspaceTablesEscapeAMembersName(t *testing.T) {
+	id := uuid.New()
+	name := "build\x1b[2J\nforged\trow"
+	srv := newCmdServer(t, http.StatusOK, []types.Workspace{{ID: id, Name: name}})
+	out, err := execCmdCapture(t, "workspace", "list", "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(out, "\x1b\t") || strings.Count(out, "\n") != 2 || !strings.Contains(out, `build\x1b[2J\nforged\trow`) {
+		t.Fatalf("workspace list = %q, want one row with the name escaped", out)
+	}
+	srv = newCmdServer(t, http.StatusOK, types.Workspace{ID: id, Name: name})
+	if out, err = execCmdCapture(t, "workspace", "get", id.String(), "--url", srv.URL, "--token", "tok"); err != nil || strings.ContainsAny(out, "\x1b\t") || strings.Count(out, "\n") != 2 {
+		t.Fatalf("workspace get = %v %q, want one row with the name escaped", err, out)
+	}
+}

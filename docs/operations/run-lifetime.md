@@ -48,7 +48,7 @@ A run's lease ends it, or someone ends it now.
 - A run lost to an outage or a reboot (`run.lost`) is a separate path; see [Revive](#revive).
 - `run.ending_soon` warns at 24h, 1h and 10m before the end.
 - A kept run's token is refused all the same: every `/internal/*` door refuses it (ended, or lost to a reboot or an outage) with `403` and an `authz.denied` row, reason `run_kept`. Nothing can mint a credential, resolve an injection or decide an approval with it.
-- Only the three tail uploads are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
+- Only the four tail uploads (the recording, the scan results, the captured SSO cache and the egress proxy's last decisions) are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
 
 ### At the lifetime cap
 
@@ -56,7 +56,7 @@ The cap (`lifetime_cap_at`) is a run's hard end. An extension never passes it, a
 
 - From the cap, every request the run's sandbox makes to the organisation is refused (`authz.denied`, `run_terminal`, with `lifetime_cap_at`), its token is not renewed, and its pending approvals cannot be decided (`409 approval_run_past_lifetime`).
 - Within a minute the lease sweep kills it (`run.kill`, `max_lifetime_reached`).
-- The three tail uploads are still accepted for five minutes from the cap.
+- The four tail uploads are still accepted for five minutes from the cap.
 
 At the kill:
 
@@ -154,12 +154,12 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 2. It is also refused when the new proxy could not confirm what it loaded: no readback (`409 egress_edit_unsupported`), or a runner or proxy image known to be older than 0.10.0-rc.19 (`409 egress_edit_legacy_proxy`). An unreadable version is not refused. On Kubernetes, see item 9.
 3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
 4. Its `via_org` routes go too. The edited config is stored with the edit's policy generation, in one write before the new proxy starts, and the organisation's cached engine for the run is retired. The answer waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
-5. Any other end stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
+5. Any other end stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. If time runs out during that stop, its folder copy back and sandbox stop finish after the answer. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
 6. While that stop is unconfirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
 8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config, which the edit stored before its replace.
 9. On Kubernetes, for a run of wardynd's own cluster, the proxy is not replaced. The edit's hosts join its deny list, which never shrinks. The proxy refuses them at once and closes proxied connections, not its DNS listener; the answer waits for its readback.
-10. wardynd gives the proxy 15 seconds to apply the edit and 60 seconds more to confirm it. Past either, or on an answer it cannot read, the run is ended, since a proxy there cannot be stopped alone.
+10. wardynd gives the proxy 15 seconds to apply the edit and 60 seconds more to confirm it. Past either, or on an answer it cannot read, the run is ended, since a proxy there cannot be stopped alone. Any edit answers within 8 minutes, not counting a stalled database read.
 11. When the proxy refuses the edit or is not listening, as while it restarts, nothing changes (`502 revive_proxy_kept_current`). Send the edit again.
 12. It is refused with `409 egress_edit_unsupported`, and nothing changes, when:
     - the run started before 0.10.0-rc.20, or its proxy image is older;

@@ -73,6 +73,8 @@ export const ERASE = {
   DONE: (n: number, person: string) => `Erased ${n} credential${n === 1 ? "" : "s"} for ${person}.`,
   DONE_NONE: (person: string) => `Nothing was stored for ${person}, so nothing was erased.`,
   DONE_AUDIT: "Recorded in the Audit log as credential.erase.",
+  NOT_ERASED: (names: string) =>
+    `Not erased: ${names}. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.`,
   KEY_VAULT_RECOVERABLE: (days: number) =>
     `Your organisation's Key Vault keeps deleted secrets recoverable for ${days} days; ask its operators to purge them sooner.`,
   FAILED: (person: string) =>
@@ -165,6 +167,10 @@ export const MINTED = {
   // console derives it from expires_at, so DISPOSITION keeps exactly the daemon's six.
   EXPIRED: "Expired",
   EXPIRED_SUB: "No longer works. Nothing to decide.",
+  // An unrevoked token the server marks owner_refused: authentication refuses it for its owner, for any of the
+  // owner check's reasons, so it does not still work. One label for every reason: Revoke is the action for each.
+  OWNER_REFUSED: "Refused",
+  OWNER_REFUSED_SUB: "Doesn't work now: Wardyn refuses it because of its owner.",
   // The footnote's two command names render mono; the parts join into the sentence.
   FOOTNOTE: ["Invite the owner with ", "wardyn person invite", ", or move the token with ", "wardyn token move", ". The console does neither."],
 } as const;

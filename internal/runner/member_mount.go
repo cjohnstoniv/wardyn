@@ -143,6 +143,32 @@ func (p UserMountPolicy) ValidateUserMount(principal, src string, writable bool)
 	return p.Writable().allows(src, real)
 }
 
+// OpenUserSource is ValidateUserMount for a read of src on this host (a
+// member's folder scan): the same source check, then open(real) on the
+// directory it resolved to. The caller passes foldersync.OpenFromTop, which
+// opens it one directory at a time from the top of its volume with no link
+// followed (this package cannot import foldersync: foldersync's tests import
+// this one). The caller reads only through the handle and closes it, so src,
+// or a folder above it, swapped for a link after the check is never read
+// through. An open that fails is the same member refusal, its cause in the
+// operator's log.
+func (p UserMountPolicy) OpenUserSource(principal, src string, open func(real string) (*os.Root, error)) (*os.Root, error) {
+	roots := p.RootsFor(principal)
+	real, err := validateUserSource(src, roots)
+	if err != nil {
+		return nil, err
+	}
+	userSourceChecked()
+	dir, err := open(real)
+	if err != nil {
+		return nil, memberSourceRefused(src, real, roots, err)
+	}
+	return dir, nil
+}
+
+// userSourceChecked runs in OpenUserSource between its check and its open; tests swap the source there.
+var userSourceChecked = func() {}
+
 // ValidateUserMountLexical is the AUTHORING-time gate for a folder bound to a
 // person's runner: the folder lives on that machine, so nothing on this host is
 // read. Everything the path's text can show is still refused: the operator
@@ -276,8 +302,7 @@ func validateUserSource(src string, roots []string) (string, error) {
 		return "", fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
 	}
 	refused := func(real string, cause error) (string, error) {
-		slog.Warn("runner: member mount source refused", slog.String("source", src), slog.String("resolved", real), slog.Any("err", cause))
-		return "", fmt.Errorf("%w: mount source %q must resolve on this host to a directory inside your member workspace roots (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
+		return "", memberSourceRefused(src, real, roots, cause)
 	}
 	if !withinAnyRootLexical(src, roots) {
 		return "", fmt.Errorf("%w: mount source %q is outside every member workspace root (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
@@ -299,6 +324,13 @@ func validateUserSource(src string, roots []string) (string, error) {
 		return "", fmt.Errorf("mount source %q is or traverses the credential path %q; denied", src, seg)
 	}
 	return real, nil
+}
+
+// memberSourceRefused logs cause for the operator and returns the refusal the
+// member reads, which says nothing about what the filesystem held.
+func memberSourceRefused(src, real string, roots []string, cause error) error {
+	slog.Warn("runner: member mount source refused", slog.String("source", src), slog.String("resolved", real), slog.Any("err", cause))
+	return fmt.Errorf("%w: mount source %q must resolve on this host to a directory inside your member workspace roots (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
 }
 
 // errMemberSourceRefused is the one refusal a member reads for a source that

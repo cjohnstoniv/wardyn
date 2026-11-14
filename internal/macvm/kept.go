@@ -168,8 +168,9 @@ func LockKeptWait(dir string, wait time.Duration) (unlock func(), err error) {
 	}
 }
 
-// RemoveKept deletes the kept machine's folder and then its lock file, holding the lock throughout:
-// ErrKeptLocked while a boot holds it, and false with no error when there was no folder.
+// RemoveKept deletes the kept machine's folder, the old generations an update moved aside
+// (RemoveOldGenerations) and then its lock file, holding the lock throughout: ErrKeptLocked while a boot
+// holds it, and false with no error when there was no folder.
 func RemoveKept(dir string) (bool, error) {
 	unlock, err := LockKept(dir)
 	if err != nil {
@@ -179,6 +180,9 @@ func RemoveKept(dir string) (bool, error) {
 	_, serr := os.Lstat(dir)
 	if err := os.RemoveAll(dir); err != nil {
 		return false, err
+	}
+	if err := RemoveOldGenerations(dir); err != nil {
+		return true, err
 	}
 	if err := os.Remove(dir + ".lock"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return true, err

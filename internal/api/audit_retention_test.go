@@ -334,8 +334,8 @@ func TestAuditPartitionChecks(t *testing.T) {
 
 func (f *retentionFake) Ping(context.Context) error { return nil }
 
-// LatestAuditEventByAction is the sensor-heartbeat read /metrics makes; none was ever written.
-func (f *retentionFake) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+// LatestOrganisationAuditEvent is the sensor-heartbeat read /metrics makes; none was ever written.
+func (f *retentionFake) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	return types.AuditEvent{}, store.ErrNotFound
 }
 

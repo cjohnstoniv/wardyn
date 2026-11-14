@@ -37,6 +37,8 @@ export const NR_RUN = {
   START_MISSING: "Choose a date and time.",
   START_PAST: "Choose a time in the future.",
   START_FAR: (n: number | string) => `Choose a time up to ${n} ${n === 1 ? "day" : "days"} ahead.`,
+  START_CLOCK: "That time is skipped or repeated when the clocks change. Choose another time.",
+  START_HELD_UNKNOWN: "The server has not said yet whether scheduled runs are on. Wait for it to answer, or start the run now.",
   STARTS: (when: string | number) => `Starts ${when}`,
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",

@@ -95,13 +95,13 @@ func requireNestingSemantics(t *testing.T, l Locker) {
 	}
 }
 
-// requireCredentialKeysAscend: several AWS SSO credential locks nest only in
-// ascending Obj, so two whole-person erases cannot each hold what the other
-// waits for; another class's second key still refuses.
-func requireCredentialKeysAscend(t *testing.T, l Locker) {
+// requireKeysAscend: several locks of class (AWS SSO credentials, a bulk
+// writer's run start locks) nest only in ascending Obj, so two holders cannot
+// each hold what the other waits for; another class's second key still refuses.
+func requireKeysAscend(t *testing.T, l Locker, class int32) {
 	t.Helper()
 	ctx := context.Background()
-	lo, hi := NewLockKey(AWSSSOCredentialLockClass, t.Name(), "a"), NewLockKey(AWSSSOCredentialLockClass, t.Name(), "b")
+	lo, hi := NewLockKey(class, t.Name(), "a"), NewLockKey(class, t.Name(), "b")
 	if lo.Obj > hi.Obj {
 		lo, hi = hi, lo
 	}
@@ -153,7 +153,8 @@ func TestLocalLocker_ReleaseEndsTheContext(t *testing.T) {
 func TestLocalLocker_Order(t *testing.T)   { requireOrderEnforced(t, NewLocalLocker()) }
 func TestLocalLocker_Nesting(t *testing.T) { requireNestingSemantics(t, NewLocalLocker()) }
 func TestLocalLocker_CredentialKeysAscend(t *testing.T) {
-	requireCredentialKeysAscend(t, NewLocalLocker())
+	requireKeysAscend(t, NewLocalLocker(), AWSSSOCredentialLockClass)
+	requireKeysAscend(t, NewLocalLocker(), RunStartLockClass)
 }
 func TestLocalLocker_Serializes(t *testing.T) {
 	requireSerializes(t, NewLocalLocker(), NewLocalLocker())
@@ -201,7 +202,7 @@ func requireSerializes(t *testing.T, a, b Locker) {
 func TestLockOrderIsTheDocumentedOne(t *testing.T) {
 	want := []int32{RunOpLockClass, ADORunTokenLockClass, AWSSSOLockClass, AWSSSOCredentialLockClass, ADOSignInLockClass,
 		GatewayAudienceLockClass, ComponentKeyLockClass, SiteConfigLockClass, CapEnforcementLockClass, AuditSweepLockClass,
-		AuditCheckpointLockClass}
+		AuditCheckpointLockClass, RunStartLockClass}
 	if len(LockOrder) != len(want) {
 		t.Fatalf("LockOrder has %d classes, want %d", len(LockOrder), len(want))
 	}
@@ -212,7 +213,7 @@ func TestLockOrderIsTheDocumentedOne(t *testing.T) {
 	}
 	seen := map[int32]bool{}
 	for _, c := range []int32{LoginSupersedeLockClass, SecretRowLockClass, PushPathListLockClass, RunOutputLockClass, RecordingLockClass,
-		MemberDriveLockClass} {
+		MemberDriveLockClass, ApprovalRunCapLockClass, APITokenCapLockClass, SSHKeyCapLockClass, LaunchPresetLockClass} {
 		seen[c] = true
 	}
 	for _, c := range LockOrder {

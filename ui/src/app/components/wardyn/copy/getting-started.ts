@@ -21,9 +21,10 @@ export const MEMBER_GETTING_STARTED = {
     const about = typeDescription?.trim().replace(/\.+$/, "");
     return `You're set up as ${typeName}${about ? `: ${about}` : ""}. Your admin set the ceiling; you run inside it.`;
   },
-  UNREACHABLE_TITLE: "Couldn't reach Wardyn.",
+  // The setup status read failed (a 5xx, a 404 or a dead network), so neither line says Wardyn could not be reached.
+  UNREACHABLE_TITLE: "Couldn't load setup status.",
   UNREACHABLE_BODY:
-    "Nothing below is marked done until it can be checked — a broken connection is not a finished step.",
+    "Nothing below is marked done until it can be checked — a failed check is not a finished step.",
   RETRY: "Retry",
   SETUP_SUMMARY_TITLE: "What's set up for you",
   BARRIER_CHIP: (label: string) => `Barrier · ${label}`,

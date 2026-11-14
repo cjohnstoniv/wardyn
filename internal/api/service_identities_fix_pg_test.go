@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -40,6 +41,40 @@ type failingList struct{ secretstore.Store }
 
 func (failingList) List(context.Context) ([]string, error) {
 	return nil, errors.New("secret store unavailable")
+}
+
+// pauseFor wraps a secret store whose first For(owner), once armed is set, waits until release is closed:
+// a credential write stopped after its request was authenticated and before the write reads its owner's
+// erase generation (beginCredentialWrite reads it through For).
+type pauseFor struct {
+	secretstore.Store
+	owner           string
+	armed           *atomic.Bool
+	paused, release chan struct{}
+}
+
+func (p pauseFor) For(owner string) secretstore.Store {
+	if owner == p.owner && p.armed.CompareAndSwap(true, false) {
+		close(p.paused)
+		<-p.release
+	}
+	return p.Store.For(owner)
+}
+
+// pauseMint wraps the identity provider: its next MintRunIdentity, once armed is set, waits until release
+// is closed: a run create stopped after its request was authenticated and before its run row is written.
+type pauseMint struct {
+	identity.Provider
+	armed           *atomic.Bool
+	paused, release chan struct{}
+}
+
+func (p pauseMint) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
+	if p.armed.CompareAndSwap(true, false) {
+		close(p.paused)
+		<-p.release
+	}
+	return p.Provider.MintRunIdentity(ctx, runID, humanSub, sponsor, audience, operatorOwned)
 }
 
 // TestServiceIdentity_SponsorSinceOnTheDatabaseClock: the sponsor cutoff is written on the database clock,
@@ -338,5 +373,78 @@ func TestServiceIdentity_AgeFreshSponsorshipsIsIdempotent(t *testing.T) {
 	ageFreshSponsorships(t, e.pool)
 	if m := minutes("sponsor_since - now()"); m < 59 || m > 61 {
 		t.Errorf("a future sponsor_since is %.1f minutes ahead after aging, want about 60", m)
+	}
+}
+
+// TestServiceIdentity_HeldWriteStoresNoCredentialAfterRetire: a service request authenticated before its
+// identity was retired, and held there until the retire and its credential erase finished, is refused when
+// it resumes, and the retired identity keeps no credential.
+func TestServiceIdentity_HeldWriteStoresNoCredentialAfterRetire(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	if w := do(t, e.h.srv, http.MethodPut, "/api/v1/model-providers", adminToken,
+		`{"providers":[{"id":"anthropic","kind":"anthropic_api_key","harnesses":[{"harness":"claude-code"}]}]}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT /model-providers: %d %s", w.Code, w.Body.String())
+	}
+	const path, body = "/api/v1/model-providers/anthropic/credential", `{"value":"sk-ant-service-own-0000000000"}`
+	if w := e.as(t, tok.Token, http.MethodPut, path, body); w.Code != http.StatusNoContent {
+		t.Fatalf("the service's own credential before the retire: %d %s, want 204", w.Code, w.Body.String())
+	}
+	p := pauseFor{Store: e.h.srv.cfg.Secrets, owner: svcPrin, armed: &atomic.Bool{}, paused: make(chan struct{}), release: make(chan struct{})}
+	e.h.srv.cfg.Secrets = p
+	p.armed.Store(true)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- e.as(t, tok.Token, http.MethodPut, path, body) }()
+	select {
+	case <-p.paused:
+	case w := <-done:
+		t.Fatalf("the PUT answered %d %s before it began its write", w.Code, w.Body.String())
+	}
+	w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/service-identities/"+svcName, e.sec, "")
+	close(p.release)
+	if w.Code != http.StatusOK {
+		t.Fatalf("retire: %d %s, want 200 with the erase finished", w.Code, w.Body.String())
+	}
+	if w := <-done; w.Code != http.StatusForbidden || respReason(w) != reasonIdentityDeactivated {
+		t.Errorf("the held PUT after the retire: %d %s, want 403 %s", w.Code, w.Body.String(), reasonIdentityDeactivated)
+	}
+	if names, err := e.ownerOnlyPG.sec.For(svcPrin).List(context.Background()); err != nil || len(names) != 0 {
+		t.Errorf("the retired identity's credentials = %v (%v), want none", names, err)
+	}
+}
+
+// TestServiceIdentity_HeldRunCreateWritesNoRunAfterSuspension: a service POST /runs authenticated before its
+// identity was suspended, and held before its run row was written until the suspension committed, is
+// refused when it resumes and writes no run.
+func TestServiceIdentity_HeldRunCreateWritesNoRunAfterSuspension(t *testing.T) {
+	e := newSvcEnv(t)
+	p := pauseMint{Provider: e.h.srv.cfg.Identity, armed: &atomic.Bool{}, paused: make(chan struct{}), release: make(chan struct{})}
+	e.h.srv.cfg.Identity = p // before the first request, so no handler reads the field while it is set
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	body := `{"agent":"claude-code","task":"t","policy_id":"` + e.plainPolicy(t, "svc-held") + `"}`
+	if w := e.as(t, tok.Token, http.MethodPost, "/api/v1/runs", body); w.Code != http.StatusCreated {
+		t.Fatalf("the service's run before the suspension: %d %s, want 201", w.Code, w.Body.String())
+	}
+	p.armed.Store(true)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- e.as(t, tok.Token, http.MethodPost, "/api/v1/runs", body) }()
+	select {
+	case <-p.paused:
+	case w := <-done:
+		t.Fatalf("the POST /runs answered %d %s before it minted its run identity", w.Code, w.Body.String())
+	}
+	w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"suspended":true}`)
+	close(p.release)
+	if w.Code != http.StatusOK {
+		t.Fatalf("suspend: %d %s, want 200", w.Code, w.Body.String())
+	}
+	if w := <-done; w.Code != http.StatusForbidden || respReason(w) != reasonIdentityDeactivated {
+		t.Errorf("the held POST /runs after the suspension: %d %s, want 403 %s", w.Code, w.Body.String(), reasonIdentityDeactivated)
+	}
+	var runs int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM agent_runs WHERE created_by = $1`, svcPrin).Scan(&runs); err != nil || runs != 1 {
+		t.Errorf("the service's runs = %d (%v), want only the one made before the suspension", runs, err)
 	}
 }

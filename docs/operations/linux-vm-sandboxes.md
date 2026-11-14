@@ -200,6 +200,7 @@
 ## The guest image contract
 
 - A run's image is an ordinary OCI image. The reference image is [`deploy/images/vm-linux`](../../deploy/images/vm-linux/Dockerfile) (Debian 13, no desktop).
+- It is a `linux/amd64` image. The runner checks that from the image's metadata, never by starting it on the host, and refuses an image of another platform.
 - It holds exactly one `/boot/vmlinuz-*` and one `/boot/initrd.img-*`, with virtio, ext4 and `qemu_fw_cfg` available. The root filesystem is `/dev/vda`.
 - It turns on no swap device, swap file or zram: `/proc/swaps` holds only its header. The guest agent refuses to initialise a guest with any swap on, and the run fails to start.
 - Its keychain and browsers keep their data at the sign-in store's paths ([Sign-ins in the desktop](#sign-ins-in-the-desktop)), none of them a symbolic link. The guest agent mounts a tmpfs over each.
@@ -215,7 +216,7 @@
 |---|---|
 | `<state>/vm/runs/<run>/ctl/` (QMP, qemu-ga, the guest agent, VNC) | The runner's user only (mode `0700`). VNC has no password, so this directory's mode is its control |
 | `<state>/vm/runs/<run>/net/` (the network relay's socket) | The runner's user only |
-| `<state>/vm/images/<image id>/` (the converted base) | The runner's user only; shared read-only by every run of that image |
+| `<state>/vm/images/v2/<image id>/` (the converted base; one an earlier release left directly under `images/` is never read by a new run, and can be deleted once no run that release started remains) | The runner's user only; shared read-only by every run of that image |
 
 - QEMU listens on no TCP port. Its serial console goes to the QEMU container's log.
 - fw_cfg carries the run id and the run's CA certificates, never a key or a secret.

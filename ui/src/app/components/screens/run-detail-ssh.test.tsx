@@ -864,8 +864,7 @@ describe("ConnectSSHCard — the attach command carries no prefix", () => {
 // TestRunSSH_ProxyCommandPrintConfigJSON pins the Go side with these literals).
 describe("ConnectSSHCard — an advertised ProxyCommand", () => {
   const PROXY = "openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h";
-  const shortId = baseRun.id.replace(/^run_/, "").slice(0, 8);
-  const alias = `wardyn-${shortId}`;
+  const alias = `wardyn-${baseRun.id}`;
   const cliPrint = `ssh -o ProxyCommand='${PROXY}' ${baseRun.id}@ssh.example.com -p 2222`;
   const cliConfig = [
     `Host ${alias}`,

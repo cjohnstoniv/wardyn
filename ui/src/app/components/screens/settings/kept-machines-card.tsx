@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { deleteMyMachine, myMachines } from "../../../lib/api/me-machines";
 import { mediumDate } from "../../../lib/format";
+import { usePoll } from "../../../lib/use-poll";
 import type { KeptMachine, MyMachines } from "../../../lib/types";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
@@ -23,6 +24,9 @@ import { Chip } from "../../wardyn/primitives";
 import { ErrorState, failureSentence } from "../../wardyn/states";
 import { useHolderLabels, shortRunId } from "./use-holder-labels";
 import { macOf, macsOf, rowOf } from "./kept-machines-model";
+
+// How often the list is read again while a machine is being made, used by a run or deleted.
+const CHANGING_POLL_MS = 10_000;
 
 export function KeptMachinesCard() {
   const [data, setData] = React.useState<MyMachines | null>(null);
@@ -36,19 +40,40 @@ export function KeptMachinesCard() {
   const ref = React.useRef<HTMLElement | null>(null);
   const [open, setOpen] = React.useState(false);
 
+  // Only the newest read answers: a poll that started before a delete's own reload must not land after it with the
+  // older list (which could also show every machine kept and so stop the poll).
+  const newest = React.useRef(0);
   const load = React.useCallback(() => {
+    const mine = ++newest.current;
     setState((s) => (s === "ready" ? s : "loading"));
     myMachines()
       .then((d) => {
+        if (mine !== newest.current) return;
         setData(d);
         setState("ready");
       })
       .catch((e) => {
+        if (mine !== newest.current) return;
         setLoadMessage(failureSentence(e));
         setState(e instanceof HttpError && (e.status === 403 || e.status === 404) ? "absent" : "failed");
       });
   }, []);
   React.useEffect(load, [load]);
+  // A machine being made, held by a run, or deleted (a delete the Mac has not confirmed answers 202) changes on the
+  // server with nothing here to say so: read the list again while one shows. A failed read keeps the last good list.
+  const changing = state === "ready" && !!data?.machines.some((m) => m.state !== "kept");
+  usePoll(
+    () => {
+      const mine = ++newest.current;
+      return myMachines()
+        .then((d) => {
+          if (mine === newest.current) setData(d);
+        })
+        .catch(() => undefined);
+    },
+    CHANGING_POLL_MS,
+    !changing || busy,
+  );
 
   const shown = !(state === "absent" || state === "loading" || (state === "ready" && data && data.machines.length === 0 && !data.allowed));
   // The run page's Machine tile links here: open and focus the card once the list is drawn, once per navigation and never

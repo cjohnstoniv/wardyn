@@ -74,6 +74,15 @@ export interface GuidedFacts {
   runInCleared?: string;
   /** The unit last picked under Run in, by id and the name it had then, so that notice can name it. */
   runInPicked?: { unitId: string; name: string };
+  /**
+   * Agent text a switch to Interactive had no place for (no harness to start, a VM, Your own tools, another agent's
+   * own task), by the agent it belongs to; "" is a task written before any harness. Held here, never in the intent,
+   * because the server refuses it in each carrier Interactive has. A switch to Autonomous gives it back, and so does
+   * starting that harness.
+   */
+  heldText?: Record<string, string>;
+  /** The seed left a harness start, and its first message, out of a VM draft: a template saved from the draft has neither, and Save as template says so. */
+  startLeftOut?: boolean;
 }
 
 export interface DocDiagnostic {

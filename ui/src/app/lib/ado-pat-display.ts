@@ -8,7 +8,7 @@
 // Every function says nothing rather than inventing a fact the wire did not
 // carry, the rule scm-access-display.ts follows for the sign-in lane.
 import { ADO_PAT } from "./ado-pat-copy";
-import { shortTime } from "./format";
+import { shortDate, shortTime } from "./format";
 import { ADO_PAT_REASON } from "./api/ado-pat";
 import { adoCapName } from "./ado-access-copy";
 import type { ADOEntraConfig, GitProvider } from "./api/providers";
@@ -114,8 +114,29 @@ export function adoIsServer(address: string): boolean {
 // row is neither, or the state is one this console does not recognise.
 export function patCardView(access: SCMAccessPAT, title: string, now: number = Date.now()): PatCardView | null {
   const mode = adoPatMode(access);
-  if (mode === "minted_pat") return mintedCard(access, title);
+  if (mode === "minted_pat") return mintedCard(access, title, now);
   if (mode === "own_pat") return ownCard(access, title, now);
+  return null;
+}
+
+// When a token that may still work stops working: the time alone on the day it is read, with the
+// day otherwise, since a token can live for days.
+function expiryClock(iso: string, now: number): string {
+  const day = (t: string | number) => new Date(t).toDateString();
+  return day(iso) === day(now) ? formatClock(iso) : `${shortDate(iso)}, ${formatClock(iso)}`;
+}
+
+// The card's last-token line: how the newest token ended, or nothing while it
+// is a run's live token. A closed record is not proof of a revoke: a refused
+// one leaves the token working to valid_to, and an expired one was never revoked.
+function lastTokenLine(last: NonNullable<SCMAccessPAT["last_token"]>, now: number): string | null {
+  const created = formatClock(last.created_at);
+  // Past valid_to the token is dead whatever its revoke came to: it is not said to work, or to need a revoke.
+  const works = Date.parse(last.valid_to) > now;
+  if (last.revoke_failed && works) return ADO_PAT.MEMBER_LAST_TOKEN_NOT_REVOKED(created, expiryClock(last.valid_to, now));
+  if (last.revoke_pending && works) return ADO_PAT.MEMBER_LAST_TOKEN_UNCONFIRMED(created, expiryClock(last.valid_to, now));
+  if (last.revoke_failed || last.revoke_pending || last.revoke_reason === "expired") return ADO_PAT.MEMBER_LAST_TOKEN_EXPIRED(created, formatClock(last.valid_to));
+  if (last.revoked_at) return ADO_PAT.MEMBER_LAST_TOKEN(created, formatClock(last.revoked_at));
   return null;
 }
 
@@ -123,15 +144,20 @@ export function patCardView(access: SCMAccessPAT, title: string, now: number = D
 // of expired_signin on the wire, not states of their own; a row the console
 // cannot redeem (no client secret) is the admin's to fix, so a member gets the
 // chip and a member sentence, never the admin's, and nothing to press.
-function mintedCard(access: SCMAccessPAT, title: string): PatCardView | null {
+function mintedCard(access: SCMAccessPAT, title: string, now: number): PatCardView | null {
   switch (access.state) {
-    case "not_configured":
-      return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NOT_CONNECTED], action: "connect", disconnect: false, remove: false };
+    case "not_configured": {
+      // A token that may still work outlives the connection, so it is named here too.
+      const body: string[] = [ADO_PAT.MEMBER_NOT_CONNECTED];
+      const last = access.last_token;
+      const line = last && (last.revoke_failed || last.revoke_pending) && Date.parse(last.valid_to) > now ? lastTokenLine(last, now) : null;
+      if (line) body.push(line);
+      return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body, action: "connect", disconnect: false, remove: false };
+    }
     case "live": {
       const body: string[] = [ADO_PAT.MEMBER_CONNECTED];
-      const last = access.last_token;
-      // Only a finished token has both times the line names.
-      if (last?.revoked_at) body.push(ADO_PAT.MEMBER_LAST_TOKEN(formatClock(last.created_at), formatClock(last.revoked_at)));
+      const line = access.last_token && lastTokenLine(access.last_token, now);
+      if (line) body.push(line);
       return { title, chip: { label: ADO_PAT.CHIP_CONNECTED, tone: "success" }, body, action: null, disconnect: true, remove: false };
     }
     case "expired_signin":
@@ -254,7 +280,7 @@ export interface RunTokenLine {
 export interface RunTokenView {
   lines: RunTokenLine[];
   paused: boolean;
-  /** The clock time each unrevokable token expires. */
+  /** The clock time each unrevokable token that still works expires. */
   revokeFailedAt: string[];
 }
 
@@ -272,22 +298,31 @@ function widened(t: ADORunToken, next: ADORunToken): boolean {
 const NEVER_HANDED_OUT = new Set(["unrecorded", "ends_unreadable"]);
 
 /** A run's tokens as the page draws them, oldest first. `paused` is the run's own
- *  state; the token list alone cannot say a run is paused.
+ *  state; the token list alone cannot say a run is paused. `now` is when the page
+ *  is drawn, as for the person's card (patCardView).
  *
  *  A token is never revoked early: one a renewal or a widening replaced is still
  *  live at Azure DevOps until its own expiry. So a token the next one followed
  *  reads "(access added)" when the next one's scope is a strict superset of its
  *  own and "(renewed)" otherwise, from the two rows, not from a revoke reason.
- *  One closed at its own expiry reads "(expired)". Only a token the server
+ *  One closed at its own expiry reads "(expired)", as does one whose revoke failed
+ *  or is unconfirmed once its expiry has passed. Only a token the server
  *  actually revoked (a pause, the run's end, a disconnect, and the like) names a
  *  revoke time and reason. */
-export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenView {
+export function runTokenView(tokens: ADORunToken[], paused: boolean, now: number = Date.now()): RunTokenView {
   const sorted = [...tokens].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  // Past valid_to a token is dead whatever its revoke came to, as on the person's card (lastTokenLine).
+  const works = (t: ADORunToken) => Date.parse(t.valid_to) > now;
   const lines = sorted.map((t, i) => {
     const created = formatClock(t.created_at);
     const expires = formatClock(t.valid_to);
     // A token that was minted and revoked before the run could use it replaced nothing.
     const next = sorted.slice(i + 1).find((n) => !NEVER_HANDED_OUT.has(n.revoke_reason ?? ""));
+    // A failed revoke is no revoke: the token may still work until its expiry, so it is never drawn revoked,
+    // and it is drawn old only once that expiry has passed.
+    if (t.revoke_failed && works(t)) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.not_revoked), old: false };
+    if (t.revoke_pending && works(t)) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.revoke_pending), old: false };
+    if (t.revoke_failed || t.revoke_pending) return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.expired), old: true };
     const revoked = !!t.revoked_at && t.revoke_reason !== "expired";
     const reason = (t.revoke_reason && ADO_PAT.REVOKE_REASON[t.revoke_reason]) || "";
     if (revoked && reason) {
@@ -305,7 +340,7 @@ export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenVi
   return {
     lines,
     paused,
-    revokeFailedAt: sorted.filter((t) => t.revoke_failed).map((t) => formatClock(t.valid_to)),
+    revokeFailedAt: sorted.filter((t) => t.revoke_failed && works(t)).map((t) => formatClock(t.valid_to)),
   };
 }
 

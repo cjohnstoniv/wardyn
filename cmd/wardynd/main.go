@@ -397,6 +397,8 @@ func run() error {
 	leader := db.NewSweeperLeader(pool, holder)
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	receiptKeys, checkpointStatus := startAuditCheckpoints(rootCtx, *f.auditCheckpointInterval, bootKeys, st, maskedRec)
+	// Nil unless WARDYN_AUDIT_SINKS has an otlp_metrics block; started after the workers below.
+	otlpMetrics := newOTLPMetrics(*f.auditSinks)
 	srv := api.New(api.Config{
 		ImageAdmissionConfig: api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
 		SweeperLease:         leader,
@@ -458,6 +460,9 @@ func run() error {
 		ControlPlaneCAPEM:    feats.hop.caCertPEM(),
 		RecordingStore:       feats.recStore,
 		OIDC:                 feats.authn,
+
+		// The OTLP metrics push's failure count; nil (no series) with the push off.
+		OTLPPushConfig: api.OTLPPushConfig{OTLPMetricsPushFailures: otlpMetricsFailures(otlpMetrics)},
 
 		// The runner stream's anonymous in-flight bound per client address.
 		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
@@ -628,6 +633,8 @@ func run() error {
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, gtWrite)
+	// OTLP metrics, off unless the sinks config has an otlp_metrics block; on every replica.
+	startOTLPMetrics(rootCtx, otlpMetrics, srv.MetricsText)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).

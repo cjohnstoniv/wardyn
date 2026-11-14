@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,10 +19,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RunBudget is how many tier-0 outbox rows one run may create per hour. The sandbox agent decides how
-// many distinct approvals its run raises, so without a bound a flood of chat cards could bury the one
-// real approval. Counted in rows, so a deployment with N channels admits 25/N raises. The console
-// still lists every approval.
+// RunBudget is how many tier-0 outbox rows one run may create per hour on one route (with no routes,
+// on all its approvals). The sandbox agent decides how many distinct approvals its run raises, so
+// without a bound a flood of chat cards could bury the one real approval; counted per route, a flood on
+// one route never holds another back. Counted in rows, so a route whose tier 0 names N channels admits
+// 25/N raises, or one when N is above 25. The console still lists every approval.
 const RunBudget = 25
 
 // BudgetLockSQL takes the run's budget lock, parameter $1 the run id as text, held to the end of the
@@ -91,11 +93,25 @@ func Plan(kind types.ApprovalKind, profileID *uuid.UUID) []Planned {
 }
 
 // Enqueue is the notification half of one approval insert. The zero value is "notifications off".
-type Enqueue struct{ planned []Planned }
+type Enqueue struct {
+	planned []Planned
+	kinds   []string // the approval kinds that take this approval's route on this run: its budget's scope
+}
 
-// NewEnqueue plans the rows for a new approval of this kind under this profile.
+// NewEnqueue plans the rows for a new approval of this kind under this profile. A run's profile is
+// fixed, so the route is a function of the kind, and the budget counts the run's approvals of every
+// kind that routes where this one does.
 func NewEnqueue(kind types.ApprovalKind, profileID *uuid.UUID) Enqueue {
-	return Enqueue{planned: Plan(kind, profileID)}
+	e := Enqueue{planned: Plan(kind, profileID)}
+	if c := active.Load(); c != nil && e.On() {
+		r := c.route(kind, profileID)
+		for _, k := range types.ApprovalKinds { // constants only: Tail writes them into the SQL text
+			if k == kind || c.route(k, profileID) == r {
+				e.kinds = append(e.kinds, string(k))
+			}
+		}
+	}
+	return e
 }
 
 // On reports whether the statement should carry the outbox insert.
@@ -103,7 +119,9 @@ func (e Enqueue) On() bool { return len(e.planned) > 0 }
 
 // queueTail is appended to a statement that defines the CTE `ins` (the approval row: id, run_id,
 // requested_at). Inserting from `ins` is what makes a dedup loser enqueue nothing, and the budget is
-// part of the same statement so it cannot be read apart from the insert.
+// part of the same statement so it cannot be read apart from the insert. The plan is admitted whole
+// only when its own tier-0 rows still fit beside its route's in the hour (Tail), so a route never holds
+// more than RunBudget unless its tier 0 alone is wider than that.
 const queueTail = `,
 queued AS (
 	INSERT INTO approval_notifications (id, approval_id, tier, channel, due_at, next_attempt_at)
@@ -111,7 +129,7 @@ queued AS (
 	       ins.requested_at + p.after_s * interval '1 second', ins.requested_at + p.after_s * interval '1 second'
 	  FROM ins, unnest($%d::smallint[], $%d::text[], $%d::int[]) AS p(tier, channel, after_s)
 	 WHERE (SELECT count(*) FROM approval_notifications b JOIN approvals a ON a.id = b.approval_id
-	         WHERE a.run_id = ins.run_id AND b.tier = 0 AND b.created_at > now() - interval '1 hour') < %d
+	         WHERE a.run_id = ins.run_id AND a.kind IN (%s) AND b.tier = 0 AND b.created_at > now() - interval '1 hour') <= %d
 	RETURNING 1
 )
 SELECT (SELECT count(*) FROM ins), (SELECT count(*) FROM queued)`
@@ -120,7 +138,17 @@ SELECT (SELECT count(*) FROM ins), (SELECT count(*) FROM queued)`
 // from firstArg; Args returns their values. The statement then yields (approvals inserted, outbox rows
 // inserted).
 func (e Enqueue) Tail(firstArg int) string {
-	return fmt.Sprintf(queueTail, firstArg, firstArg+1, firstArg+2, RunBudget)
+	tier0 := 0
+	for _, p := range e.planned {
+		if p.Tier == 0 {
+			tier0++
+		}
+	}
+	// The route's hour may hold at most RunBudget-tier0 rows. A tier 0 wider than the whole budget fits
+	// no hour, so it is admitted into an hour that holds none of its route's tier-0 rows, as it was before
+	// the plan was counted: it is sent once an hour, whatever other routes send. The kinds are
+	// types.ApprovalKinds constants (NewEnqueue), never input, so they are written into the text.
+	return fmt.Sprintf(queueTail, firstArg, firstArg+1, firstArg+2, "'"+strings.Join(e.kinds, "','")+"'", max(RunBudget-tier0, 0))
 }
 
 // Args are the three array parameters Tail refers to.

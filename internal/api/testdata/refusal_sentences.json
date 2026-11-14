@@ -381,6 +381,16 @@
   },
   {
     "reason": "governance_unit",
+    "target": "\"runs.exec\"",
+    "sentence": "fmt.Sprintf(runExecDenyInteractiveMsg, p.Name)"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.exec\"",
+    "sentence": "fmt.Sprintf(runExecDenyTaskModeExecMsg, p.Name)"
+  },
+  {
+    "reason": "governance_unit",
     "target": "\"runs.interactive\"",
     "sentence": "fmt.Sprintf(\"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.\", name)"
   },

@@ -11,11 +11,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 )
 
 // The subject a WARDYN_AUDIT_SEAL=full row carries in its actor column is the
 // id of the person's oldest principal_identities row; these are the reads that
 // map a person to it and back (audit.SubjectDirectory).
+
+var _ audit.SubjectDirectory = PG{}
 
 // AuditSubjectFor is principal's subject id. ok is false when the person has no
 // identity row.
@@ -61,4 +65,27 @@ func (s PG) AuditKeyDestroyedAt(ctx context.Context, owner string) (time.Time, b
 		return time.Time{}, false, nil
 	}
 	return *at, true, nil
+}
+
+// AuditSubjectEras is the identity row id's binding history (principal_identity_unbinds), oldest
+// first; nil for an id that is not a uuid. An erased principal reads "". SubjectGone is bounded by
+// the unbind, so a later holder's erasure, which destroys under the subject after it, is not that
+// era's.
+func (s PG) AuditSubjectEras(ctx context.Context, id string) ([]audit.SubjectEra, error) {
+	u, err := uuid.Parse(id)
+	if err != nil {
+		return nil, nil
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT COALESCE(h.principal, ''), h.unbound_at,
+		COALESCE((SELECT max(k.destroyed_at) FROM principal_keys k WHERE k.owner = $2 AND k.purpose = 'audit-seal'
+			AND k.destroyed_at <= h.unbound_at), 'epoch')
+		FROM principal_identity_unbinds h WHERE h.identity_id = $1 ORDER BY h.unbound_at`, u, audit.SubjectActorPrefix+u.String())
+	if err != nil {
+		return nil, fmt.Errorf("store: read an audit subject's earlier bindings: %w", err)
+	}
+	eras, err := pgx.CollectRows(rows, pgx.RowToStructByPos[audit.SubjectEra])
+	if err != nil {
+		return nil, fmt.Errorf("store: read an audit subject's earlier bindings: %w", err)
+	}
+	return eras, nil
 }

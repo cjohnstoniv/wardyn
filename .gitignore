@@ -33,6 +33,9 @@ deploy/images/aws-sso/awscliv2-bin
 .env
 .env.local
 .env.*.local
+# A rewrite stopped between mktemp and mv leaves .env.XXXXXX beside the env file.
+.env.*
+!.env.example
 
 # Development
 .idea/

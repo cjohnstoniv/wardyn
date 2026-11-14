@@ -308,9 +308,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 			st.Leaked++
 		}
 	}
-	for _, e := range debts {
-		st.HeldDiskBytes += e.DiskReserve
-	}
+	st.HeldDiskBytes = admission.SumDisk(debts)
 	return st, nil
 }
 

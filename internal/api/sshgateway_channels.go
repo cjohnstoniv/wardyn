@@ -899,7 +899,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshExecArgv(command),
 		Env:  env,
 	})
@@ -964,7 +964,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
 	if err != nil {
@@ -985,13 +985,15 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	defer channel.Close()
 	go ssh.DiscardRequests(reqs)
 
-	_, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
+	var end bridgeEnd
+	exit, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, noteBridgeEnd(ctx, sess, &end), false)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment (same shape, same connection-teardown race, same fix). THIS is
 	// the exact call the live e2e's -L forward step caught losing its
 	// ssh.forward row to a killed session (scripts/run-e2e-ssh.sh, step 5's
 	// comment); TestSSHGateway_ForwardAuditSurvivesKill pins it.
+	extra := map[string]any{"port": m.DestPort, "bytes": bytesOut}
+	outcome := bridgeOutcome(exit, end, "the forward relay", extra)
 	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
-		fmt.Sprintf("127.0.0.1:%d", m.DestPort), "success",
-		mustJSON(map[string]any{"port": m.DestPort, "bytes": bytesOut})))
+		fmt.Sprintf("127.0.0.1:%d", m.DestPort), outcome, mustJSON(extra)))
 }

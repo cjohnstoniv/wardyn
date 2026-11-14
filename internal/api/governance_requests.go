@@ -37,8 +37,8 @@ type governanceRequestKind struct {
 	decider string // types.DeciderKind*
 	// propose writes the 202 or the refusal.
 	propose func(s *Server, w http.ResponseWriter, r *http.Request, body governanceRequestBody, who requestCaller)
-	// view is the kind's fields from the stored payload.
-	view func(s *Server, ctx context.Context, ch types.GovernanceChange) requestFields
+	// view is the kind's fields from the stored payload; err is a failed read of the state it points at.
+	view func(s *Server, ctx context.Context, ch types.GovernanceChange) (requestFields, error)
 }
 
 var governanceRequestKinds = map[string]governanceRequestKind{
@@ -64,6 +64,7 @@ type requestFields struct {
 	unitID   *uuid.UUID
 	duration string
 	endsAt   *time.Time
+	noEnd    bool
 	image    string
 }
 
@@ -86,6 +87,7 @@ type GovernanceRequestView struct {
 	UnitName  string           `json:"unit_name,omitempty"`
 	Duration  string           `json:"duration,omitempty"` // types.CanonicalDuration, as max_elevation is stored: "4h", "1h30m"
 	EndsAt    *time.Time       `json:"ends_at,omitempty"`  // applied elevations only: the membership's expires_at
+	NoEnd     bool             `json:"no_end,omitempty"`   // applied elevations only: the membership is held with no end
 	Image     string           `json:"image,omitempty"`    // an image request's
 	Mine      bool             `json:"mine"`
 	Decidable bool             `json:"decidable"`
@@ -179,7 +181,12 @@ func (s *Server) handleListGovernanceRequests(w http.ResponseWriter, r *http.Req
 					return
 				}
 			}
-			out.Requests = append(out.Requests, s.requestView(r, ch, names))
+			v, err := s.requestView(r, ch, names)
+			if err != nil {
+				writeServerError(w, r, "read a request's state", err)
+				return
+			}
+			out.Requests = append(out.Requests, v)
 		}
 	}
 	if _, ok := s.requester(r); ok {
@@ -214,11 +221,15 @@ func (s *Server) unitNames(ctx context.Context) (map[uuid.UUID]string, error) {
 	return out, nil
 }
 
-// requestView is ch as the caller reads it.
-func (s *Server) requestView(r *http.Request, ch types.GovernanceChange, names map[uuid.UUID]string) GovernanceRequestView {
+// requestView is ch as the caller reads it; err is its kind's failed read.
+func (s *Server) requestView(r *http.Request, ch types.GovernanceChange, names map[uuid.UUID]string) (GovernanceRequestView, error) {
 	name, _ := requestKindOf(ch.TargetKind)
 	kind := governanceRequestKinds[name]
-	return s.requestViewOf(r, ch, name, kind.decider, kind.view(s, r.Context(), ch), names)
+	f, err := kind.view(s, r.Context(), ch)
+	if err != nil {
+		return GovernanceRequestView{}, err
+	}
+	return s.requestViewOf(r, ch, name, kind.decider, f, names), nil
 }
 
 // requestViewOf is requestView with the kind given: a kind's own create answers through it, so the kinds
@@ -226,13 +237,17 @@ func (s *Server) requestView(r *http.Request, ch types.GovernanceChange, names m
 func (s *Server) requestViewOf(r *http.Request, ch types.GovernanceChange, name, decider string, f requestFields, names map[uuid.UUID]string) GovernanceRequestView {
 	ctx := r.Context()
 	_, principal := actorFromRequest(r)
+	email := oidcEmailFromContext(ctx)
 	v := GovernanceRequestView{GovernanceChange: s.changeForRead(r, ch), Kind: name, UnitID: f.unitID, Duration: f.duration,
-		EndsAt: f.endsAt, Image: f.image, Mine: sameGovernanceHuman(ch, principal, oidcEmailFromContext(ctx)),
+		EndsAt: f.endsAt, Image: f.image, Mine: s.ownsGovernanceChange(ch, principal, email),
 		Deciders: s.requestApprovers(ctx, ch, decider)}
+	v.NoEnd = f.noEnd
 	if f.unitID != nil {
 		v.UnitName = names[*f.unitID]
 	}
-	v.Decidable = ch.State == types.GovernanceChangePending && !v.Mine && governanceChangeKinds[ch.TargetKind].forChange(ch).approver.allowed(s, r)
+	// Mine is ownership; Decidable keeps the conservative same-human test an approval refuses on.
+	v.Decidable = ch.State == types.GovernanceChangePending && !sameGovernanceHuman(ch, principal, email) &&
+		governanceChangeKinds[ch.TargetKind].forChange(ch).approver.allowed(s, r)
 	return v
 }
 

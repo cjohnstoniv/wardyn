@@ -109,6 +109,7 @@ func (s *Server) sweepTerminalSandboxRuns(ctx context.Context, runs []types.Agen
 // run, across replicas: the operator route and the ticker (or two replicas'
 // tickers) would otherwise both tear the same run down and double its run.kill
 // rows. A run whose lock is held is skipped; a later pass decides.
+// Each call it makes under the lock has a bound of its own: the operator route's context has none.
 func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun) bool {
 	ctx, unlock, locked := s.tryLockRunOp(ctx, run.ID)
 	if !locked {
@@ -123,18 +124,31 @@ func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun
 	if run.State == types.RunKilled && s.recoverAbandonedKillTail(ctx, run) {
 		return true
 	}
+	if run.SandboxRef != "" && run.RunnerID != nil && s.teardownHoldClearedAfterRefusal(ctx, run) {
+		// A kill its runner refused while it held the run, and has since reported finished: the boot pass's
+		// answer (the kill queued again, or the ref cleared once it is applied) without waiting for a start.
+		s.reconcileOrphanedRun(ctx, run, sandboxSweepAction)
+		return false
+	}
 	if run.SandboxRef == "" {
 		return false
 	}
-	st, serr := s.cfg.Runner.Status(ctx, run.SandboxRef)
+	pctx, pcancel := context.WithTimeout(ctx, sweepProbeBound)
+	st, serr := s.cfg.Runner.Status(pctx, run.SandboxRef)
+	pcancel()
 	if serr != nil || st.State != types.RunRunning {
 		return false // already gone (or unprobeable) — the normal, settled case
 	}
 	// A sandbox kept for its computer folder's pass back (or whose record cannot be read) is left for
 	// the tail owner (folderCleanupLoop) with only its proxy stopped, and is not counted as swept. The revoke,
 	// idempotent, runs either way.
-	left, _ := s.stopTerminalSandbox(ctx, run, "sandbox.sweep")
-	s.revokeRunCascade(ctx, run.ID)
+	stopBound := sweepStopBound
+	if run.MachineKind.IsMacOSVM() {
+		stopBound += macOSVMTeardownBudget
+	}
+	var left bool
+	heldCall(ctx, stopBound, func(ctx context.Context) { left, _ = s.stopTerminalSandbox(ctx, run, "sandbox.sweep") })
+	heldCall(ctx, heldRevokeBound, func(ctx context.Context) { s.revokeRunCascade(ctx, run.ID) })
 	return !left
 }
 
@@ -152,6 +166,14 @@ const killTailRecoveryGrace = killCascadeTimeout + 30*time.Second
 // killTailRecoveryTimeout bounds one recovered kill tail: the killCascadeTimeout
 // the normal kill path gives it. A var only so a test can shrink it.
 var killTailRecoveryTimeout = killCascadeTimeout
+
+// sweepProbeBound bounds the sweep's status probe of one run's sandbox, made under the run's lock; a variable only
+// so a test can shorten it.
+var sweepProbeBound = watcherProbeTimeout
+
+// sweepStopBound bounds the sweep's stop of one run's sandbox, made under the run's lock, as the boot pass bounds its
+// teardown; a macOS VM run's gets macOSVMTeardownBudget more. A variable only so a test can shorten it.
+var sweepStopBound = reconcileFinalizeTimeout
 
 // killTailSettled lists the audit rows that each prove a KILLED run needs no
 // kill-tail recovery. Matched with an EXISTS over the run's whole trail, never
@@ -191,15 +213,18 @@ var killTailSettled = []store.AuditFilter{
 // concurrently. A KILLED row younger than the grace is left alone — it may
 // still have a live tail finishing on its own.
 func (s *Server) recoverAbandonedKillTail(ctx context.Context, run types.AgentRun) bool {
-	if s.cfg.Now().UTC().Sub(run.UpdatedAt) < killTailRecoveryGrace {
-		return false // may still be an in-flight tail — leave it alone
+	now, err := s.dbNow(ctx) // updated_at is the database's stamp
+	if err != nil || now.Sub(run.UpdatedAt) < killTailRecoveryGrace {
+		return false // may still be an in-flight tail, or the clock is unreadable: leave it, the next pass retries
 	}
 	matcher, ok := s.cfg.Store.(store.RunAuditMatcher)
 	if !ok {
 		return false // cannot answer exactly: never re-kill on a guess
 	}
 	for _, f := range killTailSettled {
-		found, err := matcher.HasRunAuditEvent(ctx, run.ID, f)
+		hctx, hcancel := context.WithTimeout(ctx, heldStoreCallBound)
+		found, err := matcher.HasRunAuditEvent(hctx, run.ID, f)
+		hcancel()
 		if err != nil || found {
 			return false // settled, or unprobeable this pass (the next pass tries again)
 		}

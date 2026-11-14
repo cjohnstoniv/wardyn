@@ -14,12 +14,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // AddSSHKey inserts a new registered key. Returns ErrConflict when the
 // fingerprint (PK) already exists — a 23505 here means that exact key
-// material is already registered.
+// material is already registered. With a cap on ctx (WithAdmissionCap) it
+// counts the owner's keys under the owner's cap lock first.
 func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
 	const q = `
 		INSERT INTO ssh_public_keys (` + sshKeyCols + `)
@@ -27,6 +29,10 @@ func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPubli
 		RETURNING ` + sshKeyCols
 	var out types.SSHPublicKey
 	err := s.guarded(ctx, func(qr queryRower) (e error) {
+		if e = admitUnderCap(ctx, qr, db.SSHKeyCapLockClass, k.Principal,
+			`SELECT count(*) FROM ssh_public_keys WHERE principal = $1`, ErrSSHKeyCap); e != nil {
+			return e
+		}
 		out, e = scanSSHKey(qr.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.Capped, k.CreatedAt, k.RevSeq))
 		return e
 	})

@@ -145,13 +145,23 @@ function KeyDoor({
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const id = target.provider.id;
+  // DoorDialog unmounts this form when the door is dismissed. A write still in flight then belongs to a closed door,
+  // and its after() would close and complete whichever door is open by the time it answers.
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const run = async (write: () => Promise<void>, after: () => void) => {
     setBusy(true);
     setError("");
     try {
       await write();
-      after();
+      if (mounted.current) after();
     } catch (e) {
+      if (!mounted.current) return;
       if (e instanceof HttpError && e.status === 409 && e.reason === SIGNS_IN_REASON) {
         onSignsIn();
         return;

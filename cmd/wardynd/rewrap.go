@@ -43,7 +43,12 @@ const rewrapActor = "wardyn/rewrap"
 //
 // Safe beside a serving daemon configured the same way: it reads a row under
 // both the old and the new KEK, and reads the boot keys only at boot. While
-// it runs, a write to an existing secret waits for its commit.
+// it runs, a write to an existing secret waits for its commit. Its retirement
+// step holds only for a run started once every wardynd process that was
+// running when the key's latest version was made has exited: a Put seals its
+// row before it writes it, with no check of the key version at the write, so a
+// write sealed before then can land under an older version after this run
+// (retireStep says so).
 func rewrapMode(f *bootFlags) error {
 	if strings.TrimSpace(*f.dsn) == "" {
 		return fmt.Errorf("refusing to rewrap: -rewrap needs the secret store's database; set WARDYN_PG_DSN")
@@ -172,12 +177,25 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 }
 
 // retireStep names the key service id at version v, and what retires every
-// other version at that service.
+// other version at that service, once no replica that sealed a row before v
+// was made is still running.
 func retireStep(id, v string) string {
 	if strings.HasPrefix(id, kek.AzureKeyIDPrefix) {
-		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every OLDER version of both keys in Key Vault (never a newer one) now retires them", id, v)
+		return fmt.Sprintf("%s at versions %s (wrapping/signing); if every wardynd process that was running when those versions were made had exited before this run started, "+
+			"disabling every OLDER version of both keys in Key Vault (never a newer one) now retires them", id, v)
 	}
-	return fmt.Sprintf("%s version %s; raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v)
+	return fmt.Sprintf("%s version %s; if every wardynd process that was running when version %s was made had exited before this run started, "+
+		"raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v, v)
+}
+
+// failureReason is a maintenance mode's audit reason for a failed run: unknown
+// when the error came from a COMMIT (secretstorepg.ErrCommitOutcomeUnknown),
+// whose reply can be lost after the commit landed, and aborted otherwise.
+func failureReason(err error) string {
+	if errors.Is(err, secretstorepg.ErrCommitOutcomeUnknown) {
+		return "unknown"
+	}
+	return "aborted"
 }
 
 // optionalIdentity is the platform identity as the interface the store takes:
@@ -197,11 +215,13 @@ const rewrapAbortAuditTimeout = 5 * time.Second
 // boot keys now sit under a separate platform key, how many principal keys
 // moved with them, and, when a key service wraps every write, its kek_id and the
 // key version every row and principal key is now under.
-// An aborted run's event is outcome failure, reason aborted: its count is
-// what was committed (0 — the rewrap is one transaction), and it carries no
-// key_version, since no row moved to it. A run refused over its boot keys is
-// reason refused with refusal mixed_boot_keys or adopt_not_requested, so a
-// rule can fire on the tamper signal. Like secret.rekey it names no secret.
+// A failed run's event is outcome failure, reason aborted, or reason unknown
+// when its commit returned an error (failureReason). Its count is 0 either
+// way: an abort committed nothing (the rewrap is one transaction), and after a
+// commit error the count is not known. It carries no key_version. A run
+// refused over its boot keys is reason refused with refusal mixed_boot_keys or
+// adopt_not_requested, so a rule can fire on the tamper signal. Like
+// secret.rekey it names no secret.
 func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool, failure error) {
 	fields := map[string]any{"secrets": res.Rewrapped, "principal_keys": res.PrincipalKeys, "platform_key_separate": separate}
 	if res.Rotated {
@@ -217,7 +237,7 @@ func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.
 	case errors.Is(failure, secretstorepg.ErrAdoptNotRequested):
 		outcome, fields["reason"], fields["refusal"] = "failure", "refused", "adopt_not_requested"
 	case failure != nil:
-		outcome, fields["reason"] = "failure", "aborted"
+		outcome, fields["reason"] = "failure", failureReason(failure)
 	case res.KeyVersion != "":
 		fields["key_version"] = res.KeyVersion
 	}

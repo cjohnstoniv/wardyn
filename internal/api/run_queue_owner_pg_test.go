@@ -116,6 +116,58 @@ func TestPG_QueueRetiredServiceIdentityNeverStarts(t *testing.T) {
 	}
 }
 
+// A start rebuilt from a queue row carries no admission of its own, so the owner guard holds no service
+// identity row for it: the start's own check refuses a run queued before its identity was suspended, or
+// before its sponsor was handed on, a hand-over and back included, and starts one whose suspension ended.
+func TestPG_QueueSuspendedOrRehomedServiceIdentityNeverStarts(t *testing.T) {
+	ctx := context.Background()
+	e := newQueueEnv(t)
+	e.revocations()
+	const other = "sponsor-b"
+	for _, p := range []string{e.personP, other} {
+		if _, err := e.pg.IssueLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: "https://idp.example", TenantID: "t",
+			ObjectID: "o-" + p, Email: p + "@corp.example"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	si, err := e.pg.CreateServiceIdentity(ctx, types.ServiceIdentity{Name: "ci-queue", Sponsor: e.personP, UserType: types.UserTypeStandard, CreatedBy: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageSponsorships(t, e.pg.Pool)
+	auth := queueAuthority{Sub: si.Principal(), Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{}, Service: si.Name, Sponsor: e.personP}
+	queued := e.startOf(auth, types.AgentRun{ID: uuid.New()}) // queued now, before every change below
+	change := func(ch store.ServiceIdentityChange) {
+		t.Helper()
+		ch.By = "admin"
+		if _, err := e.pg.UpdateServiceIdentity(ctx, si.Name, ch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := func(what string) {
+		t.Helper()
+		if end := e.srv.queueOwnerStanding(queued); end == nil || end.token != string(types.RunEndIdentityDeactivated) {
+			t.Errorf("the start of a run queued before %s = %+v; want identity_deactivated", what, end)
+		}
+	}
+	if end := e.srv.queueOwnerStanding(queued); end != nil {
+		t.Fatalf("a live service identity's start ended: %+v", end)
+	}
+	yes, no := true, false
+	change(store.ServiceIdentityChange{Suspended: &yes})
+	refused("the identity was suspended")
+	change(store.ServiceIdentityChange{Suspended: &no})
+	if end := e.srv.queueOwnerStanding(queued); end != nil {
+		t.Errorf("the start after the suspension ended: %+v; want it to go on", end)
+	}
+	to := other
+	change(store.ServiceIdentityChange{Sponsor: &to})
+	refused("its sponsor was handed on")
+	to = e.personP
+	change(store.ServiceIdentityChange{Sponsor: &to})
+	refused("its sponsor was handed on and back")
+}
+
 // The start judges the owner by the user type the current role mappings give them, not the one their
 // session carried at launch: a person moved to a type whose agent door is shut has the run ended.
 func TestPG_QueueRetypedOwnerIsJudgedByTheCurrentType(t *testing.T) {
@@ -234,6 +286,42 @@ func TestPG_QueueEndsAuditOnlyWhatTheyEnded(t *testing.T) {
 	_ = e.srv.failStalePromoted(ctx)
 	if rows := e.audits(run.ID, "run.queue.start"); len(rows) != 0 {
 		t.Errorf("run.queue.start rows for a run already ended = %d, want 0", len(rows))
+	}
+}
+
+// A start whose heartbeat lands after the stale-lease pass listed it keeps its run: the pass's own
+// transition re-checks the lease, so there is no failure, no hint, no revoke and no start_lost row.
+func TestPG_QueueStaleLeaseSparesAStartWhoseHeartbeatRecovered(t *testing.T) {
+	ctx := context.Background()
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, "")
+	e.exec(`DELETE FROM agent_runs WHERE id = $1`, occupant.ID)
+	promoted, _, err := e.pg.PromoteRunQueue(ctx, store.PromotePass{PoolID: pool.ID, ScanLimit: 10, WatcherOwner: "live-replica"},
+		func(context.Context, types.RunnerPool, store.RunQueueEntry) (store.QueueVerdict, error) {
+			return store.QueueVerdict{Admit: true}, nil
+		})
+	if err != nil || len(promoted) != 1 || promoted[0].Run.ID != waiting.ID {
+		t.Fatalf("promote by hand: %v %v", promoted, err)
+	}
+	// The pass lists the start while its lease is stale...
+	e.exec(`UPDATE agent_runs SET watcher_heartbeat = now() - interval '2 minutes' WHERE id = $1`, waiting.ID)
+	listed, err := e.pg.StalePromotedRuns(ctx, queueLeaseStale)
+	if err != nil || len(listed) != 1 || listed[0].ID != waiting.ID {
+		t.Fatalf("stale list = %v, %v; want the promoted run", listed, err)
+	}
+	// ...and the start's heartbeat lands before the pass's transition.
+	e.exec(`UPDATE agent_runs SET watcher_heartbeat = now() WHERE id = $1`, waiting.ID)
+	e.srv.cfg.Store = &queueFaultStore{PG: e.pg, stale: listed}
+	if err := e.srv.failStalePromoted(ctx); err != nil {
+		t.Fatalf("failStalePromoted = %v; a start that recovered is no failure", err)
+	}
+	if got := e.run(waiting.ID); got.State != types.RunPending || got.FailureHint != "" {
+		t.Errorf("the recovered start's run = %s %q; want it still PENDING with no hint", got.State, got.FailureHint)
+	}
+	if rows := e.audits(waiting.ID, "run.queue.start"); len(rows) != 0 {
+		t.Errorf("run.queue.start rows = %d; want none for a run the pass did not end", len(rows))
 	}
 }
 

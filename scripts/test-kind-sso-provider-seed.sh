@@ -116,8 +116,7 @@ HTTP_PORT="$(pick_free_port)"
 # reuse on a shared box with other lanes' daemons). Picked free for the same
 # isolation reason as HTTP_PORT; never dialed here since WARDYN_RUNNER=none
 # never starts a sandbox proxy to use it.
-INTERNAL_PORT="$(pick_free_port)"
-BASE_URL="http://127.0.0.1:${HTTP_PORT}"
+INTERNAL_PORT="$(pick_free_port "${HTTP_PORT}")"
 ADMIN_TOKEN="walk-673-$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 # A non-resolving DNS name, never an IP literal — ValidateBedrockBaseURL (T-13's
 # own pin) refuses a loopback/link-local IP literal outright, and this script
@@ -125,6 +124,10 @@ ADMIN_TOKEN="walk-673-$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 # nothing).
 FAKE_BEDROCK_URL="http://wardyn-cl-673-fake.internal.test:8090"
 
+# Both ports are free until wardynd binds them, so another process can take one first; wardynd then exits
+# on its bind error, and it is started once more on new ports.
+for start in 1 2; do
+BASE_URL="http://127.0.0.1:${HTTP_PORT}"
 step "starting wardynd on ${BASE_URL} (WARDYN_RUNNER=none; no retired Bedrock env set)"
 # THE EXACT ENVIRONMENT wardynd is launched with, as an array rather than an
 # inline `env -i ... &` — so step 5 below can assert against the very list
@@ -144,7 +147,17 @@ WARDYND_ENV=(
 env -i PATH="${PATH}" HOME="${HOME}" "${WARDYND_ENV[@]}" \
   "${WORKDIR}/wardynd" >"${WORKDIR}/wardynd.log" 2>&1 &
 WARDYND_PID=$!
-wait_healthy "${BASE_URL}" 30 || { tail -40 "${WORKDIR}/wardynd.log" >&2; die "wardynd did not become healthy"; }
+up_rc=0
+wait_healthy "${BASE_URL}" 30 1 "${WARDYND_PID}" || up_rc=$?
+[[ ${up_rc} -eq 2 && ${start} -eq 1 ]] || break
+tail -5 "${WORKDIR}/wardynd.log" >&2
+warn "wardynd exited before it served /healthz; starting it once more on new ports"
+wait "${WARDYND_PID}" 2>/dev/null
+failed_ports=("${HTTP_PORT}" "${INTERNAL_PORT}")
+HTTP_PORT="$(pick_free_port "${failed_ports[@]}")"
+INTERNAL_PORT="$(pick_free_port "${failed_ports[@]}" "${HTTP_PORT}")"
+done
+[[ ${up_rc} -eq 0 ]] || { tail -40 "${WORKDIR}/wardynd.log" >&2; die "wardynd did not become healthy"; }
 
 auth() { curl -s -H "Authorization: Bearer ${ADMIN_TOKEN}" "$@"; }
 put_json() { # <path> <body> -> HTTP code (body on stdout via $RESP_FILE)

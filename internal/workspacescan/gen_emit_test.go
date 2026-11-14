@@ -5,8 +5,12 @@ package workspacescan
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 )
 
 func TestEmitEnvAsCode(t *testing.T) {
@@ -132,5 +136,65 @@ func TestEmitEnvAsCode_AlwaysBakesAgentTool(t *testing.T) {
 	}
 	if strings.Contains(dc, "CreateCommand") {
 		t.Errorf("a lifecycle command bakes nothing into the pushed image: %s", dc)
+	}
+}
+
+// TestEmitEnvAsCode_MirrorConfigIsWhereEachToolReadsIt pins each ecosystem's mirror config in the
+// export: EmitArtifactConfig's paths are relative to HOME, but the export lands them in the project,
+// so each file must sit where its tool reads a project file, be replaced by an env setting, or (Maven)
+// come with the AGENTS.md step that passes it.
+func TestEmitEnvAsCode_MirrorConfigIsWhereEachToolReadsIt(t *testing.T) {
+	const base = "https://mirror.corp/repo/"
+	const mavenStep = "mvn --settings .m2/settings.xml"
+	for _, tc := range []struct {
+		eco, file, envKey string
+	}{
+		{"npm", ".npmrc", ""},
+		{"cargo", ".cargo/config.toml", ""},
+		{"pip", "", "PIP_INDEX_URL"},
+		{"maven", ".m2/settings.xml", ""},
+		{"nuget", "NuGet.Config", ""},
+	} {
+		t.Run(tc.eco, func(t *testing.T) {
+			bases := map[string]string{tc.eco: base}
+			files, err := EmitEnvAsCode(WorkspaceProfile{}, bases, false, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mirror, want []string
+			for p := range files {
+				if p != ".devcontainer/devcontainer.json" && p != ".devcontainer/Dockerfile" && p != "AGENTS.md" {
+					mirror = append(mirror, p)
+				}
+			}
+			if tc.file != "" {
+				want = []string{tc.file}
+				src, _ := hostrules.EmitArtifactConfig(bases, false)
+				for _, content := range src {
+					if files[tc.file] != content {
+						t.Errorf("%s = %q, want the generator's %q", tc.file, files[tc.file], content)
+					}
+				}
+			}
+			if !slices.Equal(mirror, want) {
+				t.Fatalf("mirror files = %v, want %v", mirror, want)
+			}
+			var parsed struct {
+				ContainerEnv map[string]string `json:"containerEnv"`
+			}
+			if err := json.Unmarshal([]byte(files[".devcontainer/devcontainer.json"]), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			wantEnv := map[string]string{}
+			if tc.envKey != "" {
+				wantEnv[tc.envKey] = base
+			}
+			if !maps.Equal(parsed.ContainerEnv, wantEnv) {
+				t.Errorf("containerEnv = %v, want %v", parsed.ContainerEnv, wantEnv)
+			}
+			if got := strings.Contains(files["AGENTS.md"], mavenStep); got != (tc.eco == "maven") {
+				t.Errorf("AGENTS.md has the Maven step %q = %v, want %v:\n%s", mavenStep, got, tc.eco == "maven", files["AGENTS.md"])
+			}
+		})
 	}
 }

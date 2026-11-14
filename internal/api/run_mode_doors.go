@@ -15,7 +15,7 @@ import (
 // (a super admin included: this is the run's shape, not a permission). Logs,
 // audit, status and the authorised lifecycle controls (kill, stop, approve) stay.
 //
-// Two exceptions, both on a macOS VM's built-in desktop alone.
+// Three exceptions. The first two are on a macOS VM's built-in desktop alone.
 //
 // The first is a view-only watch (run_background_watch.go). It opens only by its
 // own ticket and answers to backgroundWatchRefusal, at the mint, at the enter, at
@@ -28,8 +28,16 @@ import (
 // to backgroundOnlyRefusal: a background run's owner may sit at it, and no browser
 // session keeps control beside it.
 //
+// The third is one command at a time (run_exec.go): POST /runs/{id}/exec takes a
+// background run, so a pipeline step can run commands in its own headless run. It
+// opens no terminal, SSH channel or relay. It answers to execFreshRun, which is
+// sshFreshRun less the background refusal, to refuseExecGovernance (deny_interactive,
+// and deny_task_mode_exec on a background run), to the data_out rule and to the
+// run's SSH channel cap, and each command writes a run.command.exec row. Its output
+// is neither masked nor recorded. The run's SSH access stays closed.
+//
 // A declared noVNC, a Linux VM's desktop, the Files panel, sign-ins, the terminal,
-// exec and SSH refuse as ever.
+// interactive exec and SSH refuse as ever.
 //
 // The stored field is agent_runs.experience (types.AgentRun.Experience), written
 // once at create from the request. The single predicate is
@@ -84,7 +92,8 @@ var backgroundDoors = []backgroundDoor{
 	// sshFreshRun, not the channel handlers: those take a run id and hold no run,
 	// while sshFreshRun is the one fresh read every channel bridge (shell, exec,
 	// sftp, wardyn-sync, direct-tcpip) makes before it execs. POST /runs/{id}/exec is
-	// the exec channel over HTTP (run_exec.go) and makes the same read before it execs.
+	// the exec channel over HTTP (run_exec.go) and the contract's third exception: its
+	// read is execFreshRun, which takes a background run (TestBackgroundExecIsTheDoorsThirdException).
 	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"},
 		Routes: []string{"POST /runs/{id}/exec"}, Enforced: true},
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind

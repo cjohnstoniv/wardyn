@@ -61,7 +61,7 @@ ha:
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.10.0-rc.19 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.10.0-rc.20 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
@@ -120,10 +120,10 @@ ingress:
   # was sent, one at a time, up to 3.5 minutes each: a batch slower than 60 s
   # gets the same 504, so give it a timeout that covers your largest batch.
   # The egress edit request (PATCH /api/v1/runs/{id}/egress), counted from
-  # wardynd's own time limits, can take up to 425s, or 485s for a run with a
-  # both-ways computer folder; a stalled database read at sign-in or at the
-  # audit write is not counted. Set a proxy read timeout of at least 540s for
-  # it; a shorter one can return 504 to the caller while the edit continues.
+  # wardynd's own time limits, can take up to 8 minutes (480s); a stalled
+  # database read at sign-in, when the run is first read or at the audit write
+  # is not counted. Set a proxy read timeout of at least 530s for it; a shorter
+  # one can return 504 to the caller while the edit continues.
   annotations: {}
   hosts: []
   # hosts:
@@ -441,6 +441,9 @@ kek:
 #   env:
 #     WARDYN_HOST_MIN_MEM_AVAILABLE_MIB: "8192"
 #     WARDYN_HOST_MAX_LOAD1: "100"
+# A name set here replaces the entry a chart setting would add (for example
+# WARDYN_RECORDING_STORE from persistence), except the k8s.*, ssh.*, uiSandbox.*
+# and metrics.listener.* entries, which win.
 env: {}
 
 # Cap on non-terminal runs across the whole deployment (WARDYN_MAX_CONCURRENT_RUNS,
@@ -463,6 +466,10 @@ trustedProxies: ""
 #     - name: WARDYN_OIDC_CLIENT_SECRET
 #       valueFrom:
 #         secretKeyRef: {name: wardyn-oidc, key: client-secret}
+# A name here replaces the same name in env or from a chart setting (the same
+# exceptions as env), and a name listed twice keeps its last entry. The chart
+# renders each name once, because an upgrade that drops one of two same-named
+# entries can remove the name from the Deployment.
 extraEnv: []
 
 # Boot secrets as FILES instead of env vars (for "secrets delivered at runtime"
@@ -825,16 +832,18 @@ ssh:
 
 # UI-sandbox gateway (see docs/UI-SANDBOXES.md — a governed, ticket-gated
 # relay from a browser to ONE policy-declared loopback port inside a run's
-# sandbox, e.g. a code editor). Off by default; enabled it is a CONDITIONAL
-# third port on the same Service/Deployment, driving
-# WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/_ORIGIN_TEMPLATE.
+# sandbox, e.g. a code editor). Off by default; enabled it is a third port on
+# the same Service/Deployment, driving
+# WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/_ORIGIN_TEMPLATE, and uiSandbox.ingress
+# can render its Ingress.
 #
 # `port` MUST differ from service.port: what the gateway serves is the
 # SANDBOX's own pages, and the separate browser origin is the only thing
 # keeping that code away from the console's session (the chart refuses to
 # render, and wardynd refuses to boot, when the two are equal). Terminating both ports on one hostname
 # defeats the same control — give the gateway its own host, and a certificate
-# that covers it, at your ingress/LoadBalancer (README "UI sandbox gateway").
+# that covers it (uiSandbox.ingress, or your own ingress/LoadBalancer; README
+# "UI sandbox gateway").
 uiSandbox:
   enabled: false
   port: 8081
@@ -854,7 +863,22 @@ uiSandbox:
   # With SSO configured (env.WARDYN_OIDC_ISSUER) and no originTemplate the chart
   # refuses to render and wardynd refuses to boot, because every run's apps would
   # share one origin. true accepts that (WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN).
+  # Without SSO the chart renders and prints a warning after install or upgrade
+  # instead; true silences it.
   acceptSharedOrigin: false
+  # An Ingress for the `ui` port (templates/ui-ingress.yaml): the advertiseURL
+  # host and, with originTemplate, its wildcard host (run-{run}.ui.example.com
+  # gives *.ui.example.com; {run} must sit in the first label). It refuses a
+  # host ingress.hosts routes for the console. tls names a secret you provide that covers both hosts;
+  # give it the same backend-protocol annotation your console Ingress uses.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    tls: []
+    # tls:
+    #   - hosts: ["wardyn-ui.example.com", "*.ui.example.com"]
+    #     secretName: wardyn-ui-sandbox-tls
 
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 # Its podSelector governs the control-plane pod ONLY (app.kubernetes.io/

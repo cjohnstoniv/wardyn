@@ -174,7 +174,9 @@ func signedCheckpoints(cps []store.AuditCheckpoint) []auditreceipt.SignedCheckpo
 // Caps: 1,000 events, 10 checkpoints with hash lists and 500 header-only checkpoints between them. Events past
 // them are 413 audit_receipt_too_large; a run's receipt is cut there instead and next_after_seq names where to
 // continue. An event newer than the last checkpoint is 409 audit_receipt_pending with Retry-After; one in no
-// checkpoint at all is 409 audit_receipt_unchained.
+// checkpoint at all is 409 audit_receipt_unchained. One whose checkpoint's stored rows no longer match its
+// signed statement (retention dropped rows it also covers) is 409 audit_receipt_proof_unavailable, audited as
+// a failure: that bundle would fail verification.
 func (s *Server) handleAuditReceipt(w http.ResponseWriter, r *http.Request) {
 	ck, ok := s.auditReceiptReady(w)
 	if !ok {
@@ -236,6 +238,15 @@ func (s *Server) handleAuditReceipt(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonAuditReceiptTooLarge,
 			"the events span more checkpoints than one receipt carries; ask for fewer, or for a run and page with after_seq")
 		return
+	case errors.Is(err, auditreceipt.ErrProofUnavailable):
+		slog.WarnContext(ctx, "wardyn: audit receipt refused: a checkpoint no longer matches its stored rows", slog.Any("err", err))
+		target, runData := receiptAuditTarget(req, events, len(events))
+		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "audit.receipt.create", target, "failure",
+			mustJSON(map[string]any{"events": len(events), "run_id": runData, "reason": reasonAuditReceiptProofUnavailable})))
+		writeErrorReason(w, http.StatusConflict, reasonAuditReceiptProofUnavailable,
+			"a signed checkpoint holding the event no longer matches the stored rows, so no receipt can prove it: "+
+				"audit retention dropped rows the checkpoint also covers, or the log changed after it was signed")
+		return
 	case err != nil:
 		slog.ErrorContext(ctx, "wardyn: audit receipt assembly", slog.Any("err", err))
 		writeErrorReason(w, http.StatusInternalServerError, reasonAuditReceiptReadFailed, "the receipt could not be assembled")
@@ -245,15 +256,22 @@ func (s *Server) handleAuditReceipt(w http.ResponseWriter, r *http.Request) {
 	if more || asm.Included < len(events) {
 		resp.NextAfterSeq = events[asm.Included-1].Row.Seq
 	}
-	target, runData := "events:"+strconv.Itoa(asm.Included), ""
-	if req.runID != nil {
-		target, runData = "run:"+req.runID.String(), req.runID.String()
-	} else if asm.Included == 1 {
-		target = events[0].Row.ID.String()
-	}
+	target, runData := receiptAuditTarget(req, events, asm.Included)
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "audit.receipt.create", target, "success",
 		mustJSON(map[string]any{"events": asm.Included, "run_id": runData, "checkpoints": len(asm.Bundle.Checkpoints), "redacted": redacted})))
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// receiptAuditTarget is the audit.receipt.create target and run_id for the first n events: the run, the one
+// event's id, or events:<n>.
+func receiptAuditTarget(req receiptRequest, events []auditreceipt.Event, n int) (target, runData string) {
+	if req.runID != nil {
+		return "run:" + req.runID.String(), req.runID.String()
+	}
+	if n == 1 {
+		return events[0].Row.ID.String(), ""
+	}
+	return "events:" + strconv.Itoa(n), ""
 }
 
 // handleAuditCheckpoints serves GET /audit/checkpoints?after_seq=N&limit=N: the signed checkpoints covering rows

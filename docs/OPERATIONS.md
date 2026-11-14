@@ -159,6 +159,7 @@ copy is permanent.
     for a full window of its own.
   - So such a row can outlive the run's end by more than the window.
   - For a row that holds output the excess is small in normal operation.
+  - A row recovered from live output a stopped server left is written at its recovery, which can be any time inside the window.
   - Recovering bytes needs the run's masking manifest, which the run-secret sweep removes about an hour after the
     run's last change (`api.RunSecretGrace`, checked every 15 minutes).
   - A `capture_gap` row holds no output.
@@ -261,6 +262,9 @@ copy is permanent.
       with what was read.
   - The sweep every minute resolves a terminal run's pending row, once its claim is five minutes old, the same way: by
     recovery under the same rules, or to a `capture_gap` row.
+    - A pending row that waits on the run's recording ends as a `capture_gap` row when the recording was erased, or
+      when one over-budget try (its 10-second read budget) is made 30 minutes or more after the run ended. A later
+      read of the recording that succeeds replaces that row.
   - Recording uploads commit their recovery obligation before a successful receipt.
     - A restarted leader immediately checks a bounded page of terminal work, then retries every minute; an abandoned
       claim is available after five minutes.
@@ -661,6 +665,8 @@ commands are the ones in "Back them up" and "Restore them", and in
     - fsync'd there before it leaves the spool, verbatim, so the file is a valid JSONL spool you can move back onto
       the spool path once the cause is fixed.
   - A store that is simply down accepts nothing, so nothing is ever quarantined during an outage.
+  - Before the move, the drain writes an `audit.spool.quarantine` row on the event's run, if any, so a confined
+    workspace replay of that run ends as failed, not clean; if the store refuses that row too, the line stays.
   - Each move logs at ERROR with the event's id and action and increments `wardyn_audit_spool_quarantined_total`:
     alert on it, because a spool that has drained back to 0 no longer implies the queryable trail is complete.
   - The counter is **re-read from the sidecar at startup**, so it survives a restart the way the condition it reports
@@ -785,14 +791,22 @@ commands are the ones in "Back them up" and "Restore them", and in
 > Neither binds a **table owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
 > the residual `0007_audit_least_privilege.sql` states plainly.
 
-- The role-split check that reports this posture at boot (`AuditDDLProtected`) counts FOUR ways to bypass, not two:
-  - membership in a superuser role,
-  - membership in the owner role,
-  - the **`TRIGGER` privilege** on `audit_events`,
+- The role-split check that reports this posture at boot (`AuditDDLProtected`) counts SEVEN ways to bypass, not two:
+  - membership in a superuser role, or in one that can gain a superuser's access (`pg_execute_server_program`,
+    `pg_read_server_files`, `pg_write_server_files`, or `CREATEROLE` before PostgreSQL 16),
+  - membership in the owner role of `audit_events`, any of its partitions or its bookkeeping tables,
+  - the **`TRIGGER` privilege** on any of those,
+  - ownership of a function in its schema or run by its triggers, which the owner can alter, or drop along with the
+    triggers that run it,
+  - the **`CREATE` privilege** on that schema, where migrations look up what they call (PostgreSQL 14 and earlier
+    grant it on `public` to every role, and a database upgraded from one can keep that grant),
+  - a `SECURITY DEFINER` function there without a `search_path` that ends in `pg_temp`, whose caller then chooses
+    where it looks names up,
   - and — on PostgreSQL 15 and later, where it is GRANTable to a non-superuser — the **`SET` privilege on the
     `session_replication_role` parameter**, which silences every simply-enabled trigger for the session without
     touching DDL at all.
-- All four are **membership** tests, not attribute lookups.
+- A role's rights are read for every role the app role, or the role its connection signed in as, can `SET ROLE`
+  into, not just the connecting one.
 - `GRANT some_admin_role TO app_role`, the ordinary managed-Postgres migration shape, leaves `app_role` with
   `rolsuper = false` while it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is followed to
   any depth whether or not the role `INHERIT`s.
@@ -812,7 +826,7 @@ commands are the ones in "Back them up" and "Restore them", and in
   refuses to start over ANY foreign row-level BEFORE INSERT trigger on this table.
 - So a deploy that grants `TRIGGER` back is reported as NOT protected.
 
-- **The fourth leg needs no DDL at all.**
+- **The last leg needs no DDL at all.**
   - `SET session_replication_role = 'replica'` silences every trigger left at the ordinary `tgenabled='O'` for the
     session, so a role holding nothing but `INSERT` can append a row past all three guards above — unchained,
     unrewritten by the chain trigger —
@@ -822,11 +836,11 @@ commands are the ones in "Back them up" and "Restore them", and in
     - on an older server only a superuser can set the GUC, so leg one already covers it.
   - It is why `ENABLE ALWAYS` (`tgenabled='A'`, which fires regardless of replication role — see "A trigger you have
     hardened…" above) is the documented hardening rather than an edge case.
-  - Failing any of the four legs is reported at boot as NOT protected, with the remediation logged verbatim:
+  - Failing any of these legs is reported at boot as NOT protected, with the remediation logged verbatim:
     - `wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) can still reach past audit_events'
       append-only guard by the route(s) named here — DDL protection is NOT in effect; connect wardynd as a distinct
       role that holds only INSERT/SELECT on audit_events and none of these`, followed by a `bypass_routes=[…]`
-      attribute naming which of the four fired ([`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)'s
+      attribute naming which of them fired ([`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)'s
       `connectAndMigrate`).
 
 - **The app role's grant set does not grow to keep the chain working.**
@@ -957,6 +971,8 @@ This checks the signature, the two digests and so that each seq belongs to its r
 > **Known limitations.**
 > - History before the first checkpoint is covered by the chain, but it is not receiptable one row at a time.
 > - After a late forged checkpoint from a retired key, the rows between it and the new genesis are not covered by a receipt.
+> - After audit retention drops a month, the rows that shared a signed checkpoint with it are not receiptable: the receipt route refuses them with `audit_receipt_proof_unavailable`.
+> - Rows that audit retention drops before they were signed are never covered by a checkpoint; signing resumes at the first retained row.
 > - The metrics and the latch are per replica: the replica that signs a tick updates them.
 > - A checkpoint is evidence from the moment it is signed. Rows a database owner rewrote before it was signed are signed as rewritten; the off-box copy of earlier statements is the control.
 
@@ -1335,7 +1351,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would, and the macOS VM machines they kept, each deleted as their own delete would (`kept_machines` in the row's detail); a drive or machine a run still holds, or whose Mac is away, stays and fails the scope, naming it |
-| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed; an identity unbind's record of them loses the name |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`), their delegated tokens, and the Azure DevOps token rows of their runs that are revoked or past their expiry |
 
 - The scopes run in the order above whatever order the body lists them: the person's live consumers are fenced first,
@@ -1344,6 +1360,8 @@ erases one person's retained records by explicit scope, in one audited act
 - A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and `remaining`, the
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
+- An Azure DevOps token revoke that did not finish fails `credentials` the same way, with `503`
+  `credential_erase_revoke_unfinished`: that scope erased nothing, so the retry can still revoke the token.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.
@@ -1360,7 +1378,8 @@ erases one person's retained records by explicit scope, in one audited act
     credential, and the reaper deletes each row 90 days after it was written.
   - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
     replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
-    `secret_owner_generations` below would.
+    `secret_owner_generations` below would. Its `erased_at` tells the run token sweep which refused token records
+    an erase kept.
   - `secret_owner_generations` keeps the subject id (below).
 - The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
@@ -1800,8 +1819,8 @@ drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`
     body or a relay's reply text.
   - Terminal rows older than 30 days are deleted, 500 per tick.
 
-**A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
-the one real approval under a flood of chat messages. A raise over the budget still creates its
+**A per-run budget.** One run creates at most 25 tier-0 outbox rows per hour per route, or one raise's
+where tier 0 names more channels, against chat floods. A raise over the budget still creates its
 approval and shows in the console, but enqueues nothing; it increments
 `wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
 per run per hour (per replica).
@@ -2235,6 +2254,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 - The upstream proxy is one setting: its URL and secret reference together.
 - The consequence: to remove a seeded setting, remove it from the file; clearing it in the console lasts until the next restart.
 - Any other key, malformed JSON, or a value `PUT /site-config` would refuse (an embedded `user:pass@` among them) refuses boot.
+- That includes a host in a spelling the proxy refuses in every request, such as `010.0.0.1`, here or in the default policy file (`WARDYN_DEFAULT_POLICY`); the error names the file, the field and the entry.
 
 > [!IMPORTANT]
 > Use `upstream_proxy_secret_ref`, never a credentialed URL.
@@ -2250,6 +2270,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 > **A SiteConfig write reaches only runs dispatched after it lands.**
 
 - The fields that shape a run's egress (`internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects) are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup. A running run keeps the config it started with, however often you fix the SiteConfig underneath it.
+- A host in one of those fields, the upstream proxy URL, `scm_hosts` or a model provider's base URL is refused at write in a spelling the proxy refuses in every request. Such a spelling is an IP address in a non-standard form (`134744072`, `010.0.0.1`) or a host with a character outside ASCII. A stored one, or an upstream proxy URL in a secret, stops each run that carries it from starting.
 - `PUT /site-config` says so in its response (`applies_from: "next_dispatch"`).
 - The console repeats it in the toast on saving the upstream proxy (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress redirects (`setRedirects` in `corp-network-egress.tsx`). No other console write of site config does, and `PUT /site-config` or `wardyn site-config set` has the response field and nothing else.
 - Live sidecar reload is out of scope: a running sandbox's egress posture must not change under it with no audit row to show why.
@@ -2281,6 +2302,8 @@ A URL held in a secret is checked at
 DISPATCH instead, because no write-time validator can see inside the secret.
 It is dropped there with an audited reason (`unloadable-upstream-url`, a
 `run.upstream_proxy.resolve` failure) and the run falls back to direct egress rather than being delivered.
+A URL refused only for its host's spelling, such as `http://010.0.0.1:3128`, is the exception: it is delivered with the reason `upstream-url-host-refused`.
+The run's proxy refuses its config, naming the entry, and the run does not start rather than go around the proxy you named.
 
 - If both fields are set, `upstream_proxy_url` wins — harmless mid-migration from one to the other, but don't rely on it; clear whichever you're not using.
 
@@ -2389,11 +2412,15 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 Three things in a run's audit trail say which hop its connections took and why one died, and the proxy's log adds a fourth.
 
 - **`run.upstream_proxy.resolve` says whether an upstream proxy was in effect for the run.**
-  - It is written on every dispatch that gets as far as building the run's proxy config, and again when a revived run's proxy config is refreshed from the deployment.
+  - Dispatch writes it while building the run's proxy config, and a revive writes it again when it refreshes that config.
   - `in_effect: true` (outcome `success`) means the run's proxy config carries an upstream URL.
-  - `in_effect: false` with `reason: not-configured` (outcome `success`) means none is configured, so an absent row now means the dispatch failed before that point, not "none configured".
+  - `in_effect: false` with `reason: not-configured` (outcome `success`) means none is configured, so an absent row means the dispatch failed before that point.
+  - `in_effect: false` with `reason: no-network` (outcome `success`) means a No network run, which never uses one.
+  - `in_effect: false` with `reason: not-sent-to-runner` (outcome `success`) means a run on a person's runner, never sent the organisation's upstream; a Docker runner's `--upstream-proxy` shows as the proxy's `builtin:upstream-proxy` row.
+    - The organisation-side proxy for its `via_org` destinations writes its own row each time it is built (`in_effect: true` when the site's upstream resolves), then a `builtin:upstream-proxy` row.
   - `in_effect: false` with outcome `failure` means the run's egress is direct although it may not have been meant to be.
     - `site-config-read-error` says the site config could not be read, so whether an upstream is configured is unknown; `unsupported-scheme`, `unloadable-upstream-url`, `reserved-secret-name`, `no-secret-store` and `secret-not-found` say one was configured and was dropped.
+    - `upstream-url-host-refused` is the exception: the URL was delivered, not dropped. A proxy given it refuses its config, so a dispatched run does not start and a revive is refused.
   - `in_effect` says what the run was given.
   - Which hop carried one connection is `via`.
 - **`via` on an `egress.allow` row says which hop carried that connection**: `upstream-proxy` or `direct`, a class and never an address.
@@ -2514,7 +2541,7 @@ grep 'daemon egress proxy configured' <logs>
   - Register and set `WARDYN_OIDC_REDIRECT_URL` under the base (`https://host.example.com/wardyn/auth/callback`); boot refuses one outside it, naming both variables.
   - The Azure DevOps callback is derived from it and carries the base itself.
 - **Health checks** move with the prefix: `/wardyn/healthz`, `/wardyn/readyz`.
-  - The chart's probes follow `basePath` (or an `env.WARDYN_BASE_PATH`); a compose or external health check has to be edited by hand.
+  - The chart's probes follow `basePath` or a `WARDYN_BASE_PATH` in `env`/`extraEnv`; a compose or external health check has to be edited by hand.
 - **What stays at the root.**
   - The proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`, the default `https` `WARDYN_CONTROL_PLANE_URL`) is not behind your reverse proxy, so runs keep dialling it at the root.
   - A plain `http://` loopback control-plane URL reaches the console listener instead, so it has to end in the base (`http://127.0.0.1:8080/wardyn`); boot refuses one that does not.
@@ -2625,6 +2652,7 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
+- The env-as-code export carries the same settings in the form a project opened outside Wardyn reads: `.npmrc`, `.cargo/config.toml` and `NuGet.Config` in the project, `GOPROXY`/`GOSUMDB` and `PIP_INDEX_URL` in `devcontainer.json`, and `.m2/settings.xml` for the user to pass to Maven (the exported `AGENTS.md` says how).
 - Several rows can share one `ecosystem` (pip, go and maven name two public hosts, cargo three): the row whose `from` is the first public host (`registry.npmjs.org`, `pypi.org`, `crates.io`, `repo.maven.apache.org`, `proxy.golang.org`, `api.nuget.org`) names the mirror in the config. With none, the last row does.
 - A `go` redirect keeps Go's checksum database on, reached through the mirror: `GOSUMDB` is `sum.golang.org <to>/sumdb/sum.golang.org`, so the mirror must proxy that path.
 - A mirror that cannot proxy it sets `go_checksum_db_off` on its redirect, which writes `GOSUMDB=off` for runs through it: modules it serves are then trusted without a check against `sum.golang.org`, and only `go.sum` still protects. Keep each repository's `go.sum` committed. With several `go` rows, the last one's `go_checksum_db_off` decides.
@@ -3852,7 +3880,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 | Install | How |
 |---|---|
 | Compose | Set it in `.env`. Compose passes it on. The override file below also works: name it with a second `-f` if you pass `-f` yourself |
-| Helm | `--set env.WARDYN_MIGRATE_TIMEOUT=30m`, or an `extraEnv` entry of that name. The startup probe follows it. Give `helm upgrade --timeout` more than the migration needs |
+| Helm | `--set env.WARDYN_MIGRATE_TIMEOUT=30m`, or a literal `extraEnv` entry. The startup probe follows it. Give `helm upgrade --timeout` more than the migration needs |
 
 ```yaml
 # docker-compose.override.yaml
@@ -4097,6 +4125,16 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0275` (`0275_run_proxy_starts`) creates `run_proxy_starts`, one row per proxy start and its policy readback (the start's generation, run token id, mode, the two config hashes, state, deadline and whether a failed start's proxy stop was confirmed), and adds the nullable `proxy_addr` to `agent_runs` (`0001`'s table): the address the run's agent reaches its proxy on; no row or grant change.
 - `0276` (`0276_agent_runs_forced_stop`) adds the nullable `agent_runs.forced_stop_at` (`0001`'s table), set when a kept run's end is taken without its lock, with a partial index on it where it is set. It is cleared in exactly four cases: the sandbox stop is confirmed; the sandbox is kept with its proxy stopped for its computer folder's pass back; its ref is already empty; or its runner is gone (revoked or deleted), when one `sandbox.sweep` failure row says the stop was not confirmed. In every case it clears only once the run's credential revoke has also succeeded. An offline runner keeps the mark; no row or grant change. Going back to an earlier release needs a database restore, as after any migration.
 - `0277` (`0277_agent_runs_end_marks`) adds two nullable columns to `agent_runs` (`0001`'s table): `fenced_at`, set once an ended run's agent is cut off every network, and `revoke_owed_at`, set while a run's access revoke has started and not yet succeeded. It adds four partial indexes for the background loops that read those runs; no row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0278` (`0278_run_proxy_starts_in_place`) adds `run_proxy_starts.in_place` (`0275`'s table; a boolean, default false), set on a start a live egress edit applies by narrowing the run's running proxy. A failed start's end hint reads it, whichever path stops the start; no row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0279` (`0279_agent_runs_tasks_erased`) adds the nullable `agent_runs.tasks_erased_at` (`0001`'s table), set by a person's run tasks erasure on their runs still waiting in a queue or promoted from one, so that none goes back to its queue with the erased text. No row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0280` (`0280_workload_run_end_binding_reason`) admits `workload_binding_deleted` in `workload_run_ends.reason`'s CHECK (`0244`'s table): a custom resource's run whose namespace binding was deleted while it started is owed its end with that reason. No row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0281` (`0281_insert_stamps`) adds the nullable `inserted_at` to `agent_runs` (`0001`'s table), `api_tokens` (`0045`'s table) and `ssh_public_keys` (`0033`'s table), set only by its default, the database's clock at insert; a SCIM suspension compares it with its own deactivation. Existing rows keep it empty and count as older; no row is rewritten and no grant changes. Going back to an earlier release needs a database restore, as after any migration.
+- `0282` (`0282_groundtruth_sensors_evidence`) adds the nullable `groundtruth_sensors.evidence_at` (`0261`'s table): when a node's kernel event counts last rose on a heartbeat at most 15 minutes after the one before. `/healthz` reads a sensor as `healthy` only while it is recent. It is NULL on every existing row, so each sensor reads `idle` until its counts next rise; no grant changes.
+- `0283` (`0283_principal_identity_unbinds`) creates `principal_identity_unbinds`: per identity unbind, the principal it released (cleared by that person's audit personal fields erasure, never written for one already erased) and the database time. Audit reads under `WARDYN_AUDIT_SEAL=full` use it to name rows written before an unbind. No existing row changes; split-role installs grant `SELECT, INSERT, UPDATE` on it. Going back to an earlier release needs a database restore, as after any migration.
+- `0284` (`0284_base_images_identity_digest`) replaces `base_images_identity_idx` (`0031`'s table) with `base_images_identity_digest_idx`, which keys a catalogue image's identity on a sha256 of its steps rather than the steps themselves, so the index no longer limits how long the steps can be; no row or grant change.
+- `0285` (`0285_audit_functions_search_path`) sets the `search_path` of the twelve functions Wardyn ships that run as their owner or set one of their own, `0176`'s two revocation functions among them, to `pg_catalog, pg_temp`, so none of them searches the install's schema, where a role with `CREATE` could add a function they would call. It re-creates the two `0176` functions (`CREATE OR REPLACE`) and alters the rest, each only where the migrator owns it. Any other function, and any of the twelve the migrator does not own, is left as it is, and the boot check reads it as before; no table, row or grant change.
+- `0286` (`0286_run_teardown_holds`) creates `run_teardown_holds`, one row per run whose runner reported, on a state page, a kill or end it refused because it could not see the sandbox stop: the kind, when the runner began holding it and, once the runner reports it finished, when. Only that report clears it. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `run_teardown_holds`. Going back to an earlier release needs a database restore, as after any migration.
+- `0287` (`0287_ado_signin_ends_erased_at`) adds the nullable `ado_signin_ends.erased_at` (`0129`'s table): when an erase of the person's credentials last ended their Azure DevOps sign-in; a disconnect leaves it. The run token sweep deletes their refused token rows created before it once past their valid_to, and also any refused token row whose revoke an erase recorded. A row whose last end was an erase takes that end's time; others stay NULL. No grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4213,12 +4251,16 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 - **wardynd verifies the claim rather than asserting it.**
 - On the next boot it queries whether the app role can reach past the guard by any
-  of FOUR routes:
-  - membership in a superuser role, membership in `audit_events`'s owner role, the
-    `TRIGGER` privilege on the table,
+  of SEVEN routes, each held directly or through a role it can `SET ROLE` into
+  (`db.AuditDDLBypassRoutes`):
+  - membership in a superuser role or one that can gain its access, membership in
+    the owner role of `audit_events`, one of its partitions or its bookkeeping
+    tables, the `TRIGGER` privilege on any of those,
+  - ownership of a function in the table's schema or run by its triggers, the
+    `CREATE` privilege on that schema, a `SECURITY DEFINER` function there without
+    a `search_path` that ends in `pg_temp`,
   - or (PostgreSQL 15+) the `SET` privilege on the
-    `session_replication_role` parameter, held directly or through a role it
-    can `SET ROLE` into (`db.AuditDDLBypassRoutes`).
+    `session_replication_role` parameter.
 - And it logs one of two lines:
   - `migrations applied via WARDYN_PG_MIGRATE_DSN … app role is a verified
     non-owner of audit_events — the append-only guard is DDL-protected`
@@ -4226,13 +4268,26 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
     audit_events' append-only guard by the route(s) named here — DDL protection is NOT in effect`
 - The second line now carries a `bypass_routes` field naming the route(s) that
   fired, because the remedy differs per route.
-- The first two are closed by
-  connecting as a different role, the third by a `REVOKE TRIGGER ON
-  audit_events`, and the fourth by `REVOKE SET ON PARAMETER
-  session_replication_role` — which no amount of role-swapping reaches.
+- The first two are closed by connecting as a different role, and the others by:
+  - a `REVOKE TRIGGER` on the table, its partitions and its bookkeeping tables,
+  - `ALTER FUNCTION … OWNER TO` the migrator,
+  - `REVOKE CREATE ON SCHEMA` from the app role and from `PUBLIC`, once the migrator
+    holds its own `CREATE` there (it creates every new table there),
+  - `ALTER FUNCTION … SET search_path = pg_catalog, pg_temp` once its body
+    qualifies every name,
+  - and `REVOKE SET ON PARAMETER session_replication_role`, which no amount of
+    role-swapping reaches.
 
 The second line means the split did not take; the deployment is no worse off than
 single-DSN mode, and no better.
+
+- **With the split, every start also compares the migrations the two DSNs record.**
+- wardynd refuses to start when `schema_migrations` read through `WARDYN_PG_DSN` differs
+  from the one `WARDYN_PG_MIGRATE_DSN` just migrated, and the refusal names `WARDYN_PG_DSN`;
+  point both DSNs at the same database and `search_path`.
+- The app role needs `SELECT` on `schema_migrations` for this check, which the script above
+  grants; a start that cannot read it is refused, so grant the app role `SELECT` on
+  `schema_migrations`.
 
 > [!NOTE]
 > **Why a role with SELECT and EXECUTE can write to a hash-chained table at all.**
@@ -4659,7 +4714,7 @@ secrets.allowEphemeralAgeKey=true renders anyway.
 ```console
 $ kubectl -n wardyn logs -l app.kubernetes.io/name=wardyn --tail=2
 WARN wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY public_recipient=age1qgu93czj2ksk2g3j4x3rq52kyaw5xkjetd7g38cn63gdl2az4eqsyztpgs
-ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; […] delete them (DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%') and boot with a persistent key from `wardynd -gen-age-key`"
+ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; […] delete them (BEGIN; DELETE FROM secrets WHERE enc_version=3 AND (owned_by, kek_id) IN (SELECT owner, 'pk:v' || version FROM principal_keys WHERE purpose='cred' AND destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%')); UPDATE principal_keys SET destroyed_at='epoch', wrapped_key=NULL, handle=NULL WHERE destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'); DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'; COMMIT;) and boot with a persistent key from `wardynd -gen-age-key`"
 ```
 
 - That is the correct behaviour — the boot refuses rather than mint a fresh key
@@ -4674,18 +4729,26 @@ ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] 
 - Back the Secret up off-cluster, wherever the DSN Secret is
   backed up, and treat deleting it as equivalent to deleting the database.
 - When the key was ephemeral there is no original to put back: it lived only in
-  the first pod's memory, so every row it sealed is lost.
-- Delete those rows, wire a
+  the first pod's memory, so every row it sealed is lost, and so is every per-person
+  key it wrapped.
+- Remove them, wire a
   persistent key (`wardynd -gen-age-key`), and start again; Wardyn's own boot keys
   are among the rows and are minted afresh, and every stored secret has to be set
   again:
 
 ```sh
-psql "$WARDYN_PG_DSN" -c "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
+psql "$WARDYN_PG_DSN" -c "BEGIN; DELETE FROM secrets WHERE enc_version=3 AND (owned_by, kek_id) IN (SELECT owner, 'pk:v' || version FROM principal_keys WHERE purpose='cred' AND destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%')); UPDATE principal_keys SET destroyed_at='epoch', wrapped_key=NULL, handle=NULL WHERE destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'); DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'; COMMIT;"
 ```
 
+- In one transaction it deletes the credentials sealed under per-person keys the
+  lost key wrapped, marks those keys destroyed as an erasure does, and deletes the
+  rows sealed under the lost key; keys and rows under a key service or a declared
+  key domain stay.
+- Sealed audit fields under those keys then read `[erased]`, but audit rows still
+  show the people they name: the keys are marked destroyed as of 1970, so the
+  reset's time is not recorded on the key rows. The statement writes no audit row.
 - If `WARDYN_PLATFORM_KEY_FILE` was set, keep that file: the boot-key rows under it
-  are not lost — change `OR kek_id LIKE 'local/%'` to `OR kek_id LIKE 'local/cred:%'`
+  are not lost — change every `kek_id LIKE 'local/%'` to `kek_id LIKE 'local/cred:%'`
   in the statement, so it keeps the `local/platform:` rows.
 - **Rotating it on k8s** uses the same runbook
   ([Rotating the age key](operations/secrets-and-keys.md#rotating-the-age-key)), with two differences.
@@ -4754,7 +4817,8 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
   set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — the
-  documented production default, not an optional extra. With SSO configured the chart refuses to render, and wardynd to boot, without it unless `uiSandbox.acceptSharedOrigin` (`WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`) accepts the shared origin.
+  documented production default, not an optional extra. With SSO configured the chart refuses to render, and wardynd to boot, without it unless `uiSandbox.acceptSharedOrigin` (`WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`) accepts the shared origin. Without SSO the chart renders and prints a warning.
+- `uiSandbox.ingress` renders the gateway's Ingress: its own host and the wildcard host the template needs.
 - Leaving it unset puts every run's relayed app on the SAME browser origin, separated only by a path-scoped
   cookie.
 - That shared-origin mode is a published residual
@@ -4824,6 +4888,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - `GET /api/v1/drives/member` lists every person's drives with owner, object and state. `wardyn drive member list` does the same. `GET /drives` does not list them.
 - `DELETE /api/v1/drives/member/{id}` deletes one and its files. `wardyn drive member delete <id> --yes` does the same.
+- A disk drive kept on a Mac is the exception, because that Mac deletes the image. While the Mac can't be reached, the answer is `202` with outcome `deferred` and the delete waits for the Mac. If the Mac is no longer registered, the outcome is `record_only`: only the record goes and the image stays on that Mac.
 - A person deletes their own with `DELETE /api/v1/me/drives/{id}`.
 - Every attempt is audited as `drive.member.delete`, with `by` set to `owner` or `admin`.
 

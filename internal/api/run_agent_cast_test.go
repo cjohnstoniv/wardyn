@@ -88,8 +88,9 @@ func (c *castStore) ClearRunAgentCastOwed(_ context.Context, id uuid.UUID, recor
 	return nil
 }
 
-// ListRunsAgentCastOwed lists the fixture's run while it owes its cast and is terminal; age is not kept.
-func (c *castStore) ListRunsAgentCastOwed(context.Context, time.Duration, int) ([]uuid.UUID, error) {
+// ListRunsAgentCastOwed lists the fixture's run while it owes its cast and is terminal; age is not kept, and
+// every page is short, so the cursor is nil.
+func (c *castStore) ListRunsAgentCastOwed(context.Context, time.Duration, *store.SweepCursor, int) ([]uuid.UUID, *store.SweepCursor, error) {
 	state := c.st.State()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -102,7 +103,7 @@ func (c *castStore) ListRunsAgentCastOwed(context.Context, time.Duration, int) (
 			ids = append(ids, id)
 		}
 	}
-	return ids, nil
+	return ids, nil, nil
 }
 
 // otherOwing is whether the further run id still owes its cast.

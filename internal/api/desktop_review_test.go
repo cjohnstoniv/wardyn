@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -160,6 +163,30 @@ func wantNothingSent(t *testing.T, name string, w *httptest.ResponseRecorder, co
 	t.Helper()
 	if strings.Contains(w.Body.String(), content) || strings.Contains(w.Header().Get("Content-Disposition"), "attachment") {
 		t.Fatalf("%s: the file was sent: %d %q %v", name, w.Code, w.Body.String(), w.Header())
+	}
+}
+
+// TestDesktopReview_ARunThatEndsAtItsLockTakesNoExec: the two review doors, an ask and a reviewed download, admit
+// their exec as the Files panel's other doors do: a run that ends while the door waits for its lock (an end that
+// keeps the sandbox for its computer folder's pass back holds it) answers 409 attach_not_running, and nothing
+// reaches the sandbox or leaves it. Catches: a review door that thaws and execs on desktopRun's read alone.
+func TestDesktopReview_ARunThatEndsAtItsLockTakesNoExec(t *testing.T) {
+	for _, door := range []string{"ask", "release"} {
+		e := newReviewEnv(t, types.TransferReview)
+		id := e.seed(types.ApprovalFileDownload, e.run.ID, reviewFile, types.ApprovalApproved)
+		ast := e.spend.Store.(*envelopeStore).Store.(*touchCountingStore).authzStore
+		lockEndsRun(e.srv, e.run.ID, func() { endRun(ast, e.run.ID, func(r *types.AgentRun) { r.State = types.RunCompleted }) })
+		var w *httptest.ResponseRecorder
+		if door == "ask" {
+			w = e.ask(t, reviewFile)
+		} else {
+			w = e.release(t, reviewFile, id)
+		}
+		if w.Code != http.StatusConflict || reasonOf(t, w) != reasonAttachNotRunning || e.folder.execs != 0 {
+			t.Errorf("%s on a run that ended at its lock: %d %s, %d execs; want 409 %s and no exec",
+				door, w.Code, w.Body.String(), e.folder.execs, reasonAttachNotRunning)
+		}
+		wantNothingSent(t, door, w, string(e.folder.files[reviewFile]))
 	}
 }
 
@@ -456,5 +483,25 @@ func TestDesktopDownloadBlockedAndAllowedUnchanged(t *testing.T) {
 	e = newReviewEnv(t, types.TransferAllowed)
 	if w := doSSO(t, e.srv, http.MethodGet, e.path(reviewFile), e.ses["owner"], ""); w.Code != http.StatusOK || w.Body.String() != "agent,wrote,this\n" {
 		t.Fatalf("allowed: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A released file whose send fails part way is cut off: the client's read fails, so it cannot take the bytes
+// so far for the whole file, and the release is audited as a failure. Catches a send failure that ends the
+// response cleanly, or ends it before any response at all.
+func TestDesktopReviewReleaseThatFailsPartWayIsCutOff(t *testing.T) {
+	e := newReviewEnv(t, types.TransferReview)
+	id := e.seed(types.ApprovalFileDownload, e.run.ID, reviewFile, types.ApprovalApproved)
+	prev := reviewedSendReader
+	reviewedSendReader = func(f *os.File) io.Reader {
+		return io.MultiReader(io.LimitReader(f, 5), iotest.ErrReader(errors.New("spool read failed")))
+	}
+	t.Cleanup(func() { reviewedSendReader = prev })
+	status, body, readErr := downloadOverHTTP(t, e.desktopFilesEnv, reviewFile+"?approval="+id.String())
+	if status != http.StatusOK || !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("status %d, read error %v after %q, want the committed 200 and io.ErrUnexpectedEOF", status, readErr, body)
+	}
+	if got := e.reviewRows(); !slices.Equal(got, []string{"released/failure"}) {
+		t.Errorf("download rows = %v", got)
 	}
 }

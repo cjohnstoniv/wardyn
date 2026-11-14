@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -61,6 +63,9 @@ func validatePATGrantScope(i int, g types.GrantSpec, strict bool) error {
 	if strict && !validGitPATHost(sc.Host) {
 		return fmt.Errorf("eligible_grants[%d]: git_pat host %q must be a hostname, with no port, scheme or path", i, sc.Host)
 	}
+	if err := proxy.ValidConfigHost(sc.Host); strict && err != nil {
+		return fmt.Errorf("eligible_grants[%d]: git_pat host %w", i, err)
+	}
 	if strict && sc.API && sc.Forge == types.PATForgeBitbucketServer && !patAPIBitbucketOn() {
 		return fmt.Errorf("eligible_grants[%d]: git_pat scope %s", i, errPATAPIBitbucketOff)
 	}
@@ -100,6 +105,10 @@ func validGitPATHost(host string) bool {
 // let one grant's PAT reach the other's repositories. Unnarrowed duplicates
 // keep today's behaviour. A scope that does not decode is skipped here: the
 // per-grant validation refuses it.
+//
+// It also refuses two git_pat grants for one host written two ways, such as
+// git.example.com and git.example.com.: dispatch keys them apart, and the
+// proxy's config load refuses two entries with one host key (domainmatch.CanonHost).
 func validatePATNarrowedDuplicates(grants []types.GrantSpec) error {
 	type hostGrant struct {
 		host     string
@@ -120,6 +129,11 @@ func validatePATNarrowedDuplicates(grants []types.GrantSpec) error {
 				return fmt.Errorf("eligible_grants[%d] and eligible_grants[%d]: two git_pat grants for host %q where one sets "+
 					"repos, access read or api: only one grant per host is enforced, so the narrowing would depend on list order — "+
 					"merge them into one grant, or use different hosts", p.index, i, sc.Host)
+			}
+			if a, b := strings.ToLower(strings.TrimSpace(p.host)), strings.ToLower(strings.TrimSpace(sc.Host)); a != b &&
+				domainmatch.CanonHost(a) == domainmatch.CanonHost(b) {
+				return fmt.Errorf("eligible_grants[%d] and eligible_grants[%d]: git_pat hosts %q and %q name one host, "+
+					"which the run's proxy refuses at load: write it one way", p.index, i, p.host, sc.Host)
 			}
 		}
 		prior = append(prior, hostGrant{sc.Host, i, sc.Narrowed()})

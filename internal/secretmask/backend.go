@@ -64,6 +64,30 @@ type Backend interface {
 	Fresh(ctx context.Context, arrived time.Time) error
 }
 
+// runCacher is a Backend whose PutRun puts the value in the registry itself, ordered against the run's
+// erasure (maskstore.Store), so Add adds nothing after it: a copy added once PutRun has returned could
+// land after an erasure that already dropped the value, and no later read of the corpus would drop it.
+type runCacher interface{ CachesRunValues() }
+
+func cachesRuns(b Backend) bool {
+	_, ok := b.(runCacher)
+	return ok
+}
+
+// runSettler is a Backend that can hold a run value it cached before a read of the run's fence that
+// failed (maskstore.Store). Add of a value the run already has returns its SettleRun, which refuses the
+// value of a run erased or purged meanwhile instead of reporting it on record.
+type runSettler interface {
+	SettleRun(runID uuid.UUID, value []byte) error
+}
+
+func settledRun(b Backend, runID uuid.UUID, value []byte) error {
+	if s, ok := b.(runSettler); ok {
+		return s.SettleRun(runID, value)
+	}
+	return nil
+}
+
 // GlobalGeneration snapshots erasure ordering before any credential read or
 // network exchange. The owner's identity may be established by that exchange.
 func (r *Registry) GlobalGeneration(ctx context.Context) (int64, error) {

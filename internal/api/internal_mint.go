@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -49,7 +48,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body mintRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSidecarBody)).Decode(&body); err != nil || body.GrantID == uuid.Nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxSidecarBody), &body, false); err != nil || body.GrantID == uuid.Nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonMintGrantIDRequired, "grant_id is required")
 		return
 	}
@@ -534,10 +533,17 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return
 	}
-	if pastLifetimeCap(run, s.cfg.Now().UTC()) {
-		s.auditRenewDenied(r, claims, "run_past_lifetime")
-		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run has reached its lifetime cap")
-		return
+	if run.LifetimeCapAt != nil {
+		now, err := s.dbNow(r.Context()) // lifetime_cap_at is the database's stamp
+		if err != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewReadFailed, loggedMsg(r.Context(), "read the database's clock", err))
+			return
+		}
+		if pastLifetimeCap(run, now) {
+			s.auditRenewDenied(r, claims, "run_past_lifetime")
+			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run has reached its lifetime cap")
+			return
+		}
 	}
 	// A kept run (ended or lost) has no proxy on purpose; only a revive gives
 	// it one, with a token of its own. Nothing may carry its identity forward.

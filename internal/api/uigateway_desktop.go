@@ -19,6 +19,8 @@
 package api
 
 import (
+	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -29,6 +31,7 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,6 +43,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -392,7 +396,8 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 	defer signIn.stop()
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
+	viewer := &viewerHijack{ResponseWriter: w}
+	ws, err := websocket.Accept(viewer, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request
 	}
@@ -437,8 +442,26 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 	defer release()
-	display, err := dd.DialDesktop(ctx, run.SandboxRef)
+	// The display is dialed under the run's start lock, on the run as it stands there, a watch's too: a run that
+	// ended since the check above opens no display.
+	h, err := s.lockStart(ctx, sess.Run)
 	if err != nil {
+		_ = c.Close(desktopCloseUnreachable, lockUnavailableMsg)
+		return
+	}
+	if run, code, why = s.desktopBoundedRunCheck(h.ctx, sess); code != 0 {
+		h.release()
+		_ = c.Close(code, why)
+		return
+	}
+	display, err := startAdmitted(s, ctx, h, execStartBudget,
+		func(ctx context.Context) (io.ReadWriteCloser, error) { return dd.DialDesktop(ctx, run.SandboxRef) },
+		func(d io.ReadWriteCloser) { _ = d.Close() })
+	switch {
+	case startCut(err):
+		_ = c.Close(desktopCloseUnreachable, err.Error())
+		return
+	case err != nil:
 		_ = c.Close(desktopCloseUnreachable, uiExecFailMsg(ctx, "open the desktop", err))
 		return
 	}
@@ -469,7 +492,8 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
-	filtered := s.desktopClipboardFilter(ctx, sess, rules, viewOnly, s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}}))
+	recorded, rec := s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}})
+	filtered := s.desktopClipboardFilter(ctx, sess, rules, viewOnly, rec, recorded)
 	defer func() { _ = filtered.Close() }()
 	// A window waits for this stream's control to end (yielded), so its input stops before the close frame goes.
 	windowOpened := func() {
@@ -477,8 +501,21 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		yielded()
 		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 	}
+	s.relayDesktopStream(r.Context(), ctx, sess, c, ws, conn, viewer, filtered, windowOpened)
+}
+
+// relayDesktopStream carries frames both ways until either side ends, the stream's bound or Close lands, or a
+// re-check ends the session, and tells the viewer why with the stream's close code (serveDesktopRFB).
+func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession, c desktopSocket, ws *websocket.Conn,
+	conn net.Conn, viewer *viewerHijack, filtered *rfbfilter.Conn, windowOpened func()) {
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
+	go func() {
+		_ = relayViewer(reqCtx, ws, filtered)
+		if err := viewer.frames.Refused(); err != nil {
+			filtered.Refuse(err) // a frame the library would have refused unnamed
+		}
+		done <- struct{}{}
+	}()
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
 	tick := time.NewTicker(cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck))
 	defer tick.Stop()
@@ -599,13 +636,15 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 // so no cut text flows today; the filter holds the rules for when one does. viewOnly also keeps the
 // viewer's input from the display. A background run's watch moves nothing but the picture, whatever the run's
 // rules and the Mac's caps say, and this filter holds that independently of the helper's.
-func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, viewOnly bool, display io.ReadWriteCloser) *rfbfilter.Conn {
+func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, viewOnly bool, rec *recording.RFBRecorder, display io.ReadWriteCloser) *rfbfilter.Conn {
 	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed, ViewOnly: viewOnly}
 	if sess.backgroundWatch() {
 		rules = rfbfilter.Rules{ViewOnly: true}
 	}
+	rules.Recorded = rec != nil // recordVMDisplay's recorder sits under the filter (Rules.Recorded)
 	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)
+		stopRefusedRecording(rec, err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {
 			s.auditUISession(sess, "ui.clipboard.transfer", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
 		}
@@ -642,6 +681,57 @@ func (f wsFramer) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// relayViewer hands the viewer's messages to the filter as they came: a binary message as its bytes (wsFramer), a
+// text message as an empty text frame, its text never relayed, which the filter refuses (or holds and then refuses)
+// as it does on a container desktop, so a recorded display's stop is marked with what was refused. NetConn's Read
+// would refuse a text message itself, unseen by the filter. It returns at the first error.
+func relayViewer(ctx context.Context, ws *websocket.Conn, filtered io.Writer) error {
+	for {
+		typ, msg, err := ws.Reader(ctx)
+		if err != nil {
+			return err
+		}
+		var dst io.Writer = wsFramer{filtered}
+		if typ != websocket.MessageBinary {
+			if _, err = filtered.Write([]byte{0x81, 0}); err != nil {
+				return err
+			}
+			dst = io.Discard
+		}
+		if _, err = io.Copy(dst, msg); err != nil {
+			return err
+		}
+	}
+}
+
+// viewerHijack is the viewer's ResponseWriter for websocket.Accept. The connection it hijacks reads the viewer
+// through rfbfilter.ClientFrames, the bytes net/http already buffered first, so a frame the library would refuse
+// with an error like a dropped connection's is named (frames.Refused).
+type viewerHijack struct {
+	http.ResponseWriter
+	frames *rfbfilter.ClientFrames
+}
+
+func (v *viewerHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(v.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	buffered, _ := brw.Reader.Peek(brw.Reader.Buffered())
+	v.frames = rfbfilter.CheckClientFrames(io.MultiReader(bytes.NewReader(bytes.Clone(buffered)), conn))
+	checked := checkedConn{conn, v.frames}
+	brw.Reader.Reset(checked)
+	return checked, brw, nil
+}
+
+// checkedConn is a hijacked connection whose reads are checked (viewerHijack).
+type checkedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c checkedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers
 // made, re-encoded by the filter, so no mask is ever set.

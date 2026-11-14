@@ -58,6 +58,7 @@ type queueStore interface {
 	QueueDepth(ctx context.Context) (map[uuid.UUID]int, error)
 	PoolSlotsUsed(ctx context.Context) (map[uuid.UUID]int, error)
 	StalePromotedRuns(ctx context.Context, staleAfter time.Duration) ([]types.AgentRun, error)
+	FailStalePromotedRun(ctx context.Context, id uuid.UUID, staleAfter time.Duration) (bool, error)
 	StartQueuedRun(ctx context.Context, id uuid.UUID, st store.QueueStart) (types.AgentRun, bool, error)
 	SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 	SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map[uuid.UUID]string) error
@@ -578,15 +579,24 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 // abortQueuedRun fails a run that was queued but could not be recorded in full, so it never waits as a
 // half-built row. The hint is the one line under the FAILED badge. A promoter that took the run before
 // the create could finish recording it does not get to start it: the run is killed there, so the error
-// the create answers is true.
+// the create answers is true. Each kill reads the run fresh and kills it from the state it holds; a lost
+// swap or a failed kill (its wait for the run's start fence can spend the cascade's context) is tried
+// again, at most supersedeCASAttempts times, and a run that ended meanwhile is left as it is.
 func (s *Server) abortQueuedRun(ctx context.Context, runID uuid.UUID, hint string) {
 	ctx = context.WithoutCancel(ctx)
 	if applied, _ := s.exitQueued(ctx, runID, types.RunFailed, "", hint); applied {
 		return
 	}
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err == nil {
-		_, _, err = s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelCreateAborted})
+	var err error
+	for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
+		run, gerr := s.cfg.Store.GetRun(ctx, runID)
+		if err = gerr; err != nil || isTerminalRunState(run.State) {
+			break
+		}
+		applied, _, kerr := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelCreateAborted})
+		if err = kerr; applied {
+			return
+		}
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: end a promoted run whose create failed", slog.String("run_id", runID.String()), slog.Any("err", err))
@@ -663,8 +673,20 @@ func (s *Server) cancelQueuedRunsOf(ctx context.Context, owner, reason string) (
 	if err != nil {
 		return 0, err
 	}
+	ids := make([]uuid.UUID, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.RunID)
+	}
+	// A suspension tail leaves the runs a reactivated person made after its deactivation (withSuspensionBound).
+	spared, err := runsMadeAfterBound(ctx, s.cfg.Store, ids)
+	if err != nil {
+		return 0, err
+	}
 	n := 0
 	for _, e := range entries {
+		if spared[e.RunID] {
+			continue
+		}
 		run, err := s.cfg.Store.GetRun(ctx, e.RunID)
 		if err != nil {
 			return n, err

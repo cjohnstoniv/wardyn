@@ -51,12 +51,12 @@ const (
 	// egress-allowlisted host, and this sink hands back a LIVE session token.
 	credentialReauthHostPinRefusal = "The AWS SSO access token may only be injected to this " +
 		"credential's own sso portal host"
-	// credentialReauthScopeChangedRefusal is the I3 drift refusal. It is
-	// deliberately vague about WHICH field drifted: the caller is a sidecar, the
-	// reader is an audit row, and the field names are identity.
-	credentialReauthScopeChangedRefusal = "This run's model credential is no longer the one it was " +
-		"dispatched with — the roster changed while the run was working, and Wardyn will not resolve a " +
-		"different principal's credential for a run already in flight. Relaunch the run."
+	// credentialReauthScopeChangedRefusal is the I3 drift refusal. It names the
+	// kinds of thing that drift, never WHICH field or its value: the caller is a
+	// sidecar, the reader is an audit row, and the field names are identity.
+	credentialReauthScopeChangedRefusal = "This run's AWS sign-in is no longer the one it was dispatched with — " +
+		"its model provider or AWS CLI component, its principal or its region changed while the run was working, " +
+		"and Wardyn will not resolve a different AWS sign-in for a run already in flight. Relaunch the run."
 	// credentialReauthTooManyRefusal bounds the raise path. A run that has
 	// already asked its owner to sign in eight times is not going to be fixed by
 	// a ninth row.
@@ -284,6 +284,12 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 			reason = ""
 		}
 	}
+	// The session served is the one read after any renewal: one signed in again for another region
+	// answers at another portal than the host this run's grant pins.
+	if found && blob.Region != snapshot.Region {
+		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
+			map[string]any{"drift": "region", "owner": snapshot.OwnerSubject})
+	}
 
 	// (5) the host pin, checked for the LIVE and the DEAD path alike: a grant
 	// pointing somewhere else must be refused, never held.
@@ -510,6 +516,14 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
 		"credential.reauth.request", created.ID.String(), "success", mustJSON(data)))
 	s.metrics.credentialReauthRecorded(credentialReauthOutcomeRequested)
+	// A provider write that landed since this resolve read the provider could not end a request
+	// that did not exist yet: re-read the provider now it is raised, end the request no sign-in
+	// can answer, and refuse as the run's next resolve would.
+	if why := s.raisedSignInEndReason(ctx, snapshot); why != "" {
+		s.endSignInRequest(ctx, created.ID, why)
+		writeErrorReason(w, http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal)
+		return true
+	}
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
 }

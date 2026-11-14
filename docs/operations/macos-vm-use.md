@@ -68,8 +68,9 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 | Event | What happens |
 |---|---|
 | Keep | `--keep-machine` makes the machine when the run starts, on your own Mac, from its base. The run must be an interactive macOS VM run you start yourself |
-| Stop | A normal stop scrubs the disk (up to 60 seconds) and keeps the machine. Its expiry date is the stop time plus the idle days the run was admitted with, as the Mac recorded them |
+| Stop | A normal stop ends every program of `agent`, then scrubs the disk (up to 60 seconds) and keeps the machine. Its expiry is the stop time plus the idle days the run was admitted with, as the Mac recorded them |
 | A stop without a scrub | A kill by you, a restart of the Mac, lost network, a runner upgrade or a low disk keeps the machine too. The scrub did not run, so the machine shows `scrubbed: false` and is scrubbed when it next starts |
+| A scrub that fails | A program of `agent` that will not end, or one the check immediately after the scrub finds running, fails it. The machine shows `scrubbed: false` and is scrubbed when it next starts |
 | A kill by someone else | A kill by an admin or a service identity, who is not the run's owner, deletes the machine |
 | Resume | `--resume-machine` starts a new run from the disk. Before it boots, the Mac brings the machine's tools up to date if they are behind ([The tools update](#the-tools-update-of-a-kept-machine)) |
 | Fresh start | `--resume-machine <id\|name> --fresh` deletes what is on the machine and starts again from the Mac's current base, under the same name and base |
@@ -104,12 +105,12 @@ A kept disk keeps the guest agent and harness tools it was made with. When they 
 
 ## Watching a background run's desktop
 
-A background run has no terminal, SSH or web door. This is the one exception: the person who started a background macOS VM run can watch its desktop from the run page, view only.
+A background run has no terminal, SSH or web door, though a command can run in it through the API (`POST /runs/{id}/exec`). Watching is the one exception among the doors: the person who started a background macOS VM run can watch its desktop from the run page, view only.
 
 - **What a watch can do.** It shows the picture and nothing else. Keys, pointer moves, paste and clipboard copy are dropped by three separate things: the helper for that boot, the Mac's desktop mode and the gateway's own filter.
   - A watch does not wake a paused run, mark the run as in use or keep it alive.
   - It opens through `POST /runs/{id}/desktop/watch-ticket`. A declared noVNC app, the desktop's files, a sign-in and a terminal stay refused ([Errors](../sdk.md#reason-branch-on-this-never-on-errors-prose)).
-- **The exposure.** A background run has no terminal, so what a person sees of it is its logs and audit trail. A screen can show what those keep out: a secret in a GUI app, a document, anything the run puts on screen.
+- **The exposure.** A background run has no terminal. A person sees its logs and audit trail, and the output of any command they may run in it through the API, which is neither masked nor recorded. A screen can also show what the run puts on it: a secret in a GUI app, a document.
   - Turn the site switch off, or set the profile limit, where that is not acceptable.
 - **macOS 27.** Its prepare flow creates only the setup account, and Wardyn's own prepare steps set the run user's first-login settings on 27 as on 26. Pane names change by version, so nothing beyond macOS 26 is promised as tested.
 - **Recording.** A watch is recorded when the run is at Screen and actions ([Recording](#recording)).
@@ -201,7 +202,7 @@ A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your 
 - The window shows the VM's screen and takes your keys and pointer. Paste from your Mac does not reach the VM.
 - Only what goes through the run's proxy settings counts as activity: Terminal, the harness, and tools that honour `HTTPS_PROXY`. The window, a terminal and SSH count too.
 - Requests the guest makes on its own never count, allowed or refused: macOS's services, and tools that ignore the proxy settings (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls still count, as do requests to a host with a `via_org` credential (a known issue). A Mac runner needs upgrading first.
-- Setup Assistant's Apple Account pane can show in the window. [What Wardyn sets in the base](macos-vm-base-image.md#what-wardyn-sets-in-the-base) has an opt-in that may keep it closed, not yet tried on a real Mac.
+- Setup Assistant's Apple Account pane can show in the window. [What Wardyn sets in the base](macos-vm-base-image.md#what-wardyn-sets-in-the-base) has an opt-in that may keep it closed, and a second one that holds `agent`'s sign-in until it has run. Neither is tried on a real Mac yet.
 - A run with a desktop fails if the guest is not signed in as `agent` 5 minutes after boot: "the Mac guest never reached the agent's desktop: still at the login window".
 - It is not recorded, because it is drawn on your Mac and never crosses the gateway. A run at Screen and actions can't open one.
 - While it is open, the run's browser desktop is view only. A browser desktop that had control is ended first, and the open waits up to 5 seconds for it.

@@ -183,6 +183,38 @@ func TestStatus_FollowerSeesAStoppedLeaderAfterThreeIntervals(t *testing.T) {
 	}
 }
 
+// A sweep every replica runs but only the leader finishes (run_secret): a
+// follower's pass that did not do the shared work moves the attempt, never the
+// success, so a leader that fails every tick still reads stale.
+func TestTick_NotOwnerPassHidesNoFailingLeader(t *testing.T) {
+	clk, st := newClock(), NewMemStore()
+	iv := 15 * time.Minute
+	leader, follower := New(st, "leader", clk.now), New(st, "follower", clk.now)
+	for _, tr := range []*Tracker{leader, follower} {
+		tr.Register(Sweep{Name: RunSecret, Interval: iv})
+	}
+	ctx := context.Background()
+	for range StaleAfterIntervals {
+		clk.advance(iv)
+		_ = leader.Tick(ctx, RunSecret, func(context.Context) error { return errors.New("committed rows unreachable") })
+		if err := follower.Tick(ctx, RunSecret, func(ctx context.Context) error { NotOwner(ctx); return nil }); err != nil {
+			t.Fatalf("follower tick: %v", err)
+		}
+	}
+	got := tickOf(t, st, RunSecret)
+	if !got.SucceededAt.IsZero() {
+		t.Errorf("success = %s from a follower's pass, want none", got.SucceededAt)
+	}
+	if !got.AttemptedAt.Equal(clk.now()) || got.Replica != "follower" {
+		t.Errorf("attempt = %s by %q, want the follower's %s", got.AttemptedAt, got.Replica, clk.now())
+	}
+	s, err := leader.Status(ctx)
+	if err != nil || len(s) != 1 || !s[0].Stale {
+		t.Fatalf("Status = %+v, %v; want run_secret stale while the leader fails", s, err)
+	}
+	NotOwner(ctx) // outside a Tick it does nothing
+}
+
 // A sweep with no success yet warns only once three intervals have passed since
 // this process started, however old the record's other rows are.
 func TestStatus_GraceRunsFromProcessStart(t *testing.T) {

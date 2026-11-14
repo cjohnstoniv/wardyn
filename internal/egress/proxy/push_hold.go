@@ -149,6 +149,11 @@ func (rv pushReview) headline() string {
 	return "this push touches paths that need an admin's review"
 }
 
+// fix is what the person can change about the push itself.
+func (rv pushReview) fix() string {
+	return cmp.Or(tipRemedy(rv.why), "remove these paths from the push")
+}
+
 func (rv pushReview) deniedHeadline() string {
 	if rv.unresolved {
 		return "an admin denied this push, whose changed paths could not be worked out on this lane"
@@ -292,8 +297,8 @@ func (p *Proxy) holdPush(w http.ResponseWriter, r *http.Request, rules *pushRule
 		return false
 	}
 	if p.pushHolds.unattended {
-		remedy := "remove these paths from the push, or run the task interactively so an admin can approve it"
-		if rv.unresolved {
+		remedy := rv.fix() + ", or run the task interactively so an admin can approve it"
+		if rv.unresolved && tipRemedy(rv.why) == "" {
 			remedy = "retry the push, build it directly on the branch it updates or on the default branch, or run the task interactively so an admin can approve it"
 		}
 		return refuse(ruleSourceGitPushHeldUnattended, rv.headline()+", and this run is unattended, so nobody can be asked", remedy)
@@ -303,7 +308,7 @@ func (p *Proxy) holdPush(w http.ResponseWriter, r *http.Request, rules *pushRule
 	case state == apApproved:
 		return true
 	case state == apDenied:
-		return refuse(ruleSourceGitPushHeld, rv.deniedHeadline(), "remove these paths from the push")
+		return refuse(ruleSourceGitPushHeld, rv.deniedHeadline(), rv.fix())
 	case why != "":
 		return refuse(ruleSourceGitPushHeld, why, "retry the push later")
 	}
@@ -391,7 +396,7 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 		var refused *raiseRefusedError
 		if errors.As(err, &refused) {
 			return refuse(ruleSourceGitPushHeld, fmt.Sprintf("%s, and Wardyn refused the request for one (%d)", headline, refused.status),
-				"pushing again will be refused the same way: remove these paths from the push, or ask an admin")
+				"pushing again will be refused the same way: "+rv.fix()+", or ask an admin")
 		}
 		if err != nil {
 			return refuse(ruleSourceGitPushHeld, headline+", and the request for one could not be raised",
@@ -411,7 +416,7 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 				return true
 			case types.ApprovalDenied:
 				p.pushHolds.record(key, id, apDenied)
-				return refuse(ruleSourceGitPushHeld, rv.deniedHeadline(), "remove these paths from the push")
+				return refuse(ruleSourceGitPushHeld, rv.deniedHeadline(), rv.fix())
 			case types.ApprovalExpired, types.ApprovalCancelled:
 				p.pushHolds.record(key, id, apNone)
 				return refuse(ruleSourceGitPushHeld, headline+", and the request closed without a decision",

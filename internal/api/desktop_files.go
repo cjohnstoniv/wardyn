@@ -19,10 +19,13 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -46,9 +49,12 @@ const (
 for f in "$d"/*; do [ -f "$f" ] && [ ! -L "$f" ] || continue
 n=$((n+1)); [ "$n" -le "$1" ] || break; printf '%s/%s\n' "$(wc -c < "$f")" "${f##*/}"; done`
 	// The upload lands under a dot name and is renamed only when every byte arrived, so the agent
-	// never sees half a file and a cut-off upload leaves nothing behind.
-	desktopUploadScript = `set -e; d="${HOME:?}/Transfers"; mkdir -p "$d"; [ ! -d "$d/$1" ] || exit 5
-t="$d/.wardyn-upload-$$"; cat > "$t"; if [ "$(wc -c < "$t")" -ne "$2" ]; then rm -f "$t"; exit 4; fi; mv -f "$t" "$d/$1"`
+	// never sees half a file. Every failure removes the dot file, a failed write or rename included,
+	// and exits 4 only once it is gone: any other failure cannot say what was left in the folder.
+	desktopUploadScript = `d="${HOME:?}/Transfers"; mkdir -p "$d" || exit 4; [ ! -d "$d/$1" ] || exit 5
+t="$d/.wardyn-upload-$$"; trap 'rm -f "$t"' EXIT; trap 'exit 1' HUP INT TERM
+cat > "$t" && [ "$(wc -c < "$t")" -eq "$2" ] && mv -f "$t" "$d/$1" && exit 0
+rm -f "$t" && [ ! -e "$t" ] && exit 4; exit 1`
 	desktopDownloadScript = `p="${HOME:?}/Transfers/$1"; [ -f "$p" ] && [ ! -L "$p" ] || exit 3; exec cat -- "$p"`
 )
 
@@ -115,14 +121,10 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	if s.refuseBackgroundOnly(w, r, run, "desktop") {
 		return run, types.DesktopControls{}, false
 	}
-	switch {
-	case run.State != types.RunRunning || run.SandboxRef == "":
-		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; no files can move (state="+string(run.State)+")")
+	if refuseDesktopNotLive(w, run) {
 		return run, types.DesktopControls{}, false
-	case runIsKept(run):
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; no files can move")
-		return run, types.DesktopControls{}, false
-	case s.cfg.Runner == nil:
+	}
+	if s.cfg.Runner == nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonUIGatewayNoRunner, "no runner configured; the desktop's files are unavailable")
 		return run, types.DesktopControls{}, false
 	}
@@ -144,13 +146,70 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	return run, rules, true
 }
 
-// desktopExec runs one in-sandbox half with stdin as its input, streaming its stdout to out.
-func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, script string, stdin io.Reader, out func(io.Reader) error, args ...string) (int, error) {
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: append([]string{"sh", "-c", script, "sh"}, args...)})
+// refuseDesktopNotLive answers a run with no live sandbox to move files to: not RUNNING, no sandbox, or kept.
+// True when it has answered.
+func refuseDesktopNotLive(w http.ResponseWriter, run types.AgentRun) bool {
+	switch {
+	case run.State != types.RunRunning || run.SandboxRef == "":
+		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; no files can move (state="+string(run.State)+")")
+	case runIsKept(run):
+		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; no files can move")
+	default:
+		return false
+	}
+	return true
+}
+
+// desktopAdmit admits a desktop exec into run, as desktopRun read it. A transfer (thaw) thaws it first: thawForExec
+// reads it again under the run's operation lock, so a run that ended since is not thawed. The run is then read once
+// more under its start lock (lockStart), which every write that ends the run or marks it kept takes around that
+// write, so nothing is sent into a run ended before this read, and an end after it waits until desktopExec's start
+// has returned, at most execStartBudget. A list, which never thaws, refuses it paused (runPausedReadMsg). The hold is
+// never kept for the transfer. ok=false: the refusal is written.
+func (s *Server) desktopAdmit(w http.ResponseWriter, r *http.Request, run types.AgentRun, thaw bool) (fresh types.AgentRun, h startHold, ok bool) {
+	if thaw {
+		at, principal := actorFromRequest(r)
+		switch err := s.thawForExec(r.Context(), run, at, principal, "presence"); {
+		case db.LockRefused(err):
+			writeLockRefused(w, r, err)
+			return types.AgentRun{}, startHold{}, false
+		case err != nil:
+			writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+			return types.AgentRun{}, startHold{}, false
+		}
+	}
+	h, err := s.lockStart(r.Context(), run.ID)
+	if err != nil {
+		writeLockRefused(w, r, err)
+		return types.AgentRun{}, startHold{}, false
+	}
+	fresh, err = s.cfg.Store.GetRun(h.ctx, run.ID)
+	switch {
+	case err != nil:
+		writeServerError(w, r, "get run", err)
+	case refuseDesktopNotLive(w, fresh):
+	case !thaw && fresh.PausedAt != nil:
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
+	default:
+		return fresh, h, true
+	}
+	h.release()
+	return types.AgentRun{}, startHold{}, false
+}
+
+// desktopExec runs one in-sandbox half with stdin as its input, streaming its stdout to out. execAdmitted lets
+// desktopAdmit's start lock go beside the exec once ExecStream has returned, as for runExec. The exec is closed when
+// it ends or when its caller leaves, whichever is first, so a caller gone mid-transfer leaves no exec open.
+func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, start startHold, script string, stdin io.Reader, out func(io.Reader) error, args ...string) (int, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sess, err := s.execAdmitted(ctx, start, run.SandboxRef, runner.ExecSpec{Argv: append([]string{"sh", "-c", script, "sh"}, args...)})
 	if err != nil {
 		return -1, err
 	}
-	defer func() { _ = sess.Close() }()
+	closeSess := sync.OnceFunc(func() { _ = sess.Close() })
+	defer closeSess() // a panic in out still closes the session
+	context.AfterFunc(ctx, closeSess)
 	go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	copyErr := make(chan error, 1)
 	go func() {
@@ -158,8 +217,10 @@ func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, script str
 		if stdin != nil {
 			_, err = io.Copy(sess.Stdin, stdin)
 		}
-		_ = sess.Stdin.Close()
+		// Reported before stdin closes, so an exec that ends at the end of its input always finds the copy
+		// reported below, and a whole upload never has its read stopped.
 		copyErr <- err
+		_ = sess.Stdin.Close()
 	}()
 	var outErr error
 	if out != nil {
@@ -167,10 +228,23 @@ func (s *Server) desktopExec(ctx context.Context, run types.AgentRun, script str
 	}
 	_, _ = io.Copy(io.Discard, sess.Stdout)
 	code, err := sess.Wait()
-	if err == nil {
-		err = errors.Join(<-copyErr, outErr)
+	// Close before the join, so a stdin copy stuck writing to a gone exec ends. One still waiting to read the
+	// caller's body is ended by the caller's stopRead: nothing else interrupts that Read, so the join would wait
+	// for as long as the client sends nothing. The join keeps the copy from reading the body after this returns.
+	closeSess()
+	var copied error
+	select {
+	case copied = <-copyErr:
+	default:
+		if st, ok := stdin.(interface{ stopRead() }); ok {
+			st.stopRead()
+		}
+		copied = <-copyErr
 	}
-	return code, err
+	if err != nil {
+		return -1, err // no exit status came back: what the exec did is unknown
+	}
+	return code, errors.Join(copied, outErr)
 }
 
 func (s *Server) auditDesktopTransfer(r *http.Request, run types.AgentRun, direction, outcome string, size int64, sum string) {
@@ -194,13 +268,15 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 	view := desktopFilesView{Folder: desktopTransferFolder, Rules: rules, Files: []desktopFile{}}
 	if rules.Download == types.TransferAllowed || rules.Download == types.TransferReview { // a reviewed download lists what may be asked for
 		// Reading the folder is an exec, which a paused run refuses, and a look is not a person, so it
-		// never thaws (runPausedReadMsg). With download blocked no exec runs and the rules still answer.
-		if run.PausedAt != nil {
-			writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
+		// never thaws (desktopAdmit refuses it with runPausedReadMsg). With download blocked no exec runs and
+		// the rules still answer.
+		fresh, start, ok := s.desktopAdmit(w, r, run, false)
+		if !ok {
 			return
 		}
+		defer start.release()
 		var listing bytes.Buffer
-		if code, err := s.desktopExec(r.Context(), run, desktopListScript, nil, func(o io.Reader) error {
+		if code, err := s.desktopExec(r.Context(), fresh, start, desktopListScript, nil, func(o io.Reader) error {
 			_, err := io.Copy(&listing, io.LimitReader(o, 64<<10))
 			return err
 		}, strconv.Itoa(maxDesktopListed)); err != nil || code != 0 {
@@ -218,7 +294,8 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 func parseDesktopListing(out string) []desktopFile {
 	files := []desktopFile{}
 	for _, line := range strings.Split(out, "\n") {
-		size, name, ok := strings.Cut(strings.TrimSpace(line), "/")
+		// Only the size is trimmed: a name may end in a space, and the download must ask for it as it is.
+		size, name, ok := strings.Cut(line, "/")
 		n, err := strconv.ParseInt(strings.TrimSpace(size), 10, 64)
 		if ok && err == nil && validDesktopFileName(name) {
 			files = append(files, desktopFile{Name: name, Bytes: n})
@@ -251,19 +328,26 @@ func (s *Server) handleUploadDesktopFile(w http.ResponseWriter, r *http.Request)
 			fmt.Sprintf("the file is over the %d MiB limit for a desktop upload. Nothing was sent.", maxDesktopUploadBytes>>20))
 		return
 	}
-	at, principal := actorFromRequest(r)
-	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+	run, start, ok := s.desktopAdmit(w, r, run, true)
+	if !ok {
 		return
 	}
+	defer start.release()
 	sum := sha256.New()
-	body := io.TeeReader(io.LimitReader(r.Body, r.ContentLength), sum)
-	code, err := s.desktopExec(r.Context(), run, desktopUploadScript, body, nil, name, strconv.FormatInt(r.ContentLength, 10))
+	body := uploadBody{io.TeeReader(io.LimitReader(r.Body, r.ContentLength), sum), w, r.ProtoMajor == 1}
+	code, err := s.desktopExec(r.Context(), run, start, desktopUploadScript, body, nil, name, strconv.FormatInt(r.ContentLength, 10))
+	// A stopped read (uploadBody.stopRead) or a browser that left cancels the request's context on HTTP/1.x; the
+	// outcome row keeps the request's values and is written anyway.
+	r = r.WithContext(context.WithoutCancel(r.Context()))
 	digest := hex.EncodeToString(sum.Sum(nil))
 	if err != nil || code != 0 {
 		s.auditDesktopTransfer(r, run, "upload", "failure", r.ContentLength, "")
-		msg := fmt.Sprintf("the file did not arrive whole in %s (exit %d). Nothing was kept.", desktopTransferFolder, code)
-		if code == 5 {
+		// Only the script's own exit 4 says the partial file is gone; a lost exit status proves nothing.
+		msg := "the upload to " + desktopTransferFolder + " failed, and some bytes may remain there."
+		switch code {
+		case 4:
+			msg = fmt.Sprintf("the file did not arrive whole in %s (exit %d). Nothing was kept.", desktopTransferFolder, code)
+		case 5:
 			msg = "a folder in " + desktopTransferFolder + " already has that name. Nothing was sent."
 		}
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, msg)
@@ -271,6 +355,24 @@ func (s *Server) handleUploadDesktopFile(w http.ResponseWriter, r *http.Request)
 	}
 	s.auditDesktopTransfer(r, run, "upload", "success", r.ContentLength, digest)
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "bytes": r.ContentLength, "sha256": digest})
+}
+
+// uploadBody is an upload's request body as the exec's stdin. stopRead ends a Read that is waiting on a client
+// that sends nothing: the server sets no read timeout, and closing the body does not interrupt a Read in progress.
+type uploadBody struct {
+	io.Reader
+	w     http.ResponseWriter
+	http1 bool
+}
+
+// stopRead sets a read deadline in the past. On HTTP/1.x, a read it ends cancels the connection's context, and
+// once the body has been read whole the connection would carry its next request already cancelled, so the reply
+// closes the connection.
+func (b uploadBody) stopRead() {
+	if b.http1 {
+		b.w.Header().Set("Connection", "close")
+	}
+	_ = http.NewResponseController(b.w).SetReadDeadline(time.Now())
 }
 
 // handleDownloadDesktopFile is GET /runs/{id}/desktop/files/{name}.
@@ -292,18 +394,21 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopTransferBlocked, "this run's desktop rules block downloading files. Nothing was sent.")
 		return
 	}
-	at, principal := actorFromRequest(r)
-	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+	run, start, ok := s.desktopAdmit(w, r, run, true)
+	if !ok {
 		return
 	}
+	defer start.release()
 	var sent int64
 	var sum hash.Hash
 	started := false
-	code, err := s.desktopExec(r.Context(), run, desktopDownloadScript, nil, func(o io.Reader) error {
+	code, err := s.desktopExec(r.Context(), run, start, desktopDownloadScript, nil, func(o io.Reader) error {
 		br := bufio.NewReader(o)
 		if _, err := br.Peek(1); err != nil {
-			return nil // an empty file, or the script refused it: the exit code says which
+			if errors.Is(err, io.EOF) {
+				return nil // an empty file, or the script refused it: the exit code says which
+			}
+			return err // the stream failed before its first byte: that is not an empty file
 		}
 		started, sum = true, sha256.New()
 		desktopDownloadHeaders(w, name)
@@ -319,8 +424,12 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 		s.auditDesktopTransfer(r, run, "download", "failure", sent, "")
 		if !started {
 			writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, fmt.Sprintf("could not read the file in the desktop (exit %d)", code))
+			return
 		}
-		return
+		// The 200 is committed: send what was read, then abort, so the client sees a broken transfer and never a
+		// short file that ended cleanly. Unflushed, a body under the response buffer would end as no response.
+		_ = http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
 	case !started: // an empty file
 		sum = sha256.New()
 		desktopDownloadHeaders(w, name)

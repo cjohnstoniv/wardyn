@@ -84,3 +84,21 @@ describe("ChangeEndDialog — an empty date, and the description", () => {
     expect(screen.getByRole("checkbox")).toBeInTheDocument();
   });
 });
+
+// A failed save used to show only a toast and leave nothing on screen; it now stays in the dialog with Save to retry.
+describe("ChangeEndDialog — a failed save", () => {
+  it("keeps the dialog open with the error inline, and a retry that works clears it", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const onOpenChange = vi.fn();
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("the runner did not answer"));
+    render(<ChangeEndDialog open onOpenChange={onOpenChange} run={makeRun() as RunDetail} onChanged={() => {}} allowNoEnd={false} />);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't change this run's end: the runner did not answer");
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    setRunEndAndWaitMock.mockResolvedValueOnce({ id: "run-1", ends_at: null, wait_budget_sec: 0, capped: [] });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});

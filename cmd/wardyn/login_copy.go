@@ -58,6 +58,9 @@ const (
 	errRenew          = "could not renew the CLI sign-in for %s: %v"
 	hintStoredRefused = "the CLI sign-in's token was refused: run `wardyn whoami`, or `wardyn login` to sign in again"
 
+	// A running command whose stored sign-in was signed out or replaced while it ran (errSessionChanged).
+	errSessionChangedText = "this computer's CLI sign-in changed while the command ran (signed out, or replaced by another `wardyn login`): the command stopped rather than go on under another sign-in or none; what it already sent stands (a started run keeps running); check `wardyn whoami` before you go on"
+
 	// whoami (board ATT1-Terminal frame 5).
 	copyRoleUser   = "user; admin commands need `wardyn login --admin`"
 	copyRoleAdmin  = "%s; admin access ends in %s"

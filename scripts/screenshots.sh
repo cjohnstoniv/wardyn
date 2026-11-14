@@ -27,10 +27,10 @@ export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:8098"
 # wardynd's internal TLS listener defaults to :8443 whatever ADDR is; pick a free port as run-ui-e2e.sh does
 # so a stack already holding :8443 cannot break this backend's bind.
+internal_picked=""
 if [[ -z "${WARDYN_E2E_INTERNAL_ADDR:-}" ]]; then
-  internal_port="$(pick_free_port)"
-  [[ "${internal_port}" == 8098 || "${internal_port}" == 8099 ]] && internal_port="$(pick_free_port)"
-  export WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:${internal_port}"
+  export WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:$(pick_free_port 8098 8099)"
+  internal_picked=1
 fi
 
 # log() uses WARDYN_LOG_TAG="[screenshots]" set before sourcing common.sh above.
@@ -50,7 +50,15 @@ trap cleanup EXIT
 log "Building backend + UI bundle"
 ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
 export WARDYN_E2E_SKIP_BUILD=1
-./scripts/e2e-backend.sh up || { echo "backend up failed"; exit 1; }
+# The picked port is free until wardynd binds it, so another process can take it first: retry once on a
+# new one, as run-ui-e2e.sh does.
+if ! ./scripts/e2e-backend.sh up; then
+  [[ -n "${internal_picked}" ]] || { echo "backend up failed"; exit 1; }
+  log "backend up failed; retrying once on a new internal port"
+  ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
+  export WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:$(pick_free_port 8098 8099 "${WARDYN_E2E_INTERNAL_ADDR##*:}")"
+  ./scripts/e2e-backend.sh up || { echo "backend up failed (twice)"; exit 1; }
+fi
 WARDYN_E2E_TOKEN="$(./scripts/e2e-backend.sh token)" || exit 1
 export WARDYN_E2E_TOKEN
 

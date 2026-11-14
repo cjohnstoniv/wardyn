@@ -5,8 +5,9 @@
 
 // Your account: "Your API tokens" (r15 T2-d). A person mints, lists and revokes their own tokens here, through the
 // shared token dialog, whose Use choice makes one for the Wardyn API or for calling inbound ports. The card
-// renders nothing where there is no person (the admin token, local mode) and where the api_token feature is not
-// granted: the server's wall is the same check.
+// renders nothing where there is no person (the admin token, local mode). Without the api_token feature it hides
+// Mint, the server's wall at mint, and keeps any tokens listed with Revoke: listing and revoking a person's own
+// tokens need no feature. With neither the feature nor a token to list, it renders nothing.
 import * as React from "react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
@@ -80,7 +81,7 @@ export function ApiTokensCard() {
     }
   };
 
-  if (state === "hidden" || !granted) return null;
+  if (state === "hidden" || (!granted && state === "ready" && rows.length === 0)) return null;
 
   const focusCard = (selector: string) => {
     const el = card.current?.querySelector<HTMLElement>(selector) ?? card.current?.querySelector<HTMLElement>("h3 button");
@@ -112,11 +113,13 @@ export function ApiTokensCard() {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="flex justify-end">
-            <Button type="button" variant="outline" size="sm" data-mint="own" onClick={() => setMinting(true)}>
-              {T.MINT}
-            </Button>
-          </div>
+          {granted && (
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" size="sm" data-mint="own" onClick={() => setMinting(true)}>
+                {T.MINT}
+              </Button>
+            </div>
+          )}
           {rows.length === 0 ? (
             <p className="text-body text-muted-foreground">{T.NO_TOKENS}</p>
           ) : (
@@ -141,7 +144,7 @@ export function ApiTokensCard() {
         </div>
       )}
 
-      {minting && (
+      {minting && granted && (
         <TokenDialog
           kind="mint"
           initialName=""

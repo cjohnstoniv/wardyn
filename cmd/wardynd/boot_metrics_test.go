@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -83,21 +84,30 @@ func TestStartMetricsListenerRefusesBind(t *testing.T) {
 }
 
 func TestStartMetricsListener(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := startMetricsListener(ctx, addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
 			t.Error("scrape carried a credential")
 		}
 		_, _ = io.WriteString(w, "wardyn_store_up 1\n")
-	})); err != nil {
+	})
+	// startMetricsListener takes an address, not a listener, so the test picks a free port, and picks again
+	// when another process took it before the bind.
+	var addr string
+	var err error
+	for range 20 {
+		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+		if lerr != nil {
+			t.Fatal(lerr)
+		}
+		addr = ln.Addr().String()
+		_ = ln.Close()
+		if err = startMetricsListener(ctx, addr, handler); err == nil {
+			break
+		}
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,13 +128,17 @@ func TestStartMetricsListener(t *testing.T) {
 	cancel()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		// Only a refused connection ends the wait: a dial that timed out says nothing about the listener,
+		// and a connection means something still listens there.
 		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err != nil {
+		if errors.Is(err, syscall.ECONNREFUSED) {
 			break
 		}
-		_ = c.Close()
+		if err == nil {
+			_ = c.Close()
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("metrics listener still accepting after rootCtx was cancelled")
+			t.Fatalf("metrics listener does not refuse after rootCtx was cancelled (last dial: %v)", err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -7,7 +7,7 @@
 // and each row's default model provider (packet MP-C's G1–G4). Since 0.8
 // (#548) a row carries no model credential.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool } from "../../../lib/types";
 import type { ModelProvider } from "../../../lib/api/model-providers";
@@ -119,6 +119,22 @@ describe("AgentsTab", () => {
     expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-codex-cli")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-none")).toBeInTheDocument();
+  });
+
+  it("the rows are read-only while a save is in flight, so a switch flipped then is not lost", async () => {
+    let answer: ((v: unknown) => void) | undefined;
+    putAgentProvidersMock.mockReturnValue(new Promise((done) => (answer = done)));
+    withProviders([GATEWAY, ANTHROPIC_KEY]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const enabled = within(row).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — ${HARNESSES[0].display}` });
+    expect(enabled).toBeDisabled();
+    // The default provider's select is not a native control: a disabled fieldset alone leaves it openable.
+    await userEvent.click(within(row).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — ${HARNESSES[0].display}` }));
+    expect(screen.queryByRole("option")).toBeNull();
+    await act(async () => answer?.({ providers: { agents: [] }, etag: '"e5"' }));
+    expect(enabled).toBeEnabled();
   });
 
   it("saves the whole roster, untouched catalog rows as bare ids", async () => {
@@ -592,6 +608,29 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     await waitFor(() => expect(getAgentProvidersMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: the rows are read-only until the reload lands, so a switch flipped then is not replaced", async () => {
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code" }] }, etag: '"v1"' });
+    putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
+    let me: ((v: unknown) => void) | undefined;
+    whoamiMock.mockReturnValue(new Promise((done) => (me = done)));
+    withProviders([GATEWAY, ANTHROPIC_KEY]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(whoamiMock).toHaveBeenCalledTimes(1);
+    expect(within(row).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — ${HARNESSES[0].display}` })).toBeDisabled();
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+    await userEvent.click(within(row).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — ${HARNESSES[0].display}` }));
+    expect(screen.queryByRole("option")).toBeNull();
+    await act(async () => me?.(null));
+    await waitFor(() => expect(getAgentProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(within(screen.getByTestId("agent-row-claude-code")).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — ${HARNESSES[0].display}` })).toBeEnabled(),
+    );
   });
 
   it("Discard mine and reload: no answer from /me reloads only the agents", async () => {

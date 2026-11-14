@@ -69,6 +69,11 @@ type fakeEnvbuilderDocker struct {
 
 	// repoDigests maps image ref -> the RepoDigests a real daemon reports for it from ImageInspect.
 	repoDigests map[string][]string
+	// imageIDs maps image ref -> the image ID ImageInspect reports for it; unset is fakeImageID(ref), and an
+	// ID inspects as itself. beforeBuild, when set, runs as ImageBuild starts, with the fake locked (it sets
+	// fields directly), so a test can move a tag between the wrap's inspect and its build.
+	imageIDs    map[string]string
+	beforeBuild func()
 
 	// inspected records the refs passed to ImageInspect, in order.
 	inspected []string
@@ -80,6 +85,10 @@ type fakeEnvbuilderDocker struct {
 
 	// exitCode is the exit code that ContainerWait returns. 0 = success.
 	exitCode int64
+	// waitErr, when set, makes ContainerWait fail with it; blockLogs makes ContainerLogs hold its stream
+	// open until the caller's ctx ends, as a follow of a still-running container does.
+	waitErr   error
+	blockLogs bool
 
 	// Track call counts for assertions.
 	pullCalled bool
@@ -270,12 +279,26 @@ func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _
 		}
 	}
 	return client.ImageInspectResult{
-		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg, RepoDigests: f.repoDigests[imageID]},
+		InspectResponse: image.InspectResponse{ID: f.imageIDFor(imageID), Config: cfg, RepoDigests: f.repoDigests[imageID]},
 	}, nil
+}
+
+// imageIDFor is the image ID ref names now: an ID names itself.
+func (f *fakeEnvbuilderDocker) imageIDFor(ref string) string {
+	switch id := f.imageIDs[ref]; {
+	case id != "":
+		return id
+	case strings.HasPrefix(ref, "sha256:"):
+		return ref
+	}
+	return fakeImageID(ref)
 }
 
 func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error) {
 	f.mu.Lock()
+	if f.beforeBuild != nil {
+		f.beforeBuild()
+	}
 	f.imageBuildCalled = true
 	f.lastBuildTags = options.Tags
 	f.lastBuildPullParent = options.PullParent
@@ -393,10 +416,15 @@ func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ cli
 	return client.ContainerStartResult{}, nil
 }
 
-func (f *fakeEnvbuilderDocker) ContainerLogs(_ context.Context, _ string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+func (f *fakeEnvbuilderDocker) ContainerLogs(ctx context.Context, _ string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	f.mu.Lock()
-	body := f.logsBody
+	body, block := f.logsBody, f.blockLogs
 	f.mu.Unlock()
+	if block {
+		pr, pw := io.Pipe()
+		go func() { <-ctx.Done(); pw.CloseWithError(ctx.Err()) }()
+		return pr, nil
+	}
 	if body == nil {
 		return io.NopCloser(strings.NewReader("build log output\n")), nil
 	}
@@ -419,8 +447,12 @@ func (f *fakeEnvbuilderDocker) ContainerWait(_ context.Context, _ string, _ clie
 	resultC := make(chan container.WaitResponse, 1)
 	errC := make(chan error, 1)
 	f.mu.Lock()
-	code := f.exitCode
+	code, werr := f.exitCode, f.waitErr
 	f.mu.Unlock()
+	if werr != nil {
+		errC <- werr
+		return client.ContainerWaitResult{Result: resultC, Error: errC}
+	}
 	resultC <- container.WaitResponse{StatusCode: code}
 	return client.ContainerWaitResult{Result: resultC, Error: errC}
 }

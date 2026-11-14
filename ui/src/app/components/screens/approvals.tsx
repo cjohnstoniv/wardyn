@@ -370,10 +370,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   } | null>(null);
 
   // Waiting on you: the pending requests this person may decide under a unit's deciders rule, other people's included.
-  // A security operator never gets the tab (their Pending lists every request). Everyone else asks once whether the
-  // server knows the filter, reads the list while it does, and the tab is drawn once a row carried requested_by (a
-  // request on someone else's run) and for as long as this screen is mounted.
+  // A security operator never gets the tab (their Pending lists every request). Everyone else asks whether the
+  // server knows the filter (again on each poll while the answer is unknown), reads the list while it does, and the
+  // tab is drawn once a row carried requested_by (a request on someone else's run) and for as long as this screen is
+  // mounted.
   const securityOperator = useSecurityOperator();
+  // null: not asked yet, or the last ask failed without an answer.
   const [knows, setKnows] = React.useState<boolean | null>(null);
   const [waitingRows, setWaitingRows] = React.useState<ApprovalRequest[]>([]);
   const [waitingTruncated, setWaitingTruncated] = React.useState(false);
@@ -382,6 +384,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // The held elevation requests: the person's own ("Your requests") and the ones they may decide. A failed read
   // after a good one keeps the last good list.
   const [elevation, setElevation] = React.useState<GovernanceRequestList | null | "loading" | "error">("loading");
+  // What the failed read threw, so the "error" state can say whether Wardyn answered.
+  const [elevationError, setElevationError] = React.useState<unknown>(null);
   const deciderRequests =
     !securityOperator && typeof elevation === "object" && elevation !== null
       ? elevation.requests.filter((r) => (r.kind === "elevation" || r.kind === "image") && r.decidable && r.state === "pending")
@@ -401,31 +405,58 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // CANCELLED is fetched for the same reason (B4): a run's terminal transition
   // moves its PENDING approvals there, and a row that left the pending queue
   // without appearing in the decided one would just vanish.
-  const fetchPending = React.useCallback(
-    () => api.listApprovals("PENDING", "", view).then(setPendingItems),
-    [view],
-  );
-  const fetchWaiting = React.useCallback(
-    () =>
-      api.listDecidableByMe().then(({ rows, truncated }) => {
-        setWaitingRows(rows);
-        setWaitingTruncated(truncated);
-        setWaitingStatus("ready");
-        if (rows.some((r) => !!r.requested_by)) setLatched(true);
-      }),
-    [],
-  );
-  const fetchElevation = React.useCallback(
-    () => elevationApi.list().then(setElevation),
-    [],
-  );
+  // An answer lands unless a read of the same list that started after it has landed already: a poll read that started
+  // before a decision must not put the decided request back, with Approve and Deny live, after the refresh that
+  // shows it gone. A read still out holds no older answer back, so a list is never marked ready without one.
+  const pendingAsked = React.useRef(0);
+  const pendingLanded = React.useRef(0);
+  const fetchPending = React.useCallback(() => {
+    const read = ++pendingAsked.current;
+    return api.listApprovals("PENDING", "", view).then((items) => {
+      if (read < pendingLanded.current) return;
+      pendingLanded.current = read;
+      setPendingItems(items);
+    });
+  }, [view]);
+  const waitingAsked = React.useRef(0);
+  const waitingLanded = React.useRef(0);
+  const fetchWaiting = React.useCallback(() => {
+    const read = ++waitingAsked.current;
+    return api.listDecidableByMe().then(({ rows, truncated }) => {
+      if (read < waitingLanded.current) return;
+      waitingLanded.current = read;
+      setWaitingRows(rows);
+      setWaitingTruncated(truncated);
+      setWaitingStatus("ready");
+      if (rows.some((r) => !!r.requested_by)) setLatched(true);
+    });
+  }, []);
+  // Every caller (mount, poll, a withdraw's reload) bumps this; only the newest read may land, so a slower read that
+  // still saw a request pending cannot put it back after the reload that shows it withdrawn.
+  const elevationRead = React.useRef(0);
+  const fetchElevation = React.useCallback(() => {
+    const read = ++elevationRead.current;
+    return elevationApi.list().then(
+      (list) => {
+        if (read === elevationRead.current) setElevation(list);
+      },
+      (e: unknown) => {
+        if (read === elevationRead.current) throw e;
+      },
+    );
+  }, []);
+  const decidedAsked = React.useRef(0);
+  const decidedLanded = React.useRef(0);
   const fetchDecided = React.useCallback(() => {
+    const read = ++decidedAsked.current;
     return Promise.all([
       api.listApprovals("APPROVED", "", view),
       api.listApprovals("DENIED", "", view),
       api.listApprovals("EXPIRED", "", view),
       api.listApprovals("CANCELLED", "", view),
     ]).then(([approved, denied, expired, cancelled]) => {
+      if (read < decidedLanded.current) return;
+      decidedLanded.current = read;
       // Each state is its own capped fetch, so the truncation test is per list:
       // the merged decidedItems length would false-positive on three large but
       // complete lists. Decided history only grows, so this one does get hit.
@@ -454,28 +485,38 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             }),
           ]).then(() => undefined)
         : fetchPending();
-    const elevationRead = fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    const elevationRead = fetchElevation().catch((e: unknown) => {
+      setElevationError(e);
+      setElevation((cur) => (typeof cur === "object" ? cur : "error"));
+    });
     return Promise.all([main, waitingRead, elevationRead]).then(() => undefined);
   }, [fetchPending, fetchDecided, fetchWaiting, fetchElevation, view]);
   const loadWaiting = React.useCallback(() => {
     setWaitingStatus((st) => (st === "ready" ? st : "loading"));
     fetchWaiting().catch(() => setWaitingStatus((st) => (st === "ready" ? st : "error")));
   }, [fetchWaiting]);
+  // The probe answers yes, no, or null when it could not tell (a 5xx, a dropped connection, a module that has no such
+  // read): null draws nothing new and the poll asks again, so one failed ask does not hide the tab for the screen's life.
+  const securityOperatorRef = React.useRef(securityOperator);
+  securityOperatorRef.current = securityOperator;
+  const probeKnows = React.useCallback(
+    () =>
+      Promise.resolve()
+        .then(() => api.knowsDecidableBy())
+        .catch(() => null)
+        .then((k) => {
+          // An ask that could not tell never replaces an answer another ask already got.
+          if (!securityOperatorRef.current) setKnows((prev) => (k === null ? prev : k));
+        }),
+    [],
+  );
   React.useEffect(() => {
     if (securityOperator) {
       setKnows(null);
       return;
     }
-    let alive = true;
-    // Any failure, a module that has no such read included, is "does not know": nothing new is drawn.
-    void Promise.resolve()
-      .then(() => api.knowsDecidableBy())
-      .catch(() => false)
-      .then((k) => alive && setKnows(k));
-    return () => {
-      alive = false;
-    };
-  }, [securityOperator]);
+    void probeKnows();
+  }, [securityOperator, probeKnows]);
   React.useEffect(() => {
     if (waitingOn) loadWaiting();
   }, [waitingOn, loadWaiting]);
@@ -506,11 +547,17 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   }, [wantsUnitNames]);
 
   React.useEffect(() => {
-    void fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    void fetchElevation().catch((e: unknown) => {
+      setElevationError(e);
+      setElevation((cur) => (typeof cur === "object" ? cur : "error"));
+    });
   }, [fetchElevation]);
   const reloadElevation = React.useCallback(() => {
     setElevation((cur) => (cur === "error" ? "loading" : cur));
-    fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    fetchElevation().catch((e: unknown) => {
+      setElevationError(e);
+      setElevation((cur) => (typeof cur === "object" ? cur : "error"));
+    });
   }, [fetchElevation]);
 
   const load = React.useCallback(() => {
@@ -537,8 +584,10 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // precedent); paused only while the foreground load is in flight, so a
   // tick during the error state can still recover it.
   const POLL_MS = 10_000;
+  // The chain is returned, so a tick waits for the read still out instead of starting one that supersedes it.
   usePoll(() => {
-    fetchAll()
+    if (!securityOperator && knows === null) void probeKnows();
+    return fetchAll()
       .then(() => {
         setStatus("ready");
         onChanged?.();
@@ -692,7 +741,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <p className="mb-4 text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
       )}
 
-      <MyElevationRequests list={elevation} onReload={reloadElevation} />
+      <MyElevationRequests list={elevation} error={elevationError} onReload={reloadElevation} />
 
       <Tabs value={shown} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
         <TabsList>

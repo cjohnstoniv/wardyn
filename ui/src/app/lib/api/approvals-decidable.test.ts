@@ -63,8 +63,13 @@ describe("approvals.knowsDecidableBy", () => {
     expect(await approvals.knowsDecidableBy()).toBe(false);
   });
 
-  it("is false for any other failure", async () => {
+  it("is null (unknown, ask again) for a failure that is not a 400", async () => {
     answer(500, { error: "boom" });
-    expect(await approvals.knowsDecidableBy()).toBe(false);
+    expect(await approvals.knowsDecidableBy()).toBeNull();
+  });
+
+  it("is null for a dropped connection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    expect(await approvals.knowsDecidableBy()).toBeNull();
   });
 });

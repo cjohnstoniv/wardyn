@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -494,6 +495,10 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	case len(raw.LegacyADOGrants) == 1:
 		c.ADOGrant = &raw.LegacyADOGrants[0]
 	}
+	// Before the fields' own checks, so every configured host is named by the one rule.
+	if err := errors.Join(c.refuseIPSpellingEntries(), c.refuseHostKeyCollisions()); err != nil {
+		return nil, err
+	}
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
 	}
@@ -552,7 +557,7 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 // os.Exit(1) — the egress sidecar of EVERY dispatched run, killed by a value
 // the write path said was fine.
 //
-// It IS parseUpstreamProxy — the very rule applyDefaultsAndValidate runs below —
+// It runs parseUpstreamProxy — the very rule applyDefaultsAndValidate runs below —
 // exported so the control plane can apply THE SAME rule at write time
 // (validateSiteConfig) and at dispatch (loadableUpstreamProxyURL,
 // internal/api/runs_bedrock.go) instead of keeping a second, narrower copy.
@@ -561,9 +566,23 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 // cause; parseUpstreamProxy never echoes the raw URL (it may carry
 // user:pass credentials), so the message is always safe to surface. The empty
 // string is valid (upstream disabled), matching parseUpstreamProxy.
+// Its host is then held to ValidConfigHost, as config load holds upstream_proxy_url.
 func ValidUpstreamProxyURL(raw string) error {
-	_, err := parseUpstreamProxy(raw)
-	return err
+	up, err := parseUpstreamProxy(raw)
+	if err != nil || up == nil {
+		return err
+	}
+	if err := ValidConfigHost(up.host); err != nil {
+		return fmt.Errorf("upstream proxy url: %w", err)
+	}
+	return nil
+}
+
+// UpstreamProxyURLHostRefused reports whether ValidUpstreamProxyURL refuses raw for its host's spelling
+// alone: the URL is otherwise one the proxy loads, so it names a real proxy, and config load refuses it.
+func UpstreamProxyURLHostRefused(raw string) bool {
+	up, err := parseUpstreamProxy(raw)
+	return err == nil && up != nil && ValidConfigHost(up.host) != nil
 }
 
 // validateSigninListen: the sign-in lane, when set, is a host:port of its own.

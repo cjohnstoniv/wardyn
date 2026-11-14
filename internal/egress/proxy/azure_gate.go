@@ -124,7 +124,7 @@ func newAzureGates(cfgs []AzureGateConfig) *azureGates {
 	return g
 }
 
-func azureHostKey(host string) string { return strings.ToLower(strings.TrimSuffix(host, ".")) }
+func azureHostKey(host string) string { return hostKey(host) }
 
 func (g *azureGates) forHost(host string) []*azureGate {
 	if g == nil {

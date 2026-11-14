@@ -1106,6 +1106,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
 - The same list covers `.codex`, `.gemini`, `.npmrc` and `.pypirc`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
+- A member's folder scan opens every folder from the top of the drive down to the member's folder, so the server's user needs read access to each one.
+- Where the server's user can only pass through one of them (execute without read), the scan is refused as outside the member's roots and the server log says why.
 - A source bound to the member's runner (`runner_id`) is checked here by its text alone, and by [its runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner) before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
@@ -2055,7 +2057,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Bool, default `false` (flag `-allow-ui-sandbox-shared-origin`).
 - With SSO configured and the UI-sandbox gateway on (`WARDYN_UI_SANDBOX_LISTEN`), boot is refused while `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` is unset; set this to `true` to accept that every run's apps share one origin.
 - Prefer the template: with the shared origin, a page one run serves can reach another run's app.
-- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`.
+- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`. Without SSO and with no template, the chart still renders and prints a warning unless that is set.
 
 ### `WARDYN_UI_SANDBOX_SESSION_TTL`
 
@@ -2233,7 +2235,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   "syslog":  {"network": "udp", "addr": "localhost:514"},
   "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
   "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3},
-  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100}
+  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100},
+  "otlp_metrics": {"endpoint": "https://otel.example.com:4318", "interval": "60s"}
 }
 ```
 
@@ -2269,6 +2272,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | Attributes | `wardyn.run_id` (run-scoped rows), `wardyn.actor`, `wardyn.target` (when set), `wardyn.outcome`, `wardyn.correlation_id` (when the row's `data` carries one, at most 128 characters) |
 
 - Nothing else from the row is sent: not `data`, `source_ip`, the hashes or the row id. The webhook sink's payload is the ceiling.
+
+#### OpenTelemetry metrics (`otlp_metrics`)
+
+- Not an audit sink: it sends no audit row. Each wardynd replica POSTs its `/metrics` series as OTLP/HTTP JSON to `<endpoint>/v1/metrics`; see [monitoring](operations/monitoring.md#opentelemetry-metrics).
+- The block is independent of `otlp`: set either one, or both with different endpoints.
+
+| Field | Default | Notes |
+|---|---|---|
+| `endpoint` | (required) | collector base URL, `http://` or `https://`; `/v1/metrics` is added to its path |
+| `bearer_token`, `headers`, `timeout` | as `otlp` | same meaning and limits |
+| `interval` | `60s` | how often the series are pushed; at least `1s` |
 
 #### Acknowledged delivery (`delivery: acknowledged`)
 
@@ -2444,7 +2458,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Read-only checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
 - It never prints a token or a proxy credential, writes nothing and exits 1 when a stage fails; `--json` gives the stages as data.
-- It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle would verify the server: the CLI trusts the system roots alone, and a runner trusts the bundle.
+- It trusts what the CLI trusts: the system roots, and for the organisation's host the CAs `wardyn ca add` stored. It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle, which a runner trusts, would verify the server.
 - With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)). Its `runner-exits` stage fails when the organisation parked one of that runner's exit receipts ([runner-offline.md](runner-offline.md)).
 
 ### `WARDYN_URL`

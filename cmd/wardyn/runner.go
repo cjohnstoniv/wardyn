@@ -56,8 +56,8 @@ func runnerCmd(client clientFn, sess *sessionState) *cobra.Command {
 			return err
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "Single-use registration token expires %s; registration still requires the owner's fingerprint claim.\n", token.ExpiresAt.Format(time.RFC3339))
-		fmt.Fprintln(cmd.OutOrStdout(), token.Token)
-		return nil
+		return printMintedToken(cmd.OutOrStdout(), token.Token, token.ID, token.ExpiresAt,
+			"an admin can revoke it before then with `wardyn runner tokens revoke "+token.ID.String()+"`")
 	}}
 	mint.Flags().StringVar(&owner, "owner", "", "person's principal (operator only); omit for yourself")
 	cmd.AddCommand(claim, mint, runnerSetupCmd(client, sess), runnerInstallCmd(client, sess), runnerUpgradeCmd(), runnerListCmd(client), runnerSetCmd(client), runnerRevokeCmd(client), runnerTokensCmd(client), runnerPoolCmd(client), runnerRemoteCmd(client))

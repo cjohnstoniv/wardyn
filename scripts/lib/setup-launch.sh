@@ -32,6 +32,14 @@ finish_unhealthy_launch() {
   unset _ful_pidfile _ful_wpid _ful_logfile
 }
 
+# prepare_host_log LOGFILE — creates the host wardynd log owner-only (0600) without emptying it. setup.sh
+# calls it before its already-running check, so a rerun that leaves a live wardynd in place keeps that
+# daemon's startup and error history; launch_wardynd's '>' redirect empties it for a daemon it launches.
+prepare_host_log() {
+  (umask 077; : >> "$1") 2>/dev/null || true
+  chmod 600 "$1" 2>/dev/null || true
+}
+
 # host_runner_limits URL — gives the host-mode server's runner its limits
 # (scripts/lib/runner-limits.sh, sourced by setup.sh before this is called).
 # setup.sh calls it after a launch AND on its already-running branch, so a

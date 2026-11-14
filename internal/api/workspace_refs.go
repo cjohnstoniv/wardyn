@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -321,6 +323,22 @@ func userMountAllowed(policy runner.UserMountPolicy, owner string, wm types.Work
 		return fmt.Errorf("member workspace mount: %w", err)
 	}
 	return nil
+}
+
+// openMemberSource is userMountAllowed for a host-side read of src: an
+// operator's source (owner=="") gets no handle and is read by its path; a
+// member's is checked and opened in one step (OpenUserSource, opening with no
+// link followed from the top of the volume), and the caller reads it only
+// through the handle and closes it.
+func openMemberSource(policy runner.UserMountPolicy, owner, src string) (*os.Root, error) {
+	if owner == "" {
+		return nil, nil
+	}
+	dir, err := policy.OpenUserSource(owner, src, foldersync.OpenFromTop)
+	if err != nil {
+		return nil, fmt.Errorf("member workspace mount: %w", err)
+	}
+	return dir, nil
 }
 
 // sourceRefusal is validateWorkspaceSources' (status, reason, error) answer as

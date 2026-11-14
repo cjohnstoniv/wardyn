@@ -17,7 +17,8 @@ import (
 // MergeProfiles combines N sources' individually-scanned profiles into ONE
 // profile for the workspace: unions the set-like fields, concatenates leak
 // findings and setup commands (deduped and re-capped), takes the largest
-// build-memory hint and the LOWEST confidence, and folds ContextHash into a
+// build-memory hint and the LOWEST confidence (incomplete when any source is,
+// with the omitted-name counts summed), and folds ContextHash into a
 // digest-of-digests. HasDevcontainer/HasDockerfile come from the PRIMARY
 // source ONLY, matched against identities (not profiles[0], since attachment
 // order and scan order can diverge) — no match yields false/false, never
@@ -45,8 +46,8 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 	setupSeen := map[string]struct{}{}
 	var setupCmds []SetupCommand
 	var contextHashes []string
-	needsReview := false
-	buildMemMiB := 0
+	needsReview, incomplete := false, false
+	buildMemMiB, omitted := 0, 0
 	confidenceRank := map[string]int{
 		ConfidenceHigh: 3, ConfidenceMedium: 2, ConfidenceLow: 1,
 	}
@@ -99,6 +100,8 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 			}
 		}
 		needsReview = needsReview || p.NeedsReview
+		incomplete = incomplete || p.Incomplete
+		omitted += p.RequiredSecretsOmitted // per source, so a name two sources left out counts twice
 		if p.BuildMemoryMiB > buildMemMiB {
 			buildMemMiB = p.BuildMemoryMiB
 		}
@@ -119,24 +122,26 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 	slices.SortFunc(requiredSecrets, func(a, b SecretNeed) int { return strings.Compare(a.Name, b.Name) })
 
 	return WorkspaceProfile{
-		Languages:          sortedSetKeys(langs),
-		PackageManagers:    sortedSetKeys(pkgMgrs),
-		EgressDomains:      sortedSetKeys(egress),
-		Tools:              sortedSetKeys(tools),
-		GitRemotes:         GitRemotes{GitHub: sortedSetKeys(github), OtherHosts: sortedSetKeys(otherHosts)},
-		HasDevcontainer:    hasDevcontainer,
-		HasDockerfile:      hasDockerfile,
-		RequiredSecrets:    requiredSecrets,
-		ServicesNeeded:     sortedSetKeys(services),
-		SuggestedEgress:    sortedSetKeys(suggested),
-		SecretFilesPresent: sortedSetKeys(secretFiles),
-		BuildMemoryMiB:     buildMemMiB,
-		LeakFindings:       leaks,
-		SetupCommands:      setupCmds,
-		ContextHash:        mergeContextHash(contextHashes),
-		Confidence:         lowest,
-		NeedsReview:        needsReview,
-		Source:             SourceDeterministic,
+		Languages:              sortedSetKeys(langs),
+		PackageManagers:        sortedSetKeys(pkgMgrs),
+		EgressDomains:          sortedSetKeys(egress),
+		Tools:                  sortedSetKeys(tools),
+		GitRemotes:             GitRemotes{GitHub: sortedSetKeys(github), OtherHosts: sortedSetKeys(otherHosts)},
+		HasDevcontainer:        hasDevcontainer,
+		HasDockerfile:          hasDockerfile,
+		RequiredSecrets:        requiredSecrets,
+		ServicesNeeded:         sortedSetKeys(services),
+		SuggestedEgress:        sortedSetKeys(suggested),
+		SecretFilesPresent:     sortedSetKeys(secretFiles),
+		BuildMemoryMiB:         buildMemMiB,
+		LeakFindings:           leaks,
+		SetupCommands:          setupCmds,
+		ContextHash:            mergeContextHash(contextHashes),
+		Incomplete:             incomplete,
+		RequiredSecretsOmitted: omitted,
+		Confidence:             lowest,
+		NeedsReview:            needsReview,
+		Source:                 SourceDeterministic,
 	}
 }
 

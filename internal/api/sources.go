@@ -336,10 +336,12 @@ type deleteSourceResponse struct {
 // workspaces attach it: in-use is a 409 naming every attaching workspace;
 // ?force=1 is the explicit detach-everywhere escape. Forcing does NOT make a
 // workspace's next run fail (the mount gate has no check for a vanished
-// source), so DetachedFrom is the only signal the operator gets. The in-use
-// gate and the delete are ONE atomic statement in the store (DeleteSource);
-// WorkspacesAttaching only names who's attached for the body, so a concurrent
-// attach can never slip through.
+// source), so DetachedFrom is the only signal the operator gets: the names the
+// store's detach changed, in the delete's own transaction, so a workspace that
+// attached after the listing below is named too. The in-use gate and the delete
+// are ONE atomic statement in the store (DeleteSource); WorkspacesAttaching only
+// names who's attached for the 409 body, so a concurrent attach can never slip
+// through.
 //
 //	DELETE /api/v1/sources/{id}[?force=1]
 func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +355,8 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "check source use", err)
 		return
 	}
-	if err := s.cfg.Store.DeleteSource(r.Context(), id, force); err != nil {
+	detached, err := s.cfg.Store.DeleteSource(r.Context(), id, force)
+	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			if force {
 				// STORE-1: force still refuses when detaching would leave a
@@ -377,9 +380,9 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"source.delete", id.String(), "success", mustJSON(map[string]any{
-			"detached_from": names, "forced": force,
+			"detached_from": detached, "forced": force,
 		})))
-	writeJSON(w, http.StatusOK, deleteSourceResponse{DetachedFrom: names})
+	writeJSON(w, http.StatusOK, deleteSourceResponse{DetachedFrom: detached})
 }
 
 // lastPathSegment names a source from its locator when the caller didn't:

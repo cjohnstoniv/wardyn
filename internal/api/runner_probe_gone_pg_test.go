@@ -304,7 +304,7 @@ func TestRunnerProbePG_SweepEndsAConfirmedRun(t *testing.T) {
 func TestRunnerProbePG_StaleSessionCheckChangesNothing(t *testing.T) {
 	g := goneProbeFixture(t, t.Context())
 	ctx := t.Context()
-	stale, err := g.st.RunnerProbeClock(ctx)
+	stale, err := g.st.DatabaseNow(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

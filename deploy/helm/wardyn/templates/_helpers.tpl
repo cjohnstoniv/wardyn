@@ -137,6 +137,24 @@ Naming BOTH forms is a render failure, because wardynd refuses to boot on it
 {{- end -}}
 
 {{/*
+wardyn.basePath — WARDYN_BASE_PATH as the container gets it, for the probes and
+the ServiceMonitor: an extraEnv entry (rendered last, so it wins), else an env
+entry, even an empty one, else basePath (deployment.yaml adds WARDYN_BASE_PATH
+from basePath only when neither env nor extraEnv names it). Presence counts, unlike
+wardyn.envValue: an empty WARDYN_BASE_PATH serves at the root even with basePath
+set. deployment.yaml refuses an extraEnv entry that sets it through valueFrom.
+*/}}
+{{- define "wardyn.basePath" -}}
+{{- $env := .Values.env | default dict -}}
+{{- $p := .Values.basePath | default "" | toString -}}
+{{- if hasKey $env "WARDYN_BASE_PATH" -}}{{- $p = get $env "WARDYN_BASE_PATH" | toString -}}{{- end -}}
+{{- range .Values.extraEnv | default list -}}
+{{- if eq (.name | default "") "WARDYN_BASE_PATH" -}}{{- $p = .value | default "" | toString -}}{{- end -}}
+{{- end -}}
+{{- $p -}}
+{{- end -}}
+
+{{/*
 Non-empty when SOME authentication is wired. Without one, internal/api/http.go
 adminAuth 401s every API route ("admin token not configured; public API
 disabled") while /healthz keeps reporting Ready — a pod that looks healthy and
@@ -170,7 +188,7 @@ what keeps this render check and the boot check agreeing.
 {{- end -}}
 
 {{/*
-"true" when the UI-sandbox gateway may run on one shared origin with SSO configured:
+"true" when the UI-sandbox gateway may run on one shared origin:
 uiSandbox.acceptSharedOrigin, or WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN set in env/extraEnv to something
 wardynd reads as true (the same set as wardyn.allowNoOperatorList).
 */}}

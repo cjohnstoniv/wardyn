@@ -35,9 +35,11 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"net"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -61,9 +63,9 @@ const (
 	// lock: obj = the secret-store namespace the credentials live in.
 	AWSSSOLockClass int32 = 0x57415753 // ASCII "WAWS"
 	// AWSSSOCredentialLockClass is one AWS SSO credential's renewal
-	// single-flight: obj = the namespace and the credential's secret name. The
-	// one class several keys of which may be held at once, taken in ascending
-	// Obj (the whole-person erase takes every credential's).
+	// single-flight: obj = the namespace and the credential's secret name. One
+	// of the two classes several keys of which may be held at once (manyKeys),
+	// taken in ascending Obj (the whole-person erase takes every credential's).
 	AWSSSOCredentialLockClass int32 = 0x57415343 // ASCII "WASC"
 	// ADOSignInLockClass is the Entra sign-in refresh single-flight (Azure
 	// DevOps and Azure AI Foundry): obj = person and provider row.
@@ -90,6 +92,13 @@ const (
 	// across replicas. It is only ever tried, never waited for, and the signer
 	// holds no other lock.
 	AuditCheckpointLockClass int32 = 0x5741434B // ASCII "WACK"
+	// RunStartLockClass fences one run's command starts against the writes that
+	// end it: a start holds it from its last read of the run until the runner
+	// has started the command, and each terminal or kept-mark writer holds it
+	// around its state write alone. obj = the run id. Taken last, under any
+	// other lock, and nothing is taken while it is held; a bulk writer takes
+	// several keys at once, in ascending Obj.
+	RunStartLockClass int32 = 0x57525354 // ASCII "WRST"
 )
 
 // LockOrder is the one documented order. A lock may be taken while holding
@@ -103,7 +112,7 @@ const (
 //	document lock and a component save's key and row locks), then the
 //	organisation MCP server key lock (held around a component save's row
 //	lock), then the document locks, then the audit sweep, and the audit
-//	checkpoint signer last.
+//	checkpoint signer, then a run's start lock last.
 var LockOrder = []int32{
 	RunOpLockClass,
 	ADORunTokenLockClass,
@@ -116,6 +125,7 @@ var LockOrder = []int32{
 	CapEnforcementLockClass,
 	AuditSweepLockClass,
 	AuditCheckpointLockClass,
+	RunStartLockClass,
 }
 
 // Lock failures. A refusal (ErrLockBusy, ErrLockNoCapacity, ErrLockUnavailable)
@@ -229,11 +239,17 @@ func checkLockOrder(held []LockKey, k LockKey) (reentrant bool, err error) {
 	}
 	for _, h := range held {
 		r := lockRank(h.Class)
-		if r > rank || r == rank && (k.Class != AWSSSOCredentialLockClass || h.Obj >= k.Obj) {
+		if r > rank || r == rank && (!manyKeys(k.Class) || h.Obj >= k.Obj) {
 			return false, fmt.Errorf("%w: %v taken while holding %v", ErrLockOrder, k, h)
 		}
 	}
 	return false, nil
+}
+
+// manyKeys reports whether several keys of class may be held at once (in
+// ascending Obj).
+func manyKeys(class int32) bool {
+	return class == AWSSSOCredentialLockClass || class == RunStartLockClass
 }
 
 func withHolds(ctx context.Context, h *holds) context.Context {
@@ -261,6 +277,63 @@ func WithoutCancelUnlessLost(ctx context.Context) (_ context.Context, release co
 	}
 	stop := context.AfterFunc(lost, func() { cancel(context.Cause(lost)) })
 	return out, func() { stop(); cancel(context.Canceled) }
+}
+
+// LockHoldLimit is how long a run's lock may be held before the watchdog logs and counts the hold
+// (LongLockHolds). It is past the longest hold the daemon is built to take: a dedicated end hold
+// (3 min), a macOS VM's stop on top of it (90 s), and a pass back still running past both (up to
+// 2 min). The watchdog never frees a hold or cancels its work: every call a holder makes has a bound
+// of its own, so a hold past this limit is a call without one, and freeing the lock under it would
+// let a second holder act while the first one's work may still land. A variable only so a test can
+// shorten it.
+var LockHoldLimit = 10 * time.Minute
+
+// longLockHolds counts the holds of a run's lock that ran past LockHoldLimit.
+var longLockHolds atomic.Uint64
+
+// LongLockHolds is how many holds of a run's lock have run past LockHoldLimit since the process
+// started (the /metrics series wardyn_lock_holds_over_limit_total).
+func LongLockHolds() uint64 { return longLockHolds.Load() }
+
+// watchHold starts the watchdog on a new hold of k and returns its stop, which the hold's release
+// calls. Only a run's lock is watched: it is the one a holder keeps across runtime and store calls.
+// Past LockHoldLimit the watchdog counts the hold once and logs it with the functions that took it;
+// at release it logs how long such a hold lasted. It frees nothing and cancels nothing.
+func watchHold(k LockKey) (stop func()) {
+	if k.Class != RunOpLockClass {
+		return func() {}
+	}
+	start, limit := time.Now(), LockHoldLimit
+	pcs := make([]uintptr, 12)
+	pcs = pcs[:runtime.Callers(3, pcs)]
+	var over atomic.Bool
+	t := time.AfterFunc(limit, func() {
+		over.Store(true)
+		longLockHolds.Add(1)
+		slog.Warn("db: a run's lock has been held past its limit; the watchdog does not free it, and the holder keeps it until its work returns",
+			slog.String("lock", k.String()), slog.Duration("limit", limit), slog.String("taken_by", callerNames(pcs)))
+	})
+	return func() {
+		if !t.Stop() && over.Load() {
+			slog.Warn("db: a run's lock held past its limit was released",
+				slog.String("lock", k.String()), slog.Duration("held", time.Since(start)))
+		}
+	}
+}
+
+// callerNames is pcs as "fn <- fn <- ...", innermost first, without the runtime's own frames.
+func callerNames(pcs []uintptr) string {
+	var names []string
+	frames := runtime.CallersFrames(pcs)
+	for {
+		f, more := frames.Next()
+		if f.Function != "" && !strings.HasPrefix(f.Function, "runtime.") {
+			names = append(names, f.Function)
+		}
+		if !more {
+			return strings.Join(names, " <- ")
+		}
+	}
 }
 
 // PGLocker is the Postgres-backed Locker.
@@ -522,9 +595,11 @@ func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try 
 	hctx, hcancel := context.WithCancelCause(withHolds(ctx, &holds{keys: []LockKey{k}, conn: lc}))
 	stop := make(chan struct{})
 	go lc.watch(hcancel, stop, LockWatchInterval)
+	endWatch := watchHold(k)
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
+			endWatch()
 			close(stop)
 			lc.close()
 			free()
@@ -697,9 +772,11 @@ func (l *LocalLocker) lock(ctx context.Context, k LockKey, wait time.Duration, t
 	// Cancelled at release, as the PG locker's is: a caller that keeps using
 	// the context after unlocking must fail here, in a test, as it would there.
 	hctx, hcancel := context.WithCancelCause(withHolds(ctx, &holds{keys: append(slices.Clone(held), k)}))
+	endWatch := watchHold(k)
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
+			endWatch()
 			<-e.ch
 			l.drop(k, e)
 			hcancel(context.Canceled)

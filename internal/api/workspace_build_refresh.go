@@ -39,9 +39,7 @@ func readBuildRefresh(w http.ResponseWriter, r *http.Request) (refresh, ok bool)
 	var body struct {
 		Refresh bool `json:"refresh"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&body); err != nil {
+	if err := types.DecodeOneJSON(bytes.NewReader(raw), &body, true); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return false, false
 	}

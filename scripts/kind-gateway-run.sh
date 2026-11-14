@@ -313,9 +313,8 @@ done <<<"${call_ids}"
 [[ "${joined}" -ge 1 ]]; check "the gateway's X-Wardyn-Call-Id equals the audit row's gateway_call_id (${joined} id(s) on both)" $?
 
 step "reading the fake's counters (/_seen)"
-PF_PORT="$(pick_free_port)"
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" "${PF_PORT}:8080" >/dev/null 2>&1 &
-PF_PID=$!
+port_forward PF_PID PF_PORT "${TMPDIR}/pf-fake.log" --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" :8080 \
+  || die "the port-forward to the fake named no local port: $(cat "${TMPDIR}/pf-fake.log")"
 seen=""
 for _ in $(seq 1 15); do
   seen="$(curl -sf --max-time 3 "http://127.0.0.1:${PF_PORT}/_seen" 2>/dev/null)" && break
@@ -339,9 +338,8 @@ echo "  paths the fake saw outside its two routes: $(jq -c '[.requests[] | selec
 # Direct calls to the model route from this machine, through a port-forward: the Host header names
 # the route, and the throwaway CA is the trust anchor.
 step "calling the model route directly: no token, and a token another key signed"
-GW_PF_PORT="$(pick_free_port)"
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/llm-gw" "${GW_PF_PORT}:${GATEWAY_PORT}" >/dev/null 2>&1 &
-GW_PF_PID=$!
+port_forward GW_PF_PID GW_PF_PORT "${TMPDIR}/pf-gw.log" --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/llm-gw" ":${GATEWAY_PORT}" \
+  || die "the port-forward to the gateway named no local port: $(cat "${TMPDIR}/pf-gw.log")"
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 openssl ecparam -name prime256v1 -genkey -noout -out "${TMPDIR}/other.key" 2>/dev/null || die "could not make a second signing key"
 # The header names the key set's real kid, so the gateway has the right public key to check against

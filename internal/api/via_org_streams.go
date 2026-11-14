@@ -61,6 +61,8 @@ type viaOrgRun struct {
 	mu     sync.Mutex // the engine build and its generation; taken before smu, never after
 	engine *viaOrgGen
 	routes []proxy.ViaOrgRoute
+	// upstreamRefused holds each build refused for the site's upstream proxy host, by the setting it read.
+	upstreamRefused map[viaOrgUpstreamSetting]error
 
 	smu       sync.Mutex
 	streams   map[*viaOrgStream]struct{}

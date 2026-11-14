@@ -212,8 +212,8 @@ func waitingDetail(pod *corev1.Pod) string {
 // proxyNotReadyDetail is the extra start-failure line for a proxy container that is Running but not
 // Ready when the start deadline passes, else "": the probe is a connect to the listen port, and the proxy
 // did not open it in time. In runner mode the proxy opens it only once its lapse gate opens on the first
-// run-token renewal (Server.awaitOpen), so the line says it may be waiting for that; wardynd's own driver
-// has no lapse gate. image is named when it is known.
+// run-token renewal and wardyn-runnerd's decision sink has granted it credit (Server.awaitOpen), so the
+// line says it may be waiting for either; wardynd's own driver has neither. image is named when it is known.
 func proxyNotReadyDetail(pod *corev1.Pod, image string, runnerMode bool) string {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name != proxyContainerName || cs.State.Running == nil || cs.Ready {
@@ -225,7 +225,7 @@ func proxyNotReadyDetail(pod *corev1.Pod, image string, runnerMode bool) string 
 		}
 		line := fmt.Sprintf("%s is running but its port %d readiness probe has not passed; check the proxy log and connectivity", proxy, runner.ProxyListenPort)
 		if runnerMode {
-			line += "; the proxy may be waiting for its first run-token renewal with the organisation"
+			line += "; the proxy may be waiting for its first run-token renewal with the organisation, or for wardyn-runnerd's decision sink"
 		}
 		return line
 	}

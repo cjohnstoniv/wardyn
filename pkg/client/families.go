@@ -165,8 +165,10 @@ type SourceRequest struct {
 	Ref  string `json:"ref,omitempty"`
 	Name string `json:"name,omitempty"`
 	// Requirements seeds the source's own contract (secret:/egress:/write:
-	// keys; integration: keys are tier-3-only and rejected here).
-	Requirements map[string]types.WorkspaceRequirement `json:"requirements,omitempty"`
+	// keys; integration: keys are tier-3-only and rejected here). On an
+	// existing source, nil keeps its contract and an empty map clears it, so
+	// the empty map is sent as {} (omitzero), never dropped.
+	Requirements map[string]types.WorkspaceRequirement `json:"requirements,omitzero"`
 }
 
 // ListSources returns the whole library. GET /api/v1/sources.
@@ -603,14 +605,39 @@ type ErasePersonResult struct {
 	Outcome map[string]string `json:"outcome"`
 	// Detail is each scope's counts.
 	Detail map[string]any `json:"detail"`
+	// NotErased lists the other principals that have, or had, the person's tenant and object id
+	// (another issuer's sign-in, for one): the erasure leaves them alone. Erase each by its subject
+	// when it is the same person. nil when there are none.
+	NotErased *ErasureNotErased `json:"not_erased,omitempty"`
+}
+
+// ErasureNotErased is an erasure answer's not_erased: the principals left alone and the server's note.
+type ErasureNotErased struct {
+	Subjects []string `json:"subjects"`
+	Note     string   `json:"note"`
+}
+
+// TokensNotRevoked reports the credentials scope's tokens_revocation_failed: an Azure DevOps token the
+// erasure tried to revoke may still work until it expires, because Azure DevOps refused the revoke. It
+// returns the server's sentence (its detail), or false when every token was revoked.
+func (r ErasePersonResult) TokensNotRevoked() (string, bool) {
+	c, _ := r.Detail["credentials"].(map[string]any)
+	if failed, _ := c["tokens_revocation_failed"].(bool); !failed {
+		return "", false
+	}
+	detail, _ := c["detail"].(string)
+	return detail, true
 }
 
 // ErasePerson erases one person's retained records by scope (mask_copies,
 // run_outputs, recordings, run_tasks, components, audit_personal_fields,
 // credentials) in one audited act. principal is the person's subject (or an email the deployment
 // knows them by) and is percent-encoded here. A scope that fails part way is a
-// 500 whose reason is erasure_incomplete: retry with the same scopes. Security
-// tier. POST /api/v1/people/{principal}/erasure.
+// 500 whose reason is erasure_incomplete: retry with the same scopes. A revoke of
+// an Azure DevOps token of the person's runs that did not finish is a 503 whose
+// reason is credential_erase_revoke_unfinished: the credentials scope erased
+// nothing, and the same retry finishes it. Security tier.
+// POST /api/v1/people/{principal}/erasure.
 func (c *Client) ErasePerson(ctx context.Context, principal string, scopes []string) (ErasePersonResult, error) {
 	var out ErasePersonResult
 	err := c.do(ctx, http.MethodPost, "/api/v1/people/"+url.PathEscape(principal)+"/erasure", map[string]any{"scopes": scopes}, &out)
@@ -803,11 +830,18 @@ type DrivesDocument struct {
 // GetDrives returns every registered drive and EVERY allocation. GET
 // /api/v1/drives serves allocations one page at a time (X-Wardyn-Truncated),
 // so this reads ?offset= until the flag clears, and then refuses a result
-// whose allocation count is not the server's grant_total: a document that
-// silently dropped allocations would, fed back to ApplyDrives, restore a
-// partial set.
+// whose count of distinct allocations is not the server's grant_total: a
+// document that silently dropped allocations would, fed back to ApplyDrives,
+// restore a partial set. Distinct, because an allocation moved ahead of the
+// rows already read (its priority raised) pushes a row already read onto the
+// next page: that row comes back twice and the moved one is never read, with
+// grant_total unchanged. One allocation added and another removed in the same
+// gap between two pages leave both counts matching; only a revision of the
+// whole list could show that.
 func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 	grants := []UserDriveGrant{}
+	seen := map[uuid.UUID]bool{}
+	total := -1
 	for {
 		var page DrivesDocument
 		var hdr http.Header
@@ -815,7 +849,18 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 		if err := c.do(ctx, http.MethodGet, path, nil, &page, &hdr); err != nil {
 			return DrivesDocument{}, err
 		}
+		// grant_total moving between two pages is an allocation added or removed
+		// while they were read. One removed ahead of the rows already read makes
+		// the next page skip a row, with nothing read twice to show it.
+		if total >= 0 && page.GrantTotal != total {
+			return DrivesDocument{}, fmt.Errorf("drives: read %d allocations but the server reports %d; allocations changed while being read, retry",
+				len(seen), page.GrantTotal)
+		}
+		total = page.GrantTotal
 		grants = append(grants, page.Grants...)
+		for _, g := range page.Grants {
+			seen[g.ID] = true
+		}
 		more := hdr.Get("X-Wardyn-Truncated") == "true"
 		// Past grant_total, or no progress, is a server not paging the way this
 		// loop reads it; stopping there is what bounds the loop.
@@ -824,9 +869,9 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 				len(grants), page.GrantTotal)
 		}
 		if !more {
-			if len(grants) != page.GrantTotal {
+			if len(seen) != page.GrantTotal {
 				return DrivesDocument{}, fmt.Errorf("drives: read %d allocations but the server reports %d; allocations changed while being read, retry",
-					len(grants), page.GrantTotal)
+					len(seen), page.GrantTotal)
 			}
 			page.Grants = grants
 			return page, nil

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/certbundle"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/doctor"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
@@ -45,9 +46,19 @@ nothing and changes no setting. It exits 0 when no stage failed and 1 otherwise;
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c := client()
-			net := doctor.Network{OrgURL: c.BaseURL, Source: urlSource(cmd), OrgSetting: "WARDYN_URL", Identity: true, Token: c.Token, TokenSource: doctorTokenSource(cmd),
+			net := doctor.Network{OrgURL: c.BaseURL, Source: urlSource(cmd), OrgSetting: "WARDYN_URL", Identity: true, Token: c.Token,
+				TokenSource: authHintFor.tokenFrom, TokenSignIn: authHintFor.tokenFrom == tokenFromLogin, OriginCASource: "`wardyn ca add`",
 				ExtraCASource: "WARDYN_TRUSTED_CA_FILE", ExtraCA: trustedCAPool(os.Getenv("WARDYN_TRUSTED_CA_FILE"))}
+			// The anchors `wardyn ca add` stored vouch for the organisation's host here as they do in orgClient, and a
+			// store orgClient refuses is a failed stage, as it fails every other command.
+			anchors, aerr := storedAnchors(c.BaseURL)
+			if len(anchors) > 0 {
+				net.OriginCA = certbundle.Pool(anchors)
+			}
 			report := doctor.Report{Stages: net.Run(cmd.Context())}
+			if aerr != nil {
+				report.Stages = append([]doctor.Stage{doctor.FailStage("cli-ca", aerr.Error(), "", caHint(aerr))}, report.Stages...)
+			}
 			report.Stages = append(report.Stages, runnerStages(cmd.Context(), net.ServerVersion)...)
 			report.Stages = append(report.Stages, parkedExitStages(cmd.Context(), c)...)
 			report = report.Scrubbed()
@@ -79,17 +90,6 @@ func urlSource(cmd *cobra.Command) string {
 		return "the built-in default: nothing named an organisation"
 	}
 	return "the CLI profile that wardyn login saved"
-}
-
-// doctorTokenSource names the setting the token came from; the token itself is never read into any output.
-func doctorTokenSource(cmd *cobra.Command) string {
-	switch {
-	case cmd.Flags().Changed("token"):
-		return "--token"
-	case os.Getenv("WARDYN_ADMIN_TOKEN") != "":
-		return "WARDYN_ADMIN_TOKEN"
-	}
-	return "WARDYN_TOKEN"
 }
 
 // trustedCAPool is the bundle WARDYN_TRUSTED_CA_FILE names, nil when it names none or cannot be read: a

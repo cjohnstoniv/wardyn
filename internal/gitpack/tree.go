@@ -144,30 +144,39 @@ type commitInfo struct {
 func parseCommit(data []byte, hashLen int) (commitInfo, error) {
 	var c commitInfo
 	inParentBlock := true
-	for _, line := range strings.Split(headersOf(data), "\n") {
-		key, val, found := strings.Cut(line, " ")
+	for head := headersOf(data); len(head) > 0; {
+		var line []byte
+		line, head, _ = bytes.Cut(head, []byte("\n"))
+		key, raw, found := bytes.Cut(line, []byte(" "))
 		switch {
 		case !found:
 			inParentBlock = false
 			continue
-		case key == "tree":
+		case string(key) == "tree":
 			if c.tree != "" {
 				return commitInfo{}, fmt.Errorf("%w: the commit object carries more than one tree header",
 					ErrUninspectable)
 			}
-			c.tree = val
-		case key == "parent":
+		case string(key) == "parent":
 			if !inParentBlock {
 				return commitInfo{}, fmt.Errorf("%w: the commit object carries a parent header git would not read",
 					ErrUninspectable)
 			}
-			c.parents = append(c.parents, val)
+			if len(c.parents) == maxCommitParents {
+				return commitInfo{}, ErrTooManyParents
+			}
 		default:
 			inParentBlock = false
 			continue
 		}
-		if len(val) != hashLen*2 || !isHex(val) {
-			return commitInfo{}, fmt.Errorf("gitpack: commit header %q is not an object id of this format", line)
+		if len(raw) != hashLen*2 || !isHex(string(raw)) { // the length first: one header line may be megabytes
+			return commitInfo{}, fmt.Errorf("gitpack: commit header %q is not an object id of this format", line[:min(len(line), 160)])
+		}
+		val := string(raw)
+		if string(key) == "tree" {
+			c.tree = val
+		} else {
+			c.parents = append(c.parents, val)
 		}
 	}
 	if c.tree == "" {
@@ -178,16 +187,23 @@ func parseCommit(data []byte, hashLen int) (commitInfo, error) {
 
 // tagTarget is the object id an annotated tag points at.
 func tagTarget(data []byte, hashLen int) (string, bool) {
-	for _, line := range strings.Split(headersOf(data), "\n") {
-		if val, ok := strings.CutPrefix(line, "object "); ok {
-			return val, len(val) == hashLen*2 && isHex(val)
+	for head := headersOf(data); len(head) > 0; {
+		var line []byte
+		line, head, _ = bytes.Cut(head, []byte("\n"))
+		if raw, ok := bytes.CutPrefix(line, []byte("object ")); ok {
+			if len(raw) != hashLen*2 || !isHex(string(raw)) { // the length first, as in parseCommit
+				return "", false
+			}
+			return string(raw), true
 		}
 	}
 	return "", false
 }
 
-func headersOf(data []byte) string {
-	head, _, _ := strings.Cut(string(data), "\n\n")
+// headersOf is the object's headers, to the first blank line, as a view of data: one object may be
+// 32 MiB of short lines, so its readers walk them in place rather than copying or splitting them first.
+func headersOf(data []byte) []byte {
+	head, _, _ := bytes.Cut(data, []byte("\n\n"))
 	return head
 }
 
@@ -363,6 +379,60 @@ func (r Result) Settle(held func(commit string) (bool, error)) (Result, error) {
 		return Result{}, err
 	}
 	return out, nil
+}
+
+// maxAncestrySteps bounds the parent edges Reaches follows for one push, every
+// command's walk together, so many refs over one wide history cannot make the
+// walk cost a pass each. Past it the answer is cut short, which a caller reads
+// as unproved. A var so a test can shrink it.
+var maxAncestrySteps = 1_000_000
+
+// Reaches says, for each of r.Commands in order, which commit ids the history of
+// its new value names through the commits the pack carries: the commit it sets
+// (an annotated tag is peeled), each carried commit reached parent by parent,
+// and every parent id those commits name, carried or not. A commit's parents are
+// part of the bytes its id is computed over, so a named id is in that history.
+// One not named is unproved, not disproved: the walk stops at a commit the pack
+// does not carry. A delete names nothing. whole is false when the walks together
+// passed maxAncestrySteps and stopped, so a set may be short.
+func (r Result) Reaches() (named []map[string]bool, whole bool) {
+	named = make([]map[string]bool, len(r.Commands))
+	parents := map[string][]string{}
+	if r.idx != nil {
+		for oid, o := range r.idx.byOID {
+			if o.typ != objCommit {
+				continue
+			}
+			// Inspect refuses a pack holding a commit that does not parse.
+			if c, err := parseCommit(o.data, r.idx.format.size); err == nil {
+				parents[oid] = c.parents
+			}
+		}
+	}
+	steps := 0
+	for i, cmd := range r.Commands {
+		named[i] = map[string]bool{}
+		if r.idx == nil || isZeroOID(cmd.New) {
+			continue
+		}
+		tip, how := r.idx.peel(cmd.New)
+		if how != peeled {
+			continue
+		}
+		for stack := []string{tip}; len(stack) > 0; {
+			oid := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if named[i][oid] {
+				continue
+			}
+			named[i][oid] = true
+			if steps += len(parents[oid]); steps > maxAncestrySteps {
+				return named, false
+			}
+			stack = append(stack, parents[oid]...)
+		}
+	}
+	return named, true
 }
 
 // walker accumulates one pack's change set, deduplicated on the whole entry:

@@ -13,6 +13,7 @@ import type { RunOutput } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
 import { OutputTab } from "./output-tab";
+import { STATES } from "../../wardyn/states";
 
 const getMock = vi.fn();
 vi.mock("../../../lib/api/run-output", () => ({
@@ -271,6 +272,46 @@ describe("OutputTab — refusals", () => {
     expect(screen.getByText(RUN_OUTPUT.maskTitle)).toBeInTheDocument();
     expect(screen.queryByText(RUN_COCKPIT.loadError)).not.toBeInTheDocument();
     expect(screen.getByText(RUN_OUTPUT.maskUnavailable)).toBeInTheDocument();
+  });
+
+  it("mask_state_unavailable on an unchanged live run is read again and the output comes back", async () => {
+    vi.useFakeTimers();
+    getMock
+      .mockRejectedValueOnce(new HttpError(503, "refused", "mask_state_unavailable"))
+      .mockResolvedValue(out({ complete: false, output: "line one", captured_at: undefined }));
+    await mount({ live: true, state: "RUNNING" });
+    expect(screen.getByText(RUN_OUTPUT.maskTitle)).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByText(/line one/)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.maskTitle)).not.toBeInTheDocument();
+  });
+
+  it("mask_state_unavailable on an ended run whose tail is not sealed is read again too", async () => {
+    vi.useFakeTimers();
+    getMock
+      .mockRejectedValueOnce(new HttpError(503, "refused", "mask_state_unavailable"))
+      .mockResolvedValue(out({ complete: false, output: "the tail" }));
+    await mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByText(/the tail/)).toBeInTheDocument();
+  });
+
+  it("mask_state_unavailable is read again a few times only, then Retry asks again", async () => {
+    vi.useFakeTimers();
+    refuse("mask_state_unavailable", 503);
+    await mount({ live: true, state: "RUNNING" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(5);
+    await act(async () => {
+      screen.getByRole("button", { name: STATES.RETRY }).click();
+    });
+    expect(getMock).toHaveBeenCalledTimes(6);
   });
 
   it("data_out_blocked shows the server's sentence and no Retry", async () => {

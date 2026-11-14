@@ -64,12 +64,55 @@ describe("useRunDataOut", () => {
     expect(result.current).toBeUndefined();
   });
 
-  it("is unknown when the read fails", async () => {
+  it("is unreadable when the read fails", async () => {
     getPolicy.mockImplementation(() => Promise.reject(new Error("boom")));
     const { result } = renderHook(() => useRunDataOut("run-1"));
     await act(async () => {});
     expect(getPolicy).toHaveBeenCalledTimes(1);
-    expect(result.current).toBeUndefined();
+    expect(result.current).toBe("unreadable");
+  });
+
+  // A failed read keeps content in until a later read succeeds, and a later failed read keeps it in again.
+  it("stays unreadable through a later read until it succeeds, and a later failure is unreadable again", async () => {
+    const later = deferred();
+    getPolicy.mockRejectedValueOnce(new Error("boom")).mockReturnValueOnce(later.promise).mockRejectedValueOnce(new Error("boom"));
+    const { result, rerender } = renderHook(({ wanted }) => useRunDataOut("run-1", wanted), { initialProps: { wanted: true } });
+    await act(async () => {});
+    expect(result.current).toBe("unreadable");
+    rerender({ wanted: false });
+    rerender({ wanted: true });
+    expect(result.current).toBe("unreadable");
+    await act(async () => later.resolve(view({ spec: { data_out: "allowed" } as RunPolicyView["spec"] })));
+    expect(result.current).toBe("allowed");
+    rerender({ wanted: false });
+    rerender({ wanted: true });
+    await act(async () => {});
+    expect(getPolicy).toHaveBeenCalledTimes(3);
+    expect(result.current).toBe("unreadable");
+  });
+
+  // A read is dropped once its run is left: its late answer must not open, or close, the next run's terminal.
+  it("drops a late answer of a read whose run was left, a success or a failure", async () => {
+    const allowed = view({ spec: { data_out: "allowed" } as RunPolicyView["spec"] });
+    const first = deferred();
+    let failThird!: (e: Error) => void;
+    const third = new Promise<RunPolicyView>((_, no) => {
+      failThird = no;
+    });
+    getPolicy.mockReturnValueOnce(first.promise).mockRejectedValueOnce(new Error("boom")).mockReturnValueOnce(third).mockResolvedValueOnce(allowed);
+    const { result, rerender } = renderHook(({ id }) => useRunDataOut(id), { initialProps: { id: "run-1" } });
+    rerender({ id: "run-2" });
+    await act(async () => {});
+    expect(result.current).toBe("unreadable");
+    await act(async () => first.resolve(allowed));
+    expect(result.current).toBe("unreadable");
+    rerender({ id: "run-3" });
+    rerender({ id: "run-4" });
+    await act(async () => {});
+    expect(result.current).toBe("allowed");
+    await act(async () => failThird(new Error("boom")));
+    expect(getPolicy).toHaveBeenCalledTimes(4);
+    expect(result.current).toBe("allowed");
   });
 
   it("ignores redacted: a redacted read still carries the rule", async () => {

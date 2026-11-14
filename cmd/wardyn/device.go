@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,8 +41,8 @@ func deviceCmd(client clientFn) *cobra.Command {
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "enrolment token for %q, single use, expires %s:\n",
 				t.DeviceName, t.ExpiresAt.Format(time.RFC3339))
-			fmt.Fprintln(cmd.OutOrStdout(), t.Token)
-			return nil
+			return printMintedToken(cmd.OutOrStdout(), t.Token, t.ID, t.ExpiresAt,
+				"`wardyn device enrol-token-revoke "+t.ID.String()+"` revokes it before then")
 		},
 	}
 	enrolToken.Flags().StringVar(&name, "name", "", "the laptop's inventory name (required)")
@@ -144,4 +145,15 @@ func deviceCmd(client clientFn) *cobra.Command {
 
 	cmd.AddCommand(enrolToken, tokenList, tokenRevoke, list, revoke)
 	return subcommandGroup(cmd)
+}
+
+// printMintedToken writes a token the server shows once. If the write fails, the token exists and
+// nobody holds it, so the error says it was minted, when it expires and how to revoke it; the token
+// itself is never written anywhere else.
+func printMintedToken(w io.Writer, token string, id uuid.UUID, expires time.Time, revoke string) error {
+	if _, err := fmt.Fprintln(w, token); err != nil {
+		return fmt.Errorf("token %s was minted but could not be written out (%w): it expires unused at %s; %s",
+			id, err, expires.Format(time.RFC3339), revoke)
+	}
+	return nil
 }

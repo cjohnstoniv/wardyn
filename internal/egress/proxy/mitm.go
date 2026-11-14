@@ -437,11 +437,18 @@ func rearmBodyDeadline(w http.ResponseWriter, r *http.Request) { rearmBodyDeadli
 // Only while network body bytes remain unread: once a request has no body left, net/http reads the
 // connection in the background with no deadline, and a deadline set then ends that read mid-handler,
 // cancelling the request and failing every later request on the connection.
+//
+// Once r's context has ended the deadline is now instead, checked after the set: a re-arm that races the
+// cancel (interruptBodyReadOnCancel) cannot push the deadline back out past it.
 func rearmBodyDeadlineAfter(w http.ResponseWriter, r *http.Request, wait time.Duration) {
 	if !networkBodyUnread(r) {
 		return
 	}
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(wait + mitmReadTimeout))
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(wait + mitmReadTimeout))
+	if r.Context().Err() != nil {
+		_ = rc.SetReadDeadline(time.Now())
+	}
 }
 
 // networkBody is the state of the body a request arrived with, kept in its context so it outlives a
@@ -503,6 +510,7 @@ func networkBodyUnread(r *http.Request) bool {
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	r = trackNetworkBody(r)
 	p.stripGatewayHeaders(r.Header)
+	removeConnectionNominated(r.Header) // every gate below judges the headers the forward sends
 	// A via_org destination: the inner request's own Host goes to the
 	// organisation, which refuses one that is not the grant's destination.
 	if route, ok := p.viaOrgRouteForHost(host); ok {
@@ -539,6 +547,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	defer release()
+	// A route's host and port is sent only what a route covers: refused here, before a gate below can hold it.
+	if p.gatewayOffRouteRefusedInTunnel(w, r, host, port) {
+		return
+	}
 	// The run's allowed_models judges a model host's request before any door, gate or scan sees it.
 	// A method the policy refuses is left to serveAdmittedMITMRequest, which keeps its policy:method row.
 	releaseModels, modelRefused := noopRelease, false

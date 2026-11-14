@@ -289,7 +289,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body providerSignInCapture
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+	if err := types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, 16<<10), &body, false); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonProviderSignInCaptureBodyInvalid, mpsCaptureBody)
 		return
 	}

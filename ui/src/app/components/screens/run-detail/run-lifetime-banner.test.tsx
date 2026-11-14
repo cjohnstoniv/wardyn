@@ -12,7 +12,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
-import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 import { weekdayClock } from "./run-ends-row";
@@ -113,9 +113,27 @@ describe("RunLifetimeBanner — lost (reboot)", () => {
     const run = detail({ lost_reason: "reboot" });
     renderBanner(run, [], onChanged);
     await user.click(screen.getByRole("button", { name: "Revive" }));
-    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1", undefined));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 2 hosts now blocked.");
+  });
+
+  it("a failed Revive stays under the banner, not in a toast", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockRejectedValueOnce(new Error("runner offline"));
+    renderBanner(detail({ lost_reason: "reboot" }));
+    await user.click(screen.getByRole("button", { name: "Revive" }));
+    expect(await screen.findByTestId("run-lifetime-failure")).toHaveTextContent("Couldn't revive this run: runner offline");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed Extend stays under the banner, not in a toast", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("no answer"));
+    renderBanner(detail({ lost_reason: "reboot" }));
+    await user.click(screen.getByRole("button", { name: "Extend" }));
+    expect(await screen.findByTestId("run-lifetime-failure")).toHaveTextContent("Couldn't extend this run: no answer");
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   it("a wait that ended before the runner answered says the result is unknown, not an error", async () => {
@@ -250,6 +268,23 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(Date.parse(patchBody.endsAt)).toBeGreaterThan(Date.now());
   });
 
+  it("Extend and revive: the revive after another person signed in still names the person who clicked", async () => {
+    // The server then refuses the revive rather than make it as the next person.
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    let moved!: (v: unknown) => void;
+    setRunEndAndWaitMock.mockImplementationOnce(() => new Promise((done) => (moved = done)));
+    reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: [], proxy_release: "r1" });
+    renderBanner(detail({ lost_reason: "ended", interactive: true }));
+    setExpectedPrincipal("a@example.com");
+    await user.click(screen.getByRole("button", { name: "Extend and revive" }));
+    await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    moved({ id: "run-1", ends_at: null, wait_budget_sec: 0, capped: [] });
+    await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1", "a@example.com"));
+    setExpectedPrincipal("");
+  });
+
   it("Extend and revive: a revive whose wait ended says the result is unknown, and the page still refreshes for the moved end", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
@@ -267,7 +302,8 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     const onChanged = vi.fn();
     renderBanner(detail({ lost_reason: "ended", interactive: true }), [], onChanged);
     await user.click(screen.getByRole("button", { name: "Extend and revive" }));
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Couldn't extend and revive this run", expect.anything()));
+    expect(await screen.findByTestId("run-lifetime-failure")).toHaveTextContent("Couldn't extend and revive this run: boom");
+    expect(toastErrorMock).not.toHaveBeenCalled();
     expect(onChanged).toHaveBeenCalled();
   });
 
@@ -310,13 +346,16 @@ describe("RunLifetimeBanner — End run asks first (UXR-15)", () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  it("a failed kill names the run by its title, not its id", async () => {
+  it("a failed kill names the run by its title, not its id, under the banner with End run still offered", async () => {
     const user = userEvent.setup();
     killRunMock.mockRejectedValue(new Error("boom"));
     renderBanner(ended());
     await user.click(screen.getByRole("button", { name: "End run" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "End run" }));
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Couldn't end nightly build", expect.anything()));
+    expect(await screen.findByTestId("run-lifetime-failure")).toHaveTextContent("Couldn't end nightly build: boom");
+    expect(screen.getByTestId("run-lifetime-failure")).toHaveAttribute("role", "alert");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "End run" })).toBeEnabled();
   });
 });
 
@@ -354,6 +393,17 @@ describe("RunLifetimeBanner — paused", () => {
     renderBanner(run);
     expect(screen.getByText("Paused — nobody's been here for 11 minutes")).toBeInTheDocument();
     expect(screen.queryByText(/5 minutes/)).not.toBeInTheDocument();
+  });
+
+  it("a failed Resume stays under the banner until the next try, which clears it", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    resumeRunMock.mockRejectedValueOnce(new Error("runner offline"));
+    renderBanner(detail({ paused_at: new Date(NOW - 60_000).toISOString(), paused_reason: "idle" }));
+    await user.click(screen.getByRole("button", { name: "Resume now" }));
+    expect(await screen.findByTestId("run-lifetime-failure")).toHaveTextContent("Couldn't resume this run: runner offline");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Resume now" }));
+    await waitFor(() => expect(screen.queryByTestId("run-lifetime-failure")).toBeNull());
   });
 
   it("clicking Resume now calls resumeRun", async () => {
@@ -409,6 +459,17 @@ describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 da
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("a banner failure clears once a change saved in the Change end dialog works", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    setRunEndAndWaitMock.mockRejectedValueOnce(new Error("no answer"));
+    renderBanner(detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString(), run_limits: { user_changes_limits: true } }));
+    await user.click(screen.getByRole("button", { name: "Extend 1 day" }));
+    expect(await screen.findByTestId("run-lifetime-failure")).toHaveTextContent("Couldn't extend this run: no answer");
+    await user.click(screen.getByRole("button", { name: "Change end…" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByTestId("run-lifetime-failure")).toBeNull());
   });
 
   // R2-3 (PR #1317 round-2 review): Change end… used to show for ANY

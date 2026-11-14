@@ -37,17 +37,17 @@ export interface RunComputerFolder {
   give_up_at?: string;
 }
 
-// One pass as the runner counted it (types.FolderPassRecord).
+// One pass as the server shows it (folderPassView, internal/api/run_computer_folder.go): types.FolderPassRecord
+// without the server's own audit note.
 export interface RunFolderPass {
   at: string;
   files: number;
   bytes: number;
   refused: { path: string; reason: string }[];
   error?: string;
-  // Set once the sandbox's keep ended with changes not yet back; given_up_audited is internal bookkeeping, sent as is.
+  // Set once the sandbox's keep ended with changes not yet back.
   given_up_at?: string;
   given_up_count?: number;
   given_up_paths?: string[];
   given_up_paths_more?: number;
-  given_up_audited?: boolean;
 }

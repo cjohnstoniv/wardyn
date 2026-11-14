@@ -271,6 +271,51 @@ func TestGatewayCommands_AdvertisedProxyRefusalIsVerbSpecific(t *testing.T) {
 	}
 }
 
+// TestSync_UsesTheRunIDInItsStandardForm: sync parses the run id once and uses that spelling from then on, so
+// an upper-case or urn:uuid: id names the same run, state file and --pull-commits branch as the console's id.
+// The ProxyCommand's %r, shown in the consent refusal, is where that spelling can be seen before connecting.
+func TestSync_UsesTheRunIDInItsStandardForm(t *testing.T) {
+	homeWithKey(t, false)
+	healthz := `{"ssh":{"enabled":true,"advertise_addr":"ssh.example.com:2222","host_key_fingerprint":"SHA256:x","proxy_command":"nc %r"}}`
+	f := newGatewayFixture(t, healthz, oneKey)
+	_, err := runGateway(t, syncCmd, f, "", "urn:uuid:"+strings.ToUpper(testRunID), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "\n  nc "+testRunID+"\n") {
+		t.Errorf("error = %v, want the ProxyCommand to name the run as %s", err, testRunID)
+	}
+}
+
+// TestSync_KeepsTheStateSavedUnderTheIDAsTyped: an earlier release saved the sync state under the run id as
+// it was typed. The next sync moves it to the run's one name, so it does not start from nothing and send
+// every file over the sandbox's changes; a state already saved under that name is the one kept.
+func TestSync_KeepsTheStateSavedUnderTheIDAsTyped(t *testing.T) {
+	typed := strings.ReplaceAll(testRunID, "-", "")
+	healthz := `{"ssh":{"enabled":true,"advertise_addr":"ssh.example.com:2222","host_key_fingerprint":"SHA256:x","proxy_command":"nc %r"}}`
+	for _, tc := range []struct{ name, standard, wantStandard, wantTyped string }{
+		{"moved", "", `{"local":"typed"}`, ""},
+		{"standard name kept", `{"local":"standard"}`, `{"local":"standard"}`, `{"local":"typed"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(homeWithKey(t, false), ".local", "state", "wardyn", "sync")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(dir, typed+".json"), `{"local":"typed"}`)
+			if tc.standard != "" {
+				writeFile(t, filepath.Join(dir, testRunID+".json"), tc.standard)
+			}
+			// The command stops at the ProxyCommand consent, after it has read the state.
+			if _, err := runGateway(t, syncCmd, newGatewayFixture(t, healthz, oneKey), "", typed, t.TempDir()); err == nil {
+				t.Fatal("sync: no consent refusal")
+			}
+			standard, _ := os.ReadFile(filepath.Join(dir, testRunID+".json"))
+			old, _ := os.ReadFile(filepath.Join(dir, typed+".json"))
+			if string(standard) != tc.wantStandard || string(old) != tc.wantTyped {
+				t.Errorf("state under the standard id = %q, under the typed id = %q, want %q and %q", standard, old, tc.wantStandard, tc.wantTyped)
+			}
+		})
+	}
+}
+
 func TestGatewayCommands_RefuseABadRunIDBeforeAnyRequest(t *testing.T) {
 	for _, tc := range gatewayCommands {
 		t.Run(tc.name, func(t *testing.T) {
@@ -329,7 +374,7 @@ func TestRunSSH_PrintAndConfigNeverCarryTheKey(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if want := "Host wardyn-a1b2c3d4\n  HostName gw.example.com\n  Port 2222\n  User " + testRunID + "\n"; out.String() != want {
+	if want := "Host wardyn-" + testRunID + "\n  HostName gw.example.com\n  Port 2222\n  User " + testRunID + "\n"; out.String() != want {
 		t.Errorf("--config = %q, want %q", out.String(), want)
 	}
 }
@@ -392,7 +437,7 @@ func TestRunEditor_WritesTheHostBlockAsksThenOpensCode(t *testing.T) {
 		t.Errorf("prompt = %q, want the Include line and a y/N question", prompt)
 	}
 	cfg, _ := os.ReadFile(filepath.Join(home, ".wardyn", "ssh_config"))
-	wantCfg := "Host wardyn-a1b2c3d4\n  HostName gw.example.com\n  Port 2222\n  User " + testRunID +
+	wantCfg := "Host wardyn-" + testRunID + "\n  HostName gw.example.com\n  Port 2222\n  User " + testRunID +
 		"\n  IdentityFile ~/.wardyn/id_ed25519\n  IdentitiesOnly yes\n"
 	if string(cfg) != wantCfg {
 		t.Errorf("~/.wardyn/ssh_config =\n%q\nwant\n%q", cfg, wantCfg)
@@ -401,14 +446,14 @@ func TestRunEditor_WritesTheHostBlockAsksThenOpensCode(t *testing.T) {
 	if want := "Include ~/.wardyn/ssh_config\n\nHost other\n  User me\n"; string(sshCfg) != want {
 		t.Errorf("~/.ssh/config = %q, want the Include line first and the old content kept: %q", sshCfg, want)
 	}
-	eq(t, readArgs(t, codeLog), []string{"--remote", "ssh-remote+wardyn-a1b2c3d4", "/home/agent/work"})
+	eq(t, readArgs(t, codeLog), []string{"--remote", "ssh-remote+wardyn-" + testRunID, "/home/agent/work"})
 
 	// A second run finds the Include and does not ask again.
 	prompt, err = runGateway(t, runEditorCmd, f, "", testRunID, "--dir", "/home/agent/app")
 	if err != nil || prompt != "" {
 		t.Errorf("second run: err = %v, prompt = %q, want no prompt", err, prompt)
 	}
-	eq(t, readArgs(t, codeLog), []string{"--remote", "ssh-remote+wardyn-a1b2c3d4", "/home/agent/app"})
+	eq(t, readArgs(t, codeLog), []string{"--remote", "ssh-remote+wardyn-" + testRunID, "/home/agent/app"})
 }
 
 // An Include under a Host or Match line reaches only that block's hosts, so it is not the global Include

@@ -195,3 +195,19 @@ func TestRunnerListNoLimits_ReadsEveryPage(t *testing.T) {
 		}
 	}
 }
+
+// A negative --offset is refused before any request; with --no-limits it would cut the filtered list at
+// a negative bound.
+func TestRunnerListRefusesANegativeOffset(t *testing.T) {
+	for _, rows := range [][]sdk.RunnerView{nil, {{ID: uuid.New(), Name: "no-limits-yet", State: "claimed"}}} {
+		srv := newCmdServer(t, http.StatusOK, rows)
+		for _, args := range [][]string{{"runner", "list", "--no-limits", "--offset=-1"}, {"runner", "list", "--offset=-1"}} {
+			if _, err := execCmdCapture(t, append(args, "--url", srv.URL, "--token", "t")...); err == nil || !strings.Contains(err.Error(), "--offset is a whole number, 0 or more") {
+				t.Errorf("%v = %v, want the usage refusal", args, err)
+			}
+		}
+		if len(srv.reqs) != 0 {
+			t.Errorf("%d requests sent, want none", len(srv.reqs))
+		}
+	}
+}

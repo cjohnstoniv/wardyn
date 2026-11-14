@@ -132,6 +132,12 @@ func cutText(typ byte, text string) []byte {
 // handshake38 runs an RFB 3.8, security None session up to the normal phase.
 func (h *harness) handshake38() {
 	h.t.Helper()
+	h.handshake38With(serverInit())
+}
+
+// handshake38With is handshake38 with init as the server's ServerInit.
+func (h *harness) handshake38With(init []byte) {
+	h.t.Helper()
 	steps := []struct {
 		fromServer bool
 		msg        []byte
@@ -142,7 +148,7 @@ func (h *harness) handshake38() {
 		{false, []byte{1}},
 		{true, be32(0)},
 		{false, []byte{1}},
-		{true, serverInit()},
+		{true, init},
 	}
 	for _, s := range steps {
 		var got []byte
@@ -360,43 +366,69 @@ func TestSinkGetsTheFilteredBytes(t *testing.T) {
 	}
 }
 
-// Anything the relay cannot follow ends the connection.
+// Anything the relay cannot follow ends the connection, and the refusal says what it refused in its kind's
+// fixed words (Refusal), which a recording's stop mark carries.
 func TestFailsClosedOnWhatItCannotFollow(t *testing.T) {
-	cases := map[string]func(h *harness) error{
-		"text frame": func(h *harness) error {
+	const browserFrame, desktopFrame = "a WebSocket frame from the browser that it cannot read", "a WebSocket frame from the desktop that it cannot read"
+	const browserMessage, desktopMessage = "a message from the browser that it cannot follow", "a message from the desktop that it cannot follow"
+	write := func(h *harness, msg []byte) error { _, err := h.c.Write(frames(msg, true, false)); return err }
+	cases := map[string]struct {
+		rules Rules
+		setup bool // the case runs the connection setup itself
+		run   func(h *harness) error
+		kind  string // the Refusal's words
+	}{
+		"text frame": {run: func(h *harness) error {
 			_, err := h.c.Write(appendFrame(nil, frame{b0: 0x81, masked: true}, []byte("x")))
 			return err
-		},
-		"extension bit": func(h *harness) error {
+		}, kind: browserFrame},
+		"extension bit": {run: func(h *harness) error {
 			_, err := h.c.Write(appendFrame(nil, frame{b0: 0xc2, masked: true}, []byte{4}))
 			return err
-		},
-		"unknown server message": func(h *harness) error { return h.serverErr([]byte{99}) },
-		"unframeable encoding": func(h *harness) error {
+		}, kind: browserFrame},
+		"unknown server message": {run: func(h *harness) error { return h.serverErr([]byte{99}) }, kind: desktopMessage},
+		"unframeable encoding": {run: func(h *harness) error {
 			return h.serverErr(cat([]byte{0, 0}, be16(1), be16(0), be16(0), be16(1), be16(1), be32(7)))
-		},
-		"oversized frame": func(h *harness) error {
-			return h.serverErr(make([]byte, maxFrame+1))
-		},
+		}, kind: desktopMessage},
+		"oversized frame":        {run: func(h *harness) error { return h.serverErr(make([]byte, maxFrame+1)) }, kind: desktopFrame},
+		"unknown client message": {run: func(h *harness) error { return write(h, []byte{7}) }, kind: browserMessage},
+		"QEMU client subtype":    {run: func(h *harness) error { return write(h, []byte{255, 1}) }, kind: browserMessage},
+		"view-only control": {rules: Rules{ViewOnly: true}, run: func(h *harness) error { return write(h, []byte{251}) },
+			kind: "a control message from the browser on a view-only desktop"},
+		"encrypting security type": {setup: true, run: func(h *harness) error {
+			h.server([]byte("RFB 003.008\n"))
+			h.client([]byte("RFB 003.008\n"))
+			h.server([]byte{1, 19})
+			return write(h, []byte{19}) // the browser picks VeNCrypt
+		}, kind: "the browser's connection setup, which it cannot follow"},
+		"security before the browser's version": {setup: true, run: func(h *harness) error {
+			return h.serverErr([]byte("RFB 003.008\n\x01\x01"))
+		}, kind: "the desktop's connection setup, which it cannot follow"},
 	}
-	for name, run := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			h := newHarness(t, Rules{}, false)
-			h.handshake38()
-			if err := run(h); err == nil || len(h.refused) != 1 {
-				t.Fatalf("the relay carried on (err %v, %d refusals reported); it must end the connection and say why once", err, len(h.refused))
+			h := newHarness(t, tc.rules, false)
+			if !tc.setup {
+				h.handshake38()
+			}
+			var refusal *Refusal
+			if err := tc.run(h); err == nil || len(h.refused) != 1 || !errors.As(h.refused[0], &refusal) || refusal.Kind != tc.kind {
+				t.Fatalf("the relay carried on, or did not name what it refused (err %v, refusals %v, want %q once)", err, h.refused, tc.kind)
+			}
+			// The operator log keeps the site's own error: the fixed words never replace it.
+			if refusal.Err == nil || refusal.Error() != refusal.Err.Error() || errors.Unwrap(refusal) != refusal.Err || refusal.Error() == refusal.Kind {
+				t.Fatalf("a refusal of %q carries the error %v: want the refusing site's own, as its log text", refusal.Kind, refusal.Err)
 			}
 		})
 	}
-	t.Run("encrypting security type", func(t *testing.T) {
-		h := newHarness(t, Rules{}, false)
-		h.server([]byte("RFB 003.008\n"))
-		h.client([]byte("RFB 003.008\n"))
-		h.server([]byte{1, 19})
-		if _, err := h.c.Write(frames([]byte{19}, true, false)); err == nil {
-			t.Fatal("the relay let the browser pick VeNCrypt")
-		}
-	})
+	// A pixel format a recorded desktop refuses still names itself, unwrapped (PixelFormatError).
+	h := newHarness(t, Rules{Recorded: true}, false)
+	h.handshake38With(serverInitOf(playbackPixels))
+	if err := write(h, setPixelFormat(8)); len(h.refused) != 1 || h.refused[0] != err {
+		t.Fatalf("refusals %v, err %v: want the one refusal reported as returned", h.refused, err)
+	} else if _, named := err.(*PixelFormatError); !named {
+		t.Fatalf("a refused pixel format is %T, want *PixelFormatError", err)
+	}
 }
 
 func (h *harness) serverErr(payload []byte) error {

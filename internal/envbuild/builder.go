@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path"
@@ -288,6 +289,8 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		return Built{}, fmt.Errorf("envbuild: build cancelled or timed out: %w", ctx.Err())
 
 	case waitErr := <-wait.Error:
+		// The container may still be running: end the log stream the deferred join waits on.
+		cancel()
 		return Built{}, fmt.Errorf("envbuild: waiting for build container: %w", waitErr)
 
 	case resp := <-wait.Result:
@@ -502,7 +505,7 @@ func (b *Builder) effectiveMemoryBytes() (int64, error) {
 		return 0, err
 	}
 	if mb > 0 {
-		return mb << 20, nil
+		return mibToBytes(envBuildMemoryMB, mb)
 	}
 	return defaultBuildMemoryBytes, nil
 }
@@ -514,7 +517,11 @@ func (b *Builder) effectiveNanoCPUs() (int64, error) {
 		return 0, err
 	}
 	if c > 0 {
-		return int64(c * 1e9), nil
+		// A value under one nano-CPU would convert to 0, which Docker reads as no limit.
+		if n := c * 1e9; n >= 1 && n < 1<<63 {
+			return int64(n), nil
+		}
+		return 0, fmt.Errorf("envbuild: invalid %s=%v: want at least 1e-9 and a count that fits in nano-CPUs", envBuildCPUs, c)
 	}
 	return defaultBuildNanoCPUs, nil
 }
@@ -527,9 +534,18 @@ func (b *Builder) effectiveMaxContextBytes() (int64, error) {
 		return 0, err
 	}
 	if mb > 0 {
-		return mb << 20, nil
+		return mibToBytes(envMaxContextMB, mb)
 	}
 	return 0, nil
+}
+
+// mibToBytes converts a MiB cap to bytes. A count past int64 bytes would wrap to zero, which Docker reads
+// as no limit, or to a negative size.
+func mibToBytes(key string, mb int64) (int64, error) {
+	if mb > math.MaxInt64>>20 {
+		return 0, fmt.Errorf("envbuild: invalid %s=%d: too large to express in bytes", key, mb)
+	}
+	return mb << 20, nil
 }
 
 // envInt64 parses a non-negative int64 from env key. Unset/empty is 0 ("not configured"); a present but unparseable/negative value is an error, never 0.
@@ -552,10 +568,25 @@ func envFloat(key string) (float64, error) {
 		return 0, nil
 	}
 	f, err := strconv.ParseFloat(v, 64)
-	if err != nil || f < 0 {
+	if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, fmt.Errorf("envbuild: invalid %s=%q: want a non-negative number", key, v)
 	}
+	// ParseFloat rounds a nonzero value too small for float64 (1e-350) to 0, which would read as unset.
+	if f == 0 && hasNonzeroDigit(v) {
+		return 0, fmt.Errorf("envbuild: invalid %s=%q: too small to express; want 0 or a larger number", key, v)
+	}
 	return f, nil
+}
+
+// hasNonzeroDigit reports whether the mantissa of a number ParseFloat accepted has a digit other than 0.
+func hasNonzeroDigit(v string) bool {
+	m := strings.ToLower(strings.TrimLeft(v, "+-"))
+	if h, ok := strings.CutPrefix(m, "0x"); ok {
+		m, _, _ = strings.Cut(h, "p")
+	} else {
+		m, _, _ = strings.Cut(m, "e")
+	}
+	return strings.Trim(m, "0._") != ""
 }
 
 // validateBuildInput enforces a scheme allowlist on the caller-supplied git URL/ref: file://,
@@ -782,16 +813,20 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 			return Built{}, err
 		}
 	}
-	digestRef, err := b.assertWrapSafeBase(ctx, baseRef)
+	baseID, digestRef, err := b.assertWrapSafeBase(ctx, baseRef)
 	if err != nil {
 		return Built{}, err
 	}
-	// A BYOI wrap (pullBase=false) builds FROM the digest the inspected image was pulled as, so the record names what was
-	// wrapped; the stage-1 base is this build's own per-build push ref and keeps its tag.
+	// A BYOI wrap (pullBase=false) builds FROM the image ID the preflight inspected: its tag is shared, and a refresh
+	// that pulls it again in between must not hand the build an image the preflight never saw. The digest the image
+	// was pulled as, when it has one, is the record of what was wrapped. The stage-1 base is this build's own
+	// per-build push ref, which nothing else moves, and keeps its tag.
 	from, baseDigest := baseRef, ""
-	if !pullBase && digestRef != "" {
-		from = digestRef
-		baseDigest = digestRef[strings.LastIndex(digestRef, "@")+1:]
+	if !pullBase {
+		from = baseID
+		if digestRef != "" {
+			baseDigest = digestRef[strings.LastIndex(digestRef, "@")+1:]
+		}
 	}
 	tarCtx, err := buildFinalizeContext(from, toolsDir)
 	if err != nil {
@@ -821,21 +856,25 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 // base-controlled code on the host. A Docker ONBUILD trigger fires host-side when the image is used
 // as a FROM, so a hostile BYOI base with `ONBUILD RUN curl … | sh` is build-time RCE; Docker cannot
 // suppress or report triggers, so refusing the base is the only fail-closed move. Checking only the
-// direct base suffices: ONBUILD fires one level down and children don't inherit it.
-func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) (digestRef string, err error) {
+// direct base suffices: ONBUILD fires one level down and children don't inherit it. It returns the
+// inspected image's ID, which the wrap builds FROM, and fails closed when the daemon reports none.
+func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) (id, digestRef string, err error) {
 	res, err := b.cli.ImageInspect(ctx, baseRef)
 	if err != nil {
-		return "", fmt.Errorf("envbuild: inspect base image %q before wrapping: %w", baseRef, err)
+		return "", "", fmt.Errorf("envbuild: inspect base image %q before wrapping: %w", baseRef, err)
+	}
+	if !imageIDPattern.MatchString(res.ID) {
+		return "", "", fmt.Errorf("envbuild: inspect base image %q before wrapping: the daemon reported image ID %q, not sha256:<64 hex>, so the wrap cannot be bound to the image checked", baseRef, res.ID)
 	}
 	if res.Config != nil && len(res.Config.OnBuild) > 0 {
-		return "", fmt.Errorf("envbuild: refusing to wrap base image %q: it declares %d ONBUILD trigger(s) "+
+		return "", "", fmt.Errorf("envbuild: refusing to wrap base image %q: it declares %d ONBUILD trigger(s) "+
 			"(first: %q). ONBUILD instructions execute on the HOST Docker daemon during the wrap "+
 			"build — outside every confinement tier — so wrapping such a base would run "+
 			"image-controlled code on the host. Resolve the triggers in an image you build "+
 			"yourself (a Dockerfile with `FROM %s` fires them at YOUR build time) and pass that "+
 			"image instead", baseRef, len(res.Config.OnBuild), res.Config.OnBuild[0], baseRef)
 	}
-	return repoDigestFor(baseRef, res.RepoDigests), nil
+	return res.ID, repoDigestFor(baseRef, res.RepoDigests), nil
 }
 
 // drainBuildResponse consumes the daemon's JSON build-output stream, forwarding human-readable

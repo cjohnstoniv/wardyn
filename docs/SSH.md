@@ -181,7 +181,7 @@ ssh <run-id>@<advertise-host> -p <port>
   as-is):
 
 ```
-Host wardyn-<short-id>
+Host wardyn-<run-id>
   HostName <advertise-host>
   Port <port>
   User <run-id>
@@ -216,7 +216,7 @@ Host wardyn-<short-id>
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
   - With no SSH key, or with the gateway off, `POST /api/v1/runs/{id}/exec` runs one command over HTTP ([sdk.md](sdk.md#running-a-command-in-a-run)).
     - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset.
-    - The per-run controls are SSH exec's: a `data_out` rule other than `allowed`, `deny_interactive` and a background-only run each refuse it.
+    - Its per-run controls are a `data_out` rule other than `allowed` and `deny_interactive`, which each refuse it, and `deny_task_mode_exec`, which refuses it on a background-only run. Unlike SSH exec, it takes a background-only run, though that run has no SSH access.
     - Like SSH exec, its output is neither masked nor recorded.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
 - `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH. Keep that `Include` outside any `Host` or `Match` block, or ssh will not find the run's host.
@@ -226,7 +226,7 @@ Host wardyn-<short-id>
   - With the gateway off they stop with one line saying the operator has not turned SSH on.
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
-  - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<short-id>` run it on your computer on every connection until you remove the block.
+  - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
 - When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
 
 ### Without SSH: `wardyn attach`
@@ -462,7 +462,7 @@ Interactive runs, background-only runs, exec-less (krun) runtimes and deployment
 rsync -rt --no-perms --no-links --exclude='.git/' --exclude='.envrc' --exclude='.direnv/' \
   --exclude='.vscode/tasks.json' --exclude='.vscode/launch.json' \
   --exclude='.idea/runConfigurations/' --exclude='.idea/workspace.xml' \
-  ./project/ wardyn-<short-id>:/home/agent/work/
+  ./project/ wardyn-<run-id>:/home/agent/work/
 ```
 
 ## 4. `-L` port forwarding
@@ -834,9 +834,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - **Audit actions**:
   - `ssh.authenticate` (every success; refusals are rate-bound),
     `session.attach` with `transport:ssh` in its data (the shell path, same
-    action name the browser terminal uses, so both show up together in a run's
-    timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
-  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`, `remove_requests` and `rename_requests` counted from the sftp framing, `laptop_deletes_reported` client-declared).
+    action name the browser terminal uses, so a run's timeline shows
+    both), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`, `error`).
+  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`, `error`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`, `remove_requests` and `rename_requests` counted from the sftp framing, `laptop_deletes_reported` client-declared, `error`).
   - This is the source of record for these five;
     [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
     every other audit action in the system and points back here for these.

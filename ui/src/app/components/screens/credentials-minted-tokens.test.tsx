@@ -24,6 +24,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { AdminMintedTokens } from "./credentials-minted-tokens";
 import { HttpError } from "../../lib/api/core";
+import { credentials } from "../../lib/api/credentials";
 
 const token = (id: string, person: string, disposition: AdminMintedToken["disposition"], over: Partial<AdminMintedToken> = {}): AdminMintedToken => ({
   id,
@@ -95,6 +96,29 @@ describe("the State column", () => {
     expect(gus.getByText("No longer works. Nothing to decide.")).toBeInTheDocument();
     expect(gus.queryByText("Needs a decision")).not.toBeInTheDocument();
     expect(screen.getByText(MINTED.CHIP(3))).toBeInTheDocument();
+  });
+
+  it("reads an unrevoked token the server marks as refused for its owner as not working, says so, and does not count it", async () => {
+    listMintedMock.mockResolvedValue([
+      ...live,
+      token("m8", "hal", "needs_decision", { owner_refused: true }),
+      token("m9", "ivy", "awaiting_owner", { owner_refused: true }),
+    ]);
+    render(<AdminMintedTokens />);
+    await screen.findByText("hal@example.com");
+    const hal = rowOf("hal@example.com");
+    expect(hal.getByText(MINTED.OWNER_REFUSED)).toBeInTheDocument();
+    expect(hal.getByText(MINTED.OWNER_REFUSED_SUB)).toBeInTheDocument();
+    expect(hal.queryByText("Needs a decision")).not.toBeInTheDocument();
+    const ivy = rowOf("ivy@example.com");
+    expect(ivy.getByText(MINTED.OWNER_REFUSED)).toBeInTheDocument();
+    expect(ivy.getByText(MINTED.OWNER_REFUSED_SUB)).toBeInTheDocument();
+    expect(ivy.queryByText("Waiting for the owner")).not.toBeInTheDocument();
+    // both keep their Revoke
+    expect(hal.getByRole("button", { name: "Revoke" })).toBeInTheDocument();
+    expect(ivy.getByRole("button", { name: "Revoke" })).toBeInTheDocument();
+    expect(screen.getByText(MINTED.CHIP(3))).toBeInTheDocument();
+    expect(screen.getByText(MINTED.COUNT(3))).toBeInTheDocument();
   });
 
   it("counts only the tokens that still work, and points to the CLI for what the console does not do", async () => {
@@ -189,5 +213,25 @@ describe("the State column", () => {
     render(<AdminMintedTokens />);
     expect(await screen.findByText(MINTED.EMPTY)).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED })).toBeInTheDocument();
+  });
+});
+
+// A failed revoke used to close its dialog and drop the token it was for, leaving only a toast.
+describe("a failed revoke", () => {
+  it("stays in the dialog with the server's sentence, and Revoke token tries the same token again", async () => {
+    vi.mocked(credentials.revokeToken)
+      .mockRejectedValueOnce(new HttpError(503, "The token store did not answer.", "unavailable"))
+      .mockResolvedValueOnce(undefined as never);
+    render(<AdminMintedTokens />);
+    await screen.findByText("alice@example.com");
+    await user.click(rowOf("alice@example.com").getByRole("button", { name: MINTED.REVOKE }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: MINTED.REVOKE_CONFIRM }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The token store did not answer.");
+    expect(dialog).toHaveAccessibleName(MINTED.REVOKE_TITLE("job-alice", "alice@example.com"));
+
+    await user.click(within(dialog).getByRole("button", { name: MINTED.REVOKE_CONFIRM }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(vi.mocked(credentials.revokeToken).mock.calls).toEqual([["m1"], ["m1"]]);
   });
 });

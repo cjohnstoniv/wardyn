@@ -122,6 +122,7 @@ export function ClaimRunnerDialog({
           <Field label={MY_RUNNER.FIELD_FINGERPRINT} htmlFor="claim-runner-fingerprint" hint={MY_RUNNER.FINGERPRINT_HINT(shown.name)} required>
             <Input
               id="claim-runner-fingerprint"
+              required
               autoFocus
               autoComplete="off"
               spellCheck={false}

@@ -214,6 +214,16 @@ type computerFolderStore struct {
 	runnerState string
 }
 
+// DatabaseNow implements store.DatabaseClock on the same fake database clock as RunDueFlags (dbNow), so the
+// server's decisions and this fake database's compares read one clock. Zero while dbNow is nil, so the server's
+// own clock (Config.Now) stands in, as it does for a store without the read.
+func (s *computerFolderStore) DatabaseNow(context.Context) (time.Time, error) {
+	if s.dbNow != nil {
+		return s.dbNow(), nil
+	}
+	return time.Time{}, nil
+}
+
 func (s *computerFolderStore) dueNow() time.Time {
 	if s.dbNow != nil {
 		return s.dbNow()
@@ -312,6 +322,9 @@ func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.
 }
 
 func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.UUID, p store.GiveUpParams) (store.GiveUpOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return store.GiveUpOutcome{}, err
+	}
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	s.giveUps = append(s.giveUps, p)
@@ -973,15 +986,14 @@ func agentWrites(t *testing.T, sb *folderSandboxRunner, names ...string) {
 	}
 }
 
-// A caller's ctx cancelled before finalize leaves no time to start the pass, which is recorded,
-// and the sandbox is stopped; one cancelled during a second cut pass in a row that saves nothing
-// stops it too. The pass's outcome is recorded and audited, and the caller hears its ctx ended.
+// A caller's ctx cancelled during a second cut pass in a row that saves nothing stops the sandbox: the pass's
+// outcome is recorded and audited, and the caller hears its ctx ended. One cancelled before finalize, which leaves
+// no time to start the pass, keeps a sandbox that can be held (TestFolderBack_NoTimeLeftKeepsAHoldableSandbox).
 func TestFinalizeRunEffects_TeardownRunsAfterTheCallersCtxIsCancelled(t *testing.T) {
 	cases := map[string]struct {
 		after time.Duration
 		want  string
 	}{
-		"before finalize":      {0, "no time was left for the sync"},
 		"during the pass back": {200 * time.Millisecond, "2 passes in a row brought nothing back"},
 	}
 	for name, tc := range cases {

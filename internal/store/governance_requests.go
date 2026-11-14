@@ -26,11 +26,19 @@ type ElevationSweeper interface {
 }
 
 // ListGovernanceRequests is the changes of the request kinds that are pending or were decided at or after
-// decidedSince, newest first, at most 500. A pending row past its TTL reads as expired.
+// decidedSince, newest first. Every pending one still inside its TTL is returned, so a caller that filters
+// them by who may see a request misses none; of the decided ones and the lapsed ones (pending past their
+// TTL, read as expired) at most the 500 most recent by decision or expiry. Both halves test expiry as the
+// read state does (expires_at <= now(), one database clock reading per statement), so a row is in exactly one.
 func (s PG) ListGovernanceRequests(ctx context.Context, kinds []string, decidedSince time.Time) ([]types.GovernanceChange, error) {
-	const stmt = `SELECT ` + governanceChangeColsRead + ` FROM governance_changes
-		WHERE target_kind = ANY($1) AND (state = 'pending' OR decided_at >= $2)
-		ORDER BY proposed_at DESC LIMIT 500`
+	const stmt = `(SELECT ` + governanceChangeColsRead + ` FROM governance_changes
+			WHERE target_kind = ANY($1) AND state = 'pending' AND expires_at > now())
+		UNION ALL
+		(SELECT ` + governanceChangeColsRead + ` FROM governance_changes
+			WHERE target_kind = ANY($1)
+				AND ((state <> 'pending' AND decided_at >= $2) OR (state = 'pending' AND expires_at <= now()))
+			ORDER BY COALESCE(decided_at, expires_at) DESC LIMIT 500)
+		ORDER BY proposed_at DESC`
 	return collect(ctx, s.Pool, "list", "governance requests", stmt, []any{kinds, decidedSince}, scanGovernanceChange)
 }
 

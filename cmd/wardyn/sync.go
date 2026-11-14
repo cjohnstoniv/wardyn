@@ -92,7 +92,7 @@ first pass; a sandbox directory with no repository gets a new one with that
 branch checked out over the synced files, one with a repository gets it as
 refs/remotes/laptop/<branch>. --pull-commits brings the sandbox's commits
 since then back as a bundle and fetches them into the branch
-wardyn/sync-<run-id prefix> here, for you to review; your working tree and other
+wardyn/sync-<run-id> here, for you to review; your working tree and other
 branches are never touched. Both need the top of a git work tree, and both
 run git in the sandbox over an SSH exec channel.
 
@@ -121,11 +121,31 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 	return cmd
 }
 
+// adoptTypedSyncState moves the sync state an earlier release saved under the run id as it was typed (upper
+// case, urn:uuid:, braces or no hyphens) to stateFile, the run's one name, when that name holds none. A sync
+// that found no state would send every file again, over what the sandbox changed since the last sync.
+func adoptTypedSyncState(typed, runID, stateFile string) {
+	if typed == runID {
+		return
+	}
+	old, err := foldersync.StatePath(typed)
+	if err != nil {
+		return
+	}
+	if _, err := os.Lstat(stateFile); errors.Is(err, os.ErrNotExist) {
+		_ = os.Rename(old, stateFile) // none saved under the typed id either is the usual case
+	}
+}
+
 func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFlags) error {
 	id, err := parseID("run", runID)
 	if err != nil {
 		return err
 	}
+	// One spelling of the run from here on (state file, gateway user, ProxyCommand, git branch), whichever
+	// form uuid.Parse accepted: an upper-case or urn:uuid: id names the same run as the console's.
+	typed := runID
+	runID = id.String()
 	if err := refusePlainHTTPGateway("sync", c.BaseURL); err != nil {
 		return err
 	}
@@ -147,6 +167,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
+	adoptTypedSyncState(typed, runID, stateFile)
 	stateRoot, err := foldersync.StateRoot()
 	if err != nil {
 		return err

@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -320,7 +321,10 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 	if hold || (!pending && !s.pause.stampDue(true, runID, now)) {
 		return false, nil
 	}
-	paused, err := pauser.StampRunActive(ctx, runID)
+	// On a bound of its own: thawForExec stamps under the run's lock, on a request's context.
+	sctx, scancel := context.WithTimeout(ctx, heldStoreCallBound)
+	paused, err := pauser.StampRunActive(sctx, runID)
+	scancel()
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stamping a run's presence failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
@@ -340,7 +344,11 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 		return false, nil
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(ctx, runID)
+	run, err := s.getRunHeld(ctx, runID)
+	if err == nil && !runLive(run) {
+		s.pause.thawDone(runID) // ended or kept since the stamp: no thaw owed (runLive)
+		return false, nil
+	}
 	if err == nil {
 		err = s.resumeRun(ctx, pauser, run, actorType, principal, reason)
 	}
@@ -354,7 +362,11 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 
 // thawForExec is markPresent for a path about to exec into the sandbox, given
 // the run it just read: a paused run is thawed whatever the stamp debounce
-// says, because the daemon refuses an exec into a paused container.
+// says, because the daemon refuses an exec into a paused container. A run that
+// reads paused is read again under the lock first, and thawed only while it is
+// still paused and live (runLive), as stampPresence's own resume is. A run no
+// longer live is no thaw owed (nil): the caller's read under the run's start
+// lock (lockStart) refuses it.
 //
 // The thaw takes the run's operation lock, as a pause does (pauseRun), so a
 // person's thaw never lands inside a pause's freeze, mark or compensation. Its
@@ -370,12 +382,25 @@ func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType 
 	if resumed, err := s.stampPresence(ctx, run.ID, actorType, principal, reason); err != nil || resumed {
 		return err
 	}
+	// A row that is not paused does not prove a running agent: a pause that died between its freeze and its mark
+	// left only its settle record to say so (pauseRun).
+	if err := s.settleOwedPause(ctx, run.ID); err != nil {
+		return err
+	}
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok || run.PausedAt == nil {
 		return nil
 	}
+	if run, err = s.getRunHeld(ctx, run.ID); err != nil || run.PausedAt == nil || !runLive(run) {
+		return err
+	}
 	return s.resumeRun(ctx, pauser, run, actorType, principal, reason)
 }
+
+// runLive reports whether run, read under its operation lock, is one a person's presence may resume: RUNNING and not
+// kept. resumeRun thaws the sandbox with no state check of its own, and a run that ended, or was kept, since an
+// earlier read may keep its sandbox for a computer folder's pass back.
+func runLive(run types.AgentRun) bool { return run.State == types.RunRunning && !runIsKept(run) }
 
 // noteAgentActive moves the presence clock for the agent's own activity: an
 // egress decision, or the proxy reporting bytes moved. It never thaws.
@@ -440,11 +465,11 @@ func (s *Server) approvalClosed(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(ctx, runID)
+	run, err := s.getRunHeld(ctx, runID)
 	if err != nil || run.PausedAt == nil {
 		return
 	}
-	if open, err := pauser.RunHasOpenRequest(ctx, runID); err != nil || open {
+	if open, err := heldRead(ctx, func(ctx context.Context) (bool, error) { return pauser.RunHasOpenRequest(ctx, runID) }); err != nil || open {
 		return
 	}
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
@@ -469,7 +494,7 @@ func (s *Server) resumeClosedRun(ctx context.Context, pauser store.RunPauser, c 
 		return
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(ctx, c.Run.ID)
+	run, err := s.getRunHeld(ctx, c.Run.ID)
 	if err != nil || run.PausedAt == nil {
 		return
 	}
@@ -480,7 +505,7 @@ func (s *Server) resumeClosedRun(ctx context.Context, pauser store.RunPauser, c 
 	default:
 		return
 	}
-	if open, err := pauser.RunHasOpenRequest(ctx, run.ID); err != nil || open {
+	if open, err := heldRead(ctx, func(ctx context.Context) (bool, error) { return pauser.RunHasOpenRequest(ctx, run.ID) }); err != nil || open {
 		return
 	}
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
@@ -514,21 +539,21 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 				// A thaw its context ended may still land in the runtime, under a row that stays paused. The settle
 				// record leaves it to the pause sweep, which freezes a sandbox whose row is paused (settlePauses).
 				nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
-				s.notePauseSettle(nctx, run.ID)
+				s.notePauseSettleOrRetry(nctx, run.ID)
 				ncancel()
 			}
 			data["error"] = err.Error()
-			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
+			s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 				run.ID.String(), "failure", mustJSON(data)))
 			return err
 		}
 	}
-	cleared, err := pauser.ClearRunPaused(ctx, run.ID)
+	cleared, err := heldWrite(ctx, func(ctx context.Context) (bool, error) { return pauser.ClearRunPaused(ctx, run.ID) })
 	if err != nil {
 		return err
 	}
 	if cleared {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
+		s.recordAuditHeld(ctx, s.auditEvent(&run.ID, actorType, principal, "run.resume",
 			run.ID.String(), "success", mustJSON(data)))
 	}
 	return nil
@@ -548,7 +573,7 @@ func (s *Server) thawedSandboxRunning(ctx context.Context, ref string) error {
 }
 
 // sweepRunPauses is one pass of the pause over every live run: settle the ones
-// a pause compensation left unsettled (settlePauses), pause the ones nobody is
+// a pause or its compensation left unsettled (settlePauses), pause the ones nobody is
 // at, and resume a paused one whose requests have all closed. Every
 // write is a conditional UPDATE. With a SweeperLease only the elected leader
 // sweeps, its context ends when the lease is lost, and its epoch fences each
@@ -561,6 +586,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	_, canFreeze := s.cfg.Runner.(runner.Freezer)
 	ctx, end, ok := s.beginLeaderSweep(ctx)
 	if !ok {
+		sweephealth.NotOwner(ctx)
 		return nil
 	}
 	defer end()
@@ -707,6 +733,15 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 // operation lock serializes freeze, mark and compensation across replicas, so a
 // pause that finds it held is skipped and retried by the next sweep; the
 // compensation proves it still holds that lock around its thaw (undoFreeze).
+//
+// A process that dies between the freeze and the mark leaves a frozen sandbox
+// under a row that is not paused, and nothing that reads the row finds it. So
+// the pause records its intent first, as the run's settle record, and freezes
+// nothing without it (notePauseIntent); the pause sweep (settlePauses), or a
+// person's thaw (thawForExec), then moves the sandbox to its row. The pause
+// deletes the record once the mark lands, and only when it wrote it: one
+// already there is another settle's. A freeze that fails leaves the record to
+// the sweep, since an error can hide a freeze that landed.
 func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun, reason types.PauseReason, quiet time.Duration) {
 	if !s.leaseCurrent(ctx) {
 		return
@@ -717,6 +752,10 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 		return
 	}
 	defer unlock()
+	intent, wrote, ok := s.notePauseIntent(ctx, run.ID)
+	if !ok {
+		return
+	}
 	f := s.cfg.Runner.(runner.Freezer)
 	fctx, fcancel := context.WithTimeout(ctx, pauseRuntimeCallTimeout)
 	ferr := f.FreezeSandbox(fctx, run.SandboxRef)
@@ -732,29 +771,35 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			// record leaves it to the pause sweep, which thaws a sandbox whose row is not paused (settlePauses).
 			nctx, ncancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 			defer ncancel()
-			s.notePauseSettle(nctx, run.ID)
+			s.notePauseSettleOrRetry(nctx, run.ID)
 		}
+		// Any other error keeps the record too: a reply lost on its way back can hide a freeze that landed.
 		return
 	}
 	applied, err := false, error(nil)
 	if s.leaseCurrent(ctx) {
-		applied, err = pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+		applied, err = heldWrite(ctx, func(ctx context.Context) (bool, error) {
+			return pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+		})
 	}
 	if err == nil && applied {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
+		s.recordAuditHeld(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"reason": reason, "quiet_sec": int64(quiet.Seconds()), "active_at": run.ActiveAt,
 			})))
+		if wrote {
+			heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { s.clearPauseSettle(ctx, run.ID, intent) })
+		}
 		// A paused run holds no Azure DevOps token; its resume creates one.
 		// After the mark, so a resolve racing it sees the pause and creates none.
-		s.revokeRunPATs(ctx, run.ID, adoPATRevokePause)
+		heldCall(ctx, heldRevokeBound, func(ctx context.Context) { s.revokeRunPATs(ctx, run.ID, adoPATRevokePause) })
 		return
 	}
 	// The compensation outlives a lease lost mid-pass: a freeze must not be
 	// left behind because the sweep's context ended between freeze and thaw.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 	defer cancel()
-	s.undoFreeze(cctx, ctx, f, run, reason)
+	s.undoFreeze(cctx, ctx, f, run, reason, intent, wrote)
 }
 
 // handleResumeRun serves POST /runs/{id}/resume: the person presses Resume.

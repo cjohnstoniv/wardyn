@@ -205,7 +205,9 @@ func (d *Driver) EndSandboxAt(ctx context.Context, ref string, gen int) (endErr 
 	wipeErr := d.wipeAWSCaches(ctx, ref)
 	if v := d.vmFor(ctx, ref); v != nil {
 		d.vmPowerdown(ctx, v, ref)
-		defer func() { endErr = errors.Join(endErr, d.removeVMSidecars(ctx, v.runID)) }()
+		defer func() {
+			endErr = endAnswer(endErr, errors.Join(d.removeVMSidecars(ctx, v.runID), d.macVMStopUnconfirmed(v.runID)))
+		}()
 	}
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {

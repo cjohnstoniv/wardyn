@@ -150,6 +150,18 @@ const (
 	withdrawEncrypted    = `{"classes":{"ado_minted_pat":{"mode":"runner_resident","require_posture":{"disk_encrypted":true}}}}`
 )
 
+// posture sends p as e.runner's report on a runner session begun for it, as the hub begins one before any event.
+func (e *withdrawEnv) posture(p types.RunnerPosture) {
+	e.t.Helper()
+	session := uuid.NewString()
+	if err := e.pg.BeginRunnerInventory(context.Background(), e.runner, session); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := e.srv.PostureFromRunner(context.Background(), e.runner, session, runnerwire.Event{Data: mustJSON(p)}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 func TestPG_WithdrawnLocalDeliveryRevokesAtTheWrite(t *testing.T) {
 	for name, tc := range map[string]struct {
 		policy  string
@@ -183,11 +195,19 @@ func TestPG_WithdrawnLocalDeliveryRevokesAtTheWrite(t *testing.T) {
 			e.wantOK(e.call(e.alice, http.MethodPut, "/api/v1/runners/"+e.runner.String()+"/trust", `{"trust_class":"managed_device","reason":"moved to a managed laptop"}`), "PUT /runners/{id}/trust")
 		}, true},
 		"runner posture no longer meets the policy": {withdrawEncrypted, func(e *withdrawEnv) {
-			ev := runnerwire.Event{Data: mustJSON(types.RunnerPosture{OS: "linux", DiskEncrypted: false, Evidence: types.PostureEvidenceOSProbe})}
-			if err := e.srv.PostureFromRunner(context.Background(), e.runner, ev); err != nil {
+			e.posture(types.RunnerPosture{OS: "linux", DiskEncrypted: false, Evidence: types.PostureEvidenceOSProbe})
+		}, true},
+		"runner posture from a superseded session": {withdrawEncrypted, func(e *withdrawEnv) {
+			old := uuid.NewString()
+			if err := e.pg.BeginRunnerInventory(context.Background(), e.runner, old); err != nil {
 				e.t.Fatal(err)
 			}
-		}, true},
+			e.posture(types.RunnerPosture{OS: "linux", DiskEncrypted: true, Evidence: types.PostureEvidenceOSProbe}) // the fresh session's
+			ev := runnerwire.Event{Data: mustJSON(types.RunnerPosture{OS: "linux", DiskEncrypted: false, Evidence: types.PostureEvidenceOSProbe})}
+			if err := e.srv.PostureFromRunner(context.Background(), e.runner, old, ev); err != nil {
+				e.t.Fatal(err)
+			}
+		}, false},
 		"runner posture: a token on another runner is not judged": {withdrawEncrypted, func(e *withdrawEnv) {
 			// Withdrawn already (its runner reports no encrypted disk), so only the runner filter keeps it.
 			other := e.claimedRunner(withdrawOwner)
@@ -195,10 +215,7 @@ func TestPG_WithdrawnLocalDeliveryRevokesAtTheWrite(t *testing.T) {
 				e.t.Fatal(err)
 			}
 			_, _, otherAuth := e.localRun(other)
-			ev := runnerwire.Event{Data: mustJSON(types.RunnerPosture{OS: "linux", DiskEncrypted: false, Evidence: types.PostureEvidenceOSProbe})}
-			if err := e.srv.PostureFromRunner(context.Background(), e.runner, ev); err != nil {
-				e.t.Fatal(err)
-			}
+			e.posture(types.RunnerPosture{OS: "linux", DiskEncrypted: false, Evidence: types.PostureEvidenceOSProbe})
 			if closed, _ := e.revoked(otherAuth); closed || slices.Contains(e.pats.revokedIDs(), otherAuth.String()) {
 				e.t.Fatal("a posture report revoked a token held by a run on another runner")
 			}

@@ -195,6 +195,13 @@ func TestGovernanceChanges_ListApproveReject(t *testing.T) {
 	if err != nil || !strings.Contains(out, id+" -> applied") {
 		t.Errorf("approve = %q, %v", out, err)
 	}
+	// An approval that could not revoke every token holding the old role prints the server's remedy on stderr.
+	f.change.TokensRevocationFailed, f.change.Detail = true, "remedy"
+	out, errOut, err := runGovernance(t, srv.URL, "changes", "approve", id)
+	if err != nil || !strings.Contains(out, id+" -> applied") || errOut != "warning: remedy\n" {
+		t.Errorf("approve with tokens left = %q, stderr %q, %v; want the change and the warning", out, errOut, err)
+	}
+	f.change.TokensRevocationFailed, f.change.Detail = false, ""
 	out, _, err = runGovernance(t, srv.URL, "changes", "reject", id, "--reason", "not now")
 	if err != nil || !strings.Contains(out, id+" -> rejected") || !strings.Contains(f.reason, `"reason":"not now"`) {
 		t.Errorf("reject = %q, %v (body %q)", out, err, f.reason)

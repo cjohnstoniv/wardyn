@@ -82,6 +82,7 @@ function renderPane(
   // viewer it had; record-pane.test.tsx's own new Admin-view case passes
   // "/admin/workspaces/ws-1" explicitly.
   route = "/workspaces/ws-1",
+  notice: { status: number; detail?: string; reason?: string } | null = null,
 ) {
   return render(
     <MemoryRouter initialEntries={[route]}>
@@ -95,7 +96,7 @@ function renderPane(
       <OperatorProvider operator={operator} securityOperator={securityOperator}>
         <RecordPane
           ws={ws(over)}
-          notice={null}
+          notice={notice}
           launch={launch}
           busyTask={null}
           modelReady={modelReady}
@@ -282,6 +283,31 @@ describe("RecordPane — new session", () => {
       "Opens an attached terminal with the repo + your model provider ready. Do the real thing, then click Done recording to capture what it used.",
     );
     expect(helper).not.toHaveTextContent(/replay/i);
+  });
+});
+
+describe("RecordPane — a refused launch", () => {
+  const pane = (notice: { status: number; detail?: string; reason?: string }) =>
+    renderPane({}, {}, true, true, null, null, true, "/workspaces/ws-1", notice);
+
+  it("a 422 shows the server's sentence and the form stays usable", () => {
+    pane({ status: 422, detail: "Connect Azure DevOps once before launching." });
+    expect(screen.getByTestId("record-refused")).toHaveTextContent("Connect Azure DevOps once before launching.");
+    expect(within(screen.getByTestId("record-new-session")).getByRole("button", { name: /start recording/i })).toBeEnabled();
+  });
+
+  it("a 503 that is not the no-runner reason is not called -runner none and leaves a retry open", () => {
+    pane({ status: 503, detail: "Wardyn couldn't read its model providers just now." });
+    expect(screen.queryByTestId("record-no-runner")).not.toBeInTheDocument();
+    expect(screen.getByTestId("record-refused")).toHaveTextContent("Wardyn couldn't read its model providers just now.");
+    expect(within(screen.getByTestId("record-new-session")).getByRole("button", { name: /start recording/i })).toBeEnabled();
+  });
+
+  it("the no-runner reason keeps its own wording and disables the form", () => {
+    pane({ status: 503, detail: "record needs a configured runner", reason: "record_no_runner" });
+    expect(screen.getByTestId("record-no-runner")).toBeInTheDocument();
+    expect(screen.queryByTestId("record-refused")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("record-new-session")).getByRole("button", { name: /start recording/i })).toBeDisabled();
   });
 });
 

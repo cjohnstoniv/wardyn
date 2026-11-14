@@ -440,4 +440,17 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toHaveCount(0);
     await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
   });
+
+  // A setup status read that fails is not a host without a barrier: the console's stand-in for it lists no
+  // classes, so the shell says it could not check. /healthz and /readyz still answer, so no outage banner covers it.
+  test("a failed setup status read says the barrier couldn't be checked, never that no barrier can be built", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", (route) => route.fulfill({ status: 500, json: {} }));
+    await gotoConsole(page);
+    await expect(page.getByText("Couldn't check this host's barrier.")).toBeVisible();
+    await expect(page.getByRole("button", { name: NO_BARRIER.RECHECK })).toBeVisible();
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toHaveCount(0);
+    await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
+  });
 });

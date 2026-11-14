@@ -132,49 +132,30 @@ func (d *Driver) ensureDNSVolume(ctx context.Context, runID uuid.UUID) error {
 // the volume, a name proves nothing about who made the object.
 var errDNSSeedNotOurs = errors.New("docker: a container answers to this run's DNS seed name but is not Wardyn's DNS seed for it")
 
-// dnsSeedOwned says whether a container is runID's DNS seed as this driver creates it: the DNS seed component,
-// managed, this run's, this deployment's and this runner's labels.
-func (d *Driver) dnsSeedOwned(insp container.InspectResponse, runID uuid.UUID) error {
-	var l map[string]string
-	if insp.Config != nil {
-		l = insp.Config.Labels
-	}
-	if !d.dnsSeedLabelsOwned(l, runID) {
-		return fmt.Errorf("%w: %q", errDNSSeedNotOurs, dnsSeedName(runID))
-	}
-	return nil
-}
-
-// dnsSeedLabelsOwned is the label half of dnsSeedOwned, shared with the age sweep: the DNS seed component,
-// managed, runID's, a deployment label that is present and this deployment's, and this runner's.
-func (d *Driver) dnsSeedLabelsOwned(l map[string]string, runID uuid.UUID) bool {
+// runContainerLabelsOwned says whether labels l are runID's component (a DNS seed, a drive seed or a drive hold)
+// as this driver creates it, shared with the age sweep: that component, managed, runID's, a deployment label that
+// is present and this deployment's, and this runner's.
+func (d *Driver) runContainerLabelsOwned(l map[string]string, runID uuid.UUID, component string) bool {
 	deployment, hasDeployment := l[labelDeployment]
-	return l[labelManaged] == "true" && l[labelComponent] == componentDNSSeed && l[labelRun] == runID.String() &&
+	return l[labelManaged] == "true" && l[labelComponent] == component && l[labelRun] == runID.String() &&
 		hasDeployment && deployment == d.cfg.InternalNetwork && l[runner.LabelRunnerID] == d.cfg.RunnerID
 }
 
-// removeDNSSeed removes runID's DNS seed if one is there: inspected by name, judged by dnsSeedOwned, and removed
-// by the id that inspect returned, so a name taken between the two cannot redirect the removal. A seed that is
-// not Wardyn's is left in place and returned as errDNSSeedNotOurs; none there is success.
+// removeDNSSeed removes runID's DNS seed if one is there (removeRunContainer). A seed that is not Wardyn's is left
+// in place and returned as errDNSSeedNotOurs; none there is success.
 func (d *Driver) removeDNSSeed(ctx context.Context, runID uuid.UUID) error {
-	res, err := d.cli.ContainerInspect(ctx, dnsSeedName(runID), client.ContainerInspectOptions{})
-	if isNotFound(err) {
-		return nil
+	err := d.removeRunContainer(ctx, dnsSeedName(runID), runID, componentDNSSeed)
+	if errors.Is(err, errRunContainerNotOurs) {
+		return fmt.Errorf("%w: %q", errDNSSeedNotOurs, dnsSeedName(runID))
 	}
-	if err != nil {
-		return fmt.Errorf("docker: inspect the DNS seed: %w", err)
-	}
-	if err := d.dnsSeedOwned(res.Container, runID); err != nil {
-		return err
-	}
-	return d.removeSeedByID(ctx, res.Container.ID)
+	return err
 }
 
-// removeSeedByID force-removes the seed container with this id, the one this driver created or inspected, and
-// any anonymous volume the image declared for it. The run's named DNS volume stays.
+// removeSeedByID force-removes the seed or hold container with this id, the one this driver created or inspected,
+// and any anonymous volume the image declared for it. Named volumes, the run's DNS volume and its drives, stay.
 func (d *Driver) removeSeedByID(ctx context.Context, id string) error {
 	if _, err := d.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("docker: remove the DNS seed: %w", err)
+		return fmt.Errorf("docker: remove container %s: %w", id, err)
 	}
 	return nil
 }

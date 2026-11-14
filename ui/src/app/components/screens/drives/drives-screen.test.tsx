@@ -557,7 +557,7 @@ describe("DrivesScreen — the re-home confirm dialog", () => {
     expect(screen.queryByText(DRIVES.SAVE_REFUSED_TITLE)).not.toBeInTheDocument();
 
     await userEvent.click(within(dialog).getByRole("button", { name: DRIVES.SAVE_CTA }));
-    expect(updateDriveMock).toHaveBeenLastCalledWith(HOMES.id, expect.anything(), true);
+    expect(updateDriveMock).toHaveBeenLastCalledWith(HOMES.id, expect.anything(), true, "");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 

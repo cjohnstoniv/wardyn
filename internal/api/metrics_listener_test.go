@@ -4,8 +4,10 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +57,22 @@ func TestMetricsListenerHandler(t *testing.T) {
 		if w := scrape(tc.method, tc.path); w.Code != http.StatusNotFound {
 			t.Errorf("listener %s %s = %d, want 404", tc.method, tc.path, w.Code)
 		}
+	}
+}
+
+// TestMetricsText_IsTheScrapeBody pins that the OTLP metrics push sends the body
+// a scrape gets, the live health gauges included.
+func TestMetricsText_IsTheScrapeBody(t *testing.T) {
+	h := newHarness(t)
+	console := do(t, h.srv, http.MethodGet, "/metrics", adminToken, "")
+	if console.Code != http.StatusOK {
+		t.Fatalf("admin console /metrics = %d, want 200", console.Code)
+	}
+	text := string(h.srv.MetricsText(context.Background()))
+	if text != console.Body.String() {
+		t.Errorf("MetricsText differs from the scrape:\nMetricsText:\n%s\nscrape:\n%s", text, console.Body)
+	}
+	if !strings.Contains(text, "# TYPE wardyn_store_up gauge\n") {
+		t.Errorf("MetricsText lacks the wardyn_store_up gauge:\n%s", text)
 	}
 }

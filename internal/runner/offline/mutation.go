@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -44,6 +45,11 @@ func (m *Manager) MutationFinished(ctx context.Context, method, ref string, runI
 		ref = m.expectedRef(runID)
 	} else if runID != uuid.Nil {
 		return errors.New("ref completion unexpectedly supplies run identity")
+	}
+	// A refusal for a newer policy generation touched nothing, and the proxy it left is that generation's:
+	// it is no failed mutation, whose containment would stop that newer proxy.
+	if runner.RefusedForNewerGeneration(cause) {
+		cause = nil
 	}
 	key := mutationKey{method, ref, generation}
 	m.mu.Lock()

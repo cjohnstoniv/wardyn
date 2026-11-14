@@ -310,6 +310,41 @@ describe("DesktopViewer", () => {
     expect(screen.getByText(DESKTOP.sessionEnded)).toBeInTheDocument();
   });
 
+  it("stops on what the desktop sent, says the viewer's reason, and dials again only on Try again", () => {
+    vi.useFakeTimers();
+    const { sockets, connect } = open();
+    sockets[0].opened();
+    sockets[0].serve([...new TextEncoder().encode("RFB 003.008\n"), 1, 2]); // offers a password only
+    expect(sockets[0].closed).toBe(true);
+    sockets[0].end(1005);
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(DESKTOP.failedTitle)).toBeInTheDocument();
+    expect(screen.getByText("It stopped trying to reconnect.")).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.failedReason("the desktop asks for a password"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: DESKTOP.close })).toBeInTheDocument();
+    act(() => screen.getByRole("button", { name: DESKTOP.tryAgain }).click());
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.starting);
+    expect(screen.queryByText(DESKTOP.stillTrying("the desktop asks for a password"))).toBeNull();
+    sockets[1].serve(HANDSHAKE);
+    expect(screen.getByText(DESKTOP.connected)).toBeInTheDocument();
+  });
+
+  it("a stopped socket that closes after Try again leaves the new desktop taking keys", () => {
+    const { sockets } = open();
+    sockets[0].opened();
+    sockets[0].serve([...new TextEncoder().encode("RFB 003.008\n"), 1, 2]);
+    act(() => screen.getByRole("button", { name: DESKTOP.tryAgain }).click());
+    sockets[1].serve(HANDSHAKE);
+    sockets[0].end(1005); // the stopped socket's close arrives only now
+    expect(screen.getByText(DESKTOP.connected)).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByTestId("desktop-canvas"), { key: "a" });
+    expect(sockets[1].sent.filter((m) => m[0] === 4)).toHaveLength(1);
+  });
+
   it("shows the gateway's reason from the second failed dial, and says reconnecting after a drop", () => {
     vi.useFakeTimers();
     const { sockets } = open();

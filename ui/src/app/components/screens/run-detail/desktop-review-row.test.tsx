@@ -84,6 +84,19 @@ describe("DesktopReviewRow", () => {
     expect(onRefused).toHaveBeenCalled();
   });
 
+  it("Download approved asks for the file once while a download is in flight, and offers it again after a failure", async () => {
+    let fail: (e: Error) => void = () => {};
+    downloadMock.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    renderRow(row({ state: "APPROVED", decided_by: "sam@acme.example", decided_at: aheadByHours(-1) }));
+    await userEvent.click(screen.getByRole("button", { name: C.downloadApproved }));
+    await userEvent.click(screen.getByRole("button", { name: C.downloadApproved }));
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: C.downloadApproved })).toBeDisabled();
+    fail(new Error("gone"));
+    expect(await screen.findByText(`${C.downloadFailed}: gone`)).toBeTruthy();
+    expect(screen.getByRole("button", { name: C.downloadApproved })).toBeEnabled();
+  });
+
   it("denied shows the decider's reason and offers Request download again", () => {
     renderRow(row({ state: "DENIED", decided_by: "sam.okafor@acme.example", reason: "Customer records leave through the data team.", decided_at: aheadByHours(-1) }));
     expect(screen.getByText(C.stateDenied)).toBeTruthy();
@@ -91,9 +104,10 @@ describe("DesktopReviewRow", () => {
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
   });
 
-  it("a released approval reads as downloaded and offers Request download again", () => {
+  it("an approval spent with no file in this browser says it was used, never Downloaded at the decision time", () => {
     renderRow(row({ state: "APPROVED", minted_jti: "jti-1", decided_at: aheadByHours(-1) }));
-    expect(screen.getByText(/Downloaded [^·]*\d{1,2}:\d\d[^·]* · sha256 9f2c…41ab/)).toBeTruthy();
+    expect(screen.getByText(C.approvalUsed)).toBeTruthy();
+    expect(screen.queryByText(/Downloaded/)).toBeNull();
     expect(screen.queryByRole("button", { name: C.downloadApproved })).toBeNull();
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
   });
@@ -137,5 +151,17 @@ describe("DesktopReviewRow", () => {
     expect(await screen.findByText(`${C.notAsked}: the download's review could not be raised.`)).toBeTruthy();
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
     expect(onRefused).not.toHaveBeenCalled();
+  });
+
+  it("Download approved revokes the object URL only after the click's task, so the browser has the file first", async () => {
+    downloadMock.mockResolvedValue({ blob: new Blob(["x"]), sha256: SHA });
+    const atClick: number[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+      setTimeout(() => atClick.push(vi.mocked(URL.revokeObjectURL).mock.calls.length), 0); // a task queued at the click
+    });
+    renderRow(row({ state: "APPROVED", decided_by: "lee.chen@acme.example", decided_at: aheadByHours(-0.5) }));
+    await userEvent.click(screen.getByRole("button", { name: C.downloadApproved }));
+    await vi.waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:x"));
+    expect(atClick).toEqual([0]);
   });
 });

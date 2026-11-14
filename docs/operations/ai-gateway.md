@@ -29,6 +29,7 @@
 2. Give wardynd the certificate authority. Set the Helm value `trustedCA`, or `WARDYN_TRUSTED_CA_FILE` outside Helm. The run's proxy and the sandbox's own TLS clients then trust it.
 3. Add a `custom_endpoint` provider whose `base_url` is the model hostname and port, for example `https://llm-gw.wardyn.svc.cluster.local:8443`. A person's credential is stored as for any provider.
    - Two providers with identity on can share one gateway only on paths apart, such as `/anthropic` and `/openai`. A run that uses both on one path is refused.
+   - The proxy sends that host and port nothing else.
    - A Bedrock provider with a bearer key can send identity too. Put the gateway in its `bedrock.base_url`, and each person's key goes to the gateway.
    - A Bedrock provider with SSO sign-in can send identity only while Wardyn signs AWS requests at its proxy: [Bedrock with SSO sign-in](#bedrock-with-sso-sign-in).
 4. Add the model hostname to the policy's `allowed_domains`. The model route needs no `internal_hosts` entry, and adding one lifts the private-address guard for that host on every path ([Internal model gateway](../OPERATIONS.md#internal-model-gateway)).
@@ -259,7 +260,7 @@ With content inspection on (`llm_inspection` in the run's policy), Wardyn checks
 | The run's own secret values, exact match (`detect_secrets`) | Wardyn | Wardyn |
 | Secret formats, entropy, personal data, classified markers, the detector sidecar, attachments | Wardyn | The gateway |
 
-- Only a call on the provider's route is left to the gateway: its host, port and path prefix, the match that carries the token. Another host, a path outside the prefix, a path with a dot segment and the plain HTTP lane keep the whole policy.
+- Only a call on the provider's route is left to the gateway: its host, port and path prefix, the match that carries the token. Another host and the plain HTTP lane keep the whole policy. At the route's host and port, the proxy sends nothing else.
 - The run's own secret values exist only in Wardyn's memory, so no gateway can look for them. That check stays on whenever the policy has it, and in block mode it still refuses the call.
 - With no `detect_secrets` on the policy, Wardyn checks nothing on that route.
 - Each prompt left to the gateway has an `llm.scan.skip` row with `data.skip_reason: deferred_to_gateway` and `data.deferred_to` set to the provider id. A secret found there is an alert or block row with the same `deferred_to`. The console's audit reads "Left prompt checks to" the provider, and the run's Policy tab reads "On, except prompts to" its name.

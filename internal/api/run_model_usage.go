@@ -4,6 +4,7 @@
 package api
 
 import (
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -88,6 +89,9 @@ func (s *Server) handleRunModelUsage(w http.ResponseWriter, r *http.Request) {
 func buildModelUsageView(sum store.ModelUsageSummary, tunnels int64, provider *types.ModelProvider) ModelUsageView {
 	v := ModelUsageView{ByModel: []ModelUsageModel{}, OpaqueTunnels: tunnels, UpdatedAt: sum.UpdatedAt}
 	for _, g := range sum.Groups {
+		if !fitsTotals(v.Totals, g) {
+			g = g.Uncounted()
+		}
 		t := ModelUsageTokens{
 			InputTokens: g.Input, OutputTokens: g.Output, CacheReadTokens: g.CacheRead, CacheWriteTokens: g.CacheWrite,
 			ReasoningTokens: g.Reasoning, Calls: g.Calls, UncountedCalls: g.UncountedCalls, PartialCalls: g.PartialCalls,
@@ -111,6 +115,15 @@ func buildModelUsageView(sum store.ModelUsageSummary, tunnels int64, provider *t
 		v.Totals.PartialCalls += t.PartialCalls
 	}
 	return v
+}
+
+// fitsTotals reports whether each of g's token counts can be added to tot's without passing an int64. Both are
+// never negative. A group that does not fit is shown Uncounted, in its line and in the totals, so a total is
+// never wrapped negative and never a cut figure.
+func fitsTotals(tot ModelUsageTokens, g store.ModelUsageGroup) bool {
+	return g.Input <= math.MaxInt64-tot.InputTokens && g.Output <= math.MaxInt64-tot.OutputTokens &&
+		g.CacheRead <= math.MaxInt64-tot.CacheReadTokens && g.CacheWrite <= math.MaxInt64-tot.CacheWriteTokens &&
+		g.Reasoning <= math.MaxInt64-tot.ReasoningTokens
 }
 
 // providerServesHost reports whether host is an address p's calls go to: its base URL, its Bedrock or

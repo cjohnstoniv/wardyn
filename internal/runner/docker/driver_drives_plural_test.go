@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -87,6 +88,84 @@ func TestCreateSandbox_MountsEveryDrive(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_ADriveVolumeMadeAgainIsThisDrives: a volume a reclaim removes after the run checked it is
+// made again by the next mount of its name, with that mount's labels, and comes back as this drive's: another
+// drive naming the same object refuses it, where it would adopt an unlabelled one. That mount is the hold's; the
+// seed's and the agent's come only after the hold, so they can make one only once the hold is gone (docker rm or a
+// prune), which the second and third cases stand for by removing the volume as the seed or the agent is made.
+func TestCreateSandbox_ADriveVolumeMadeAgainIsThisDrives(t *testing.T) {
+	for name, tc := range map[string]struct {
+		drive types.DriveMount
+		at    string // the create that finds the volume gone: "" is the first after the check
+	}{
+		"by the hold":                      {*dockerVolumeDrive(), ""},
+		"by the seed, the hold once gone":  {secondVolumeDrive(), driveSeedPrefix},
+		"by the agent, the hold once gone": {*dockerVolumeDrive(), agentNamePrefix},
+	} {
+		t.Run(name, func(t *testing.T) {
+			drive := tc.drive
+			f := newFakeDocker()
+			f.mountMakesVolumes = true
+			removed := false
+			f.onCreate = func(name string) {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				_, ok := f.volumes[drive.ObjectName]
+				if ok && !removed && !strings.HasPrefix(name, "wardyn-proxy-") && strings.HasPrefix(name, tc.at) {
+					removed = true
+					delete(f.volumes, drive.ObjectName)
+				}
+			}
+			if _, err := createWithDrives(t, f, uuid.New(), drive); err != nil {
+				t.Fatal(err)
+			}
+			if !removed {
+				t.Fatal("the volume was never removed; the test proves nothing")
+			}
+			if got := f.volumes[drive.ObjectName].Labels; got[labelDrive] != drive.DriveID.String() || got[labelDriveSubject] != drive.SubjectHash {
+				t.Fatalf("the volume made again carries %v, want this drive's labels", got)
+			}
+			other := drive
+			other.DriveID, other.SubjectHash = uuid.New(), types.DriveSubjectHash("bob@example.com")
+			f.onCreate = nil
+			if _, err := createWithDrives(t, f, uuid.New(), other); err == nil {
+				t.Error("another drive naming the same object adopted the volume made again")
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_SeedsOnlyAHeldVolume: a drive's seed copies the run's image into an empty volume, so it must
+// only ever mount the volume the run checked. A volume another person's first run made under the name after the
+// check is refused before any seed is made over it: the seed comes after the hold, whose check refuses the run.
+func TestCreateSandbox_SeedsOnlyAHeldVolume(t *testing.T) {
+	f := newFakeDocker()
+	drive := secondVolumeDrive()
+	run := uuid.New()
+	swapped := false
+	f.onCreate = func(name string) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if _, ok := f.volumes[drive.ObjectName]; !ok || swapped || strings.HasPrefix(name, "wardyn-proxy-") {
+			return
+		}
+		swapped = true
+		f.volumes[drive.ObjectName] = client.VolumeCreateOptions{Name: drive.ObjectName, Driver: driveVolumeDriver, Labels: map[string]string{
+			labelManaged: "true", labelDrive: uuid.NewString(), labelDriveHome: drive.HomeName,
+			labelDriveSubject: types.DriveSubjectHash("bob@example.com"),
+		}}
+	}
+	if _, err := createWithDrives(t, f, run, drive); err == nil {
+		t.Error("CreateSandbox went on over a volume another person's run made under the name")
+	}
+	if !swapped {
+		t.Fatal("the volume was never replaced; the test proves nothing")
+	}
+	if c := f.containers[driveSeedName(run)]; c != nil {
+		t.Errorf("a seed was made over a volume the run did not check: %+v", c.host.Mounts)
+	}
+}
+
 // teamVolumeDrive is a team drive's docker volume at its shared path.
 func teamVolumeDrive(readOnly bool) types.DriveMount {
 	d := *dockerVolumeDrive()
@@ -104,6 +183,8 @@ func seedCopies(f *fakeDocker, runID uuid.UUID) []fakeCopy {
 	}
 	return out
 }
+
+func noCopy(m *mount.Mount) bool { return m.VolumeOptions != nil && m.VolumeOptions.NoCopy }
 
 func wantNoCopyMount(t *testing.T, m *mount.Mount, what string) {
 	t.Helper()
@@ -216,13 +297,13 @@ func TestCreateSandbox_PersonalDriveSeedUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	seed := f.containers[driveSeedName(run)]
-	if seed == nil || len(seed.host.Mounts) != 1 || seed.host.Mounts[0].Target != runner.DriveTarget || seed.host.Mounts[0].VolumeOptions != nil {
+	if seed == nil || len(seed.host.Mounts) != 1 || seed.host.Mounts[0].Target != runner.DriveTarget || noCopy(&seed.host.Mounts[0]) {
 		t.Fatalf("personal seed = %+v, want the volume at %s with the default copy", seed, runner.DriveTarget)
 	}
 	if c := seedCopies(f, run); len(c) != 0 {
 		t.Errorf("personal seed copies = %+v, want none", c)
 	}
-	if m := findMount(mounts, drive.Target); m == nil || m.VolumeOptions != nil {
+	if m := findMount(mounts, drive.Target); m == nil || noCopy(m) {
 		t.Errorf("personal mount = %+v, want the default copy", m)
 	}
 }
@@ -415,6 +496,9 @@ func TestCreateSandbox_DriveSeedFailureRefuses(t *testing.T) {
 	if _, err := createWithDrives(t, f, testSpec().RunID, secondVolumeDrive()); err == nil || !strings.Contains(err.Error(), "seed user drive volume") {
 		t.Fatalf("CreateSandbox = %v, want the seed refusal", err)
 	}
+	if c := f.containers[drivePinName(testSpec().RunID)]; c == nil || !c.removed {
+		t.Errorf("the refused run's hold = %+v, want it made before the seed and removed by the rollback", c)
+	}
 }
 
 // TestCreateSandbox_DrivesAtOneOrForeignTargetRefused: two drives at one path
@@ -440,12 +524,14 @@ func TestCreateSandbox_DrivesAtOneOrForeignTargetRefused(t *testing.T) {
 }
 
 // TestTeardown_RemovesALeftDriveSeed: a seed a crash left behind holds its
-// drive's volume; the run's teardown removes it by its run-derived name.
+// drive's volume; the run's teardown removes it, found by its run-derived name
+// and judged by its labels.
 func TestTeardown_RemovesALeftDriveSeed(t *testing.T) {
 	f := newFakeDocker()
 	id := uuid.New()
-	f.containers[driveSeedName(id)] = &createdContainer{name: driveSeedName(id)}
-	if err := newTestDriver(f).teardown(context.Background(), agentContainerName(id)); err != nil {
+	d := newTestDriver(f)
+	f.containers[driveSeedName(id)] = &createdContainer{name: driveSeedName(id), cfg: &container.Config{Labels: d.labels(id, componentDriveSeed, nil)}}
+	if err := d.teardown(context.Background(), agentContainerName(id)); err != nil {
 		t.Fatal(err)
 	}
 	if c := f.containers[driveSeedName(id)]; c != nil && !c.removed {

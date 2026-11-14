@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.19). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.20). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -389,7 +389,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 - **[0.9, client mode]** A runner, `wardyn-runnerd`, dials out to the organisation and runs its owner's locally placed runs on the laptop's Docker ([design §2.3](../docs/design/0.9/PLAN.md#23-trust-boundaries)).
 - The organisation stays the only scheduler, ceiling resolver, credential broker and audit writer. A runner never creates a run, grants, approves or mints.
 - **The developer is root on that host.** B1, B2 and L0 hold between the sandbox and the laptop proxy, so they and every other control bind the **agent**, never the developer (residual #69).
-- A background task placed on a runner is closed at the organisation's doors (terminal, SSH, exec, attach, web apps, desktop: `AgentRun.BackgroundOnly`). The developer can still open its sandbox from the host's own Docker, so no runner claims to deny that and none is asked to.
+- A background task placed on a runner is closed at the organisation's interactive doors (terminal, SSH, interactive exec, attach, web apps, desktop: `AgentRun.BackgroundOnly`). REST exec (`POST /runs/{id}/exec`) stays open to whoever may enter the run, unless its governance profile refuses it (`deny_interactive`, `deny_task_mode_exec`). The developer can still open its sandbox from the host's own Docker, so no runner claims to deny that and none is asked to.
 - An admin who may read a run's detail also reads a runner-placed sandbox's file names and resource counts, through a fixed read-only command the runner runs. Entering its terminal stays the run owner's alone.
 - **Trust class [0.9.3].** Every claimed runner carries one of `personal` < `managed_device` < `org_cluster` (`RunnerTrustClass`, [`internal/types/runner.go`](../internal/types/runner.go)). It is an administrator's assertion, never the runner's: residual #90.
 
@@ -426,7 +426,7 @@ A run gets what every layer allows. The run's policy record names the layer that
   - A SelfSubjectAccessReview that finds a missing verb refuses boot (`CheckRunnerAccess`), and so do another runner's objects in the runs namespace (`CheckForeignObjects`).
   - A schedulable node of the runner's architecture whose kubelet is below 1.31 refuses boot, named (`kubelet_below_floor`, `CheckKubeletFloor`).
   - A cluster that rewrites a pod's source address toward the relay Service refuses boot (`relay_source_rewritten`, `ProbeRelaySource`).
-- **Hard deny.** Every run's proxy refuses `svc`, the cluster domain, the relay address, runnerd's pod IP, the API server addresses the chart reads at `helm install` and `helm upgrade` (a `helm template` render adds none), and any CIDRs in `egress.hardDenyCIDRs`, which is empty by default: set it to the cluster's pod and service CIDRs. It checks the name and every resolved address before `internal_hosts` lifts anything (`NewHardDeny`, [`internal/runner/k8s/hard_deny.go`](../internal/runner/k8s/hard_deny.go)). A run on an organisation runner reaches no in-cluster service inside that denied set.
+- **Hard deny.** Every run's proxy refuses `svc`, the cluster domain, the relay address, runnerd's pod IP, the API server addresses the chart reads at `helm install` and `helm upgrade` (a `helm template` render adds none), and any CIDRs in `egress.hardDenyCIDRs`, which is empty by default: set it to the cluster's pod and service CIDRs. It checks the name and every resolved address before `internal_hosts` lifts anything (`NewHardDeny`, [`internal/runner/k8s/hard_deny.go`](../internal/runner/k8s/hard_deny.go)). A run on an organisation runner reaches no in-cluster service inside that denied set. With the runner's own `--upstream-proxy`, a name the run's proxy cannot resolve gets only the name and suffix check and goes to that proxy by name, so keep that proxy outside the cluster ([k8s-runners.md](../docs/operations/k8s-runners.md#in-cluster-services-are-unreachable)).
 - **Terminal self-lapse.** The proxy is closed until its first renew and lapses for good at the last renew's send time plus the run-token TTL (`selfLapseTTL`, [`internal/egress/proxy/self_lapse.go`](../internal/egress/proxy/self_lapse.go)). Its pod is never restarted, and both pods carry a deadline (`sandbox.maxPodLifetime`, `168h` by default).
 
 | Crossing | Guard | Residual |
@@ -688,6 +688,16 @@ is not the deployment described above.**
     render at 2048 reads.
 - Each part is masked with the secrets registered when it arrives, so a value printed before it is
   registered stays in an earlier part.
+- A revoked run token still reaches its own run's decision door inside the five-minute grace after
+  each end of the run, and after a later server write to the ended run's row, until it expires
+  (about an hour), even after a kill for compromise. A holder can add egress, content-scan, DNS
+  and model token-count rows to that run only, set its failure hint to a Bedrock one (a fixed
+  sentence naming at most an HTTP status and an error class) or clear such a hint, and write at
+  most one refusal (`authz.denied`) row on it in each 65 minutes from each server process. A
+  holder of the run's revoked or expired token can also write at most one `run.report.drop` row on
+  it in each 65 minutes from each server process: with a revoked token only by a malformed report
+  inside that grace, or while the run, or its runner's pending actions, cannot be read, and with
+  an expired one only until about two hours after the run is over.
 - Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked);
 - honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`);
 - host eBPF is blind inside CC3/Kata (`kernel.sensor.bypass`).
@@ -913,7 +923,7 @@ is not the deployment described above.**
     - **SSH exec, SFTP and direct-tcpip were never masked** (`sshgateway_channels.go`), and masking is verbatim only.
     - **REST exec (`POST /runs/{id}/exec`, `run_exec.go`) is never masked or recorded either**, and it is on with the SSH gateway off.
       - So a deployment with no SSH listener still gives a run's owner, or their API token, an unmasked command door.
-      - Its per-run controls are SSH exec's: `deny_interactive`, a `data_out` rule other than `allowed`, and background-only runs refuse it.
+      - Its per-run controls are `deny_interactive`, `deny_task_mode_exec` on a background run, a `data_out` rule other than `allowed` and the run's channel cap. Unlike SSH exec it takes a background-only run, so whoever may enter a background run (its owner or their API token; a super admin on their own or an operator-owned run, who skips the profile's limits there) can run commands in it. Each command and its exit code are audited (`run.command.exec`); its output is neither masked nor recorded. Tool rules and approvals do not see these commands.
     - **Masking depends on Postgres.** With it unreachable, uploads and new attaches are refused and live output shows the placeholder: availability is traded for never persisting a credential.
     - **A compromised wardynd process still sees every value it masks**, and a refresh in flight on an old lock holder can still race a new holder across a Postgres failover (the person signs in again).
 
@@ -925,7 +935,7 @@ is not the deployment described above.**
 
 | Step | Check | Refused as |
 |---|---|---|
-| 1 | A run with no network refuses everything first; then a literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `policy:no-network`; `builtin:private-ip`, `policy:ip-literal` |
+| 1 | A run with no network refuses everything first; then a literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `policy:no-network`; `builtin:private-ip`, `builtin:non-ascii-host`, `builtin:ip-spelling`, `policy:ip-literal` |
 | 2 | A host reached only by a brokered route: an MCP server, a local model server | `brokered:mcp:direct`, `brokered:local-model` |
 | 3 | Host, port and method (`gateConnect`), then a push to a code host under `deny_all` | `policy:denied`, `policy:port`, `policy:method`, `policy:evaluator-error`, `brokered:git:push-deny-all-forge` |
 | 4 | A private address refused before (`privateIPMemoHit`) | Refused again, with no new decision row |
@@ -1647,7 +1657,7 @@ These risks are **not closed by v1 Wardyn**.
 12. **eBPF ground-truth stream live-validated on ONE host; the sensor has measured ceilings.**
     - The control-plane plumbing — ingest endpoint, audience-separated write-only token, append-only recording, `/healthz` honest-degradation gate — is shipped and unit-tested, and the Tetragon→`kernel.*` mapper has run against a live Tetragon (v1.1.2, the compose `groundtruth` profile).
     - The measured ceilings are recorded where operators read them ([`deploy/compose/README.md`](../deploy/compose/README.md)).
-    - A host without a working sensor reports `ebpf_groundtruth=unavailable` and the stream never falsely reads `healthy`.
+    - No recorded heartbeat reads `ebpf_groundtruth=unavailable`; `healthy` needs counts that rose within the last 15 minutes.
     - Broader-fleet validation is the follow-up.
 
 13. **A BYOI base is trusted-by-the-operator, and the wrap that adds Wardyn's tools runs on the HOST — and so does the RECOMMENDED devcontainer build.**
@@ -1821,6 +1831,7 @@ These risks are **not closed by v1 Wardyn**.
     <details><summary>Details</summary>
 
     - In the default path mode (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` unset) every run's relayed apps are served from one origin under `/r/<run-id>/<app>/`, separated only by the relay cookie's `Path` scope.
+    - Who is in path mode: wardynd and the Helm chart refuse it with SSO configured unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN` (chart: `uiSandbox.acceptSharedOrigin`) accepts it. A deployment with no SSO still boots in it; the chart then prints a warning after install or upgrade.
     - That stops the browser ATTACHING run A's cookie to a request for run B — it is not an origin boundary.
     - Two apps open at once are same-origin, so one app's page can script the other's tab where it holds a window handle, and origin-scoped storage (`localStorage`, `IndexedDB`) is shared.
     - The console is out of reach either way (§4, B10).
@@ -2102,11 +2113,20 @@ These risks are **not closed by v1 Wardyn**.
 
     </details>
 
-34. **A drive created before migration `0067` names its objects by slug, so two such drives can collide, and a collision is a REFUSED RUN, not a cross-mount.**
+34. **A drive created before migration `0067` names its objects by slug, so two such drives can collide, and a collision or a replaced object is a REFUSED RUN, not a cross-mount.**
     - An old-scheme name is `wardyn-drive-<drive-slug>-<home>`. Both fields admit `-`, so drive `eng` + home `us-bob` and drive `eng-us` + home `bob` name one object.
     - Since `0067` every new drive names its objects by its fixed-width id (`DriveObjectSchemeID`), so `<home>` starts at a fixed offset. A row keeps the scheme it was created under, because neither substrate can rename storage.
     - A fail-closed identity check bounds the old scheme: `driveClaimIdentity` refuses a claim whose `wardyn.drive` / `wardyn.home` labels are not this run's, and `driveVolumeAdoptable` refuses another drive's volume.
-    - Wardyn holds no `delete` verb to repair a collision, so it costs one of the two people a refused run; the remedy is distinct home names.
+    - A collision costs one of the two people a refused run; the remedy is distinct home names.
+    - A run checks a drive's object before its proxy starts and mounts it by name later. In between, a reclaim can remove it and another person's first run make one under that name (an old-scheme collision, or a reused `home_override`).
+    - On Kubernetes the run reads the claim again before the agent pod is made and once its main container runs, and refuses one that is gone, deleting or another UID (`recheckDriveClaims`).
+    - On Docker a never-started container with no network mounts each checked volume, read-only and `NoCopy`, until teardown (`pinDriveVolumes`), so a reclaim answers "in use"; a volume whose labels changed before that is refused. A drive's seed, which writes into an empty volume, is made only after it.
+    - A reclaim is refused while one of that person's runs is STARTING (`handleReclaimUserDrive`).
+    - Left: on Kubernetes a replaced claim is mounted from the main container's start until the second read refuses the run, and a process from the run's image (its idle shell, or an interactive run's workspace preparation) can read and write it until the teardown.
+    - On Docker the hold's mount makes a volume removed after its check again, empty and with this drive's labels, so no other drive adopts it; the run goes on, or is refused if the checked volume carried other labels.
+    - `docker rm`, `docker container prune` or `docker system prune` removes a hold (a prune counts it as stopped). The run then no longer blocks a reclaim, and its seed and agent mounts after it go by name unchecked.
+    - Those mounts can then take a volume another person's run made under the name: a cross-mount. The gap is the rest of the run's create; for a krun run it lasts until its first Exec.
+    - The STARTING read and the reclaim are two steps, not one transaction, and the read covers only the person reclaimed; the checks above hold another person's run.
 
 35. **The credential-dotfile deny-list now matches a DRIVE's real path too, and that is the whole of what it covers.**
     <details><summary>Details</summary>
@@ -2567,7 +2587,7 @@ These risks are **not closed by v1 Wardyn**.
     - Tearing a run down early is scoped differently: a security admin already has that axis, on any run in the deployment (`POST /runs/{id}/kill`, gated by `ownsRunOrAdmin` in [`internal/api/helpers.go`](../internal/api/helpers.go), which admits `isSecurityOperator`).
     - It is keeping a run alive that no narrower role can do.
     - The action is fully audited with both the actor and the owner as `subject` (`run.revive`, [`docs/AUDIT-ACTIONS.md`](../docs/AUDIT-ACTIONS.md)), so misuse is visible after the fact; nothing today narrows who holds the button in advance.
-    - A run stored with the background experience has no interactive door (terminal, exec, SSH, the UI gateway and desktop). The doors read the stored experience after entry authorization, so no principal, an admin included, can enter one (`run_background_only`), and a revive keeps the experience.
+    - A run stored with the background experience has no interactive door (terminal, interactive exec, SSH, the UI gateway and desktop). The doors read the stored experience after entry authorization, so no principal, an admin included, can open one of them (`run_background_only`), and a revive keeps the experience. One command door stays open: REST exec (`POST /runs/{id}/exec`) runs a command in it for whoever may enter the run, unless its governance profile refuses it.
 
 56. **A revived or restarted run keeps its ORIGINAL agent image — revive never re-pulls or rebuilds it.**
     - A proxy-only revive (a control-plane outage) touches only the proxy sidecar; a revive after a reboot restarts the SAME, already-created agent container rather than recreating it from the current agent image.
@@ -3157,7 +3177,7 @@ These risks are **not closed by v1 Wardyn**.
     - **Operator requirements, detected only in part.** Two kubelets under one node name, and a node name reused for another machine while a run's pods remain, are unsupported. runnerd refuses to release a run on a name it saw reused except by the node-powered-off record; a reuse none of its lists samples is not caught.
     - **CNI semantics.** How `ipBlock` treats pod addresses, and whether policy holds for a container whose pod is being deleted, depend on the CNI. Without enforcement the relay and sink ports are reachable in-cluster; the relay admits only proxy addresses and carries ciphertext, and the sink needs a per-run key.
     - **Identity.** The runner key lives on its persistent volume, so losing the volume loses the identity; 0.9.3 has no re-key. A revoke stops every run's proxy on the runner (`Revoked`, [`internal/runner/offline/manager.go`](../internal/runner/offline/manager.go)).
-    - **In-cluster services.** A run cannot reach an in-cluster service inside B13's hard deny, declared or not: the `svc` suffix, the cluster domain, the relay, runnerd, the API server addresses the chart read and any `egress.hardDenyCIDRs` (empty by default, so set it). Reach one by an external name or an address outside the deny.
+    - **In-cluster services.** A run cannot reach an in-cluster service inside B13's hard deny, declared or not: the `svc` suffix, the cluster domain, the relay, runnerd, the API server addresses the chart read and any `egress.hardDenyCIDRs` (empty by default, so set it). Reach one by an external name or an address outside the deny. With the runner's own `--upstream-proxy`, a name the run's proxy cannot resolve gets only the name and suffix check and goes to that proxy by name, so keep that proxy outside the cluster ([k8s-runners.md](../docs/operations/k8s-runners.md#in-cluster-services-are-unreachable)).
     - One architecture per runner release: a mixed cluster installs one release per architecture.
 
     </details>
@@ -3599,7 +3619,7 @@ Claude sign-in's token, each the person's own on their model provider.
   - Reaching an internal-IP-resolving hostname still requires ALL of:
     - (1) an operator configured the upstream proxy,
     - (2) the run's own egress **policy** allows that hostname (default-deny allowlist + first-use approval + method rules, all unaffected),
-    - and (3) the destination is named by HOSTNAME: a literal private/loopback/link-local/metadata IP is still denied at the literal-IP guard, **in every literal spelling that guard parses** (see below).
+    - and (3) the destination is named by HOSTNAME: a literal private/loopback/link-local/metadata IP is still denied at the literal-IP guard, **in every literal spelling** (see below).
   - Only the PIN is deferred, to the operator's own corp proxy; §4.2 states the two residuals that deferral leaves.
   - That literal-IP guard covers the NON-CANONICAL spellings too:
     - `net.ParseIP` accepts only the canonical dotted-quad, while `inet_aton(3)` — and so glibc `getaddrinfo`, and so the corp proxy that finally dials — also reads `127.1`, `0x7f000001` and `2130706433` as `127.0.0.1`, and `0251.0376.0.1` as
@@ -3608,14 +3628,20 @@ Claude sign-in's token, each the person's own on their model provider.
   - `net.ParseIP` is likewise nil for a ZONE-SUFFIXED IPv6 literal — `fe80::1%eth0`, and the RFC 6874 authority spelling `fe80::1%25eth0` — which `netip.ParseAddr` parses and `net.Dial` dials.
     - So the zone id alone used to decide the verdict for an address whose canonical spelling is denied.
   - `evaluate` step 0 and `egressTarget`'s upstream branch both re-run the block check on all of these (`nonCanonicalLiteralIP`, [`internal/egress/proxy/literal_ip_guard.go`](../internal/egress/proxy/literal_ip_guard.go)).
-  - Deny only: a spelling the operator did not type inherits no `allowed_domains` grant.
+  - Deny only: such a spelling inherits no `allowed_domains` grant, and is refused wherever its address is denied: `denied_domains`, a live egress edit, a Kubernetes runner's hard deny.
+  - Every other non-standard spelling is refused at step 0 on every run (`builtin:ip-spelling`): an all-numeric host or a zoned IPv6 address.
+    - Programs differ on which address such a spelling names (`010.0.0.1` is `8.0.0.1` to `inet_aton` and `10.0.0.1` to a decimal parser), so no check of one decoded address binds the hop that dials it.
+    - One in a policy entry, host rule, MCP server URL, live egress edit or any other host a run's config names is refused at write, and a stored one, or an upstream proxy URL held in a secret, stops the run at proxy load.
+  - So is every host with a character outside ASCII (`builtin:non-ascii-host`).
+    - One program maps `８.８.８.８` or a full-width `example.com` to the address or name a policy lists, and the next to another or to nothing.
+    - A configured host with one is refused at write and at proxy load the same way, naming its `xn--` form where IDNA gives one.
   - A third EMBEDDED-v4 shape is covered on the canonical path rather than by that gap-filler:
     - the deprecated IPv4-compatible IPv6 form (`::127.0.0.1`, `::169.254.169.254`, RFC 4291 §2.5.5.1) is one `net.ParseIP` DOES parse,
     - and it carries a real IPv4 in its low 32 bits that `To4()` cannot see (`To4` unwraps only `::ffff:/96`), so every stdlib predicate answered false for it.
   - It is denied by `isBlockedIP`'s IPv4-compatible arm (`v4CompatibleEmbeddedV4`, [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)), which re-runs the embedded address through the same check the NAT64 arm beside it uses.
     - So the form is bound at `evaluate` step 0 AND in `VetHost` (whose literal fast path calls that same predicate), not by one instead of the other.
   - Only the embedded address decides: `::8.8.8.8` stays reachable, so the arm can only add the denials the canonical spelling already gets.
-  - **Residual, stated rather than hedged:** the guard covers the spellings it PARSES and the embedded-v4 prefixes it KNOWS.
+  - **Residual, stated rather than hedged:** the guard refuses every ASCII spelling it cannot read as one standard address, and every non-ASCII host, but it knows only the embedded-v4 prefixes below.
   - A NETWORK-SPECIFIC RFC 6052 NAT64 prefix is unknowable here without operator config (`ipguard.NAT64Prefixes` carries the well-known `64:ff9b::/96` and local-use `64:ff9b:1::/48` only), so an address inside a site's own translation prefix is judged on its IPv6 form alone.
     - Under a corp upstream that is left to the operator's own egress controls, like any other name only that proxy resolves.
 - The optional **sidecar** (`detector_sidecar_url`) treats an error/timeout/non-200 as a scanner error like the in-process detectors.
@@ -3869,7 +3895,7 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   - A parent counts only when GitHub's compare API reports it inside the current history of the default branch or a branch the push updates.
     - An updated branch counts only at the forge's tip, which must equal the push's stated old value.
   - A merge passes an entry that matches any counted parent.
-    - Demanding all would refuse merging the default branch in after it changed a denied path, and closes nothing a single-parent commit on the same base could not already do.
+    - An updated branch may hold only its tip's entry at each deny or review path ([`push_forge_tip.go`](../internal/egress/proxy/push_forge_tip.go)), so an older parent restores nothing; for `max_file_size_mib` and `deny_new_executables` it still can.
 - **History a push re-sends is taken out the same way.**
   - A clone whose base is no longer a tip the forge advertises re-sends its history, and the first commit of that history reads as though the push added every file the repository has.
   - The carried commits GitHub places in that same current history are taken out (`internal/gitpack`'s `Result.Settle`) and the push is judged against them; a commit once found new is never taken as held.
@@ -4086,6 +4112,8 @@ What it does not stop:
 - `WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a second, plain-HTTP listener that answers `GET /metrics` with **no credential** and `404` to everything else (`api.Server.MetricsListenerHandler`, [`internal/api/metrics_listener.go`](../internal/api/metrics_listener.go)).
 - `/metrics` on the console port keeps its `requireOperator` gate.
 - Boot refuses a metrics address equal to the console, internal, SSH or UI-sandbox listener, so the open route never sits on an address an authenticated route uses.
+- The `otlp_metrics` block of `WARDYN_AUDIT_SINKS` (off by default) pushes the same series to a collector the operator names, with no audit row (`OTLPMetrics`, [`internal/audit/sinks/otlp_metrics.go`](../internal/audit/sinks/otlp_metrics.go)).
+  - The push adds one value the body does not carry: the replica's host name, prefixed by `WARDYN_AUDIT_SOURCE` when set. On a laptop the host name can name its owner.
 
 **What a reader who reaches the port learns.**
 

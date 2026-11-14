@@ -1495,3 +1495,39 @@ func TestVMEndStopsTheContainerWhenTheLookupFails(t *testing.T) {
 		})
 	}
 }
+
+// An end whose AWS cache wipe failed and whose share cleanup failed too has not finished: the cleanup's
+// failure reaches the caller with no wipe warning that would make it a success, and the retry that clears
+// the share answers the warning alone, which the runner takes as a finished end.
+func TestVMEndWithAFailedWipeStillAnswersAShareCleanup(t *testing.T) {
+	old := awsCacheWipeArgv
+	awsCacheWipeArgv = []string{"sh", "-c", "exit 3"}
+	t.Cleanup(func() { awsCacheWipeArgv = old })
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Env = map[string]string{runner.AWSProfileRecordEnv: "cHJvZmlsZQ=="}
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}, {Source: t.TempDir(), Target: "/workspace/ref", ReadOnly: true}}
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := vmfsName(spec.RunID, 1)
+	r.f.mu.Lock()
+	r.f.failRemove = map[string]int{second: 1}
+	r.f.mu.Unlock()
+	err = r.d.EndSandbox(ctx, sb.Ref)
+	if err == nil || !strings.Contains(err.Error(), second) || errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+		t.Fatalf("EndSandbox = %v, want the second share's failure and no wipe warning", err)
+	}
+	if runner.KeptDespiteAWSCacheWipe(ctx, sb.Ref, err) == nil {
+		t.Fatal("the runner answered an end that left a share as finished")
+	}
+	err = r.d.EndSandbox(ctx, sb.Ref)
+	if !errors.Is(err, runner.ErrAWSCacheWipeFailed) || runner.KeptDespiteAWSCacheWipe(ctx, sb.Ref, err) != nil {
+		t.Fatalf("the retry = %v, want the wipe warning alone", err)
+	}
+	if !r.container(t, second).removed {
+		t.Fatal("the retry left share 1")
+	}
+}

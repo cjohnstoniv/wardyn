@@ -20,10 +20,20 @@ import (
 // finalizeRunEffects is shared by ordinary finalization and durable runner exit
 // receipts, whose success audit already committed with their state transition.
 func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, action string, data map[string]any, finishAfterStop, gracefulStop bool) error {
-	errs := []error{s.revokeRunCascade(ctx, runID), s.cancelRunApprovals(ctx, runID)}
+	// Each of these runs on a bound of its own (heldCall), not the end hold's deadline: a holder's ctx may have none
+	// (the completion watcher, a person's bring-back), and the run's lock is released only when they return. The
+	// revoke runs first and is never cut at the hold's deadline; one cut at its own bound stays owed for the revoke
+	// queue once its owed mark is written, otherwise the mark is written again in the background until it lands
+	// (settleRevokeOwed). The output keeps the bound a kill gives it (finishRunOutputDetached).
+	var revokeErr, approvalsErr error
+	heldCall(ctx, heldRevokeBound, func(ctx context.Context) { revokeErr = s.revokeRunCascade(ctx, runID) })
+	heldCall(ctx, heldStoreCallBound, func(ctx context.Context) { approvalsErr = s.cancelRunApprovals(ctx, runID) })
+	errs := []error{revokeErr, approvalsErr}
 	if !finishAfterStop {
-		s.prepareRunOutput(ctx, runID, gracefulStop)
-		s.finishRunOutput(ctx, runID)
+		heldCall(ctx, killCascadeTimeout, func(ctx context.Context) {
+			s.prepareRunOutput(ctx, runID, gracefulStop)
+			s.finishRunOutput(ctx, runID)
+		})
 	}
 	// A computer folder's changes come back while the sandbox still holds them (run_computer_folder.go).
 	// A pass cut short can keep the sandbox for a resume, its agent stopped and its egress closed:
@@ -32,7 +42,7 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	if fe, forced := ctx.Value(forcedEndKey{}).(forcedEnd); forced {
 		keep = fe.keep // a forced end runs no pass: forcedKeepsSandbox decided
 	} else {
-		keep = s.bringComputerFolderBack(ctx, runID, ref)
+		keep = s.bringComputerFolderBackAs(ctx, runID, ref, action)
 	}
 	if keep {
 		errs = append(errs, errComputerFolderResumes)
@@ -57,7 +67,14 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 		// No audit row: another server may own the run now.
 		errs = append(errs, fmt.Errorf("the sandbox was not stopped: %w", db.ErrLockLost))
 	}
-	if stops && !lost && !holdPassed(tctx) {
+	// The hold's deadline is asked once, on the clock, as the lost lock is, and the skip is said here: tctx's own
+	// timer may not have fired yet, and context.Cause(tctx) below would then be nil.
+	passed := stops && !lost && holdPassed(tctx)
+	if passed {
+		// No audit row: the readers (the containment loop and the tail owner) finish the run.
+		errs = append(errs, fmt.Errorf("the sandbox was not stopped: %w", errHoldPassed))
+	}
+	if stops && !lost && !passed {
 		if serr := s.cfg.Runner.StopSandbox(tctx, ref); serr != nil {
 			errs = append(errs, serr)
 			td := make(map[string]any, len(data)+1)
@@ -82,21 +99,37 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// LAST because reconcileRecordRun above still reads run.SandboxRef to tell
 	// "the sandbox never started" from "capture was empty". Success-only because
 	// the boot orphan sweep keys on a terminal run STILL carrying a ref — after
-	// this line that means exactly "teardown failed", the case it exists for.
+	// this line that means "teardown failed", the case it exists for, or a
+	// copy back not yet given up (below).
 	// The kill tail clears the ref after a confirmed kill (killTeardownTail); the
 	// idle stop tears down on its own path and does not, and the evidence
 	// endpoints' terminal-state guard covers those runs. A failed clear is
 	// deliberately ignored: it degrades to the pre-clear behavior the boot
 	// sweep already retries.
+	// A computer folder's copy back still owed once the sandbox is stopped (its
+	// pass did not run, or its reads or its record failed) is given up first,
+	// while the ref the give-up needs is set: with no ref no pass runs again, and
+	// the record would show the changes owed with no given_up row. A record not
+	// final keeps the ref, as a failed clear does; the boot sweep, the tail owner
+	// and a forced end's retry (its mark stays: forcedStopConfirmed) try again.
 	if teardownOK && s.cfg.Store != nil {
-		settleAfterTeardown(ctx, func(sctx context.Context) { errs = append(errs, s.clearSandboxRef(sctx, runID)) })
+		final, gerr := false, error(nil)
+		settleAfterTeardown(ctx, func(sctx context.Context) { final, gerr = s.giveUpFolderEnded(sctx, runID) })
+		if final {
+			settleAfterTeardown(ctx, func(sctx context.Context) { errs = append(errs, s.clearSandboxRef(sctx, runID)) })
+		} else {
+			slog.WarnContext(ctx, "wardynd: a run end stopped a sandbox whose folder copy back could not be given up; its ref stays",
+				slog.String("run_id", runID.String()), slog.Any("err", gerr))
+			errs = append(errs, errors.New("the sandbox's ref is kept: its computer folder's owed copy back is not given up yet"), gerr)
+		}
 	}
 	return errors.Join(append(errs, cmp.Or(ctx.Err(), context.Cause(tctx)))...)
 }
 
 // forcedEndKey carries, on the ctx of a forced end's tail (forceKeptStop), the sandbox decision made without the
 // run's lock. The tail then runs no pass back: the run's lock is held by another operation, which may be running
-// one. keep is forcedKeepsSandbox's answer.
+// one. keep is forcedKeepsSandbox's answer. The tail owner's give-up (tailFinalize) carries keep false: its record
+// is final, so no pass is owed and the sandbox is stopped.
 type forcedEndKey struct{}
 
 type forcedEnd struct{ keep bool }

@@ -774,11 +774,18 @@ type lifecycleStopper struct {
 	// computer folder's pass back and the sandbox stop, as every other end of a run holds it, so no sweep
 	// stops the sandbox under that pass. Nil-safe.
 	lockEnd func(context.Context, uuid.UUID) (context.Context, func(), bool)
+	// fenceStarts is api.Server's FenceRunStarts: the run's start lock, held around the guarded transition alone,
+	// so no command starts in the run between its last read and the stop. Nil-safe.
+	fenceStarts func(context.Context, uuid.UUID) func()
 	// bringBack is api.Server's BringComputerFolderBack: a "both ways" computer folder's pass back, after
 	// the pane snapshot and before StopSandbox, with the agent stopped and its egress cut first where the
 	// substrate can. true is a pass cut short that keeps the sandbox for a resume: it is not stopped.
 	// Nil-safe.
 	bringBack func(context.Context, uuid.UUID, string) bool
+	// holdPassed is api.EndHoldPassed: whether the end hold lockEnd took has run out, asked just before StopSandbox
+	// as the lost lock is. Past it the stop is left to the readers (the containment loop and the tail owner), as every
+	// other end leaves it. Nil-safe.
+	holdPassed func(context.Context) bool
 }
 
 var _ lifecycle.Stopper = lifecycleStopper{}
@@ -821,7 +828,12 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelAppro
 	// keepalive. If a concurrent kill/complete already moved the run terminal, or
 	// an open request is still inside its wait (store.openHoldSQL), the CAS also
 	// no-ops and we leave the run and any teardown/revocation untouched.
+	release := func() {}
+	if l.fenceStarts != nil {
+		release = l.fenceStarts(ctx, runID)
+	}
 	applied, uerr := transition(ctx)
+	release()
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
 	}
@@ -868,7 +880,15 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelAppro
 	// A "both ways" computer folder's changes come back before the sandbox stops, within this stop's own
 	// deadline (the pass leaves the stop its teardown budget). A cut pass keeps the sandbox for a resume.
 	kept := l.bringBack != nil && run.SandboxRef != "" && l.bringBack(ctx, runID, run.SandboxRef)
-	if l.runner != nil && run.SandboxRef != "" && !kept && (db.HeldLocks(ctx) == nil || db.LockHeld(ctx) == nil) {
+	stopping := l.runner != nil && run.SandboxRef != "" && !kept && (db.HeldLocks(ctx) == nil || db.LockHeld(ctx) == nil)
+	if stopping && l.holdPassed != nil && l.holdPassed(ctx) {
+		// Past the end hold the stop is the readers' (the containment loop and the tail owner), which find the run
+		// by its ref. Logged, so a sandbox left running is not silent.
+		slog.WarnContext(ctx, "wardynd: lifecycle idle-stop end hold ran out; the sandbox stop is left to the containment loop and the tail owner",
+			slog.String("run_id", runID.String()))
+		stopping = false
+	}
+	if stopping {
 		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
 			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
 				slog.String("run_id", runID.String()),

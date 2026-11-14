@@ -342,8 +342,14 @@ func driveMemberDeleteCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <drive-id>",
 		Short: "DELETE one person's drive and its files",
-		Long: `Delete a drive a person created, and the Docker volume or claim holding its
-files. THIS DELETES DATA AND NOTHING UNDOES IT.
+		Long: `Delete a drive a person created, and the Docker volume, claim or Mac disk
+image holding its files. THIS DELETES DATA AND NOTHING UNDOES IT.
+
+A Mac disk image is deleted by its Mac, so the files may stay for a while or
+for good. Outcome deferred: the Mac can't be reached now, and the delete waits
+for it to come back. Outcome record_only: the Mac is no longer registered, so
+only the drive's record goes and the image stays on that Mac. The result names
+the outcome.
 
 Refused with a 409 while a run still holds the drive. Every attempt is audited
 as ` + "`drive.member.delete`" + `. On Kubernetes the daemon needs the chart's
@@ -356,7 +362,7 @@ drives.reclaim.enabled to delete claims.
 				return fmt.Errorf("drive member delete: %q is not a drive id (a uuid)", args[0])
 			}
 			if !yes {
-				return fmt.Errorf("drive member delete: refusing without --yes: this permanently deletes drive %s and its files", id)
+				return fmt.Errorf("drive member delete: refusing without --yes: this deletes drive %s and its files, and nothing undoes it (a Mac disk image may stay; see --help)", id)
 			}
 			res, err := client().DeleteMemberDrive(cmd.Context(), id)
 			if err != nil {
@@ -369,7 +375,7 @@ drives.reclaim.enabled to delete claims.
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&yes, "yes", false, "confirm that this permanently deletes the person's drive and its files")
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm deleting the person's drive and its files (a Mac disk image may stay; see --help)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {drive, drive_id, owner, backend, object, outcome} as JSON")
 	return cmd
 }

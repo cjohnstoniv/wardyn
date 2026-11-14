@@ -5,7 +5,7 @@
 
 // The run document as text: the draft's intent written out, an example, and the
 // server's diagnostics placed on lines.
-import { isMap, isScalar, isSeq, LineCounter, parseDocument } from "yaml";
+import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Pair, type YAMLMap } from "yaml";
 import { runDocumentErrorText, RUN_END_CONFLICT_REASON } from "../../../../lib/run-document-canon";
 import { TEMPLATE_API_VERSION, RUN_DOCUMENT_KIND, type TemplateDiagnostic } from "../../../../lib/types/templates";
 import { toYaml } from "../../../wardyn/yaml-block";
@@ -39,26 +39,50 @@ function segments(path: string): Segment[] {
  * ancestor that is in the text; the start of the text when none is. JSON is
  * read as YAML, which it is a subset of.
  */
-export function locatePath(text: string, path: string): { line: number; column: number } {
+export const locatePath = (text: string, path: string): { line: number; column: number } => locator(text)(path);
+
+/**
+ * locatePath over one text, parsed once: a document can draw thousands of
+ * diagnostics, and parsing it again for each, or scanning a map's keys again for
+ * each, stalls the console. A map's keys are indexed on first use, the first of
+ * a repeated key kept. The parser's repeated-key check is off: it compares each
+ * key with every earlier one, and a document with a repeated key is refused
+ * before the server is asked.
+ */
+function locator(text: string): (path: string) => { line: number; column: number } {
   const lines = new LineCounter();
-  const doc = parseDocument(text, { lineCounter: lines, prettyErrors: false });
-  let at = 0;
-  let node: unknown = doc.contents;
-  for (const seg of segments(path)) {
-    if (isMap(node) && typeof seg === "string") {
-      const pair = node.items.find((p) => isScalar(p.key) && String(p.key.value) === seg);
-      if (!pair) break;
-      at = (isScalar(pair.key) && pair.key.range?.[0]) || at;
-      node = pair.value;
-    } else if (isSeq(node) && typeof seg === "number") {
-      const item = node.items[seg] as { range?: [number, number, number] | null } | undefined;
-      if (!item) break;
-      at = item.range?.[0] ?? at;
-      node = item;
-    } else break;
-  }
-  const pos = lines.linePos(at);
-  return { line: Math.max(1, pos.line), column: Math.max(1, pos.col) };
+  const doc = parseDocument(text, { lineCounter: lines, prettyErrors: false, uniqueKeys: false });
+  const keys = new Map<YAMLMap, Map<string, Pair>>();
+  const keyed = (map: YAMLMap): Map<string, Pair> => {
+    let index = keys.get(map);
+    if (!index) {
+      index = new Map();
+      for (const pair of map.items) {
+        if (isScalar(pair.key) && !index.has(String(pair.key.value))) index.set(String(pair.key.value), pair);
+      }
+      keys.set(map, index);
+    }
+    return index;
+  };
+  return (path) => {
+    let at = 0;
+    let node: unknown = doc.contents;
+    for (const seg of segments(path)) {
+      if (isMap(node) && typeof seg === "string") {
+        const pair = keyed(node).get(seg);
+        if (!pair) break;
+        at = (isScalar(pair.key) && pair.key.range?.[0]) || at;
+        node = pair.value;
+      } else if (isSeq(node) && typeof seg === "number") {
+        const item = node.items[seg] as { range?: [number, number, number] | null } | undefined;
+        if (!item) break;
+        at = item.range?.[0] ?? at;
+        node = item;
+      } else break;
+    }
+    const pos = lines.linePos(at);
+    return { line: Math.max(1, pos.line), column: Math.max(1, pos.col) };
+  };
 }
 
 /**
@@ -67,12 +91,13 @@ export function locatePath(text: string, path: string): { line: number; column: 
  * is reported at `intent`; it marks both keys.
  */
 export function placeDiagnostics(text: string, format: DocumentFormat, diagnostics: readonly TemplateDiagnostic[]): DocDiagnostic[] {
+  const locate = locator(text);
   return diagnostics.flatMap((d) => {
     const sentence = runDocumentErrorText(d, format);
     const paths = d.reason === RUN_END_CONFLICT_REASON ? [`${d.path}.ends_after_sec`, `${d.path}.no_end`] : [d.path];
     const seen = new Set<number>();
     return paths.flatMap((path) => {
-      const at = locatePath(text, path);
+      const at = locate(path);
       if (seen.has(at.line)) return [];
       seen.add(at.line);
       return [{ path: d.path, reason: d.reason, text: sentence, ...at }];

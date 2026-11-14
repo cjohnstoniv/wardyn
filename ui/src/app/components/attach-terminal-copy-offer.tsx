@@ -25,6 +25,7 @@ export function CopyOfferToast({
   onDone,
   onHold,
   copyRef,
+  keepsIn,
 }: {
   offer: CopyOffer;
   onDone: () => void;
@@ -32,6 +33,8 @@ export function CopyOfferToast({
   onHold: (held: boolean) => void;
   /** Filled with this card's Copy while it is mounted: the terminal's Cmd/Ctrl+C reaches it. */
   copyRef: React.MutableRefObject<(() => void) | null>;
+  /** Read at the moment of Copy: true once the run's data_out rule keeps its content in. */
+  keepsIn: () => boolean;
 }) {
   const [error, setError] = React.useState("");
   const [left, setLeft] = React.useState(OFFER_TTL_MS / 1000);
@@ -67,6 +70,11 @@ export function CopyOfferToast({
   }, [offer.id, offer.chars, mac]);
 
   const copy = async () => {
+    // The rule can turn copying off while the card is up; every Copy path then copies nothing.
+    if (keepsIn()) {
+      onDone();
+      return;
+    }
     try {
       await navigator.clipboard.writeText(offer.text);
       toast.success(TERMINAL_COPY.COPIED);

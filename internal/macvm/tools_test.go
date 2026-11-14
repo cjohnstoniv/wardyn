@@ -270,7 +270,9 @@ func TestStage2PinMismatchRefuses(t *testing.T) {
 	if _, ok := g.files["/usr/local/bin/claude"]; ok {
 		t.Fatal("a mismatched download was pushed")
 	}
-	if des, _ := os.ReadDir(f.opts.Cache); slices.ContainsFunc(des, func(d os.DirEntry) bool { return strings.HasPrefix(d.Name(), "claude-code") }) {
+	if des, _ := os.ReadDir(f.opts.Cache); slices.ContainsFunc(des, func(d os.DirEntry) bool {
+		return strings.HasPrefix(d.Name(), "claude-code") && !strings.HasSuffix(d.Name(), ".lock")
+	}) {
 		t.Fatalf("mismatched download kept: %v", des)
 	}
 }

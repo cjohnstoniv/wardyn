@@ -111,3 +111,15 @@ func TestAdoRunPATRefusalTransientIs503(t *testing.T) {
 		t.Errorf("HTTP 403 answered %d, want 403", got)
 	}
 }
+
+// The sweep deletes what an erase kept of a token Azure DevOps refused to revoke, once it has expired,
+// so a person a SCIM purge removed, whom nobody erases again, keeps no record of it.
+func TestRunPATSweepDeletesWhatAnEraseKept(t *testing.T) {
+	fx := newADOPATFixture(t)
+	swept := 0
+	fx.srv.cfg.Store = tokenHistoryLeft{adoConsoleStore: adoConsoleStore{fx.st}, swept: &swept}
+	fx.advance(adoRunPATSweepEvery + time.Second)
+	if err := fx.srv.sweepRunPATs(context.Background()); err != nil || swept != 1 {
+		t.Fatalf("sweepRunPATs = %v, deletes asked %d; want one", err, swept)
+	}
+}

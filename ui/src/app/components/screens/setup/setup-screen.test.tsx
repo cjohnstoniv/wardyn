@@ -197,7 +197,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findByText(/nothing redirected on this host/i);
   };
 
-  it("unreachable daemon: shows 'Couldn't reach Wardyn' + Re-check, never the no-runner danger card", async () => {
+  // A 5xx or a 404 lands the same made-up status, and either is an answer: the page says the check failed.
+  it("a failed setup status read: says the check failed + Re-check, never the no-runner danger card", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         unreachable: true,
@@ -208,7 +209,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     );
     renderScreen(<SetupScreen onDone={() => {}} />);
 
-    expect(await screen.findByText(/couldn.t reach wardyn/i)).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load setup status.")).toBeInTheDocument();
+    expect(screen.getByText(/The setup status request failed, so nothing on this page would be accurate\./)).toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t reach/i)).toBeNull();
     expect(screen.getByRole("button", { name: /re-check/i })).toBeInTheDocument();
     // None of the step machinery renders from the made-up fields.
     expect(screen.queryByText(/no sandbox runner/i)).not.toBeInTheDocument();

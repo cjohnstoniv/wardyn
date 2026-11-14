@@ -83,8 +83,9 @@
 - The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
   64 KiB and 5 seconds, then read in order. A desktop whose first frame is not an RFB version is closed, and a
   `ui.clipboard.transfer` `failure` row records `reason: not_rfb`.
-- It fails closed: a text frame, a WebSocket extension, a security type that encrypts the stream, or a message or
-  encoding it cannot frame closes the socket, and the gateway logs which one.
+- It fails closed: a browser frame that breaks the WebSocket protocol, a text frame, a WebSocket extension, a security
+  type that encrypts the stream, or a message or encoding it cannot frame closes the socket. The gateway logs which
+  one. The protocol check ends at the browser's close frame and does not read that frame's reason.
 - It offers the desktop no WebSocket extension and narrows the browser's encodings to Raw, CopyRect, ZRLE and the
   pseudo-encodings it frames, so Tight is off on this path.
 - Every other app's sockets relay unfiltered, as before.
@@ -522,7 +523,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 | | Set it when the relay's parent domain is shared with other applications — see "Header hygiene" below |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. |
 | | **The documented default for a production deployment, and the recommendation for any install with more than one user**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below. |
-| | With SSO configured, boot is refused while it is unset unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin (chart: `uiSandbox.originTemplate` or `uiSandbox.acceptSharedOrigin`) |
+| | With SSO configured, boot is refused while it is unset unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin (chart: `uiSandbox.originTemplate` or `uiSandbox.acceptSharedOrigin`). Without SSO the chart warns instead, and `uiSandbox.ingress` renders its Ingress |
 | | Put `{run}` in the first host label: the console's CSP turns that label into a wildcard |
 
 - **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
@@ -723,9 +724,12 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     - Over plain HTTP a browser refuses every `__Host-` cookie, so the plain names are used and a relayed page can plant them: the login-CSRF gap (#1258) stays open there only.
   - Host mode keeps each run on a host
     of its own under that site.
-  - `X-Forwarded-*` is removed and deliberately not
-    re-added — the sandbox has no business learning the operator's IP — and every
-    gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
+  - Every `X-Forwarded-*` header, `Forwarded`, `X-Real-IP` and the caller-address and
+    sign-in headers common ingresses add are removed and not re-added
+    (`uiStripIngressHeaders`): the sandbox has no business learning the operator's IP.
+  - A front proxy that names the caller under any other header passes it to the app,
+    so do not send such a header to the relay.
+  - Every gateway response carries `Referrer-Policy: no-referrer` so the enter URL's
     ticket cannot leak to whatever the app links to.
 - **Liveness.** Every new connection reloads the run: a stopped or killed run
   stops serving with a 409 naming its state, not a hang.

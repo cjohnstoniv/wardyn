@@ -81,6 +81,9 @@ export function AdoOwnTokenDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        // A token still being stored keeps its dialog: closed and opened again, the answer would clear and close
+        // the new draft.
+        if (!next && busy) return;
         if (!next) reset();
         onOpenChange(next);
       }}
@@ -115,6 +118,7 @@ export function AdoOwnTokenDialog({
             className="font-mono"
             aria-invalid={!!tokenError}
             aria-describedby={tokenError ? `${uid}-token-error` : undefined}
+            disabled={busy}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
@@ -134,6 +138,7 @@ export function AdoOwnTokenDialog({
             className="max-w-[12rem]"
             aria-invalid={!!expiresError}
             aria-describedby={expiresError ? `${uid}-expires-error` : undefined}
+            disabled={busy}
             value={expires}
             onChange={(e) => setExpires(e.target.value)}
           />
@@ -147,6 +152,7 @@ export function AdoOwnTokenDialog({
           <Button
             type="button"
             variant="outline"
+            disabled={busy}
             onClick={() => {
               reset();
               onOpenChange(false);

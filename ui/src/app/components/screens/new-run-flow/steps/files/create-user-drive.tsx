@@ -112,6 +112,7 @@ export function CreateUserDrive({ choose, reload, creating, setCreating, deletin
       {deleting && (
         <DeleteDriveConfirm
           name={deleting.drive.name}
+          onMac={deleting.drive.onMac}
           remove={() => deleteMyDrive(deleting.drive.id)}
           returnFocusTo={() => (deleted.current ? null : deleting.opener)}
           onClose={() => setDeleting(null)}

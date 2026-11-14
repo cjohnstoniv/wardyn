@@ -154,9 +154,16 @@ func templateSaveRequest(cmd *cobra.Command, file, scope, groupID, name, descrip
 	if err := decodeOneJSONStrict(bytes.NewReader(jsonDoc), &req.Document); err != nil {
 		return req, id, fmt.Errorf("parse template document: %w", err)
 	}
-	req.Scope, req.GroupID, req.Description = sdk.TemplateScope(scope), groupID, description
-	if req.Name = strings.TrimSpace(name); req.Name == "" {
+	req.Scope, req.GroupID = sdk.TemplateScope(scope), groupID
+	// The server refuses a name or description that differs from the document's own, so a flag
+	// replaces the document's copy too; an explicit --description "" clears it.
+	if req.Name = strings.TrimSpace(name); req.Name != "" {
+		req.Document.Name = req.Name
+	} else {
 		req.Name = strings.TrimSpace(req.Document.Name)
+	}
+	if description != "" || cmd.Flags().Changed("description") {
+		req.Description, req.Document.Description = description, description
 	}
 	if req.Name == "" {
 		return req, id, fmt.Errorf("a template needs a name: pass --name, or set name in the document")
@@ -241,7 +248,7 @@ func printTemplateImport(w io.Writer, res sdk.TemplateImportResult) error {
 		if path == "" {
 			path = "document"
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", path, d.Reason, d.Message)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", termLine(path), termLine(d.Reason), termLine(d.Message))
 	}
 	return fmt.Errorf("the template document has %d problem(s)", len(res.Diagnostics))
 }

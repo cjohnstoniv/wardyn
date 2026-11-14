@@ -315,17 +315,39 @@ func (f *runnerLeaseFixture) connect(t *testing.T) context.CancelFunc {
 	ctx, cancel := context.WithCancel(f.ctx)
 	t.Cleanup(cancel)
 	hub := f.srv.runnerHub(f.st)
+	done := make(chan struct{})
+	var serves sync.WaitGroup // the hub's Serve goroutines this session's dials started
 	id := f.rn.ID
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: admissionOrgURL, RunnerID: id.String(), PrivateKey: f.key, Hooks: f.hooks,
 		Dial: func(context.Context) (runnerwire.Conn, error) {
 			org, run := runnerwire.Loopback()
-			go func() { _ = hub.Serve(ctx, org, id) }()
+			serves.Add(1)
+			go func() {
+				defer serves.Done()
+				_ = hub.Serve(ctx, org, id)
+			}()
 			return run, nil
 		}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = client.Connect(ctx) }()
+	go func() {
+		_ = client.Connect(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		// Join what this session started: the client's Connect, then the hub's Serve for each dial (no dial
+		// follows Connect's return). runnerwire's own call handlers are not joined: Peer cancels them when it
+		// closes but keeps no handle to wait on, and a stalled verb returns on that cancel.
+		cancel()
+		if !joinedWithin(func() { <-done }, 10*time.Second) {
+			t.Errorf("the runner's connection had not ended 10s after its session was cancelled")
+			return
+		}
+		if !joinedWithin(serves.Wait, 10*time.Second) {
+			t.Errorf("the hub's side of the session had not ended 10s after its session was cancelled")
+		}
+	})
 	ep := f.srv.runnerEndpoint(id)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		if _, ok := ep.sub.Caps(); ok && ep.link.Online() {

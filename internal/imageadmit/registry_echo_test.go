@@ -5,7 +5,6 @@ package imageadmit
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,9 +99,7 @@ func TestRegistryErrorsNeverRepeatWhatTheRegistryServed(t *testing.T) {
 		assertNoEcho(t, "blob digest", err.Error())
 	}
 
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	_, closed, _ := net.SplitHostPort(l.Addr().String())
-	_ = l.Close()
+	closed := "1" // nothing listens there; a freed port could be taken by another process
 	var srvPort string
 	cases := map[string]func(w http.ResponseWriter, r *http.Request){
 		"redirect scheme": func(w http.ResponseWriter, r *http.Request) {

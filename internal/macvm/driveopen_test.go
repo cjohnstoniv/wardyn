@@ -4,6 +4,7 @@
 package macvm_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,8 +28,11 @@ import (
 const (
 	driveOpenEntry  = "0123456789abcdef"
 	driveOpenObject = "wardyn-drive-abc123-home"
-	driveOpenBody   = "the drive's bytes"
 )
+
+// driveOpenBody is a formatted drive's image as far as the runner reads one: 4 KiB or more that do not start
+// with zeros.
+var driveOpenBody = strings.Repeat("the drive's bytes\n", 256)
 
 // driveOpenGuest plays the guest agent: it records Init's raw body and counts execs.
 type driveOpenGuest struct {
@@ -253,9 +258,83 @@ func TestDriveOpenRefusals(t *testing.T) {
 	}
 }
 
+// An image that starts with 4 KiB of zeros and has no mark is an existing drive damaged there, not a new
+// one: drive open refuses it before any VM is built, says it was not formatted and how to start again, and
+// leaves the image as it was.
+func TestDriveOpenRefusesABlankDriveItDidNotMakeNew(t *testing.T) {
+	r := newDriveOpenRig(t)
+	blank := make([]byte, 1<<20)
+	if err := os.WriteFile(r.img, blank, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // a boot would wait for a guest
+	defer cancel()
+	err := macvm.DriveOpen(ctx, r.options(func(macvm.DriveOpenReady) { t.Error("ready") }))
+	if err == nil || !strings.Contains(err.Error(), "Wardyn did not format this disk drive") ||
+		!strings.Contains(err.Error(), "delete this drive and create a new one") {
+		t.Fatalf("drive open of a blank image with no mark: %v", err)
+	}
+	if n := len(r.eng.Machines()); n != 0 {
+		t.Fatalf("%d VMs built", n)
+	}
+	if b, err := os.ReadFile(r.img); err != nil || !bytes.Equal(b, blank) {
+		t.Fatalf("the image changed: %v", err)
+	}
+	unlock, err := macvm.LockDisk(r.img)
+	if err != nil {
+		t.Fatalf("the lock outlived the refusal: %v", err)
+	}
+	unlock()
+}
+
+// A drive no run has formatted yet still has its mark, so drive open lets the guest have it, and the mark is
+// used up before the drive is ready: what the person writes back is never on a drive that reads as new.
+func TestDriveOpenUsesUpANewDrivesMark(t *testing.T) {
+	r := newDriveOpenRig(t)
+	if err := os.Remove(r.img); err != nil {
+		t.Fatal(err)
+	}
+	if err := macvm.MakeDiskImage(r.img, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(r.img + ".new"); err != nil {
+		t.Fatalf("a new image has no mark: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	marked := make(chan error, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- macvm.DriveOpen(ctx, r.options(func(macvm.DriveOpenReady) {
+			_, err := os.Stat(r.img + ".new")
+			marked <- err
+		}))
+	}()
+	r.serve(ctx, t, 0, newDriveOpenGuest(false))
+	select {
+	case err := <-marked:
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the mark is there once the drive is ready: %v", err)
+		}
+	case err := <-done:
+		t.Fatalf("drive open ended before it was ready: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("drive open was never ready")
+	}
+	cancel()
+	<-done
+}
+
 // A guest that refuses the drive ends the boot with the reason, and frees the lock and the clone.
 func TestDriveOpenGuestRefusalEndsTheBoot(t *testing.T) {
 	r := newDriveOpenRig(t)
+	// The drive is new and the guest refuses it, so nothing formatted it: its mark stays for the next open.
+	if err := os.Remove(r.img); err != nil {
+		t.Fatal(err)
+	}
+	if err := macvm.MakeDiskImage(r.img, 1<<20); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -277,6 +356,9 @@ func TestDriveOpenGuestRefusalEndsTheBoot(t *testing.T) {
 		t.Fatalf("the lock outlived the VM: %v", err)
 	}
 	unlock()
+	if _, err := os.Stat(r.img + ".new"); err != nil {
+		t.Fatalf("a refused Init used up the new drive's mark: %v", err)
+	}
 }
 
 // A clone a dead helper left goes at the next open; one too new to judge stays.

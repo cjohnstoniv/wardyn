@@ -61,6 +61,8 @@ export const WORKLOADS = {
   DELETE_HIDDEN: "Delete is hidden: this workload is managed by Kubernetes.",
   // Not in the mock: the toasts and the delete confirmation around the two actions.
   RESTARTED: (name: string) => `${name} restarted.`,
+  /** A restart that started no run and whose answer carried no sentence of its own. */
+  RESTART_NOT_STARTED: (name: string) => `${name}: restart recorded. This request did not start a new run.`,
   DELETED: (name: string) => `${name} deleted.`,
   DELETE_TITLE: (name: string) => `Delete ${name}?`,
   DELETE_BODY: "Its run ends and the workload is removed.",

@@ -8,11 +8,12 @@
 // lib/model-providers-copy.ts (itself pinned to
 // docs/design/model-providers-canon.md by model-providers-copy.test.ts).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import type { ModelProvidersList } from "../../../lib/api/model-providers";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { T } from "../../../lib/integrations";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR as E, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
@@ -556,6 +557,34 @@ describe("E6 — save refused", () => {
     expect(assign).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: the editor is read-only until the reload answers, and a second click sends nothing", async () => {
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
+    let answer: (me: { principal: string }) => void = () => {};
+    whoamiMock.mockReturnValue(new Promise((done) => (answer = done)));
+    const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    const discard = await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD });
+    await user.click(discard);
+    expect(screen.getByLabelText(E.BASE_URL)).toBeDisabled();
+    expect(screen.getByRole("button", { name: E.SAVE })).toBeDisabled();
+    expect(screen.getByRole("button", { name: E.REMOVE })).toBeDisabled();
+    await user.click(discard);
+    expect(whoamiMock).toHaveBeenCalledTimes(1);
+    await act(async () => answer({ principal: "alice" }));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("Discard mine and reload on a new provider: who it is available to is read-only too", async () => {
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockReturnValue(new Promise(() => {}));
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await user.click(await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    expect(screen.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeDisabled();
+    expect(screen.getByRole("button", { name: E.SAVE })).toBeDisabled();
   });
 });
 

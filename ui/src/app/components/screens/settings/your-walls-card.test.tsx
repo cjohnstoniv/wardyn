@@ -7,7 +7,7 @@
 // card sends (only narrowing values), what it shows back, and the strings of the owner-approved board.
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../test/set-field";
 import { HttpError } from "../../../lib/api/core";
@@ -58,6 +58,15 @@ describe("Your walls card", () => {
     expect(screen.getByRole("radio", { name: "Fence" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Wall" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Vault" })).toBeInTheDocument();
+  });
+
+  // jsdom does no layout: this pins the classes that stack the 551px unlisted-sites switch in any card or dialog narrower than 35rem.
+  it("the unlisted-sites switch stacks while its group is narrower than it", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const group = screen.getByRole("group", { name: YOUR_WALLS.UNLISTED });
+    expect(group).toHaveClass("@container/segmented-wide");
+    expect(within(group).getByRole("button", { name: YOUR_WALLS.UNLISTED_BLOCK }).parentElement).toHaveClass("@max-[35rem]/segmented-wide:flex-col");
   });
 
   it("shows the walls it loaded", async () => {
@@ -245,6 +254,19 @@ describe("Your walls card", () => {
     await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
     expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("could not clear");
     expect(screen.getByText("a.example.com")).toBeInTheDocument();
+  });
+
+  it("is read-only while its save is in flight, so a limit added then is neither dropped nor reported as Saved", async () => {
+    let answer: ((w: PersonalWalls) => void) | undefined;
+    putMock.mockReturnValueOnce(new Promise<PersonalWalls>((done) => (answer = done)));
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    expect(screen.getByRole("checkbox", { name: "Block upload" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Wall" })).toBeDisabled();
+    await act(async () => answer?.({ spec: {} }));
+    expect(screen.getByRole("checkbox", { name: "Block upload" })).toBeEnabled();
+    expect(screen.getByText(YOUR_WALLS.SAVED)).toBeInTheDocument();
   });
 
   it("puts a refusal under the section it names, without the prefix or the reason code, and offers no Saved", async () => {

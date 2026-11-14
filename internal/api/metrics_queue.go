@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net/http"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -117,12 +116,12 @@ func (q *queueSnapshot) get(ctx context.Context, qs queueStore) (depth, slots ma
 
 // writeQueueGauges appends the two per-pool gauges from the 15-second snapshot; on a failed refresh
 // they are omitted, never written as zero, like the fleet gauges.
-func (s *Server) writeQueueGauges(r *http.Request, w io.Writer) {
+func (s *Server) writeQueueGauges(ctx context.Context, w io.Writer) {
 	qs, ok := s.queueStore()
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+	ctx, cancel := context.WithTimeout(ctx, storePingTimeout)
 	defer cancel()
 	depth, slots, ok := s.queue.gauges.get(ctx, qs)
 	if !ok {

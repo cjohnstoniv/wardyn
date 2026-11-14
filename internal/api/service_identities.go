@@ -389,7 +389,9 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if s.cfg.Secrets != nil {
 		principal := retired.After.Principal()
 		var rep secretstore.EraseReport
-		_, eerr := s.eraseCredentialsScope(ctx, principal, nil, &rep)
+		// No Azure DevOps token is ever created in a service identity's name (adoLaneOwner declines one), so
+		// there is no refused revoke to report.
+		_, _, eerr := s.eraseCredentialsScope(ctx, principal, nil, &rep)
 		outcome := "success"
 		if eerr != nil {
 			outcome = "failure"

@@ -49,47 +49,54 @@ export interface RunModeBody extends LegacyRunMode {
  * Whether the server would refuse the body beside carriers. Mirrors the server's
  * runModeRunWideRules (run-wide tool and push rules, which belong to each tool and Git
  * entry under the contract) and experienceConflictRefusal (a background task has no idle
- * stop and no web application gateway). Such a body keeps the older fields.
+ * stop, and no web application gateway but an inbound one). Such a body keeps the older fields.
  */
 function carriersRefused(body: RunModeBody, experience: Experience): boolean {
   const policy = body.inline_policy;
   if (policy?.tool_rules?.length || policy?.push_rules != null || body.overrides?.agent?.tool_rules?.length) return true;
-  return experience === "background" && Boolean(policy?.auto_stop_after_sec || policy?.ui_apps?.length);
+  return experience === "background" && Boolean(policy?.auto_stop_after_sec || policy?.ui_apps?.some((a) => !a.inbound));
 }
 
 /**
  * The carriers for a run, or null when the contract cannot say it and the run keeps
- * its older fields: an interactive initial prompt (no carrier until startup.prompt),
- * tool approvals and the boot-seed opt-in (the server refuses both beside carriers),
- * a command that names an agent for want of an image (a command carries none), and a
- * prompt or command with no text, and a body with run-wide rules or a background stop
- * (carriersRefused).
+ * its older fields: tool approvals and the boot-seed opt-in (the server refuses both
+ * beside carriers), a command that names an agent for want of an image (a command
+ * carries none), a model provider with no agent to carry it, an interactive task with
+ * no interactive_start (a prompt or a command, which only the person can say: a task
+ * is never turned into a shell command), a harness start with no agent, a prompt or
+ * command with no text, and a body with run-wide rules or a background stop
+ * (carriersRefused). A template leaves a background run's text, and may leave its agent, for the
+ * person who uses it (textLater): it maps with empty text and no harness, as Guided setup writes it before either is chosen.
  */
-export function mapRunMode(run: RunModeBody): RunModeCarriers | null {
-  const carriers = mapShape(run);
+export function mapRunMode(run: RunModeBody, textLater = false): RunModeCarriers | null {
+  const carriers = mapShape(run, textLater);
   return carriers && !carriersRefused(run, carriers.experience) ? carriers : null;
 }
 
-function mapShape(run: LegacyRunMode): RunModeCarriers | null {
-  if (run.seed_auto_tools || run.tool_approvals === "hold") return null;
+function mapShape(run: LegacyRunMode, textLater: boolean): RunModeCarriers | null {
+  if (run.seed_auto_tools || run.tool_approvals === "hold" || (run.model_provider && !run.agent)) return null;
   const text = run.task?.trim() ?? "";
   if (run.interactive) {
-    if (!run.agent) return null;
-    const tools = harness(run.agent, run.model_provider);
+    const tools = run.agent ? { tools: harness(run.agent, run.model_provider) } : {};
     if (run.interactive_start === "agent") {
-      return text ? null : { mode_contract: "0.9", experience: "interactive", tools, startup: { kind: "harness", tool: run.agent } };
+      // The task is the started harness's first message.
+      return run.agent
+        ? { mode_contract: "0.9", experience: "interactive", ...tools, startup: { kind: "harness", tool: run.agent, ...(text ? { prompt: run.task } : {}) } }
+        : null;
     }
-    return { mode_contract: "0.9", experience: "interactive", tools, ...(text ? { startup: { kind: "command", command: run.task } } : {}) };
+    if (text && run.interactive_start !== "shell") return null;
+    return { mode_contract: "0.9", experience: "interactive", ...tools, ...(text ? { startup: { kind: "command", command: run.task } } : {}) };
   }
-  if (!text) return null;
+  if (!text && !textLater) return null;
   if (run.task_mode === "exec") {
-    return run.agent ? null : { mode_contract: "0.9", experience: "background", workload: { kind: "command", command: run.task } };
+    return run.agent ? null : { mode_contract: "0.9", experience: "background", workload: { kind: "command", command: text ? run.task : "" } };
   }
-  if (!run.agent) return null;
+  // A template may leave the agent for the person too: the task's own carrier, with no harness yet.
+  if (!run.agent) return textLater ? { mode_contract: "0.9", experience: "background", workload: { kind: "agent_task", task: text ? run.task : "" } } : null;
   return {
     mode_contract: "0.9",
     experience: "background",
-    workload: { kind: "agent_task", agent: run.agent, task: run.task },
+    workload: { kind: "agent_task", agent: run.agent, task: text ? run.task : "" },
     tools: harness(run.agent, run.model_provider),
   };
 }

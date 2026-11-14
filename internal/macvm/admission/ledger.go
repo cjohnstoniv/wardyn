@@ -29,8 +29,9 @@
 // all of them count it, writable only by the login that created it, and
 // (sticky bit) removable only by it. Every write goes to an exclusive temp
 // file in the same dir and is renamed into place, so a reader never sees half
-// an entry; a file that does not parse anyway is damage, and counts as a live
-// VM (fail closed) until its owner removes it. An entry's uid is its file's
+// an entry; a file that does not parse anyway, or that holds a negative disk
+// reservation, is damage, and counts as a live VM (fail closed) until its
+// owner removes it. An entry's uid is its file's
 // owner, never a field inside it. Every transaction holds flock(LOCK_EX) on
 // admission.lock, waiting at most LockWait. A runner never creates the lock:
 // if it is missing, Open refuses and names the fix.
@@ -59,7 +60,8 @@
 // so any local user can add entries that hold slots, memory or disk, or hold
 // the lock: a local denial of service on macOS VMs only. A forged entry can
 // refuse admissions but never grant one, because entries only ever subtract
-// capacity. A tombstone (Sweep) is honoured only after the reader re-checks
+// capacity: a negative reservation is damage, and every sum of entry figures
+// stops at its type's largest value instead of wrapping. A tombstone (Sweep) is honoured only after the reader re-checks
 // its condition against the live process table, so a forged or early
 // tombstone changes nothing. An honoured tombstone recovers only the dead
 // VM's capacity (its slot and memory); its disk reservation stays held as a
@@ -75,6 +77,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -466,7 +469,7 @@ func readEntry(path string, fi os.FileInfo) (Entry, bool) {
 	}
 	defer f.Close()
 	b, err := io.ReadAll(io.LimitReader(f, maxEntryFile))
-	if err != nil || json.Unmarshal(b, &e) != nil || e.ID == "" {
+	if err != nil || json.Unmarshal(b, &e) != nil || e.ID == "" || e.DiskReserve < 0 {
 		return e, false
 	}
 	return e, true
@@ -487,11 +490,11 @@ type usage struct {
 func (l *Ledger) usage(v *view) usage {
 	u := usage{count: len(v.counted) + v.unknown, dockerBy: map[int]uint64{}}
 	for _, e := range v.debts {
-		u.disk += e.DiskReserve
+		u.disk = addDisk(u.disk, e.DiskReserve)
 	}
 	for _, e := range v.counted {
-		u.memory += e.GuestMemory + e.Overhead
-		u.disk += e.DiskReserve
+		u.memory = addMemory(u.memory, e.GuestMemory, e.Overhead)
+		u.disk = addDisk(u.disk, e.DiskReserve)
 		if e.Slot >= 0 && e.Slot < LicenceCap {
 			u.slotsUsed[e.Slot] = true
 		}
@@ -503,6 +506,35 @@ func (l *Ledger) usage(v *view) usage {
 		}
 	}
 	return u
+}
+
+// addMemory sums memory figures, holding at the largest uint64 instead of wrapping: an entry's
+// figures are whatever its file says, and a wrapped sum would read as free memory.
+func addMemory(a uint64, bs ...uint64) uint64 {
+	for _, b := range bs {
+		if a+b < a {
+			return math.MaxUint64
+		}
+		a += b
+	}
+	return a
+}
+
+// addDisk sums two non-negative disk figures, holding at the largest int64 instead of wrapping.
+func addDisk(a, b int64) int64 {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
+}
+
+// SumDisk is es's disk reservations, holding at the largest int64 instead of wrapping.
+func SumDisk(es []Entry) int64 {
+	var sum int64
+	for _, e := range es {
+		sum = addDisk(sum, e.DiskReserve)
+	}
+	return sum
 }
 
 // gibOf is n bytes in GiB, for a message.
@@ -518,10 +550,10 @@ func (l *Ledger) memoryBudget(u usage) (uint64, error) {
 	reserved := MacOSReserveBytes
 	for uid, d := range u.dockerBy {
 		if uid != l.c.UID {
-			reserved += d
+			reserved = addMemory(reserved, d)
 		}
 	}
-	reserved += max(u.dockerBy[l.c.UID], l.c.DockerMemoryBytes)
+	reserved = addMemory(reserved, max(u.dockerBy[l.c.UID], l.c.DockerMemoryBytes))
 	if total <= reserved {
 		return 0, nil
 	}
@@ -547,7 +579,7 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 		if err != nil {
 			return err
 		}
-		if u.memory+req.GuestMemory+l.c.OverheadBytes > budget {
+		if addMemory(u.memory, req.GuestMemory, l.c.OverheadBytes) > budget {
 			return &Refusal{Reason: fmt.Sprintf("this Mac's memory for macOS VMs (%d MiB after Docker and macOS) is in use", budget>>20)}
 		}
 		if avail, err := l.c.Host.AvailableMemoryBytes(); err == nil && avail < req.GuestMemory+LiveMemoryMarginBytes {
@@ -560,7 +592,7 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 			return err
 		}
 		if free-u.disk < req.DiskReserve+DiskFloorBytes {
-			return &Refusal{Reason: fmt.Sprintf("this Mac needs %d GiB free for another macOS VM", (req.DiskReserve+DiskFloorBytes+u.disk)>>30),
+			return &Refusal{Reason: fmt.Sprintf("this Mac needs %d GiB free for another macOS VM", addDisk(req.DiskReserve+DiskFloorBytes, u.disk)>>30),
 				DiskNeeded: req.DiskReserve + DiskFloorBytes, DiskFreeLeft: free - u.disk}
 		}
 		slot := 0
@@ -756,7 +788,7 @@ func (l *Ledger) Offer(perRunMemory uint64, perRunDisk int64) (Offer, error) {
 			more, reason = memFit, "this Mac's memory, after Docker's and macOS's own share, does not fit another macOS VM at the per-run memory limit"
 		}
 		if perRunDisk > 0 {
-			diskFit := int(max(free-u.disk-DiskFloorBytes, 0) / perRunDisk)
+			diskFit := int(max(free-addDisk(u.disk, DiskFloorBytes), 0) / perRunDisk)
 			if diskFit < more {
 				more, reason = diskFit, "this Mac does not have enough free disk for another macOS VM"
 			}

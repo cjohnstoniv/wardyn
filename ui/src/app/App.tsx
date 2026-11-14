@@ -421,7 +421,7 @@ export default function App() {
   const [notice, setNotice] = React.useState<GateNotice | null>(null);
   const signingOutRef = React.useRef(false);
   // This tab signed out on purpose, so a focus or visibility re-probe must not walk back in (a failed logout leaves
-  // the cookie live). Another tab announcing a sign-in is still believed. Cleared by signing in here.
+  // the cookie live). Another tab announcing a sign-in is still believed. Never cleared: the next sign-in reloads.
   const signedOutHereRef = React.useRef(false);
   // A 401 on any probe path says why the session ended (M12): the cold load, its retries and the re-probes
   // all read it the same way. This tab's own sign-out is never overwritten by a probe; a stored token
@@ -593,8 +593,8 @@ export default function App() {
           else noteEnded(reason, hadToken);
         }
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
-        // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.
-        signedOutHereRef.current = false;
+        // Back in, by another tab's sign-in. After this tab's own sign-out the page loads fresh: nothing runs on.
+        if (signedOutHereRef.current) return setReloadTo("/runs");
         setNotice(null);
         setAuth("authed");
       });
@@ -660,26 +660,28 @@ export default function App() {
   // promise-based, so a void return would let a slow /setup/status — the
   // expensive endpoint — stack a second read on top of the first every tick.
   const refreshSetupStatus = React.useCallback((forceSweep?: boolean) => {
-    return setupApi
-      // `=== true`: usePoll and the model-access door call this with no or foreign arguments.
-      .getSetupStatus(forceSweep === true ? { recheck: true } : undefined)
-      .then((status) => {
-        // authRef, not a closed-over `auth` (the same ref H1's 401 handler
-        // reads): /setup/status is the expensive endpoint and can still be in
-        // flight across a sign-out, and its late answer describes the person
-        // who just left.
-        if (authRef.current !== "authed") return;
-        // An `unreachable` answer is READY_FALLBACK's made-up payload (no
-        // checks, has_runs:false), so it never replaces a real one: the gate,
-        // the landing and the model-access door keep deciding from the last
-        // status the daemon actually sent. Only the FIRST read may land it —
-        // with nothing better known, it is what keeps a daemon that can't
-        // answer from trapping anyone in the funnel.
-        setSetupStatus((prev) => (status.unreachable && prev && !prev.unreachable ? prev : status));
-      })
-      .catch(() => {
-        /* leave the last-known status in place — never trap behind a failed probe */
-      });
+    const read = (recheck: boolean): Promise<void> => {
+      // A late /setup/status answer describes whoever was signed in when it started. authRef (as H1's 401 handler)
+      // drops it at the gate; after any later auth event (another tab's, a renewal) the generation drops it and the
+      // status is read again for whoever is signed in now, because the landing waits for a first status.
+      const generation = getAuthGeneration();
+      return setupApi
+        .getSetupStatus(recheck ? { recheck: true } : undefined)
+        .then((status) => {
+          if (authRef.current !== "authed") return;
+          if (generation !== getAuthGeneration()) return read(false);
+          // An `unreachable` answer is READY_FALLBACK's made-up payload (no checks, has_runs:false), so it never
+          // replaces a real one: the gate, the landing and the model-access door keep deciding from the last status
+          // the daemon actually sent. Only the FIRST read may land it — with nothing better known, it is what keeps
+          // a daemon that can't answer from trapping anyone in the funnel.
+          setSetupStatus((prev) => (status.unreachable && prev && !prev.unreachable ? prev : status));
+        })
+        .catch(() => {
+          /* leave the last-known status in place — never trap behind a failed probe */
+        });
+    };
+    // `=== true`: usePoll and the model-access door call this with no or foreign arguments.
+    return read(forceSweep === true);
   }, []);
 
   // The console's ONE reachability signal. Every screen's background refresh
@@ -771,14 +773,13 @@ export default function App() {
         <SignIn
           notice={notice ? noticeView(notice) : undefined}
           onSignIn={() => {
-            // The gate does not mount the Routes, so the URL the person arrived on is still current; after
-            // a deliberate sign-out it is the previous person's last page, so the next one starts at /runs.
-            const returnTo = signedOutHereRef.current ? "/runs" : safeReturnPath(location.pathname + location.search);
+            // The gate does not mount the Routes, so the URL the person arrived on is still current. After a deliberate
+            // sign-out the next person's console loads fresh at /runs, so nothing the previous person started runs on.
+            if (signedOutHereRef.current) return setReloadTo("/runs");
             signingOutRef.current = false;
-            signedOutHereRef.current = false;
             setNotice(null);
             setAuth("authed");
-            void navigate(returnTo, { replace: true });
+            void navigate(safeReturnPath(location.pathname + location.search), { replace: true });
           }}
         />
         <Toaster />
@@ -806,9 +807,9 @@ export default function App() {
               // #214 — the shell's own read of the deployment-wide no-barrier
               // fact (deriveReadiness's barrierReady — see AppShell's own doc
               // for exactly what this is and is not the same as). Absent
-              // (undefined -> false) while setupStatus hasn't landed yet,
-              // never a guess painted off no data.
-              noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              // (undefined -> false) while setupStatus hasn't landed yet, and
+              // "unknown" on the made-up status of a read that failed.
+              noBarrier={setupStatus?.unreachable ? "unknown" : !!setupStatus && !deriveReadiness(setupStatus).barrierReady}
               onRecheck={() => void refreshSetupStatus(true)}
               tier={setupStatus?.tier}
               onSignOut={async (sso) => {

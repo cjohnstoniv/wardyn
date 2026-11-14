@@ -4,7 +4,7 @@
 // PIN for /healthz reports the eBPF sensor DEGRADED, with a stale
 // last_heartbeat, while beats are arriving normally.
 //
-// LatestAuditEventByAction answered "the latest kernel.sensor.ping" with
+// The latest kernel.sensor.ping lookup (LatestOrganisationAuditEvent) once answered with
 // ORDER BY seq DESC — insertion order, not event order. The audit spool replays
 // at-least-once and replays KEEP their original ev.Time, so a beat that was
 // spooled during a database blip comes back later with the HIGHEST seq and an
@@ -16,6 +16,8 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -25,7 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder(t *testing.T) {
+func TestPG_LatestOrganisationAuditEventAnswersByEventTimeNotInsertionOrder(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -34,11 +36,12 @@ func TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder(t *testi
 	// seeded here — audit_events is append-only and shared by every test in the
 	// lane's database.
 	action := "test.heartbeat." + uuid.NewString()
+	const actor = "b8-f5-probe"
 	beat := func(at time.Time) uuid.UUID {
 		t.Helper()
 		ev := types.AuditEvent{
 			ID: uuid.New(), Time: at, ActorType: types.ActorSystem,
-			Actor: "b8-f5-probe", Action: action, Outcome: "success",
+			Actor: actor, Action: action, Outcome: "success",
 		}
 		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
 			t.Fatalf("insert beat at %s: %v", at, err)
@@ -52,9 +55,9 @@ func TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder(t *testi
 	// carrying its ORIGINAL time, which is what makes a spool replay a replay.
 	beat(now.Add(-2 * time.Hour))
 
-	got, err := pg.LatestAuditEventByAction(ctx, action)
+	got, err := pg.LatestOrganisationAuditEvent(ctx, action, types.ActorSystem, actor)
 	if err != nil {
-		t.Fatalf("LatestAuditEventByAction: %v", err)
+		t.Fatalf("LatestOrganisationAuditEvent: %v", err)
 	}
 	if got.ID != fresh {
 		t.Errorf("the latest %q is the row with the newest SEQ (%s, time %s) rather than the newest TIME (%s, time %s).\n"+
@@ -69,21 +72,21 @@ func TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder(t *testi
 	// The ordinary case stays ordinary: a genuinely newer beat wins, and it is
 	// the one with both the newest time AND the highest seq.
 	newest := beat(now.Add(time.Second))
-	got, err = pg.LatestAuditEventByAction(ctx, action)
+	got, err = pg.LatestOrganisationAuditEvent(ctx, action, types.ActorSystem, actor)
 	if err != nil {
-		t.Fatalf("LatestAuditEventByAction after a newer beat: %v", err)
+		t.Fatalf("LatestOrganisationAuditEvent after a newer beat: %v", err)
 	}
 	if got.ID != newest {
 		t.Errorf("a beat newer in both time and seq was not returned; got %s, want %s", got.ID, newest)
 	}
 
 	// An action with no rows is still ErrNotFound, not an empty event.
-	if _, err := pg.LatestAuditEventByAction(ctx, "test.heartbeat."+uuid.NewString()); err == nil {
+	if _, err := pg.LatestOrganisationAuditEvent(ctx, "test.heartbeat."+uuid.NewString(), types.ActorSystem, actor); err == nil {
 		t.Error("an action with no rows answered nil error; /healthz tells 'never seen' apart from 'seen long ago' by exactly this")
 	}
 }
 
-// TestPG_LatestAuditEventByActionFallsBackPastTheWindow pins the RESIDUAL as
+// TestPG_LatestOrganisationAuditEventFallsBackPastTheWindow pins the RESIDUAL as
 // documented behaviour rather than leaving the comment claiming a bound the
 // query does not hold.
 //
@@ -95,17 +98,18 @@ func TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder(t *testi
 // back. That is the accepted transience ("self-heals at the next beat"),
 // bounded by one heartbeat interval, and the difference between "the finding is
 // closed" and "the finding is bounded" is exactly what this asserts.
-func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {
+func TestPG_LatestOrganisationAuditEventFallsBackPastTheWindow(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 
 	action := "test.heartbeat." + uuid.NewString()
+	const actor = "b8-f5-window-probe"
 	beat := func(at time.Time) uuid.UUID {
 		t.Helper()
 		ev := types.AuditEvent{
 			ID: uuid.New(), Time: at, ActorType: types.ActorSystem,
-			Actor: "b8-f5-window-probe", Action: action, Outcome: "success",
+			Actor: actor, Action: action, Outcome: "success",
 		}
 		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
 			t.Fatalf("insert beat at %s: %v", at, err)
@@ -120,9 +124,9 @@ func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {
 	for i := range 19 {
 		beat(now.Add(-time.Duration(i+1) * time.Hour))
 	}
-	got, err := pg.LatestAuditEventByAction(ctx, action)
+	got, err := pg.LatestOrganisationAuditEvent(ctx, action, types.ActorSystem, actor)
 	if err != nil {
-		t.Fatalf("LatestAuditEventByAction with the fresh beat still in the window: %v", err)
+		t.Fatalf("LatestOrganisationAuditEvent with the fresh beat still in the window: %v", err)
 	}
 	if got.ID != fresh {
 		t.Errorf("with 19 stale replays above it (20 rows total) the fresh beat was not returned; the window is "+
@@ -135,9 +139,9 @@ func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {
 	for i := range 2 {
 		beat(now.Add(-time.Duration(20+i) * time.Hour))
 	}
-	got, err = pg.LatestAuditEventByAction(ctx, action)
+	got, err = pg.LatestOrganisationAuditEvent(ctx, action, types.ActorSystem, actor)
 	if err != nil {
-		t.Fatalf("LatestAuditEventByAction past the window: %v", err)
+		t.Fatalf("LatestOrganisationAuditEvent past the window: %v", err)
 	}
 	if got.ID == fresh {
 		t.Fatalf("21 stale replays did not push the fresh beat out of a twenty-row window — the window is not the " +
@@ -151,12 +155,69 @@ func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {
 	// And it self-heals at the next beat, which is the whole reason the residual
 	// was accepted: one live beat takes the top of the window back.
 	next := beat(now.Add(time.Second))
-	got, err = pg.LatestAuditEventByAction(ctx, action)
+	got, err = pg.LatestOrganisationAuditEvent(ctx, action, types.ActorSystem, actor)
 	if err != nil {
-		t.Fatalf("LatestAuditEventByAction after the next live beat: %v", err)
+		t.Fatalf("LatestOrganisationAuditEvent after the next live beat: %v", err)
 	}
 	if got.ID != next {
 		t.Errorf("the next live beat did not restore the answer (got %s, want %s) — the residual would not be "+
 			"transient, and /healthz would stay degraded", got.ID, next)
+	}
+}
+
+// TestPG_LatestOrganisationAuditEventPassesOverForwardedRows: an enrolled laptop
+// may forward any action with any data and any time, and IngestDeviceAudit
+// takes it (that stays). Forwarded rows of the same action, newer and more than
+// a window of them, must neither be the answer nor push the organisation's own
+// row out of the window; nor may another writer's row, or the same actor name
+// under another actor type.
+func TestPG_LatestOrganisationAuditEventPassesOverForwardedRows(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	action := "test.heartbeat." + uuid.NewString()
+	const actor = "b8-origin-probe"
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	write := func(at time.Time, actorType types.ActorType, who string) uuid.UUID {
+		t.Helper()
+		ev := types.AuditEvent{ID: uuid.New(), Time: at, ActorType: actorType, Actor: who, Action: action, Outcome: "success"}
+		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
+			t.Fatalf("insert %s %q at %s: %v", actorType, who, at, err)
+		}
+		return ev.ID
+	}
+	own := write(now.Add(-time.Hour), types.ActorSystem, actor)
+	write(now, types.ActorSystem, "another-writer")
+	write(now, types.ActorHuman, actor)
+
+	d, err := pg.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "laptop"}, "wdd_"+uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []types.FederatedAuditEvent
+	prev := ""
+	for i := range 25 {
+		ev := types.AuditEvent{ID: uuid.New(), Time: now.Add(time.Hour), ActorType: types.ActorSystem, Actor: actor,
+			Action: action, Outcome: "success", PrevHash: prev, Data: json.RawMessage(`{"observed_total":42}`)}
+		ev.RowHash = auditRowHash(t, pool, prev, ev)
+		prev = ev.RowHash
+		rows = append(rows, types.FederatedAuditEvent{AuditEvent: ev, Seq: int64(i + 1)})
+	}
+	res, err := pg.IngestDeviceAudit(ctx, d.ID, "10.9.9.9", rows)
+	if err != nil || res.Accepted != len(rows) {
+		t.Fatalf("a laptop forwarding this action: accepted %d, err %v; want all %d taken", res.Accepted, err, len(rows))
+	}
+
+	got, err := pg.LatestOrganisationAuditEvent(ctx, action, types.ActorSystem, actor)
+	if err != nil {
+		t.Fatalf("with 25 newer forwarded rows above it: %v; the organisation's own row was pushed out of the window", err)
+	}
+	if got.ID != own {
+		t.Errorf("answered %s (actor %q, time %s), want the organisation's own row %s", got.ID, got.Actor, got.Time, own)
+	}
+	// The forwarded rows' stored actor names, asked for exactly, are still not this organisation's.
+	if got, err := pg.LatestOrganisationAuditEvent(ctx, action, types.ActorSystem, store.FederatedActor(d.ID, actor)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("asking for the forwarded actor answered %s (actor %q), err %v; want ErrNotFound", got.ID, got.Actor, err)
 	}
 }

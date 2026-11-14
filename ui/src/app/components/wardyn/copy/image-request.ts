@@ -28,10 +28,10 @@ export const IMG = {
   LIST_EMPTY: "You have no requests.",
   LIST_FAILED_TITLE: "Couldn't load your requests",
   LIST_FAILED_BODY: "Wardyn isn't answering. Try again.",
+  LIST_LOAD_FAILED: "Wardyn couldn't load your requests.",
   STATE_STALE: "Not applied",
   STATE_WITHDRAWN: "Withdrawn",
   LINE_WAITING: (when: string) => `Requested ${when} · waiting for a decision`,
-  LINE_APPROVED: "You can launch exactly this image now. The digest rule and image checks still apply.",
   LINE_STALE: "Something changed before it was approved, so nothing was granted. Ask again if you still need it.",
   LINE_WITHDRAWN: (when: string) => `You withdrew it · ${when}`,
 

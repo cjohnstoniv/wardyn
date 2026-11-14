@@ -41,7 +41,7 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 const getAvailabilityMock = vi.fn();
 const getMyCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
@@ -60,7 +60,7 @@ import { toast } from "sonner";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 import { STATES } from "../../wardyn/states";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -399,7 +399,23 @@ describe("WorkspaceDetailScreen — image row: three honest variants, never a /b
     expect(await screen.findByText(".devcontainer/devcontainer.json (this repo, @main)")).toBeInTheDocument();
     expect(screen.getByText("Built as written — we don't modify it.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Rebuild" }));
-    await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalledWith("ws-1"));
+    await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalledWith("ws-1", true));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Rebuild started for "payments"'));
+  });
+
+  it("Rebuild says nothing was rebuilt when the server answers done, and why on none", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ profile: { has_devcontainer: true } as unknown as Record<string, unknown> }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    expect(await screen.findByText(".devcontainer/devcontainer.json (this repo, @main)")).toBeInTheDocument();
+    vi.mocked(toast.success).mockClear();
+    buildWorkspaceMock.mockResolvedValueOnce({ state: "done", image: "img" });
+    await user.click(screen.getByRole("button", { name: "Rebuild" }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Nothing to rebuild for "payments".', { description: undefined }));
+    buildWorkspaceMock.mockResolvedValueOnce({ state: "none", detail: "no image builder" });
+    await user.click(screen.getByRole("button", { name: "Rebuild" }));
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('"payments" was not rebuilt.', { description: "no image builder" }));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("pinned ref: an explicit base_image — no Rebuild action, the ref renders mono", async () => {
@@ -596,7 +612,76 @@ describe("WorkspaceDetailScreen — approveHosts merges onto the freshest overla
     expect(setRequirementsMock).toHaveBeenCalledWith("ws-1", {
       "egress:concurrent.example.com": { level: "required", provenance: "operator_set" },
       "egress:evil.example.com": { level: "required", provenance: "operator_set" },
-    });
+    }, "");
+  });
+
+  it("the PUT after the fresh read still names the person who approved, when another signed in meanwhile", async () => {
+    // The server then refuses it rather than approve the host as the next person.
+    const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    const confinedRR: RecordResult = {
+      run_id: "vr1",
+      label: "build & test",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 0, deny_count: 2, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    const mounted = ws({ record_results: { "build-test": learning, "verify:build-test": confinedRR }, requirements: {} });
+    let fresh!: (w: unknown) => void;
+    getWorkspaceMock.mockResolvedValueOnce(mounted).mockImplementationOnce(() => new Promise((done) => (fresh = done)));
+    setRequirementsMock.mockResolvedValue(ws({}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    const blocked = await screen.findByTestId("verify-session-blocked");
+    setExpectedPrincipal("a@example.com");
+    await user.click(within(blocked).getByRole("button", { name: /^approve$/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(getWorkspaceMock).toHaveBeenCalledTimes(2));
+
+    setExpectedPrincipal("b@example.com");
+    fresh(mounted);
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    expect(setRequirementsMock.mock.calls[0][2]).toBe("a@example.com");
+    setExpectedPrincipal("");
+  });
+});
+
+// The server takes a stamped clean replay back on a later read when a decision of its run lands late, so the
+// page keeps reading for a while after the stamp (cleanVerdictMayMove) and shows the verdict it now holds; a
+// replay stamped long ago is not read again.
+describe("WorkspaceDetailScreen — a clean replay the server takes back", () => {
+  const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+  const replay = (finishedAgoMs: number): RecordResult => ({
+    run_id: "vr1", label: "build & test", mode: "interactive", confined: true, status: "recorded",
+    clean: true, caught: 0, finished_at: new Date(Date.now() - finishedAgoMs).toISOString(),
+  });
+  const withReplay = (rr: RecordResult) => ws({ record_results: { "build-test": learning, "verify:build-test": rr } });
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps reading a clean verdict stamped a minute ago, and shows it taken back", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const clean = replay(60_000);
+    getWorkspaceMock.mockResolvedValueOnce(withReplay(clean)).mockResolvedValue(withReplay({ ...clean, clean: false, caught: 1 }));
+    renderDetail();
+    expect(await screen.findByText("Replayed clean")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(await screen.findByText("Replayed — caught 1")).toBeInTheDocument();
+    expect(screen.queryByText("Replayed clean")).not.toBeInTheDocument();
+    const reads = getWorkspaceMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3 * 2500);
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(reads);
+  });
+
+  it("does not read again a clean verdict stamped eleven minutes ago", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    getWorkspaceMock.mockResolvedValue(withReplay(replay(11 * 60_000)));
+    renderDetail();
+    expect(await screen.findByText("Replayed clean")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3 * 2500);
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(1);
   });
 });
 

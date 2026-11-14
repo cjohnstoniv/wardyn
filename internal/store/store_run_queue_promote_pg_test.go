@@ -415,6 +415,58 @@ func TestPG_QueueScans(t *testing.T) {
 	}
 }
 
+// The stale-lease pass's transition re-checks the run in its own statement: a promoted run whose lease
+// recovered, one that has its sandbox, one marked lost and a plain PENDING run stay PENDING; only a
+// promoted run whose lease is still stale is failed, once, with its end stamped.
+func TestPG_FailStalePromotedRunRechecksTheLease(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	now := time.Now().UTC()
+	exec := func(sql string, id uuid.UUID) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dead, recovered, sandboxed := promotedRun(t, pg, now), promotedRun(t, pg, now.Add(time.Second)), promotedRun(t, pg, now.Add(2*time.Second))
+	lost := promotedRun(t, pg, now.Add(3*time.Second))
+	plain := newRun(types.RunPending)
+	if _, err := pg.CreateRun(ctx, plain); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uuid.UUID{dead.ID, recovered.ID, sandboxed.ID, lost.ID, plain.ID} {
+		exec(`UPDATE agent_runs SET watcher_heartbeat = now() - interval '2 minutes' WHERE id = $1`, id)
+	}
+	exec(`UPDATE agent_runs SET watcher_heartbeat = now() WHERE id = $1`, recovered.ID)
+	exec(`UPDATE agent_runs SET sandbox_ref = 'sbx-started' WHERE id = $1`, sandboxed.ID)
+	exec(`UPDATE agent_runs SET lost_at = now(), lost_reason = 'outage' WHERE id = $1`, lost.ID)
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+		want bool
+	}{
+		{"a start whose lease recovered", recovered.ID, false},
+		{"a start that has its sandbox", sandboxed.ID, false},
+		{"a start marked lost", lost.ID, false},
+		{"a plain PENDING run", plain.ID, false},
+		{"a start whose lease is still stale", dead.ID, true},
+		{"the same run again, already failed", dead.ID, false},
+	} {
+		if got, err := pg.FailStalePromotedRun(ctx, tc.id, 90*time.Second); err != nil || got != tc.want {
+			t.Errorf("%s: FailStalePromotedRun = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+	for _, id := range []uuid.UUID{recovered.ID, sandboxed.ID, lost.ID, plain.ID} {
+		if r, err := pg.GetRun(ctx, id); err != nil || r.State != types.RunPending {
+			t.Errorf("run %s = %s, %v; want it still PENDING", id, r.State, err)
+		}
+	}
+	if r, err := pg.GetRun(ctx, dead.ID); err != nil || r.State != types.RunFailed || r.EndedAt == nil {
+		t.Errorf("the dead start's run = %s ended_at=%v, %v; want FAILED with its end stamped", r.State, r.EndedAt, err)
+	}
+}
+
 // promotedRun enqueues a run on a pool with room and promotes it.
 func promotedRun(t *testing.T, pg store.PG, at time.Time) types.AgentRun {
 	t.Helper()

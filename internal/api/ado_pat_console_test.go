@@ -465,3 +465,73 @@ func TestADOPATConsole_DisconnectOwnTokenRowOnlyIsUnconfigured(t *testing.T) {
 		t.Fatalf("disconnect status = %d, want 404: %s", w.Code, w.Body.String())
 	}
 }
+
+// A revoke Azure DevOps refused leaves the token working to its expiry, so
+// the disconnect says so (200 with tokens_revocation_failed and a detail)
+// rather than a bare 204, and still forgets the sign-in.
+func TestADODisconnect_SaysWhenATokenWasNotRevoked(t *testing.T) {
+	for name, status := range map[string]int{"refused": http.StatusBadRequest, "unfinished": http.StatusServiceUnavailable} {
+		t.Run(name, func(t *testing.T) {
+			fx := newADOConsoleLane(t, true)
+			fx.pats.revokeErr = &adoPATError{Status: status}
+			w := fx.disconnect(t, fx.subject)
+			var got struct {
+				Failed bool   `json:"tokens_revocation_failed"`
+				Detail string `json:"detail"`
+			}
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || !got.Failed || got.Detail != adoDisconnectTokensNotRevoked {
+				t.Fatalf("disconnect after a %d revoke = %d %s, want 200 naming the failure", status, w.Code, w.Body.String())
+			}
+			if _, found := fx.stored(t, fx.subject); found {
+				t.Error("the stored sign-in survived the disconnect")
+			}
+		})
+	}
+}
+
+// The card's last token says how it ended: revoke_pending while a failed
+// revoke waits for the sweep, revoke_failed once Azure DevOps refused it.
+func TestADOPATConsole_LastTokenSaysHowItEnded(t *testing.T) {
+	fx := newADOConsoleLane(t, true)
+	ctx := context.Background()
+	p := fx.st.unrevoked(t)[0]
+	last := func() map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal(fx.scmAccessJSON(t)["last_token"], &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if err := fx.st.NoteRunPATRevokeFailed(ctx, p.RunID, p.AuthorizationID, "HTTP 503"); err != nil {
+		t.Fatal(err)
+	}
+	if m := last(); m["revoke_pending"] != true || m["revoke_failed"] != nil || m["valid_to"] == nil {
+		t.Errorf("open with a failed revoke: last_token = %v, want revoke_pending and valid_to", m)
+	}
+	if _, err := fx.st.MarkRunPATRevoked(ctx, p.RunID, p.AuthorizationID, adoPATRevokeRunEnd, "HTTP 400"); err != nil {
+		t.Fatal(err)
+	}
+	if m := last(); m["revoke_failed"] != true || m["revoke_pending"] != nil || m["revoke_reason"] != adoPATRevokeRunEnd {
+		t.Errorf("closed with a refused revoke: last_token = %v, want revoke_failed with its reason", m)
+	}
+}
+
+// An expired token is dead whatever error its record kept; only a revoke
+// refused short of the expiry leaves it working.
+func TestADOTokenRevokeOutcome(t *testing.T) {
+	at := adoTestNow
+	for name, tc := range map[string]struct {
+		p               store.RunPAT
+		failed, pending bool
+	}{
+		"live":            {store.RunPAT{}, false, false},
+		"revoked":         {store.RunPAT{RevokedAt: &at, RevokeReason: adoPATRevokeRunEnd}, false, false},
+		"refused":         {store.RunPAT{RevokedAt: &at, RevokeReason: adoPATRevokeRunEnd, LastError: "HTTP 400"}, true, false},
+		"expired":         {store.RunPAT{RevokedAt: &at, RevokeReason: adoPATRevokeExpired, LastError: "HTTP 503"}, false, false},
+		"retry scheduled": {store.RunPAT{LastError: "HTTP 503"}, false, true},
+	} {
+		if failed, pending := adoTokenRevokeOutcome(tc.p); failed != tc.failed || pending != tc.pending {
+			t.Errorf("%s: failed, pending = %v, %v; want %v, %v", name, failed, pending, tc.failed, tc.pending)
+		}
+	}
+}

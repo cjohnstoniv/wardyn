@@ -99,7 +99,7 @@ docs/operations/who-gets-in.md=2044 share=35 # +92, measured: the Admin runs sub
 # docs/operations/admin-only-writes.md 3946 adds 2 over 3944, measured: the component unit pin route beside the workspace one.
 # docs/operations/admin-only-writes.md 3935 measured (+2, the unit-admin routes row names the model-usage read); earlier: 3933 measured (+17, platform envelopes: the envelope routes row); earlier: +6 (rc.14, measured 3916: the three audit receipt routes in the security tier row); release tags and the documented-gaps history cut (-90)
 # docs/operations/admin-only-writes.md 3948 measured with both sides merged: the component unit pin route (3946) and the unit-admin routes row naming the model-usage read (+2).
-docs/operations/admin-only-writes.md=3948 share=35 # 3933 measured (+17, platform envelopes: the envelope routes row); earlier: +6 (rc.14, measured 3916: the three audit receipt routes in the security tier row); release tags and the documented-gaps history cut (-90)
+docs/operations/admin-only-writes.md=3963 share=35 # 3963 measured (+15: a Mac deletes its own disk drive image, so the admin delete can leave it); earlier: 3933 measured (+17, platform envelopes: the envelope routes row); earlier: +6 (rc.14, measured 3916: the three audit receipt routes in the security tier row); release tags and the documented-gaps history cut (-90)
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
 # docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
 # docs/operations/admin-only-writes.md 3760 adds 29 over 3731, measured (0.10 unit admins): the unit-admin tier row, and the promotion named in the security row.
@@ -114,12 +114,12 @@ docs/operations/admin-only-writes.md=3948 share=35 # 3933 measured (+17, platfor
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
 # docs/operations/three-roles.md 4826 adds 38 over 4788, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/three-roles.md=5184 share=35 # 5184 measured (+10: a super admin's door exemption narrows to operator-owned runs under WARDYN_GOVERN_ADMIN_RUNS); earlier: 5174 measured (+13: the lifetime cap pointer); earlier: 5161 measured (+4: the deny lists row); earlier: 5157 measured (+2: the scheduled-runs door and the tenth rubric field); earlier: +21, measured: rerouting keys under allowed models; earlier: +20, measured: the admin-runs cross-reference; earlier: -3 net, measured: a role table added; ids, version narration and repeated bullets removed
+docs/operations/three-roles.md=5221 share=35 # 5221 measured (+37: REST exec takes a background run, its governance refusals and errors); earlier: 5184 measured (+10: a super admin's door exemption narrows to operator-owned runs under WARDYN_GOVERN_ADMIN_RUNS); earlier: 5174 measured (+13: the lifetime cap pointer); earlier: 5161 measured (+4: the deny lists row); earlier: 5157 measured (+2: the scheduled-runs door and the tenth rubric field); earlier: +21, measured: rerouting keys under allowed models; earlier: +20, measured: the admin-runs cross-reference; earlier: -3 net, measured: a role table added; ids, version narration and repeated bullets removed
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1380 share=35 # -2, measured: the two-door grid first; version narration removed
 # 0.9.4 W4-DOCS-1: docs/operations/ownership-and-offboarding.md 2383 adds 13 over 2370, measured: #2376: the Azure DevOps owner exception.
-docs/operations/ownership-and-offboarding.md=2424 share=35 # -4 net, measured: step 7a (the rest of what a leaver owns, and SCIM) added; version ids and repeated bullets removed
+docs/operations/ownership-and-offboarding.md=2453 share=35 # 2453 measured (+29: an Azure DevOps revoke that did not finish refuses the erase with 503, and one refused for good is named with tokens_revocation_failed); earlier: -4 net, measured: step 7a (the rest of what a leaver owns, and SCIM) added; version ids and repeated bullets removed
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
@@ -151,7 +151,7 @@ docs/operations/member-runs.md=1079 share=35 # -7, measured: the onboarding-note
 # docs/operations/user-drives.md 4877 adds 54 over 4823, measured: a person's reclaim refuses a team drive; a leaver's team-drive writes are kept (0.10 FEAT-2TEAM).
 # docs/operations/user-drives.md 4938 adds 7 over 4931, measured: a bound folder may be the drive root itself.
 # docs/operations/user-drives.md 4984 adds 46 over 4938, measured: a drive bound to a person's runner also serves Linux VM runs there.
-docs/operations/user-drives.md=4984 share=35 # unchanged, measured: the mac_disk pointer is added and the migration and release narration removed
+docs/operations/user-drives.md=5016 share=35 # 5016 measured (+32 over 4984: a reclaim waits for a starting run, and a Docker run holds its drive volumes); earlier: 4984 unchanged, measured: the mac_disk pointer is added and the migration and release narration removed
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
@@ -163,7 +163,8 @@ docs/operations/capabilities.md=5172 share=35 # 5172 measured (+9 over 5163, mea
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
 # docs/operations/custom-components.md 1283 adds 14 over 1269, measured: a line links the brokered operations recipes.
 # docs/operations/custom-components.md 1464 adds 181 over 1283, measured: the pinned-to-a-unit block and the revive sentence for component_unit_pinned.
-docs/operations/custom-components.md=1464 share=35
+# docs/operations/custom-components.md 1496 adds 32 over 1464, measured: expected_version on a component PUT.
+docs/operations/custom-components.md=1496 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
 # docs/operations/api-tokens.md 5475 adds 9 over 5466 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
@@ -183,7 +184,7 @@ docs/operations/custom-components.md=1464 share=35
 # docs/operations/api-tokens.md 6704 = ours 6691 + theirs 6561 - base 6548 at the 0.10 W7 merge of the workload preview change.
 # docs/operations/api-tokens.md 6598 on id-6: +50 (rc.14, measured 6598: the portal revoke's cut_in_flight option in the table and the Revocation list); earlier: a which-credential table added, offset by release narration and two internal details cut (-2)
 # docs/operations/api-tokens.md 6928 = ours 6911 + theirs 6800 - base 6783 at the 0.10 W7 merge of the 0.10 W7 merge of lane/016-approvers-docs into the rc.16 w3 batch D train.
-docs/operations/api-tokens.md=6928 share=35 # 6911 measured (+128: the portal unit pin section); earlier: 6783 measured on id-5 (+29: created_via_actor on a portal run, and where else the agent rides); earlier: 6754 measured at the 0.10.1 w5 merge of id-6 (ours 6704, theirs 6598); earlier: +143 (rc.14, measured 6691: naming the acting agent on the exchange, its residual and data.via.actor); a which-credential table added, offset by release narration and two internal details cut (-2)
+docs/operations/api-tokens.md=6967 share=35 # 6967 measured (+39: the admin-minted list leaves out a token refused for its owner, and the owner_refused field); earlier: 6911 measured (+128: the portal unit pin section); earlier: 6783 measured on id-5 (+29: created_via_actor on a portal run, and where else the agent rides); earlier: 6754 measured at the 0.10.1 w5 merge of id-6 (ours 6704, theirs 6598); earlier: +143 (rc.14, measured 6691: naming the acting agent on the exchange, its residual and data.via.actor); a which-credential table added, offset by release narration and two internal details cut (-2)
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
@@ -218,7 +219,7 @@ docs/operations/api-tokens.md=6928 share=35 # 6911 measured (+128: the portal un
 # docs/operations/denials.md 5717 adds 1 over 5716, measured (rc.12): git_push_withheld in the runner proxy-setting list.
 # docs/operations/denials.md 5718 adds 1 over 5717, measured (rc.12): forge_hosts in the runner proxy settings list.
 # docs/operations/denials.md 5573 adds 73 over 5500, measured at the rc.16 w3 batch B train: the merged lanes' additions together.
-docs/operations/denials.md=5573 share=35 # 5500 measured (+60: the not_a_decider and decision_scope_above_rule rows); earlier: release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
+docs/operations/denials.md=5684 share=35 # 5684 measured at the rc.21 w2 merge of feature/021-thaw-held-read (head 5649, lane 5608, merge base 5573); earlier: 5649 measured (+76: the decision door joins the tail-upload doors, takes a revoked run token, and writes its refusal once per run); earlier: 5500 measured (+60: the not_a_decider and decision_scope_above_rule rows); earlier: release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

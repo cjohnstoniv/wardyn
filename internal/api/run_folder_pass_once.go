@@ -174,9 +174,9 @@ func (s *Server) holdUnquiesced(ctx context.Context, run types.AgentRun, qerr er
 }
 
 // keepBusy keeps the sandbox of a pass back the runner refused as busy (recordFolderPassBusy), once it is
-// safe to keep (holdUnquiesced); one that is not is stopped with its changes not brought back.
+// safe to keep (holdOnTeardown); one that is not is stopped with its changes not brought back.
 func (s *Server) keepBusy(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
-	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+	if err := s.holdOnTeardown(ctx, run, qerr); err != nil {
 		return s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the runner is still running this run's last pass back", err)
 	}
 	return s.recordFolderPassBusy(ctx, run.ID, folder, gen)
@@ -186,12 +186,33 @@ func (s *Server) keepBusy(ctx context.Context, run types.AgentRun, folder types.
 const folderPassAwayMsg = "Kept: the computer's runner was offline at the end; the copy back is tried again when it is back"
 
 // keepAway keeps the sandbox of a pass back not sent because the computer's runner is offline or not connected
-// here, once it is safe to keep (holdUnquiesced), with a resume and nothing counted, so a later sweep tries
+// here, once it is safe to keep (keepUnsent), with a resume and nothing counted, so a later sweep tries
 // again when the runner is back. One not safe to keep (a virtual machine, an agent that cannot be stopped
 // alone, a sandbox on that same offline computer) is stopped with its changes not brought back, as before.
 func (s *Server) keepAway(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
-	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
-		return s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the computer's runner was offline at the end", err)
+	return s.keepUnsent(ctx, run, folder, gen, qerr, folderPassAwayMsg, "no pass ran; the computer's runner was offline at the end")
+}
+
+// folderPassNoTimeMsg is the record of a pass back not sent because no time was left to start it; the tail owner's
+// next visit runs it. It opens with the words a forced end's keep opens with (forcedKeptForCopyBack), which the run
+// page shows as a keep, not as a failed copy back.
+const folderPassNoTimeMsg = "Kept for its copy back: there was no time left to bring the changes back. Wardyn tries again on its next check."
+
+// keepNoTime keeps the sandbox of a pass back not sent because no time was left for it (computerFolderPassWithin's
+// noTime: the caller's deadline was too near, or its ctx was cancelled), as keepAway keeps one whose runner is away:
+// with a resume and nothing counted, settled, so the tail owner runs the pass. A pass that never ran is no stall, and
+// settling its generation keeps an older runner's next pass from waiting oldPassBound for it. One not safe to keep is
+// stopped with its changes not brought back.
+func (s *Server) keepNoTime(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
+	return s.keepUnsent(ctx, run, folder, gen, qerr, folderPassNoTimeMsg, "no pass ran; no time was left for it when the run ended")
+}
+
+// keepUnsent keeps the sandbox of a pass back that was not sent, once it is safe to keep (holdOnTeardown), with a
+// resume and nothing counted, settled at gen and recorded as kept. One not safe to keep, or whose resume did not land,
+// is stopped with its changes not brought back, its record headed head.
+func (s *Server) keepUnsent(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error, kept, head string) bool {
+	if err := s.holdOnTeardown(ctx, run, qerr); err != nil {
+		return s.stopNotKept(ctx, run.ID, folder, gen, true, head, err)
 	}
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
@@ -199,22 +220,41 @@ func (s *Server) keepAway(ctx context.Context, run types.AgentRun, folder types.
 		if st.Resume == nil {
 			st.Resume = &types.FolderResume{}
 		}
-		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, folderPassAwayMsg, true)
+		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, kept, true)
 		st.Settled = gen
 	}) {
-		s.auditComputerFolderPass(rctx, run.ID, folder, true, runnerwire.FolderPass{}, folderPassAwayMsg)
+		s.auditComputerFolderPass(rctx, run.ID, folder, true, runnerwire.FolderPass{}, kept)
 		return true
 	}
 	// A resume that did not land leaves the sweeps nothing to resume: kept only for an owner that moved the record on.
-	return s.folderGenTaken(rctx, run.ID, gen) || s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the computer's runner was offline at the end", errors.New("its record could not be written"))
+	return s.folderGenTaken(rctx, run.ID, gen) || s.stopNotKept(ctx, run.ID, folder, gen, true, head, errors.New("its record could not be written"))
+}
+
+// holdOnTeardown is holdUnquiesced asked on a teardownCtx, as stopForKeep asks it: a caller with no time left, or
+// cancelled, still gets its agent stopped before its sandbox is kept.
+func (s *Server) holdOnTeardown(ctx context.Context, run types.AgentRun, qerr error) error {
+	hctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	return s.holdUnquiesced(hctx, run, qerr)
+}
+
+// stopAgentOnTeardown is stopAgentForPass asked on a teardownCtx, as holdOnTeardown asks holdUnquiesced: a person's
+// bring-back whose ctx is cancelled after the run's end (a daemon shutdown) still gets its agent stopped, and its pass
+// then has no time left and is kept owed (keepNoTime). On the cancelled ctx itself the stop fails, which would record
+// the bring-back as settled with no pass run and stop its sandbox with the changes in it. The stop still ends at the
+// end hold's deadline and when the run's lock is lost (teardownCtxWithin).
+func (s *Server) stopAgentOnTeardown(ctx context.Context, ref string) error {
+	actx, cancel := teardownCtx(ctx)
+	defer cancel()
+	return s.stopAgentForPass(actx, ref)
 }
 
 // keepUnconfirmed keeps the sandbox of a pass back not sent because the runner may still run the last
-// (errFolderPassUnconfirmed), once it is safe to keep (holdUnquiesced), with the last pass's send time
+// (errFolderPassUnconfirmed), once it is safe to keep (holdOnTeardown), with the last pass's send time
 // (genAt) kept, so the wait does not start again. One not safe to keep is stopped with its changes not
 // brought back.
 func (s *Server) keepUnconfirmed(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus, genAt time.Time, qerr error) bool {
-	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+	if err := s.holdOnTeardown(ctx, run, qerr); err != nil {
 		return s.stopNotKept(ctx, run.ID, folder, gen, false, "no pass ran; the runner may still be running its last pass back", err)
 	}
 	return s.keepForResume(ctx, run.ID, folder, gen, rec, genAt)
@@ -380,4 +420,57 @@ func (s *Server) recordFolderPassBusy(ctx context.Context, id uuid.UUID, folder 
 		s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, folderPassBusyMsg)
 	}
 	return true
+}
+
+// keepAfterBumpMiss answers whether the sandbox stays up after a bump that did not land: only when another
+// owner moved the record on, which a fresh read proves; otherwise the miss is recorded and the sandbox stops.
+func (s *Server) keepAfterBumpMiss(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost, unread bool) bool {
+	if lost && !unread && s.folderGenTaken(ctx, id, gen) {
+		return true
+	}
+	s.recordFolderBumpMissed(ctx, id, folder, gen, lost)
+	return false
+}
+
+// recordFolderBumpMissed is what a pass back that ran no pass leaves when its record
+// could not be moved to the pass's generation (the sandbox is stopped after this, by the caller, and the stop is
+// reported on its own path): one failure row, and one try at the record on gen, the
+// generation it was read at. lost is a clean miss (another owner moved the record); otherwise the store
+// failed, and its error is in bumpComputerFolderGen's log. A write that does not land is logged and changes
+// nothing else.
+func (s *Server) recordFolderBumpMissed(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, lost bool) {
+	why := "its store could not write it"
+	if lost {
+		why = "another owner moved it"
+	}
+	errText := "no pass ran; the folder record could not be moved before its pass: " + boundReason(why) +
+		"; the changes were not copied back by this attempt, uncounted"
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, errText)
+	if !s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
+		st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, errText, true)
+	}) {
+		slog.WarnContext(ctx, "wardynd: a computer folder's pass record could not say why its pass did not run", slog.String("run_id", id.String()))
+	}
+}
+
+// keepUnreadFolder decides the sandbox of an end that could not read its computer folder's settings or its run's
+// data_out rule by the rule the sweeps keep a sandbox by (folderKeepVerdict): kept, with no pass run and nothing
+// written, only once the agent's cut is confirmed, or left in place while the run's runner is not here. The record
+// then still owes its pass back (folderOwedRecord), which the tail owner runs once those reads answer, or gives up
+// past the keep, durably, before its own finalize stops the sandbox with no pass (tailFinalize). A killed run, a run
+// that cannot be read and a sandbox that cannot be cut are stopped, as before. A cut that fails is audited as action.
+func (s *Server) keepUnreadFolder(ctx context.Context, runID uuid.UUID, ref, action string, readErr error) bool {
+	vctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	run, err := s.cfg.Store.GetRun(vctx, runID)
+	if err != nil || run.State == types.RunKilled {
+		return false
+	}
+	run.SandboxRef = ref
+	slog.WarnContext(ctx, "wardynd: an ended run's computer folder settings or data_out rule could not be read; its sandbox is kept only on a confirmed cut",
+		slog.String("run_id", runID.String()), slog.Any("err", readErr))
+	v, _, _ := s.folderKeepVerdict(vctx, run, action)
+	return v != folderKeepNone
 }

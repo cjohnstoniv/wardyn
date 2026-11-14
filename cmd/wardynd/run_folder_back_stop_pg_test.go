@@ -79,3 +79,40 @@ func TestPG_GracefulStopsBringTheComputerFolderBackUnderTheRunLock(t *testing.T)
 		}
 	}
 }
+
+// A graceful stop whose end hold has passed by its sandbox stop leaves the sandbox to the readers, as every other end
+// does: the hold is asked on the ctx lockEnd returned, just before StopSandbox, and the rest of the stop (the output)
+// still runs. Catches the idle or max-age stop made past its end hold. Guarded by WARDYN_TEST_PG.
+func TestPG_GracefulStopsSkipTheStopPastTheEndHold(t *testing.T) {
+	pool := revocationPool(t)
+	ctx := context.Background()
+	pg := store.PG{Pool: pool}
+	run := skewedRun(t, pg, 60)
+	if err := pg.SetSandboxRef(ctx, run.ID, "sbx-hold-passed"); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var order []string
+	add := func(s string) { mu.Lock(); order = append(order, s); mu.Unlock() }
+	stopper := lifecycleStopper{
+		pool:         pool,
+		runner:       orderRunner{mu: &mu, order: &order},
+		finishOutput: func(context.Context, uuid.UUID) { add("finish") },
+		lockEnd: func(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
+			return context.WithValue(ctx, runEndHeld{}, id), func() {}, true
+		},
+		holdPassed: func(ctx context.Context) bool {
+			if ctx.Value(runEndHeld{}) != run.ID {
+				t.Error("the end hold was asked on a ctx lockEnd did not return")
+			}
+			add("hold")
+			return true
+		},
+	}
+	if out, err := stopper.StopRun(ctx, run.ID, time.Now().Add(time.Hour)); err != nil || !out.Applied {
+		t.Fatalf("stop = %+v, %v; want applied", out, err)
+	}
+	if want := []string{"hold", "finish"}; !slices.Equal(order, want) {
+		t.Fatalf("order %v, want %v: no sandbox stop past the end hold", order, want)
+	}
+}

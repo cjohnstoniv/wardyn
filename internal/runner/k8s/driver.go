@@ -139,6 +139,10 @@ type Config struct {
 	// TrustedCAPEM is runnerd's corporate CA bundle, applied to the proxy config and the sandbox
 	// before pod construction (design K1 §5.2).
 	TrustedCAPEM string
+	// UpstreamProxyURL is runnerd's own corporate upstream proxy (--upstream-proxy), validated at boot.
+	// Runner mode makes it every run's upstream_proxy_url; the organisation never sends one to a runner.
+	// It may carry a credential, so it is never logged. Empty changes nothing.
+	UpstreamProxyURL string
 	// Arch is --arch (amd64 or arm64), merged into the node selector of every pod as
 	// kubernetes.io/arch (design K1 §6.1). Required in runner mode.
 	Arch string
@@ -196,6 +200,17 @@ type EvidenceStore interface {
 
 // runnerMode reports a Driver wardyn-runnerd built.
 func (d *Driver) runnerMode() bool { return d.cfg.RunnerID != "" }
+
+// runnerProxyKeys is the proxy config keys only a runner sets: self_lapse, the run's decision sink, the
+// hard deny and, when runnerd has one, its own upstream proxy, as on Docker. The organisation never
+// sends an upstream proxy to a runner.
+func (d *Driver) runnerProxyKeys(sink any) map[string]any {
+	keys := map[string]any{"self_lapse": true, "decision_sink": sink, "hard_deny": d.hardDeny}
+	if d.cfg.UpstreamProxyURL != "" {
+		keys["upstream_proxy_url"] = d.cfg.UpstreamProxyURL
+	}
+	return keys
+}
 
 func (c *Config) withDefaults() {
 	if c.StartTimeout <= 0 {

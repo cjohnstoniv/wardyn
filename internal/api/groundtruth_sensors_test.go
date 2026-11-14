@@ -7,17 +7,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -58,7 +63,7 @@ func (s *nodeSensorStore) ListGroundtruthSensors(_ context.Context, since time.T
 	return out, nil
 }
 
-func (s *nodeSensorStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (s *nodeSensorStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	if s.beat.Action == "" {
 		return types.AuditEvent{}, store.ErrNotFound
 	}
@@ -194,6 +199,139 @@ func TestGroundtruthPodEventAfterRunEndedDowngrades(t *testing.T) {
 	}
 }
 
+// TestGroundtruthExecMaskedWithItsRun: an exec's raw arguments carry a secret registered only for its
+// run, one containing a space. The row is masked with that run's secrets before the arguments are
+// split onto argv, both when the event keeps its run and when, for a run that ended over 15 minutes
+// ago, it loses it. An event naming no run is split all the same and leaves no entry for the unknown
+// id in the registry.
+func TestGroundtruthExecMaskedWithItsRun(t *testing.T) {
+	t.Setenv("WARDYN_K8S_NAMESPACE", "wardyn-runs")
+	const secret = "alphaBravo charlieDelta"
+	now := time.Now().UTC()
+	for name, tc := range map[string]struct {
+		endedAgo   time.Duration
+		noRun      bool // the event names a run the store does not have
+		wantReason string
+		wantArgv   []string
+	}{
+		"kept on its run": {endedAgo: 5 * time.Minute, wantArgv: []string{"/usr/bin/mysql", "--password=<secret-hidden>", "--host", "db"}},
+		"ended 16m ago":   {endedAgo: 16 * time.Minute, wantReason: "run_ended", wantArgv: []string{"/usr/bin/mysql", "--password=<secret-hidden>", "--host", "db"}},
+		"names no run":    {noRun: true, wantReason: "run_id_not_found", wantArgv: []string{"/usr/bin/mysql", "--password=alphaBravo", "charlieDelta", "--host", "db"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			ended := now.Add(-tc.endedAgo)
+			cfg := baseTestConfig(h, &nodeSensorStore{run: types.AgentRun{ID: runID, State: types.RunCompleted,
+				CreatedAt: now.Add(-time.Hour), UpdatedAt: now, EndedAt: &ended}})
+			cfg.Now = func() time.Time { return now }
+			cfg.MaskRegistry = secretmask.NewRegistry()
+			if err := cfg.MaskRegistry.Add(runID, []byte(secret)); err != nil {
+				t.Fatalf("register secret: %v", err)
+			}
+			named := runID
+			if tc.noRun {
+				named = uuid.New()
+			}
+			data, _ := json.Marshal(groundtruth.EventData{Stream: groundtruth.Stream, Subtype: groundtruth.SubtypeProcessExec,
+				Correlation: groundtruth.CorrelationMapped, Node: "node-a", Pod: "wardyn-runs/wardyn-agent-" + named.String(),
+				Argv: []string{"/usr/bin/mysql"}, Arguments: "--password=" + secret + " --host db"})
+			postBatch(t, h, New(cfg), types.AuditEvent{Action: groundtruth.ActionProcessExec, RunID: &named,
+				Target: "/usr/bin/mysql", Outcome: "success", Data: data})
+
+			got, ed := recordedByTarget(t, h, "/usr/bin/mysql")
+			if !slices.Equal(ed.Argv, tc.wantArgv) || ed.Arguments != "" {
+				t.Errorf("argv = %q, arguments = %q, want %q and none", ed.Argv, ed.Arguments, tc.wantArgv)
+			}
+			if tc.noRun {
+				if slices.Contains(cfg.MaskRegistry.RunIDs(), named) {
+					t.Errorf("the registry holds an entry for %s, a run id the store does not have", named)
+				}
+			} else if strings.Contains(string(got.Data), "alphaBravo") || strings.Contains(string(got.Data), "charlieDelta") {
+				t.Errorf("recorded data carries the run's secret: %s", got.Data)
+			}
+			if kept := tc.wantReason == ""; (got.RunID != nil) != kept || ed.Reason != tc.wantReason {
+				t.Errorf("run=%v reason=%q, want kept=%v reason=%q", got.RunID, ed.Reason, kept, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestGroundtruthExecSplitWaitsOnTheCorpus: the server that takes the batch has not read the run's secret yet, one
+// containing a space that another replica registered. The raw arguments are split only after one read of the shared
+// corpus for the batch. A read that brings the secret hides it whole; a read that fails stores the placeholder in
+// place of the arguments, since words split under a short corpus can never be masked afterwards.
+func TestGroundtruthExecSplitWaitsOnTheCorpus(t *testing.T) {
+	t.Setenv("WARDYN_K8S_NAMESPACE", "wardyn-runs")
+	const secret = "alphaBravo charlieDelta"
+	now := time.Now().UTC()
+	for name, tc := range map[string]struct {
+		down      bool
+		uncovered bool // the run's manifest cannot be proven here
+		wantArgv  []string
+	}{
+		"the read brings the secret":          {wantArgv: []string{"/usr/bin/mysql", "--password=<secret-hidden>", "--host", "db"}},
+		"the read fails":                      {down: true, wantArgv: []string{"/usr/bin/mysql", "<secret-hidden>"}},
+		"the run's manifest cannot be proven": {uncovered: true, wantArgv: []string{"/usr/bin/mysql", "<secret-hidden>"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			cfg := baseTestConfig(h, &nodeSensorStore{run: types.AgentRun{ID: runID, State: types.RunRunning,
+				CreatedAt: now.Add(-time.Hour), UpdatedAt: now}})
+			cfg.Now = func() time.Time { return now }
+			reg, backend := newReadBackend(0)
+			backend.stage(runID, secret)
+			backend.down = tc.down
+			cfg.MaskRegistry = reg
+			if tc.uncovered {
+				// A Postgres that refuses every connection (pgxpool dials lazily): Covered answers false.
+				pool, err := pgxpool.New(context.Background(), "postgres://wardyn@127.0.0.1:1/wardyn?connect_timeout=1&sslmode=disable")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(pool.Close)
+				cfg.MaskManifests = maskmanifest.New(pool, noKeys{}, reg)
+			}
+			data, _ := json.Marshal(groundtruth.EventData{Stream: groundtruth.Stream, Subtype: groundtruth.SubtypeProcessExec,
+				Correlation: groundtruth.CorrelationMapped, Node: "node-a", Pod: "wardyn-runs/wardyn-agent-" + runID.String(),
+				Argv: []string{"/usr/bin/mysql"}, Arguments: "--password=" + secret + " --host db"})
+			exec := types.AuditEvent{Action: groundtruth.ActionProcessExec, RunID: &runID, Target: "/usr/bin/mysql",
+				Outcome: "success", Data: data}
+			postBatch(t, h, New(cfg), exec, exec)
+
+			got, ed := recordedByTarget(t, h, "/usr/bin/mysql")
+			if !slices.Equal(ed.Argv, tc.wantArgv) || ed.Arguments != "" {
+				t.Errorf("argv = %q, arguments = %q, want %q and none", ed.Argv, ed.Arguments, tc.wantArgv)
+			}
+			if strings.Contains(string(got.Data), "alphaBravo") || strings.Contains(string(got.Data), "charlieDelta") {
+				t.Errorf("recorded data carries the run's secret: %s", got.Data)
+			}
+			if n := backend.readCount(); n != 1 {
+				t.Errorf("the shared corpus was read %d times for a batch of two execs, want once", n)
+			}
+		})
+	}
+}
+
+// TestGroundtruthHeartbeatLeftAsSent: a process-wide masked value that also occurs in a beat, here its node name, does not
+// rewrite the node its health row is written under. The handler leaves a heartbeat as the sensor sent it.
+func TestGroundtruthHeartbeatLeftAsSent(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &nodeSensorStore{}
+	cfg := baseTestConfig(h, st)
+	cfg.Now = func() time.Time { return now }
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	if err := cfg.MaskRegistry.AddGlobal(0, "", "a-credential", now, []byte("node-alpha-0001")); err != nil {
+		t.Fatalf("register a process-wide value: %v", err)
+	}
+	postBatch(t, h, New(cfg), groundtruth.HeartbeatEventForNode("node-alpha-0001", 3, 7, 2, map[string]uint64{groundtruth.ActionProcessExec: 7}))
+	if len(st.upserts) != 1 || st.upserts[0].Node != "node-alpha-0001" || st.upserts[0].ObservedTotal != 7 {
+		t.Fatalf("upserts = %+v, want one row for node-alpha-0001 with observed 7", st.upserts)
+	}
+}
+
 // TestGroundtruthHeartbeatUpsertsNodeSensor: each kernel.sensor.ping writes its node's row with the
 // server's clock and the beat's counts; the Compose sensor's row is the empty node.
 func TestGroundtruthHeartbeatUpsertsNodeSensor(t *testing.T) {
@@ -255,7 +393,7 @@ func TestHealthzEbpfOneNodeMatchesToday(t *testing.T) {
 
 	today := nodeSensorServer(h, stubHeartbeatStore{ev: beat}, now)
 	oneNode := nodeSensorServer(h, &nodeSensorStore{beat: beat, sensors: []store.GroundtruthSensor{
-		{Node: "", LastBeat: beat.Time, DroppedTotal: 1, ObservedTotal: 6, ObservedByKind: healthyKinds},
+		{Node: "", LastBeat: beat.Time, DroppedTotal: 1, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &beat.Time},
 		{Node: "gone-node", LastBeat: now.Add(-30 * time.Hour)},
 	}}, now)
 
@@ -277,9 +415,10 @@ func TestHealthzEbpfOneNodeMatchesToday(t *testing.T) {
 func TestHealthzEbpfTwoNodesOneStaleDegraded(t *testing.T) {
 	h := newHarness(t)
 	now := time.Now().UTC().Truncate(time.Second)
+	rose := now.Add(-5 * time.Minute)
 	st := &nodeSensorStore{sensors: []store.GroundtruthSensor{
-		{Node: "node-a", LastBeat: now.Add(-20 * time.Second), ObservedTotal: 6, ObservedByKind: healthyKinds},
-		{Node: "node-b", LastBeat: now.Add(-5 * time.Minute), ObservedTotal: 3, ObservedByKind: healthyKinds},
+		{Node: "node-a", LastBeat: now.Add(-20 * time.Second), ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &rose},
+		{Node: "node-b", LastBeat: now.Add(-5 * time.Minute), ObservedTotal: 3, ObservedByKind: healthyKinds, EvidenceAt: &rose},
 		{Node: "node-c", LastBeat: now.Add(-25 * time.Hour), ObservedTotal: 9},
 	}}
 	srv := nodeSensorServer(h, st, now)
@@ -486,7 +625,7 @@ func TestGroundtruthPodEventAfterLeaseEndedDowngrades(t *testing.T) {
 // TestHealthzEbpfNodeReadFailureIsDegraded: a failed per-node read (say a split-role install missing
 // the grant on groundtruth_sensors) must not fall back to the newest heartbeat anywhere, which would
 // read healthy while another node is dead. It reads degraded, with the same reason anonymously. A
-// successful read of zero nodes keeps today's answer.
+// successful read of zero nodes reads the sensor's audit beat, which holds no rise in its counts.
 func TestHealthzEbpfNodeReadFailureIsDegraded(t *testing.T) {
 	h := newHarness(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -503,12 +642,86 @@ func TestHealthzEbpfNodeReadFailureIsDegraded(t *testing.T) {
 		t.Errorf("anonymous ebpf_groundtruth = %v, want degraded with the same reason", anon)
 	}
 
-	today := nodeSensorServer(h, stubHeartbeatStore{ev: beat}, now)
 	zero := nodeSensorServer(h, &nodeSensorStore{beat: beat}, now)
-	want, _ := json.Marshal(today.ebpfGroundtruthStatus(context.Background()))
-	got, _ := json.Marshal(zero.ebpfGroundtruthStatus(context.Background()))
-	if string(got) != string(want) {
-		t.Fatalf("zero-node status = %s\nwant today's    %s", got, want)
+	if got := zero.ebpfGroundtruthStatus(context.Background()); got["state"] != "idle" || got["reason"] != groundtruthNotYetKnown ||
+		got["last_heartbeat"] != beat.Time.Format(time.RFC3339) {
+		t.Fatalf("zero-node status = %v, want the audit beat read idle with %q", got, groundtruthNotYetKnown)
+	}
+}
+
+// Lifetime counts prove nothing about now: a fresh beat with counts but no rise in them on record
+// (a first beat, a rise across a long gap, or no node row at all) reads idle with its own reason
+// and note, never healthy, alone or beside a healthy node.
+func TestHealthzEbpfNotYetKnownIsNeverHealthy(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	rose := now.Add(-time.Minute)
+	beat := groundtruth.HeartbeatEventWithDropped(0, 6, 0, healthyKinds)
+	beat.Time = now.Add(-10 * time.Second)
+	for name, tc := range map[string]struct {
+		st                   *nodeSensorStore
+		wantReason, wantNote string
+	}{
+		"a node row with no rise on record": {st: &nodeSensorStore{sensors: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: beat.Time, ObservedTotal: 6, ObservedByKind: healthyKinds}}},
+			wantReason: groundtruthNotYetKnown, wantNote: hostSensorNotYetKnownCaveat},
+		"no node row, the audit beat only": {st: &nodeSensorStore{beat: beat},
+			wantReason: groundtruthNotYetKnown, wantNote: hostSensorNotYetKnownCaveat},
+		"one of two nodes": {st: &nodeSensorStore{sensors: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: beat.Time, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &rose},
+			{Node: "node-b", LastBeat: beat.Time, ObservedTotal: 4, ObservedByKind: healthyKinds}}},
+			wantReason: "1 of 2 node sensors idle", wantNote: fmt.Sprintf(hostSensorsNotYetKnownCaveat, 1, 2)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := nodeSensorServer(h, tc.st, now)
+			got := srv.ebpfGroundtruthStatus(context.Background())
+			if got["state"] != "idle" {
+				t.Fatalf("state = %v (%v), want idle, never healthy", got["state"], got)
+			}
+			if got["reason"] != tc.wantReason {
+				t.Errorf("reason = %v, want %q", got["reason"], tc.wantReason)
+			}
+			if note := srv.hostSensorCaveat(context.Background()); note != tc.wantNote {
+				t.Errorf("note = %q\nwant %q", note, tc.wantNote)
+			}
+		})
+	}
+}
+
+// With two or more node sensors the reason only counts the idle nodes, so the note comes from their
+// causes: nodes whose counts stopped rising get the quiet note, never "zero mapped kernel events",
+// and a quiet node beside a zero-count one still gets it, counting the quiet one.
+func TestHostSensorCaveatTwoNodesQuiet(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	quiet := now.Add(-store.GroundtruthEvidenceWindow - time.Minute)
+	fresh := now.Add(-10 * time.Second)
+	for name, tc := range map[string]struct {
+		rows []store.GroundtruthSensor
+		want string
+	}{
+		"both quiet": {rows: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: fresh, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &quiet},
+			{Node: "node-b", LastBeat: fresh, ObservedTotal: 4, ObservedByKind: healthyKinds, EvidenceAt: &quiet}},
+			want: fmt.Sprintf(hostSensorsQuietCaveat, 2, 2)},
+		"one quiet, one zero-count": {rows: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: fresh, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &quiet},
+			{Node: "node-b", LastBeat: fresh}},
+			want: fmt.Sprintf(hostSensorsQuietCaveat, 1, 2)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := nodeSensorServer(h, &nodeSensorStore{sensors: tc.rows}, now)
+			if st := srv.ebpfGroundtruthStatus(context.Background()); st["state"] != "idle" {
+				t.Fatalf("state = %v, want idle", st["state"])
+			}
+			note := srv.hostSensorCaveat(context.Background())
+			if note != tc.want {
+				t.Errorf("note = %q\nwant %q", note, tc.want)
+			}
+			if strings.Contains(note, "mapped zero") || strings.Contains(note, "zero mapped") {
+				t.Errorf("note = %q says zero mapped events for nodes whose counts are positive", note)
+			}
+		})
 	}
 }
 

@@ -34,9 +34,11 @@ type Network struct {
 	OrgURL, Source, OrgSetting string
 	// Strict applies setup's own rule for a runner's organisation URL (federation.CheckOrgURL).
 	Strict bool
-	// Identity adds the /api/v1/me stage. Token is never printed; TokenSource names where it came from.
+	// Identity adds the /api/v1/me stage. Token is never printed; TokenSource names where it came from, and
+	// TokenSignIn marks it as the sign-in `wardyn login` stored, which signing in again replaces.
 	Identity           bool
 	Token, TokenSource string
+	TokenSignIn        bool
 	// Wire adds the runner-wire stage: whether a WebSocket upgrade on the runner stream route gets through.
 	Wire bool
 	// WireDespiteHealthz runs the wire stage after an advisory healthz failure too, for a command that
@@ -55,6 +57,10 @@ type Network struct {
 	SystemRoots, ExtraCA *x509.CertPool
 	ExtraCASource        string
 	ExtraCATrusted       bool
+	// OriginCA is trust the command gives the organisation's own host and never a proxy (the CLI's
+	// `wardyn ca add` anchors), named by OriginCASource.
+	OriginCA       *x509.CertPool
+	OriginCASource string
 	// ProxyNote is appended to the proxy stage, for what the diagnosed command's own environment lacks.
 	ProxyNote string
 	// ServerVersion is what /healthz reported, "" when it did not.
@@ -100,7 +106,10 @@ func (n *Network) Run(ctx context.Context) []Stage {
 		rest("not run: the route to the organisation is not usable", "tls", "healthz")
 		return out
 	}
-	p := &probe{n: n}
+	p := &probe{n: n, origin: strings.TrimRight(u.Hostname(), ".")}
+	if proxy != nil && proxy.Scheme == "https" {
+		p.proxy = proxy.Hostname()
+	}
 	tr := p.transport()
 	resp, err := p.get(ctx, tr, u, "/healthz")
 	tlsSt := n.tlsStage(p, u, proxy, err)
@@ -204,6 +213,9 @@ type probe struct {
 	extraOnly bool
 	verifyErr error
 	connect   int
+
+	// origin is the organisation's host, and proxy an https:// proxy's ("" for none): the names a handshake is held to.
+	origin, proxy string
 }
 
 func (p *probe) transport() *http.Transport {
@@ -220,21 +232,27 @@ func (p *probe) transport() *http.Transport {
 	}
 }
 
-// verify checks the presented chain against the command's trust store, then against the extra bundle, so the
-// report can say which one vouched for it, and records the leaf even when neither did.
+// verify checks the presented chain, for the name this handshake dialled, against the command's trust store,
+// then the organisation's own anchors (for its host only), then the extra bundle, so the report can say which
+// one vouched for it, and records the leaf even when none did.
 func (p *probe) verify(cs tls.ConnectionState) error {
 	p.leaf = cs.PeerCertificates[0]
 	inter := x509.NewCertPool()
 	for _, c := range cs.PeerCertificates[1:] {
 		inter.AddCert(c)
 	}
+	name, origin := p.peer(cs)
 	try := func(roots *x509.CertPool) error {
-		_, err := p.leaf.Verify(x509.VerifyOptions{DNSName: cs.ServerName, Roots: roots, Intermediates: inter})
+		_, err := p.leaf.Verify(x509.VerifyOptions{DNSName: name, Roots: roots, Intermediates: inter})
 		return err
 	}
 	err := try(p.n.SystemRoots)
 	if err == nil {
 		p.store = "system"
+		return nil
+	}
+	if origin && p.n.OriginCA != nil && try(p.n.OriginCA) == nil {
+		p.store = p.n.OriginCASource
 		return nil
 	}
 	if p.n.ExtraCA != nil && try(p.n.ExtraCA) == nil {
@@ -246,6 +264,29 @@ func (p *probe) verify(cs tls.ConnectionState) error {
 	}
 	p.verifyErr = err
 	return err
+}
+
+// peer is the name the handshake dialled and whether it is the organisation's. Go sends no SNI for an IP
+// address and leaves ConnectionState.ServerName empty then, and x509 checks no name at all for an empty one,
+// so an empty name is the organisation's address when that is an IP, else the https:// proxy's. With both an
+// IP, the proxy's handshake is held to the organisation's address, which fails closed.
+func (p *probe) peer(cs tls.ConnectionState) (name string, origin bool) {
+	switch {
+	case cs.ServerName != "":
+		return cs.ServerName, strings.EqualFold(cs.ServerName, p.origin)
+	case p.proxy != "" && !sendsNoName(p.origin):
+		return p.proxy, false
+	}
+	return p.origin, true
+}
+
+// sendsNoName is whether a handshake to host carries no server name: host is an IP address, with or without
+// a zone (crypto/tls drops the zone before it decides).
+func sendsNoName(host string) bool {
+	if i := strings.LastIndex(host, "%"); i > 0 {
+		host = host[:i]
+	}
+	return net.ParseIP(host) != nil
 }
 
 // get is a GET that does not follow a redirect, with a bounded wait, through tr.
@@ -295,7 +336,7 @@ func (n *Network) certFailure(p *probe, u *url.URL) Stage {
 		detail := presented + ", which no trusted root signed (a proxy that inspects TLS does this)"
 		if !n.ExtraCATrusted {
 			return FailStage("tls", detail, "SSL_CERT_FILE",
-				"a PEM bundle holding that issuer's root CA (Linux), or add the root to the system trust store; wardyn-runnerd reads WARDYN_TRUSTED_CA_FILE instead")
+				"a PEM bundle holding that issuer's root CA (Linux), add the root to the system trust store, or run `wardyn ca add <file>` to add it to the CLI's trust store; wardyn-runnerd reads WARDYN_TRUSTED_CA_FILE instead")
 		}
 		return FailStage("tls", detail, "WARDYN_TRUSTED_CA_FILE", "a PEM file holding that issuer's root CA")
 	case errors.As(p.verifyErr, &wrongHost):
@@ -386,18 +427,24 @@ func (n *Network) identityStage(ctx context.Context, u *url.URL, tr *http.Transp
 	c := &sdk.Client{BaseURL: u.String(), Token: n.Token, HTTPClient: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	raw, err := c.Me(ctx)
 	var ae *sdk.APIError
+	token := "the token from " + n.TokenSource
+	if n.TokenSignIn {
+		token = "your stored `wardyn login` sign-in"
+	}
 	switch {
 	case errors.As(err, &ae) && (ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden):
 		from := "no token was sent"
 		if n.Token != "" {
-			from = "the token from " + n.TokenSource + " was refused"
+			from = token + " was refused"
 		}
-		setting := "WARDYN_TOKEN"
-		if n.TokenSource == "WARDYN_ADMIN_TOKEN" {
+		setting, fix := "WARDYN_TOKEN", "a personal API token: sign in to the console and create one in Settings (a deployment with single sign-on and no admin token takes nothing else)"
+		switch {
+		case n.Token != "" && n.TokenSignIn:
+			setting, fix = "", "sign in again with `wardyn login`"
+		case n.TokenSource == "WARDYN_ADMIN_TOKEN":
 			setting = n.TokenSource
 		}
-		return FailStage("identity", fmt.Sprintf("/api/v1/me answered %d: %s", ae.Status, from), setting,
-			"a personal API token: sign in to the console and create one in Settings (a deployment with single sign-on and no admin token takes nothing else)")
+		return FailStage("identity", fmt.Sprintf("/api/v1/me answered %d: %s", ae.Status, from), setting, fix)
 	case err != nil:
 		return FailStage("identity", "/api/v1/me did not answer: "+unwrapURL(err).Error(), n.OrgSetting, "your organisation's Wardyn address")
 	}
@@ -405,7 +452,7 @@ func (n *Network) identityStage(ctx context.Context, u *url.URL, tr *http.Transp
 	_ = json.Unmarshal(raw, &me)
 	who := "no token sent (this server asked for none)"
 	if n.Token != "" {
-		who = "the token from " + n.TokenSource
+		who = token
 	}
 	return OKStage("identity", fmt.Sprintf("%s: method %s, role %s", who, me.Method, me.Role))
 }

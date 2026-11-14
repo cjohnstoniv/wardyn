@@ -268,7 +268,7 @@ func (s *Server) canSeeGovernanceChange(r *http.Request, ch types.GovernanceChan
 		return true
 	}
 	_, principal := actorFromRequest(r)
-	return sameGovernanceHuman(ch, principal, oidcEmailFromContext(r.Context()))
+	return s.ownsGovernanceChange(ch, principal, oidcEmailFromContext(r.Context()))
 }
 
 // govProposal is a covered write to hold.

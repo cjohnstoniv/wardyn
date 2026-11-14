@@ -6,7 +6,7 @@
 // GovernanceScreen — what each section says once, and where the longer text lives (#3049, #3060). Split from
 // governance-screen.test.tsx, which is at the file-size cap.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -14,6 +14,7 @@ vi.mock("../../../lib/api/runs", () => ({ runs: { gradePolicy: () => Promise.res
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 const getGovernanceMock = vi.fn();
+const listChangesMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -21,7 +22,7 @@ vi.mock("../../../lib/api/governance", async () => {
     governance: {
       getGovernance: () => getGovernanceMock(),
       previewGovernance: () => Promise.resolve({}),
-      listChanges: () => Promise.resolve([]),
+      listChanges: () => listChangesMock(),
     },
   };
 });
@@ -36,8 +37,8 @@ vi.mock("../../../lib/api/policies", async () => {
 });
 vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () => Promise.resolve([]) } }));
 
-import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import type { GovernanceEffective, GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
+import { CHANGES, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
@@ -69,7 +70,9 @@ function renderScreen(snap: GovernanceSnapshot = WITH_ROWS) {
 
 beforeEach(() => {
   getGovernanceMock.mockReset();
-  getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC2" });
+  listChangesMock.mockReset().mockResolvedValue([]);
+  // The signed-in person's own ceiling, narrower than the deployment's.
+  getDefaultPolicyMock.mockReset().mockResolvedValue({ allowed_domains: ["mine.corp"], min_confinement_class: "CC2" });
   window.localStorage.clear();
 });
 
@@ -120,15 +123,79 @@ describe("GovernanceScreen — the Default unit", () => {
     expect(screen.getByRole("button", { name: GOV.NEW_CTA })).toBeInTheDocument();
   });
 
-  const DEFAULT_UNIT: GovernanceUnit = { ...PLATFORM, id: DEFAULT_GOVERNANCE_UNIT_ID, name: "Default", kind: "default", depth: 1 };
+  const DEPLOYMENT_WALLS: GovernanceEffective = { ceiling: { ...PLATFORM.ceiling, allowed_domains: ["*"] }, limits: {} };
+  const DEFAULT_UNIT: GovernanceUnit = {
+    ...PLATFORM, id: DEFAULT_GOVERNANCE_UNIT_ID, name: "Default", kind: "default", depth: 1, effective: DEPLOYMENT_WALLS,
+  };
+  const COMPOSED: GovernanceUnit = { ...PLATFORM, id: "c1", name: "Composed", overlay: {}, parent_id: DEFAULT_GOVERNANCE_UNIT_ID };
 
-  it("a unit based on Default opens in the editor on the deployment ceiling, which is fetched", async () => {
-    const COMPOSED: GovernanceUnit = { ...PLATFORM, id: "c1", name: "Composed", overlay: {}, parent_id: DEFAULT_GOVERNANCE_UNIT_ID };
-    renderScreen({ profiles: [DEFAULT_UNIT, COMPOSED], assignments: [] });
+  async function openComposed() {
     await userEvent.click(await screen.findByRole("button", { name: `${GOV.EDIT} ${COMPOSED.name}` }));
     const editor = await screen.findByTestId("governance-profile-editor");
     expect(within(editor).getByText(GOV.BASE_DEPLOYMENT)).toBeInTheDocument();
-    await waitFor(() => expect(getDefaultPolicyMock).toHaveBeenCalled());
+    return editor;
+  }
+
+  it("a unit based on Default opens on the deployment ceiling, which is Default's, not the editor's own", async () => {
+    renderScreen({ profiles: [DEFAULT_UNIT, COMPOSED], assignments: [] });
+    const editor = await openComposed();
+    expect(within(editor).getAllByText(GOV.OVERLAY_INHERITED("*")).length).toBeGreaterThan(0);
+    expect(within(editor).queryByText(GOV.OVERLAY_INHERITED("mine.corp"))).toBeNull();
+    expect(getDefaultPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it("a read without Default takes the deployment ceiling from the walls a subtree hangs from", async () => {
+    renderScreen({
+      profiles: [COMPOSED],
+      assignments: [],
+      parent_walls: [{ unit_id: COMPOSED.id, parent_id: DEFAULT_GOVERNANCE_UNIT_ID, parent_name: "Default", effective: DEPLOYMENT_WALLS }],
+    });
+    const editor = await openComposed();
+    expect(within(editor).getAllByText(GOV.OVERLAY_INHERITED("*")).length).toBeGreaterThan(0);
+    expect(within(editor).queryByText(GOV.OVERLAY_INHERITED("mine.corp"))).toBeNull();
+  });
+
+  // A unit admin's read with three subtree roots: two under different units outside their scope and one under
+  // Default. The walls are listed with another root's first, so each root must find its own by unit id.
+  const ROOT: GovernanceUnit = { ...PLATFORM, id: "r1", name: "Root", overlay: {}, parent_id: "u-out" };
+  const OTHER: GovernanceUnit = { ...ROOT, id: "r2", name: "Other", parent_id: "u-out2" };
+  const walls = (domain: string, limits = {}): GovernanceEffective => ({ ceiling: { ...PLATFORM.ceiling, allowed_domains: [domain] }, limits });
+  const THREE_ROOTS: GovernanceSnapshot = {
+    profiles: [COMPOSED, ROOT, OTHER],
+    assignments: [],
+    parent_walls: [
+      { unit_id: OTHER.id, parent_id: "u-out2", parent_name: "Finance", effective: walls("fin.corp") },
+      { unit_id: ROOT.id, parent_id: "u-out", parent_name: "Ops", effective: walls("ops.corp", { max_concurrent_runs: 7 }) },
+      { unit_id: COMPOSED.id, parent_id: DEFAULT_GOVERNANCE_UNIT_ID, parent_name: "Default", effective: DEPLOYMENT_WALLS },
+    ],
+  };
+
+  it("a root under a unit outside the viewer's scope inherits the walls and limits the snapshot carries for it, not nothing", async () => {
+    renderScreen(THREE_ROOTS);
+    await userEvent.click(await screen.findByRole("button", { name: `${GOV.EDIT} ${ROOT.name}` }));
+    const editor = await screen.findByTestId("governance-profile-editor");
+    expect(within(editor).getAllByText(GOV.OVERLAY_INHERITED("ops.corp")).length).toBeGreaterThan(0);
+    expect(within(editor).queryByText(GOV.OVERLAY_INHERITED("fin.corp"))).toBeNull();
+    expect(within(editor).getAllByText(GOV.OVERLAY_INHERITED("7")).length).toBeGreaterThan(0);
+  });
+
+  it("a root under Default beside roots under other units still opens on Default's walls", async () => {
+    renderScreen(THREE_ROOTS);
+    const editor = await openComposed();
+    expect(within(editor).getAllByText(GOV.OVERLAY_INHERITED("*")).length).toBeGreaterThan(0);
+    expect(within(editor).queryByText(GOV.OVERLAY_INHERITED("fin.corp"))).toBeNull();
+  });
+
+  it("carries the server's cut from the list read to the tab's count and the note above the list", async () => {
+    const row = {
+      id: "c1", target_kind: "governance_unit", op: "update", target_key: "team-a", state: "pending" as const,
+      proposed_by: "ana@example.com", proposed_at: aheadByHours(-2), expires_at: aheadByHours(20),
+      diff: { before: { name: "team-a" }, after: { name: "team-a" }, changed: [] },
+    };
+    listChangesMock.mockResolvedValue(Object.assign([row, { ...row, id: "c2", target_key: "team-b" }], { truncated: true }));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("tab", { name: CHANGES.TAB_COUNT_CUT(2) }));
+    expect(await screen.findByText(CHANGES.TRUNCATED)).toBeInTheDocument();
   });
 
   it("a membership on Default shows the unit's name, not its id", async () => {

@@ -113,7 +113,7 @@ func TestScanLocalDirSource_ConsultsAIAdvisor(t *testing.T) {
 	srv := New(Config{Store: st, ScanAIAdvisor: adv})
 
 	src := types.Source{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: dir}
-	profile, aiRan, aiChanged, detail, ok := srv.scanLocalDirSource(context.Background(), src)
+	profile, aiRan, aiChanged, detail, ok := srv.scanLocalDirSource(context.Background(), src, nil)
 	if !ok {
 		t.Fatalf("scanLocalDirSource failed: %s", detail)
 	}
@@ -148,7 +148,7 @@ func TestScanLocalDirSource_AIDisabled_ByteIdentical(t *testing.T) {
 	srv := New(Config{Store: st}) // no ScanAIAdvisor: feature off
 
 	src := types.Source{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: dir}
-	_, aiRan, aiChanged, detail, ok := srv.scanLocalDirSource(context.Background(), src)
+	_, aiRan, aiChanged, detail, ok := srv.scanLocalDirSource(context.Background(), src, nil)
 	if !ok {
 		t.Fatalf("scanLocalDirSource failed: %s", detail)
 	}

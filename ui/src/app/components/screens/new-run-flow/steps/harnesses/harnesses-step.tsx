@@ -9,12 +9,12 @@
 
 import * as React from "react";
 import { Button } from "../../../../ui/button";
-import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
+import { NR_HARNESSES, NR_HARNESSES_LOOKUP } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { Notice } from "../../../../wardyn/notice";
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
-import { addHarness, agentTask, clearStarter, removeHarness, setAgentTask, setStartPrompt, setStarter, swapHarness } from "../../lenses/harness-lens";
+import { addHarness, agentTask, clearStarter, heldKey, removeHarness, setAgentTask, setStartPrompt, setStarter, startWithHeld, swapHarness, swapHeld } from "../../lenses/harness-lens";
 import { harnessIds } from "../../lenses/lens-keys";
 import { modeOf } from "../../lenses/shape-lens";
 import { isVMKind } from "../../../../../lib/types/machine-kind";
@@ -41,7 +41,11 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
-  const loaded = useLoaded(deps?.load ?? loadRoster);
+  // Try again is a fresh load function, so useLoaded reads the roster again.
+  const [attempt, setAttempt] = React.useState(0);
+  const load = deps?.load ?? loadRoster;
+  const loadAgain = React.useMemo(() => (attempt === 0 ? load : () => load()), [load, attempt]);
+  const loaded = useLoaded(loadAgain);
   const offer = useMacOSOffer();
   const { intent } = draft;
   const base = loaded.status === "ready" ? loaded.value : EMPTY;
@@ -53,6 +57,16 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   // Several agents side by side only in an Autonomous run, and only where the server has the switch on.
   const multi = mode === "autonomous" && roster.multiAgent === true;
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
+  // A harness the person starts takes the text a switch to Interactive held for it as its first message, once.
+  const held = draft.guided.heldText;
+  const start = (id: string, then: (i: RunIntent) => RunIntent = (i) => i) => {
+    const key = heldKey(held, id);
+    if (held && key !== undefined) {
+      const { [key]: _given, ...rest } = held;
+      dispatch({ type: "guided", patch: { heldText: Object.keys(rest).length ? rest : undefined } });
+    }
+    edit((i) => startWithHeld(then(i), id, held));
+  };
 
   const taken = mode === "autonomous" ? [] : ids;
   const blocked = roster.harnesses.filter((h) => !ids.includes(h.id)).flatMap((h) => {
@@ -91,7 +105,12 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
       primary={{ label: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_FILES), onActivate: () => go({ screen: "step", step: "files" }) }}
       issues={[...comboIssues.slice(0, 1), ...stepIssues("harnesses", intent)]}
     >
-      {loaded.status === "error" && <p role="alert" className="text-sm text-danger">{loaded.message}</p>}
+      {loaded.status === "error" && (
+        <div className="flex items-center gap-3">
+          <p role="alert" className="text-sm text-danger">{loaded.message}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>{NR_HARNESSES_LOOKUP.RETRY}</Button>
+        </div>
+      )}
       {ids.length === 0 && mode === "optional" && (
         <div className="flex flex-col gap-1 rounded-lg border border-dashed border-border p-4 text-sm">
           <strong>{NR_HARNESSES.EMPTY_TITLE}</strong>
@@ -114,13 +133,16 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             started={intent.startup?.kind === "harness" && intent.startup.tool === id}
             vm={vm}
             text={mode === "autonomous" ? agentTask(intent, id) : intent.startup?.tool === id ? intent.startup.prompt ?? "" : ""}
-            onSwap={(to) => edit((i) => swapHarness(i, id, to))}
+            onSwap={(to) => {
+              dispatch({ type: "guided", patch: { heldText: swapHeld(held, id, to) } });
+              edit((i) => swapHarness(i, id, to));
+            }}
             onRemove={() => {
               edit((i) => removeHarness(i, id));
               announce(NR_HARNESSES.REMOVED);
               document.getElementById(ADD_ID)?.focus();
             }}
-            onStart={(on) => edit((i) => (on ? setStarter(i, id) : clearStarter(i)))}
+            onStart={(on) => (on ? start(id) : edit(clearStarter))}
             onText={(text) => edit((i) => (mode === "autonomous" ? setAgentTask(i, id, text) : setStartPrompt(i, text)))}
           />
         ))}
@@ -138,7 +160,10 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             onClick={() => {
               if (!addable) return;
               focusNew.current = ids.length;
-              edit((i) => addHarness(i, addable.id, multi));
+              const add = (i: RunIntent) => addHarness(i, addable.id, multi);
+              // An Interactive run that starts in no harness starts the one added when text is held for it.
+              if (mode === "interactive" && !vm && !intent.startup && heldKey(held, addable.id) !== undefined) start(addable.id, add);
+              else edit(add);
               announce(NR_HARNESSES.ADDED);
             }}
           >

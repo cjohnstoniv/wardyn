@@ -39,6 +39,20 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $ui := .Values.uiSandbox | default dict -}}
 {{- $ml := (.Values.metrics | default dict).listener | default dict -}}
 {{- if .Values.networkPolicy.enabled -}}
+{{- /* A TCP port entry that renders empty (unset, a blank, or a word YAML reads as null) is every TCP port, and
+the Postgres rule names no destination, nor does the API server rule while k8s.apiServer.to is empty. Rules only
+add, so each port must be a number. An empty k8s.apiServer.ports renders no rule and stays allowed. */ -}}
+{{- $portRe := "^[1-9][0-9]{0,4}$" -}}
+{{- if not (regexMatch $portRe (toString .Values.networkPolicy.postgres.port | trim)) -}}
+{{- fail "wardyn: networkPolicy.postgres.port must be a port number, for example 5432. Left empty it renders an egress rule that allows wardynd every TCP port at any address." -}}
+{{- end -}}
+{{- if .Values.k8s.enabled -}}
+{{- range .Values.k8s.apiServer.ports -}}
+{{- if not (regexMatch $portRe (toString . | trim)) -}}
+{{- fail "wardyn: k8s.apiServer.ports must hold port numbers only, for example [443, 6443]. An entry that is empty or not a number renders an egress rule that allows wardynd every TCP port, at any address while k8s.apiServer.to is empty." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -201,8 +215,9 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Postgres. By default allow to any destination on the DB port (managed
-    # Postgres is commonly out-of-cluster); restrict with networkPolicy.egress.extra.
+    # Postgres: any destination on the DB port, because managed Postgres is
+    # commonly out of the cluster. networkPolicy.egress.extra only adds rules,
+    # so it cannot narrow this one.
     - ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.postgres.port }}

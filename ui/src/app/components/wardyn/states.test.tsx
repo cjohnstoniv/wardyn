@@ -101,6 +101,10 @@ describe("failureSentence", () => {
     expect(failureSentence(new TypeError("Failed to fetch"))).toBeUndefined();
   });
 
+  it("says an answer whose body does not parse couldn't be read, with no retry advice", () => {
+    expect(failureSentence(new SyntaxError("Unexpected token < in JSON"))).toBe("Wardyn's answer couldn't be read.");
+  });
+
   it("leaves a request that timed out (wfetch's HttpError with the timeout status) to the isn't-answering default", () => {
     expect(failureSentence(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."))).toBeUndefined();
   });

@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, setExpectedPrincipal } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import { makeApproval } from "../../../../test/factories";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
@@ -72,6 +72,24 @@ describe("DesktopFilesPanel", () => {
     expect(within(panel).queryByText("secret.txt")).toBeNull();
   });
 
+  it("a file sent after another person signed in still names the person who chose the files", async () => {
+    // The server then refuses it rather than put it in the desktop as the next person.
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    let first!: (v: unknown) => void;
+    uploadMock.mockImplementationOnce(() => new Promise((done) => (first = done))).mockResolvedValue({ name: "b.txt", bytes: 1, sha256: "0".repeat(64) });
+    setExpectedPrincipal("a@example.com");
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.upload(within(panel).getByLabelText(C.choose), [new File(["a"], "a.txt"), new File(["b"], "b.txt")]);
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
+
+    setExpectedPrincipal("b@example.com");
+    first({ name: "a.txt", bytes: 1, sha256: "0".repeat(64) });
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(2));
+    expect(uploadMock.mock.calls.map((c) => c[2])).toEqual(["a@example.com", "a@example.com"]);
+    setExpectedPrincipal("");
+  });
+
   it("on a VM desktop says copy and paste are not available instead of the Allowed strip", async () => {
     listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
     render(<DesktopFilesPanel runId="r1" vm />);
@@ -99,6 +117,19 @@ describe("DesktopFilesPanel", () => {
     expect(ok.textContent).toMatch(/sha256 c3a1…0e9d · [^·]*\d{1,2}:\d\d[^·]*/);
     await waitFor(() => expect(big.textContent).toContain(C.tooLarge));
     expect(big.textContent).toContain(C.tooLargeSub);
+  });
+
+  it("a failed upload says Upload failed with the server's sentence, never Not sent", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    const sentence = "the upload to ~/Transfers failed, and some bytes may remain there.";
+    uploadMock.mockRejectedValueOnce(new HttpError(502, sentence, "desktop_transfer_failed"));
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.upload(within(panel).getByLabelText(C.choose), new File(["a,b,c"], "notes.csv"));
+    const row = await within(panel).findByTestId("desktop-upload");
+    await waitFor(() => expect(row.textContent).toContain(C.uploadFailed));
+    expect(row.textContent).toContain(sentence);
+    expect(row.textContent).not.toContain("Not sent");
   });
 
   it("lists the folder with a Download button when download is allowed", async () => {
@@ -404,6 +435,51 @@ describe("DesktopFilesPanel on a run that keeps its content in", () => {
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
+  it("a dropped connection or a timeout gets the same sentence and Try again, which reads again", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(0, "Wardyn did not answer in time."));
+    render(<DesktopFilesPanel runId="r1" />);
+    expect(await screen.findByText(C.loadFailed)).toBeTruthy();
+    expect(screen.queryByText("Wardyn did not answer in time.")).toBeNull();
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    await userEvent.click(screen.getByRole("button", { name: C.retry }));
+    expect(await screen.findByText(C.drop)).toBeTruthy();
+    expect(screen.queryByText(C.loadFailed)).toBeNull();
+  });
+
+  it("a paused run keeps being checked through a dropped connection, and comes back by itself", async () => {
+    vi.useFakeTimers();
+    listMock.mockRejectedValueOnce(pausedRefusal());
+    render(<DesktopFilesPanel runId="r1" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByTestId("desktop-files-paused").textContent).toBe(pausedMsg);
+
+    listMock.mockRejectedValueOnce(new HttpError(0, "Wardyn did not answer in time."));
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(C.loadFailed)).toBeTruthy();
+    expect(screen.getByRole("button", { name: C.retry })).toBeTruthy();
+
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    expect(listMock).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText(C.loadFailed)).toBeNull();
+    expect(screen.getByText(C.drop)).toBeTruthy();
+  });
+
+  it("a refusal while paused ends the checking and offers no Try again", async () => {
+    vi.useFakeTimers();
+    listMock.mockRejectedValueOnce(pausedRefusal());
+    render(<DesktopFilesPanel runId="r1" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    listMock.mockRejectedValue(new HttpError(409, "The run is not running.", "attach_not_running"));
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("The run is not running.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: C.retry })).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(20000));
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
   it("a server error gets the same sentence and Try again, not the server's raw text", async () => {
     listMock.mockRejectedValue(new HttpError(500, "Internal Server Error", "internal"));
     render(<DesktopFilesPanel runId="r1" />);
@@ -428,5 +504,23 @@ describe("DesktopFilesPanel on a run that keeps its content in", () => {
     expect(downloadMock).toHaveBeenCalledTimes(1);
     finish({ blob: new Blob(["x"]), sha256: "abcd".repeat(16) });
     await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("a Download revokes the object URL only after the click's task, so the browser has the file first", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: { ...defaults, download: "allowed" }, files: [{ name: "a.csv", bytes: 12 }] });
+    downloadMock.mockResolvedValue({ blob: new Blob(["x"]), sha256: "abcd".repeat(16) });
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    const atClick: number[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+      setTimeout(() => atClick.push(vi.mocked(URL.revokeObjectURL).mock.calls.length), 0); // a task queued at the click
+    });
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+    await userEvent.click(await within(panel).findByRole("button", { name: `${C.download} a.csv` }));
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:x"));
+    expect(atClick).toEqual([0]);
+    click.mockRestore();
   });
 });

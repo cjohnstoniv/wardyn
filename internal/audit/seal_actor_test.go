@@ -19,6 +19,7 @@ import (
 type memDir struct {
 	ids       map[string]string // principal -> subject id
 	destroyed map[string]time.Time
+	eras      map[string][]SubjectEra // subject id -> earlier bindings
 	down      bool
 }
 
@@ -45,6 +46,24 @@ func (d *memDir) AuditPrincipalOf(_ context.Context, id string) (string, bool, e
 func (d *memDir) AuditKeyDestroyedAt(_ context.Context, principal string) (time.Time, bool, error) {
 	at, ok := d.destroyed[principal]
 	return at, ok, nil
+}
+
+func (d *memDir) AuditSubjectEras(_ context.Context, id string) ([]SubjectEra, error) {
+	return d.eras[id], nil
+}
+
+func (d *memDir) AuditSubjectReleased(_ context.Context, principal string, at time.Time) (string, bool, error) {
+	for id, eras := range d.eras {
+		for _, e := range eras {
+			if !at.After(e.Until) {
+				if e.Principal == principal {
+					return id, true, nil
+				}
+				break
+			}
+		}
+	}
+	return "", false, nil
 }
 
 func newFullSealer(t *testing.T, people ...string) (*Sealer, *memKeys, *memDir) {

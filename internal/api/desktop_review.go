@@ -34,6 +34,9 @@ import (
 // desktopReviewMaxBytes bounds one reviewed download (types.MaxReviewedDownloadBytes); a var so a test can lower it.
 var desktopReviewMaxBytes int64 = types.MaxReviewedDownloadBytes
 
+// reviewedSendReader is what a released file is sent from: the checked file itself; a var so a test can fail a read part way.
+var reviewedSendReader = func(f *os.File) io.Reader { return f }
+
 // fileDownloadSecondHumanSwitch names the second-person rule every file_download decision is held to, in its
 // refusal and in the break-glass audit row the admin token's decision writes.
 const fileDownloadSecondHumanSwitch = "desktop.download review"
@@ -89,14 +92,15 @@ func (s *Server) handleRequestDesktopReview(w http.ResponseWriter, r *http.Reque
 		writeReviewUnavailable(w, r, "raised", errors.New("no approval service"))
 		return
 	}
-	at, principal := actorFromRequest(r)
-	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+	_, principal := actorFromRequest(r)
+	run, start, ok := s.desktopAdmit(w, r, run, true)
+	if !ok {
 		return
 	}
+	defer start.release()
 	sum := sha256.New()
 	var n int64
-	code, err := s.desktopExec(r.Context(), run, desktopDownloadScript, nil, func(o io.Reader) error {
+	code, err := s.desktopExec(r.Context(), run, start, desktopDownloadScript, nil, func(o io.Reader) error {
 		var cerr error
 		n, cerr = io.Copy(sum, io.LimitReader(o, desktopReviewMaxBytes+1))
 		return cerr
@@ -126,14 +130,17 @@ func (s *Server) handleRequestDesktopReview(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if count >= maxApprovalsPerRun {
-		writeErrorReason(w, http.StatusTooManyRequests, reasonInternalApprovalCapReached, "this run has raised too many approvals; no more will be accepted")
+		writeCapReached(w, store.ErrApprovalRunCap)
 		return
 	}
 	raw, _ := json.Marshal(scope)
 	req := types.ApprovalRequest{ID: uuid.New(), RunID: run.ID, Kind: types.ApprovalFileDownload, RequestedScope: raw}
-	created, err := s.cfg.Approvals.Request(r.Context(), req)
+	created, err := s.cfg.Approvals.Request(store.WithAdmissionCap(r.Context(), maxApprovalsPerRun), req)
 	if errors.Is(err, types.ErrDuplicatePendingApproval) || (err == nil && created.ID != req.ID) {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopReviewPending, "a review of this file is already waiting; it is released once a person approves it")
+		return
+	}
+	if writeCapReached(w, err) {
 		return
 	}
 	if err != nil {
@@ -183,11 +190,11 @@ func (s *Server) serveReviewedDownload(w http.ResponseWriter, r *http.Request, r
 		writeReviewUnavailable(w, r, "spent", errors.New("the store has no review spend"))
 		return
 	}
-	at, principal := actorFromRequest(r)
-	if err := s.thawForExec(ctx, run, at, principal, "presence"); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+	run, start, ok := s.desktopAdmit(w, r, run, true)
+	if !ok {
 		return
 	}
+	defer start.release()
 	tmp, err := os.CreateTemp("", "wardyn-review-*")
 	if err != nil {
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "could not hold the file to check it; nothing was sent")
@@ -196,7 +203,7 @@ func (s *Server) serveReviewedDownload(w http.ResponseWriter, r *http.Request, r
 	defer func() { _ = tmp.Close(); _ = os.Remove(tmp.Name()) }()
 	sum := sha256.New()
 	var n int64
-	code, err := s.desktopExec(ctx, run, desktopDownloadScript, nil, func(o io.Reader) error {
+	code, err := s.desktopExec(ctx, run, start, desktopDownloadScript, nil, func(o io.Reader) error {
 		var cerr error
 		n, cerr = io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(o, desktopReviewMaxBytes+1))
 		return cerr
@@ -233,9 +240,10 @@ func (s *Server) serveReviewedDownload(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	desktopDownloadHeaders(w, name)
-	if _, err := io.Copy(w, tmp); err != nil {
+	if _, err := io.Copy(w, reviewedSendReader(tmp)); err != nil {
 		s.auditDesktopReview(r, run, "failure", "released", n, got)
-		return
+		_ = http.NewResponseController(w).Flush() // the 200 is committed: cut it off, never no response at all
+		panic(http.ErrAbortHandler)
 	}
 	s.auditDesktopReview(r, run, "success", "released", n, got)
 }

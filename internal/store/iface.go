@@ -51,7 +51,9 @@ type Store interface {
 	CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error)
 	GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error)
 	ListPolicies(ctx context.Context) ([]types.RunPolicy, error)
-	UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error)
+	// UpdatePolicy writes only while updated_at equals seen, the updated_at the caller read
+	// (ErrPolicyStale otherwise), so a save from an older copy cannot undo a later one.
+	UpdatePolicy(ctx context.Context, id uuid.UUID, seen time.Time, name string, spec types.RunPolicySpec) (types.RunPolicy, error)
 	DeletePolicy(ctx context.Context, id uuid.UUID) error
 
 	// Workspace.
@@ -105,7 +107,7 @@ type Store interface {
 	ListSources(ctx context.Context) ([]types.Source, error)
 	UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error)
 	WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error)
-	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error
+	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) ([]string, error)
 	ClaimSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error)
@@ -125,7 +127,7 @@ type Store interface {
 	FinishImageCheck(ctx context.Context, id uuid.UUID, image string, attempt uuid.UUID, status, reason string, arches []string) (types.BaseImageEntry, error)
 	LiveImageCheckAttempts(ctx context.Context) (map[uuid.UUID]bool, error)
 	WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error)
-	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error
+	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) ([]string, error)
 
 	// CredentialGrant.
 	CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error)
@@ -142,7 +144,9 @@ type Store interface {
 	// AuditEvent.
 	QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error)
 	QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.AuditEvent, error)
-	LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error)
+	// LatestOrganisationAuditEvent is the newest row of action written by this organisation itself as
+	// actorType/actor, never a row a device forwarded (audit_latest_organisation.go).
+	LatestOrganisationAuditEvent(ctx context.Context, action string, actorType types.ActorType, actor string) (types.AuditEvent, error)
 
 	// SiteConfig.
 	GetSiteConfig(ctx context.Context) (types.SiteConfig, error)
@@ -379,6 +383,11 @@ type PG struct {
 	// difference of two readings, carrying no skew) measured after a successful DB-clock read. See db.CaptureAppClock.
 	Now func() time.Time
 
+	// DBNow, when set (tests only), is what DatabaseNow answers in place of the database's clock: an api
+	// test that moves its own clock to reach a run's end moves the decisions with it, and one that returns an
+	// error stands for a read that failed. Nil reads Postgres.
+	DBNow func() (time.Time, error)
+
 	// SIEM, when set, receives the audit rows this store writes in its own transaction (the retention
 	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
 	// nowhere.
@@ -419,8 +428,9 @@ type ComponentStore interface {
 	CreateComponent(ctx context.Context, c types.Component) (types.Component, error)
 	// UpdateComponent replaces the name and definition of the row with c's id AND owner and moves
 	// its version by one. ErrNotFound when that owner has no such row; ErrConflict on a name the
-	// owner already uses.
-	UpdateComponent(ctx context.Context, c types.Component) (types.Component, error)
+	// owner already uses. With expected not 0 it writes only while the row is at that version, the
+	// one the caller read: ErrComponentStale otherwise, a row gone since included.
+	UpdateComponent(ctx context.Context, c types.Component, expected int) (types.Component, error)
 	// DeleteComponent removes owner's row and returns it, or ErrNotFound. Snapshots of it on
 	// runs already launched are kept.
 	DeleteComponent(ctx context.Context, id uuid.UUID, owner string) (types.Component, error)

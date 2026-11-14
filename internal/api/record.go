@@ -24,7 +24,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -39,6 +38,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -126,49 +126,9 @@ type RecordTaskResult struct {
 	// couldn't reach the control plane, so no evidence landed).
 	FailureHint string   `json:"failure_hint,omitempty"`
 	Caveats     []string `json:"caveats,omitempty"`
-}
-
-// recordResultsMap decodes the workspace's opaque record_results blob. A
-// missing/malformed blob is an empty map (fail-open to "nothing recorded").
-func recordResultsMap(ws types.Workspace) map[string]RecordTaskResult {
-	out := map[string]RecordTaskResult{}
-	if len(ws.RecordResults) > 0 {
-		_ = json.Unmarshal(ws.RecordResults, &out)
-	}
-	return out
-}
-
-// inFlightRecordResults is raw reduced to the entries still `recording`, nil when
-// there are none. A sources edit clears the reviewed results but must leave a live
-// session's marker: the capture that settles it is written under that entry.
-func inFlightRecordResults(raw json.RawMessage) json.RawMessage {
-	var all map[string]json.RawMessage
-	if len(raw) == 0 || json.Unmarshal(raw, &all) != nil {
-		return nil
-	}
-	keep := map[string]json.RawMessage{}
-	for k, v := range all {
-		var e struct {
-			Status string `json:"status"`
-		}
-		if json.Unmarshal(v, &e) == nil && e.Status == recordStatusRecording {
-			keep[k] = v
-		}
-	}
-	if len(keep) == 0 {
-		return nil
-	}
-	return mustJSON(keep)
-}
-
-// putRecordResult upserts one task's entry via the store's ATOMIC per-key
-// jsonb merge (never a whole-map read-modify-write, so writers of different
-// tasks can't lose each other). onlyIfStatus, when non-empty, makes the write
-// a compare-and-set on the entry's CURRENT status — the guard that stops a
-// late streaming upload from reverting a completed capture, and makes capture
-// itself idempotent across the watcher/kill/boot/read-repair triggers.
-func (s *Server) putRecordResult(ctx context.Context, wsID uuid.UUID, taskKey string, res RecordTaskResult, onlyIfStatus string) (types.Workspace, bool, error) {
-	return s.cfg.Store.SetWorkspaceRecordResult(ctx, wsID, taskKey, mustJSON(res), onlyIfStatus)
+	// EvidenceSeq is the audit position a confined capture read its run's trail through (recordEvidenceSeq):
+	// recheckCleanReplays takes a clean verdict again when a row that can change it lands past it.
+	EvidenceSeq int64 `json:"evidence_seq,omitempty"`
 }
 
 // recordLabelCollisionMsg is the 409 a re-record under a DIFFERENT name that
@@ -230,6 +190,8 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 			repaired = true
 		}
 	}
+	// A clean confined verdict whose run's trail has grown since the capture is taken again.
+	repaired = s.recheckCleanReplays(ctx, ws) || repaired
 	// Scan strand: the workspace is mid-import but its in-flight run has
 	// already terminated — settle it to a clear failure so the operator sees a
 	// reason instead of an endless spinner. reconcileWorkspaceRun re-fences on the
@@ -738,6 +700,11 @@ func promotableHosts(obs *recordmode.Observations, selfHost string, skipHost map
 		if !hostrules.ValidApprovedHost(host) {
 			continue // junk shape — the approve lane wouldn't take it either
 		}
+		// Its requirement row would stop the workspace's runs at load (a lying or pre-step-0 sidecar's host).
+		if err := proxy.ValidConfigHost(host); err != nil {
+			slog.Warn("api: recorded host not offered for promotion", slog.String("host", host), slog.String("why", err.Error()))
+			continue
+		}
 		promotable[host] = struct{}{}
 	}
 	return promotable
@@ -844,7 +811,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 
 	wantHosts, skipped, notPromotable := selectPromoteHosts(req.Hosts, promotable, providerHosts)
 	if notPromotable != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+notPromotable+" was not observed+allowed in this recording — cannot promote")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, notPromotableText(notPromotable))
 		return
 	}
 

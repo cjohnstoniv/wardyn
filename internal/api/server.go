@@ -105,15 +105,15 @@ type Config struct {
 	// person's audit-seal key through it. Nil makes the audit_personal_fields
 	// scope unavailable.
 	SubjectKeys *subjectkey.Manager
-	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for the
-	// wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit Fanout's
-	// DropsByName). Nil omits the metric: no SIEM sinks configured, nothing to report.
+	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for the wardyn_audit_sink_drops_total metric
+	// (cmd/wardynd wires it to the audit Fanout's DropsByName). Nil omits the metric: no SIEM sinks configured, nothing to report.
 	AuditSinkDrops       func() map[string]int64
 	ForgetRunCorrelation func(runIDs []uuid.UUID) // cmd/wardynd: the audit Fanout's ForgetRuns; person erasure calls it after clearing the ids. Nil with no sinks.
 	// AuditDelivery, when set, reports each acknowledged-delivery destination's checkpoint and the head it
 	// lags behind for the wardyn_audit_delivery_* metrics (cmd/wardynd wires it to the store only when the
 	// webhook sink is configured with delivery "acknowledged"). Nil omits the series.
 	AuditDelivery func(ctx context.Context) ([]store.AuditDeliveryStatus, error)
+	OTLPPushConfig
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
@@ -888,10 +888,10 @@ type Server struct {
 	leaseDeferred   sync.Map        // see deferRenewedLease
 	execOutputs     execOutputTails // each non-interactive run's output tail (run_output.go)
 	uiGatewayState                  // the UI gateway's process state (server_uigateway.go)
-
+	doorRefusals    doorRefusals    // the decision door's once-per-run refusal row (internal_live_run.go)
 	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
 	desktopRecs desktopRecordings
-
+	sensorBeat  sensorBeatState // the sensor heartbeat read's cache (healthz_sensor_beat.go)
 	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
 	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
 	// once more. A durable mark on the person row would need a migration.

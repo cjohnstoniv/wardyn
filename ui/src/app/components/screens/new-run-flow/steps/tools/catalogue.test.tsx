@@ -10,7 +10,8 @@ import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../../../test/set-field";
 import { MY_COMPONENTS, ORG_BILLING, ORG_GITHUB, ORG_KUBECTL, ORG_LINEAR, ORG_POSTGRES, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
-import type { MyComponents } from "../../../../../lib/types/components";
+import type { Component, MyComponents } from "../../../../../lib/types/components";
+import { aheadByHours } from "../../../../../lib/test-clock";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC, MY_COMPONENTS as MY_COMPONENTS_COPY } from "../../../../wardyn/copy/components";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
@@ -718,7 +719,7 @@ describe("what a tool card brings", () => {
       await details("Linear");
       const dialog = within(await screen.findByRole("dialog", { name: "Linear" }));
       expect(dialog.getByText(NR_TOOLS.DETAIL_WHERE)).toBeTruthy();
-      expect(dialog.getByText("https://mcp.linear.app/mcp")).toBeTruthy();
+      expect(dialog.getByText("https://mcp.linear.app")).toBeTruthy();
       expect(dialog.getByText(NR_TOOLS.DETAIL_MCP_BODY)).toBeTruthy();
     });
 
@@ -738,6 +739,46 @@ describe("what a tool card brings", () => {
       // An API row keeps today's chips; no card that cannot be added shows a breakdown.
       expect(card(ORG_POSTGRES.name).getByText(NR_TOOLS.DELIVERY_ENV)).toBeTruthy();
       expect(dts(ORG_POSTGRES.name)).toEqual([]);
+    });
+
+    it("a local organisation server is an MCP card with its chips, never called remote", async () => {
+      const local = { id: "77777777-7777-4777-8777-777777777777", name: "Files", category: "mcp" as const, hosts: ["files.acme.test"], secrets: [], config_keys: [], mcp: { url: "", transport: "stdio" } };
+      h.mine.mockResolvedValue(COMPONENTS({ org: [local] }));
+      await show();
+      await userEvent.click(within(screen.getByRole("group", { name: NR_TOOLS.CATEGORY_ARIA })).getByRole("button", { name: NR_TOOLS.CATEGORY_MCP }));
+      expect(card("Files").getByText("files.acme.test")).toBeTruthy();
+      expect(dts("Files")).toEqual([]);
+      expect(screen.queryByText(`${NR_TOOLS.FROM_MCP} · ${NR_TOOLS.MCP_REMOTE}`)).toBeNull();
+    });
+  });
+
+  describe("a component saved to reuse", () => {
+    const saved = (name: string, definition: Component["definition"]): Component => ({
+      id: name === "Acme API" ? "88888888-8888-4888-8888-888888888888" : "99999999-9999-4999-8999-999999999999",
+      owner: "alice", name, definition, version: 1, created_at: aheadByHours(-24), updated_at: aheadByHours(-24),
+    });
+    const API = saved("Acme API", { hosts: ["api.acme.test"], secrets: [{ secret_name: "acme-key", delivery: { mode: "header", host: "api.acme.test" } }] });
+    const MCP = saved("Acme MCP", { hosts: ["mcp.acme.test"], mcp: { url: "https://mcp.acme.test/mcp", transport: "http" } });
+
+    it("is offered in a later run, with no organisation rows, and is added by its id", async () => {
+      h.mine.mockResolvedValue(COMPONENTS({ org: [], mine: [API, MCP] }));
+      await show();
+      expect(await card("Acme API").findByText(NR_TOOLS.SUB_SAVED)).toBeTruthy();
+      expect(card("Acme API").getByText("api.acme.test")).toBeTruthy();
+      expect(card("Acme API").getByText(NR_TOOLS.DELIVERY_PROXY)).toBeTruthy();
+      expect(card("Acme API").queryByText(NR_TOOLS.FROM_ORG)).toBeNull();
+      await userEvent.click(within(screen.getByRole("group", { name: NR_TOOLS.CATEGORY_ARIA })).getByRole("button", { name: NR_TOOLS.CATEGORY_MCP }));
+      expect(screen.queryByRole("heading", { name: "Acme API" })).toBeNull();
+      expect(dd("Acme MCP")).toEqual(["mcp.acme.test", NR_TOOLS.DETAIL_NONE, NR_TOOLS.DETAIL_NONE, `${NR_TOOLS.FROM_MCP} · ${NR_TOOLS.MCP_REMOTE}`]);
+      await userEvent.click(card("Acme MCP").getByRole("button", { name: `${NR_TOOLS.CARD_ADD} Acme MCP` }));
+      expect(draft().components).toEqual([{ id: MCP.id }]);
+    });
+
+    it("is held, with the reason, for a person who may no longer define components", async () => {
+      h.mine.mockResolvedValue(COMPONENTS({ may_define: false, org: [], mine: [API] }));
+      await show();
+      expect(await card("Acme API").findByText(ADD_ACCESS.NOT_ALLOWED)).toBeTruthy();
+      expect(card("Acme API").queryByRole("button", { name: `${NR_TOOLS.CARD_ADD} Acme API` })).toBeNull();
     });
   });
 });

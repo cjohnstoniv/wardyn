@@ -56,6 +56,11 @@ func upstreamProxySidecarAccepts(t *testing.T, raw string) error {
 //
 // The pin holds the property, not the current input list: if the control-plane
 // gate ever re-widens (or the sidecar tightens), one of these fires.
+//
+// A URL the sidecar refuses for its host's spelling alone is the one value
+// delivered although the sidecar refuses it (upstreamURLHostRefused): it names a
+// real proxy, so the run stops at proxy load, naming the entry, rather than
+// going around that proxy.
 func TestUpstreamProxyGateMatchesSidecar(t *testing.T) {
 	// Values a corporate operator can plausibly type that a scheme-only gate
 	// would accept and the sidecar refuses. wantReason is
@@ -69,13 +74,21 @@ func TestUpstreamProxyGateMatchesSidecar(t *testing.T) {
 		{"http:///path", "unloadable-upstream-url"},
 		{"http://proxy.corp:8080", ""}, // the good one: must stay accepted by BOTH
 		{"https://proxy.corp:8080", "unsupported-scheme"},
+		{"http://010.0.0.1:3128", upstreamURLHostRefused},
+		{"http://user:pass@134744072:3128", upstreamURLHostRefused},
+		{"http://bücher.de:3128", upstreamURLHostRefused},
+		{"http://010.0.0.1:0", "unloadable-upstream-url"}, // its port is refused too, so it names no proxy
 	} {
 		sidecarErr := upstreamProxySidecarAccepts(t, c.raw)
+		if c.wantReason == upstreamURLHostRefused &&
+			(sidecarErr == nil || !strings.HasPrefix(sidecarErr.Error(), "config: upstream_proxy_url: ") || strings.Contains(sidecarErr.Error(), "user:pass")) {
+			t.Errorf("the sidecar's load of %q: %v, want the upstream_proxy_url spelling refusal, with no credential", c.raw, sidecarErr)
+		}
 		// Both dispatch lanes: the plain site_config.UpstreamProxyURL and the
 		// secret-sourced one, which no write-time validator can see inside.
 		for _, lane := range []string{"plain", "secret"} {
 			gotURL, reason := resolveUpstreamProxyLane(t, c.raw, lane == "secret")
-			if gotURL != "" && sidecarErr != nil {
+			if gotURL != "" && sidecarErr != nil && reason != upstreamURLHostRefused {
 				t.Errorf("[%s lane] control plane ACCEPTS %q (resolved %q) but the wardyn-proxy sidecar refuses it at startup: %v\n"+
 					"\tthat value saves clean, audits run.upstream_proxy.resolve as SUCCESS, and then exits the sidecar 1 —\n"+
 					"\tevery run in the deployment comes up with no egress path at all", lane, c.raw, gotURL, sidecarErr)
@@ -87,13 +100,16 @@ func TestUpstreamProxyGateMatchesSidecar(t *testing.T) {
 				t.Errorf("[%s lane] the ordinary corp proxy URL %q must stay accepted (gate must not over-tighten), got %q",
 					lane, c.raw, gotURL)
 			}
-			if c.wantReason != "" && gotURL != "" {
+			if c.wantReason != "" && c.wantReason != upstreamURLHostRefused && gotURL != "" {
 				t.Errorf("[%s lane] %q must be DROPPED (direct egress + audited reason), got %q", lane, c.raw, gotURL)
+			}
+			if c.wantReason == upstreamURLHostRefused && gotURL != c.raw {
+				t.Errorf("[%s lane] %q must be DELIVERED, so the run's proxy refuses it and the run stops, got %q", lane, c.raw, gotURL)
 			}
 			// Every dropped value must be explainable to the operator by the
 			// probe's own reason table, or the site-config probe prints a bare code.
 			if _, ok := upstreamResolveFailDetail[reason]; reason != "" && !ok {
-				t.Errorf("[%s lane] reason %q for %q has no operator-facing detail in upstreamResolveFailDetail (site_config_probe.go)",
+				t.Errorf("[%s lane] reason %q for %q has no operator-facing detail in upstreamResolveFailDetail (site_config_probe_classify.go)",
 					lane, reason, c.raw)
 			}
 		}

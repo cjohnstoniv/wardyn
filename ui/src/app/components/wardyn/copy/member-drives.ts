@@ -21,4 +21,10 @@ export const MEMBER_DRIVES = {
   SHOWING: (n: number, total: number) => `Showing ${n} of ${total}.`,
   /** NEW, no sheet id */
   SHOW_MORE: "Show more",
+  /** NEW, no sheet id: the delete confirm for a disk kept on a Mac, which may not remove the disk */
+  DELETE_CONFIRM_MAC: (name: string) =>
+    `Delete ${name}? Its disk is deleted on its Mac and can't be recovered. If the Mac is offline, the disk is deleted when it reconnects. If the Mac is no longer registered, the disk stays on it and only this record is removed.`,
+  /** NEW, no sheet id: after a delete that removed only the record, when the runner list no longer names the Mac */
+  RECORD_ONLY_UNNAMED:
+    "This drive's Mac is no longer registered, so its disk stays on that Mac. Deleting removes only the record.",
 } as const;

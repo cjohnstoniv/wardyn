@@ -34,10 +34,11 @@ type forcedMarks struct {
 	containment string
 }
 
-func (m *forcedMarks) StopKeptRunForcedIf(_ context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (time.Time, bool, error) {
+func (m *forcedMarks) StopKeptRunForcedIf(_ context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time, fromLostAt bool, after time.Duration) (time.Time, bool, error) {
 	m.cs.dispatchTestStore.mu.Lock()
 	cur := m.cs.run
-	if m.cs.state != types.RunRunning || !sameKeptMark(cur, types.AgentRun{LostAt: lostAt, LostReason: lostReason, EndsAt: endsAt}) {
+	if m.cs.state != types.RunRunning || !sameKeptMark(cur, types.AgentRun{LostAt: lostAt, LostReason: lostReason, EndsAt: endsAt}) ||
+		!keptHoldOffPassedAt(cur, fromLostAt, after, m.cs.dueNow()) {
 		m.cs.dispatchTestStore.mu.Unlock()
 		return time.Time{}, false, nil
 	}
@@ -51,22 +52,14 @@ func (m *forcedMarks) StopKeptRunForcedIf(_ context.Context, id uuid.UUID, to ty
 	return stamp, true, nil
 }
 
-// keptHoldOffPassedAt is store.PG's KeptHoldOffPassed over a row as the fake database holds it, at the fake
-// database's time now.
+// keptHoldOffPassedAt is the hold-off in store.PG's StopKeptRunForcedIf over a row as the fake database holds
+// it, at the fake database's time now.
 func keptHoldOffPassedAt(run types.AgentRun, fromLostAt bool, after time.Duration, now time.Time) bool {
 	from := run.EndsAt
 	if fromLostAt {
 		from = run.LostAt
 	}
 	return from != nil && !from.Add(after).After(now)
-}
-
-// KeptHoldOffPassed answers from the fixture's fake database clock (dueNow), not the server's.
-func (m *forcedMarks) KeptHoldOffPassed(_ context.Context, _ uuid.UUID, fromLostAt bool, after time.Duration) (bool, error) {
-	m.cs.dispatchTestStore.mu.Lock()
-	run := m.cs.run
-	m.cs.dispatchTestStore.mu.Unlock()
-	return keptHoldOffPassedAt(run, fromLostAt, after, m.cs.dueNow()), nil
 }
 
 func (m *forcedMarks) ListForcedStops(context.Context) ([]store.ForcedStop, error) {
@@ -120,7 +113,7 @@ func (l *keptEndLeaser) StopKeptRunIf(_ context.Context, _ uuid.UUID, to types.R
 	return true, nil
 }
 
-func (l *keptEndLeaser) SetRunContainmentError(_ context.Context, _ uuid.UUID, msg string, _ time.Time) error {
+func (l *keptEndLeaser) SetRunContainmentError(_ context.Context, _ uuid.UUID, msg string) error {
 	l.marksMu.Lock()
 	defer l.marksMu.Unlock()
 	l.containment = msg
@@ -350,7 +343,7 @@ func (f *forced) setRecord(rec types.RunLocalFolderStatus) {
 // was stopped.
 func (f *forced) claimOnly(t *testing.T) {
 	t.Helper()
-	if _, ok, err := f.leaser.StopKeptRunForcedIf(context.Background(), f.run.ID, types.RunStopped, f.run.LostAt, f.run.LostReason, f.run.EndsAt); err != nil || !ok {
+	if _, ok, err := f.leaser.StopKeptRunForcedIf(context.Background(), f.run.ID, types.RunStopped, f.run.LostAt, f.run.LostReason, f.run.EndsAt, true, 0); err != nil || !ok {
 		t.Fatalf("claim = %v, %v; want applied", ok, err)
 	}
 }
@@ -776,7 +769,7 @@ func TestForceKeptStop_ACrashAfterTheClaimIsStoppedOnTheNextTick(t *testing.T) {
 func TestForceKeptStop_AReassertClearDuringTheForcedEndKeepsTheMark(t *testing.T) {
 	f := newForced(t)
 	f.withoutOwedPass()
-	if err := f.leaser.SetRunContainmentError(context.Background(), f.run.ID, "the stop was queued", f.due); err != nil {
+	if err := f.leaser.SetRunContainmentError(context.Background(), f.run.ID, "the stop was queued"); err != nil {
 		t.Fatal(err)
 	}
 	f.sb.stopErr = errors.New("the runner did not answer the stop")
@@ -846,10 +839,11 @@ func TestForceKeptStop_AnUnsettledRecordOffTheServerStopsTheSandbox(t *testing.T
 			f := newForced(t)
 			f.s.cfg.Store = bumpRefusedStore{f.s.cfg.Store.(markedStore)}
 			f.setRecord(types.RunLocalFolderStatus{Gen: 3, Settled: 2, Resume: &types.FolderResume{Unsynced: 1}})
+			f.cs.giveUpApplies = true // the stop ends the keep: the owed copy back is given up before the ref is cleared
 			set(f)
 			f.end(f.s)
-			if f.sb.stopCount() != 1 {
-				t.Errorf("%d sandbox stops, want 1: it cannot be kept with its proxy stopped alone", f.sb.stopCount())
+			if f.sb.stopCount() != 1 || len(f.cs.giveUps) != 1 {
+				t.Errorf("%d sandbox stops, %d give-ups; want 1 and 1: it cannot be kept with its proxy stopped alone", f.sb.stopCount(), len(f.cs.giveUps))
 			}
 			if rows := forcedRows(t, f.audit, "run.ended.expired"); len(rows) != 1 || !rows[0].Stopped || f.leaser.markCount() != 0 {
 				t.Errorf("rows %+v, %d marks; want one row, stopped, mark cleared", rows, f.leaser.markCount())
@@ -1522,6 +1516,7 @@ func TestSweepForcedStops_AKeptSandboxWhoseProxyStopFailsIsStoppedNotKept(t *tes
 		t.Fatalf("%d marks, %d proxy stops, %d sandbox stops; want 1, 2 and 0: both stops failed, so the retry waits", f.leaser.markCount(), rn.proxyStops.Load(), f.sb.stopCount())
 	}
 	f.sb.stopErr = nil
+	f.cs.giveUpApplies = true // the stop ends the keep: the owed copy back is given up before the ref is cleared
 	f.tick(t, f.s)
 	if f.leaser.markCount() != 0 || f.sb.stopCount() != 1 {
 		t.Errorf("%d marks, %d sandbox stops; want 0 and 1: the proxy stop still fails, so the sandbox is stopped, not kept", f.leaser.markCount(), f.sb.stopCount())

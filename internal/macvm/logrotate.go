@@ -68,14 +68,18 @@ func (l *RotatingLog) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// rotate moves the file to <path>.1 and starts it afresh. The old file stays open until the rename and the
+// open have both worked, so a rotation that fails leaves it in use: that write is refused, the cap holds,
+// and the next write tries the rotation again.
 func (l *RotatingLog) rotate() error {
-	if err := l.f.Close(); err != nil {
-		return err
-	}
+	old := l.f
 	if err := os.Rename(l.Path, l.Path+".1"); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return l.open()
+	if err := l.open(); err != nil {
+		return err
+	}
+	return old.Close()
 }
 
 func (l *RotatingLog) Close() error {

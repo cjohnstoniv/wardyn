@@ -9,10 +9,23 @@
 // run has ended, the changes that came back. One side edits at a time, so there is no live sync to show.
 import { absoluteTime, fmtBytes, shortTime } from "../../../../lib/format";
 import { isTerminalRunState, type RunComputerFolder, type RunDetail } from "../../../../lib/types";
-import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
+import { FORCED_KEEP_PREFIX, RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
 
 // Only a fate this page knows is drawn; an absent or unknown one falls back to the neutral line.
 const isKnownFate = (v: unknown) => v === "retained" || v === "given_up" || v === "complete";
+// What a terminal run's folder answer says about settling, for the run page's poll. "unsettled": its changes are
+// kept for their copy back, or were given up while the sandbox's stop is not confirmed. "stopping": nothing is left
+// to copy back and the server still reports the sandbox copy as kept, which a stop under way clears. "settled": the
+// sandbox copy is confirmed deleted, so nothing is left to change. "unknown": neither a fate nor a sandbox copy,
+// from a server that reports neither or a read it could not finish. null for a run that has not ended.
+export type ComputerFolderSettling = "unsettled" | "stopping" | "settled" | "unknown";
+export const computerFolderSettling = (run: Pick<RunDetail, "state" | "computer_folder"> | null | undefined): ComputerFolderSettling | null => {
+  if (!run || !isTerminalRunState(run.state)) return null;
+  const f = run.computer_folder;
+  if (f?.sandbox_copy === "deleted") return "settled";
+  if (f?.fate === "retained" || f?.fate === "given_up") return "unsettled";
+  return f?.sandbox_copy === "kept" ? "stopping" : "unknown";
+};
 const count = (n: number) => n.toLocaleString("en");
 // The give-up time in the viewer's zone: the app's absolute time plus a short zone name, so it is never ambiguous.
 const zoneName = (iso: string) => new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date(iso)).find((p) => p.type === "timeZoneName")?.value ?? "";
@@ -54,7 +67,12 @@ export function ComputerFolderRows({ run }: { run: RunDetail }) {
       )}
       {refused > 0 && <p className="col-span-2 text-meta text-muted-foreground">{C.REFUSED(count(refused))}</p>}
       {ended && f.back && !f.back.error && <p className="col-span-2 text-meta text-muted-foreground">{C.BACK_AT(shortTime(f.back.at), count(f.back.files))}</p>}
-      {f.back?.error && <p role="alert" className="col-span-2 text-meta text-danger">{C.BACK_FAILED(f.back.error)}</p>}
+      {f.back?.error &&
+        (f.back.error.startsWith(FORCED_KEEP_PREFIX) ? (
+          <p className="col-span-2 text-meta text-muted-foreground">{f.back.error}</p>
+        ) : (
+          <p role="alert" className="col-span-2 text-meta text-danger">{C.BACK_FAILED(f.back.error)}</p>
+        ))}
       {ended && f.state === "synced" && !isKnownFate(f.fate) && f.sandbox_copy !== "deleted" && <p className="col-span-2 text-meta text-muted-foreground">{C.MAY_BE_GONE}</p>}
       {ended && (f.fate === "retained" || f.fate === "given_up") && <OwedRows f={f} />}
       {ended && f.sandbox_copy === "deleted" && <p className="col-span-2 text-meta text-muted-foreground">{C.DELETED}</p>}

@@ -34,8 +34,8 @@ import * as React from "react";
 import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { governance as api, type GovernanceUnit, type GovernanceSnapshot } from "../../../lib/api/governance";
-import type { GovernanceChange } from "../../../lib/types";
+import { governance as api, type GovernanceChangeList, type GovernanceUnit, type GovernanceSnapshot } from "../../../lib/api/governance";
+import type { GovernanceChange, RunPolicySpec } from "../../../lib/types";
 import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
@@ -82,6 +82,8 @@ export function GovernanceScreen() {
   // A unit admin opens a profile to read it; the editor stays disabled for them (securityOperator below).
   const unitAdmin = useUnitAdminOf().length > 0;
   const [snap, setSnap] = React.useState<GovernanceSnapshot>(EMPTY);
+  // The Default unit's effective ceiling, kept before the list hides Default: the editor's deployment base.
+  const [deploymentCeiling, setDeploymentCeiling] = React.useState<RunPolicySpec | undefined>(undefined);
   // X3-F5: FORBIDDEN is its own arm — /governance is a securityOps route hidden
   // from a member's nav, so the 403 that answers a URL-typed visit is a verdict
   // on their tier, not a control plane to retry.
@@ -94,7 +96,7 @@ export function GovernanceScreen() {
   const [busy, setBusy] = React.useState(false);
   // The pending changes behind the Changes tab. Read with the snapshot so the tab can say how many wait,
   // and kept apart from it: a list that cannot be read never hides the profiles.
-  const [changes, setChanges] = React.useState<GovernanceChange[]>([]);
+  const [changes, setChanges] = React.useState<GovernanceChangeList>([]);
   const [changesError, setChangesError] = React.useState<string | null>(null);
   // A profile write the server held for a second person (202): the note stands until the next write.
   const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
@@ -118,13 +120,19 @@ export function GovernanceScreen() {
   // refresh, and flipping back to loading would unmount the add form under
   // whoever just typed in it — the skeleton belongs to the FIRST read, which is
   // what the initial state already says.
-  const load = React.useCallback(() => {
-    api
+  // Resolves once the snapshot read has landed or failed, for a caller that waits on it.
+  const read = React.useCallback(() => {
+    const snapshot = api
       .getGovernance()
       .then((s) => {
         // The console hides the Default unit until the tree screen lands: it is the deployment root, not a
         // profile. A unit based on it reads as based on the deployment (no parent), as before the tree; the
         // names keep Default for a membership that points at it.
+        // A unit admin's read leaves Default out and carries its walls as the parent of a subtree hung from it.
+        setDeploymentCeiling(
+          (s.profiles.find((p) => p.id === DEFAULT_GOVERNANCE_UNIT_ID)?.effective ??
+            s.parent_walls?.find((w) => w.parent_id === DEFAULT_GOVERNANCE_UNIT_ID)?.effective)?.ceiling,
+        );
         setSnap({
           ...s,
           profiles: s.profiles
@@ -142,7 +150,9 @@ export function GovernanceScreen() {
         setChangesError(null);
       })
       .catch((e) => setChangesError(getErrorMessage(e)));
+    return snapshot;
   }, []);
+  const load = React.useCallback(() => void read(), [read]);
   React.useEffect(load, [load]);
   // A link to one profile (the run page's allowed-models card) opens its editor once the profiles are read.
   const askedProfile = searchParams.get("profile");
@@ -245,7 +255,7 @@ export function GovernanceScreen() {
                   { value: "egress-baseline", label: BASELINE.TAB },
                 ]
               : []),
-            { value: "changes", label: changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB },
+            { value: "changes", label: changes.length === 0 ? CHANGES.TAB : changes.truncated ? CHANGES.TAB_COUNT_CUT(changes.length) : CHANGES.TAB_COUNT(changes.length) },
           ]}
         />
       )}
@@ -448,11 +458,13 @@ export function GovernanceScreen() {
                 key={editing.profile?.id ?? ""}
                 profile={editing.profile}
                 profiles={snap.profiles}
+                deploymentCeiling={deploymentCeiling}
+                parentWalls={snap.parent_walls?.find((w) => w.unit_id === editing.profile?.id)?.effective}
                 disabled={!securityOperator}
                 deciders={snap.deciders}
                 decidersSupported={snap.envelopes !== undefined}
                 unitNames={snap.unit_names}
-                onDecidersChanged={load}
+                onDecidersChanged={read}
                 onCancel={() => setEditing(null)}
                 onSaved={(warnings) => {
                   setEditing(null);

@@ -106,7 +106,9 @@ func (c VMConfig) runDir(runID uuid.UUID) string {
 	return filepath.Join(c.StateDir, "runs", runID.String())
 }
 
-func (c VMConfig) imageDir(id string) string { return filepath.Join(c.StateDir, "images", id) }
+func (c VMConfig) imageDir(id string) string {
+	return filepath.Join(c.StateDir, "images", vmImageCacheFormat, id)
+}
 
 // runParts are the run directory's parts (DESIGN 3.3): each mounted only where it is needed, and
 // all of them 0700 and owned by the VM containers' user, so nobody else on the host can open a
@@ -208,6 +210,9 @@ func (d *Driver) linuxVMRef(ctx context.Context, ref string) (uuid.UUID, bool, e
 	}
 	if !isLinuxVM(res.Container.Config) {
 		d.notVMs.Store(ref, struct{}{})
+		if h := res.Container.HostConfig; h != nil && !runtimeSupportsExec(h.Runtime) {
+			d.execLess.Store(ref, h.Runtime)
+		}
 		return uuid.Nil, false, nil
 	}
 	id, err := parseRunID(res.Container.Config.Labels[labelRun])
@@ -289,10 +294,9 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("docker: info: %w", err)
 	}
-	for _, img := range []string{vc.QEMUImage, spec.Image, d.proxyImage()} {
-		if err := d.ensureImage(ctx, img, "", func() { spec.NotifyWaiting("image: Pulling: " + img) }); err != nil {
-			return runner.Sandbox{}, err
-		}
+	guestID, err := d.vmImages(ctx, spec, vc.QEMUImage)
+	if err != nil {
+		return runner.Sandbox{}, err
 	}
 	// A read-only drive's bind asks to be recursive. A runtime that cannot do that takes it plain: virtiofsd's
 	// --readonly and the guest's read-only mount still hold under a submount, so there is nothing to warn of.
@@ -310,6 +314,11 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 			shares = append(shares, m)
 		}
 	}
+	// Teardown and rollback remove the virtiofsd names below maxVMShares only, so a share past them
+	// would outlive its run: refuse such a run before anything is started.
+	if len(shares) > maxVMShares {
+		return runner.Sandbox{}, fmt.Errorf("docker: a Linux VM sandbox cannot take more than %d folders and drives; this run has %d", maxVMShares, len(shares))
+	}
 
 	var rollback []func()
 	fail := func(err error) (runner.Sandbox, error) {
@@ -324,7 +333,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	}
 	rollback = append(rollback, undoNet)
 
-	base, err := d.vmImage(ctx, spec)
+	base, err := d.vmImage(ctx, spec, guestID)
 	if err != nil {
 		return fail(err)
 	}
@@ -487,18 +496,14 @@ func (c VMConfig) chown(paths ...string) error {
 	return nil
 }
 
-// vmImage is the image's converted base (rootfs.raw, vmlinuz, initrd.img), made on first use and
-// cached by image id: export the image's filesystem to a tar, then mke2fs -d in a prep container,
-// unprivileged, so file owners and setuid bits come from the tar and nothing runs as root.
-func (d *Driver) vmImage(ctx context.Context, spec runner.SandboxSpec) (string, error) {
+// vmImage is the converted base (rootfs.raw, vmlinuz, initrd.img) of the image guestImage inspected,
+// imageID, made on first use and cached by that id: export that image's filesystem to a tar, then mke2fs -d
+// in a prep container, unprivileged, so file owners and setuid bits come from the tar and nothing runs as root.
+func (d *Driver) vmImage(ctx context.Context, spec runner.SandboxSpec, imageID string) (string, error) {
 	vc := d.vmConfig()
-	insp, err := d.cli.ImageInspect(ctx, spec.Image)
-	if err != nil {
-		return "", fmt.Errorf("docker: inspect the VM image: %w", err)
-	}
-	id := strings.TrimPrefix(insp.ID, "sha256:")
+	id := strings.TrimPrefix(imageID, "sha256:")
 	if id == "" || strings.ContainsAny(id, "/.") {
-		return "", fmt.Errorf("docker: the VM image has no usable id %q", insp.ID)
+		return "", fmt.Errorf("docker: the VM image has no usable id %q", imageID)
 	}
 	dir := vc.imageDir(id)
 	if _, err := os.Stat(filepath.Join(dir, qemu.RootFS)); err == nil {
@@ -513,7 +518,7 @@ func (d *Driver) vmImage(ctx context.Context, spec runner.SandboxSpec) (string, 
 		return "", fmt.Errorf("docker: VM image cache: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
-	if err := d.exportImage(ctx, spec, filepath.Join(tmp, "rootfs.tar")); err != nil {
+	if err := d.exportImage(ctx, spec, imageID, filepath.Join(tmp, "rootfs.tar")); err != nil {
 		return "", err
 	}
 	if err := vc.chown(tmp, filepath.Join(tmp, "rootfs.tar")); err != nil {
@@ -538,13 +543,14 @@ func (d *Driver) vmImage(ctx context.Context, spec runner.SandboxSpec) (string, 
 	return dir, nil
 }
 
-// exportImage writes the image's filesystem to path: a container created from it (never started)
-// and exported.
-func (d *Driver) exportImage(ctx context.Context, spec runner.SandboxSpec, path string) error {
+// exportImage writes the filesystem of the image imageID names to path: a container created from it
+// (never started) and exported. It is created by id, never by spec.Image, so a tag moved since the
+// inspect cannot put another image's files under this id's cache entry.
+func (d *Driver) exportImage(ctx context.Context, spec runner.SandboxSpec, imageID, path string) error {
 	name := vmPrepName(spec.RunID, "export")
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
-		Config: &container.Config{Image: spec.Image, Entrypoint: []string{"/nonexistent"},
+		Config: &container.Config{Image: imageID, Entrypoint: []string{"/nonexistent"},
 			Labels: d.labels(spec.RunID, componentVMPrep, d.runnerIDLabel())},
 		HostConfig: &container.HostConfig{NetworkMode: "none"},
 	})
@@ -689,7 +695,7 @@ func (d *Driver) startVMNet(ctx context.Context, spec runner.SandboxSpec, netDir
 	return nil
 }
 
-// maxVMShares bounds the virtiofsd names removeVMSidecars tries.
+// maxVMShares bounds a VM's shares (createVM refuses more) and so the virtiofsd names removeVMSidecars tries.
 const maxVMShares = 64
 
 // removeVMSidecars removes a run's network relay, virtiofsd and prep containers. Their names are deterministic
@@ -867,19 +873,20 @@ func (d *Driver) vmLogTail(ref string) string {
 // touches nothing for a run that is not a VM. A VM this runner can no longer reach (VM sandboxes off
 // since it was made) is still ended: its QEMU container is stopped without the guest's power down.
 // An engine that cannot say what the run is answers an error. wardyn-runnerd calls it when a VM
-// run's audit spool is full.
+// run's audit spool is full, and tries a failed end again: a failed AWS cache wipe alone is a finished
+// end (runner.KeptDespiteAWSCacheWipe), which an end asked again of the stopped VM always answers.
 func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
 	ref := agentContainerName(runID)
 	v, err := d.vmLookup(ctx, ref)
 	if errors.Is(err, errVMUnreachable) {
 		// EndSandbox finds no VM to tear down here (vmFor is nil with VM sandboxes off), so the
 		// sidecars go by name.
-		return true, errors.Join(d.EndSandbox(ctx, ref), d.removeVMSidecars(ctx, runID))
+		return true, runner.KeptDespiteAWSCacheWipe(ctx, ref, endAnswer(d.EndSandbox(ctx, ref), d.removeVMSidecars(ctx, runID)))
 	}
 	if err != nil || v == nil {
 		return false, err // an engine that cannot say is an error the caller retries, never "not a VM"
 	}
-	return true, d.EndSandbox(ctx, ref)
+	return true, runner.KeptDespiteAWSCacheWipe(ctx, ref, d.EndSandbox(ctx, ref))
 }
 
 // teardownVM removes what a VM run adds to a container run's teardown: its sidecars and its run

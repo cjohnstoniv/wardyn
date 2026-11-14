@@ -34,27 +34,33 @@ func TestGovernanceRequestKindsTable(t *testing.T) {
 	}
 }
 
-// TestCapAtElevation: a run launched under an elevation is capped at its end when that is earlier.
-func TestCapAtElevation(t *testing.T) {
+// TestCaptureRunLimitsKeepsTheCapInputs: a run launched under an elevation is capped at its end when that is
+// earlier, and carries the pool's span, its source, the elevation's end and the end asked for to the insert,
+// which decides the cap again on the database's clock (store stampRunTimes).
+func TestCaptureRunLimitsKeepsTheCapInputs(t *testing.T) {
 	now := time.Now().UTC()
-	early, late := now.Add(time.Hour), now.Add(3*time.Hour)
-	run := types.AgentRun{LifetimeCapAt: &late, LifetimeCapSource: types.LimitSourcePool}
-	capAtElevation(&run, nil)
-	if run.LifetimeCapSource != types.LimitSourcePool {
-		t.Errorf("no elevation changed the cap to %q", run.LifetimeCapSource)
-	}
-	capAtElevation(&run, &early)
-	if !run.LifetimeCapAt.Equal(early) || run.LifetimeCapSource != types.LimitSourceElevation {
-		t.Errorf("an earlier elevation end = %v %q, want %v elevation", run.LifetimeCapAt, run.LifetimeCapSource, early)
-	}
-	capAtElevation(&run, &late)
-	if !run.LifetimeCapAt.Equal(early) {
-		t.Errorf("a later elevation end moved the cap to %v", run.LifetimeCapAt)
-	}
-	none := types.AgentRun{}
-	capAtElevation(&none, &late)
-	if none.LifetimeCapAt == nil || !none.LifetimeCapAt.Equal(late) || none.LifetimeCapSource != types.LimitSourceElevation {
-		t.Errorf("an uncapped run = %v %q, want the elevation's end", none.LifetimeCapAt, none.LifetimeCapSource)
+	asked := 4 * 3600
+	for _, tc := range []struct {
+		name      string
+		elevation time.Time
+		wantCap   time.Time
+		want      types.LimitSource
+	}{
+		{"an earlier elevation end caps the run", now.Add(time.Hour), now.Add(time.Hour), types.LimitSourceElevation},
+		{"a later one leaves the pool's cap", now.Add(3 * time.Hour), now.Add(2 * time.Hour), types.LimitSourcePool},
+	} {
+		run := types.AgentRun{CreatedAt: now}
+		(&Server{}).captureRunLimits(&run, governanceCeiling{ContextExpiresAt: &tc.elevation},
+			&createEnd{endSec: &asked, capSec: 2 * 3600, capSource: types.LimitSourcePool})
+		in := run.CapInputs
+		if in == nil || in.Span != 2*time.Hour || in.SpanSource != types.LimitSourcePool || in.Elevation == nil ||
+			!in.Elevation.Equal(tc.elevation) || in.End == nil || *in.End != 4*time.Hour || in.EndAtCap {
+			t.Fatalf("%s: inputs %+v; want the pool's 2 h, the elevation's end %v and the 4 h asked", tc.name, in, tc.elevation)
+		}
+		if run.LifetimeCapAt == nil || !run.LifetimeCapAt.Equal(tc.wantCap) || run.LifetimeCapSource != tc.want ||
+			run.EndsAt == nil || !run.EndsAt.Equal(tc.wantCap) {
+			t.Errorf("%s: cap %v (%q), end %v; want both at %v (%q)", tc.name, run.LifetimeCapAt, run.LifetimeCapSource, run.EndsAt, tc.wantCap, tc.want)
+		}
 	}
 }
 

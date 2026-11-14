@@ -159,7 +159,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   if (!mayAttach || !running || isBackgroundRun(run)) return null; // a background run has no terminal to attach to
 
   const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
-  const shortId = run.id.replace(/^run_/, "").slice(0, 8);
+  // The Host name `wardyn run ssh --config` and `run editor` save: the whole run id, so two runs never share one.
+  const hostAlias = `wardyn-${run.id}`;
   const portFlag = port ? ` -p ${port}` : "";
   // A proxy command that fails the daemon's own rules is never drawn into a
   // shell line or an ssh_config line: the card falls back to the plain form and
@@ -171,7 +172,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // Byte-identical to `wardyn run ssh --print` (cmd/wardyn/ssh.go).
   const command = `ssh ${proxyFlag}${run.id}@${host || "…"}${portFlag}`;
   const sshConfig = [
-    `Host wardyn-${shortId}`,
+    `Host ${hostAlias}`,
     `  HostName ${host || "…"}`,
     `  Port ${port || "22"}`,
     `  User ${run.id}`,
@@ -302,7 +303,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             <p className="mb-1.5 text-meta leading-relaxed text-muted-foreground">{RUN_SSH.PROXY_NOTE}</p>
             <CodeBlock text={sshConfig} copyLabel={RUN_SSH.COPY_CONFIG} />
             <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
-              {monoTokens(RUN_SSH.CONFIG_USE(`wardyn-${shortId}`), "~/.ssh/config", `ssh wardyn-${shortId}`)}
+              {monoTokens(RUN_SSH.CONFIG_USE(hostAlias), "~/.ssh/config", [`ssh ${hostAlias}`, "break-all"])}
             </p>
             <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
               {monoTokens(RUN_SSH.CLI_PROXY(run.id), `wardyn run ssh --advertised-proxy ${run.id}`)}
@@ -345,7 +346,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           </summary>
           <div className="mt-1.5 space-y-1.5 text-meta text-muted-foreground">
             <p>
-              Remote-SSH → Connect to Host → <Mono className="text-foreground">wardyn-{shortId}</Mono>. One setting is
+              Remote-SSH → Connect to Host → <Mono className="break-all text-foreground">{hostAlias}</Mono>. One setting is
               required first, in VS Code's <Mono className="text-foreground">settings.json</Mono>:
             </p>
             <CodeBlock text={'"remote.SSH.localServerDownload": "always"'} />
@@ -460,11 +461,13 @@ export const DESKTOP_APP: UIApp = { name: "__desktop", port: 0 };
 // file-path tokens in <Mono>, per the mock's visual rule §6 (and matching the
 // SSH lane right above, which wraps WARDYN_SSH_LISTEN the same way). The
 // strings stay whole and frozen in copy.ts — this only splits them at render,
-// so the rendered text content still byte-matches the canonical table.
-function monoTokens(text: string, ...tokens: string[]): (string | React.ReactElement)[] {
+// so the rendered text content still byte-matches the canonical table. A token given as [token, class] adds
+// that class to its <Mono>: break-all lets a 43-character Host alias wrap inside a 390 px card.
+function monoTokens(text: string, ...tokens: (string | [string, string])[]): (string | React.ReactElement)[] {
   let key = 0;
   let parts: (string | React.ReactElement)[] = [text];
-  for (const token of tokens) {
+  for (const t of tokens) {
+    const [token, extra] = typeof t === "string" ? [t, ""] : t;
     parts = parts.flatMap((part) =>
       typeof part !== "string"
         ? [part]
@@ -474,7 +477,7 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
               i === 0
                 ? [seg]
                 : [
-                    <Mono key={`t${key++}`} className="text-foreground">
+                    <Mono key={`t${key++}`} className={cn(extra, "text-foreground")}>
                       {token}
                     </Mono>,
                     seg,
@@ -509,11 +512,12 @@ export function openEnterTab(): Window | null {
 // The /open page passes the ticket it minted itself (an inbound app's, for a named caller) and "_self", since
 // that page is already the new tab. A caller that has to await before this (a takeover, a ticket) opens the tab
 // itself with openEnterTab, inside its click, and passes it as opts.tab; then no other tab is opened here.
+// opts.stale is the /open page's: a page left while this waited gets no binding and no hand-off.
 export async function enterUIApp(
   runId: string,
   app: string,
   uiSandbox: UISandboxEnter,
-  opts: { ticket?: string; target?: "_blank" | "_self"; tab?: Window } = {},
+  opts: { ticket?: string; target?: "_blank" | "_self"; tab?: Window; stale?: () => boolean } = {},
 ) {
   const target = opts.target ?? "_blank";
   // The tab is opened here, before the first await, when the caller did not open one. A null return means the
@@ -526,11 +530,20 @@ export async function enterUIApp(
     formTarget = tab.name;
   }
   try {
+    // A caller whose page was left while this waited (opts.stale) gets no binding and no hand-off. Nothing awaits
+    // between the last check and the hand-off below.
+    const left = () => {
+      if (!opts.stale?.()) return false;
+      tab?.close();
+      return true;
+    };
     const ticket = opts.ticket ?? (await runsApi.attachTicket(runId, "ui"));
+    if (left()) return;
     // #1241: the gateway refuses a ticket this browser did not bind first,
     // so a ticket minted elsewhere cannot be pushed into this browser.
     if (uiSandbox?.bind_url) {
       await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(runId)), ticket);
+      if (left()) return;
     }
     // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
     // HOST half of enter_post_url ("https://run-{run}.ui.example.com/

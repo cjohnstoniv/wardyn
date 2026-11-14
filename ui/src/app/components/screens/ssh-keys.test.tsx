@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { expandCard } from "../../lib/test-dom";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -216,6 +216,25 @@ describe("SshKeysPane — add key", () => {
 
     await waitFor(() => expect(addKeyMock).toHaveBeenCalledWith("new key", "ssh-ed25519 AAAA"));
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+  });
+
+  it("a key still being added keeps its dialog and its fields: Escape and Cancel do nothing until the answer", async () => {
+    let answer: (() => void) | undefined;
+    addKeyMock.mockReturnValue(new Promise<void>((done) => (answer = done)));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByText("No keys yet");
+    await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
+    setField(screen.getByLabelText(/public key/i), "ssh-ed25519 AAAA");
+    await user.click(screen.getByRole("button", { name: /^add key$/i }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(within(dialog).getByLabelText(/public key/i)).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    await act(async () => answer?.());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(toastSuccess).toHaveBeenCalled();
   });
 
   it("shows the server's validation error inline (e.g. private-key paste)", async () => {

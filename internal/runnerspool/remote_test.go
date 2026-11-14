@@ -356,6 +356,24 @@ func TestRemoteCorruptSealedManifestIsRefused(t *testing.T) {
 	}
 }
 
+// TestRemoteSettleWithoutProducerWritesNoLoss: a run whose proxy never had a session settles with no
+// loss, as that proxy served nothing (it listens only once a session granted it credit), and a hello
+// from it after that settlement is refused.
+func TestRemoteSettleWithoutProducerWritesNoLoss(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := testSpool(t)
+	loss, err := s.SettleLoss(ctx, nil)
+	if err != nil || loss.Count != 0 {
+		t.Fatalf("settle with no producer = %+v, %v; want no loss", loss, err)
+	}
+	if l := liability(t, s); l.PendingLoss != nil || l.Producer == nil || l.Producer.Instance != settledInstance {
+		t.Fatalf("after settling no producer: %+v; want no pending loss and the settled mark", l)
+	}
+	if _, err := s.Accept(ctx, inst); !errors.Is(err, ErrProducer) {
+		t.Fatalf("a hello after the settlement was accepted: %v", err)
+	}
+}
+
 // TestRemoteSucceedOpensTheSpoolToANewProducer: a revived proxy is a new
 // instance. While the old producer holds a grant it is refused; once settled,
 // Succeed lets the new instance in from sequence 1, keeps the old records and

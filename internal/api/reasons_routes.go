@@ -130,22 +130,6 @@ const (
 	reasonRequestBodyUnreadable = "request_body_unreadable"
 )
 
-// /api/v1/policies (policies.go).
-const (
-	reasonPolicyRequestInvalid    = "policy_request_invalid"     // the create/update body fails decodePolicyRequest
-	reasonPolicySecretRefsInvalid = "policy_secret_refs_invalid" // a secret reference in the spec fails shape validation
-	reasonPolicyNameConflict      = "policy_name_conflict"       // a policy by that name already exists
-	// Shared by the policy CRUD door, POST /runs' inline_policy and a launch
-	// preset's inline_policy: the spec's
-	// azure_devops_capabilities names something the catalogue cannot grant.
-	reasonADOCapabilityUnknown = "ado_capability_unknown"
-	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
-	// that leaves nothing standing (POST /runs/preflight).
-	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
-	// The bounded list reaches past the provider row's capability_ceiling.
-	reasonADOCapabilitiesAboveCeiling = "ado_capabilities_above_ceiling"
-)
-
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field
 // arms outside writeProviderRefusal — which always carries its own reason,
 // llmRefusalAuditReason or the generic authz.ReasonModelProviderUnavailable.
@@ -159,6 +143,7 @@ const (
 // surface, not the member-facing API.
 const (
 	reasonInternalDecisionLogInvalid = "internal_decision_log_invalid" // the egress decision log body did not decode
+	reasonInternalDecisionUnrecorded = "internal_decision_unrecorded"  // the decision's egress row was neither written nor spooled; retry
 	reasonGroundtruthBatchInvalid    = "groundtruth_batch_invalid"     // the ground-truth batch body did not decode
 	reasonGroundtruthBatchTooLarge   = "groundtruth_batch_too_large"   // the batch named more than 1000 events
 	reasonGroundtruthActionNotKernel = "groundtruth_action_not_kernel" // an event's action lacks the required kernel. prefix
@@ -196,6 +181,9 @@ const (
 	// (internal_live_run.go) — the shared /internal/* liveness gate every
 	// sidecar door runs through.
 	reasonInternalLivenessReadFailed = "internal_liveness_read_failed"
+	// reasonViaOrgUpstreamProxyRefused is the via_org route's 503 when the run's engine cannot be built because
+	// the site's upstream proxy URL writes its host in a spelling the proxy refuses (via_org.go): no retry helps.
+	reasonViaOrgUpstreamProxyRefused = "via_org_upstream_proxy_refused"
 )
 
 // The credential-injection sinks' own closed set (injection.go's
@@ -716,6 +704,8 @@ const (
 	// The Azure DevOps sign-in's configuration could not be read, so the erase
 	// could not take the sign-in's lock and refused (#1478).
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
+	// Revoking a token of the person's runs did not finish, so nothing was erased; POST /erasure too.
+	reasonCredentialEraseRevokeUnfinished = "credential_erase_revoke_unfinished"
 )
 
 // /me/secrets and /shared-secrets (secrets_explicit.go): the caller has no personal namespace to name
@@ -919,9 +909,10 @@ const reasonCredentialHostCollision = "credential_host_collision"
 // definition, shared-secret and store-unavailable refusals they also answer are
 // the gate's, declared above.
 const (
-	reasonComponentCapReached   = "component_cap_reached"   // the person, or the organisation, is at the saved-component limit
-	reasonComponentNameConflict = "component_name_conflict" // another component of this owner already has the name (or, for an org id, the id)
-	reasonComponentNotFound     = "component_not_found"     // no such component of this owner's; another person's and an absent id answer alike
+	reasonComponentCapReached      = "component_cap_reached"      // the person, or the organisation, is at the saved-component limit
+	reasonComponentNameConflict    = "component_name_conflict"    // another component of this owner already has the name (or, for an org id, the id)
+	reasonComponentNotFound        = "component_not_found"        // no such component of this owner's; another person's and an absent id answer alike
+	reasonComponentVersionConflict = "component_version_conflict" // the row is no longer at the expected_version the caller read
 )
 
 // Runner registration request and deployment refusals. Token and claim refusals

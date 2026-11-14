@@ -85,6 +85,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		} else {
 			args[2] = anchor.Translate(r.UpdatedAt)
 		}
+		stampRunTimes(anchor, r, args)
 		if out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...)); e != nil {
 			return e
 		}
@@ -176,6 +177,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	} else {
 		args[2] = anchor.Translate(r.UpdatedAt)
 	}
+	stampRunTimes(anchor, r, args)
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)
@@ -594,31 +596,6 @@ func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 	return s.ListPoliciesPage(ctx, Page{})
 }
 
-// UpdatePolicy replaces a policy's name and spec and bumps updated_at. Returns
-// ErrNotFound when no policy has the given id, and ErrConflict when the rename
-// collides with run_policies.name's UNIQUE constraint — same mapping as
-// CreatePolicy, since a rename onto a taken name is the same caller-fixable
-// mistake as an insert under one. The caller validates the spec before calling.
-func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
-	specJSON, err := json.Marshal(spec)
-	if err != nil {
-		return types.RunPolicy{}, fmt.Errorf("store: marshal policy spec: %w", err)
-	}
-	const q = `
-		UPDATE run_policies SET name=$1, spec=$2, updated_at=now()
-		WHERE id=$3
-		RETURNING id, name, created_at, updated_at, spec`
-	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, name, specJSON, id))
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return types.RunPolicy{}, ErrConflict
-		}
-		return types.RunPolicy{}, err
-	}
-	return out, nil
-}
-
 // DeletePolicy removes a policy by id. Returns ErrNotFound when no row matched.
 // agent_runs.policy_id has no foreign key, so referencing runs keep a dangling
 // policy_id; their authorization envelope survives via the run.policy.resolve
@@ -705,15 +682,9 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 		return types.ApprovalRequest{}, fmt.Errorf("store: begin approval tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var profileID *uuid.UUID
-	if notify.Enabled() {
-		if _, err := tx.Exec(ctx, notify.BudgetLockSQL, a.RunID.String()); err != nil {
-			return types.ApprovalRequest{}, fmt.Errorf("store: lock the run's notification budget: %w", err)
-		}
-		// Read in the approval's own transaction, so a concurrent profile change cannot route it by stale data.
-		if err := tx.QueryRow(ctx, notify.UnitSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return types.ApprovalRequest{}, fmt.Errorf("store: read run profile: %w", err)
-		}
+	profileID, err := admitApproval(ctx, tx, a.RunID)
+	if err != nil {
+		return types.ApprovalRequest{}, err
 	}
 	// INSERT omits decision_scope/decision_expires_at: their SQL DEFAULTs already
 	// mean "no decision"; RETURNING names them so the caller sees those defaults.
@@ -880,34 +851,6 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 		limit = 500
 	}
 	return s.QueryRecentAuditEventsPage(ctx, Page{Limit: limit})
-}
-
-// LatestAuditEventByAction returns the most recent audit event whose action
-// equals the given action, or ErrNotFound when none exists. Used by /healthz
-// to find the latest kernel.sensor.ping driving the eBPF health state.
-//
-// Most recent by `time`, picked from a seq-ordered window: the audit spool
-// replays at-least-once while keeping each event's original ev.Time, so a beat
-// spooled through a DB blip could carry the highest seq but an hours-old time
-// and falsely mark the sensor degraded. The window orders by seq to keep using
-// the purpose-built (action, seq DESC) index; ordering by time directly would
-// sort the whole action's history on every probe. Twenty is a window, not a
-// proof — a longer replay backlog can push the fresh row out, bounding the
-// staleness to one heartbeat interval against /healthz's own TTL.
-func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
-	const q = `
-		SELECT ` + auditCols + ` FROM (
-			SELECT ` + auditCols + `, seq
-			FROM audit_events WHERE action=$1 ORDER BY seq DESC LIMIT 20
-		) recent ORDER BY time DESC, seq DESC LIMIT 1`
-	ev, err := scanAuditEvent(s.Pool.QueryRow(ctx, q, action))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return types.AuditEvent{}, ErrNotFound
-	}
-	if err != nil {
-		return types.AuditEvent{}, fmt.Errorf("store: latest audit event by action: %w", err)
-	}
-	return ev, nil
 }
 
 // auditCols is THE audit_events column list, in scanAuditEvent's order, shared

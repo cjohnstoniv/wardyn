@@ -15,7 +15,7 @@ import { Lock, Plus } from "lucide-react";
 import { components as api } from "../../../../../lib/api/components";
 import { secrets } from "../../../../../lib/api/secrets";
 import reasons from "../../../../../lib/access-reasons.golden.json";
-import type { CatalogueCLI, CatalogueCLIKind, ComponentRef, MyComponents, OrgComponentView } from "../../../../../lib/types/components";
+import type { CatalogueCLI, CatalogueCLIKind, Component, ComponentRef, MyComponents, OrgComponentView } from "../../../../../lib/types/components";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import { Button } from "../../../../ui/button";
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
@@ -70,6 +70,15 @@ function useMyComponents(): { mine: MyComponents | null; failed?: string } {
     return () => { live = false; };
   }, []);
   return state;
+}
+
+/** A person's saved component as its card reads it: an organisation row's shape, with the person's own MCP address. */
+function savedView(c: Component): OrgComponentView {
+  const { description, hosts, secrets: own = [], config = {}, mcp } = c.definition;
+  return {
+    id: c.id, name: c.name, description, hosts, secrets: own.map((s) => ({ delivery: s.delivery })), config_keys: Object.keys(config),
+    category: mcp ? "mcp" : "api", ...(mcp && { mcp: { url: mcp.url ?? "", transport: mcp.transport } }),
+  };
 }
 
 /** The hosts a card brings, then how its credential reaches the run. */
@@ -211,6 +220,8 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
   const attached = (id: string) => !!intent.components?.some((c) => c.id === id);
   const stateOf = (id: string) => access?.rows.find((r) => r.id === id);
   const org = (kind: OrgComponentView["category"]) => (mine?.org ?? []).filter((o) => o.category === kind);
+  // The person's own saved components, offered beside the organisation's and attached by id the same way.
+  const saved = (kind: OrgComponentView["category"]) => (mine?.mine ?? []).map(savedView).filter((o) => o.category === kind);
   const show = (c: Exclude<Category, "all">) => category === "all" || category === c;
   // Until the server has said, neither door claims a reason; once it says no, both say why.
   const noDefine = mine && !mayDefine ? ADD_ACCESS.NOT_ALLOWED : undefined;
@@ -232,19 +243,21 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
   const breakdown = (on: boolean, reason: string | undefined, brings: ToolAccess): ToolAccess | undefined =>
     !reason ? brings : on ? NOTHING : undefined;
 
-  const orgCard = (row: OrgComponentView) => {
+  // own: a saved component of the person's, which only someone who may define components can attach.
+  const componentCard = (row: OrgComponentView, own: boolean) => {
     const residentRow = row.secrets.some((s) => s.delivery.mode !== "header");
     const fact = stateOf(row.id);
-    const reason = residentRow && !residentAllowed ? CC.ERR.RESIDENT_OFF : answered ? sentence(fact?.reason) : undefined;
+    const reason = own && noDefine ? noDefine : residentRow && !residentAllowed ? CC.ERR.RESIDENT_OFF : answered ? sentence(fact?.reason) : undefined;
     const on = attached(row.id);
-    // A remote MCP server shows what it brings; an API row keeps its chips until its Other line has words.
-    const kind = row.category === "mcp" ? mcpAccess(row, on ? runFacts : undefined) : undefined;
+    // A remote MCP server shows what it brings; a local one and an API row keep their chips until their Other line has words.
+    const kind = row.category === "mcp" && row.mcp?.transport !== "stdio" ? mcpAccess(row, on ? runFacts : undefined) : undefined;
     return (
       <ToolCard
         key={row.id}
         icon={row.category === "mcp" ? CARD_ICON.mcp : CARD_ICON.api}
         title={row.name}
-        org
+        org={!own}
+        sub={own ? NR_TOOLS.SUB_SAVED : undefined}
         body={row.description || undefined}
         access={kind && breakdown(on, reason, kind)}
         brings={!kind && <Brings hosts={row.hosts} deliveries={row.secrets.map((s) => MODE_DELIVERY[s.delivery.mode])} />}
@@ -342,8 +355,10 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
             </ToolCard>
           );
         })}
-        {show("mcp") && org("mcp").map(orgCard)}
-        {show("api") && org("api").map(orgCard)}
+        {show("mcp") && org("mcp").map((row) => componentCard(row, false))}
+        {show("mcp") && saved("mcp").map((row) => componentCard(row, true))}
+        {show("api") && org("api").map((row) => componentCard(row, false))}
+        {show("api") && saved("api").map((row) => componentCard(row, true))}
         {show("secret") && (
           <>
             <DoorCard icon={CARD_ICON.secret} title={NR_TOOLS.SECRET_CARD_TITLE} body={NR_TOOLS.SECRET_CARD_BODY} button={NR_TOOLS.SECRET_CARD_BUTTON} onOpen={() => open("secret")} />

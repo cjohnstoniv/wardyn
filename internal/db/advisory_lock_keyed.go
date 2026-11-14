@@ -101,6 +101,19 @@ const MemberDriveLockClass int32 = 0x574D4452 // ASCII "WMDR"
 // KeptMachineLockClass serializes one person's store.CreateKeptMachine count and insert (second key: crc32 of the owner).
 const KeptMachineLockClass int32 = 0x574B504D // ASCII "WKPM"
 
+// ApprovalRunCapLockClass, APITokenCapLockClass and SSHKeyCapLockClass serialize a capped insert's count
+// and insert in one transaction (store.WithAdmissionCap; second key: crc32 of the run id or the owner),
+// so two writers of one scope cannot both pass a count that leaves one slot.
+const (
+	ApprovalRunCapLockClass int32 = 0x57415043 // ASCII "WAPC"
+	APITokenCapLockClass    int32 = 0x57415443 // ASCII "WATC"
+	SSHKeyCapLockClass      int32 = 0x57534B43 // ASCII "WSKC"
+)
+
+// LaunchPresetLockClass serializes the writes of one launch preset name (second key: crc32 of the name),
+// so a create reads the version floor a delete of that name committed, never one from before it.
+const LaunchPresetLockClass int32 = 0x574C5056 // ASCII "WLPV"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches
