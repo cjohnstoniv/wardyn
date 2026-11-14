@@ -116,10 +116,10 @@ func TestAdoRunPATRefusalTransientIs503(t *testing.T) {
 // so a person a SCIM purge removed, whom nobody erases again, keeps no record of it.
 func TestRunPATSweepDeletesWhatAnEraseKept(t *testing.T) {
 	fx := newADOPATFixture(t)
-	var swept []string
+	swept := 0
 	fx.srv.cfg.Store = tokenHistoryLeft{adoConsoleStore: adoConsoleStore{fx.st}, swept: &swept}
 	fx.advance(adoRunPATSweepEvery + time.Second)
-	if err := fx.srv.sweepRunPATs(context.Background()); err != nil || len(swept) != 1 || swept[0] != adoPATRevokeOffboarding {
-		t.Fatalf("sweepRunPATs = %v, deletes asked %v; want one, for the erase's reason %q", err, swept, adoPATRevokeOffboarding)
+	if err := fx.srv.sweepRunPATs(context.Background()); err != nil || swept != 1 {
+		t.Fatalf("sweepRunPATs = %v, deletes asked %d; want one", err, swept)
 	}
 }

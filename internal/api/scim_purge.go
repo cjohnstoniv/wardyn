@@ -55,6 +55,10 @@ const (
 	scimResumeIdle = 10 * time.Minute
 
 	scimSweeperSlot = "sweeper"
+
+	// purgeLeftTokenRow prefixes an erase step's ledger key for one Azure DevOps token row its erase left
+	// (the row's id follows); person.deprovision's live_left counts the distinct keys.
+	purgeLeftTokenRow = "live_left_row:"
 )
 
 // scimPurgeScopes is the erasure a purge asks for (Q-SCIM5): the person's credentials, the masking
@@ -210,7 +214,8 @@ func (s *Server) purgeStep(ctx context.Context, st scimStore, id uuid.UUID, jobs
 // not configured on this server holds nothing of the person's, so it is skipped rather than failing
 // the purge; a configured scope that fails keeps the step pending.
 func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[string]int, error) {
-	orch := s.erasureOrchestrator(nil, nil)
+	var left []string
+	orch := s.erasureOrchestratorLeaving(nil, nil, &left)
 	scopes := slices.DeleteFunc(slices.Clone(scimPurgeScopes), func(sc erasure.Scope) bool { return orch.Steps[sc] == nil })
 	detail := map[string]int{}
 	if len(scopes) == 0 {
@@ -222,10 +227,12 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 		if m["tokens_revocation_failed"] == true {
 			detail["tokens_revocation_failed"] = 1
 		}
-		// The person's Azure DevOps token rows the erase left because those tokens may still work.
-		if n, ok := m["live_left"].(int64); ok {
-			detail["live_left"] = int(n)
-		}
+	}
+	// The person's Azure DevOps token rows the erase left because those tokens may still work, one key
+	// per row: the erase steps of a principal and of an entra form it proved both reach a row under
+	// that form, and auditPurge counts it once.
+	for _, id := range left {
+		detail[purgeLeftTokenRow+id] = 1
 	}
 	if m, ok := rep.Details[erasure.MaskCopies].(map[string]any); ok {
 		detail["masks_fenced"], _ = m["runs_fenced"].(int)
@@ -513,6 +520,12 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 			counts[k] += v
 		}
 	}
+	liveLeft := 0 // distinct token rows: two erase steps can name one
+	for k := range counts {
+		if strings.HasPrefix(k, purgeLeftTokenRow) {
+			liveLeft++
+		}
+	}
 	drives, err := s.personDrives(ctx, forms.targets)
 	if err != nil {
 		return err
@@ -535,7 +548,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 		"invitations_deleted": counts["invitations_deleted"], "invitations_cleared": counts["invitations_cleared"], "service_identities_cleared": counts["service_identities_cleared"],
 		"runner_pools_deleted": counts["runner_pools_deleted"], "templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
-		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"], "live_left": counts["live_left"],
+		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"], "live_left": liveLeft,
 		"granted_drives": granted,
 	}
 	if len(memberIDs) > 0 {

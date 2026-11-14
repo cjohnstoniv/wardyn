@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -47,11 +48,12 @@ func TestPG_DeleteSettledRunPATsOfKeepsARefusedToken(t *testing.T) {
 	insert(ahead, "offboarding", "")        // revoked: deleted
 	insert(ahead, "expired", "HTTP 503")    // closed as expired: deleted
 	insert(past, "offboarding", "HTTP 400") // refused, but past its valid_to: deleted
-	insert(ahead, "", "")                   // open: kept
+	open := insert(ahead, "", "")           // open: kept
 
 	deleted, left, err := st.DeleteSettledRunPATsOf(ctx, []string{"oidc:alice"})
-	if err != nil || deleted != 3 || left != 2 {
-		t.Fatalf("DeleteSettledRunPATsOf = %d deleted, %d left, %v; want 3 and 2 (the refused and the open row kept)", deleted, left, err)
+	if err != nil || deleted != 3 || len(left) != 2 || !slices.Contains(left, refused.String()+"/"+refused.String()) ||
+		!slices.Contains(left, open.String()+"/"+open.String()) {
+		t.Fatalf("DeleteSettledRunPATsOf = %d deleted, left %v, %v; want 3 and the ids of the refused and the open row", deleted, left, err)
 	}
 	if got, err := st.ListRefusedRunPATs(ctx, "oidc:alice", now); err != nil || len(got) != 1 || got[0].RunID != refused {
 		t.Errorf("ListRefusedRunPATs after the erase = %+v, %v; want the refused token still listed", got, err)
@@ -59,10 +61,11 @@ func TestPG_DeleteSettledRunPATsOfKeepsARefusedToken(t *testing.T) {
 }
 
 // The run token sweep's delete takes only what an erase kept of a refused token: a refused row past
-// its valid_to, created before its owner's last sign-in end, when that end was an erase. A refused row
-// still inside its valid_to, a row revoked or closed as expired, one created after the erase, and one
-// of a person who only disconnected, or who has no end, all stay. Guarded by WARDYN_TEST_PG; skipped
-// cleanly when unset.
+// its valid_to, created before its owner's credentials were last erased, also when they disconnected
+// Azure DevOps after the erase, or revoked by the erase's end itself, also when it was recorded after
+// the end. A refused row still inside its valid_to, a row revoked or closed as expired, one created
+// after the erase and refused at a run end, and one of a person who only disconnected, or who has no
+// end, all stay. Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
 func TestPG_DeleteErasedRefusedRunPATs(t *testing.T) {
 	st := store.NewPG(runsPGPoolIsolated(t))
 	ctx := context.Background()
@@ -84,7 +87,7 @@ func TestPG_DeleteErasedRefusedRunPATs(t *testing.T) {
 		if err := st.BeginADOSignInEnd(ctx, owner, reason); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.FinishADOSignInEnd(ctx, owner); err != nil {
+		if err := st.FinishADOSignInEnd(ctx, owner, reason); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -92,6 +95,7 @@ func TestPG_DeleteErasedRefusedRunPATs(t *testing.T) {
 	gone := []uuid.UUID{
 		insert("oidc:alice", past, "offboarding", "HTTP 400"), // the erase's own revoke was refused
 		insert("oidc:alice", past, "run_end", "HTTP 403"),     // refused before the erase, which kept it
+		insert("oidc:dave", past, "run_end", "HTTP 400"),      // dave disconnected after his erase
 	}
 	kept := []uuid.UUID{
 		insert("oidc:alice", ahead, "offboarding", "HTTP 400"), // refused, still inside its valid_to
@@ -102,10 +106,13 @@ func TestPG_DeleteErasedRefusedRunPATs(t *testing.T) {
 	}
 	end("oidc:alice", "offboarding")
 	end("oidc:bob", "disconnect")
-	kept = append(kept, insert("oidc:alice", past, "run_end", "HTTP 400")) // created after the erase
+	end("oidc:dave", "offboarding")
+	end("oidc:dave", "disconnect")
+	kept = append(kept, insert("oidc:alice", past, "run_end", "HTTP 400"))     // created after the erase
+	gone = append(gone, insert("oidc:alice", past, "offboarding", "HTTP 400")) // created across the erase's end, recorded after it
 
-	if n, err := st.DeleteErasedRefusedRunPATs(ctx, "offboarding"); err != nil || n != 2 {
-		t.Fatalf("DeleteErasedRefusedRunPATs = %d, %v; want 2, the refused rows the erase kept", n, err)
+	if n, err := st.DeleteErasedRefusedRunPATs(ctx); err != nil || n != 4 {
+		t.Fatalf("DeleteErasedRefusedRunPATs = %d, %v; want 4, the refused rows the erases kept or revoked", n, err)
 	}
 	for want, runs := range map[int][]uuid.UUID{0: gone, 1: kept} {
 		for _, run := range runs {

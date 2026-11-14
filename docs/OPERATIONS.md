@@ -1365,7 +1365,8 @@ erases one person's retained records by explicit scope, in one audited act
     credential, and the reaper deletes each row 90 days after it was written.
   - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
     replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
-    `secret_owner_generations` below would.
+    `secret_owner_generations` below would. Its `erased_at` tells the run token sweep which refused token records
+    an erase kept.
   - `secret_owner_generations` keeps the subject id (below).
 - The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
@@ -4108,6 +4109,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0281` (`0281_insert_stamps`) adds the nullable `inserted_at` to `agent_runs` (`0001`'s table), `api_tokens` (`0045`'s table) and `ssh_public_keys` (`0033`'s table), set only by its default, the database's clock at insert; a SCIM suspension compares it with its own deactivation. Existing rows keep it empty and count as older; no row is rewritten and no grant changes. Going back to an earlier release needs a database restore, as after any migration.
 - `0282` (`0282_groundtruth_sensors_evidence`) adds the nullable `groundtruth_sensors.evidence_at` (`0261`'s table): when a node's kernel event counts last rose on a heartbeat at most 15 minutes after the one before. `/healthz` reads a sensor as `healthy` only while it is recent. It is NULL on every existing row, so each sensor reads `idle` until its counts next rise; no grant changes.
 - `0283` (`0283_principal_identity_unbinds`) creates `principal_identity_unbinds`: per identity unbind, the principal it released (cleared by that person's audit personal fields erasure, never written for one already erased) and the database time. Audit reads under `WARDYN_AUDIT_SEAL=full` use it to name rows written before an unbind. No existing row changes; split-role installs grant `SELECT, INSERT, UPDATE` on it. Going back to an earlier release needs a database restore, as after any migration.
+- `0287` (`0287_ado_signin_ends_erased_at`) adds the nullable `ado_signin_ends.erased_at` (`0129`'s table): when an erase of the person's credentials last ended their Azure DevOps sign-in; a disconnect leaves it. The run token sweep deletes their refused token rows created before it once past their valid_to, and also any refused token row whose revoke an erase recorded. A row whose last end was an erase takes that end's time; others stay NULL. No grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -233,15 +234,15 @@ func TestSCIMPurgeEraseRetrySaysARefusedTokenMayStillWork(t *testing.T) {
 	}
 }
 
-// tokenHistoryLeft keeps token history as store.PG does: each erase leaves left of the person's token
-// rows, and the sweep's deletes of what an erase kept are recorded in swept.
+// tokenHistoryLeft keeps token history as store.PG does: each erase leaves the person's token rows
+// left (their ids), and the sweep's deletes of what an erase kept are counted in swept.
 type tokenHistoryLeft struct {
 	adoConsoleStore
-	left  int64
-	swept *[]string
+	left  []string
+	swept *int
 }
 
-func (s tokenHistoryLeft) DeleteSettledRunPATsOf(context.Context, []string) (int64, int64, error) {
+func (s tokenHistoryLeft) DeleteSettledRunPATsOf(context.Context, []string) (int64, []string, error) {
 	return 0, s.left, nil
 }
 
@@ -249,20 +250,62 @@ func (tokenHistoryLeft) DeleteDelegatedTokensOf(context.Context, []string) (int6
 	return 0, nil
 }
 
-func (s tokenHistoryLeft) DeleteErasedRefusedRunPATs(_ context.Context, eraseReason string) (int64, error) {
+func (s tokenHistoryLeft) DeleteErasedRefusedRunPATs(context.Context) (int64, error) {
 	if s.swept != nil {
-		*s.swept = append(*s.swept, eraseReason)
+		*s.swept++
 	}
 	return 0, nil
 }
 
-// A purge's erase step counts the token rows its erase left, as the erase routes do, so the purge's
-// person.deprovision row says how many of the person's tokens may still work.
+// A purge's erase step names each token row its erase left, so the purge's person.deprovision row says
+// how many of the person's tokens may still work.
 func TestSCIMPurgeEraseCountsTheTokenRowsLeft(t *testing.T) {
 	fx := newADOConsoleLane(t, true)
-	fx.srv.cfg.Store = tokenHistoryLeft{adoConsoleStore: adoConsoleStore{fx.st}, left: 2}
-	if detail, err := fx.srv.eraseForPurge(context.Background(), fx.subject); err != nil || detail["live_left"] != 2 {
-		t.Errorf("eraseForPurge = %v, %v; want live_left 2, the token rows the erase left", detail, err)
+	fx.srv.cfg.Store = tokenHistoryLeft{adoConsoleStore: adoConsoleStore{fx.st}, left: []string{"run-1/token-1", "run-2/token-2"}}
+	detail, err := fx.srv.eraseForPurge(context.Background(), fx.subject)
+	if err != nil || detail[purgeLeftTokenRow+"run-1/token-1"] != 1 || detail[purgeLeftTokenRow+"run-2/token-2"] != 1 {
+		t.Errorf("eraseForPurge = %v, %v; want one key for each token row the erase left", detail, err)
+	}
+}
+
+// formTokenRowLeft proves form the person's own (entraFormStore) and keeps token history as store.PG
+// does: one row, recorded under form, is left by every erase whose names include form.
+type formTokenRowLeft struct{ entraFormStore }
+
+func (s formTokenRowLeft) DeleteSettledRunPATsOf(_ context.Context, owners []string) (int64, []string, error) {
+	if slices.Contains(owners, s.form) {
+		return 0, []string{"run-1/token-1"}, nil
+	}
+	return 0, nil, nil
+}
+
+func (formTokenRowLeft) DeleteDelegatedTokensOf(context.Context, []string) (int64, error) {
+	return 0, nil
+}
+
+// A token row recorded under an entra:<tenant>:<object> form (an install upgraded from 0.8.9) is left
+// by two of a purge's erase steps: the sign-in principal's, which erases under the form it proved, and
+// the form's own. The person.deprovision row counts it once.
+func TestSCIMPurgeRowCountsATokenRowUnderAnEntraFormOnce(t *testing.T) {
+	const form = "entra:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222"
+	fx := newADOConsoleLane(t, true)
+	fx.srv.cfg.Store = formTokenRowLeft{entraFormStore{adoConsoleStore{fx.st}, fx.subject, form}}
+	cov := newSCIMCovStore()
+	l := scimCovSeedPurgee(cov)
+	for _, target := range []string{fx.subject, form} {
+		detail, err := fx.srv.eraseForPurge(context.Background(), target)
+		if err != nil {
+			t.Fatalf("eraseForPurge(%s) = %v", target, err)
+		}
+		cov.jobs = append(cov.jobs, &store.DeprovisionJob{IdentityID: l.id, Kind: store.JobKindPurge, Step: jobStepErase,
+			Target: target, Done: true, Detail: detail})
+	}
+	e := newSCIMCovEnv(t, cov)
+	if w := e.scim(http.MethodDelete, "/scim/v2/Users/"+l.id.String(), ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	if got := e.auditData(e.purgeRow())["live_left"]; got != float64(1) {
+		t.Errorf("person.deprovision live_left = %v, want 1: one token row, which two erase steps left", got)
 	}
 }
 
@@ -274,7 +317,7 @@ func TestSCIMPurgeRowSaysWhenATokenWasNotRevoked(t *testing.T) {
 		l := scimCovSeedPurgee(cov)
 		if refused {
 			cov.jobs = append(cov.jobs, &store.DeprovisionJob{IdentityID: l.id, Kind: store.JobKindPurge, Step: jobStepErase,
-				Target: "sub-pat", Done: true, Detail: map[string]int{"tokens_revocation_failed": 1, "live_left": 1}})
+				Target: "sub-pat", Done: true, Detail: map[string]int{"tokens_revocation_failed": 1, purgeLeftTokenRow + "run-1/token-1": 1}})
 		}
 		e := newSCIMCovEnv(t, cov)
 		if w := e.scim(http.MethodDelete, "/scim/v2/Users/"+l.id.String(), ""); w.Code != http.StatusNoContent {

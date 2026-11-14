@@ -38,7 +38,7 @@ func (s *Server) beginADOSignInEnd(ctx context.Context, owner, reason string) (f
 	return func() {
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoSignInEndFinishTimeout)
 		defer cancel()
-		if err := st.FinishADOSignInEnd(fctx, owner); err != nil {
+		if err := st.FinishADOSignInEnd(fctx, owner, reason); err != nil {
 			// The end then reads as running until store.ADOSignInEndsStaleAfter, which only makes
 			// a mint revoke its own token: the safe side.
 			slog.WarnContext(ctx, "wardynd: an Azure DevOps sign-in end was not marked finished", slog.Any("err", err))

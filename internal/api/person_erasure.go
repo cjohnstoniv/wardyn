@@ -60,6 +60,13 @@ type erasureIncompleteBody struct {
 // when that scope fails part way. want, when non-nil, is the person's names the
 // caller proved before anything ran (erasureNamesOf); the steps act on no others.
 func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *erasureNames) *erasure.Orchestrator {
+	return s.erasureOrchestratorLeaving(credRep, want, nil)
+}
+
+// erasureOrchestratorLeaving is erasureOrchestrator whose credentials step, when left is non-nil, also
+// sets it to the ids of the Azure DevOps token rows its erase left (eraseTokenHistory), so a SCIM purge
+// counts a row two of its erase steps reach once.
+func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, want *erasureNames, left *[]string) *erasure.Orchestrator {
 	// Launch intents hold task text and inline component definitions, so the
 	// run_tasks and components steps erase them too, and so does run_setups.
 	steps := map[erasure.Scope]erasure.Step{
@@ -76,7 +83,10 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 				err = s.eraseLoginGroups(ctx, person, want)
 			}
 			if err == nil {
-				err = s.eraseTokenHistory(ctx, person, want, history)
+				var kept []string
+				if kept, err = s.eraseTokenHistory(ctx, person, want, history); left != nil {
+					*left = kept
+				}
 			}
 			if credRep != nil {
 				*credRep = rep

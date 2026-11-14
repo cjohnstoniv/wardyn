@@ -235,7 +235,7 @@ func (s *Server) sweepRunPATs(ctx context.Context) error {
 		}
 	}
 	if d, ok := s.cfg.Store.(erasedRunPATDeleter); ok {
-		if _, err := d.DeleteErasedRefusedRunPATs(ctx, adoPATRevokeOffboarding); err != nil {
+		if _, err := d.DeleteErasedRefusedRunPATs(ctx); err != nil {
 			return fmt.Errorf("delete erased refused run tokens: %w", err)
 		}
 	}
@@ -245,7 +245,7 @@ func (s *Server) sweepRunPATs(ctx context.Context) error {
 // erasedRunPATDeleter deletes the record an erase kept of a token Azure DevOps refused to revoke, once
 // the token has expired (store.PG): a person a SCIM purge removed is never erased again.
 type erasedRunPATDeleter interface {
-	DeleteErasedRefusedRunPATs(ctx context.Context, eraseReason string) (int64, error)
+	DeleteErasedRefusedRunPATs(ctx context.Context) (int64, error)
 }
 
 // sweepLiveRunPATs closes the expired rows of a live run and retries, under
