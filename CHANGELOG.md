@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- The `/healthz` sensor reason for a sensor that saw no kernel events now starts with a capital letter, like its other reasons: "No kernel events observed", before "no kernel events observed". The reason for a sensor that saw kernel events but tied none to a run likewise reads "Kernel events observed but none correlated to a run". A check that matches the reason text exactly needs the new case.
 - `GET /runs/{id}` and `POST /runs/{id}/computer-folder/bring-back` no longer send `given_up_audited` in a computer folder's pass records; it was the server's own audit bookkeeping.
 
 ### Fixed
