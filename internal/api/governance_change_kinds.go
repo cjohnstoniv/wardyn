@@ -375,8 +375,10 @@ func (s *Server) renameShift(ctx context.Context, id uuid.UUID, name string) (sh
 }
 
 // holdUnitDelete stores a profile delete as a pending change, after a dry run of the delete has
-// shown the store would accept it (so the refusals are the direct delete's own).
-func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+// shown the store would accept it (so the refusals are the direct delete's own). A prune's under is
+// checked on the same locked read; the base then holds the unit's chain, so a later move makes the
+// change stale.
+func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, under *uuid.UUID) {
 	ctx := r.Context()
 	var all []types.GovernanceUnit
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
@@ -387,9 +389,12 @@ func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.
 		if all, err = store.ListGovernanceUnitsQ(ctx, q); err != nil {
 			return err
 		}
+		if err := s.requireUnderQ(ctx, q, under, id); err != nil {
+			return err
+		}
 		return store.DeleteGovernanceUnitQ(ctx, q, id)
 	})
-	if s.writeUnitDeleteError(w, r, err) {
+	if answerNotUnder(w, err) || s.writeUnitDeleteError(w, r, err) {
 		return
 	}
 	cur := unitsByID(all)[id]
@@ -718,7 +723,9 @@ func heldBelongsStale(ctx context.Context, q store.Querier, ch types.GovernanceC
 
 // holdMembershipDelete stores an assignment delete as a pending change. keepsIn is, for a unit admin's
 // delete, the units they are granted that the subject keeps another membership below (heldBelongsStale).
-func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, keepsIn []uuid.UUID) {
+// A prune's under is checked on the unit chain the base is computed from, so a later move makes the
+// change stale.
+func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, keepsIn []uuid.UUID, under *uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState
 	var activates []unitActivation
@@ -730,10 +737,13 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 		if st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false); err != nil {
 			return err
 		}
+		if err := s.requireUnderChainQ(ctx, q, under, st.chain); err != nil {
+			return err
+		}
 		activates, err = deleteActivationsQ(ctx, q, row)
 		return err
 	})
-	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
+	if answerNotUnder(w, err) || notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
 		return
 	}
 	if err != nil || st.current == nil {

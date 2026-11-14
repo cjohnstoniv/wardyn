@@ -207,6 +207,7 @@ var queryParamNotAnID = map[string]string{
 	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
 	"cut_in_flight":             "DELETE /admin/delegates/{id} (security tier): true or false, whether the revoke also cuts the gateway access of the runs the portal launched; names no row",
 	"approver":                  "GET /governance/changes: the word security narrows the list the caller may already read to the changes only a security admin may decide; it names no entity",
+	"under":                     "the four governance prune writes (a unit or membership delete, a deciders write, a grant revoke): a unit the write's own target must still be at or below, else 409; it only refuses, a unit admin's must be one they govern or it is the same 409, and it selects no entity",
 	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"event":                     "GET /audit/receipt (security tier): an audit event id to receipt; a session below the security tier is refused before it is read, and an audit row is not one principal's entity",

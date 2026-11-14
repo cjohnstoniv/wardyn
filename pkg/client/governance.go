@@ -560,12 +560,14 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		return GovernanceApplyResult{}, fmt.Errorf("read current governance state: %w", err)
 	}
 	current = withoutExpiring(current)
-	return c.applyGovernanceTo(ctx, current, doc, prune, nil)
+	return c.applyGovernanceTo(ctx, current, doc, prune, nil, "")
 }
 
 // applyGovernanceTo is ApplyGovernanceResult's apply over current as read (narrowed, for the Under variant).
 // beforePrune, when set, runs once just before the first prune write; its error stops the apply there.
-func (c *Client) applyGovernanceTo(ctx context.Context, current, doc GovernanceDocument, prune bool, beforePrune func(context.Context) error) (res GovernanceApplyResult, err error) {
+// underQuery goes on each prune write (pruneAll).
+func (c *Client) applyGovernanceTo(ctx context.Context, current, doc GovernanceDocument, prune bool, beforePrune func(context.Context) error,
+	underQuery string) (res GovernanceApplyResult, err error) {
 	// The writes below record each saved row in doc's slices; copy them first, so the caller's document is
 	// never changed and applying it again still finds the ids its own entries carry.
 	doc.Units, doc.Memberships, doc.Restrictions = slices.Clone(doc.Units), slices.Clone(doc.Memberships), slices.Clone(doc.Restrictions)
@@ -675,7 +677,7 @@ func (c *Client) applyGovernanceTo(ctx context.Context, current, doc GovernanceD
 	}
 
 	if prune {
-		if err := c.pruneAll(ctx, current, doc, admins, deciders, beforePrune, &res); err != nil {
+		if err := c.pruneAll(ctx, current, doc, admins, deciders, beforePrune, underQuery, &res); err != nil {
 			return res, err
 		}
 	}
@@ -761,10 +763,10 @@ func (c *Client) writeGovernanceUnit(ctx context.Context, p GovernanceUnit, repl
 }
 
 // pruneGovernance deletes every assignment, then every profile, in current that
-// doc does not name. It stops at the first delete the server holds for approval
-// (recording it in res.Pending) and reports that as skipped=true, because the
-// deletes after it would run against a state that is not final.
-func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDocument, res *GovernanceApplyResult) (skipped bool, err error) {
+// doc does not name, each with underQuery (pruneAll). It stops at the first delete
+// the server holds for approval (recording it in res.Pending) and reports that as
+// skipped=true, because the deletes after it would run against a state that is not final.
+func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDocument, underQuery string, res *GovernanceApplyResult) (skipped bool, err error) {
 	currentIDToName := make(map[uuid.UUID]string, len(current.Units))
 	for _, p := range current.Units {
 		currentIDToName[p.ID] = p.Name
@@ -783,7 +785,7 @@ func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDoc
 		if keepAssignment[governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)] {
 			continue
 		}
-		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/memberships/"+a.ID.String(), nil, nil)
+		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/memberships/"+a.ID.String()+underQuery, nil, nil)
 		if err != nil {
 			err = fmt.Errorf("prune governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
 		}
@@ -806,7 +808,7 @@ func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDoc
 		if keepProfile[p.Name] || p.Kind == types.UnitKindDefault {
 			continue
 		}
-		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/units/"+p.ID.String(), nil, nil)
+		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/units/"+p.ID.String()+underQuery, nil, nil)
 		if err != nil {
 			err = fmt.Errorf("prune governance profile %q: %w", p.Name, err)
 		}

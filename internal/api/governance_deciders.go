@@ -67,19 +67,26 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUnitsInScope(w, r, "governance.unit_deciders", true, unit) {
 		return
 	}
+	under, ok := pruneUnder(w, r)
+	if !ok {
+		return
+	}
 	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
 	if mode == govQueue {
-		s.holdUnitDeciders(w, r, unitDecidersPayload{UnitID: unit, Rules: rules})
+		s.holdUnitDeciders(w, r, unitDecidersPayload{UnitID: unit, Rules: rules}, under)
 		return
 	}
 	var saved types.UnitDeciders
 	var idempotentClear bool
 	err = s.writeGovernance(ctx, func(q store.Querier) (err error) {
 		if err := lockDecidersKey(ctx, q, unit); err != nil {
+			return err
+		}
+		if err := s.requireUnderQ(ctx, q, under, unit); err != nil {
 			return err
 		}
 		row, all, err := s.deciderWriteCheck(ctx, q, unit)
@@ -293,14 +300,19 @@ func (s *Server) boundaryDeciderLockRefusal(ctx context.Context, q store.Querier
 }
 
 // holdUnitDeciders stores a write as a pending change, except a clear of a unit that has no rules: that
-// answers 200 and holds nothing.
-func (s *Server) holdUnitDeciders(w http.ResponseWriter, r *http.Request, p unitDecidersPayload) {
+// answers 200 and holds nothing. A prune's under is checked first; the base then holds the unit's chain
+// (underBase), so a later move makes the change stale.
+func (s *Server) holdUnitDeciders(w http.ResponseWriter, r *http.Request, p unitDecidersPayload, under *uuid.UUID) {
 	ctx := r.Context()
 	var base any
 	var cur *types.UnitDeciders
 	var row types.GovernanceUnit
 	err := s.readGovernanceState(r, func(q store.Querier) (err error) {
 		var all []types.GovernanceUnit
+		chain, err := s.underChainQ(ctx, q, under, p.UnitID)
+		if err != nil {
+			return err
+		}
 		if row, all, err = s.deciderWriteCheck(ctx, q, p.UnitID); err != nil {
 			return err
 		}
@@ -308,6 +320,7 @@ func (s *Server) holdUnitDeciders(w http.ResponseWriter, r *http.Request, p unit
 			return err
 		}
 		base, cur, err = unitDecidersState(ctx, q, p.UnitID, false)
+		base = underBase(base, chain)
 		return err
 	})
 	if s.writeDecidersError(w, r, err) {
@@ -350,8 +363,8 @@ func applyUnitDecidersChange(s *Server, r *http.Request, q store.Querier, ch typ
 	if err != nil {
 		return govApplied{}, err
 	}
-	if computeETag(base) != ch.BaseHash {
-		return govApplied{}, store.ErrGovernanceChangeStale
+	if err := heldBaseStale(ctx, q, ch, base, p.UnitID); err != nil {
+		return govApplied{}, err
 	}
 	row, all, err := s.deciderWriteCheck(ctx, q, p.UnitID)
 	if err != nil {
