@@ -698,6 +698,9 @@ func TestDesktopSignin_ExpiredWindowIsEndedBySweep(t *testing.T) {
 	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndExpired {
 		t.Fatalf("row = %+v, want ended expired", si)
 	}
+	if ev := findAudit(f.h.audit.snapshot(), f.run.ID, "desktop_signin.close", "success"); ev == nil || !strings.Contains(string(ev.Data), `"reason":"expired"`) {
+		t.Fatalf("close row = %+v, want success with reason expired", ev)
+	}
 }
 
 // TestDesktopSignin_OnlyTheRunsCreator: the admin token and another person

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -273,6 +274,129 @@ func TestDesktopSignin_ABeginThatFailsBeforeTheAgentStopsEndsTheHoldAWatchTook(t
 				t.Errorf("desktop.recording rows: %d pause, %d resume, want one of each", p, r)
 			}
 		})
+	}
+}
+
+// signinCtxStore is signinReadOnInsert whose row writes fail on a cancelled context, as PostgreSQL's do.
+type signinCtxStore struct{ signinReadOnInsert }
+
+func (s signinCtxStore) EndDesktopSignin(ctx context.Context, id uuid.UUID, reason string, at time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return s.signinTestStore.EndDesktopSignin(ctx, id, reason, at)
+}
+
+func (s signinCtxStore) RequestDesktopSigninEnd(ctx context.Context, id uuid.UUID, reason, stage string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return s.signinTestStore.RequestDesktopSigninEnd(ctx, id, reason, stage)
+}
+
+// signinCancelStopRunner is signinFakeRunner whose SIGSTOP the person's client abandons: the request is
+// cancelled while the stop is sent, after the stop landed or before it was sent (delivered).
+type signinCancelStopRunner struct {
+	*signinFakeRunner
+	cancel    context.CancelFunc
+	delivered bool
+}
+
+func (r signinCancelStopRunner) SignalMain(ctx context.Context, ref, signal string) error {
+	if signal != "SIGSTOP" {
+		return r.signinFakeRunner.SignalMain(ctx, ref, signal)
+	}
+	if r.delivered {
+		_ = r.signinFakeRunner.SignalMain(ctx, ref, signal)
+	}
+	r.cancel()
+	return ctx.Err()
+}
+
+// TestDesktopSignin_ABeginCancelledDuringTheStopClosesItsRow: a begin whose request is cancelled while
+// the agent's stop is sent, whether or not the stop landed, continues the agent, closes its row with one
+// desktop_signin.close row, and ends the recording hold a desktop watch took from the row while it was open.
+func TestDesktopSignin_ABeginCancelledDuringTheStopClosesItsRow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		delivered bool
+		calls     []string
+	}{
+		"the stop landed":     {true, []string{"signal:SIGSTOP", "signal:SIGCONT"}},
+		"the stop was unsent": {false, []string{"signal:SIGCONT"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := recordedSigninFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f.srv.cfg.Store = signinCtxStore{signinReadOnInsert{signinTestStore: f.st, srv: f.srv}}
+			f.srv.cfg.Runner = signinCancelStopRunner{signinFakeRunner: f.rn, cancel: cancel, delivered: tc.delivered}
+			w := doSSOCtx(t, f.srv, ctx, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/desktop-signin", f.cookie, "")
+			if w.Code != http.StatusBadGateway {
+				t.Fatalf("begin = %d %s, want 502", w.Code, w.Body.String())
+			}
+			if got := f.rn.seen(); !slices.Equal(got, tc.calls) {
+				t.Fatalf("calls = %v, want %v (the agent continued)", got, tc.calls)
+			}
+			if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
+				t.Fatalf("sign-in row = ended %v, reason %q, want closed as %q", si.EndedAt, si.EndReason, signinEndFailed)
+			}
+			if held := f.srv.desktopRecs.heldWith(f.run.ID, ""); len(held) != 0 {
+				t.Fatalf("holds after the cancelled begin = %v, want none", held)
+			}
+			if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
+				t.Errorf("desktop.recording rows: %d pause, %d resume, want one of each", p, r)
+			}
+			var closes []types.AuditEvent
+			for _, ev := range f.h.audit.snapshot() {
+				if ev.Action == "desktop_signin.close" {
+					closes = append(closes, ev)
+				}
+			}
+			if len(closes) != 1 || closes[0].Outcome != "success" || !strings.Contains(string(closes[0].Data), `"agent_resumed":true`) {
+				t.Fatalf("desktop_signin.close rows = %+v, want one success with agent_resumed true", closes)
+			}
+		})
+	}
+}
+
+// signinLostInsertStore is signinCtxStore whose insert lands and then answers the request's cancel, as an
+// INSERT whose request is cancelled during its round trip can.
+type signinLostInsertStore struct {
+	signinCtxStore
+	cancel context.CancelFunc
+}
+
+func (s signinLostInsertStore) BeginDesktopSignin(ctx context.Context, si types.DesktopSignin) error {
+	if err := s.signinCtxStore.BeginDesktopSignin(ctx, si); err != nil {
+		return err
+	}
+	s.cancel()
+	return context.Canceled
+}
+
+// TestDesktopSignin_ABeginWhoseInsertLandedAndAnsweredAnErrorClosesItsRow: a begin whose insert wrote the
+// row and still answered an error, its request cancelled, sends the agent no signal, closes the row, and
+// ends the recording hold a desktop watch took from the row while it was open.
+func TestDesktopSignin_ABeginWhoseInsertLandedAndAnsweredAnErrorClosesItsRow(t *testing.T) {
+	f := recordedSigninFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.srv.cfg.Store = signinLostInsertStore{signinCtxStore{signinReadOnInsert{signinTestStore: f.st, srv: f.srv}}, cancel}
+	w := doSSOCtx(t, f.srv, ctx, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/desktop-signin", f.cookie, "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("begin = %d %s, want 503", w.Code, w.Body.String())
+	}
+	if got := f.rn.seen(); len(got) != 0 {
+		t.Fatalf("calls = %v, want none: the agent was sent no signal", got)
+	}
+	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
+		t.Fatalf("sign-in row = ended %v, reason %q, want closed as %q", si.EndedAt, si.EndReason, signinEndFailed)
+	}
+	if held := f.srv.desktopRecs.heldWith(f.run.ID, ""); len(held) != 0 {
+		t.Fatalf("holds after the failed begin = %v, want none", held)
+	}
+	if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
+		t.Errorf("desktop.recording rows: %d pause, %d resume, want one of each", p, r)
 	}
 }
 

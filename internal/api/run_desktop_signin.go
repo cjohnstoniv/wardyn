@@ -350,6 +350,9 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 			return
 		}
 		slog.ErrorContext(ctx, "wardynd: begin desktop sign-in", "run_id", run.ID, "err", err)
+		// An insert that answered an error may still have landed, when the request was cancelled or the
+		// connection lost during its round trip: close that row. Nothing closes when none was written.
+		s.endUnstartedDesktopSignin(ctx, st, run, si)
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in could not be recorded")
 		return
 	}
@@ -372,7 +375,13 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := se.SignalMain(ctx, run.SandboxRef, "SIGSTOP"); err != nil {
-		s.endUnstartedDesktopSignin(ctx, st, run, si)
+		if ctx.Err() != nil && !errors.Is(err, runner.ErrSigninUnsupported) {
+			// The request was cancelled while the stop was sent, so it may have
+			// landed: continue pid 1 and close the row, as when pause-agent never ran.
+			s.abandonDesktopSignin(ctx, se, run, si, principal)
+		} else {
+			s.endUnstartedDesktopSignin(ctx, st, run, si)
+		}
 		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be stopped, so the sign-in did not start", "pause", err)
 		return
 	}
@@ -420,7 +429,11 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 
 // endUnstartedDesktopSignin closes the row of a sign-in that failed before the agent was stopped.
 // A desktop watch may already have read the row open and held the recording, so the hold ends too.
+// It runs on its own bounded context: a row left open by a cancelled request would keep every
+// recorded desktop stream paused until the sweep's window passed.
 func (s *Server) endUnstartedDesktopSignin(ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, si types.DesktopSignin) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
+	defer cancel()
 	if ended, _ := st.EndDesktopSignin(ctx, si.ID, signinEndFailed, s.cfg.Now()); ended {
 		s.endDesktopHold(ctx, run, si.ID.String(), nil)
 	}
@@ -432,12 +445,15 @@ func (s *Server) rollbackDesktopSignin(ctx context.Context, run types.AgentRun, 
 	_ = s.finishDesktopSignin(context.WithoutCancel(ctx), run, si, signinEndFailed, types.ActorHuman, principal)
 }
 
-// abandonDesktopSignin ends a sign-in whose pause-agent never ran: only pid 1
-// was stopped, so a bare SIGCONT resumes the agent. When even that fails, the
+// abandonDesktopSignin ends a sign-in whose pause-agent never ran, or whose
+// request was cancelled while pid 1's stop was sent: at most pid 1 was
+// stopped, so a bare SIGCONT resumes the agent. When even that fails, the
 // row is left at the "continue" stage, and the sweep retries only that
-// SIGCONT (continueDesktopSignin), never the helper.
+// SIGCONT (continueDesktopSignin), never the helper. It runs on its own
+// bounded context, since the begin's request may be gone.
 func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExecer, run types.AgentRun, si types.DesktopSignin, principal string) {
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signinExecTimeout)
+	defer cancel()
 	st, ok := s.desktopSigninStore()
 	if !ok {
 		return
