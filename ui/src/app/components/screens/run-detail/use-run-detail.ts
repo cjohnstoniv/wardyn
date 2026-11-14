@@ -25,11 +25,14 @@ import { HttpError, LIST_LIMIT } from "../../../lib/api/core";
 import { failureSentence } from "../../wardyn/states";
 import { withNewestEvents } from "./audit-window";
 import { macOSDiskPending } from "./macos-run-facts";
+import { computerFolderSettling } from "./widgets/identity-computer-folder";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
 // How long after a KILLED run ended its page keeps asking whether the kill row has landed.
 const KILL_SETTLE_MS = 120_000;
+// How long a finished run keeps polling for its sandbox's confirmed stop, or after an answer that lost its folder's fate.
+const FOLDER_SETTLE_MS = 120_000;
 
 export type RecordingIndex = "complete" | "failed" | "capped";
 const NO_RECORDING_ROWS: { sessions: AuditEvent[]; desktop: AuditEvent[]; gaps: AuditEvent[] } = { sessions: [], desktop: [], gaps: [] };
@@ -101,6 +104,8 @@ export function useRunDetail(id: string) {
   // one. Best-effort: a failed read leaves the last-good rows, and a failed mint
   // read is "couldn't read which credentials".
   const settleSince = React.useRef<number | null>(null);
+  // The run whose computer folder this page is waiting on, and since when the wait is a bounded one.
+  const folderWait = React.useRef<{ id: string; since: number | null } | null>(null);
   const endingGen = React.useRef(0);
   const endingInFlight = React.useRef(false);
   const loadEnding = React.useCallback(() => {
@@ -327,8 +332,19 @@ export function useRunDetail(id: string) {
   const unconfirmedKill = run?.state === "KILLED" && !killSettled;
   if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
   const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
-  // …and a macOS VM run whose disk is still being removed
-  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling && !macOSDiskPending(run));
+  // A terminal run's computer folder changes on the server with nothing to press here. Unsettled, it is polled
+  // until it settles. With only the sandbox's stop left to confirm, or after an answer that lost the fate of a
+  // folder this page saw waiting (a read the server could not finish), it is polled for FOLDER_SETTLE_MS on this
+  // page's clock, like the kill wait: a stop that is never confirmed must not poll for ever. A server that reports
+  // no fate at all is never polled.
+  const folder = computerFolderSettling(run);
+  const waited = folderWait.current?.id === run?.id ? folderWait.current : null;
+  if (folder === "unsettled") folderWait.current = { id: run?.id ?? "", since: null };
+  else if (folder === "stopping" || (folder === "unknown" && waited)) folderWait.current = { id: run?.id ?? "", since: waited?.since ?? Date.now() };
+  else folderWait.current = null;
+  const folderSettling = folderWait.current !== null && Date.now() - (folderWait.current.since ?? Date.now()) < FOLDER_SETTLE_MS;
+  // …and a macOS VM run whose disk is still being removed, and a run whose computer folder is still settling
+  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling && !macOSDiskPending(run) && !folderSettling);
 
   return {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, recordingIndex, status, loadMessage, tab, setTab,
