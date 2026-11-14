@@ -52,7 +52,7 @@ func TestWarmLoopStopsOnClose(t *testing.T) {
 	interval := shortWarmInterval(t)
 	d, cs := warmTestDriver(t, warmTestPool("a", 1))
 	d.startWarmPools()
-	waitForAction(t, cs, "list pods", 4) // the first pass and at least two ticks
+	waitForAction(t, cs, "list pods", 4) // the first pass lists pods 3 times (reconcileWarmPools twice, replaceWarmDeny's wait once), so 4 proves one tick
 	closeWithin(t, d)
 	after := countOf(warmSeq(cs), "list pods")
 	time.Sleep(20 * interval)

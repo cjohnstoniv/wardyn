@@ -43,6 +43,7 @@ func warmClaimSpec() runner.SandboxSpec {
 func TestClaimWarmTakesAReadyPlaceholderAndReturnsItsNode(t *testing.T) {
 	p := warmTestPool("a", 2)
 	d, cs := warmTestDriver(t, p)
+	// the fake already lists by name, so seeding 1 before 0 does not pin the sort in claimWarm
 	seedReady(t, d, cs, p, 1, "n2", "u1", "5")
 	seedReady(t, d, cs, p, 0, "n1", "u0", "4")
 	cs.ClearActions()
@@ -56,6 +57,47 @@ func TestClaimWarmTakesAReadyPlaceholderAndReturnsItsNode(t *testing.T) {
 	pre := dels[0].GetDeleteOptions().Preconditions
 	if pre == nil || pre.UID == nil || *pre.UID != "u0" || pre.ResourceVersion == nil || *pre.ResourceVersion != "4" {
 		t.Fatalf("delete preconditions %+v, want UID u0 and resourceVersion 4", pre)
+	}
+}
+
+// TestWarmPodReadyNeedsEveryCondition breaks one of the four conditions per row; each must answer not ready.
+func TestWarmPodReadyNeedsEveryCondition(t *testing.T) {
+	deleting := metav1.Now()
+	for _, tc := range []struct {
+		name string
+		edit func(*corev1.Pod)
+		want bool
+	}{
+		{"all four hold", func(*corev1.Pod) {}, true},
+		{"name of another pool", func(p *corev1.Pod) { p.Name = "wardyn-warm-b-0" }, false},
+		{"being deleted", func(p *corev1.Pod) { p.DeletionTimestamp = &deleting }, false},
+		{"not bound to a node", func(p *corev1.Pod) { p.Spec.NodeName = "" }, false},
+		{"Ready is false", func(p *corev1.Pod) { p.Status.Conditions[0].Status = corev1.ConditionFalse }, false},
+		{"no Ready condition, another is true", func(p *corev1.Pod) { p.Status.Conditions[0].Type = corev1.PodScheduled }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "wardyn-warm-a-0"}}
+			pod.Spec.NodeName = "n1"
+			pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+			tc.edit(pod)
+			if got := warmPodReady(pod, "a"); got != tc.want {
+				t.Fatalf("warmPodReady = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaimWarmSkipsAPlaceholderThatIsNotReady(t *testing.T) {
+	p := warmTestPool("a", 2)
+	d, cs := warmTestDriver(t, p)
+	seedPlaceholder(t, d, cs, p, 0, nil) // Running, on no node and not Ready
+	seedReady(t, d, cs, p, 1, "n2", "u1", "5")
+	cs.ClearActions()
+	if got := d.claimWarm(context.Background(), warmClaimSpec(), types.CC1); got != "n2" {
+		t.Fatalf("claimWarm = %q, want n2 (the first by name is not Ready)", got)
+	}
+	if dels := deletesOf(cs, "pods"); len(dels) != 1 || dels[0].GetName() != "wardyn-warm-a-1" {
+		t.Fatalf("pod deletes %v, want wardyn-warm-a-1 alone", dels)
 	}
 }
 
