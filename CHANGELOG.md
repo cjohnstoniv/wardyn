@@ -195,6 +195,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`), and `SELECT, INSERT`
   on `audit_checkpoints` and `run_model_usage`.
 
+### Security
+
+- The one-line installer's upgrade rewrote `.env` through a fixed name, `.env.tmp`. An `.env.tmp` already there gave `.env` its permissions, so a leftover file others could read could leave `.env` readable by them, and a symlink at that name had the store key and the admin token written to wherever it pointed. Each rewrite now goes through a new file made by `mktemp`, readable by its owner only, and an existing `.env.tmp` is left untouched. The next upgrade leaves `.env` readable by its owner only. `scripts/up.sh` and `scripts/setup.sh` rewrote `deploy/compose/.env` through `.env.tmp` too, and followed a symlink at that name; they now use a new `mktemp` file as well.
+- `wardyn support-bundle`: a flag such as `--password value`, `--api-key value` or `--requirepass value`, given in a Compose `command` list or in a shell string, kept its value in `compose-config.redacted.yaml`, and so did `--api-key=value`. When a flag's name contains `key`, `pass`, or one of the words the bundle already treats as secret in a setting name (such as `token`, `secret` or `auth`), the list entry after it is now redacted, so is a list entry that joins it to its value with `=`, and a shell string that carries such a flag with a value is redacted whole.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added

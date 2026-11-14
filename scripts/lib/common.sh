@@ -254,13 +254,19 @@ env_get() {
 # its mode), which fixes the primitive rather than the one call site that
 # happened to be found — all ~15 callers are covered, up.sh's and setup.sh's
 # alike. Pinned by scripts/test-up-policy.sh.
+#
+# The tmp is a new file from mktemp (0600), never the fixed name FILE.tmp: a
+# leftover or planted FILE.tmp symlink was followed by `cp -p` and `>`, and the
+# mv then made the link FILE, with the secrets written to its target.
 env_set() {
   _es_file=$1; _es_key=$2; _es_val=$3
   if [ -f "${_es_file}" ] && grep -qE "^${_es_key}=" "${_es_file}"; then
-    cp -p "${_es_file}" "${_es_file}.tmp"
-    awk -v k="${_es_key}=" -v line="${_es_key}=${_es_val}" \
-      'index($0,k)==1{print line; next}{print}' "${_es_file}" > "${_es_file}.tmp"
-    mv "${_es_file}.tmp" "${_es_file}"
+    _es_tmp=$(mktemp "${_es_file}.XXXXXX") || die "could not create a temporary file beside ${_es_file}"
+    cp -p "${_es_file}" "${_es_tmp}" \
+      && awk -v k="${_es_key}=" -v line="${_es_key}=${_es_val}" \
+        'index($0,k)==1{print line; next}{print}' "${_es_file}" > "${_es_tmp}" \
+      || { rm -f "${_es_tmp}"; die "could not rewrite ${_es_file}"; }
+    mv "${_es_tmp}" "${_es_file}"
   else
     printf '%s=%s\n' "${_es_key}" "${_es_val}" >> "${_es_file}"
   fi
