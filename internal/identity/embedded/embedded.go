@@ -238,8 +238,9 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		if errors.Is(err, jwt.ErrExpired) {
 			if runID, rerr := p.runIDFromActor(claims.Act.Sub); rerr == nil {
 				return nil, &identity.ExpiredTokenError{
-					RunID: runID,
-					Err:   fmt.Errorf("embedded identity: validate claims: %w", err),
+					RunID:  runID,
+					Expiry: claims.Expiry.Time(),
+					Err:    fmt.Errorf("embedded identity: validate claims: %w", err),
 				}
 			}
 		}

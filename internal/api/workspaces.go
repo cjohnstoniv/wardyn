@@ -374,6 +374,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 		}
 		out := make([]types.Workspace, 0, len(rows))
 		for _, ws := range rows {
+			ws = s.rejudgedForList(r.Context(), ws) // a clean replay's verdict taken again, as the detail read does
 			ws = redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))
 			if stamp != nil {
 				ws = stamp(ws)

@@ -392,30 +392,35 @@ func TestRunIsOver(t *testing.T) {
 }
 
 // The decision door's refusal of a run that is over is written once per run: a claim holds until every token
-// of the run has lapsed, a spent claim is dropped, a claim given back is taken again, and each run has its own.
+// of the run has lapsed, a spent claim is dropped, a claim given back is taken again, and each run, and each
+// action of the same run (a refusal and a post the door could not take), has its own.
 func TestClaimDecisionRefusalHoldsUntilTheRunsTokensLapse(t *testing.T) {
 	now := time.Now().UTC()
 	s := &Server{cfg: Config{Now: func() time.Time { return now }}}
 	runID, other := uuid.New(), uuid.New()
-	if !s.claimDecisionRefusal(runID) || s.claimDecisionRefusal(runID) {
+	const denied = "authz.denied"
+	if !s.claimDecisionRefusal(runID, denied) || s.claimDecisionRefusal(runID, denied) {
 		t.Fatal("want the run's first refusal claimed and its second not")
 	}
-	if !s.claimDecisionRefusal(other) {
+	if !s.claimDecisionRefusal(other, denied) {
 		t.Fatal("another run's first refusal was not claimed")
 	}
+	if !s.claimDecisionRefusal(runID, runReportLostAction) || s.claimDecisionRefusal(runID, runReportLostAction) {
+		t.Fatal("want the run's first lost report claimed beside its refusal, and its second not")
+	}
 	now = now.Add(identity.RunTokenLapseAfter - time.Second)
-	if s.claimDecisionRefusal(runID) {
+	if s.claimDecisionRefusal(runID, denied) {
 		t.Fatal("a refusal before the run's tokens lapse was claimed again")
 	}
 	now = now.Add(time.Second)
-	if !s.claimDecisionRefusal(runID) {
+	if !s.claimDecisionRefusal(runID, denied) {
 		t.Fatal("a refusal once the run's tokens have lapsed was not claimed")
 	}
 	if len(s.doorRefusals.until) != 1 {
-		t.Fatalf("held claims = %d, want the spent one dropped", len(s.doorRefusals.until))
+		t.Fatalf("held claims = %d, want the spent ones dropped", len(s.doorRefusals.until))
 	}
-	s.releaseDecisionRefusal(runID)
-	if !s.claimDecisionRefusal(runID) {
+	s.releaseDecisionRefusal(runID, denied)
+	if !s.claimDecisionRefusal(runID, denied) {
 		t.Fatal("a claim given back was not taken again")
 	}
 }
@@ -426,11 +431,16 @@ func TestClaimDecisionRefusalHoldsUntilTheRunsTokensLapse(t *testing.T) {
 type overRunClocks struct {
 	keptRunStore
 	store.RunPauser
-	touched, stamped, hinted int
+	touched, stamped, hinted, endedHinted int
 }
 
 func (s *overRunClocks) SetRunFailureHint(context.Context, uuid.UUID, string) error {
 	s.hinted++
+	return nil
+}
+
+func (s *overRunClocks) SetEndedRunFailureHint(context.Context, uuid.UUID, string) error {
+	s.endedHinted++
 	return nil
 }
 
@@ -442,7 +452,8 @@ func (s *overRunClocks) StampRunActive(context.Context, uuid.UUID) (bool, error)
 }
 
 // TestInternalDecisionOnARunThatIsOverMovesNoClock: a run that is over reaches the decision door only inside its
-// tail grace, and what it posts there is kept on its trail but is not activity, as on the runner spool.
+// tail grace, and what it posts there is kept on its trail but is not activity, as on the runner spool. The
+// failure hint a late report carries is still written, on the write that leaves updated_at.
 func TestInternalDecisionOnARunThatIsOverMovesNoClock(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
@@ -454,9 +465,9 @@ func TestInternalDecisionOnARunThatIsOverMovesNoClock(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("code = %d, want 202 for a decision inside the tail grace; body=%s", w.Code, w.Body.String())
 	}
-	if st.touched != 0 || st.stamped != 0 || st.hinted != 0 {
-		t.Fatalf("touched %d, stamped active %d, failure hint written %d; want no clock moved for a run that is over",
-			st.touched, st.stamped, st.hinted)
+	if st.touched != 0 || st.stamped != 0 || st.hinted != 0 || st.endedHinted != 1 {
+		t.Fatalf("touched %d, stamped %d, hint %d, hint keeping updated_at %d; want 0, 0, 0, 1 for a run that is over",
+			st.touched, st.stamped, st.hinted, st.endedHinted)
 	}
 	for _, ev := range h.audit.snapshot() {
 		if ev.Action == "egress.allow" && ev.RunID != nil && *ev.RunID == runID {
@@ -528,13 +539,78 @@ func TestInternalAuth_RevokedTokenReachesOnlyTheDecisionDoorOfARunThatIsOver(t *
 }
 
 // Only revocation opens the decision door to a run that is over: an expired token names its run too
-// (identity.ExpiredTokenError), and keeps the 401.
+// (identity.ExpiredTokenError), and keeps the 401. What it posted is lost, so the door notes it on the run's
+// trail, once however often it is refused, and only at that door. A token that expired more than
+// identity.RunTokenLapseAfter ago is noted only while its run is not over, so a dead token cannot fail the
+// replay of a run that ended long ago.
 func TestInternalAuth_ExpiredTokenIsRefusedAtTheDecisionDoorOfARunThatIsOver(t *testing.T) {
-	runID := uuid.New()
-	st := &dispatchTestStore{run: types.AgentRun{ID: runID, CreatedBy: "t@example.com"}, state: types.RunCompleted}
-	srv, tok := expiredIdentityServer(t, st, &syncAudit{}, runID)
-	w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, `{"request":{"host":"pypi.org","method":"GET"},"decision":"allow"}`)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("code = %d, want 401 for an expired token at the decision door; body=%s", w.Code, w.Body.String())
+	for _, tc := range []struct {
+		name       string
+		state      types.RunState
+		expiredAgo time.Duration
+		want       int
+	}{
+		{"a run that is over, its token expired just now", types.RunCompleted, 2 * time.Minute, 1},
+		{"a run that is over, its token expired long ago", types.RunCompleted, 2 * time.Hour, 0},
+		{"a live run, its token expired long ago", types.RunRunning, 2 * time.Hour, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runID := uuid.New()
+			st := &dispatchTestStore{run: types.AgentRun{ID: runID, CreatedBy: "t@example.com"}, state: tc.state}
+			audit := &syncAudit{}
+			srv, tok := expiredIdentityServer(t, st, audit, runID)
+			srv.cfg.Identity.(*expiredIdentity).expiry = time.Now().Add(-tc.expiredAgo)
+			for range 3 {
+				w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, `{"request":{"host":"pypi.org","method":"GET"},"decision":"allow"}`)
+				if w.Code != http.StatusUnauthorized {
+					t.Fatalf("code = %d, want 401 for an expired token at the decision door; body=%s", w.Code, w.Body.String())
+				}
+			}
+			_ = do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"egress_domain","requested_scope":{"host":"x"}}`)
+			lost := 0
+			for _, ev := range audit.snapshot() {
+				if ev.Action == runReportLostAction && ev.RunID != nil && *ev.RunID == runID && ev.Target == decisionsDoor &&
+					strings.Contains(string(ev.Data), reportLostExpired) {
+					lost++
+				}
+			}
+			if lost != tc.want {
+				t.Fatalf("run.report.drop rows = %d after three expired posts to the decision door and one to another door, want %d", lost, tc.want)
+			}
+		})
+	}
+}
+
+// A decision-door post whose run cannot be read is a retryable 503, on the run's live token (the liveness gate)
+// and on its revoked one (verifyRunToken), never a 401; either way it is noted on the run's trail once, since
+// the proxy does not post it again. Another door keeps its answer and writes no such row.
+func TestInternalAuth_DecisionDoorNotesAPostOfAnUnreadableRun(t *testing.T) {
+	ctx := context.Background()
+	for _, revoked := range []bool{false, true} {
+		h := newHarness(t)
+		runID := uuid.New()
+		srv := New(baseTestConfig(h, errRunStore{err: errors.New("conn reset")}))
+		tok := h.mintRunToken(t, runID)
+		if revoked {
+			if err := h.idp.RevokeRun(ctx, runID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range 3 {
+			w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, `{"request":{"host":"pypi.org","method":"GET"},"decision":"deny"}`)
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("revoked %v: code = %d, want 503; body=%s", revoked, w.Code, w.Body.String())
+			}
+		}
+		_ = do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"egress_domain","requested_scope":{"host":"x"}}`)
+		lost := 0
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == runReportLostAction && ev.RunID != nil && *ev.RunID == runID && ev.Target == decisionsDoor {
+				lost++
+			}
+		}
+		if lost != 1 {
+			t.Fatalf("revoked %v: run.report.drop rows = %d, want 1", revoked, lost)
+		}
 	}
 }

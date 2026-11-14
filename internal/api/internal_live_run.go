@@ -212,11 +212,12 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // revoked before its sandbox is stopped (finalizeRunEffects), so the egress proxy's last reports, posted as
 // it drains, arrive on a revoked token. At the decision door alone, a token whose only defect is revocation
 // (identity.RevokedTokenError) is taken for a run that is over (runIsOver), and refuseTerminalRun then holds
-// it to the tail grace like any other: a post inside it is kept as the run's own rows and nothing else
-// (handlePostDecision), and one past it is refused, with one row on the run's trail per replica
-// (claimDecisionRefusal) that fails its confined replay (runDecisionPostRefused).
-// Every other door, a run still going (an old token a revive retired), and a run that cannot be read keep
-// the refusal.
+// it to the tail grace like any other: a post inside it is kept as the run's own rows, and a Bedrock data-plane
+// refusal on it, or the first clean call after one, can set or clear the run's failure hint, and nothing else
+// (handlePostDecision, noteBedrockDataPlaneFault); one past it is refused, with one row on the run's trail per
+// replica (claimDecisionRefusal) that fails its confined replay (runDecisionPostRefused).
+// Every other door and a run still going (an old token a revive retired) keep the refusal. A run that cannot
+// be read keeps it too, as a retryable one noted on the run's trail (runUnreadableError, refuseRunToken).
 func (s *Server) verifyRunToken(r *http.Request, tok string) (*identity.Claims, error) {
 	claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
 	var revoked *identity.RevokedTokenError
@@ -226,6 +227,9 @@ func (s *Server) verifyRunToken(r *http.Request, tok string) (*identity.Claims, 
 		return claims, err
 	}
 	run, rerr := s.cfg.Store.GetRun(r.Context(), revoked.Claims.RunID)
+	if rerr != nil && !errors.Is(rerr, store.ErrNotFound) {
+		return nil, &runUnreadableError{RunID: revoked.Claims.RunID, Err: rerr}
+	}
 	if rerr != nil || !runIsOver(run, s.cfg.Now().UTC()) {
 		return nil, err
 	}
@@ -310,7 +314,7 @@ func uploadGraceOpen(since, now time.Time) bool {
 func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, reason authz.Reason, key, val string) {
 	once := r.URL.Path == decisionsDoor &&
 		(reason == authz.ReasonRunTerminal || reason == authz.ReasonRunKept || placement.Reason(reason).Valid())
-	if once && !s.claimDecisionRefusal(claims.RunID) {
+	if once && !s.claimDecisionRefusal(claims.RunID, authz.AuditAction) {
 		return
 	}
 	d := authz.Deny(reason, r.URL.Path, "").OnRun(claims.RunID).With("actor", internalAuthActor)
@@ -322,52 +326,60 @@ func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, r
 	if !once {
 		s.recordAudit(r.Context(), ev)
 	} else if !s.recordAuditDurably(r.Context(), ev) {
-		s.releaseDecisionRefusal(claims.RunID)
+		s.releaseDecisionRefusal(claims.RunID, authz.AuditAction)
 	}
 }
 
-// doorRefusals holds, per run, until when this replica writes no further refusal row for the decision door
-// (claimDecisionRefusal). The zero value is ready to use.
+// doorRefusals holds, per run and per row, until when this replica writes no further row of that action for
+// the decision door (claimDecisionRefusal): its refusal (authz.denied) and a post it could not take
+// (run.report.drop). The zero value is ready to use.
 type doorRefusals struct {
 	mu    sync.Mutex
-	until map[uuid.UUID]time.Time
+	until map[doorRow]time.Time
 }
 
-// claimDecisionRefusal reports whether this refusal of the decision door is the one this replica writes on the
-// run's trail. Past the tail grace, a holder of the run's token (revoked, at this door: verifyRunToken) is
-// refused on every post until the token lapses; a post off the run's relay binding is refused on every post
-// too; and the internal lane has no rate limit. One authz.denied row already fails the run's confined replay
-// (runDecisionPostRefused), so the rest write none. A claim holds for identity.RunTokenLapseAfter: renewal
-// stops when the run is over, so every token of a run that is over lapses inside that span, Verify's leeway
-// included. This replica therefore writes at most one such row per run in any RunTokenLapseAfter, a restart
-// at most one more, and a claim whose span is over is dropped at the next claim, so the set holds only the
-// runs refused within the last span.
-func (s *Server) claimDecisionRefusal(runID uuid.UUID) bool {
+// doorRow is one run's row of one action at the decision door.
+type doorRow struct {
+	run    uuid.UUID
+	action string
+}
+
+// claimDecisionRefusal reports whether this refusal of the decision door is the one row of action this replica
+// writes on the run's trail. Past the tail grace, a holder of the run's token (revoked, at this door:
+// verifyRunToken) is refused on every post until the token lapses; a post off the run's relay binding is
+// refused on every post too; and the internal lane has no rate limit. One authz.denied row already fails the
+// run's confined replay (runDecisionPostRefused), so the rest write none. A claim holds for
+// identity.RunTokenLapseAfter: renewal stops when the run is over, so every token of a run that is over lapses
+// inside that span, Verify's leeway included. This replica therefore writes at most one such row per run in
+// any RunTokenLapseAfter, a restart at most one more, and a claim whose span is over is dropped at the next
+// claim, so the set holds only the runs refused within the last span. A post the door could not take
+// (noteDecisionReportLost) is bounded the same way, under its own action.
+func (s *Server) claimDecisionRefusal(runID uuid.UUID, action string) bool {
 	g := &s.doorRefusals
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	now := s.cfg.Now()
-	if until, ok := g.until[runID]; ok && now.Before(until) {
+	now, row := s.cfg.Now(), doorRow{runID, action}
+	if until, ok := g.until[row]; ok && now.Before(until) {
 		return false
 	}
 	if g.until == nil {
-		g.until = map[uuid.UUID]time.Time{}
+		g.until = map[doorRow]time.Time{}
 	}
-	for id, until := range g.until {
+	for held, until := range g.until {
 		if !now.Before(until) {
-			delete(g.until, id)
+			delete(g.until, held)
 		}
 	}
-	g.until[runID] = now.Add(identity.RunTokenLapseAfter)
+	g.until[row] = now.Add(identity.RunTokenLapseAfter)
 	return true
 }
 
-// releaseDecisionRefusal gives a run's claim back when its row was neither written nor spooled, so the next
-// refused post writes it.
-func (s *Server) releaseDecisionRefusal(runID uuid.UUID) {
+// releaseDecisionRefusal gives a run's claim of action back when its row was neither written nor spooled, so
+// the next refused post writes it.
+func (s *Server) releaseDecisionRefusal(runID uuid.UUID, action string) {
 	g := &s.doorRefusals
 	g.mu.Lock()
-	delete(g.until, runID)
+	delete(g.until, doorRow{runID, action})
 	g.mu.Unlock()
 }
 

@@ -49,9 +49,13 @@ type Claims struct {
 // NOT an authorization result: Verify still returns nil claims with it, and callers must
 // keep failing closed. A provider that can't resolve the run id returns an ordinary error
 // instead, so the fallback is silence, not a row keyed to the wrong run.
+//
+// Expiry is the token's own expiry claim (zero when it had none), so a caller can tell a
+// token that lapsed just now from one that lapsed long ago.
 type ExpiredTokenError struct {
-	RunID uuid.UUID
-	Err   error
+	RunID  uuid.UUID
+	Expiry time.Time
+	Err    error
 }
 
 func (e *ExpiredTokenError) Error() string {

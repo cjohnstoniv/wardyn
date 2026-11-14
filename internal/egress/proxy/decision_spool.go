@@ -58,7 +58,7 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, err
 	}
-	return &decisionSink{local: spool, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]spoolReservation{}}, nil
+	return &decisionSink{local: spool, spoolRunID: id, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]spoolReservation{}}, nil
 }
 
 // spoolReservation is one admitted request's hold on the spool: the activity
@@ -166,7 +166,7 @@ func (s *decisionSink) tryReserve(ctx context.Context, need int64) (uuid.UUID, e
 		var depth int
 		var bytes int64
 		depth, bytes, _, err = s.local.Stats(ctx)
-		if err == nil && (depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+need > runnerspool.MaxBytes) {
+		if err == nil && s.noRoom(depth, bytes, need) {
 			err = runnerspool.ErrFull
 		}
 	}
@@ -177,6 +177,13 @@ func (s *decisionSink) tryReserve(ctx context.Context, need int64) (uuid.UUID, e
 	s.reservations[id] = spoolReservation{epoch: runneractivity.Capture(s.activityDir), bytes: need}
 	s.heldBytes += need
 	return id, nil
+}
+
+// noRoom reports whether a record of size bytes would take the room kept for closeLocal's summary: the
+// spool's last record slot and runnerspool.LossReserveBytes, which the spool gives only to its loss row
+// (AppendLoss), as the remote sink's grant keeps them for its builtin:spool-lost row. The caller holds s.mu.
+func (s *decisionSink) noRoom(depth int, bytes, size int64) bool {
+	return depth+len(s.reservations)+1 >= runnerspool.MaxRecords || bytes+s.heldBytes+size+runnerspool.LossReserveBytes > runnerspool.MaxBytes
 }
 
 // refused ends an admission that did not reserve. A full spool's refusal (the spool was seen full and
@@ -345,6 +352,10 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		// The spool takes nothing once the sink has closed: counted for closeLocal's summary, in place of its
+		// request's reservation if it had one, so the two are not both counted.
+		s.dropped.Add(1)
+		s.drop(log.Request.AuditReservation)
 		return
 	}
 	id := log.Request.AuditReservation
@@ -387,12 +398,16 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		switch {
 		case statErr != nil:
 			err = statErr
-		case depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+size > runnerspool.MaxBytes:
-			// A served record that does not fit is lost, not a refused admission: it is not counted.
+		case s.noRoom(depth, bytes, size):
+			// A served record that does not fit is lost, not a refused admission: it is not counted as one.
 			err = runnerspool.ErrFull
 			if !served {
-				err = errors.Join(err, s.local.Refuse(ctx))
+				if rerr := s.local.Refuse(ctx); rerr != nil {
+					err = rerr // the refusal is not counted, so the record is counted below
+				}
 			}
+		case served:
+			err = s.local.AppendAdmitted(ctx, log) // the spool must not count it as a refusal either
 		default:
 			err = s.local.Append(ctx, log)
 		}
@@ -401,14 +416,61 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		_ = runneractivity.Record(s.activityDir, held.epoch)
 	}
 	// A served request whose record did not land, for any reason, is an audit gap: it refuses all
-	// later egress. A deny or a pending hold was never sent, and a full or broken spool still refuses
-	// at the next reservation.
+	// later egress, and it is counted for closeLocal's summary, so a replay of the run fails on it. A deny
+	// or a pending hold was never sent, and a full or broken spool still refuses at the next reservation;
+	// one the spool neither took nor counted as a refusal (spoolCounted) is counted for the summary too.
 	if err != nil && served {
 		slog.Error("proxy lost the audit record of a served request; refusing further egress", "host", log.Request.Host, "rule_source", log.RuleSource, "err", err)
 		s.localErr = err
-	} else if err != nil && !errors.Is(err, runnerspool.ErrFull) {
+		s.dropped.Add(1)
+	} else if err != nil && !spoolCounted(err) {
 		slog.Error("proxy could not spool a decision for a request it did not serve", "host", log.Request.Host, "rule_source", log.RuleSource, "err", err)
+		s.dropped.Add(1)
 	}
+}
+
+// spoolCounted reports whether err is the spool's full refusal and nothing else, the one answer to a record
+// of a request that was not sent whose refusal the spool counted. Its group commit joins each record's answer
+// to the batch's error, so a full refusal joined with a write error is one whose count may not have been kept.
+func spoolCounted(err error) bool {
+	for err != runnerspool.ErrFull {
+		joined, ok := err.(interface{ Unwrap() []error })
+		if !ok || len(joined.Unwrap()) != 1 {
+			return false
+		}
+		err = joined.Unwrap()[0]
+	}
+	return true
+}
+
+// closeLocal closes the spool sink once closed is set and no admitted append runs (close). The spool takes
+// nothing after this, so the records it will never hold are counted into one summary row first, the same
+// egress:dropped-decisions-<n> row the run-token sink posts: each record emitted since the sink closed, each
+// served record the spool did not take, and each dropped by the proxy (emitLocal, the blind-host cap), and one
+// for each admitted request whose first record has not come, as it can come only now. A later record of a
+// request whose first one landed is not counted. The summary is the spool's loss row (AppendLoss), the one
+// record that may take the room kept for it; one that still does not fit is close's error, never a refusal.
+func (s *decisionSink) closeLocal(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.dropped.Load()
+	for _, held := range s.reservations {
+		if !held.used {
+			n++
+		}
+	}
+	var summary error
+	if n > 0 {
+		log := droppedSummaryLog(n)
+		log.Request.RunID = s.spoolRunID
+		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), spoolAppendTimeout)
+		summary = s.local.AppendLoss(actx, log)
+		cancel()
+		if summary != nil {
+			slog.Error("proxy could not spool the summary of the decisions it dropped at close", "dropped", n, "err", summary)
+		}
+	}
+	return errors.Join(summary, s.local.Close(), s.writerLock.Close())
 }
 
 func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client, out io.Writer) (*decisionSink, error) {

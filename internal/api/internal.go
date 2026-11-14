@@ -37,7 +37,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// plus an optional scan summary, so nothing legitimate comes near it, and a
 	// too-tight cap here would DROP an egress audit record behind a 413.
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&dl); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonInternalDecisionLogInvalid, "invalid decision log")
+		s.refuseDecisionLog(w, r, claims.RunID)
 		return
 	}
 	normalizeN1Decision(&dl)
@@ -150,21 +150,19 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.MatchedRule != "" {
 		fields["matched_rule"] = dl.MatchedRule // the tool_rules key behind a policy:tool-* row
 	}
-	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go). A run that is over keeps
-	// the row alone: the hint write bumps updated_at, which the terminal tail grace is counted from, so a
-	// post kept inside the grace must not be able to open it again.
+	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go). A run that is over takes
+	// its hint on a write that leaves updated_at, which the terminal tail grace is counted from, so a post
+	// kept inside the grace cannot open it again.
 	if dl.UpstreamFault != "" {
 		fields["upstream_fault"] = dl.UpstreamFault
-		if !over {
-			s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
-		}
+		s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
 	}
 	data, _ := json.Marshal(fields)
 	outcome := decisionOutcome(dl.Decision)
 	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,
 		"egress."+string(dl.Decision), dl.Request.Host, outcome, data)
 	ev.SourceIP = r.RemoteAddr
-	s.recordAudit(r.Context(), ev)
+	kept := s.recordAuditDurably(r.Context(), ev)
 	// wardyn_egress_denies_total is exposed as "denied by policy", and it
 	// is the only egress counter Wardyn has. Some rows arrive here as
 	// egress.Deny without being a denial by policy; isPolicyDeny (metrics.go)
@@ -184,8 +182,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Scan != nil {
 		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
 	}
-
-	writeJSON(w, http.StatusAccepted, nil)
+	answerDecisionPost(w, kept)
 }
 
 // recordLLMScanAudit shares the content-free payload and finding cap with

@@ -244,6 +244,80 @@ func TestRecordReplayWhoseProxyDroppedDecisionsIsNeverClean(t *testing.T) {
 	})
 }
 
+// A runner's report of decisions its spool lost (builtin:spool-lost) is, like the proxy's summary, a deny with no
+// host, and it stands for decisions of requests that were sent. A confined replay whose trail holds one is a
+// failed capture, never a clean replay: at the first capture, and when the report lands after a clean verdict
+// was stamped.
+func TestRecordReplayWithDecisionsTheSpoolLostIsNeverClean(t *testing.T) {
+	ctx := context.Background()
+	lost := func(runID uuid.UUID) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), RunID: &runID, Action: "egress.deny", Outcome: "denied",
+			Data: mustJSON(map[string]any{"host": "", "rule_source": "builtin:spool-lost"})}
+	}
+	failed := func(t *testing.T, fake *recordStore) {
+		t.Helper()
+		res := fake.savedResult(t, "verify:build")
+		if res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordDecisionsLostHint {
+			t.Fatalf("status %q, clean %v, hint %q; want record_failed, no verdict, the lost-decisions hint", res.Status, res.Clean, res.FailureHint)
+		}
+	}
+	t.Run("on the trail at the capture", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		fake.events = append(fake.events, lost(runID))
+		newTestSrv(t, fake).reconcileRecordRun(ctx, runID)
+		failed(t, fake)
+	})
+	t.Run("landed after a clean verdict", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		srv := newTestSrv(t, fake)
+		srv.reconcileRecordRun(ctx, runID)
+		if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+			t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+		}
+		fake.events = append(fake.events, lost(runID))
+		ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+		srv.repairStaleWorkspaceRuns(ctx, ws)
+		failed(t, fake)
+	})
+}
+
+// A runner's count of the records its full spool refused (builtin:spool-full) is a deny with no host. It stands
+// for requests refused at admission, which the policy never judged, and for decisions of requests that were not
+// sent: either could have been a deny. A confined replay whose trail holds one is a failed capture, never a clean
+// replay: at the first capture, and when the count lands after a clean verdict was stamped.
+func TestRecordReplayWhoseSpoolWasFullIsNeverClean(t *testing.T) {
+	ctx := context.Background()
+	full := func(runID uuid.UUID) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), RunID: &runID, Action: "egress.deny", Outcome: "denied",
+			Data: mustJSON(map[string]any{"host": "", "rule_source": "builtin:spool-full", "spooled": true})}
+	}
+	failed := func(t *testing.T, fake *recordStore) {
+		t.Helper()
+		res := fake.savedResult(t, "verify:build")
+		if res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordSpoolFullHint {
+			t.Fatalf("status %q, clean %v, hint %q; want record_failed, no verdict, the spool-full hint", res.Status, res.Clean, res.FailureHint)
+		}
+	}
+	t.Run("on the trail at the capture", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		fake.events = append(fake.events, full(runID))
+		newTestSrv(t, fake).reconcileRecordRun(ctx, runID)
+		failed(t, fake)
+	})
+	t.Run("landed after a clean verdict", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		srv := newTestSrv(t, fake)
+		srv.reconcileRecordRun(ctx, runID)
+		if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+			t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+		}
+		fake.events = append(fake.events, full(runID))
+		ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+		srv.repairStaleWorkspaceRuns(ctx, ws)
+		failed(t, fake)
+	})
+}
+
 // refusedDecisionPost is the row internalAuth writes on a run's trail when it refuses a post to the decision door.
 func refusedDecisionPost(runID uuid.UUID) types.AuditEvent {
 	return types.AuditEvent{ID: uuid.New(), RunID: &runID, ActorType: types.ActorAgent, Action: "authz.denied",
@@ -291,6 +365,44 @@ func TestRecordReplayWithARefusedDecisionPostIsNeverClean(t *testing.T) {
 		if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusRecorded || res.Clean == nil || !*res.Clean {
 			t.Fatalf("status %q, clean %v, hint %q; want the replay recorded clean", res.Status, res.Clean, res.FailureHint)
 		}
+	})
+}
+
+// lostDecisionPost is the row the decision door writes on a run's trail for a post it could not take.
+func lostDecisionPost(runID uuid.UUID) types.AuditEvent {
+	return types.AuditEvent{ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Action: runReportLostAction,
+		Target: "/api/v1/internal/decisions", Outcome: "failure", Data: mustJSON(map[string]any{"reason": "token_expired"})}
+}
+
+// A post the decision door could not take (a 503, or a 401 for the run's expired token) is not on the trail
+// either: a confined replay whose trail notes one is a failed capture, at the first capture and when the note
+// lands after a clean verdict, and a list read of the workspace takes the verdict again as a read of the one
+// workspace does.
+func TestRecordReplayWithALostDecisionPostIsNeverClean(t *testing.T) {
+	ctx := context.Background()
+	failed := func(t *testing.T, res RecordTaskResult) {
+		t.Helper()
+		if res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordDecisionRefusedHint {
+			t.Fatalf("status %q, clean %v, hint %q; want record_failed, no verdict, the refused-report hint", res.Status, res.Clean, res.FailureHint)
+		}
+	}
+	t.Run("on the trail at the capture", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		fake.events = append(fake.events, lostDecisionPost(runID))
+		newTestSrv(t, fake).reconcileRecordRun(ctx, runID)
+		failed(t, fake.savedResult(t, "verify:build"))
+	})
+	t.Run("landed after a clean verdict, read by the list", func(t *testing.T) {
+		fake, runID := confinedRecording(t)
+		srv := newTestSrv(t, fake)
+		srv.reconcileRecordRun(ctx, runID)
+		ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+		if listed := recordResultsMap(srv.rejudgedForList(ctx, ws))["verify:build"]; listed.Clean == nil || !*listed.Clean {
+			t.Fatalf("listed before the note: clean %v, want the stamped true", listed.Clean)
+		}
+		fake.events = append(fake.events, lostDecisionPost(runID))
+		failed(t, recordResultsMap(srv.rejudgedForList(ctx, ws))["verify:build"])
+		failed(t, fake.savedResult(t, "verify:build"))
 	})
 }
 
@@ -406,6 +518,202 @@ func TestRecordOffRelayDecisionPostsLeaveOneRowThatFailsTheReplay(t *testing.T) 
 	srv.repairStaleWorkspaceRuns(ctx, ws)
 	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusFailed || res.Clean != nil {
 		t.Fatalf("status %q, clean %v; want record_failed and no verdict", res.Status, res.Clean)
+	}
+}
+
+// pendingReadFailsStore is recordStore for a run on a runner whose pending runner actions cannot be read.
+type pendingReadFailsStore struct {
+	*recordStore
+	store.RunnerStore
+}
+
+func (pendingReadFailsStore) RunHasPendingRunnerAction(context.Context, uuid.UUID) (bool, error) {
+	return false, errors.New("conn reset")
+}
+
+// A relayed decision post whose relay fence cannot read the run's pending runner actions is a retryable 503
+// the proxy does not send again: the door notes it once on the run's trail, and the replay fails on the note.
+func TestRecordRelayedPostTheFenceCannotReadFailsTheReplay(t *testing.T) {
+	ctx := context.Background()
+	const deny = `{"request":{"host":"example.com","method":"GET"},"decision":"deny","rule_source":"policy"}`
+	fake, runID := confinedRecording(t)
+	fake.run.UpdatedAt = time.Now().UTC().Add(-time.Second)
+	runner := uuid.New()
+	fake.run.Placement, fake.run.RunnerID = types.PlacementLocal, &runner
+	h := newHarness(t)
+	cfg := baseTestConfig(h, pendingReadFailsStore{recordStore: fake})
+	cfg.Audit = refusingDrain{s: fake}
+	tok := h.mintRunToken(t, runID)
+	srv := New(cfg)
+	srv.reconcileRecordRun(ctx, runID)
+	if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+		t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+	}
+	relayed := func(tb testing.TB, next http.Handler) http.Handler {
+		inner := panicFails(tb, next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			inner.ServeHTTP(w, r.WithContext(relayConnContext(r.Context(), relayedConn{runner: runner})))
+		})
+	}
+	for range 3 {
+		w := doVia(t, relayed, srv, http.MethodPost, "/api/v1/internal/decisions", tok, deny)
+		if w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != reasonInternalLivenessReadFailed {
+			t.Fatalf("a relayed post the fence cannot read answered %d; want a retryable 503; body=%s", w.Code, w.Body.String())
+		}
+	}
+	rows := 0
+	for _, ev := range fake.events {
+		if ev.Action == runReportLostAction && ev.Target == decisionsDoor && ev.RunID != nil && *ev.RunID == runID {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("run.report.drop rows on the run's trail = %d after 3 relayed posts the fence could not read, want 1", rows)
+	}
+	ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusFailed || res.FailureHint != recordDecisionRefusedHint {
+		t.Fatalf("status %q, clean %v, hint %q; want record_failed on the refused-report hint", res.Status, res.Clean, res.FailureHint)
+	}
+}
+
+// The proxy's summary of the decisions it dropped is posted through the same door as they were, and at teardown
+// on the run's revoked token: inside the tail grace it is kept, and the replay fails on it.
+func TestRecordDroppedSummaryOnARevokedTokenFailsTheReplay(t *testing.T) {
+	ctx := context.Background()
+	fake, runID, srv, tok := confinedReplayDoor(t, time.Second, true)
+	srv.reconcileRecordRun(ctx, runID)
+	const summary = `{"request":{},"decision":"deny","rule_source":"egress:dropped-decisions-2"}`
+	if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, summary); w.Code != http.StatusAccepted {
+		t.Fatalf("the dropped-decisions summary on a revoked token inside the grace answered %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+	ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusFailed || res.Clean != nil || res.FailureHint != recordDecisionsDroppedHint {
+		t.Fatalf("status %q, clean %v, hint %q; want record_failed on the dropped-decisions hint", res.Status, res.Clean, res.FailureHint)
+	}
+}
+
+// A post on the run's expired token, mid-run or after it ended, is refused with a 401 and lost: the door notes
+// it once on the run's trail, and the replay fails on the note. A token that expired long ago cannot fail the
+// replay of a run that is over: its posts leave the clean verdict as it was.
+func TestRecordPostOnAnExpiredTokenFailsTheReplay(t *testing.T) {
+	ctx := context.Background()
+	fake, runID := confinedRecording(t)
+	cfg := baseTestConfig(newHarness(t), fake)
+	tokens := &expiredIdentity{token: expiredIdentityToken, runID: runID, expiry: time.Now().Add(-2 * time.Hour)}
+	cfg.Identity = tokens
+	cfg.Audit = refusingDrain{s: fake}
+	srv := New(cfg)
+	srv.reconcileRecordRun(ctx, runID)
+	if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+		t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+	}
+	const deny = `{"request":{"host":"example.com","method":"GET"},"decision":"deny","rule_source":"policy"}`
+	post := func() {
+		t.Helper()
+		for range 3 {
+			if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", expiredIdentityToken, deny); w.Code != http.StatusUnauthorized {
+				t.Fatalf("a post on an expired token answered %d, want 401; body=%s", w.Code, w.Body.String())
+			}
+		}
+	}
+	ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+	post()
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status == recordStatusFailed || res.Clean == nil || !*res.Clean {
+		t.Fatalf("status %q, clean %v after posts on a token that expired long ago; want the clean verdict kept", res.Status, res.Clean)
+	}
+	tokens.expiry = time.Now().Add(-2 * time.Minute)
+	post()
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusFailed || res.FailureHint != recordDecisionRefusedHint {
+		t.Fatalf("status %q, clean %v, hint %q; want record_failed on the refused-report hint", res.Status, res.Clean, res.FailureHint)
+	}
+}
+
+// A decision post whose body does not decode is a 400 the proxy counts among the posts it dropped: the door
+// notes it once on the run's trail, and the replay fails on the note.
+func TestRecordDecisionPostThatDoesNotDecodeFailsTheReplay(t *testing.T) {
+	ctx := context.Background()
+	fake, runID, srv, tok := confinedReplayDoor(t, time.Second, false)
+	srv.reconcileRecordRun(ctx, runID)
+	if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+		t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+	}
+	for range 3 {
+		w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, `{"request":`)
+		if w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonInternalDecisionLogInvalid {
+			t.Fatalf("a post that does not decode answered %d; body=%s", w.Code, w.Body.String())
+		}
+	}
+	rows := 0
+	for _, ev := range fake.events {
+		if ev.Action == runReportLostAction && ev.Target == decisionsDoor && ev.RunID != nil && *ev.RunID == runID &&
+			strings.Contains(string(ev.Data), `"reason":"`+reportLostInvalid+`"`) {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("run.report.drop rows = %d after 3 posts that do not decode, want 1", rows)
+	}
+	ws, _ := fake.GetWorkspace(ctx, uuid.Nil)
+	srv.repairStaleWorkspaceRuns(ctx, ws)
+	if res := fake.savedResult(t, "verify:build"); res.Status != recordStatusFailed || res.FailureHint != recordDecisionRefusedHint {
+		t.Fatalf("status %q, clean %v, hint %q; want record_failed on the refused-report hint", res.Status, res.Clean, res.FailureHint)
+	}
+}
+
+// A decision whose egress row is neither written nor spooled is a retryable 503, not a 202: the proxy counts
+// the post among those it dropped, and its summary of them goes through the door. A row that was kept is a 202.
+func TestDecisionDoorAnswersA503ForADecisionItCouldNotKeep(t *testing.T) {
+	fake, runID := confinedRecording(t)
+	fake.run.UpdatedAt = time.Now().UTC().Add(-time.Second)
+	h := newHarness(t)
+	cfg := baseTestConfig(h, fake)
+	cfg.Audit = refusingDrain{s: fake, refuse: []string{"egress.deny"}}
+	tok := h.mintRunToken(t, runID)
+	srv := New(cfg)
+	const deny = `{"request":{"host":"example.com","method":"GET"},"decision":"deny","rule_source":"policy"}`
+	if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, deny); w.Code != http.StatusServiceUnavailable ||
+		reasonOf(t, w) != reasonInternalDecisionUnrecorded {
+		t.Fatalf("a decision whose row was not kept answered %d; want a retryable 503; body=%s", w.Code, w.Body.String())
+	}
+	const allow = `{"request":{"host":"pypi.org","method":"GET"},"decision":"allow","rule_source":"policy"}`
+	if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, allow); w.Code != http.StatusAccepted {
+		t.Fatalf("a decision whose row was kept answered %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// listedRecordStore lists the one workspace recordStore holds.
+type listedRecordStore struct{ *recordStore }
+
+func (s listedRecordStore) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
+	ws, err := s.GetWorkspace(ctx, uuid.Nil)
+	return []types.Workspace{ws}, err
+}
+
+// GET /workspaces hands out each row as GET /workspaces/{id} does: a clean confined verdict whose run's trail
+// moved is taken again before it is listed.
+func TestListWorkspacesTakesACleanVerdictAgain(t *testing.T) {
+	ctx := context.Background()
+	fake, runID := confinedRecording(t)
+	srv := newTestSrv(t, listedRecordStore{fake})
+	srv.reconcileRecordRun(ctx, runID)
+	if res := fake.savedResult(t, "verify:build"); res.Clean == nil || !*res.Clean {
+		t.Fatalf("first capture: clean %v, want a stamped true", res.Clean)
+	}
+	fake.events = append(fake.events, refusedDecisionPost(runID))
+	w := do(t, srv, http.MethodGet, "/api/v1/workspaces", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: code = %d; body=%s", w.Code, w.Body.String())
+	}
+	var got []types.Workspace
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != 1 {
+		t.Fatalf("decode %d rows: %v", len(got), err)
+	}
+	if res := recordResultsMap(got[0])["verify:build"]; res.Status != recordStatusFailed || res.Clean != nil {
+		t.Fatalf("listed status %q, clean %v; want the verdict taken again (record_failed)", res.Status, res.Clean)
 	}
 }
 

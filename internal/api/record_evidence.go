@@ -24,8 +24,8 @@ import (
 // the egress proxy's post. So the capture records the audit position it read through, a later workspace
 // read takes a clean verdict again when an egress decision has landed past that position, a spool that sets
 // a run's event aside notes it on that run's trail, and the door keeps a run's last decisions inside its
-// tail grace (terminalGraceRoutes) and writes a refusal row on the run's trail when it refuses a post past
-// it (once per run: claimDecisionRefusal).
+// tail grace (terminalGraceRoutes) and writes a row on the run's trail when it refuses a post past it or
+// cannot take one (once per run: claimDecisionRefusal).
 
 // auditSpoolQuarantineAction is the row an audit spool writes on a run's trail when it sets one of that
 // run's events aside (AuditSpool.noteRunEventSetAside).
@@ -40,8 +40,27 @@ const recordEvidenceSetAsideHint = "One of this replay's audit events could not 
 const recordDecisionsDroppedHint = "The egress proxy could not deliver every decision of this replay to the server " +
 	"and reported how many it dropped, so the replay cannot be judged clean. Replay again."
 
-// recordDecisionRefusedHint is the failure hint of a confined replay whose egress proxy had a post refused.
-const recordDecisionRefusedHint = "The server refused a report the egress proxy sent for this replay, which " +
+// recordDecisionsLostHint is the failure hint of a confined replay whose runner reported egress decisions its
+// spool lost (ruleSourceSpoolLost).
+const recordDecisionsLostHint = "The runner lost decisions of this replay before they reached the server and " +
+	"reported how many, so the replay cannot be judged clean. Replay again."
+
+// ruleSourceSpoolLost is the rule source of the row a runner's spool writes for decisions of sent requests that
+// it lost (runnerspool's EmitLoss).
+const ruleSourceSpoolLost = "builtin:spool-lost"
+
+// recordSpoolFullHint is the failure hint of a confined replay whose runner's spool was full (ruleSourceSpoolFull).
+const recordSpoolFullHint = "The runner's egress audit was full during this replay: some requests were refused " +
+	"before the policy judged them, or their decisions were not recorded, so the replay cannot be judged clean. " +
+	"Replay again."
+
+// ruleSourceSpoolFull is the rule source of the row a runner's spool writes for the records it refused for room
+// (runnerspool's Overflow): requests refused at admission, and decisions of requests that were not sent.
+const ruleSourceSpoolFull = "builtin:spool-full"
+
+// recordDecisionRefusedHint is the failure hint of a confined replay whose egress proxy had a post refused, or
+// one the decision door could not take (run.report.drop).
+const recordDecisionRefusedHint = "The server did not keep a report the egress proxy sent for this replay, which " +
 	"could have been one of its decisions, so the replay cannot be judged clean. Replay again."
 
 // decisionsDoor is the path the egress proxy posts its reports to, and so the target of the authz.denied row
@@ -66,8 +85,8 @@ func (s *Server) recordEvidenceSeq(ctx context.Context, runID uuid.UUID, confine
 }
 
 // recheckCleanReplays takes each clean confined verdict in ws again when its run's trail has, past the
-// entry's EvidenceSeq, an egress decision, a note that an event was set aside, or a refused post to the
-// decision door (cleanVerdictMoved). The entry is captured again
+// entry's EvidenceSeq, an egress decision, a note that an event was set aside, or a refused or lost post to
+// the decision door (cleanVerdictMoved). The entry is captured again
 // from the run's whole trail and swapped in only while the stored entry is still the one read, so a
 // promotion, a re-record or another replica's recheck that wrote first is kept. A store error leaves the
 // entry as it is, for the next read. Reports whether ws is stale: an entry was swapped, or a swap found
@@ -106,11 +125,11 @@ func (s *Server) recheckCleanReplays(ctx context.Context, ws types.Workspace) bo
 }
 
 // cleanVerdictMoved reports whether res's run has, past res.EvidenceSeq, an egress decision (each of
-// allow, deny and hold can change the verdict), a note that an event was set aside, or a refused post to
-// the decision door. A failed probe reports nothing, and the next read probes again.
+// allow, deny and hold can change the verdict), a note that an event was set aside, or a refused or lost
+// post to the decision door. A failed probe reports nothing, and the next read probes again.
 func cleanVerdictMoved(ctx context.Context, ev store.RecordEvidence, res RecordTaskResult) bool {
 	for _, f := range []store.AuditFilter{{ActionPrefix: "egress."}, {Action: auditSpoolQuarantineAction},
-		{Action: authz.AuditAction, Target: decisionsDoor}} {
+		{Action: authz.AuditAction, Target: decisionsDoor}, {Action: runReportLostAction}} {
 		if found, err := ev.HasRunAuditEventAfter(ctx, res.RunID, res.EvidenceSeq, f); err == nil && found {
 			return true
 		}
@@ -133,11 +152,31 @@ func runEventSetAside(events []types.AuditEvent) bool {
 // (ruleSourceDroppedDecisions). The summary is a deny with no host, which the capture leaves out, and it
 // stands for decisions the trail never got: any of them could have been a deny.
 func runDecisionsDropped(events []types.AuditEvent) bool {
+	return runHasDeny(events, func(rule string) bool { return strings.HasPrefix(rule, ruleSourceDroppedDecisions) })
+}
+
+// runDecisionsLost reports whether events hold a runner spool's report of decisions it lost
+// (ruleSourceSpoolLost). Like the proxy's summary it is a deny with no host, which the capture leaves out, and
+// the decisions it stands for are of requests that were sent: any of them could have been a deny.
+func runDecisionsLost(events []types.AuditEvent) bool {
+	return runHasDeny(events, func(rule string) bool { return rule == ruleSourceSpoolLost })
+}
+
+// runSpoolWasFull reports whether events hold a runner spool's count of the records it refused for room
+// (ruleSourceSpoolFull). It is a deny with no host, which the capture leaves out. A request refused at
+// admission was never judged by the policy, and a refused decision is one the trail never got: either could
+// have been a deny.
+func runSpoolWasFull(events []types.AuditEvent) bool {
+	return runHasDeny(events, func(rule string) bool { return rule == ruleSourceSpoolFull })
+}
+
+// runHasDeny reports whether events hold an egress deny whose rule source matches.
+func runHasDeny(events []types.AuditEvent, match func(rule string) bool) bool {
 	for _, ev := range events {
 		var d struct {
 			RuleSource string `json:"rule_source"`
 		}
-		if ev.Action == "egress.deny" && json.Unmarshal(ev.Data, &d) == nil && strings.HasPrefix(d.RuleSource, ruleSourceDroppedDecisions) {
+		if ev.Action == "egress.deny" && json.Unmarshal(ev.Data, &d) == nil && match(d.RuleSource) {
 			return true
 		}
 	}
@@ -145,15 +184,28 @@ func runDecisionsDropped(events []types.AuditEvent) bool {
 }
 
 // runDecisionPostRefused reports whether events hold internalAuth's refusal of a post to the decision door,
-// such as one the egress proxy sent after its run's tail grace (terminalGraceRoutes). What it posted is not
-// on the trail, and it could have been a deny.
+// such as one the egress proxy sent after its run's tail grace (terminalGraceRoutes), or a post the door
+// could not take (runReportLostAction). What it posted is not on the trail, and it could have been a deny.
 func runDecisionPostRefused(events []types.AuditEvent) bool {
 	for _, ev := range events {
-		if ev.Action == authz.AuditAction && ev.Target == decisionsDoor {
+		if (ev.Action == authz.AuditAction || ev.Action == runReportLostAction) && ev.Target == decisionsDoor {
 			return true
 		}
 	}
 	return false
+}
+
+// rejudgedForList is ws as a list read hands it out: a clean confined verdict whose run's trail has moved
+// is taken again first (recheckCleanReplays), as a read of the one workspace does, and the row is read
+// again when an entry was swapped. A row that cannot be read again is listed as it was.
+func (s *Server) rejudgedForList(ctx context.Context, ws types.Workspace) types.Workspace {
+	if !s.recheckCleanReplays(ctx, ws) {
+		return ws
+	}
+	if fresh, err := s.cfg.Store.GetWorkspace(ctx, ws.ID); err == nil {
+		return fresh
+	}
+	return ws
 }
 
 // noteRunEventSetAside writes on ev's run's own trail that this spool is setting ev aside, so a confined

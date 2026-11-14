@@ -913,19 +913,13 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 		}
 		claims, err := s.verifyRunToken(r, tok) // Verify, and a revoked token's one door for a run that is over
 		if err != nil {
-			// Do not leak the verification reason (revoked vs expired vs forged)
-			// to the caller. The audit row is equally coarse — one reason for the
-			// whole verify failure — so the trail records THAT a run token was
-			// refused without telling a brute-forcer which half it got wrong.
-			s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
-			s.auditRunIdentityExpired(r, err)
-			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
+			s.refuseRunToken(w, r, err) // 401, or a retryable 503 (decision_door_lost.go)
 			return
 		}
 		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
-		run, ok := s.refuseTerminalRun(w, r, claims)
-		if !ok || s.refuseRelayBinding(w, r, claims, run) {
+		run, ok := s.refuseTerminalRun(s.decisionGate(w, r, claims), r, claims)
+		if !ok || s.refuseRelayBinding(s.decisionGate(w, r, claims), r, claims, run) {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(contextWithLiveRun(r.Context(), run)))

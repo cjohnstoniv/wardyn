@@ -135,8 +135,9 @@ func (s *Spool) Liability(ctx context.Context) (out Liability, err error) {
 	return
 }
 
-// Drained is a proxy's drained reply: its last sequence and the credit units it
-// consumed (sequences plus reservations still held).
+// Drained is a proxy's drained reply: its last sequence and what it consumed:
+// sequences, reservations still held, and the records it dropped that hold no
+// reservation and that no full grant refused.
 type Drained struct {
 	Gen      uint64
 	FinalSeq int64
