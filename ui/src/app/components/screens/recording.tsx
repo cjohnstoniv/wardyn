@@ -116,30 +116,38 @@ export function RecordingScreen() {
   // Not `runs.length` — the held rows are de-duplicated, so a page of rows already shown would advance
   // nothing, and every later click would ask for that same offset again.
   const consumed = React.useRef(0);
+  // Only the newest read applies. A read started by the first load, a Refresh or a page request takes the
+  // next number, and an older read that answers later is dropped, so a slow page can never land after a
+  // Refresh and advance the offset past rows it never fetched.
+  const readGen = React.useRef(0);
+  const supersede = React.useCallback(() => ++readGen.current, []);
 
   const load = React.useCallback(() => {
-    let cancelled = false;
+    const gen = supersede();
     setStatus("loading");
     setPageError(false);
+    setLoadingMore(false);
     consumed.current = 0;
     runsApi
       .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: 0 })
       .then((got) => {
-        if (cancelled) return;
+        if (readGen.current !== gen) return;
         consumed.current = got.runs.length;
         setRuns(got.runs);
         setTruncated(got.truncated);
         setStatus("ready");
       })
       .catch(() => {
-        if (!cancelled) setStatus("error");
+        if (readGen.current === gen) setStatus("error");
       });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [supersede]);
 
-  React.useEffect(load, [load]);
+  React.useEffect(() => {
+    load();
+    return () => {
+      supersede();
+    };
+  }, [load, supersede]);
 
   // #159: fetch the next PAGE_SIZE rows starting where the last page ended.
   // `consumed` is the next offset, advanced by the rows the server returned and
@@ -148,11 +156,13 @@ export function RecordingScreen() {
   // offset (ponytail: offset paging; keyset paging if a deleted run's skipped
   // neighbour matters).
   const loadMore = React.useCallback(() => {
+    const gen = supersede();
     setLoadingMore(true);
     setPageError(false);
     runsApi
       .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: consumed.current })
       .then((got) => {
+        if (readGen.current !== gen) return;
         consumed.current += got.runs.length;
         setRuns((prev) => {
           const held = new Set(prev.map((r) => r.id));
@@ -160,9 +170,13 @@ export function RecordingScreen() {
         });
         setTruncated(got.truncated);
       })
-      .catch(() => setPageError(true))
-      .finally(() => setLoadingMore(false));
-  }, []);
+      .catch(() => {
+        if (readGen.current === gen) setPageError(true);
+      })
+      .finally(() => {
+        if (readGen.current === gen) setLoadingMore(false);
+      });
+  }, [supersede]);
 
   // Fetches the cast for `playing` — and ONLY `playing` — whenever it
   // changes. Nothing here runs while the library is just being browsed.

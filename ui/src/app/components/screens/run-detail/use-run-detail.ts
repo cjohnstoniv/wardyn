@@ -31,6 +31,9 @@ const DETAIL_POLL_MS = 4000;
 // How long after a KILLED run ended its page keeps asking whether the kill row has landed.
 const KILL_SETTLE_MS = 120_000;
 
+export type RecordingIndex = "complete" | "failed" | "capped";
+const NO_RECORDING_ROWS: { sessions: AuditEvent[]; desktop: AuditEvent[]; gaps: AuditEvent[] } = { sessions: [], desktop: [], gaps: [] };
+
 export type Tab = "overview" | "approvals" | "policy" | "audit" | "recording" | "output";
 const TABS: readonly string[] = ["overview", "approvals", "policy", "audit", "recording", "output"];
 
@@ -45,9 +48,19 @@ export function useRunDetail(id: string) {
   // A full oldest page cannot change (the trail is append-only), so it is read once per run id and
   // only the newest page is fetched again on later polls.
   const oldestPage = React.useRef<{ id: string; events: AuditEvent[] } | null>(null);
-  // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
-  // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
-  const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
+  // The run's recording index, read apart from the general trail so its cap can't crowd it out: the
+  // terminal session casts, the saved desktop recordings (by their exact write action, so a desktop's
+  // pause and resume rows can never fill the page before them) and the desktop's pause gaps. Each read
+  // keeps its own last-good rows, so one that fails never hides what another found.
+  const [recordingRows, setRecordingRows] = React.useState(NO_RECORDING_ROWS);
+  // "failed": the latest read of a list of recordings failed; "capped": one filled its page. Either way
+  // the index may be missing recordings, and the Recording tab says so. A failed gaps read hides no
+  // recording: the replay still marks the gaps its recorder kept.
+  const [recordingIndex, setRecordingIndex] = React.useState<RecordingIndex>("complete");
+  const recordingAudit = React.useMemo(() => {
+    const seen = new Set<string>();
+    return [...recordingRows.sessions, ...recordingRows.desktop, ...recordingRows.gaps].filter((e) => !seen.has(e.id) && !!seen.add(e.id));
+  }, [recordingRows]);
   // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
   // trail — the first ones the 1000-row cap on `audit` above pushes off —
   // scoped-fetched the same way session.recording.write is, so the exit code and
@@ -147,10 +160,11 @@ export function useRunDetail(id: string) {
         // "session.recording" names the ACTION FAMILY, prefixing both the old
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
-        // A desktop's screen recordings and their pause gaps (#2968), on the same terms.
+        // A desktop's saved screen recordings (#2968), and apart from them its pause and resume rows.
+        auditApi.listAudit(id, { action: "desktop.recording.write" }),
         auditApi.listAudit(id, { actionPrefix: "desktop.recording" }),
       ])
-        .then(async ([r, g, runApprovals, a, recA, deskA]) => {
+        .then(async ([r, g, runApprovals, a, recA, deskA, gapA]) => {
           // A run answer for a different id than this page shows is dropped:
           // the page never renders, or acts on, a run it was not asked for.
           // Case-insensitive: a non-canonical UUID in the URL is still this run.
@@ -184,8 +198,19 @@ export function useRunDetail(id: string) {
           // predicate cannot leak another run's rows onto this page.
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id.toLowerCase() === id.toLowerCase()));
-          if (recA.status === "fulfilled")
-            setRecordingAudit(deskA.status === "fulfilled" ? [...recA.value, ...deskA.value] : recA.value);
+          const rows = {
+            sessions: recA.status === "fulfilled" ? recA.value : undefined,
+            desktop: deskA.status === "fulfilled" ? deskA.value : undefined,
+            gaps: gapA.status === "fulfilled" ? gapA.value : undefined,
+          };
+          setRecordingRows((last) => ({ sessions: rows.sessions ?? last.sessions, desktop: rows.desktop ?? last.desktop, gaps: rows.gaps ?? last.gaps }));
+          setRecordingIndex(
+            !rows.sessions || !rows.desktop
+              ? "failed"
+              : rows.sessions.length >= LIST_LIMIT || rows.desktop.length >= LIST_LIMIT
+                ? "capped"
+                : "complete",
+          );
           setStatus("ready");
           // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
           // ISN'T terminal — fetching them every DETAIL_POLL_MS tick on a live
@@ -215,6 +240,9 @@ export function useRunDetail(id: string) {
     setRecording(null);
     setRecState("idle");
     setRecKey(id);
+    // Last-good recording rows belong to the run they were read for.
+    setRecordingRows(NO_RECORDING_ROWS);
+    setRecordingIndex("complete");
     void load(true);
   }, [id, load]);
 
@@ -303,7 +331,7 @@ export function useRunDetail(id: string) {
   usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling && !macOSDiskPending(run));
 
   return {
-    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, loadMessage, tab, setTab,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, recordingIndex, status, loadMessage, tab, setTab,
     recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   };
