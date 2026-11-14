@@ -48,6 +48,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `SELECT, INSERT, UPDATE` on `groundtruth_sensors`, `runner_health`, `launch_preset_version_floor`, `cli_sessions`
   and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`), and `SELECT, INSERT`
   on `audit_checkpoints` and `run_model_usage`.
+- A trigger of your own on `audit_events` or one of its bookkeeping tables, such as a notify or replication trigger, whose function sets no `search_path`: that function now runs with `pg_catalog, pg_temp`, the path migration `0285` gives the audit functions that fire it. Before, the install's schema was on that path. Before upgrading, name every table, sequence and function it uses with its schema, or give it its own `search_path` that ends in `pg_temp`. Otherwise a bare name is not found and the audit write that fired the trigger fails; the server writes one audit row as a check when it starts, so it then refuses to start.
 
 ### Security
 
