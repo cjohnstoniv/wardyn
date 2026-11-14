@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -58,7 +59,8 @@ func parseWarmPools(raw string) ([]WarmPool, error) {
 	if err := dec.Decode(&pools); err != nil {
 		return nil, fmt.Errorf("%scannot read the JSON array of pools: %w", warmPoolsRefusal, err)
 	}
-	if dec.More() {
+	// only white space may follow the array; More alone would pass a stray "]" or "}"
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%sdata after the array of pools", warmPoolsRefusal)
 	}
 	seen := map[string]bool{}
