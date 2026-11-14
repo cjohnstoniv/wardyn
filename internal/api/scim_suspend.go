@@ -350,9 +350,10 @@ type suspensionBoundOf struct {
 // database's clock. A reactivation can commit as soon as step 1 releases the row, and what the person makes
 // after it is not this suspension's. The sweep and the kill under ctx leave a run, token or SSH key the database
 // stamped after at, and only when the same read shows the person active again; while the person is still
-// deactivated they spare nothing. They write no new session cut for a form that already carries one from at on
-// (cutSub), since that cut would end the reactivated person's sessions and tokens too, and the one there, which
-// a reactivation keeps, already ended every session and token from before.
+// deactivated they spare nothing. Once that read shows the person active again, they write no new session cut
+// for a form that already carries one from at on (cutSub), since that cut would end the reactivated person's
+// sessions and tokens too, and the one there, which a reactivation keeps, already ended every session and token
+// from before.
 func withSuspensionBound(ctx context.Context, id uuid.UUID, at time.Time) context.Context {
 	return context.WithValue(ctx, suspensionBoundKey{}, suspensionBoundOf{id: id, at: at})
 }
@@ -383,13 +384,15 @@ func tokensMadeAfterBound(ctx context.Context, st any, ids []uuid.UUID) (map[uui
 	return sb.APITokensInsertedAfter(ctx, b.id, ids, b.at)
 }
 
-// cutSub writes a session cutoff for sub. Under a suspension tail's bound it writes none when sub already
-// carries one from the bound on (the suspension's own, or a later one), which ended every session and token
-// from before it; a form with none still owes the cut and gets it.
+// cutSub writes a session cutoff for sub. Under a suspension tail's bound it writes none when the person is
+// active again and sub already carries one from the bound on (the suspension's own, or a later one), which
+// ended every session and token from before it. While the person is deactivated it writes the cut, so a
+// revocation store that fails it fails the step and the request answers 5xx; a form with none still owes the
+// cut and gets it.
 func (s *Server) cutSub(ctx context.Context, sub string) error {
 	if b, ok := suspensionBound(ctx); ok {
 		if sb, can := s.cfg.Store.(store.SuspensionBounds); can {
-			cut, err := sb.SubCutSince(ctx, sub, b.at)
+			cut, err := sb.SubCutSince(ctx, b.id, sub, b.at)
 			if err != nil || cut {
 				return err
 			}

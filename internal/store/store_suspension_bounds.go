@@ -16,19 +16,20 @@ import (
 // SuspensionBounds is what a SCIM suspension's tail reads to reach only what it owed: the database's own
 // insert time of runs, API tokens and SSH keys (inserted_at, migration 0281), a column default the application
 // never writes, so on the same clock as an identity's deactivated_at; whether a session cutoff of a sub was
-// written at or after a given instant; and a step finish that a later suspension's ledger refuses. Optional,
-// like LeaverStore: callers type-assert it.
+// written at or after a given instant while the identity is active again; and a step finish that a later
+// suspension's ledger refuses. Optional, like LeaverStore: callers type-assert it.
 type SuspensionBounds interface {
 	RunsInsertedAfter(ctx context.Context, identity uuid.UUID, ids []uuid.UUID, at time.Time) (map[uuid.UUID]bool, error)
 	APITokensInsertedAfter(ctx context.Context, identity uuid.UUID, ids []uuid.UUID, at time.Time) (map[uuid.UUID]bool, error)
 	DeleteSSHKeysUpTo(ctx context.Context, identity uuid.UUID, principal string, at time.Time) (int, error)
-	SubCutSince(ctx context.Context, sub string, at time.Time) (bool, error)
+	SubCutSince(ctx context.Context, identity uuid.UUID, sub string, at time.Time) (bool, error)
 	FinishSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, detail map[string]int, at time.Time) error
 }
 
 // personActiveSQL: the identity ($3) a suspension tail works for is active again. Only then is a row stamped
-// after the tail's bound one a reactivated person made; while the person is deactivated nothing is spared,
-// since not every insert is refused then (a service token's, or one under a principal no identity row binds).
+// after the tail's bound one a reactivated person made, and only then is a form's session cut not written
+// again; while the person is deactivated nothing is spared, since not every insert is refused then (a service
+// token's, or one under a principal no identity row binds).
 const personActiveSQL = `EXISTS (SELECT 1 FROM principal_identities WHERE id = $3 AND deactivated_at IS NULL AND purged_at IS NULL)`
 
 // RunsInsertedAfter is the subset of ids whose agent_runs row the database stamped strictly after at, read in
@@ -70,12 +71,14 @@ func (s PG) DeleteSSHKeysUpTo(ctx context.Context, identity uuid.UUID, principal
 	return int(tag.RowsAffected()), nil
 }
 
-// SubCutSince says sub carries a session cutoff written at or after at. Nothing deletes a cutoff row; a
-// false answer leads the caller to write one, so a cutoff a racing write set back is cut again.
-func (s PG) SubCutSince(ctx context.Context, sub string, at time.Time) (bool, error) {
+// SubCutSince says sub carries a session cutoff written at or after at, read in the statement that finds the
+// identity active again. While the identity is deactivated it is false, so the tail cuts again as before the
+// bound existed, and a failed cut fails its step. Nothing deletes a cutoff row; a false answer leads the
+// caller to write one, so a cutoff a racing write set back is cut again.
+func (s PG) SubCutSince(ctx context.Context, identity uuid.UUID, sub string, at time.Time) (bool, error) {
 	var cut bool
-	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM oidc_session_revocations WHERE sub = $1 AND revoked_at >= $2)`,
-		sub, at).Scan(&cut); err != nil {
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM oidc_session_revocations WHERE sub = $1 AND revoked_at >= $2) AND `+personActiveSQL,
+		sub, at, identity).Scan(&cut); err != nil {
 		return false, fmt.Errorf("store: read session cutoff: %w", err)
 	}
 	return cut, nil

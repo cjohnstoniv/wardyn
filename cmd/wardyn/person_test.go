@@ -61,6 +61,8 @@ func TestPersonEraseSaysATokenMayStillWork(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	cmd := personCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	// The root sets both (main.go): main prints the returned error, and cobra prints neither it nor the usage.
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
 	out, errOut := &strings.Builder{}, &strings.Builder{}
 	cmd.SetOut(out)
 	cmd.SetErr(errOut)
