@@ -142,7 +142,9 @@ type Store interface {
 	// AuditEvent.
 	QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error)
 	QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.AuditEvent, error)
-	LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error)
+	// LatestOrganisationAuditEvent is the newest row of action written by this organisation itself as
+	// actorType/actor, never a row a device forwarded (audit_latest_organisation.go).
+	LatestOrganisationAuditEvent(ctx context.Context, action string, actorType types.ActorType, actor string) (types.AuditEvent, error)
 
 	// SiteConfig.
 	GetSiteConfig(ctx context.Context) (types.SiteConfig, error)

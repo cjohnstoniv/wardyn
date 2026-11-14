@@ -351,6 +351,9 @@ func governanceChangesCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "governance change %s -> %s\n", ch.ID, ch.State)
+			if ch.TokensRevocationFailed {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", ch.Detail)
+			}
 			return nil
 		},
 	}

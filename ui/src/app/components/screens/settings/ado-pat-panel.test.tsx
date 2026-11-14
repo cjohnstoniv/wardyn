@@ -24,8 +24,13 @@ vi.mock("../../../lib/hooks/use-ado-connect", () => ({
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
+const toastWarning = vi.fn();
 vi.mock("sonner", () => ({
-  toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) },
+  toast: {
+    success: (...a: unknown[]) => toastSuccess(...a),
+    error: (...a: unknown[]) => toastError(...a),
+    warning: (...a: unknown[]) => toastWarning(...a),
+  },
 }));
 
 const disconnectMock = vi.fn();
@@ -86,6 +91,7 @@ beforeEach(() => {
   removeMock.mockReset();
   toastSuccess.mockReset();
   toastError.mockReset();
+  toastWarning.mockReset();
 });
 
 describe("a row that creates a token for each run", () => {
@@ -103,7 +109,7 @@ describe("a row that creates a token for each run", () => {
   });
 
   it("4c: connected says how the tokens are made and names the last one", async () => {
-    renderCard({ ...minted, state: "live", source: "org", last_token: { created_at: at(9, 2), revoked_at: at(9, 41) } });
+    renderCard({ ...minted, state: "live", source: "org", last_token: { created_at: at(9, 2), valid_to: at(17, 2), revoked_at: at(9, 41) } });
     expect(screen.getByText(ADO_PAT.CHIP_CONNECTED)).toBeInTheDocument();
     await expandCard("Azure DevOps");
     expect(screen.getByText(ADO_PAT.MEMBER_CONNECTED)).toBeInTheDocument();
@@ -112,7 +118,7 @@ describe("a row that creates a token for each run", () => {
   });
 
   it("4d: Disconnect asks first, says what it revokes, and only then disconnects", async () => {
-    disconnectMock.mockResolvedValue(undefined);
+    disconnectMock.mockResolvedValue({});
     const onChanged = renderCard({ ...minted, state: "live", source: "org" });
     await expandCard("Azure DevOps");
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
@@ -123,6 +129,17 @@ describe("a row that creates a token for each run", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
     await waitFor(() => expect(disconnectMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("4d: a disconnect that could not confirm every revoke says so until dismissed", async () => {
+    disconnectMock.mockResolvedValue({ tokensRevocationFailed: true, detail: "remedy" });
+    const onChanged = renderCard({ ...minted, state: "live", source: "org" });
+    await expandCard("Azure DevOps");
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith("remedy", { duration: Infinity }));
+    expect(onChanged).toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it("4d: Cancel leaves the connection alone", async () => {

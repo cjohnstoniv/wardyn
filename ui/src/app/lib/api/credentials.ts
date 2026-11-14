@@ -57,6 +57,12 @@ export interface AdminMintedToken {
   service_identity?: string;
 }
 
+/** An erasure's `not_erased`: other principals that have, or had, the person's tenant and object id, left alone. */
+export interface NotErased {
+  subjects: string[];
+  note: string;
+}
+
 export interface EraseResult {
   count: number;
   /** Rows under the person's destroyed principal key, unreadable now. */
@@ -66,6 +72,16 @@ export interface EraseResult {
   store?: string;
   purged?: boolean;
   recoverable_days?: number;
+  not_erased?: NotErased;
+  /** An Azure DevOps token the erase tried to revoke may still work (Azure DevOps refused the revoke); detail says so. */
+  tokens_revocation_failed?: boolean;
+  detail?: string;
+}
+
+/** The credentials scope's sentence that an Azure DevOps token may still work, from either erase answer's credentials data. */
+export function tokensNotRevoked(data: unknown): string | undefined {
+  const c = data as { tokens_revocation_failed?: unknown; detail?: unknown } | undefined;
+  return c?.tokens_revocation_failed === true && typeof c.detail === "string" ? c.detail : undefined;
 }
 
 /** The scopes POST /people/{principal}/erasure takes (internal/erasure). */
@@ -88,6 +104,7 @@ export interface PersonErasureResult {
   outcome: Record<string, string>;
   /** What each finished scope reported, keyed by scope. */
   detail: Record<string, unknown>;
+  not_erased?: NotErased;
 }
 
 /** The 500 `erasure_incomplete`: what finished and what is left, so a retry names the same scopes. */

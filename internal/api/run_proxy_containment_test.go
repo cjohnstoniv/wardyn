@@ -91,7 +91,7 @@ func TestReadback_MismatchContainmentUnresolvedUntilTheStopSucceeds(t *testing.T
 func TestReadback_ContainmentNeverStopsANewerStart(t *testing.T) {
 	f := newReadbackFixture(t)
 	gen := f.failWithUnstoppableProxy(t)
-	if _, err := f.rb.BeginProxyStart(context.Background(), f.run.ID, gen+1, "newer-jti", store.ProxyStartExpected); err != nil {
+	if _, err := f.rb.BeginProxyStart(context.Background(), f.run.ID, gen+1, "newer-jti", store.ProxyStartExpected, false); err != nil {
 		t.Fatal(err)
 	}
 	f.setProxyStopErr(nil)

@@ -33,6 +33,10 @@ import (
 // sign-in's lock (credential_erase.go).
 var errSignInConfigUnreadable = errors.New("the Azure DevOps sign-in configuration could not be read")
 
+// errADORevokeUnfinished is the credentials scope's refusal when revoking one of the person's Azure DevOps
+// tokens did not finish: a retry could still revoke it, but only with the sign-in the erase would delete.
+var errADORevokeUnfinished = errors.New("revoking an Azure DevOps token of the person's runs did not finish")
+
 // reasonIdentityDirectoryUnreadable is the audit reason an erase records when it
 // could not read who a name is, so nothing was erased.
 const reasonIdentityDirectoryUnreadable = "identity_directory_unreadable"
@@ -56,6 +60,13 @@ type erasureIncompleteBody struct {
 // when that scope fails part way. want, when non-nil, is the person's names the
 // caller proved before anything ran (erasureNamesOf); the steps act on no others.
 func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *erasureNames) *erasure.Orchestrator {
+	return s.erasureOrchestratorLeaving(credRep, want, nil)
+}
+
+// erasureOrchestratorLeaving is erasureOrchestrator whose credentials step, when left is non-nil, also
+// sets it to the ids of the Azure DevOps token rows its erase left (eraseTokenHistory), so a SCIM purge
+// counts a row two of its erase steps reach once.
+func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, want *erasureNames, left *[]string) *erasure.Orchestrator {
 	// Launch intents hold task text and inline component definitions, so the
 	// run_tasks and components steps erase them too, and so does run_setups.
 	steps := map[erasure.Scope]erasure.Step{
@@ -67,12 +78,15 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 		steps[erasure.Credentials] = func(ctx context.Context, person string) (any, error) {
 			var rep secretstore.EraseReport
 			history := map[string]any{}
-			fenced, err := s.eraseCredentialsScope(ctx, person, want, &rep)
+			fenced, revokeFailed, err := s.eraseCredentialsScope(ctx, person, want, &rep)
 			if err == nil {
 				err = s.eraseLoginGroups(ctx, person, want)
 			}
 			if err == nil {
-				err = s.eraseTokenHistory(ctx, person, want, history)
+				var kept []string
+				if kept, err = s.eraseTokenHistory(ctx, person, want, history); left != nil {
+					*left = kept
+				}
 			}
 			if credRep != nil {
 				*credRep = rep
@@ -81,6 +95,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 			maps.Copy(data, history)
 			if s.cfg.MaskManifests != nil {
 				data["runs_fenced"] = fenced
+			}
+			if revokeFailed {
+				data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 			}
 			return data, err
 		}
@@ -114,6 +131,33 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 	}
 	return &erasure.Orchestrator{Steps: steps}
 }
+
+// erasureTokensNotRevoked is the credentials scope's statement, beside tokens_revocation_failed, that an Azure
+// DevOps token it tried to revoke may still work: Azure DevOps refused the revoke for good, and the sign-in a
+// later revoke would need is erased with the rest. A revoke that did not finish erases nothing instead
+// (errADORevokeUnfinished).
+const erasureTokensNotRevoked = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked. A token that was not revoked works until it expires; to end it sooner, revoke it in Azure DevOps."
+
+// tokensNotRevokedOf is the two keys a credentials step set before it failed (err is the orchestrator's),
+// so the failure's audit row still says a token may work; nil when the step did not say so.
+func tokensNotRevokedOf(err error) map[string]any {
+	var inc *erasure.IncompleteError
+	if !errors.As(err, &inc) {
+		return nil
+	}
+	part, _ := inc.Detail.(map[string]any)
+	if part["tokens_revocation_failed"] != true {
+		return nil
+	}
+	return map[string]any{"tokens_revocation_failed": true, "detail": part["detail"]}
+}
+
+// The 503s an unfinished revoke answers: on DELETE /people/{principal}/credentials, and on POST
+// /people/{principal}/erasure, where the scopes before credentials may be done.
+const (
+	credentialEraseRevokeUnfinishedMsg = "Wardyn could not finish revoking the Azure DevOps tokens it created for this person's runs, so nothing was erased. Try again."
+	erasureRevokeUnfinishedMsg         = "Erasure is not complete: Wardyn could not finish revoking the Azure DevOps tokens it created for this person's runs, so their credentials were not erased; retry with the same scopes to finish the rest"
+)
 
 // The two answers credential.erase gives for what held back a writer that began before it:
 // the owner's erase generation, which refuses it in any process, or the credential locks alone,
@@ -150,39 +194,66 @@ func credentialEraseData(rep secretstore.EraseReport) map[string]any {
 // The person's runs are fenced (FenceSubject) before the cred key goes: their
 // masking values are sealed under it, so a replica that has not opened them
 // could no longer vouch for those runs' masking. It returns how many runs it
-// fenced. Their history and sandboxes are untouched.
-func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, want *erasureNames, rep *secretstore.EraseReport) (int, error) {
+// fenced, and whether Azure DevOps refused for good to revoke a token of theirs
+// still inside its valid_to, now or earlier, which then works until it expires.
+// Their tokens are those recorded under any name they hold credentials under
+// (personNamespaces): a run started under an entra form owns its tokens by it.
+// A revoke that did not finish, or a refused token that cannot be listed,
+// refuses the scope with errADORevokeUnfinished before anything is fenced or
+// erased. Their history and
+// sandboxes are untouched.
+func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, want *erasureNames, rep *secretstore.EraseReport) (int, bool, error) {
 	rowID, cfgErr := s.adoSignInRowID(ctx)
 	if cfgErr != nil {
-		return 0, errSignInConfigUnreadable
+		return 0, false, errSignInConfigUnreadable
+	}
+	// Every namespace eraseLocked erases: a run started under an entra form owns its tokens and
+	// its manifest by it, and the erase takes that form's sign-in too.
+	namespaces, err := s.personNamespaces(ctx, owner, want)
+	if err != nil {
+		return 0, false, err
 	}
 	// Revoke the person's live Azure DevOps tokens first: the erase takes the
 	// sign-in that revoking them needs. That runs BEFORE and OUTSIDE the three
 	// locks eraseLocked takes, because its paths take the Entra redemption lock
 	// themselves (ado_pat_client.go) and a nested take would deadlock.
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
-	finish, err := s.beginADOSignInEnd(ctx, owner, adoPATRevokeOffboarding)
-	if err != nil {
-		return 0, err
+	revoke := adoRevoked
+	for _, ns := range namespaces {
+		finish, err := s.beginADOSignInEnd(ctx, ns, adoPATRevokeOffboarding)
+		if err != nil {
+			return 0, false, err
+		}
+		defer finish()
+		revoke = max(revoke, s.revokeOwnerRunPATs(ctx, ns, adoPATRevokeOffboarding))
 	}
-	defer finish()
-	s.revokeOwnerRunPATs(ctx, owner, adoPATRevokeOffboarding)
+	if revoke == adoRevokeUnfinished {
+		return 0, false, errADORevokeUnfinished
+	}
+	// A token an earlier revoke had refused is closed, so this revoke no longer lists it, but it may
+	// still work: a retry after a failed erase, or after any revoke Azure DevOps refused, says so too.
+	refused := 0
+	if rd, ok := s.cfg.Store.(store.RunPATReader); ok && owner != "" {
+		for _, ns := range namespaces {
+			rows, err := rd.ListRefusedRunPATs(ctx, ns, s.cfg.Now())
+			if err != nil {
+				return 0, false, errADORevokeUnfinished
+			}
+			refused += len(rows)
+		}
+	}
+	revokeFailed := revoke == adoRevokeRefused || refused > 0
 	fenced := 0
 	if s.cfg.MaskManifests != nil && owner != "" { // "" is refused by the erase below
-		// Every namespace eraseLocked erases: a run started under an entra form owns its manifest by it.
-		namespaces, err := s.personNamespaces(ctx, owner, want)
-		if err != nil {
-			return 0, err
-		}
 		for _, ns := range namespaces {
 			runs, err := s.cfg.MaskManifests.FenceSubject(ctx, ns)
 			fenced += len(runs)
 			if err != nil {
-				return fenced, err
+				return fenced, revokeFailed, err
 			}
 		}
 	}
-	return fenced, s.eraseLocked(ctx, owner, rowID, want, rep)
+	return fenced, revokeFailed, s.eraseLocked(ctx, owner, rowID, want, rep)
 }
 
 // alsoEraseLaunchIntents runs step, then erases the person's launch intents and
@@ -218,7 +289,10 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 // eraseRunTasks blanks the task text, title, description and correlation id of every run the person created, and
 // clears the answers kept for the idempotency keys naming those runs (each key stays bound). A run of theirs still waiting
 // in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
-// snapshot included, and it would start under the very person being erased.
+// snapshot included, and it would start under the very person being erased. The blank also marks their
+// waiting and promoted runs so that no promoted start puts its copy of the queue row back
+// (RequeuePromotedRun), and the queue is cancelled again after it, for a start that put its run back
+// before the mark.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {
 	pe, err := s.personErasureStore()
 	if err != nil {
@@ -228,7 +302,13 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	s.queueRaceAt(queueRaceEraseAfterCancel)
 	n, err := pe.BlankRunTasks(ctx, person)
+	if err == nil {
+		var again int
+		again, err = s.cancelQueuedRunsOf(ctx, person, "person_erased")
+		cancelled += again
+	}
 	// After the blank: the answers kept for their idempotency keys carry the same text.
 	var cleared int64
 	if ks, ok := s.cfg.Store.(runCreateAnswerEraser); ok {
@@ -253,6 +333,10 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	}
 	return out, err
 }
+
+// queueRaceEraseAfterCancel is the point between eraseRunTasks' first cancel of the queue and its blank
+// where a test puts a promoted run back in its queue (Server.queueRace).
+const queueRaceEraseAfterCancel = "erase_after_cancel"
 
 // runCreateAnswerEraser is the store that keeps POST /runs Idempotency-Keys and their answers.
 type runCreateAnswerEraser interface {
@@ -402,8 +486,9 @@ func (s *Server) provedNames(ctx context.Context, person string, want *erasureNa
 
 // eraseAuditSealKeys is the audit_personal_fields scope for person, the principal the route resolved
 // (resolveSecretOwner): it destroys, in every version, the key the person's sealed audit fields are
-// under, and clears the person from the governance changes they proposed or decided (migration 0126)
-// and from the approvals they decided, with the reason they typed.
+// under, and clears the person from the governance changes they proposed or decided (migration 0126),
+// from the approvals they decided, with the reason they typed, and from the binding history of the
+// identity rows an unbind released from them.
 // The fields are sealed under the person's principal; a name the directory did not yet know when a row
 // was written is under its own key, so the keys of the person's proved names (erasureNames) are
 // destroyed too (a destroy that finds no live key writes only a tombstone). A governance change matches on its
@@ -436,6 +521,13 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *er
 		}
 		generations += len(gens)
 	}
+	// After the destroys, so an unbind that waits on an identity row this locks reads a destroyed key and
+	// records no name (store.PG UnbindIdentity).
+	if bh, ok := s.cfg.Store.(bindingHistoryEraser); ok {
+		if _, err := bh.EraseBindingHistoryOf(ctx, names); err != nil {
+			return nil, err
+		}
+	}
 	detail := map[string]any{"generations": generations}
 	if pe, err := s.personErasureStore(); err == nil {
 		// A pending change whose proposer is erased leaves pending in the same statement, so a change
@@ -454,6 +546,11 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *er
 		detail["approvals"] = n
 	}
 	return detail, nil
+}
+
+// bindingHistoryEraser clears principals from the identity rows' binding history (store.PG).
+type bindingHistoryEraser interface {
+	EraseBindingHistoryOf(ctx context.Context, principals []string) (int, error)
 }
 
 // approvalDecisionEraser clears who decided an approval and the reason they typed (store.PG).
@@ -631,6 +728,17 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 		var inc *erasure.IncompleteError
 		if errors.As(err, &inc) {
 			outcomes[string(inc.Remaining[0])] = "failed"
+			if left := tokensNotRevokedOf(err); left != nil {
+				detail[string(inc.Remaining[0])] = left
+			}
+			status, reason, msg := http.StatusInternalServerError, reasonErasureIncomplete, "erasure is not complete; retry with the same scopes to finish the rest"
+			switch {
+			case errors.Is(err, errErasureNameUnproved):
+				msg = "erasure did not run: a name derived for this person names no one this deployment knows, so nothing was erased"
+			case errors.Is(err, errADORevokeUnfinished):
+				status, reason, msg = http.StatusServiceUnavailable, reasonCredentialEraseRevokeUnfinished, erasureRevokeUnfinishedMsg
+				data["reason"] = reason
+			}
 			data["error"] = err.Error()
 			record(owner, "failure", data)
 			slog.ErrorContext(r.Context(), "wardyn: person erasure incomplete", slog.String("target", owner), slog.Any("err", err))
@@ -638,12 +746,8 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 				writeLockRefused(w, r, err)
 				return
 			}
-			msg := "erasure is not complete; retry with the same scopes to finish the rest"
-			if errors.Is(err, errErasureNameUnproved) {
-				msg = "erasure did not run: a name derived for this person names no one this deployment knows, so nothing was erased"
-			}
-			writeJSON(w, http.StatusInternalServerError, erasureIncompleteBody{
-				Error: msg, Reason: reasonErasureIncomplete, Done: scopeNames(inc.Done), Remaining: scopeNames(inc.Remaining),
+			writeJSON(w, status, erasureIncompleteBody{
+				Error: msg, Reason: reason, Done: scopeNames(inc.Done), Remaining: scopeNames(inc.Remaining),
 			})
 			return
 		}

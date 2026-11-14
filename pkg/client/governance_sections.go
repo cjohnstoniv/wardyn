@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -323,11 +324,63 @@ func (c *Client) ApplyGovernanceResultUnder(ctx context.Context, doc GovernanceD
 	if err != nil {
 		return GovernanceApplyResult{}, err
 	}
-	res, err := c.applyGovernanceTo(ctx, narrowed, doc, prune)
+	sub, _ := subtreeOf(current, under) // narrowUnder resolved it
+	res, err := c.applyGovernanceTo(ctx, narrowed, doc, prune, c.stillUnder(narrowed, sub.root))
 	if sub, serr := subtreeOf(res.Document, under); serr == nil { // the read after the apply, narrowed as `get --under` prints it
 		res.Document = sub.narrow(res.Document)
 	}
 	return res, err
+}
+
+// pruneAll is an apply's prune, in order: the unit sections, then units and memberships, then restrictions,
+// each stopping at the first delete the server holds (res.PruneSkipped). A pending write means the state the
+// prune would compare against is not final, so no delete is issued after one (ApplyGovernance's doc).
+// beforePrune, when set, runs before the first prune write.
+func (c *Client) pruneAll(ctx context.Context, current, doc GovernanceDocument, admins adminPlan, deciders deciderPlan,
+	beforePrune func(context.Context) error, res *GovernanceApplyResult) (err error) {
+	if res.PruneSkipped = len(res.Pending) > 0; res.PruneSkipped {
+		return nil
+	}
+	if beforePrune != nil {
+		if err := beforePrune(ctx); err != nil {
+			return err
+		}
+	}
+	if res.PruneSkipped, err = c.pruneUnitSections(ctx, admins, doc.Admins, deciders, res); err != nil || res.PruneSkipped {
+		return err
+	}
+	if res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, res); err != nil || res.PruneSkipped {
+		return err
+	}
+	res.PruneSkipped, err = c.pruneRestrictions(ctx, current, doc, res)
+	return err
+}
+
+// stillUnder is an Under prune's check just before its first write. Every delete and clear was planned
+// from the first read, and the server deletes by id, so the subtree is read again: a unit of read that is
+// now outside it (moved while the writes ran) stops the prune before anything is pruned. A unit that is
+// gone is no concern of this check. A move between this read and a delete is not caught.
+func (c *Client) stillUnder(read GovernanceDocument, root GovernanceUnit) func(context.Context) error {
+	return func(ctx context.Context) error {
+		fresh, err := c.GetGovernance(ctx)
+		if err != nil {
+			return fmt.Errorf("read governance state before the prune: %w", err)
+		}
+		sub, err := subtreeOf(fresh, root.ID.String())
+		if err != nil {
+			return fmt.Errorf("before the prune: %w", err)
+		}
+		var moved []string
+		for _, u := range read.Units {
+			if !sub.ids[u.ID] && slices.ContainsFunc(fresh.Units, func(f GovernanceUnit) bool { return f.ID == u.ID }) {
+				moved = append(moved, strconv.Quote(u.Name))
+			}
+		}
+		if len(moved) > 0 {
+			return fmt.Errorf("nothing was pruned: %s moved out of %q while the apply ran; run it again", strings.Join(moved, ", "), root.Name)
+		}
+		return nil
+	}
 }
 
 // GetGovernanceUnder is GetGovernance narrowed the same way (what `get --under` prints).

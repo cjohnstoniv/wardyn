@@ -104,6 +104,26 @@ type SubjectDirectory interface {
 	// AuditKeyDestroyedAt is when the latest generation of principal's seal key
 	// was destroyed; ok is false while none has been.
 	AuditKeyDestroyedAt(ctx context.Context, principal string) (at time.Time, ok bool, err error)
+	// AuditSubjectEras is the earlier bindings of the identity row an id names,
+	// oldest first: empty for an id that is not a uuid, a row never unbound, or a
+	// row unbound only before its unbinds were recorded.
+	AuditSubjectEras(ctx context.Context, id string) ([]SubjectEra, error)
+	// AuditSubjectReleased is the identity row whose binding to principal held at
+	// at and was ended by a recorded unbind: the row's first recorded unbind at or
+	// after at released principal. ok is false when no row's did.
+	AuditSubjectReleased(ctx context.Context, principal string, at time.Time) (id string, ok bool, err error)
+}
+
+// SubjectEra is one earlier binding of a subject's identity row: Principal held
+// it until Until, the database clock at the unbind that released it. Principal
+// is "" once that person's audit personal fields were erased, before the unbind
+// or after it. SubjectGone is the latest destruction recorded under the subject
+// itself at or before Until (the epoch when there is none): the erasure of whoever
+// held the row then, which an unbind that left no record would hide.
+type SubjectEra struct {
+	Principal   string
+	Until       time.Time
+	SubjectGone time.Time
 }
 
 // ActorTranslator turns the person an audit actor filter names into the actor
@@ -469,7 +489,15 @@ type keyMemo struct {
 type actorMemo struct {
 	principal string // "" for an id no identity row carries
 	destroyed time.Time
-	hasKey    bool // destroyed is meaningful
+	hasKey    bool      // destroyed is meaningful
+	eras      []eraMemo // earlier bindings of the id's identity row, oldest first
+}
+
+// eraMemo is who an earlier binding was, for rows written at or before until.
+type eraMemo struct {
+	actorMemo
+	until       time.Time
+	subjectGone time.Time
 }
 
 func newKeyMemo() *keyMemo {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The tier-1 library endpoints. The properties worth pinning at the API layer:
@@ -153,6 +155,30 @@ func TestSources_ReAddAppliesRenameOnIdentityHit(t *testing.T) {
 	_ = json.Unmarshal(get.Body.Bytes(), &fetched)
 	if fetched.Name != "Payments Service" {
 		t.Errorf("stored name = %q, want the rename persisted", fetched.Name)
+	}
+}
+
+// The SDK's source write against the handler, on an identity hit: no requirements keeps the stored
+// contract, and an empty map clears it.
+func TestSources_SDKKeepsOrClearsTheContractOnIdentityHit(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, &sourcesEndpointFake{}))
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	c := &client.Client{BaseURL: ts.URL, Token: adminToken, HTTPClient: ts.Client()}
+	ctx := context.Background()
+	req := client.SourceRequest{Kind: types.SourceLocalDir, Locator: "/home/me/payments",
+		Requirements: map[string]types.WorkspaceRequirement{"secret:deploy-key": {Level: "required", Provenance: "operator_set"}}}
+	if _, err := c.CreateSource(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	req.Requirements = nil
+	if kept, err := c.CreateSource(ctx, req); err != nil || len(kept.Requirements) != 1 {
+		t.Fatalf("re-add with no requirements = %v, %v; want the stored contract kept", kept.Requirements, err)
+	}
+	req.Requirements = map[string]types.WorkspaceRequirement{}
+	if cleared, err := c.CreateSource(ctx, req); err != nil || len(cleared.Requirements) != 0 {
+		t.Fatalf("re-add with an empty map = %v, %v; want the contract cleared", cleared.Requirements, err)
 	}
 }
 

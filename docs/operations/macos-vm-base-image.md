@@ -271,7 +271,13 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 - **Governance.** A profile's `allowed_macos_bases` lists the bases its people may pick, Standard included. Empty allows any base a Mac offers. A restriction narrows it the same way.
 - **The pool list.** A pool's `macos_vm.bases` lists the other bases: `ready` on every Mac, `rebuilding` with the least progress, or `missing` on at least one.
 - A directory that cannot be read, or a list that is refused, leaves Standard alone offered, and the runner logs why.
-- Removing a base's list does not remove its files: delete `variants/<name>` in the VM directory by hand when no run is on it.
+- Removing a base's list does not remove its files. Delete `variants/<name>` in the VM directory by hand when no run is on it, and with it any `variants/<name>.update.old-<id>` beside it, the old copy a failed update moved aside.
+- A failed update of a kept machine can leave its old copy moved aside the same way, as `kept/<key>.update.old-<id>` in the VM directory, beside the machine's folder `kept/<key>`. The error names it. Deleting that kept machine, or its expiry, deletes the copy with it.
+  - To keep the old copy, move it back first, when no run is on the machine:
+      1. Rename `kept/<key>` to `kept/<key>.refused`, the copy the update refused.
+      2. Rename `kept/<key>.update.old-<id>` to `kept/<key>`.
+      3. Once the machine starts and works, delete `kept/<key>.refused`. A revoke of the Mac's runner deletes it too.
+  - Once the machine is gone, nothing deletes the copy but a revoke of the Mac's runner, which erases its kept machines. Otherwise delete it by hand when no run is on it.
 
 ## What Wardyn sets in the base
 

@@ -40,7 +40,7 @@ const NOT_A_DRAFT: Record<string, string> = {
   '"/admin/runs/restart"': "action on named runs, no composed text",
   "/org-check": "probe, saves nothing",
   "/sign-in`, { method": "starts a sign-in flow, no body",
-  "/build`, { method": "action on a workspace, no composed body",
+  "/build`, {": "action on a workspace (Rebuild sends only refresh: true), no composed body",
   "/env-as-code/write": "action on a workspace, no composed body",
   "/scan`": "action on a workspace, no composed body",
 };

@@ -270,7 +270,7 @@ func TestGroundtruthEmptyBatch(t *testing.T) {
 }
 
 func TestHealthzEbpfUnavailableWithoutSensor(t *testing.T) {
-	// With no Pool wired (and thus no heartbeat ever), /healthz must report the
+	// With no Pool wired (and thus no heartbeat on record), /healthz must report the
 	// ground-truth stream as unavailable — honest degradation, never a silent
 	// claim that the stream exists.
 	h := newHarness(t)
@@ -291,16 +291,38 @@ func TestHealthzEbpfUnavailableWithoutSensor(t *testing.T) {
 	}
 }
 
-// stubHeartbeatStore returns a fixed heartbeat from LatestAuditEventByAction so
+// stubHeartbeatStore returns a fixed heartbeat from LatestOrganisationAuditEvent, and
+// the same beat as its sensor's node row with counts that rose on it, so
 // /healthz's ground-truth state can be exercised without a real Store/Pool. It
-// embeds store.Store (nil) and overrides ONLY the one method /healthz calls.
+// embeds store.Store (nil) and overrides only the reads /healthz makes.
 type stubHeartbeatStore struct {
 	store.Store
 	ev types.AuditEvent
 }
 
-func (s stubHeartbeatStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (s stubHeartbeatStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	return s.ev, nil
+}
+
+func (stubHeartbeatStore) UpsertGroundtruthSensor(context.Context, store.GroundtruthSensor) error {
+	return nil
+}
+
+func (s stubHeartbeatStore) ListGroundtruthSensors(_ context.Context, since time.Time) ([]store.GroundtruthSensor, error) {
+	return beatAsNodeRow(s.ev, since), nil
+}
+
+// beatAsNodeRow is ev as its sensor's node row, with evidence at the beat (its
+// counts rose on it), or none when ev is not after since.
+func beatAsNodeRow(ev types.AuditEvent, since time.Time) []store.GroundtruthSensor {
+	if !ev.Time.After(since) {
+		return nil
+	}
+	var hb groundtruthBeat
+	_ = json.Unmarshal(ev.Data, &hb)
+	at := ev.Time
+	return []store.GroundtruthSensor{{LastBeat: ev.Time, DroppedTotal: hb.DroppedTotal, ObservedTotal: hb.ObservedTotal,
+		DroppedUnmapped: hb.DroppedUnmapped, ObservedByKind: hb.ObservedByKind, EvidenceAt: &at}}
 }
 
 // GetSiteConfig answers /healthz's other read (the sign-in help pair) with
@@ -351,8 +373,8 @@ func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 // but could bind none of them to a run (a frozen correlator counter) must not
 // report the same idle/observed_total:0 as a sensor seeing nothing at all —
 // one is a quiet host, the other is a broken pipeline no amount of waiting
-// fixes. The gated-drop count must reach /healthz and the reason must say
-// which of the two failures this is.
+// fixes. The reason must say which of the two failures this is, and the count
+// stays on the operator-gated /metrics, never in the anonymous body.
 func TestHealthzEbpfIdleNamesBrokenCorrelation(t *testing.T) {
 	h := newHarness(t)
 	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 4812, nil) // saw 4,812, correlated none
@@ -363,15 +385,17 @@ func TestHealthzEbpfIdleNamesBrokenCorrelation(t *testing.T) {
 	if gt["state"] != "idle" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want idle", gt["state"])
 	}
-	// The dropped_unmapped COUNTER moved to the operator-gated /metrics
-	// (wardyn_groundtruth_dropped_unmapped_total): the anonymous /healthz
-	// must not publish fleet volumes. What this test exists for is unchanged and
-	// asserted below — the anonymous probe still distinguishes a BROKEN
-	// CORRELATION from a blind sensor, and the count still reaches an operator
-	// inside the reason sentence.
 	reason, _ := gt["reason"].(string)
-	if !strings.Contains(reason, "none correlated") || !strings.Contains(reason, "4812") {
-		t.Errorf("reason = %q, want it to name the correlation failure and the count", reason)
+	if !strings.Contains(reason, "none correlated") || strings.ContainsAny(reason, "0123456789") {
+		t.Errorf("reason = %q, want it to name the correlation failure with no count", reason)
+	}
+	if body := do(t, h.srv, http.MethodGet, "/healthz", "", "").Body.String(); strings.Contains(body, "4812") {
+		t.Errorf("anonymous /healthz carries the unmapped count:\n%s", body)
+	}
+	var m strings.Builder
+	h.srv.writeEbpfGroundtruthCounters(context.Background(), &m)
+	if !strings.Contains(m.String(), "wardyn_groundtruth_dropped_unmapped_total 4812\n") {
+		t.Errorf("the gated scrape lacks the unmapped count:\n%s", m.String())
 	}
 }
 
@@ -537,7 +561,7 @@ func TestHealthzEbpfHealthyWithoutFileWrite(t *testing.T) {
 func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
 	cases := []struct {
 		name      string
-		noStore   bool // leave h.srv.cfg.Store nil (no sensor ever configured)
+		noStore   bool // leave h.srv.cfg.Store nil (no sensor configured)
 		hb        types.AuditEvent
 		wantEmpty bool
 		wantState string // substring the caveat must name

@@ -227,3 +227,37 @@ func TestMacVMDisksPruneKeepsAReportStoredBetweenItsReadAndItsForget(t *testing.
 		t.Fatalf("report = %+v (%v), want the fresh one kept", v, ok)
 	}
 }
+
+// A stop, a kill or a lease end that sees the helper outlive its kill is not answered as done: the VM is
+// not known to have stopped. Once the helper has exited, the same call ends the run.
+func TestMacVMStopWithTheHelperAliveIsNotDone(t *testing.T) {
+	for name, stop := range map[string]func(*Driver, string) error{
+		"stop": func(d *Driver, ref string) error { return d.StopSandbox(context.Background(), ref) },
+		"kill": func(d *Driver, ref string) error { return d.KillSandbox(context.Background(), ref) },
+		"end":  func(d *Driver, ref string) error { return d.EndSandbox(context.Background(), ref) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newMacRig(t)
+			r.c.helperWait = 100 * time.Millisecond
+			sb, spec := createMac(t, r)
+			r.host.mu.Lock()
+			r.host.pinned = map[int]bool{macHelperPID: true}
+			r.host.mu.Unlock()
+			err := stop(r.d, sb.Ref)
+			unconfirmed := (*runner.TeardownUnconfirmedError)(nil)
+			if !errors.Is(err, errMacVMHelperAlive) || !errors.As(err, &unconfirmed) || runner.KeptDespiteAWSCacheWipe(context.Background(), sb.Ref, err) == nil {
+				t.Fatalf("with the helper alive = %v, want errMacVMHelperAlive", err)
+			}
+			r.host.mu.Lock()
+			r.host.pinned = nil
+			r.host.mu.Unlock()
+			r.host.gone(macHelperPID)
+			if err := stop(r.d, sb.Ref); runner.KeptDespiteAWSCacheWipe(context.Background(), sb.Ref, err) != nil {
+				t.Fatalf("once the helper exited = %v, want the run ended", err)
+			}
+			if _, err := os.Lstat(r.c.runDir(spec.RunID)); !os.IsNotExist(err) {
+				t.Fatalf("run directory left once the helper exited: %v", err)
+			}
+		})
+	}
+}

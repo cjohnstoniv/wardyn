@@ -41,7 +41,7 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 const getAvailabilityMock = vi.fn();
 const getMyCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
@@ -399,7 +399,23 @@ describe("WorkspaceDetailScreen — image row: three honest variants, never a /b
     expect(await screen.findByText(".devcontainer/devcontainer.json (this repo, @main)")).toBeInTheDocument();
     expect(screen.getByText("Built as written — we don't modify it.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Rebuild" }));
-    await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalledWith("ws-1"));
+    await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalledWith("ws-1", true));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Rebuild started for "payments"'));
+  });
+
+  it("Rebuild says nothing was rebuilt when the server answers done, and why on none", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ profile: { has_devcontainer: true } as unknown as Record<string, unknown> }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    expect(await screen.findByText(".devcontainer/devcontainer.json (this repo, @main)")).toBeInTheDocument();
+    vi.mocked(toast.success).mockClear();
+    buildWorkspaceMock.mockResolvedValueOnce({ state: "done", image: "img" });
+    await user.click(screen.getByRole("button", { name: "Rebuild" }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Nothing to rebuild for "payments".', { description: undefined }));
+    buildWorkspaceMock.mockResolvedValueOnce({ state: "none", detail: "no image builder" });
+    await user.click(screen.getByRole("button", { name: "Rebuild" }));
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('"payments" was not rebuilt.', { description: "no image builder" }));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("pinned ref: an explicit base_image — no Rebuild action, the ref renders mono", async () => {

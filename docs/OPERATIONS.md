@@ -788,14 +788,22 @@ commands are the ones in "Back them up" and "Restore them", and in
 > Neither binds a **table owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
 > the residual `0007_audit_least_privilege.sql` states plainly.
 
-- The role-split check that reports this posture at boot (`AuditDDLProtected`) counts FOUR ways to bypass, not two:
-  - membership in a superuser role,
-  - membership in the owner role,
-  - the **`TRIGGER` privilege** on `audit_events`,
+- The role-split check that reports this posture at boot (`AuditDDLProtected`) counts SEVEN ways to bypass, not two:
+  - membership in a superuser role, or in one that can gain a superuser's access (`pg_execute_server_program`,
+    `pg_read_server_files`, `pg_write_server_files`, or `CREATEROLE` before PostgreSQL 16),
+  - membership in the owner role of `audit_events`, any of its partitions or its bookkeeping tables,
+  - the **`TRIGGER` privilege** on any of those,
+  - ownership of a function in its schema or run by its triggers, which the owner can alter, or drop along with the
+    triggers that run it,
+  - the **`CREATE` privilege** on that schema, where migrations look up what they call (PostgreSQL 14 and earlier
+    grant it on `public` to every role, and a database upgraded from one can keep that grant),
+  - a `SECURITY DEFINER` function there without a `search_path` that ends in `pg_temp`, whose caller then chooses
+    where it looks names up,
   - and — on PostgreSQL 15 and later, where it is GRANTable to a non-superuser — the **`SET` privilege on the
     `session_replication_role` parameter**, which silences every simply-enabled trigger for the session without
     touching DDL at all.
-- All four are **membership** tests, not attribute lookups.
+- A role's rights are read for every role the app role, or the role its connection signed in as, can `SET ROLE`
+  into, not just the connecting one.
 - `GRANT some_admin_role TO app_role`, the ordinary managed-Postgres migration shape, leaves `app_role` with
   `rolsuper = false` while it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is followed to
   any depth whether or not the role `INHERIT`s.
@@ -815,7 +823,7 @@ commands are the ones in "Back them up" and "Restore them", and in
   refuses to start over ANY foreign row-level BEFORE INSERT trigger on this table.
 - So a deploy that grants `TRIGGER` back is reported as NOT protected.
 
-- **The fourth leg needs no DDL at all.**
+- **The last leg needs no DDL at all.**
   - `SET session_replication_role = 'replica'` silences every trigger left at the ordinary `tgenabled='O'` for the
     session, so a role holding nothing but `INSERT` can append a row past all three guards above — unchained,
     unrewritten by the chain trigger —
@@ -825,11 +833,11 @@ commands are the ones in "Back them up" and "Restore them", and in
     - on an older server only a superuser can set the GUC, so leg one already covers it.
   - It is why `ENABLE ALWAYS` (`tgenabled='A'`, which fires regardless of replication role — see "A trigger you have
     hardened…" above) is the documented hardening rather than an edge case.
-  - Failing any of the four legs is reported at boot as NOT protected, with the remediation logged verbatim:
+  - Failing any of these legs is reported at boot as NOT protected, with the remediation logged verbatim:
     - `wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) can still reach past audit_events'
       append-only guard by the route(s) named here — DDL protection is NOT in effect; connect wardynd as a distinct
       role that holds only INSERT/SELECT on audit_events and none of these`, followed by a `bypass_routes=[…]`
-      attribute naming which of the four fired ([`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)'s
+      attribute naming which of them fired ([`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)'s
       `connectAndMigrate`).
 
 - **The app role's grant set does not grow to keep the chain working.**
@@ -1338,7 +1346,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would, and the macOS VM machines they kept, each deleted as their own delete would (`kept_machines` in the row's detail); a drive or machine a run still holds, or whose Mac is away, stays and fails the scope, naming it |
-| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed; an identity unbind's record of them loses the name |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`), their delegated tokens, and the Azure DevOps token rows of their runs that are revoked or past their expiry |
 
 - The scopes run in the order above whatever order the body lists them: the person's live consumers are fenced first,
@@ -1347,6 +1355,8 @@ erases one person's retained records by explicit scope, in one audited act
 - A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and `remaining`, the
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
+- An Azure DevOps token revoke that did not finish fails `credentials` the same way, with `503`
+  `credential_erase_revoke_unfinished`: that scope erased nothing, so the retry can still revoke the token.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.
@@ -1363,7 +1373,8 @@ erases one person's retained records by explicit scope, in one audited act
     credential, and the reaper deletes each row 90 days after it was written.
   - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
     replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
-    `secret_owner_generations` below would.
+    `secret_owner_generations` below would. Its `erased_at` tells the run token sweep which refused token records
+    an erase kept.
   - `secret_owner_generations` keeps the subject id (below).
 - The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
@@ -4100,6 +4111,16 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0275` (`0275_run_proxy_starts`) creates `run_proxy_starts`, one row per proxy start and its policy readback (the start's generation, run token id, mode, the two config hashes, state, deadline and whether a failed start's proxy stop was confirmed), and adds the nullable `proxy_addr` to `agent_runs` (`0001`'s table): the address the run's agent reaches its proxy on; no row or grant change.
 - `0276` (`0276_agent_runs_forced_stop`) adds the nullable `agent_runs.forced_stop_at` (`0001`'s table), set when a kept run's end is taken without its lock, with a partial index on it where it is set. It is cleared in exactly four cases: the sandbox stop is confirmed; the sandbox is kept with its proxy stopped for its computer folder's pass back; its ref is already empty; or its runner is gone (revoked or deleted), when one `sandbox.sweep` failure row says the stop was not confirmed. In every case it clears only once the run's credential revoke has also succeeded. An offline runner keeps the mark; no row or grant change. Going back to an earlier release needs a database restore, as after any migration.
 - `0277` (`0277_agent_runs_end_marks`) adds two nullable columns to `agent_runs` (`0001`'s table): `fenced_at`, set once an ended run's agent is cut off every network, and `revoke_owed_at`, set while a run's access revoke has started and not yet succeeded. It adds four partial indexes for the background loops that read those runs; no row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0278` (`0278_run_proxy_starts_in_place`) adds `run_proxy_starts.in_place` (`0275`'s table; a boolean, default false), set on a start a live egress edit applies by narrowing the run's running proxy. A failed start's end hint reads it, whichever path stops the start; no row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0279` (`0279_agent_runs_tasks_erased`) adds the nullable `agent_runs.tasks_erased_at` (`0001`'s table), set by a person's run tasks erasure on their runs still waiting in a queue or promoted from one, so that none goes back to its queue with the erased text. No row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0280` (`0280_workload_run_end_binding_reason`) admits `workload_binding_deleted` in `workload_run_ends.reason`'s CHECK (`0244`'s table): a custom resource's run whose namespace binding was deleted while it started is owed its end with that reason. No row or grant change. Going back to an earlier release needs a database restore, as after any migration.
+- `0281` (`0281_insert_stamps`) adds the nullable `inserted_at` to `agent_runs` (`0001`'s table), `api_tokens` (`0045`'s table) and `ssh_public_keys` (`0033`'s table), set only by its default, the database's clock at insert; a SCIM suspension compares it with its own deactivation. Existing rows keep it empty and count as older; no row is rewritten and no grant changes. Going back to an earlier release needs a database restore, as after any migration.
+- `0282` (`0282_groundtruth_sensors_evidence`) adds the nullable `groundtruth_sensors.evidence_at` (`0261`'s table): when a node's kernel event counts last rose on a heartbeat at most 15 minutes after the one before. `/healthz` reads a sensor as `healthy` only while it is recent. It is NULL on every existing row, so each sensor reads `idle` until its counts next rise; no grant changes.
+- `0283` (`0283_principal_identity_unbinds`) creates `principal_identity_unbinds`: per identity unbind, the principal it released (cleared by that person's audit personal fields erasure, never written for one already erased) and the database time. Audit reads under `WARDYN_AUDIT_SEAL=full` use it to name rows written before an unbind. No existing row changes; split-role installs grant `SELECT, INSERT, UPDATE` on it. Going back to an earlier release needs a database restore, as after any migration.
+- `0284` (`0284_base_images_identity_digest`) replaces `base_images_identity_idx` (`0031`'s table) with `base_images_identity_digest_idx`, which keys a catalogue image's identity on a sha256 of its steps rather than the steps themselves, so the index no longer limits how long the steps can be; no row or grant change.
+- `0285` (`0285_audit_functions_search_path`) sets the `search_path` of the twelve functions Wardyn ships that run as their owner or set one of their own, `0176`'s two revocation functions among them, to `pg_catalog, pg_temp`, so none of them searches the install's schema, where a role with `CREATE` could add a function they would call. It re-creates the two `0176` functions (`CREATE OR REPLACE`) and alters the rest, each only where the migrator owns it. Any other function, and any of the twelve the migrator does not own, is left as it is, and the boot check reads it as before; no table, row or grant change.
+- `0286` (`0286_run_teardown_holds`) creates `run_teardown_holds`, one row per run whose runner reported, on a state page, a kill or end it refused because it could not see the sandbox stop: the kind, when the runner began holding it and, once the runner reports it finished, when. Only that report clears it. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `run_teardown_holds`. Going back to an earlier release needs a database restore, as after any migration.
+- `0287` (`0287_ado_signin_ends_erased_at`) adds the nullable `ado_signin_ends.erased_at` (`0129`'s table): when an erase of the person's credentials last ended their Azure DevOps sign-in; a disconnect leaves it. The run token sweep deletes their refused token rows created before it once past their valid_to, and also any refused token row whose revoke an erase recorded. A row whose last end was an erase takes that end's time; others stay NULL. No grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4216,12 +4237,16 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 - **wardynd verifies the claim rather than asserting it.**
 - On the next boot it queries whether the app role can reach past the guard by any
-  of FOUR routes:
-  - membership in a superuser role, membership in `audit_events`'s owner role, the
-    `TRIGGER` privilege on the table,
+  of SEVEN routes, each held directly or through a role it can `SET ROLE` into
+  (`db.AuditDDLBypassRoutes`):
+  - membership in a superuser role or one that can gain its access, membership in
+    the owner role of `audit_events`, one of its partitions or its bookkeeping
+    tables, the `TRIGGER` privilege on any of those,
+  - ownership of a function in the table's schema or run by its triggers, the
+    `CREATE` privilege on that schema, a `SECURITY DEFINER` function there without
+    a `search_path` that ends in `pg_temp`,
   - or (PostgreSQL 15+) the `SET` privilege on the
-    `session_replication_role` parameter, held directly or through a role it
-    can `SET ROLE` into (`db.AuditDDLBypassRoutes`).
+    `session_replication_role` parameter.
 - And it logs one of two lines:
   - `migrations applied via WARDYN_PG_MIGRATE_DSN … app role is a verified
     non-owner of audit_events — the append-only guard is DDL-protected`
@@ -4229,10 +4254,15 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
     audit_events' append-only guard by the route(s) named here — DDL protection is NOT in effect`
 - The second line now carries a `bypass_routes` field naming the route(s) that
   fired, because the remedy differs per route.
-- The first two are closed by
-  connecting as a different role, the third by a `REVOKE TRIGGER ON
-  audit_events`, and the fourth by `REVOKE SET ON PARAMETER
-  session_replication_role` — which no amount of role-swapping reaches.
+- The first two are closed by connecting as a different role, and the others by:
+  - a `REVOKE TRIGGER` on the table, its partitions and its bookkeeping tables,
+  - `ALTER FUNCTION … OWNER TO` the migrator,
+  - `REVOKE CREATE ON SCHEMA` from the app role and from `PUBLIC`, once the migrator
+    holds its own `CREATE` there (it creates every new table there),
+  - `ALTER FUNCTION … SET search_path = pg_catalog, pg_temp` once its body
+    qualifies every name,
+  - and `REVOKE SET ON PARAMETER session_replication_role`, which no amount of
+    role-swapping reaches.
 
 The second line means the split did not take; the deployment is no worse off than
 single-DSN mode, and no better.

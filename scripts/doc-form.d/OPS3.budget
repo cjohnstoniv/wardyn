@@ -119,7 +119,7 @@ docs/operations/three-roles.md=5184 share=35 # 5184 measured (+10: a super admin
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1380 share=35 # -2, measured: the two-door grid first; version narration removed
 # 0.9.4 W4-DOCS-1: docs/operations/ownership-and-offboarding.md 2383 adds 13 over 2370, measured: #2376: the Azure DevOps owner exception.
-docs/operations/ownership-and-offboarding.md=2424 share=35 # -4 net, measured: step 7a (the rest of what a leaver owns, and SCIM) added; version ids and repeated bullets removed
+docs/operations/ownership-and-offboarding.md=2453 share=35 # 2453 measured (+29: an Azure DevOps revoke that did not finish refuses the erase with 503, and one refused for good is named with tokens_revocation_failed); earlier: -4 net, measured: step 7a (the rest of what a leaver owns, and SCIM) added; version ids and repeated bullets removed
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.

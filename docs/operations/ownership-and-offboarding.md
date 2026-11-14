@@ -90,9 +90,10 @@ Workspaces and secrets are the second and third owned nouns after runs.
     - on a deployment with more than one replica a second one can still interleave,
     - and the erase's own re-list reports only a write it can see.
   - An Azure DevOps sign-in configuration that cannot be read refuses the erase (`503`, `credential_erase_signin_config_unreadable`, nothing erased).
+  - So does a revoke of their Azure DevOps tokens that did not finish (`503`, `credential_erase_revoke_unfinished`, nothing erased); run it again.
   - A person who reconnects afterwards writes new credentials, which stay.
   - The erase does not reach into a running run: one that already holds a credential in memory keeps it, and an `api_key` injection is fetched once and cached for the run. Stop their runs too (`POST /runs/{id}/kill`).
-  - **Wardyn cannot revoke anything upstream**, with one exception: it first revokes the live Azure DevOps tokens it created for the person's runs (`ado_pat.revoke`, reason `offboarding`; one it cannot revoke expires by itself).
+  - **Wardyn cannot revoke anything upstream**, with one exception: it first revokes the live Azure DevOps tokens it created for the person's runs (`ado_pat.revoke`, reason `offboarding`; one Azure DevOps refuses to revoke expires by itself, and the answer says so with `tokens_revocation_failed`).
   - A refused erase (a blank principal `400`, or one naming nobody or several people `422`) is audited `credential.erase` `denied`.
   - **The erasure horizon, on the default (local Postgres) store, is your backup retention — not the API call.**
     - `DELETE /people/{principal}/credentials` removes the live row; it does not, and cannot, reach a `pg_dump` you already took, a replica, or Postgres WAL.

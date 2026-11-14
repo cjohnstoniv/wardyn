@@ -162,7 +162,7 @@ func shape(doc client.GovernanceDocument) map[string][4]any {
 func TestApplyGovernance_GraphReversedOrderRoundTripsAndRepeatsAsNoop(t *testing.T) {
 	ctx := context.Background()
 	src := sourceGraph()
-	// ApplyGovernance rewrites the document it is given in place; keep the source's own ids and shape.
+	// Keep the source's own ids and shape to compare the re-exported graph against.
 	raw, _ := json.Marshal(src)
 	var srcCopy client.GovernanceDocument
 	_ = json.Unmarshal(raw, &srcCopy)

@@ -390,7 +390,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
 });
 
 test.describe("the run page", () => {
-  test("lists each token oldest first from the daemon: renewed, revoked with its reason, and a revoke that failed (Credentials widget)", async ({ page }) => {
+  test("lists each token oldest first from the daemon: renewed, access added, and a revoke that failed, never drawn as revoked (Credentials widget)", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
     const t = (h: number, m: number) => new Date(2000, 8, 29, h, m);
     clearRunTokens(runId);
@@ -410,7 +410,7 @@ test.describe("the run page", () => {
       const lines = tokens.locator("p:not([role=alert])");
       await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created ${clock(t(9, 2))} · expires ${clock(t(17, 2))} (renewed)`);
       await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created ${clock(t(15, 2))} · expires ${clock(t(23, 2))} (access added)`);
-      await expect(lines.nth(2)).toHaveText(`Azure DevOps token: created ${clock(t(16, 0))} · expires ${clock(t(23, 30))} · revoked ${clock(t(16, 40))} (run ended)`);
+      await expect(lines.nth(2)).toHaveText(`Azure DevOps token: created ${clock(t(16, 0))} · expires ${clock(t(23, 30))} (not revoked)`);
       await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_REVOKE_FAILED(clock(t(23, 30))));
     } finally {
       clearRunTokens(runId);

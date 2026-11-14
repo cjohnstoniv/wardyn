@@ -371,7 +371,8 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // audits it with teardown_error) for the NEXT boot to retry. A runner run's
 // teardown follows the runner's last answer: an end it refused is retried as a
 // kill, an end or a kill it applied clears the ref, and a kill it refused is not
-// queued again. With no answer yet it is a kill.
+// queued again, unless the runner has since reported that the kill or end it held
+// the run for finished after that refusal. With no answer yet it is a kill.
 //
 // It also re-runs revokeRunCascade: a run that
 // reaches this pass may have had its ORIGINAL finalize/kill/idle-stop
@@ -390,16 +391,16 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		s.revokeRunCascade(ctx, run.ID)
 		// An end still running its computer folder's pass back holds the run's lock (lockRunEnd).
 		if lctx, unlock, free := s.tryLockRunOp(ctx, run.ID); free {
-			s.reconcileOrphanedRun(lctx, run)
+			s.reconcileOrphanedRun(lctx, run, "sandbox.orphan.sweep")
 			unlock()
 		}
 	}
 	return nil
 }
 
-// reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
-func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
-	if s.boundedKeepVerdict(ctx, run, "sandbox.orphan.sweep") != folderKeepNone {
+// reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock, audited as action.
+func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun, action string) {
+	if s.boundedKeepVerdict(ctx, run, action) != folderKeepNone {
 		// Kept for its computer folder's pass back, which the tail owner (folderCleanupLoop) runs, on a confirmed
 		// cut; or a runner that is not here, left until it is, or until the tail owner gives the pass up.
 		return
@@ -409,19 +410,20 @@ func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
 	switch {
 	case answered && outcome == types.RunnerActionSuccess:
 		torn = true // the runner applied an end or a kill: a proven stop
-	case answered && kind == types.RunnerActionKill && outcome == types.RunnerActionRefused:
+	case answered && kind == types.RunnerActionKill && outcome == types.RunnerActionRefused && !s.teardownHoldClearedAfterRefusal(ctx, run):
 		return // queued again it would be refused again; the ref stays
 	case answered && (kind == types.RunnerActionKill || outcome == types.RunnerActionRefused):
 		// A record the runner keeps only for containment refuses an end, every boot, but takes
-		// a kill, which stops its agent.
-		torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
+		// a kill, which stops its agent. A kill the runner refused while it held the run, and
+		// has since finished on its own, is queued again, and the runner applies it.
+		torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, action, boundedTeardown(s.cfg.Runner.KillSandbox))
 	case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
 		// A kill, never a stop: a stop is queued for an offline runner (at boot, every runner) as an
 		// end, which a runner that cannot keep an ended sandbox refuses and a containment-only record
 		// refuses too. Every runner takes a kill, and a terminal run's sandbox has nothing to keep.
-		torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
+		torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, action, boundedTeardown(s.cfg.Runner.KillSandbox))
 	default:
-		torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.StopSandbox))
+		torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, action, boundedTeardown(s.cfg.Runner.StopSandbox))
 	}
 	if !torn {
 		return // still stuck; audited above, ref stays set for the next boot

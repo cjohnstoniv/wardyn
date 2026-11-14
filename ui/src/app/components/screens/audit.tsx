@@ -75,7 +75,7 @@ const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hi
   healthy: { tone: "success", hint: "fresh sensor heartbeats and real kernel events observed" },
   idle: { tone: "warning", hint: "sensor is beating but has observed no kernel events" },
   degraded: { tone: "warning", hint: "sensor heartbeat is stale — the sensor has stalled or died" },
-  unavailable: { tone: "neutral", hint: "no eBPF sensor has ever reported — this tier is opt-in" },
+  unavailable: { tone: "neutral", hint: "no eBPF sensor heartbeat is on record — this tier is opt-in" },
 };
 
 // Event-kind bucketing. AuditEvent.action is an open dotted-verb string the
@@ -771,7 +771,7 @@ function EventOutcome({ e }: { e: AuditEvent }) {
 }
 
 // Kernel ground-truth health. The event list itself can only ever show a LIVE
-// sensor (kernel.sensor.ping rows): "unavailable" (no sensor ever) and
+// sensor (kernel.sensor.ping rows): "unavailable" (no heartbeat on record) and
 // "degraded" (stale beat) are the ABSENCE of events, so they render as an empty
 // list indistinguishable from a quiet window — exactly the blindness that has to
 // stay visible. Nothing is claimed when the daemon doesn't report the field.

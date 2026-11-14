@@ -18,7 +18,7 @@ const poolMembersMock = vi.fn();
 vi.mock("../../../lib/api/runner-pools", () => ({
   runnerPools: { get: (...a: unknown[]) => poolGetMock(...a), members: (...a: unknown[]) => poolMembersMock(...a) },
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
 const approveMock = vi.fn();
 const rejectMock = vi.fn();
@@ -81,6 +81,7 @@ beforeEach(() => {
   approveMock.mockReset();
   rejectMock.mockReset();
   vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.warning).mockClear();
 });
 
 describe("the Changes tab", () => {
@@ -300,6 +301,18 @@ describe("the change drawer", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
     expect(approveMock).toHaveBeenCalledWith("c1");
     expect(toast.success).toHaveBeenCalledWith(CHANGES.TOAST_APPROVED);
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("an approved change whose token revocation did not finish keeps the server's remedy until dismissed", async () => {
+    const detail = "The change is saved, but Wardyn could not revoke every API token that may still hold the old role.";
+    approveMock.mockResolvedValue({ ...change({ state: "applied" }), tokens_revocation_failed: true, detail });
+    const { onChanged } = renderTab([change()]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
+    expect(toast.warning).toHaveBeenCalledWith(detail, { duration: Infinity });
+    expect(toast.success).not.toHaveBeenCalled();
     expect(onChanged).toHaveBeenCalled();
   });
 

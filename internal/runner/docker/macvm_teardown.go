@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"syscall"
@@ -103,6 +104,28 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 		log.Warn("docker: release a macOS VM's ledger entry (the orphan sweep retries)", slog.String("err", err.Error()))
 	}
 	c.changed()
+}
+
+// errMacVMHelperAlive is a stop, kill or lease end of a macOS VM whose helper outlived its kill.
+var errMacVMHelperAlive = errors.New("docker: the macOS VM helper is still running after the stop and a kill, so the VM is not known to have stopped")
+
+// macVMStopUnconfirmed is the answer of a stop that destroyMacVM has had its turn at: a helper it did not
+// see exit (destroyMacVM then keeps the run directory and the ledger entry) means the VM is not known to
+// have stopped, so the stop is not answered as done, and the next call destroys the VM again. It is nil
+// for a run that is not a macOS VM, or whose VM is gone.
+func (d *Driver) macVMStopUnconfirmed(runID uuid.UUID) error {
+	c := d.macVMConfig()
+	if c == nil {
+		return nil
+	}
+	cfg, err := readMacRun(c.runDir(runID), runID)
+	if err != nil {
+		return nil
+	}
+	if e, ok := c.entry(cfg.LedgerEntry); ok && c.helperAlive(e) {
+		return &runner.TeardownUnconfirmedError{Err: fmt.Errorf("%w (run %s)", errMacVMHelperAlive, runID)}
+	}
+	return nil
 }
 
 // waitMacVMHelperExit waits for e's helper to leave the process table.

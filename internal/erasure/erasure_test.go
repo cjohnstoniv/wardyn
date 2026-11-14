@@ -123,3 +123,24 @@ func TestComponentsScopeRunsBeforeTheKeys(t *testing.T) {
 		t.Fatalf("ran %v, want %v", ran, want)
 	}
 }
+
+// A step that fails after doing part of its work hands that part back on the error, so the caller's
+// failure row can still say what the step did.
+func TestOrchestrateKeepsWhatAFailedStepReported(t *testing.T) {
+	part := map[string]any{"tokens_revocation_failed": true}
+	o := &Orchestrator{Steps: map[Scope]Step{
+		RunTasks:    func(context.Context, string) (any, error) { return 1, nil },
+		Credentials: func(context.Context, string) (any, error) { return part, errors.New("the key store is down") },
+	}}
+	rep, err := o.Orchestrate(context.Background(), "p", []Scope{Credentials, RunTasks})
+	var inc *IncompleteError
+	if !errors.As(err, &inc) {
+		t.Fatalf("err = %v, want *IncompleteError", err)
+	}
+	if got, _ := inc.Detail.(map[string]any); got["tokens_revocation_failed"] != true {
+		t.Errorf("Detail = %v, want the failed step's data", inc.Detail)
+	}
+	if _, done := rep.Details[Credentials]; done || len(rep.Done) != 1 {
+		t.Errorf("report = %+v, want the failed scope neither done nor detailed", rep)
+	}
+}

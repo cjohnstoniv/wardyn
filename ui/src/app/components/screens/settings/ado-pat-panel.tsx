@@ -66,7 +66,9 @@ export function AdoPatBody({
   const disconnect = async () => {
     setConfirmDisconnect(false);
     try {
-      await adoPat.disconnect();
+      const res = await adoPat.disconnect();
+      // The sign-in is gone, but a token may still work: say so until dismissed.
+      if (res.tokensRevocationFailed && res.detail) toast.warning(res.detail, { duration: Infinity });
       onChanged();
     } catch (e) {
       toast.error(getErrorMessage(e));

@@ -39,7 +39,7 @@
 | `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`, `spent`, `transport_error` or `unavailable`. It graphs the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check make. |
 | `wardyn_credential_reauth_total{outcome}` | Counter. Mid-run model-credential re-auth workflows, by outcome: `requested`, `resolved`, `expired`, `cancelled` or `timeout`. The timeout series is the one to watch for a sign-in nobody answered; the egress deny counter does not count it. |
 | `wardyn_credential_reauth_wait_seconds` | Summary (sum and count). How long a re-auth request stayed open, from the raise to the sign-in that answered it. |
-| `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. They are only here: `/healthz` publishes the verdict only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and the reason sentence still names the unmapped-drop count. Omitted entirely when no sensor has ever beaten. |
+| `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. They are only here: `/healthz` publishes the verdict only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and `reason` omits the unmapped-drop count. Omitted while `ebpf_groundtruth` reads `unavailable`. |
 | `wardyn_auth_failed_suppressed_total` | Audit rows a rate limiter dropped: `auth.fail` and SSH or ticket refusals. The trail stops describing the volume, so a credential-stuffing run reads quieter than a few typos. Alert on this series, not the audit row count. |
 | `wardyn_auth_store_errors_total` | Requests an authentication path couldn't decide because its store read failed and answered `503`. The SSO path records `auth.fail`; every other path records nothing. |
 | `wardyn_ssh_connections_refused_total{bound}` | SSH gateway connections closed at a [bound](../SSH.md#bounds): `handshake`, `source`, `established` or `principal`; per replica. |
@@ -127,7 +127,7 @@ With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each n
 
 | Live nodes | `/healthz` `ebpf_groundtruth` |
 |---|---|
-| None heard from, ever | `unavailable` |
+| No heartbeat on record | `unavailable` |
 | 0 or 1 | One verdict from the newest beat of any node, as before per-node health existed. No `sensors[]`, and a node that went silent is not shown |
 | 2 or more | The worst live node's state (`degraded`, then `idle`, then `partial`, then `healthy`) and `sensors[]` |
 
@@ -135,7 +135,13 @@ With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each n
 - A signed-in caller gets `sensors[]`, because node names describe your cluster. An anonymous caller gets the verdict, `last_heartbeat`, `reason` and `missing_kinds`, and no node list.
 - The counters never reach `/healthz`. With two or more live nodes the `wardyn_groundtruth_*` series on `/metrics` sum the live nodes.
 - When the worst state is not `healthy`, `reason` reads like "1 of 2 node sensors degraded", so an anonymous caller sees a node count only then.
-- If the node list cannot be read, the failure is logged. If any heartbeat was ever recorded, `/healthz` reports `degraded` with "Node sensor health could not be read", to anonymous callers too. With no heartbeat on record it reports `unavailable`.
+- If the node list cannot be read, the failure is logged. If a heartbeat is on record, `/healthz` reports `degraded` with "Node sensor health could not be read", to anonymous callers too. With no heartbeat on record it reports `unavailable`.
+- With 0 or 1 live nodes the verdict comes from the newest node row of the last 7 days. With no such row the sensor's latest heartbeat is read, at most once every 30 seconds per server.
+- If that read fails or takes over half a second, `/healthz` reports `unavailable` with "Sensor heartbeat could not be read", to anonymous callers too. `unavailable` with no reason means no heartbeat is on record.
+- `healthy` needs fresh heartbeats whose kernel event counts (`observed_total` plus `dropped_unmapped`) rose in the last 15 minutes. A sensor that stops can read `healthy` for up to 15 minutes after its last such heartbeat.
+- A fresh heartbeat whose counts last rose over 15 minutes ago reads `idle` with "No new kernel events in the last 15 minutes". Tetragon or its export may have stopped, or the host ran nothing Tetragon exports.
+- With no rise on record it reads `idle` with "Whether new kernel events still arrive is not yet known". That is a node's first heartbeat, the first after a gap of over 15 minutes, and any heartbeat with no node row. After upgrading to this version, every sensor reads so until its counts next rise.
+- The node's row keeps when its counts last rose, so every server reads the same verdict, one that just started included.
 - A failed write of a node's row is logged and does not fail the heartbeat.
 - With two or more live nodes, a run's recent kernel events are read from the node its newest event came from, and are empty if it has none.
 

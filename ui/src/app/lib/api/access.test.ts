@@ -53,6 +53,43 @@ describe("access.upsertMapping — stale_token_snapshots wire mirror", () => {
     expect(res.staleTokenSnapshots).toBeUndefined();
     expect(res.created).toBe(true);
   });
+
+  it("surfaces a saved write whose token revocation did not finish", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: "m-1",
+            value: "engineering",
+            role: "user",
+            stale_token_snapshots: 3,
+            tokens_revocation_failed: true,
+            detail: "remedy",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const res = await access.upsertMapping({ value: "engineering", role: "user" });
+    expect(res.tokensRevocationFailed).toBe(true);
+    expect(res.detail).toBe("remedy");
+    expect(res.tokensRevoked).toBeUndefined();
+    expect(res.mapping).toEqual({ id: "m-1", value: "engineering", role: "user" });
+  });
+
+  it("surfaces a delete whose token revocation did not finish", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ tokens_revocation_failed: true, detail: "remedy" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    await expect(access.deleteMapping("m-1")).resolves.toEqual({ tokensRevocationFailed: true, detail: "remedy" });
+  });
 });
 
 describe("access request shapes and write refusals", () => {
@@ -89,7 +126,7 @@ describe("access request shapes and write refusals", () => {
 
   it.each([false, true])("deletes an encoded mapping with acknowledgement=%s in the query", async (acknowledge) => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
-    await expect(access.deleteMapping("mapping/id ?", acknowledge)).resolves.toBeUndefined();
+    await expect(access.deleteMapping("mapping/id ?", acknowledge)).resolves.toEqual({});
     const suffix = acknowledge ? "?acknowledge_access_change=true" : "";
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/access/mappings/mapping%2Fid%20%3F${suffix}`, expect.objectContaining({ method: "DELETE" }));
     expect(fetchMock.mock.calls[0][1].body).toBeUndefined();

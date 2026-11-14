@@ -100,10 +100,17 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 			"The Azure DevOps sign-in configuration could not be read, so nothing was erased. Try again.")
 		return
 	}
+	if errors.Is(err, errADORevokeUnfinished) {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseRevokeUnfinished}, owner, known)))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonCredentialEraseRevokeUnfinished, credentialEraseRevokeUnfinishedMsg)
+		return
+	}
 	data := credentialEraseData(rep)
 	if done, ok := orep.Details[erasure.Credentials].(map[string]any); ok {
 		data = done // with runs_fenced
 	}
+	maps.Copy(data, tokensNotRevokedOf(err)) // a step that failed after a failed revoke still says so on its row
 	if ne, ok := notErasedDetail(names.notErased); ok {
 		data["not_erased"] = ne
 	}

@@ -14,7 +14,7 @@
 // listed has no second field. Opt-in scopes stay unticked (OPT_IN).
 import * as React from "react";
 import { Loader2 } from "lucide-react";
-import { credentials as credentialsApi, ErasureIncomplete, type ErasureScope } from "../../lib/api/credentials";
+import { credentials as credentialsApi, ErasureIncomplete, type ErasureScope, tokensNotRevoked } from "../../lib/api/credentials";
 import { HttpError } from "../../lib/api/core";
 import { people as peopleApi } from "../../lib/api/people";
 import { getErrorMessage } from "../../lib/format";
@@ -78,9 +78,28 @@ export interface ErasePerson {
 
 const personOf = (p: PersonSummary): ErasePerson => ({ principal: p.principal, label: p.email || p.principal });
 
+// notErased: the principals the answer's not_erased left alone, shown beside the result. tokensNotRevoked: the
+// server's sentence when an Azure DevOps token the erase tried to revoke may still work.
 type Result =
-  | { kind: "scopes"; person: string; erased: Set<string>; chosen: ErasureScope[]; complete: boolean }
-  | { kind: "credentials"; person: string; count: number; store?: string; purged?: boolean; recoverable_days?: number };
+  | {
+      kind: "scopes";
+      person: string;
+      erased: Set<string>;
+      chosen: ErasureScope[];
+      complete: boolean;
+      notErased: string[];
+      tokensNotRevoked?: string;
+    }
+  | {
+      kind: "credentials";
+      person: string;
+      count: number;
+      store?: string;
+      purged?: boolean;
+      recoverable_days?: number;
+      notErased: string[];
+      tokensNotRevoked?: string;
+    };
 
 export function EraseDataDialog({
   open,
@@ -164,14 +183,22 @@ export function EraseDataDialog({
     try {
       if (credentialsOnly) {
         const res = await credentialsApi.erase(principal);
-        setResult({ kind: "credentials", person: label, ...res });
+        setResult({
+          kind: "credentials",
+          person: label,
+          ...res,
+          notErased: res.not_erased?.subjects ?? [],
+          tokensNotRevoked: tokensNotRevoked(res),
+        });
       } else {
-        await credentialsApi.erasePerson(principal, chosen);
-        setResult({ kind: "scopes", person: label, erased: new Set(chosen), chosen, complete: true });
+        const res = await credentialsApi.erasePerson(principal, chosen);
+        const notErased = res.not_erased?.subjects ?? [];
+        const tokens = tokensNotRevoked(res.detail?.credentials);
+        setResult({ kind: "scopes", person: label, erased: new Set(chosen), chosen, complete: true, notErased, tokensNotRevoked: tokens });
       }
     } catch (e) {
       if (e instanceof ErasureIncomplete) {
-        setResult({ kind: "scopes", person: label, erased: new Set(e.done), chosen, complete: false });
+        setResult({ kind: "scopes", person: label, erased: new Set(e.done), chosen, complete: false, notErased: [] });
       } else {
         // A >=500 never finished, so it may have partly landed: its own sentence. A 4xx refusal (self-erasure, an
         // unknown scope, the operator namespace, an unknown address) shows the server's sentence as sent.
@@ -205,6 +232,10 @@ export function EraseDataDialog({
             {result.count > 0 && result.store && !result.purged && !!result.recoverable_days && (
               <p className="text-body text-muted-foreground">{ERASE.KEY_VAULT_RECOVERABLE(result.recoverable_days)}</p>
             )}
+            {result.notErased.length > 0 && (
+              <p className="text-body text-foreground">{ERASE.NOT_ERASED(result.notErased.join(", "))}</p>
+            )}
+            {result.tokensNotRevoked && <p className="text-body text-foreground">{result.tokensNotRevoked}</p>}
             {result.count > 0 && <p className="text-body text-muted-foreground">{ERASE.DONE_AUDIT}</p>}
             <DialogFooter>
               <Button onClick={() => close(true)}>{ERASE.CLOSE}</Button>
@@ -227,6 +258,10 @@ export function EraseDataDialog({
             <p className="text-body text-foreground">
               {result.complete ? ERASE_DATA.DONE(result.person) : ERASE_DATA.PARTIAL(result.person)}
             </p>
+            {result.notErased.length > 0 && (
+              <p className="text-body text-foreground">{ERASE.NOT_ERASED(result.notErased.join(", "))}</p>
+            )}
+            {result.tokensNotRevoked && <p className="text-body text-foreground">{result.tokensNotRevoked}</p>}
             <p className="text-body text-muted-foreground">{ERASE_DATA.DONE_AUDIT}</p>
             <DialogFooter>
               <Button variant="ghost" onClick={() => close(true)}>

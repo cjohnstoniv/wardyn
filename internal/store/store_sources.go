@@ -332,7 +332,8 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 const PrewrappedCheckWindow = 12 * time.Minute
 
 // UpsertBaseImage inserts a catalog image or returns the row with the same
-// identity (kind, image, steps) — the identity index is the dedupe rule. The
+// identity (kind, image, steps) — the identity index is the dedupe rule, over a
+// digest of the steps (0284), so steps of any size fit its key. The
 // CHECK constraint refuses 'recommended' structurally: that build is derived
 // per-workspace and has no catalog identity.
 //
@@ -360,7 +361,7 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 		VALUES ($1,$2,$3,$4,$5,$6,$7,
 			CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'checking' END, $8,
 			CASE WHEN $8::uuid IS NULL THEN NULL ELSE clock_timestamp() + make_interval(secs => $9) END)
-		ON CONFLICT (kind, image, (COALESCE(steps, '[]'::jsonb))) DO UPDATE SET updated_at = now()
+		ON CONFLICT (kind, image, (sha256(jsonb_send(COALESCE(steps, '[]'::jsonb))))) DO UPDATE SET updated_at = now()
 		RETURNING ` + baseImageCols
 	return scanBaseImage(s.Pool.QueryRow(ctx, q,
 		b.ID, b.Kind, b.Name, b.Image, steps, b.CreatedAt, b.UpdatedAt, attempt, PrewrappedCheckWindow.Seconds()))

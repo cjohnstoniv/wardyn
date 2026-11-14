@@ -291,7 +291,7 @@ func TestPG_ADOSignInEnds(t *testing.T) {
 	if st.Gen != 1 || !st.Running || st.Reason != "disconnect" {
 		t.Fatalf("after begin = %+v, want gen 1, running, reason disconnect", st)
 	}
-	if err := pg.FinishADOSignInEnd(ctx, "alice"); err != nil {
+	if err := pg.FinishADOSignInEnd(ctx, "alice", "disconnect"); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = pg.ADOSignInEnds(ctx, "alice")

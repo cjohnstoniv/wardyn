@@ -388,6 +388,44 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     await waitFor(() => expect(upsertMappingMock).toHaveBeenCalled());
     expect(screen.queryByText(/API tokens? revoked/)).not.toBeInTheDocument();
   });
+
+  // A saved demotion whose token revocation did not reach every token: the
+  // mapping stays saved and the server's remedy stays on screen.
+  const REVOKE_DETAIL =
+    "The change is saved, but Wardyn could not revoke every API token that may still hold the old role. Revoke them with POST /sessions/revoke.";
+
+  it("says the revocation is incomplete when it revoked none", async () => {
+    upsertMappingMock.mockResolvedValue({
+      mapping: { id: "m1", value: "eng-team", role: "user" },
+      created: false,
+      tokensRevocationFailed: true,
+      detail: REVOKE_DETAIL,
+    });
+    renderPanel(baseAccess());
+
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    expect(await screen.findByText(REVOKE_DETAIL)).toBeInTheDocument();
+    expect(screen.queryByText(/API tokens? revoked/)).not.toBeInTheDocument();
+  });
+
+  it("shows the count and the incomplete note when it revoked some", async () => {
+    upsertMappingMock.mockResolvedValue({
+      mapping: { id: "m1", value: "eng-team", role: "user" },
+      created: false,
+      tokensRevoked: 2,
+      tokensRevocationFailed: true,
+      detail: REVOKE_DETAIL,
+    });
+    renderPanel(baseAccess());
+
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    expect(await screen.findByText(PEOPLE.TOKENS_REVOKED_RECEIPT(2))).toBeInTheDocument();
+    expect(screen.getByText(REVOKE_DETAIL)).toBeInTheDocument();
+  });
 });
 
 describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {
@@ -634,7 +672,7 @@ describe("AccessPanel — add mapping error classification", () => {
 
 describe("AccessPanel — delete mapping", () => {
   it("a plain delete (not the last row) shows the plain confirm, no ack required", async () => {
-    deleteMappingMock.mockResolvedValue(undefined);
+    deleteMappingMock.mockResolvedValue({});
     const onReload = vi.fn();
     renderPanel(chartPlusTwoConsole(), "ready", onReload);
 
@@ -653,7 +691,7 @@ describe("AccessPanel — delete mapping", () => {
   // straight to the API (ack=false first), and only a 400 carrying the
   // structured posture-flip body switches the OPEN dialog into guard mode.
   it("the FIRST delete attempt always sends ack=false — no client-side 'is this the last row' guess", async () => {
-    deleteMappingMock.mockResolvedValue(undefined);
+    deleteMappingMock.mockResolvedValue({});
     renderPanel(
       baseAccess({
         mappings: [
@@ -687,7 +725,7 @@ describe("AccessPanel — delete mapping", () => {
         after: "sign in as a member",
       }),
     );
-    deleteMappingMock.mockResolvedValueOnce(undefined);
+    deleteMappingMock.mockResolvedValueOnce({});
     const onReload = vi.fn();
     // consoleRows.length === 2 here — NOT what a row-count heuristic would
     // call "the last row" — proving the guard fires purely off the server's
@@ -720,6 +758,42 @@ describe("AccessPanel — delete mapping", () => {
     await userEvent.click(deleteBtn);
     expect(await screen.findByText(ACCESS_ERROR.LOCKOUT_ERROR)).toBeInTheDocument();
     expect(deleteBtn).not.toBeDisabled();
+  });
+
+  it("a delete whose token revocation did not finish keeps the server's remedy until the next delete", async () => {
+    const detail = "The change is saved, but Wardyn could not revoke every API token that may still hold the old role.";
+    deleteMappingMock.mockResolvedValueOnce({ tokensRevocationFailed: true, detail });
+    deleteMappingMock.mockResolvedValueOnce({});
+    const onReload = vi.fn();
+    renderPanel(chartPlusTwoConsole(), "ready", onReload);
+
+    await userEvent.click(screen.getByRole("button", { name: `${PEOPLE.DELETE} alice@corp.example` }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+    expect(await screen.findByText(detail)).toBeInTheDocument();
+    expect(onReload).toHaveBeenCalled();
+
+    // Opening the next delete is what clears it, before that delete is confirmed.
+    await userEvent.click(screen.getByRole("button", { name: `${PEOPLE.DELETE} eng-team` }));
+    expect(screen.queryByText(detail)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+    expect(deleteMappingMock).toHaveBeenLastCalledWith("c2", false);
+    expect(screen.queryByText(detail)).not.toBeInTheDocument();
+  });
+
+  it("the remedy outlasts a reload that fails", async () => {
+    const detail = "The change is saved, but Wardyn could not revoke every API token that may still hold the old role.";
+    deleteMappingMock.mockResolvedValueOnce({ tokensRevocationFailed: true, detail });
+    const onReload = vi.fn();
+    const view = render(<AccessPanel access={chartPlusTwoConsole()} state="ready" onReload={onReload} />);
+    await userEvent.click(screen.getByRole("button", { name: `${PEOPLE.DELETE} alice@corp.example` }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+    expect(await screen.findByText(detail)).toBeInTheDocument();
+
+    // The reload after the delete fails, as it does when the store that could not list the tokens is still down.
+    view.rerender(<AccessPanel access={null} state="fetch_failed" onReload={onReload} />);
+    expect(screen.getByText(detail)).toBeInTheDocument();
+    view.rerender(<AccessPanel access={chartPlusTwoConsole()} state="ready" onReload={onReload} />);
+    expect(screen.getByText(detail)).toBeInTheDocument();
   });
 });
 

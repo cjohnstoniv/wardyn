@@ -261,12 +261,16 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 	// The runner's answer to this exact binding already settles a re-assert of
 	// it (the lease sweep queues a kept run's stop every pass), so it is
 	// returned, not repeated. A deferred answer is no answer, and one before a
-	// successful recover_containment stopped what the recovery reopened.
+	// successful recover_containment stopped what the recovery reopened. Nor is a
+	// kill the runner refused that its teardown hold (run_teardown_holds) reports
+	// finished after, on the runner's clock: queued again, the runner applies it.
 	done, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions t
 		WHERE t.run_id = $1 AND t.kind = $2 AND t.ref = $3 AND t.applied_at IS NOT NULL AND t.outcome <> 'deferred'
 		AND t.execution_generation IS NOT DISTINCT FROM $4 AND t.containment_lost_at IS NOT DISTINCT FROM $5
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = t.run_id AND r.kind = 'recover_containment'
 			AND r.outcome = 'success' AND r.queue_seq > t.queue_seq)
+		AND NOT (t.kind = 'kill' AND t.outcome = 'refused' AND EXISTS (SELECT 1 FROM run_teardown_holds h
+			WHERE h.run_id = t.run_id AND h.cleared_at > t.observed_at))
 		ORDER BY t.queue_seq DESC LIMIT 1`, a.RunID, string(a.Kind), a.Ref, generationArg, a.LostAt))
 	if err == nil && sameRunnerAction(done, a) {
 		return done, false, nil
