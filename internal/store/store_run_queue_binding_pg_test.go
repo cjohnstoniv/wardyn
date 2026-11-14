@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // A queued run's start under a namespace binding holds only while the binding exists: a delete still in
@@ -40,7 +41,7 @@ func TestPG_QueueStart_WaitsForABindingDeleteAndThenRefuses(t *testing.T) {
 	}
 	got := make(chan error, 1)
 	go func() {
-		_, _, err := pg.StartQueuedRun(ctx, run.ID, store.QueueStart{SPIFFEID: "spiffe://x/bound", Binding: &b.ID})
+		_, _, err := pg.StartQueuedRun(ctx, run.ID, store.QueueStart{SPIFFEID: "spiffe://x/bound", ConfinementClass: types.CC2, Binding: &b.ID})
 		got <- err
 	}()
 	select {
@@ -63,7 +64,7 @@ func TestPG_QueueStart_WaitsForABindingDeleteAndThenRefuses(t *testing.T) {
 		t.Fatalf("the refused start wrote %q", r.SPIFFEID)
 	}
 	standing := bind("team-b")
-	if started, ok, err := pg.StartQueuedRun(ctx, run.ID, store.QueueStart{SPIFFEID: "spiffe://x/bound", Binding: &standing.ID}); err != nil || !ok ||
+	if started, ok, err := pg.StartQueuedRun(ctx, run.ID, store.QueueStart{SPIFFEID: "spiffe://x/bound", ConfinementClass: types.CC2, Binding: &standing.ID}); err != nil || !ok ||
 		started.SPIFFEID != "spiffe://x/bound" {
 		t.Fatalf("start under a standing binding = %+v, %v, %v; want it written", started, ok, err)
 	}
