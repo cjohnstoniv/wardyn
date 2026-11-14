@@ -237,8 +237,9 @@ func TestToOrgHost(t *testing.T) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
-	// A zoned address is dialled with no server name too, and its certificate can name it only as text.
-	zoned, _ := tc.mintLeaf(t, []net.IP{net.ParseIP("10.0.0.5")}, "fe80::9%eth0")
+	// A zoned address is dialled with no server name too, and since go 1.27
+	// the handshake checks it against the certificate's IP addresses, zone dropped.
+	zoned, _ := tc.mintLeaf(t, []net.IP{net.ParseIP("10.0.0.5"), net.ParseIP("fe80::9")})
 	zp, _ := url.Parse("https://[fe80::9%25eth0]:3128")
 	if toOrgHost(tls.ConnectionState{PeerCertificates: []*x509.Certificate{zoned}}, "10.0.0.5", zp) {
 		t.Error("an https proxy at a zoned address the certificate names: true, want false")

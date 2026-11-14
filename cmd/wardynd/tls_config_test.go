@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -155,8 +154,12 @@ func TestLoadTLSConfig_CertNotModeChecked(t *testing.T) {
 // installs). Exercises the actual seam both listeners go through
 // (tlsConfigForListener, boot_serve.go) rather than a hand-rolled Clone(), so
 // reverting that seam back to handing out posture.tlsConfig itself turns this
-// red — starts two real TLS listeners off what it returns and proves the
-// ORIGINAL loaded config is left untouched.
+// red — starts two real TLS listeners off what it returns and proves each has
+// its own config and the ORIGINAL loaded config is left untouched.
+//
+// Since go 1.27 net/http adds "h2" to ServeTLS's own clone rather than to
+// s.TLSConfig, so the identity checks, not NextProtos, are what turn a shared
+// config red; the h2 handshake proves the HTTP/2 setup still ran.
 func TestListenersDoNotShareOneTLSConfig(t *testing.T) {
 	certPEM, keyPEM := genTestTLSKeyPair(t)
 	dir := t.TempDir()
@@ -193,13 +196,17 @@ func TestListenersDoNotShareOneTLSConfig(t *testing.T) {
 			_ = srv.Shutdown(ctx)
 		})
 		// ServeTLS's HTTP/2 setup runs before it starts accepting, so a
-		// successful dial proves that setup already ran on srv's OWN clone.
+		// successful h2 dial proves that setup already ran.
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			//nolint:gosec // test-only dial against our own self-signed cert
-			conn, derr := tls.Dial("tcp", ln.Addr().String(), &tls.Config{InsecureSkipVerify: true})
+			conn, derr := tls.Dial("tcp", ln.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
 			if derr == nil {
+				proto := conn.ConnectionState().NegotiatedProtocol
 				conn.Close()
+				if proto != "h2" {
+					t.Fatalf("listener negotiated %q, want h2 — the test's premise (ServeTLS sets up HTTP/2) does not hold", proto)
+				}
 				return srv
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -211,8 +218,8 @@ func TestListenersDoNotShareOneTLSConfig(t *testing.T) {
 	srv1 := startOne(t)
 	srv2 := startOne(t)
 
-	if !slices.Contains(srv1.TLSConfig.NextProtos, "h2") || !slices.Contains(srv2.TLSConfig.NextProtos, "h2") {
-		t.Fatal("neither listener's own TLSConfig clone was set up for HTTP/2 — the test's premise (H2 setup mutates TLSConfig) does not hold; check net/http's onceSetNextProtoDefaults")
+	if srv1.TLSConfig == base || srv2.TLSConfig == base || srv1.TLSConfig == srv2.TLSConfig {
+		t.Fatal("the listeners share a *tls.Config, with each other or with the loaded one — each must use its own .Clone()")
 	}
 	if len(base.NextProtos) != 0 {
 		t.Fatalf("the ORIGINAL shared config was mutated: base.NextProtos = %v, want untouched (empty) — each listener must use its own .Clone()", base.NextProtos)
