@@ -8,7 +8,11 @@
 // only what an admin registered, so a Mac disk never appears there. Paged by the server's own total.
 //
 // Delete is DELETE /drives/member/{id} behind the same confirm as the registry's. A disk drive whose Mac is offline
-// stays "Deleting" until it returns, so the row says so after the refresh rather than claiming it is gone.
+// stays "Deleting" until it returns, so the row says so after the refresh rather than claiming it is gone. One whose
+// Mac is no longer registered loses only its record (outcome record_only): the confirm stays up with the sentence a
+// person gets for their own drive, since the row is gone and its disk is not, even when that was the last drive. A
+// disk on a Mac gets a confirm that says both cases before the click. While the delete is in flight the
+// confirm cannot be closed, and an answer for a confirm that was closed since never touches a newer one.
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import {
@@ -18,6 +22,7 @@ import {
 import { runners as runnersApi } from "../../../lib/api/runners";
 import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
+import { DRIVE_REFUSAL } from "../../../lib/drive-refusals";
 import { DRIVES, PEOPLE, ACCESS_STATE } from "../../../lib/user-drives-copy";
 import { SCIM } from "../../../lib/scim-copy";
 import { driveSizeLabel } from "../../../lib/user-drives-display";
@@ -37,6 +42,7 @@ import { Mono } from "../../wardyn/code-block";
 import { MAC_DRIVES } from "../../wardyn/copy/mac-drives";
 import { MEMBER_DRIVES as T } from "../../wardyn/copy/member-drives";
 import { NR_FILES } from "../../wardyn/copy/new-run/files";
+import { NR_SHARED } from "../../wardyn/copy/new-run/shared";
 import { POOLS } from "../../wardyn/copy/runner-pools";
 import { Chip } from "../../wardyn/primitives";
 import { Note } from "./display";
@@ -60,6 +66,10 @@ export function MemberDrives() {
   const [toDelete, setToDelete] = React.useState<MemberDriveAdminItem | null>(null);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // The sentence for a delete that removed only the record; the confirm then shows it and a close button.
+  const [recordOnly, setRecordOnly] = React.useState<string | null>(null);
+  // Counts every open and close of the confirm, so a delete's answer acts only on the confirm it was sent from.
+  const openCount = React.useRef(0);
 
   // The first page replaces what is shown (after a delete the list is read again from the top); a later page adds to it.
   const load = React.useCallback((offset: number) => {
@@ -86,21 +96,38 @@ export function MemberDrives() {
     runnersApi.list("all").then((rs) => setMacs(Object.fromEntries(rs.map((r) => [r.id, r.name])))).catch(() => setMacs({}));
   }, [showMacs]);
 
+  const openDelete = (d: MemberDriveAdminItem | null) => {
+    openCount.current += 1;
+    setDeleteError(null);
+    setRecordOnly(null);
+    setToDelete(d);
+  };
+
   const del = async (d: MemberDriveAdminItem) => {
+    const open = openCount.current;
     setBusy(true);
     try {
-      await api.deleteMemberDrive(d.id);
-      setToDelete(null);
-      await load(0);
+      const res = await api.deleteMemberDrive(d.id);
+      if (open === openCount.current) {
+        if (res.outcome === "record_only") {
+          const mac = d.home_runner_id ? macs[d.home_runner_id] : undefined;
+          setRecordOnly(mac ? DRIVE_REFUSAL.MEMBER_RECORD_ONLY(mac) : T.RECORD_ONLY_UNNAMED);
+        } else {
+          openDelete(null);
+        }
+      }
     } catch (e) {
       // The substrate's own refusal, as the server worded it.
-      setDeleteError(getErrorMessage(e));
+      if (open === openCount.current) setDeleteError(getErrorMessage(e));
+      return;
     } finally {
       setBusy(false);
     }
+    await load(0);
   };
 
-  if (status === "loading" || status === "hidden" || (status === "ready" && total === 0)) return null;
+  // The record-only sentence outlives the list: deleting the last drive empties it, and the confirm must stay up.
+  if (!recordOnly && (status === "loading" || status === "hidden" || (status === "ready" && total === 0))) return null;
 
   return (
     <section data-testid="member-drives" className="mt-6 overflow-clip rounded-xl border border-border bg-card">
@@ -148,10 +175,7 @@ export function MemberDrives() {
                           variant="ghost"
                           size="sm"
                           aria-label={`${DRIVES.DELETE} ${d.name}`}
-                          onClick={() => {
-                            setDeleteError(null);
-                            setToDelete(d);
-                          }}
+                          onClick={() => openDelete(d)}
                         >
                           {DRIVES.DELETE}
                         </Button>
@@ -174,30 +198,49 @@ export function MemberDrives() {
         </>
       )}
 
-      <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
+      <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && !busy && openDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{toDelete ? NR_FILES.DELETE_CONFIRM(toDelete.name) : ""}</AlertDialogTitle>
+            <AlertDialogTitle className={recordOnly ? "sr-only" : undefined}>
+              {recordOnly
+                ? NR_FILES.DELETE_DRIVE
+                : toDelete
+                  ? toDelete.home_runner_id
+                    ? T.DELETE_CONFIRM_MAC(toDelete.name)
+                    : NR_FILES.DELETE_CONFIRM(toDelete.name)
+                  : ""}
+            </AlertDialogTitle>
             <AlertDialogDescription className="sr-only">{toDelete?.owner}</AlertDialogDescription>
           </AlertDialogHeader>
+          {recordOnly && (
+            <Note tone="amber" role="status">
+              <span>{recordOnly}</span>
+            </Note>
+          )}
           {deleteError && (
             <Note tone="red" role="alert">
               <span>{deleteError}</span>
             </Note>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
-              disabled={busy}
-              onClick={(e) => {
-                e.preventDefault();
-                if (toDelete) void del(toDelete);
-              }}
-            >
-              {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-              {DRIVES.DELETE}
-            </AlertDialogAction>
+            {recordOnly ? (
+              <AlertDialogCancel>{NR_SHARED.CLOSE_DIALOG}</AlertDialogCancel>
+            ) : (
+              <>
+                <AlertDialogCancel disabled={busy}>{PEOPLE.CANCEL}</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-danger text-danger-foreground hover:bg-danger/90"
+                  disabled={busy}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (toDelete) void del(toDelete);
+                  }}
+                >
+                  {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+                  {DRIVES.DELETE}
+                </AlertDialogAction>
+              </>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

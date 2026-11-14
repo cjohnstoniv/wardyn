@@ -155,6 +155,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run scheduled for later no longer starts at once when scheduled runs are turned off while its Name dialog is open: the Run step, Review and the dialog say it is held, with the reason, Launch waits, and the run starts now only when you choose Run now. A start time that the clocks skip or repeat on a daylight-saving change is now refused, in the console and by `POST /runs` (`start_at_invalid` with `detail` `clock_change`), instead of being moved to another time; an RFC 3339 `start_at` with its UTC offset still names one occurrence of a repeated hour.
 - `GET /api/v1/scim/status` now reports a purge delay under one second as `purge_after_seconds: 1` instead of 0, which the console showed as off while the purge still ran.
 - Go SDK: the new `WorkloadHistoryPage` also returns the server's `X-Wardyn-Truncated` signal, which `WorkloadHistory` drops; with no limit given, a history longer than 200 events comes back as one page of 200 events with no sign that more exist.
+- Drives, People's drives: the confirm for deleting a disk drive on a Mac now says that the disk stays on its Mac if the Mac is no longer registered, and after such a delete it says that only the record was removed; before, it said the drive's files were deleted and closed. The confirm can no longer be closed while its delete is in flight. The confirm a person gets for deleting their own disk drive on a Mac, in the Add dialog of a new run, now says the same before the click.
 
 ### Security
 
