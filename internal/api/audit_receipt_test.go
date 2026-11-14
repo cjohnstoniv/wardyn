@@ -405,6 +405,36 @@ func TestAuditReceipt_RecordsReceiptCreate(t *testing.T) {
 	}
 }
 
+// Retention dropped seqs 1-4, so checkpoint 4-6 lost its first row: a receipt for an event in it is refused
+// 409 audit_receipt_proof_unavailable and audited as a failure, never served as a bundle verify rejects. An
+// event in a checkpoint retention left whole still gets a receipt that verifies.
+func TestAuditReceipt_ProofUnavailableAfterRetention409(t *testing.T) {
+	w := newReceiptWorld(t, 3)
+	w.fake.rows, w.fake.lists[4] = w.fake.rows[4:], w.fake.lists[4][1:]
+	delete(w.fake.lists, 1)
+	srv, h := w.server(t)
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	rec := doSSO(t, srv, http.MethodGet, eventQuery(w.ids[5]), admin, "")
+	if rec.Code != http.StatusConflict || respReason(rec) != "audit_receipt_proof_unavailable" {
+		t.Fatalf("an event in the cut checkpoint = %d %s, want 409 audit_receipt_proof_unavailable", rec.Code, rec.Body.String())
+	}
+	var rows []string
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "audit.receipt.create" {
+			var d map[string]any
+			_ = json.Unmarshal(ev.Data, &d)
+			rows = append(rows, fmt.Sprintf("%s %s %v", ev.Outcome, ev.Target, d["reason"]))
+		}
+	}
+	if want := "failure " + w.ids[5].String() + " audit_receipt_proof_unavailable"; len(rows) != 1 || rows[0] != want {
+		t.Fatalf("audit.receipt.create rows %q, want one %q", rows, want)
+	}
+	rec = doSSO(t, srv, http.MethodGet, eventQuery(w.ids[6]), admin, "")
+	if rep := auditreceipt.VerifyBundle(decodeReceipt(t, rec).Bundle, w.keys()); rec.Code != http.StatusOK || !rep.Complete() {
+		t.Fatalf("an event in a whole checkpoint = %d, failures %+v; want 200 and a receipt that verifies", rec.Code, rep.Failures)
+	}
+}
+
 // The checkpoint export is signatures and links only, paged by after_seq; the keys route serves what verify pins.
 func TestAuditReceipt_CheckpointsAndKeys(t *testing.T) {
 	w := newReceiptWorld(t, 3)

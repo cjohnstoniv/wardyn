@@ -194,3 +194,26 @@ func TestVerifyAuditChain_RemovalReasonsNameTheMissingDrop(t *testing.T) {
 		}
 	}
 }
+
+// The checkpoint range starts from a drop's tail only for a drop that removed rows above the head and
+// recorded a tail; a drop at or below the head, a hashless tail, or no drop leaves the head's hash. Catches
+// a seed that drops the head's own hash when no drop removed rows above it, and one that chains past a
+// hashless dropped range.
+func TestCheckpointRangeSeed(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		dropSeq    int64
+		tail, want string
+		ranged     bool
+	}{
+		{"no drop", 0, "", "head", true},
+		{"a drop below the head", 4, "tail", "head", true},
+		{"a drop that ended at the head", 5, "tail", "head", true},
+		{"a drop above the head", 6, "tail", "tail", false},
+		{"a drop above the head with a hashless tail", 6, "", "head", true},
+	} {
+		if prev, ranged := checkpointRangeSeed(5, "head", c.dropSeq, c.tail); prev != c.want || ranged != c.ranged {
+			t.Errorf("%s: seed %q ranged %v, want %q ranged %v", c.name, prev, ranged, c.want, c.ranged)
+		}
+	}
+}

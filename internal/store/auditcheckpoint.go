@@ -72,6 +72,10 @@ var _ AuditCheckpointer = PG{}
 // the first checkpoint, the head the checkpoints started after; "" only when the chain had no row). So the
 // first row must chain to that head, and a hashless row anywhere in the range is a break, never legacy.
 //
+// One removal is accepted, the one the sweep accepts: when the newest attested retention drop removed rows
+// above afterSeq (signing was behind it, so they were never signed), the first row must chain to that drop's
+// recorded tail instead. A drop that ended at or below afterSeq changes nothing, and any other gap is a break.
+//
 // One repeatable-read, read-only snapshot: audit_append advances hw_seq under the chain lock with the insert,
 // so seq order is commit order and every row at or below the high-water mark read here is already visible.
 // On a break it returns *AuditCheckpointBreak and no rows. highWater is returned with the rows so the caller
@@ -90,6 +94,11 @@ func (s PG) AuditCheckpointRange(ctx context.Context, afterSeq int64, afterHash 
 	if err := tx.QueryRow(ctx, `SELECT hw_seq FROM audit_partition_meta`).Scan(&hw); err != nil {
 		return nil, 0, fmt.Errorf("store: read audit high-water mark: %w", err)
 	}
+	tail, dropSeq, err := newestDropAnchor(ctx, tx, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	prev, ranged := checkpointRangeSeed(afterSeq, afterHash, dropSeq, tail)
 
 	// The column list is the sweep's (VerifyAuditChain), so the walk sees what the sweep sees.
 	rows, err := tx.Query(ctx, `
@@ -111,7 +120,7 @@ func (s PG) AuditCheckpointRange(ctx context.Context, afterSeq int64, afterHash 
 
 	// anchored: a hashless row is a break even as the first one read; ranged: prev began as the row before the
 	// range, not a retention drop's tail.
-	w := &auditChainWalk{st: AuditChainStatus{OK: true}, prev: afterHash, anchored: true, ranged: true}
+	w := &auditChainWalk{st: AuditChainStatus{OK: true}, prev: prev, anchored: true, ranged: ranged}
 	var out []CheckpointRow
 	for rows.Next() {
 		var l auditChainLink
@@ -127,6 +136,16 @@ func (s PG) AuditCheckpointRange(ctx context.Context, afterSeq int64, afterHash 
 		return nil, 0, fmt.Errorf("store: iterate audit checkpoint range: %w", err)
 	}
 	return out, hw, nil
+}
+
+// checkpointRangeSeed is the hash the range's first row must chain to, and whether the walk is ranged: the
+// recorded tail of the newest drop with rows when that drop removed rows above afterSeq, else afterHash. A
+// drop whose tail is "" (a hashless range) leaves nothing to chain to, so the head's hash still counts.
+func checkpointRangeSeed(afterSeq int64, afterHash string, dropSeq int64, tail string) (prev string, ranged bool) {
+	if dropSeq > afterSeq && tail != "" {
+		return tail, false
+	}
+	return afterHash, true
 }
 
 // AuditChainHead is the chain's high-water mark: the seq and row_hash of the newest row ever appended ("" while
