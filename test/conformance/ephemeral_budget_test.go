@@ -22,6 +22,9 @@ import (
 // number, so re-ordering the Makefile does not silently disarm this.
 var makefileTimeoutRe = regexp.MustCompile(`-timeout\s+(\S+)`)
 
+// makefileDefaultTimeoutRe reads the default of the recipe's `CONFORMANCE_K8S_TIMEOUT ?= <dur>` line.
+var makefileDefaultTimeoutRe = regexp.MustCompile(`(?m)^CONFORMANCE_K8S_TIMEOUT \?= (\S+)`)
+
 // ephemeralBudgetSuiteMargin is what the eviction case must leave behind for
 // every OTHER case in the package. 5m against a measured 457 s green run — the
 // margin is the measurement, rounded up, not a round number chosen for comfort.
@@ -63,8 +66,13 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 		if m == nil {
 			t.Fatalf("the k8s conformance recipe carries no -timeout: %q — this case can outrun go test's 10m default", line)
 		}
-		if timeout, err = time.ParseDuration(m[1]); err != nil {
-			t.Fatalf("parse -timeout %q: %v", m[1], err)
+		// The recipe takes its value from CONFORMANCE_K8S_TIMEOUT; this guard checks the default conformance-k8s runs.
+		val := m[1]
+		if d := makefileDefaultTimeoutRe.FindStringSubmatch(string(b)); d != nil && val == "$(CONFORMANCE_K8S_TIMEOUT)" {
+			val = d[1]
+		}
+		if timeout, err = time.ParseDuration(val); err != nil {
+			t.Fatalf("parse -timeout %q: %v", val, err)
 		}
 		break
 	}

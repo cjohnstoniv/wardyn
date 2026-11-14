@@ -465,9 +465,12 @@ test-daemon-proxy-secret-kind: ## WARDYN_DAEMON_PROXY_SECRET on kind, 0440 + 040
 # Routed through scripts/test-report.sh (T-08/G9) — see test-conformance-docker
 # above for why: AgentCannotReachAPIServer, CreateStatusStop and WaitExitCode
 # must-pass here too.
+# conformance-k8s uses the 30m default; the agent-sandbox job passes a longer one, since its keep and warm pool cases
+# add their wait limits (TestAgentSandboxCaseBudgetsFitTheJobTimeout reads it from ci.yml).
+CONFORMANCE_K8S_TIMEOUT ?= 30m
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout 30m ./test/conformance/...
+	WARDYN_TEST_K8S=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout $(CONFORMANCE_K8S_TIMEOUT) ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no

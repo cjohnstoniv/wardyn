@@ -24,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
+	"github.com/cjohnstoniv/wardyn/test/conformance"
 )
 
 const warmConfPool = "conf"
@@ -52,7 +53,7 @@ func warmPoolRunner(t *testing.T) (*asEnv, *orchestrator.Orchestrator) {
 	r := orchestrator.New(sub)
 	t.Cleanup(func() {
 		_ = r.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), conformance.ASWarmCleanupBound)
 		defer cancel()
 		_ = e.cs.CoreV1().Pods(e.ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: "wardyn.component=warm"})
 		_ = e.cs.NetworkingV1().NetworkPolicies(e.ns).Delete(ctx, "wardyn-warm-deny", metav1.DeleteOptions{})
@@ -97,7 +98,7 @@ func waitReadyPlaceholder(ctx context.Context, t *testing.T, e *asEnv, limit tim
 func TestWarmPoolPlaceholderHoldsNothing(t *testing.T) {
 	e, _ := warmPoolRunner(t)
 	ctx := context.Background()
-	listed := waitReadyPlaceholder(ctx, t, e, 180*time.Second)
+	listed := waitReadyPlaceholder(ctx, t, e, conformance.ASWarmReadyWait)
 	pod, err := e.cs.CoreV1().Pods(e.ns).Get(ctx, listed.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("re-read the placeholder: %v", err)
@@ -132,7 +133,7 @@ func TestWarmPoolPlaceholderHoldsNothing(t *testing.T) {
 func TestWarmPoolPlaceholderClaimedAndRefilled(t *testing.T) {
 	e, r := warmPoolRunner(t)
 	ctx := context.Background()
-	held := waitReadyPlaceholder(ctx, t, e, 180*time.Second)
+	held := waitReadyPlaceholder(ctx, t, e, conformance.ASWarmReadyWait)
 	node := held.Spec.NodeName
 	runID := uuid.New()
 	sb, err := e.startRun(ctx, t, r, runID, func(s *runner.SandboxSpec) {
@@ -169,7 +170,7 @@ func TestWarmPoolPlaceholderClaimedAndRefilled(t *testing.T) {
 	if agentPod.Status.Phase != corev1.PodRunning {
 		t.Errorf("the agent pod is %s, want Running", agentPod.Status.Phase)
 	}
-	refilled := waitReadyPlaceholder(ctx, t, e, 120*time.Second, held.UID)
+	refilled := waitReadyPlaceholder(ctx, t, e, conformance.ASWarmRefillWait, held.UID)
 	if refilled.UID == held.UID {
 		t.Error("the pool did not refill with a new placeholder")
 	}
