@@ -1426,7 +1426,7 @@ jobs:
       WARDYN_CHART_VALUES: >-
         --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
         --set serviceAccount.automount=true --set k8s.enabled=true --set k8s.proxyImage=wardyn/wardyn-proxy:kind-test
-        --set k8s.runsNamespace=wardyn-conformance --set k8s.agentSandbox.enabled=true
+        --set k8s.runsNamespace=wardyn-conformance --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep.enabled=true
     steps:
       - name: Free disk for the images and the kind node
         run: |
@@ -1694,7 +1694,8 @@ jobs:
           for t in TestAgentSandboxBackendIsReallyOn TestAgentSandboxNetworkPolicyFirst TestAgentSandboxSquatterPodIsRefused \
                    TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission \
                    TestAgentSandboxStagedSecretStarts \
-                   TestAgentSandboxKeepProxyThroughService TestAgentSandboxKeepEndpointSliceElsewhereIsDropped TestAgentSandboxKeepLiveReplaceProxy TestAgentSandboxKeepAPISequence; do
+                   TestAgentSandboxKeepProxyThroughService TestAgentSandboxKeepEndpointSliceElsewhereIsDropped TestAgentSandboxKeepLiveReplaceProxy TestAgentSandboxKeepAPISequence \
+                   TestWarmPoolPlaceholderHoldsNothing TestWarmPoolPlaceholderClaimedAndRefilled; do
             if grep -qF "\"Action\":\"pass\",\"Package\":\"github.com/cjohnstoniv/wardyn/test/conformance\",\"Test\":\"$t\"" "$out"; then
               echo "passed: $t"
             else

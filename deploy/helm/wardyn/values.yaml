@@ -730,6 +730,21 @@ k8s:
     # from the v1.0.9 extensions.yaml, not its controller. Set adds `get` on that one sandboxtemplate to the
     # runner Role. Empty (default) uses none. Needs enabled=true.
     template: ""
+    # Experimental: keep an ended interactive claude-code or codex-cli run whose work folder is a kept drive, and
+    # revive it, on this backend. Each interactive run with a kept work folder reaches its proxy through its own
+    # Service, so the Role gains services and endpointslices verbs.
+    # Drain kept runs before turning it off. docs/operations/kubernetes-agent-sandbox.md#keep-and-revive
+    keep:
+      enabled: false
+  # Experimental: idle placeholder pods per pool that hold room on a node with the pool's image pulled; a run that fits a
+  # pool prefers that node. Each placeholder reserves cpu + memory plus a proxy's share, all the time.
+  # Entries: {name, image, class: CC1|CC2|CC3, cpu, memory, size (0-20; 50 in all)}. docs/operations/kubernetes-warm-pools.md
+  warmPools: []
+  warmPoolPriorityClass:
+    # Render a PriorityClass (value -10, preemptionPolicy Never) so placeholders never delay or evict a run.
+    create: true
+    # Defaults to "<fullname>-warm-placeholder". Set create=false and a name to use an existing class.
+    name: ""
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu; the chart README has a Kata example). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime
