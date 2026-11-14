@@ -118,20 +118,31 @@ func TestRecordingOutput_GapThenLateCommittedUpload(t *testing.T) {
 	}
 }
 
-// A later part that cannot be read makes the recovery a gap, not a shorter cast stored as the run's output:
-// a gap is read again later (repairRecordingOutput), a recovered row is not.
-func TestRecordingOutput_ALaterPartReadErrorIsAGap(t *testing.T) {
+// A later part that cannot be read fails the recovery as part 1's read error does: the source is unavailable, so
+// no shorter cast is stored as the run's output and the work stays pending for the sweep to read again.
+func TestRecordingOutput_ALaterPartReadErrorStaysPending(t *testing.T) {
 	f, rs := newRecordingOutputFixture(t)
 	saveOutputCast(t, rs, f.run.ID, partsHeader+`[0,"o","part one marker\n"]`+"\n")
+	var part2 atomic.Bool
 	rs.open = func(ctx context.Context, key string) (io.ReadCloser, error) {
 		if strings.HasSuffix(key, recording.PartSuffix(2)) {
+			part2.Store(true)
 			return io.NopCloser(iotest.ErrReader(errors.New("part 2: input/output error"))), nil
 		}
 		return rs.Store.OpenCast(ctx, key)
 	}
 	f.srv.FinishRunOutput(t.Context(), f.run.ID)
-	if r := f.finalRow(t); !r.CaptureGap || len(r.Output) != 0 {
-		t.Fatalf("row = %+v, want a gap with no output", r)
+	if !part2.Load() {
+		t.Fatal("the recovery never reached part 2")
+	}
+	if r, found := f.mem.row(f.run.ID); found {
+		t.Fatalf("row = %+v, want none: a recovery that failed on a later part stores nothing", r)
+	}
+	f.mem.mu.Lock()
+	p := f.mem.recording[f.run.ID]
+	f.mem.mu.Unlock()
+	if p.requested <= p.completed {
+		t.Fatalf("recording work %+v, want it still pending", p)
 	}
 }
 
