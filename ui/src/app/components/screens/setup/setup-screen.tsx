@@ -656,7 +656,7 @@ export function SetupScreen({
     );
   }
 
-  // A manually-opened funnel against a daemon that didn't answer: say THAT,
+  // A manually-opened funnel whose setup status read failed: say THAT,
   // instead of rendering step bodies (no-runner danger card, "Needs setup"
   // badges) built from the synthetic fallback's made-up fields.
   if (status.unreachable) {
@@ -666,11 +666,11 @@ export function SetupScreen({
           Getting started
         </h1>
         <div className="mt-4 max-w-xl rounded-lg border border-border bg-muted/40 p-4">
-          <p className="text-sm text-foreground">Couldn&apos;t reach Wardyn.</p>
+          <p className="text-sm text-foreground">Couldn&apos;t load setup status.</p>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            The setup status request didn&apos;t get an answer, so nothing on
-            this page would be accurate. Check that the Wardyn service is
-            running and reachable from this browser, then re-check.
+            The setup status request failed, so nothing on this page would be
+            accurate. Check that the Wardyn service is running and reachable
+            from this browser, then re-check.
           </p>
           <button
             className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted disabled:opacity-50"

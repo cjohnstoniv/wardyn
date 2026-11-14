@@ -478,7 +478,7 @@ test.describe("error boundary (no spurious fallback)", () => {
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/navigation.spec.ts
 test.describe("the unreachable banner sees a store outage", () => {
   // ticket: R4/F066
-  const BANNER = /Control plane unreachable — showing the last data received/i;
+  const BANNER = /Control plane not available — showing the last data received/i;
 
   test("a live daemon with an unreachable store raises the banner", async ({ page }) => {
     // /healthz keeps saying "ok" — it is liveness, and it is telling the truth.

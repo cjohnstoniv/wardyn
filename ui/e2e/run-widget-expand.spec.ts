@@ -283,7 +283,7 @@ test.describe("the control-plane banner stays above the expanded view", () => {
       paths = 60;
       await page.route("**/readyz", (route) => route.fulfill({ status: 503, json: { status: "unavailable" } }));
       await openRun(page, viewport);
-      const banner = page.getByRole("status").filter({ hasText: "Control plane unreachable" });
+      const banner = page.getByRole("status").filter({ hasText: "Control plane not available" });
       await expect(banner).toBeVisible();
       const b = (await banner.boundingBox())!;
       if (wraps) expect(b.height).toBeGreaterThan(40);
@@ -298,7 +298,7 @@ test.describe("the control-plane banner stays above the expanded view", () => {
     await page.route("**/readyz", (route) => route.fulfill({ status: 503, json: { status: "unavailable" } }));
     await openRun(page, { width: 320, height: 568 });
     // A CSS locator: the open modal hides the rest of the page from the accessibility tree.
-    const banner = page.locator('[role="status"]', { hasText: "Control plane unreachable" });
+    const banner = page.locator('[role="status"]', { hasText: "Control plane not available" });
     await expect(banner).toBeVisible();
     await page.getByRole("button", { name: RUN_COCKPIT.expandWidget("Egress") }).click();
     const dialog = (await page.getByRole("dialog", { name: "Egress" }).boundingBox())!;

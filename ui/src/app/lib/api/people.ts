@@ -6,12 +6,12 @@
 // The admin People page's reads and writes (internal/api/people.go, sessions.go, sshkeys_admin.go).
 // All securityOps: admin or security admin. Stored-credential erase is credentials.erase.
 import type { PersonList, PersonSummary, PersonToken } from "../types";
-import { asJson, errText, HttpError, LIST_LIMIT, unwrapList, wfetch } from "./core";
+import { asJson, asNoContent, LIST_LIMIT, unwrapList, wfetch } from "./core";
 
 const seg = (principal: string) => encodeURIComponent(principal);
 
 async function ok(res: Response): Promise<Response> {
-  if (!res.ok) throw new HttpError(res.status, await errText(res));
+  await asNoContent(res);
   return res;
 }
 

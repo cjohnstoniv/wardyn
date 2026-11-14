@@ -176,6 +176,20 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(getSetupStatusMock).not.toHaveBeenCalled();
   });
 
+  // A failed status read stands in a made-up status with no classes and no provider. Literals on purpose, so no
+  // sentence can drift.
+  it("first run, admin: a failed setup status read says the barrier and the model provider couldn't be checked", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ unreachable: true, has_runs: false, runner: { driver: "none", confinement_classes: [] } }),
+    );
+    renderScreen("admin");
+    await screen.findByText("No runs yet");
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    expect(await screen.findAllByText("Couldn't check.")).toHaveLength(2);
+    expect(screen.queryByText("None available on this host.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not connected — agent runs need one\./)).not.toBeInTheDocument();
+  });
+
   it("first run, Admin view: the inline empty state, no composer", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: false }));
     renderScreen(undefined, "/admin/runs");

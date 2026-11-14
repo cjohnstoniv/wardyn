@@ -22,6 +22,7 @@ import { CC_ORDER } from "../../lib/types";
 import type { Readiness } from "../../lib/readiness";
 import { Button } from "../ui/button";
 import { CC_META } from "../wardyn/cc-meta";
+import { NO_BARRIER } from "../wardyn/copy";
 
 // Lazy on purpose. /runs is EAGER (App.tsx keeps it unlazied), so anything this
 // module imports statically lands in the entry chunk — and the demo catalog is
@@ -39,11 +40,15 @@ const FirstRunDemoGrid = React.lazy(() => import("./runs-first-run-demos"));
 // status the no-barrier banner above uses — never a second, disagreeing check.
 export function RunsFirstRun({
   readiness,
+  statusUnknown,
   confinementClasses,
   secretNames,
   onNewRun,
 }: {
   readiness: Readiness | null;
+  // The setup status read failed and `readiness` comes off the made-up stand-in: both rows say they could not
+  // check, never that the host has no barrier or no model provider.
+  statusUnknown?: boolean;
   confinementClasses: ConfinementClass[];
   // Stored secret NAMES (SetupStatus.secrets.present) — the same list the demo
   // steps' own gate reads, so a card can't offer a "Run it" for a demo whose
@@ -76,7 +81,7 @@ export function RunsFirstRun({
           <li className="flex items-start gap-3 p-3.5">
             {/* Never a green check when there's genuinely nothing available —
                 that would contradict the no-barrier blocker banner above. */}
-            {!barrierLoaded ? (
+            {!barrierLoaded || statusUnknown ? (
               <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             ) : barrierLabels.length > 0 ? (
               <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" />
@@ -86,11 +91,13 @@ export function RunsFirstRun({
             <div className="min-w-0">
               <div className="text-sm font-medium text-foreground">Sandbox barrier</div>
               <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
-                {!barrierLoaded
-                  ? "Checking…"
-                  : barrierLabels.length > 0
-                    ? `${barrierLabels.join(", ")} available on this host.`
-                    : "None available on this host."}
+                {statusUnknown
+                  ? NO_BARRIER.UNCHECKED_ROW
+                  : !barrierLoaded
+                    ? "Checking…"
+                    : barrierLabels.length > 0
+                      ? `${barrierLabels.join(", ")} available on this host.`
+                      : "None available on this host."}
               </p>
             </div>
           </li>
@@ -106,7 +113,9 @@ export function RunsFirstRun({
             <div className="min-w-0">
               <div className="text-sm font-medium text-foreground">Model provider</div>
               <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
-                {llmReady ? (
+                {statusUnknown ? (
+                  NO_BARRIER.UNCHECKED_ROW
+                ) : llmReady ? (
                   `Connected${readiness?.llmLabel ? ` — ${readiness.llmLabel}` : ""}.`
                 ) : (
                   <>

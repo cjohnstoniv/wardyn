@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
 import { ELEV } from "../../wardyn/copy/elevation";
+import { answeredSentence } from "../../wardyn/states";
 import { DurationField } from "../../wardyn/duration-field";
 import { Field, fieldHintId } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
@@ -35,7 +36,7 @@ const CUSTOM_UNITS = [
 ];
 
 type Length = number | "custom";
-type Units = { status: "loading" } | { status: "failed" } | { status: "ready"; offers: ElevationOffer[] };
+type Units = { status: "loading" } | { status: "failed"; text: string } | { status: "ready"; offers: ElevationOffer[] };
 type Refusal = { text: string; mono: boolean };
 
 export function ElevationRequestDialog({
@@ -94,7 +95,7 @@ function RequestForm({
     let live = true;
     requests.list().then(
       (list) => live && setLoaded({ status: "ready", offers: list?.offered ?? [] }),
-      () => live && setLoaded({ status: "failed" }),
+      (e: unknown) => live && setLoaded({ status: "failed", text: answeredSentence(e, ELEV.UNITS_LOAD_FAILED) ?? ELEV.UNITS_FAILED_BODY }),
     );
     return () => {
       live = false;
@@ -203,7 +204,7 @@ function RequestForm({
       ) : units.status === "failed" || (units.status === "ready" && !offer) ? (
         <Note tone="red" role="alert">
           <span className="font-semibold">{ELEV.UNITS_FAILED_TITLE}</span>
-          <span>{units.status === "failed" ? ELEV.UNITS_FAILED_BODY : ELEV.NOT_OFFERED_ANY}</span>
+          <span>{units.status === "failed" ? units.text : ELEV.NOT_OFFERED_ANY}</span>
           {!given && (
             <Button type="button" variant="outline" size="sm" className="mt-1 w-fit" onClick={retry}>
               {ELEV.RETRY}

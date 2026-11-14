@@ -73,6 +73,18 @@ describe("/open/{run}/{app}", () => {
     expect(enterMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["no answer", {}, "Wardyn isn't answering. Try again."],
+    ["a 503", { failedStatus: 503 }, "Wardyn couldn't open this app. Try again."],
+    ["a 403", { failedStatus: 403 }, "Wardyn couldn't open this app."],
+    ["a 2xx body that does not parse", { failedStatus: 200 }, "Wardyn's answer couldn't be read."],
+  ])("a health read with %s says so without asking for a ticket", async (_name, h, text) => {
+    healthMock.mockResolvedValue(h);
+    open();
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+    expect(appTicketMock).not.toHaveBeenCalled();
+  });
+
   it("says the gateway is off without asking for a ticket", async () => {
     healthMock.mockResolvedValue({ status: "ok" });
     open();

@@ -373,10 +373,13 @@ export const health = {
   // (or unreadable), degraded = stale heartbeat, idle = beating with no kernel events, none
   // new in 15 minutes or none known yet, healthy = fresh beats AND new kernel events. Absent on an older daemon.
   async health(): Promise<{
-    // "ok" iff the daemon actually answered — the {} returned below on a
+    // "ok" iff the daemon actually answered — what is returned below on a
     // network error or a non-2xx has none, which is how the shell's heartbeat
     // (App.tsx) reads "control plane unreachable".
     status?: string;
+    // The status of an answer that was not a readable 2xx body; absent on a real body and on no answer ({}),
+    // so a caller can tell a failed answer from none without asking again.
+    failedStatus?: number;
     trust_domain?: string;
     identity_provider?: string;
     runner?: string;
@@ -485,6 +488,7 @@ export const health = {
     // on an older daemon. The card's Get the CLI lines fetch from it when present.
     cli_artifact_base?: string;
   }> {
+    let res: Response;
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
       // that cannot go through wfetch — and therefore the one that has to
@@ -496,15 +500,20 @@ export const health = {
       // Signed in, the body also carries components: the session cookie rides
       // on credentials:"include", and the admin token, when one is set, here.
       const token = getToken();
-      const res = await fetch(appURL("/healthz"), {
+      res = await fetch(appURL("/healthz"), {
         credentials: "include",
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS),
       });
-      if (!res.ok) return {};
-      return (await res.json()) as Record<string, unknown>;
     } catch {
       return {};
+    }
+    if (!res.ok) return { failedStatus: res.status };
+    try {
+      return (await res.json()) as Record<string, unknown>;
+    } catch (e) {
+      // Only a body that does not parse is an answer; a body read that broke off or ran out of time is none.
+      return e instanceof SyntaxError ? { failedStatus: res.status } : {};
     }
   },
 

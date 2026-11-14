@@ -382,6 +382,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // The held elevation requests: the person's own ("Your requests") and the ones they may decide. A failed read
   // after a good one keeps the last good list.
   const [elevation, setElevation] = React.useState<GovernanceRequestList | null | "loading" | "error">("loading");
+  // What the failed read threw, so the "error" state can say whether Wardyn answered.
+  const [elevationError, setElevationError] = React.useState<unknown>(null);
   const deciderRequests =
     !securityOperator && typeof elevation === "object" && elevation !== null
       ? elevation.requests.filter((r) => (r.kind === "elevation" || r.kind === "image") && r.decidable && r.state === "pending")
@@ -454,7 +456,10 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             }),
           ]).then(() => undefined)
         : fetchPending();
-    const elevationRead = fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    const elevationRead = fetchElevation().catch((e: unknown) => {
+      setElevationError(e);
+      setElevation((cur) => (typeof cur === "object" ? cur : "error"));
+    });
     return Promise.all([main, waitingRead, elevationRead]).then(() => undefined);
   }, [fetchPending, fetchDecided, fetchWaiting, fetchElevation, view]);
   const loadWaiting = React.useCallback(() => {
@@ -506,11 +511,17 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   }, [wantsUnitNames]);
 
   React.useEffect(() => {
-    void fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    void fetchElevation().catch((e: unknown) => {
+      setElevationError(e);
+      setElevation((cur) => (typeof cur === "object" ? cur : "error"));
+    });
   }, [fetchElevation]);
   const reloadElevation = React.useCallback(() => {
     setElevation((cur) => (cur === "error" ? "loading" : cur));
-    fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    fetchElevation().catch((e: unknown) => {
+      setElevationError(e);
+      setElevation((cur) => (typeof cur === "object" ? cur : "error"));
+    });
   }, [fetchElevation]);
 
   const load = React.useCallback(() => {
@@ -692,7 +703,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <p className="mb-4 text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
       )}
 
-      <MyElevationRequests list={elevation} onReload={reloadElevation} />
+      <MyElevationRequests list={elevation} error={elevationError} onReload={reloadElevation} />
 
       <Tabs value={shown} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
         <TabsList>

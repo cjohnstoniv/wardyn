@@ -15,6 +15,8 @@ every row with it byte for byte.
 | REAUTH_DIALOG.POPUP_FALLBACK | Open it in a new tab | Dialog, link after POPUP_BLOCKED |
 | REAUTH_DIALOG.CLOSED_WITHOUT | That window closed before you signed in. | Dialog, SSO window closed with no session |
 | REAUTH_DIALOG.UNREACHABLE | Wardyn isn't answering. This page is still here — try again in a moment. | Dialog, daemon unreachable |
+| REAUTH_DIALOG.CHECK_FAILED | Wardyn couldn't check your session. This page is still here — try again in a moment. | Dialog, a 5xx from the session check that names no sentence of its own |
+| REAUTH_DIALOG.CHECK_FAILED_FINAL | Wardyn couldn't check your session. This page is still here. | Dialog, a 403 or another non-401 4xx from the session check that names no sentence of its own, or a 2xx body that does not parse |
 | REAUTH_DIALOG.WRITE_DROPPED | Your last save didn't go through. Everything you typed is still here — save again. | Beside the Save of the screen whose save was refused; a toast elsewhere |
 | REAUTH_DIALOG.ROLE_CHANGED_BODY | You're signed in, but this page is no longer yours to open. Copy anything you need — Wardyn will take you to Runs. | Dialog body, same person with a narrower role |
 | REAUTH_BAR.BODY | You're signed out. This page is read-only until you sign in again. | Bar across the top after "Not now" |
@@ -25,8 +27,8 @@ every row with it byte for byte.
 | SESSION_ENDED_REASON | You were signed out. Sign in again to continue. | The full sign-in screen's own notice (`lib/api/core.ts`), amber not red (Q457-10) |
 
 The renewal strip (the session-expiry banner's "Sign in again", renewing in place) reuses
-`REAUTH_DIALOG.WAITING`, `POPUP_BLOCKED`, `POPUP_FALLBACK`, `CLOSED_WITHOUT` and `UNREACHABLE` for
-its states, and `ROLE_CHANGED_BODY` with **Go to Runs** for a narrowed role.
+`REAUTH_DIALOG.WAITING`, `POPUP_BLOCKED`, `POPUP_FALLBACK`, `CLOSED_WITHOUT`, `UNREACHABLE`,
+`CHECK_FAILED` and `CHECK_FAILED_FINAL` for its states, and `ROLE_CHANGED_BODY` with **Go to Runs** for a narrowed role.
 
 Reused, not restated: "Copy my changes" and its toast (`PROVIDERS_EXTRA.CONFLICT_COPY`,
 `CONFLICT_COPIED_TOAST`), "Not now" (`MODEL_ACCESS_BANNER.NOT_NOW`), "Sign in with SSO"

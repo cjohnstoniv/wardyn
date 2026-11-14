@@ -16,7 +16,7 @@ import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { PersonSummary, PersonToken } from "../../../lib/types";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
-import { STATES } from "../../wardyn/states";
+import { answeredSentence, STATES } from "../../wardyn/states";
 import { roleLabel } from "./people-format";
 import { Button } from "../../ui/button";
 import {
@@ -64,6 +64,7 @@ export function PersonDrawer({
   // A swallowed rejection left the section showing the server's count with no names under it, which
   // reads as "no tokens" — so the read carries its own state and Retry refetches.
   const [tokenState, setTokenState] = React.useState<"loading" | "error" | "ready">("loading");
+  const [tokenError, setTokenError] = React.useState<unknown>(null);
   // Retry bumps this rather than calling the API again: the effect below owns the fetch (and its
   // live guard), so there is one read path for the drawer.
   const [attempt, setAttempt] = React.useState(0);
@@ -84,7 +85,11 @@ export function PersonDrawer({
         setTokens(t.filter(isActiveToken));
         setTokenState("ready");
       })
-      .catch(() => live && setTokenState("error"));
+      .catch((e: unknown) => {
+        if (!live) return;
+        setTokenError(e);
+        setTokenState("error");
+      });
     return () => {
       live = false;
     };
@@ -148,7 +153,7 @@ export function PersonDrawer({
                   Same sentence that screen's own failed read already shows. */}
               {tokenState === "error" && (
                 <div role="status" className="flex flex-wrap items-center gap-2">
-                  <p className="text-meta text-muted-foreground">{STATES.ERROR_DEFAULT}</p>
+                  <p className="text-meta text-muted-foreground">{answeredSentence(tokenError, P.TOKENS_LOAD_FAILED) ?? STATES.ERROR_DEFAULT}</p>
                   <Button size="sm" variant="outline" onClick={() => setAttempt((n) => n + 1)}>
                     <RotateCw className="size-3.5" />
                     {STATES.RETRY}

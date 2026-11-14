@@ -325,12 +325,11 @@ describe("MemberGettingStarted", () => {
     });
 
     renderPage();
+    expect(await screen.findByText("Couldn't load setup status.")).toBeInTheDocument();
     expect(
-      await screen.findByText("Couldn't reach Wardyn."),
+      screen.getByText("Nothing below is marked done until it can be checked — a failed check is not a finished step."),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Nothing below is marked done until it can be checked/),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t reach/i)).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.queryByText("Done")).not.toBeInTheDocument();

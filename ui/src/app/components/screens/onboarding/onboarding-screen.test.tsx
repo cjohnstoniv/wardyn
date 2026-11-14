@@ -96,7 +96,8 @@ describe("OnboardingScreen (welcome hero)", () => {
     expect(screen.queryByText("Barrier: needs setup")).not.toBeInTheDocument();
   });
 
-  it("an unreachable daemon (synthetic READY_FALLBACK) says so, rather than reading 'Checking…' forever", () => {
+  // A 5xx or a 404 also lands the synthetic READY_FALLBACK, and either is an answer: the chip says the check failed.
+  it("a failed setup status read (synthetic READY_FALLBACK) says so, rather than reading 'Checking…' forever", () => {
     render(
       <OnboardingScreen
         onGetStarted={() => {}}
@@ -104,7 +105,8 @@ describe("OnboardingScreen (welcome hero)", () => {
       />,
     );
     expect(screen.getByRole("button", { name: /Get started/ })).toBeInTheDocument();
-    expect(screen.getByText("Couldn't reach Wardyn")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't check")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t reach/i)).toBeNull();
     expect(screen.queryByText(/Checking…/)).not.toBeInTheDocument();
     expect(screen.queryByText("Barrier: needs setup")).not.toBeInTheDocument();
   });

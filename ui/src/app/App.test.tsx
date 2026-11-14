@@ -706,3 +706,23 @@ describe("App — an unknown address", () => {
     expect(await screen.findByRole("region", { name: "Page not found" })).toHaveTextContent(`There's no page at ${path}.`);
   });
 });
+
+// A 503 from /readyz is an answer (the store is down), not a lost connection, so the shell's band
+// must not call the control plane unreachable.
+describe("App — the control-plane band on a 503 /readyz", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("says the control plane is not available, never unreachable", async () => {
+    const base = mockFetch({}).fetch;
+    const fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) =>
+      String(url).includes("/readyz") ? Promise.resolve(jsonResponse(503, { status: "unavailable" })) : base(url, init),
+    );
+    vi.stubGlobal("fetch", fetch);
+    renderApp();
+    expect(await screen.findByText(/Control plane not available — showing the last data received\./)).toBeInTheDocument();
+    expect(screen.queryByText(/unreachable/i)).toBeNull();
+  });
+});

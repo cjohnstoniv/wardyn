@@ -807,9 +807,9 @@ export default function App() {
               // #214 — the shell's own read of the deployment-wide no-barrier
               // fact (deriveReadiness's barrierReady — see AppShell's own doc
               // for exactly what this is and is not the same as). Absent
-              // (undefined -> false) while setupStatus hasn't landed yet,
-              // never a guess painted off no data.
-              noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              // (undefined -> false) while setupStatus hasn't landed yet, and
+              // "unknown" on the made-up status of a read that failed.
+              noBarrier={setupStatus?.unreachable ? "unknown" : !!setupStatus && !deriveReadiness(setupStatus).barrierReady}
               onRecheck={() => void refreshSetupStatus(true)}
               tier={setupStatus?.tier}
               onSignOut={async (sso) => {

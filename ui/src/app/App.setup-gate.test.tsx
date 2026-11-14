@@ -16,6 +16,7 @@ import App, { FirstRunLanding, RequireSetup } from "./App";
 import { RoleProvider } from "./components/wardyn/operator-context";
 import { resetGateForTests } from "./components/screens/setup/setup-gate";
 import { baseStatus } from "./lib/test-fixtures";
+import { NO_BARRIER } from "./components/wardyn/copy";
 import type { SetupStatus } from "./lib/types";
 
 vi.mock("./components/screens/runs", () => ({
@@ -172,6 +173,15 @@ describe("App — an unreachable status read never replaces a real one (#469)", 
     mountApp(0);
     await screen.findByText("runs screen stub", {}, FIRST_PAINT);
     expect(screen.queryByText("setup funnel stub")).toBeNull();
+  });
+
+  // The made-up status has no barrier classes. A literal on purpose, so the sentence cannot drift with its constant.
+  it("a FIRST read that fails says the barrier couldn't be checked, never that no barrier can be built", async () => {
+    mountApp(0);
+    await screen.findByText("runs screen stub");
+    expect(screen.queryByText(NO_BARRIER.BANNER_TITLE)).toBeNull();
+    expect(screen.getByText("Couldn't check this host's barrier.")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: NO_BARRIER.RECHECK })).toBeInTheDocument();
   });
 });
 

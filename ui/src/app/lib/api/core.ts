@@ -250,6 +250,9 @@ export class HttpError extends Error {
   /** A preflight model_credential refusal's setup rows (runs.preflightRunWire): the checklist the
    *  server resolved before the provider refused, so Review keeps those blockers. */
   declare setupItems?: SetupItem[];
+  /** The server's own sentence for this failure, "" when the answer named none (see serverSentence). Set by asJson
+   *  and on wfetch's answered 401; undefined on an HttpError built anywhere else, whose message stands as the sentence. */
+  declare said?: string;
   constructor(
     status: number,
     message: string,
@@ -296,7 +299,7 @@ export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as Confinement
 // useMeta -> App.tsx's roleResolved), so one stalled read is a permanent
 // spinner with no error, no retry and nothing a reload changes. The deadline
 // turns that into the rejection every caller already handles: the shell's
-// "Control plane unreachable" banner, sign-in's "Could not reach the control
+// "Control plane not available" banner, sign-in's "Could not reach the control
 // plane.", a launch button that un-disables.
 //
 // 60s, not a snappy 5-10s: this bounds a HANG, it is not a latency budget, and
@@ -482,7 +485,10 @@ export async function wfetch(
       if (token && getToken() === token) setToken(null);
       _unauthorized?.(refused);
     }
-    throw new HttpError(401, "Unauthorized", reason);
+    // "Unauthorized" is the status word, not a sentence: a site that words its own failure shows its line.
+    const err = new HttpError(401, "Unauthorized", reason);
+    err.said = "";
+    throw err;
   }
   if (res.status === 403) _forbidden?.();
   return res;
@@ -502,8 +508,11 @@ export class PendingChangeError extends Error {
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind, policy, tool, cause, field, feature, detail } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause, field, feature, detail);
+    const { envelope, said } = await readFailure(res);
+    const { message, reason, org, provider, kind, policy, tool, cause, field, feature, detail } = envelope;
+    const err = new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause, field, feature, detail);
+    err.said = said;
+    throw err;
   }
   const body = await res.json();
   if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
@@ -626,6 +635,26 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
 
 export async function errText(res: Response): Promise<string> {
   return (await errEnvelope(res)).message;
+}
+
+// A failed answer, read once: its envelope, and the sentence the envelope named, or "" when the body was empty, not
+// JSON (markup included) or only the status text: a raw body or a bare status text is not shown as Wardyn's words.
+// Nor is an unclassified 500's message: internal_error carries the handler's name ("list api tokens"), not a sentence
+// (internal/api/writeservererror.go), the rule failureSentence already keeps.
+async function readFailure(res: Response): Promise<{ envelope: ErrEnvelope; said: string }> {
+  let body = "";
+  try {
+    body = await res.text();
+  } catch {
+    /* no body to read */
+  }
+  const envelope = await errEnvelope({ text: async () => body, statusText: res.statusText } as Response);
+  const unworded = envelope.message === body || envelope.message === res.statusText || envelope.reason === "internal_error";
+  return { envelope, said: unworded ? "" : envelope.message };
+}
+
+export async function serverSentence(res: Response): Promise<string> {
+  return (await readFailure(res)).said;
 }
 
 // Explicit page size for the console's list polls. wardynd paginates every list

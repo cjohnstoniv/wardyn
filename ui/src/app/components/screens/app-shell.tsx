@@ -461,8 +461,9 @@ export function AppShell({
   // noBarrierOnHost gates Launch on: that one folds a nil runner and a
   // member's redacted status to "unknown" and leaves Launch enabled rather
   // than guess, where this is a deployment-wide fact that is always resolved
-  // once setupStatus has landed. False/undefined renders nothing.
-  noBarrier?: boolean;
+  // once setupStatus has landed. False/undefined renders nothing. "unknown":
+  // the setup status read failed, so the notice says it could not check.
+  noBarrier?: boolean | "unknown";
   // Re-reads the setup status for the no-barrier notice's Re-check.
   onRecheck?: () => void;
   // SetupStatus.tier, for the top bar's account menu and local-only chip.
@@ -674,7 +675,7 @@ export function AppShell({
               >
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>
-                  Control plane unreachable — showing the last data received.{" "}
+                  Control plane not available — showing the last data received.{" "}
                   {lastCheckedLabel(lastOkAt ?? null)}
                 </span>
               </div>
@@ -685,8 +686,13 @@ export function AppShell({
                 "unknown", not "no barrier", and the banner above already
                 says so. */}
             {!unreachable && noBarrier && (
-              <div className="relative z-50 shrink-0 border-b border-border bg-danger-subtle px-4 py-2">
-                <NoBarrierNotice canFix={canReachEnvironmentStep} onRecheck={onRecheck} />
+              <div
+                className={cn(
+                  "relative z-50 shrink-0 border-b border-border px-4 py-2",
+                  noBarrier === "unknown" ? "bg-warning-subtle" : "bg-danger-subtle",
+                )}
+              >
+                <NoBarrierNotice canFix={canReachEnvironmentStep} onRecheck={onRecheck} unknown={noBarrier === "unknown"} />
               </div>
             )}
             {/* B1 — the settled-but-unknown identity, beside the unreachable

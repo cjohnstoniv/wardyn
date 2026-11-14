@@ -171,7 +171,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (!active) return;
     let alive = true;
     void health.health().then((h) => {
-      if (!alive || Object.keys(h).length === 0) return;
+      if (!alive || Object.keys(h).length === 0 || h.failedStatus !== undefined) return;
       setDoors({ sso: !!h.sso, token: h.token_login !== false || !h.sso });
     });
     return () => {
@@ -198,7 +198,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   };
   const succeed = React.useRef((_me: Me) => {});
   const quiet = !active;
-  const { status, setStatus, busy, startPoll, stopPoll, checkOnce, recheck, submitToken: checkToken } = useSessionPoll((me) => {
+  const { status, setStatus, busy, outage, startPoll, stopPoll, checkOnce, recheck, submitToken: checkToken } = useSessionPoll((me) => {
     if (reauth.endingSession?.()) return true;
     if (isSwitching() || (quiet && isSignedOutHold())) return false;
     if (verdict.current(me) === "waiting") {
@@ -426,10 +426,15 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     </Button>
   );
 
+  // A /me read that gave no session: the server's own sentence when it named one; else no answer, a 5xx
+  // (a retry may help), or a 403 or another 4xx (it will not).
+  const unanswered =
+    outage.said ||
+    (outage.status === 0 ? REAUTH_DIALOG.UNREACHABLE : outage.status >= 500 ? REAUTH_DIALOG.CHECK_FAILED : REAUTH_DIALOG.CHECK_FAILED_FINAL);
   const note: Partial<Record<typeof status, [string, string]>> = {
     waiting: [REAUTH_DIALOG.WAITING, "text-muted-foreground"],
     closed: [REAUTH_DIALOG.CLOSED_WITHOUT, "text-warning"],
-    unreachable: [REAUTH_DIALOG.UNREACHABLE, "text-warning"],
+    unreachable: [unanswered, "text-warning"],
     rejected: [SIGNIN.TOKEN_REJECTED, "text-danger"],
   };
   const line = note[status];
@@ -455,7 +460,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
           : status === "closed"
             ? REAUTH_DIALOG.CLOSED_WITHOUT
             : status === "unreachable"
-              ? REAUTH_DIALOG.UNREACHABLE
+              ? unanswered
               : REAUTH_DIALOG.WAITING}
       </span>
       {/* First in the tab order, last on the line. */}

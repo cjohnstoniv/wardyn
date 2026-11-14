@@ -22,8 +22,8 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { useTheme } from "../wardyn/theme-provider";
 import {
-  errText,
   HttpError,
+  serverSentence,
   setToken,
   wfetch,
   withLimit,
@@ -163,11 +163,11 @@ export function SignIn({
     // decide what the screen offers. trust_domain / identity_provider are
     // deliberately NOT read here any more.
     void health.health().then((h) => {
-      // health() resolves the EMPTY object for "no answer" (health.ts:237-243:
-      // `if (!res.ok) return {}` / `catch { return {} }`), and a real /healthz
-      // body is never empty — it always carries at least status and version. So
-      // an empty object is the outage, and the last known answer survives it.
-      if (Object.keys(h).length === 0) {
+      // health() resolves the EMPTY object for "no answer" and `failedStatus` alone
+      // for an answer that is not a readable 2xx body, and a real /healthz body
+      // always carries at least status and version. So either is the outage, and
+      // the last known answer survives it.
+      if (Object.keys(h).length === 0 || h.failedStatus !== undefined) {
         setUnansweredReads((n) => Math.min(n + 1, STILL_CHECKING_AFTER_READS));
         return;
       }
@@ -229,7 +229,8 @@ export function SignIn({
         onSignIn();
         return;
       }
-      setError(await errText(res));
+      // An answer that named no sentence of its own: a 5xx may pass, a 403 or another 4xx will not.
+      setError((await serverSentence(res)) || (res.status >= 500 ? SIGNIN.CHECK_FAILED : SIGNIN.CHECK_FAILED_FINAL));
     } catch (e) {
       if (e instanceof HttpError && e.status === 401) {
         setToken(null); // a real rejection — don't keep carrying a bad token

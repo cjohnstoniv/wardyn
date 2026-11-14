@@ -82,8 +82,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const setup = (l: React.ComponentProps<typeof MyElevationRequests>["list"], onReload = vi.fn()) => {
-  const utils = render(<MyElevationRequests list={l} onReload={onReload} />);
+const setup = (l: React.ComponentProps<typeof MyElevationRequests>["list"], onReload = vi.fn(), error?: unknown) => {
+  const utils = render(<MyElevationRequests list={l} error={error} onReload={onReload} />);
   return { onReload, ...utils };
 };
 
@@ -297,6 +297,15 @@ describe("Your requests: the states of the card", () => {
     expect(screen.queryByRole("button", { name: "Request elevation" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /retry/i }));
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a timeout", new HttpError(0, "Could not reach the control plane."), "Wardyn isn't answering. Try again."],
+    ["a 502 with no sentence", Object.assign(new HttpError(502, "Bad Gateway"), { said: "" }), "Wardyn couldn't load your requests. Try again."],
+    ["a 404 with no sentence", Object.assign(new HttpError(404, "Not Found"), { said: "" }), "Wardyn couldn't load your requests."],
+  ])("read failed with %s: says so", (_name, error, text) => {
+    setup("error", vi.fn(), error);
+    expect(screen.getByText(text)).toBeInTheDocument();
   });
 
   it("offers and no rows: You have no requests.", () => {
