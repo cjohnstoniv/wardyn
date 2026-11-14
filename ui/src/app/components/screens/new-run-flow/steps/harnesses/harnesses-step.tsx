@@ -9,7 +9,7 @@
 
 import * as React from "react";
 import { Button } from "../../../../ui/button";
-import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
+import { NR_HARNESSES, NR_HARNESSES_LOOKUP } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { Notice } from "../../../../wardyn/notice";
 import type { RunIntent } from "../../draft/run-intent";
@@ -41,7 +41,11 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
-  const loaded = useLoaded(deps?.load ?? loadRoster);
+  // Try again is a fresh load function, so useLoaded reads the roster again.
+  const [attempt, setAttempt] = React.useState(0);
+  const load = deps?.load ?? loadRoster;
+  const loadAgain = React.useMemo(() => (attempt === 0 ? load : () => load()), [load, attempt]);
+  const loaded = useLoaded(loadAgain);
   const offer = useMacOSOffer();
   const { intent } = draft;
   const base = loaded.status === "ready" ? loaded.value : EMPTY;
@@ -91,7 +95,12 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
       primary={{ label: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_FILES), onActivate: () => go({ screen: "step", step: "files" }) }}
       issues={[...comboIssues.slice(0, 1), ...stepIssues("harnesses", intent)]}
     >
-      {loaded.status === "error" && <p role="alert" className="text-sm text-danger">{loaded.message}</p>}
+      {loaded.status === "error" && (
+        <div className="flex items-center gap-3">
+          <p role="alert" className="text-sm text-danger">{loaded.message}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>{NR_HARNESSES_LOOKUP.RETRY}</Button>
+        </div>
+      )}
       {ids.length === 0 && mode === "optional" && (
         <div className="flex flex-col gap-1 rounded-lg border border-dashed border-border p-4 text-sm">
           <strong>{NR_HARNESSES.EMPTY_TITLE}</strong>
