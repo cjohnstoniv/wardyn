@@ -138,6 +138,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - When output arrives after a run's final output row is written, the mark that labels the row incomplete is now retried, for as long as the server stays up, until it is written or the output is erased; before, one failed write left the row labelled complete for good.
 - When a server takes over the output of a run whose first server stopped, a failed read of the output that server had already saved no longer deletes it; the run's output stays pending and a later pass writes it.
 - When database errors kept a run's pending output record and then its final output row from being written, and the server then stopped, the output kept from the run is now recovered into its output row, marked incomplete, and the retention sweep deletes that row as usual; before, the output stayed readable past `WARDYN_RUN_OUTPUT_RETENTION_DAYS`. Output an earlier version left this way is recovered by the run output sweep when its run ended inside that window, and is then kept for a full window from its recovery, as a recording-derived row is; when its run ended longer ago, it is deleted and no longer served.
+- Turning one enforcement switch on or off on the Permissions screen could switch back another one that a second admin had changed after the page loaded. That save is now refused; the page reloads the switches, and the change can be confirmed again.
 
 ### Security
 

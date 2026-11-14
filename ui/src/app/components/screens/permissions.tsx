@@ -256,14 +256,12 @@ export function PermissionsScreen() {
   );
 
   const writeEnforcement = async (kind: CapabilityKind, next: boolean) => {
+    if (busy || !snap || status !== "ready") return; // no loaded map (reload failed or in flight): a full-map replace is never built from nothing
     setBusy(true);
     try {
-      // FULL-MAP replace: send every kind's current state with this one
-      // changed, because an omitted key is a real "stop enforcing".
-      const body: Record<string, boolean> = {};
-      for (const k of CAPABILITY_KINDS) body[k] = k === kind ? next : !!snap?.enforcement[k];
-      const saved = await api.putEnforcement(body);
-      setSnap((s) => ({ grants: s?.grants ?? [], enforcement: saved }));
+      const body = Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === kind ? next : !!snap.enforcement[k]]));
+      const saved = await api.putEnforcement(body, snap.etag);
+      setSnap((s) => ({ grants: s?.grants ?? [], ...saved }));
       setConfirm(null);
       setSubmitted(null);
     } catch (e) {
@@ -273,7 +271,9 @@ export function PermissionsScreen() {
         load();
         return;
       }
-      toast.error("Failed to save enforcement", { description: getErrorMessage(e) });
+      const stale = e instanceof HttpError && e.reason === "capability_enforcement_stale";
+      if (stale) load(); // changed since it loaded: reload, keep the dialog open
+      toast.error("Failed to save enforcement", { description: stale ? PERM.ENFORCE_STALE : getErrorMessage(e) });
     } finally {
       setBusy(false);
     }

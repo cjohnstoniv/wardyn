@@ -85,13 +85,15 @@ export interface GrantUpsert {
 export const permissions = {
   // GET /api/v1/permissions -> {grants, enforcement}. A nil Go slice/map
   // encodes as null, so both halves are coerced here and every caller can map
-  // over grants / index enforcement without a guard.
+  // over grants / index enforcement without a guard. The ETag is kept for
+  // putEnforcement's If-Match.
   async getPermissions(): Promise<PermissionsSnapshot> {
     const res = await wfetch("/permissions", { method: "GET" });
     const body = await asJson<Partial<PermissionsSnapshot>>(res);
     return {
       grants: unwrapList<CapabilityGrant>(body.grants),
       enforcement: body.enforcement ?? {},
+      etag: res.headers.get("ETag"),
     };
   },
 
@@ -118,15 +120,22 @@ export const permissions = {
     }
   },
 
-  // PUT /api/v1/permissions/enforcement -> the saved map. FULL REPLACE: a key
-  // omitted from the body is a real "stop enforcing that kind", so callers
-  // must send the whole map, never a patch.
-  async putEnforcement(enforcement: Record<string, boolean>): Promise<Record<string, boolean>> {
+  // PUT /api/v1/permissions/enforcement -> the saved map and its new ETag.
+  // FULL REPLACE: a key omitted from the body is a real "stop enforcing that
+  // kind", so callers must send the whole map, never a patch, together with
+  // the ETag of the map they built it from. A map changed since then is a 412
+  // (HttpError), so a stale page can never switch someone else's kind back.
+  async putEnforcement(
+    enforcement: Record<string, boolean>,
+    etag: string | null | undefined,
+  ): Promise<{ enforcement: Record<string, boolean>; etag: string | null }> {
     const res = await wfetch("/permissions/enforcement", {
       method: "PUT", asPerson: true,
+      headers: etag ? { "If-Match": etag } : {},
       body: JSON.stringify(enforcement),
     });
-    return (await asJson<Record<string, boolean> | null>(res)) ?? {};
+    const saved = (await asJson<Record<string, boolean> | null>(res)) ?? {};
+    return { enforcement: saved, etag: res.headers.get("ETag") };
   },
 
   // GET /api/v1/permissions/availability/{kind}/{value} -> one resource's
