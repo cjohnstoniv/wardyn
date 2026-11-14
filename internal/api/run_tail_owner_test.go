@@ -1318,9 +1318,10 @@ func (f *forced) crashedBeforeItsTail(t *testing.T, to types.RunState) types.Age
 	return run
 }
 
-// sweepPaths are the three destructive sweeps, each run on its own against run: the boot orphan pass
-// (reconcileOrphanedRun), the label orphan sweep (reconcile.go isOrphan) and the terminal-sandbox sweep
-// (stopTerminalSandbox). A sweep reports whether it tore the sandbox down.
+// sweepPaths are the destructive sweeps, each run on its own against run: the boot orphan pass
+// (reconcileOrphanedRun), the label orphan sweep (reconcile.go isOrphan), the sweep a runner gets when it
+// reconnects (sweepRunnerOrphansOnce) and the terminal-sandbox sweep (stopTerminalSandbox). A sweep reports
+// whether it tore the sandbox down.
 var sweepPaths = map[string]func(*testing.T, *forced, types.AgentRun) bool{
 	"the boot orphan pass": func(t *testing.T, f *forced, _ types.AgentRun) bool {
 		before := f.sb.stopCount()
@@ -1334,6 +1335,9 @@ var sweepPaths = map[string]func(*testing.T, *forced, types.AgentRun) bool{
 			t.Error(err)
 		}
 		return f.s.cfg.Runner.(*proxyCounted).orphan
+	},
+	"the READY orphan sweep": func(t *testing.T, f *forced, _ types.AgentRun) bool {
+		return f.readySweep(t)
 	},
 	"the terminal-sandbox sweep": func(_ *testing.T, f *forced, run types.AgentRun) bool {
 		before := f.sb.stopCount()
@@ -1373,7 +1377,7 @@ func TestSweeps_KeepASeededRunThatCrashedBeforeItsTail(t *testing.T) {
 			f.tailPassAfterCrash(t)
 		})
 	}
-	t.Run("all three before the tail owner", func(t *testing.T) {
+	t.Run("every sweep before the tail owner", func(t *testing.T) {
 		f := newCrashed(t)
 		run := f.crashedBeforeItsTail(t, types.RunStopped)
 		for name, sweep := range sweepPaths {
@@ -1382,7 +1386,7 @@ func TestSweeps_KeepASeededRunThatCrashedBeforeItsTail(t *testing.T) {
 			}
 		}
 		if cur := f.terminalRun(t); f.sb.stopCount() != 0 || cur.SandboxRef == "" {
-			t.Fatalf("after all three: %d stops, ref %q; want no stop and the ref kept", f.sb.stopCount(), cur.SandboxRef)
+			t.Fatalf("after every sweep: %d stops, ref %q; want no stop and the ref kept", f.sb.stopCount(), cur.SandboxRef)
 		}
 		f.tailPassAfterCrash(t)
 	})
