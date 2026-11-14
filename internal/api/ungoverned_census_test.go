@@ -163,6 +163,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"workspace_admission.go:writeAdmissionLaunchRefusal":       {1, "authz-only: a refusal message"},
 	"workspace_egress_github.go:unionDirectGitHubEgress":       {1, "D: the GitHub host clamp; hosts meet the boundary at dispatch"},
 	"workspace_refs.go:launchCarrierRule":                      {1, "R: the launch carrier; the run meets the boundary at resolve"},
+	"workspace_refs.go:scanRefusalFor":                         {1, "authz-only: whether a scan refusal names the stale workspace; nothing it admits"},
 	"workspaces.go:handleListWorkspaces":                       {1, "authz-only: a list scope"},
 	"workloads.go:handleDeleteWorkload":                        {1, "authz-only: who may delete a custom resource's workload through the API; a delete ends a run and admits none"},
 	"workloads.go:mayReachWorkloadsOf":                         {2, "authz-only: workload reach, for workloadOwnerOf and for canRestartWorkload's display flag on every read; the flag grants nothing, as the restart route checks workloadOwnerOf itself, and a restart's launch is a run create, which meets the boundary at resolve"},
