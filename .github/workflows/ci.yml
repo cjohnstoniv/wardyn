@@ -2226,11 +2226,14 @@ jobs:
           pins+='|TestPass_APutBackNamesALaterSaveItsFailedCopyMovedAside|TestPass_APartialCopyThatCannotBeMovedAsideIsNamed'
           pins+='|TestPass_APutBackCopyWhoseNameIsGoneKeepsTheSave|TestPass_ALaptopSaveAfterAPullDeletesLookIsKept'
           pins+='|TestPass_ALaptopFileMadeDuringAPullDeletesMoveBackIsKept'
+          pins+='|TestPass_APutBackWhoseFileIDChangesLeavesNoDuplicate|TestPass_APutBackOfAnEmptySaveWhoseFileIDChangesLeavesNoDuplicate'
+          pins+='|TestPass_ACopyWhoseFileIDChangesNeverTakesAnEditorsSave|TestPass_AFailedCopyWhoseFileIDChangesLeavesNoUnnamedPartial'
+          pins+='|TestPass_AFailedCopyWrittenIntoInPlaceIsNamedNotRemoved|TestPass_AFailedPutBackCopyNotProvedNamesItsPartialCopy'
           go test -c -o "$RUNNER_TEMP/foldersync.test" ./internal/foldersync/
           (cd internal/foldersync && env TMPDIR="$mnt" GOTMPDIR="$mnt" "$RUNNER_TEMP/foldersync.test" \
             -test.count=1 -test.v -test.timeout 5m -test.run "^($pins)\$") | tee "$RUNNER_TEMP/foldersync-exfat.out"
-          # -v and the count prove all nine ran and passed, not just compiled: a skip prints no PASS line.
-          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 9
+          # -v and the count prove all fifteen ran and passed, not just compiled: a skip prints no PASS line.
+          test "$(grep -c -- '^--- PASS: Test' "$RUNNER_TEMP/foldersync-exfat.out")" = 15
       - name: Detach the exFAT disk image
         if: ${{ !cancelled() && steps.exfat.outcome == 'success' }}
         timeout-minutes: 2

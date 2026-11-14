@@ -153,3 +153,36 @@ func TestPass_AFailedCopyWrittenIntoInPlaceIsNamedNotRemoved(t *testing.T) {
 		t.Errorf("laptop %s = %q, temps %v, refusal %q: want the written-into copy kept and the refusal naming it", name, got, temps, reason)
 	}
 }
+
+// A --pull-deletes put-back whose copy fails and is not proved, as when its handle cannot be read, names
+// both files: the save it keeps and the partial copy at the laptop's name. Catches a put-back refusal
+// that names only the save.
+func TestPass_AFailedPutBackCopyNotProvedNamesItsPartialCopy(t *testing.T) {
+	sy, root, name := copyCase(t, true)
+	failCopySync(t, name)
+	idSettlesOnSync(t, name, syscall.EIO)
+	reason := refusedFor(pass(t, sy), name)
+	kept, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
+	if _, err := os.Lstat(filepath.Join(root, name)); err != nil || len(kept) != 1 || getSyncFile(t, kept[0]) != "laptop save" ||
+		!strings.Contains(reason, "it is kept as "+filepath.Base(kept[0])) || !strings.Contains(reason, "its partial copy is left at "+name) {
+		t.Errorf("laptop %s: %v, kept %v, refusal %q: want the save kept and both files named", name, err, kept, reason)
+	}
+}
+
+// An editor's save renamed over a copy that then fails is never named as the copy's partial copy: the
+// copy's handle has no name left. Catches a copy told from a save by its file number alone.
+func TestPass_AnEditorsSaveOverAFailedCopyIsNotNamedAsItsPartialCopy(t *testing.T) {
+	sy, root, name := copyCase(t, false)
+	sync := fsyncFile
+	onSync(t, func(f *os.File) error {
+		if filepath.Base(f.Name()) != name {
+			return sync(f)
+		}
+		editorSave(t, root, name, "editor save")
+		return syscall.EIO
+	}, nil)
+	reason := refusedFor(pass(t, sy), name)
+	if got := getSyncFile(t, filepath.Join(root, name)); got != "editor save" || reason == "" || strings.Contains(reason, "its partial copy is left at") {
+		t.Errorf("laptop %s = %q, refusal %q: want the editor's save in place and a refusal that does not call it the partial copy", name, got, reason)
+	}
+}
