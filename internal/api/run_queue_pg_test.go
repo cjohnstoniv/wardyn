@@ -251,7 +251,18 @@ func TestPG_QueuedLaunchSaysItsManagedSettingsAreUndelivered(t *testing.T) {
 	pool := e.cappedPool("Plain", 1)
 	e.occupy(pool)
 	e.runner.noManagedFiles = true
-	out := e.queuedLaunch(nil, pool, `,"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]`)
+	// The harness entry endBody writes, with approvals on hold: a second "tools" key is refused as a repeated key.
+	const harness, held = `"tools":[{"id":"claude-code","kind":"harness"}]`, `"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]`
+	body := endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`)
+	if !strings.Contains(body, harness) {
+		t.Fatalf("endBody no longer writes %s; this test cannot put its tool on hold:\n%s", harness, body)
+	}
+	w := e.admin(http.MethodPost, "/api/v1/runs", strings.Replace(body, harness, held, 1))
+	var out queuedLaunchAnswer
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if w.Code != http.StatusCreated || out.State != types.RunQueued {
+		t.Fatalf("launch into a full pool = %d %s; want 201 QUEUED", w.Code, w.Body)
+	}
 	const want = "managed settings for tool approvals on hold are not delivered"
 	if all := strings.Join(out.Warnings, "\n"); !strings.Contains(all, want) {
 		t.Errorf("the queued 201 does not say %q; warnings were:\n%s", want, all)
