@@ -675,6 +675,10 @@ func TestResident_LockOrder(t *testing.T) {
 		t.Fatal("no offline sources found")
 	}
 	for _, path := range files {
+		// A test file may wire the manager into a dispatcher, as the runner does; it is not in the built package.
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

@@ -111,7 +111,7 @@ func (s *Server) startReportLocked(ctx context.Context, r LoadedReport) {
 	}
 	child, cancel := context.WithCancel(ctx)
 	s.live.reportCancel = cancel
-	go s.ReportLoaded(child, r)
+	go s.proxy.reportLoaded(child, r, loadedReportTiming())
 }
 
 // NarrowAnswer is the one JSON line the narrowing socket answers.

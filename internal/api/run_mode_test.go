@@ -486,6 +486,13 @@ func TestBackgroundOnlyRefusal(t *testing.T) {
 // declared function's body, by name, for the door table's guard.
 func backgroundDoorBodies(t *testing.T) map[string]*ast.BlockStmt {
 	t.Helper()
+	return funcBodies(t, false)
+}
+
+// funcBodies is every function body in the package's non-test files, by name; qualified keys a method by its receiver
+// type too (localAttach.run), for a name more than one type uses.
+func funcBodies(t *testing.T, qualified bool) map[string]*ast.BlockStmt {
+	t.Helper()
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -502,7 +509,17 @@ func backgroundDoorBodies(t *testing.T) map[string]*ast.BlockStmt {
 		}
 		for _, d := range f.Decls {
 			if fn, ok := d.(*ast.FuncDecl); ok && fn.Body != nil {
-				out[fn.Name.Name] = fn.Body
+				key := fn.Name.Name
+				if qualified && fn.Recv != nil && len(fn.Recv.List) == 1 {
+					recv := fn.Recv.List[0].Type
+					if star, ok := recv.(*ast.StarExpr); ok {
+						recv = star.X
+					}
+					if id, ok := recv.(*ast.Ident); ok {
+						key = id.Name + "." + key
+					}
+				}
+				out[key] = fn.Body
 			}
 		}
 	}
@@ -696,9 +713,11 @@ func TestBackgroundWatchIsTheDoorsOneException(t *testing.T) {
 
 // TestBackgroundExecIsTheDoorsThirdException holds the contract's third exception to the code: POST /runs/{id}/exec
 // stays the SSH access door's route; liveRunForExec, the fresh read without the background refusal, is called only
-// by sshFreshRun, which then refuses a background run, and by execFreshRun, which only handleRunExec calls; and
-// handleRunExec keeps the governance door, the data_out rule and the channel cap. An SSH bridge switched to
-// execFreshRun or liveRunForExec reds here.
+// by sshFreshRun, which then refuses a background run, by execFreshRun, which only handleRunExec calls, and by
+// startFresh; and handleRunExec keeps the governance door, the data_out rule and the channel cap. startFresh re-reads
+// the run under its start lock; each of its callers has already refused a background run, and a run's experience
+// never changes after create. An SSH bridge switched to execFreshRun or liveRunForExec, or a new door through
+// startFresh, reds here.
 func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 	bodies := backgroundDoorBodies(t)
 	calls := func(body *ast.BlockStmt, name string) bool {
@@ -707,6 +726,9 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 			if call, ok := n.(*ast.CallExpr); ok {
 				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
 					found = true
+				}
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == name {
+					found = true // a plain function, such as the generic startFresh
 				}
 			}
 			return !found
@@ -724,12 +746,24 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 		return out
 	}
 	for name, want := range map[string][]string{
-		"liveRunForExec": {"execFreshRun", "sshFreshRun"},
+		"liveRunForExec": {"execFreshRun", "sshFreshRun", "startFresh"},
 		"execFreshRun":   {"handleRunExec"},
 	} {
 		if got := callers(name); !slices.Equal(got, want) {
 			t.Errorf("%s is called by %v, want %v", name, got, want)
 		}
+	}
+	// startFresh's callers, keyed by receiver too: three methods in the package are named run.
+	var fresh []string
+	for sym, body := range funcBodies(t, true) {
+		if calls(body, "startFresh") {
+			fresh = append(fresh, sym)
+		}
+	}
+	slices.Sort(fresh)
+	want := []string{"Server.desktopSigninDial", "Server.establishExec", "Server.execFresh", "Server.signinExec", "localAttach.run"}
+	if !slices.Equal(fresh, want) {
+		t.Errorf("startFresh is called by %v, want %v", fresh, want)
 	}
 	for _, name := range []string{"refuseExecGovernance", "refuseExecDataOut", "sshAcquireSession"} {
 		if !calls(bodies["handleRunExec"], name) {
