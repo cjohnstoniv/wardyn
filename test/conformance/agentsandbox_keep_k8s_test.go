@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -403,4 +404,78 @@ func (e *asEnv) endUnsupportedThenStop(ctx context.Context, t *testing.T, r *orc
 		pods, err := e.cs.CoreV1().Pods(e.ns).List(ctx, metav1.ListOptions{LabelSelector: "wardyn.run-id=" + runID.String()})
 		return err == nil && len(pods.Items) == 0 || apierrors.IsNotFound(err)
 	})
+}
+
+// TestAgentSandboxKeepAdmissionBoundsServices drives the chart's two keep policies on this API server: wardynd may
+// make only a run's own ClusterIP Service with no selector or external IPs, and EndpointSlices labelled for such a
+// Service. Every create is a server-side dry run, as the suite's identity (wardynd), so nothing is left behind.
+func TestAgentSandboxKeepAdmissionBoundsServices(t *testing.T) {
+	requireAgentSandbox(t)
+	e := newASEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	self, err := e.cs.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("SelfSubjectReview: %v", err)
+	}
+	if me := self.Status.UserInfo.Username; !strings.HasPrefix(me, "system:serviceaccount:") {
+		t.Fatalf("the suite runs as %q; it must run as the ServiceAccount the keep policies name as wardynd's (ci.yml renders it for wardyn/wardynd)", me)
+	}
+	id := uuid.New().String()
+	own := "wardyn-proxy-svc-" + id
+	dryRun := metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}
+	service := func(name string, mod func(*corev1.Service)) *corev1.Service {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeClusterIP,
+				Ports: []corev1.ServicePort{{Port: 3128, Protocol: corev1.ProtocolTCP}},
+			},
+		}
+		if mod != nil {
+			mod(svc)
+		}
+		return svc
+	}
+	slice := func(labels map[string]string) *discoveryv1.EndpointSlice {
+		return &discoveryv1.EndpointSlice{
+			ObjectMeta:  metav1.ObjectMeta{GenerateName: "wardyn-conformance-", Labels: labels},
+			AddressType: discoveryv1.AddressTypeIPv4,
+		}
+	}
+	const svcMsg = "wardynd may make only a run's own ClusterIP Service"
+	const sliceMsg = "wardynd may write EndpointSlices only for a run's own Service"
+
+	cases := []struct {
+		name    string
+		svc     *corev1.Service
+		slice   *discoveryv1.EndpointSlice
+		refused string
+	}{
+		{name: "own ClusterIP Service, no selector: allowed", svc: service(own, nil)},
+		{name: "NodePort", svc: service(own, func(s *corev1.Service) { s.Spec.Type = corev1.ServiceTypeNodePort }), refused: svcMsg},
+		{name: "external IPs", svc: service(own, func(s *corev1.Service) { s.Spec.ExternalIPs = []string{"192.0.2.10"} }), refused: svcMsg},
+		{name: "a selector", svc: service(own, func(s *corev1.Service) { s.Spec.Selector = map[string]string{"app": "x"} }), refused: svcMsg},
+		{name: "a name that is not a run's", svc: service("wardyn-conformance-other-"+id[:8], nil), refused: svcMsg},
+		{name: "own slice: allowed", slice: slice(map[string]string{discoveryv1.LabelServiceName: own})},
+		{name: "slice of another Service", slice: slice(map[string]string{discoveryv1.LabelServiceName: "other"}), refused: sliceMsg},
+		{name: "slice with no labels", slice: slice(nil), refused: sliceMsg},
+	}
+	for _, c := range cases {
+		var err error
+		if c.svc != nil {
+			_, err = e.cs.CoreV1().Services(e.ns).Create(ctx, c.svc, dryRun)
+		} else {
+			_, err = e.cs.DiscoveryV1().EndpointSlices(e.ns).Create(ctx, c.slice, dryRun)
+		}
+		switch {
+		case c.refused == "" && err != nil:
+			t.Errorf("%s: refused, want allowed: %v", c.name, err)
+		case c.refused != "" && err == nil:
+			t.Errorf("%s: allowed, want refused", c.name)
+		case c.refused != "" && !strings.Contains(err.Error(), c.refused):
+			t.Errorf("%s: refused with %q, want a message containing %q", c.name, err, c.refused)
+		}
+	}
 }

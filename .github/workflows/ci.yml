@@ -1600,7 +1600,8 @@ jobs:
           set -euo pipefail
           # shellcheck disable=SC2086 # WARDYN_CHART_VALUES is a list of --set flags
           helm template wardyn deploy/helm/wardyn -n wardyn $WARDYN_CHART_VALUES --set serviceAccount.name=wardynd \
-            --show-only templates/agent-sandbox-policy.yaml > "$RUNNER_TEMP/agent-sandbox-policy.yaml"
+            --show-only templates/agent-sandbox-policy.yaml \
+            --show-only templates/agent-sandbox-keep-policy.yaml > "$RUNNER_TEMP/agent-sandbox-policy.yaml"
           grep -F "system:serviceaccount:wardyn:wardynd" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
           grep -F "system:serviceaccount:agent-sandbox-system:agent-sandbox-controller" "$RUNNER_TEMP/agent-sandbox-policy.yaml"
           kubectl apply -f "$RUNNER_TEMP/agent-sandbox-policy.yaml"
@@ -1695,7 +1696,8 @@ jobs:
                    TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission \
                    TestAgentSandboxStagedSecretStarts \
                    TestAgentSandboxKeepProxyThroughService TestAgentSandboxKeepEndpointSliceElsewhereIsDropped TestAgentSandboxKeepLiveReplaceProxy TestAgentSandboxKeepAPISequence \
-                   TestWarmPoolPlaceholderHoldsNothing TestWarmPoolPlaceholderClaimedAndRefilled; do
+                   TestWarmPoolPlaceholderHoldsNothing TestWarmPoolPlaceholderClaimedAndRefilled \
+                   TestAgentSandboxKeepAdmissionBoundsServices; do
             if grep -qF "\"Action\":\"pass\",\"Package\":\"github.com/cjohnstoniv/wardyn/test/conformance\",\"Test\":\"$t\"" "$out"; then
               echo "passed: $t"
             else

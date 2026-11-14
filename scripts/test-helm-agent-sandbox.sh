@@ -14,6 +14,8 @@
 #     the template without the backend is refused;
 #   - keep off (k8s.agentSandbox.keep absent, null, false) renders the same bytes as on without it; keep on adds only the
 #     services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP; keep on without the backend is refused;
+#   - keep on also renders two ValidatingAdmissionPolicies and two bindings, <fullname>-keep-service (Services only) and
+#     <fullname>-keep-endpoints (EndpointSlices only), selected on wardynd's identity; keep off, or the backend off, renders none;
 #   - on without k8s.enabled, or with an unenforced-NetworkPolicy or ambient-default-deny override (value, env, extraEnv or valueFrom), is refused.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
@@ -124,6 +126,26 @@ render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.ke
   || die "keep: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_KEEP=true"
 grep -q 'WARDYN_K8S_AGENT_SANDBOX_KEEP\|endpointslices' "$TMP/on.out" && die "on without keep: a keep marker rendered"
 ok "keep: off (absent, false, null) renders the same bytes; on adds services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP"
+
+# Keep's two admission policies: one per kind, each selected on wardynd's identity, Deny on the runs namespace.
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/keep.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
+  || die "keep: not exactly the policies r-wardyn-keep-service and r-wardyn-keep-endpoints"
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicyBinding" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/keep.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
+  || die "keep: not exactly the bindings r-wardyn-keep-service and r-wardyn-keep-endpoints"
+for n in keep-service keep-endpoints; do
+  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\") | .spec.matchConditions[0].expression" "$TMP/keep.out")" == "request.userInfo.username == 'system:serviceaccount:default:wardyn-byo'" ]] \
+    || die "keep: the $n match condition is not wardynd's authenticated identity"
+  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicyBinding\" and .metadata.name == \"r-wardyn-$n\") | .spec.policyName + \" \" + (.spec.validationActions | join(\",\"))" "$TMP/keep.out")" == "r-wardyn-$n Deny" ]] \
+    || die "keep: the $n binding is not Deny for its policy"
+done
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-service") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/keep.out")" == "services" ]] \
+  || die "keep: the keep-service policy does not match services only"
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-endpoints") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/keep.out")" == "endpointslices" ]] \
+  || die "keep: the keep-endpoints policy does not match endpointslices only"
+for f in on keep-false keep-null; do
+  if grep -q 'keep-service\|keep-endpoints' "$TMP/$f.out"; then die "keep policy rendered with keep off ($f)"; fi
+done
+ok "keep: two policies and two bindings, one kind each, on wardynd's identity; none with keep off"
 
 # Nothing else changed: the added lines are the rule, the verb, the env and the two policy objects.
 diff "$TMP/key-absent.out" "$TMP/on.out" | grep '^<' | grep -v 'verbs: \["create", "get", "list", "delete", "deletecollection"\]' \
