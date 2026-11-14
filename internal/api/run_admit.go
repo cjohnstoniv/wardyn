@@ -89,7 +89,7 @@ const (
 
 var (
 	//lint:ignore ST1005 a sentence shown to the person as written
-	errStartTooSlow  = errors.New(startTooSlowMsg)
+	errStartTooSlow = errors.New(startTooSlowMsg)
 	//lint:ignore ST1005 a sentence shown to the person as written
 	errStartLockLost = errors.New(startLockLostMsg)
 )
