@@ -4166,7 +4166,7 @@ The labelled series, every label, and where its values come from:
 - When the gateway asks in the TLS handshake, `wardyn-proxy` also presents a client certificate naming the run (one URI SAN, `spiffe://<trust domain>/agent-run/<run id>`), signed by a CA of its own, `wardyn-gateway-client-ca`, and living no longer than the token (`gatewayCertHolder`, `gatewayidentity.Authority`).
   - Its key is made in the proxy and never leaves it; wardynd signs the public half after the same checks as a token (`Server.gatewayCertAdmit`).
   - A connection keeps the certificate it opened with, so the token, checked on every call, is what ends a cut run's access within its lifetime.
-  - The certificate never stands alone. The proxy presents it on any connection to a route's host and port, so a call to a path outside the route carries it with no token; a gateway must check the token too.
+  - The certificate never stands alone. The proxy presents it on any connection to a route's host and port, and it names only the run, not the person or the audience; a gateway must check the token too.
   - A gateway that requires the certificate refuses a sandbox's own tunnel, which has none. Tested against Go's TLS server only, not a named gateway.
   - With no usable certificate, or when the gateway names only other CAs, the proxy sends none, so a TLS front that only asks for one lets the call through.
 

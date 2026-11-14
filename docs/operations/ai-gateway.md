@@ -249,15 +249,15 @@ A gateway that asks for a client certificate in the TLS handshake gets one namin
 | Who signs it | A CA of its own, the secret-store row `wardyn-gateway-client-ca`, apart from the token's signing key. |
 | The bundle | Anonymous `GET /.well-known/wardyn-experimental/gateway-client-ca.pem` on wardynd, under `WARDYN_BASE_PATH` when set, with `max-age=60`. It holds the current CA certificate and, for 15 minutes after a rotation, the previous one. Off, it answers as a path no route holds. |
 | When it is sent | Only to the host and port of one of the run's routes, and only when that gateway asks. A gateway that does not ask gets no certificate, and none is made. |
-| When none is sent | When wardynd does not sign one, or the gateway names only other CAs. A gateway that requires one then refuses the connection, and the proxy's log says why. A TLS front that only asks lets the call through. |
+| When none is sent | When wardynd does not sign one, or the gateway names only other CAs. A gateway that requires one then refuses the connection, and the proxy's log carries its TLS alert. |
 
 To check it at the gateway:
 
 1. Fetch the bundle and set it as the gateway's trusted client CA.
-2. Require a client certificate on the listener the run's proxy reaches. Where a TLS front sits before the gateway, the front is what must ask for it and check it.
+2. Require a client certificate on the listener the run's proxy reaches. Where a TLS front sits before the gateway, the front is what must ask for it and check it. A TLS front that asks for a certificate but does not require one lets the call through.
 3. Check that the certificate's URI SAN equals the token's `act.sub`, so a certificate and a token from two different runs are refused.
 
-- **The certificate never stands alone: check the token on every call.** The proxy presents the certificate on any connection to a route's host and port, so a call to a path outside the route carries it with no token.
+- **The certificate never stands alone: check the token on every call.** The proxy presents the certificate on any connection to a route's host and port, and it names only the run, not the person or the audience.
 - **A connection keeps its certificate.** Connections are reused, so a certificate can be older than the call it carries. The token is what reflects a cut run, a suspended person or a changed provider.
 - **No revocation list.** The certificate's short life is the limit, as with the token. On the normal path a run's end stops its proxy, and the key goes with it. A run whose stop is not confirmed keeps its proxy, but wardynd signs no new certificate for it.
 - **A sandbox's own tunnel has no certificate.** A gateway that requires one refuses a sandbox that reaches it through an opaque tunnel.
