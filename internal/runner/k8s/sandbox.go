@@ -204,6 +204,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			return runner.Sandbox{}, err
 		}
 	}
+	warmNode := d.claimWarm(ctx, spec, enforced)
 
 	// SECURITY: fail tears down via teardownByRunID, the same
 	// wait-before-netpol-drop guard Stop/KillSandbox use — a bare LIFO delete
@@ -299,103 +300,21 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy config secret: %w", err))
 	}
-
-	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
-	proxyPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns},
-		Spec: corev1.PodSpec{
-			ActiveDeadlineSeconds:        d.podDeadline(spec.Resources.LifetimeCap),
-			AutomountServiceAccountToken: boolPtr(false),
-			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
-			// for the init container; without it, "permission denied".
-			SecurityContext: &corev1.PodSecurityContext{FSGroup: &proxyNonrootGID, Sysctls: proxyDNSSysctls()},
-			// SECURITY: default true injects a <SVC>_SERVICE_HOST/PORT pair for
-			// every namespace Service into every container — a free
-			// service-topology enumeration nothing here needs.
-			EnableServiceLinks: boolPtr(false),
-			// InitContainers stages the proxy config from the Secret into an
-			// in-memory emptyDir as owner-only 0400 (see proxyConfigSecretVolumeName
-			// doc above).
-			InitContainers: []corev1.Container{{
-				Name:  stageProxyConfigInitName,
-				Image: d.cfg.ProxyImage,
-				Args:  []string{"-stage-config-src", proxyConfigSecretPath(), "-stage-config-dst", proxyConfigStagedPath()},
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: proxyConfigSecretVolumeName, MountPath: proxyConfigSecretMountDir, ReadOnly: true},
-					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir},
-				},
-				SecurityContext: restrictedSecurityContext(),
-				Resources:       proxyResources(false),
-				// The binary logs its refusal to stderr, not /dev/termination-log;
-				// without this proxyStartFailure's error names no cause.
-				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-			}},
-			Containers: []corev1.Container{{
-				Name:  proxyContainerName,
-				Image: d.cfg.ProxyImage,
-				// -config, not an env var: reaches this container only via the
-				// read-only staged-file mount (see SECURITY note above).
-				Args: []string{"-config", proxyConfigStagedPath()},
-				Env: []corev1.EnvVar{
-					{Name: "WARDYN_RUN_ID", Value: spec.RunID.String()},
-					{Name: "WARDYN_CONTROL_PLANE_URL", Value: spec.ProxyConfig.ControlPlaneURL},
-					{Name: proxy.DNSListenEnv, Value: ":53"},
-				},
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir, ReadOnly: true},
-				},
-				SecurityContext:          restrictedSecurityContext(),
-				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
-				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-				// The proxy binds its listener only once it serves: after its startup resolve has
-				// succeeded and, on a runner (self_lapse), after its first renew and its decision sink's
-				// first grant. A connect to it is that proof: without a probe the container is Ready as
-				// soon as it runs, and waitPodIP can return before a failing resolve exits it, or start an
-				// agent whose requests the proxy still refuses, a short run's recording upload among them.
-				ReadinessProbe: &corev1.Probe{
-					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
-					PeriodSeconds: 1,
-				},
-			}},
-			Volumes: []corev1.Volume{
-				{
-					Name: proxyConfigSecretVolumeName,
-					VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-						SecretName: secretName(spec.RunID),
-						Items: []corev1.KeyToPath{{
-							Key:  proxyConfigSecretKey,
-							Path: proxyConfigFileName,
-							Mode: &proxyConfigSecretFileMode,
-						}},
-					}},
-				},
-				{
-					Name:         proxyConfigStagedVolumeName,
-					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory}},
-				},
-			},
-		},
-	}
-	// Operator knobs the sidecar reads from its OWN environment: a pod
-	// inherits nothing from wardynd, so without this an operator setting is
-	// unreachable rather than "off". Same list as the docker driver's.
-	for _, kv := range runner.ProxySidecarEnvKnobs() {
-		proxyPod.Spec.Containers[0].Env = append(proxyPod.Spec.Containers[0].Env,
-			corev1.EnvVar{Name: kv[0], Value: kv[1]})
-	}
-	if !d.runnerMode() {
-		withLiveDenyDir(proxyPod)
-	}
-	if d.cfg.ImagePullSecret != "" {
-		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
-	}
-	d.placement.apply(proxyPod, spec.RunID, componentProxy, spec.Labels)
-	if err := d.runnerPodSpec(proxyPod, componentProxy, spec.ProxyConfig.ControlPlaneURL); err != nil {
+	keepSvc, err := d.keepService(ctx, ns, spec, objLabels(componentProxy))
+	if err != nil {
 		return fail(err)
 	}
-	if cpPin != nil { // a No network run on a server: Wardyn's one address, with no DNS rule to find it
-		proxyPod.Spec.HostAliases = append(proxyPod.Spec.HostAliases, *cpPin)
+
+	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
+	proxyPod, err := d.buildProxyPod(proxyPodInputs{
+		RunID: spec.RunID, Namespace: ns, SecretName: secretName(spec.RunID),
+		Deadline: d.podDeadline(spec.Resources.LifetimeCap), ControlPlaneURL: spec.ProxyConfig.ControlPlaneURL,
+		Azure: len(spec.ProxyConfig.AzureGates) > 0, Labels: spec.Labels, CPPin: cpPin,
+	})
+	if err != nil {
+		return fail(err)
 	}
+	preferNode(proxyPod, warmNode)
 	createdProxy, err := d.createPod(ctx, spec.RunID, componentProxy, proxyPod)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
@@ -410,13 +329,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// Contained before it ever opens, rather than running to its deadline.
 		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
 	}
+	proxyAddr, err := d.keepAddress(ctx, ns, spec.RunID, keepSvc, proxyIP)
+	if err != nil {
+		return fail(err)
+	}
 
 	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" to
 	// the resolved IP (its only route there, since the agent NetworkPolicy
 	// allows no DNS at all).
 	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
-		idleCmd = []string{"agent-run", "--idle"}
+		idleCmd = d.interactiveIdleCmd(spec)
 	}
 	if spec.Resources.PidsLimit > 0 {
 		slog.Warn("wardynd: k8s substrate: PidsLimit requested but not enforced (Kubernetes has no per-container pids ResourceName; the fork-bomb guard is a node-level kubelet setting, not a per-pod one); running WITHOUT a pids cap",
@@ -432,14 +355,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			ActiveDeadlineSeconds:        d.podDeadline(spec.Resources.LifetimeCap),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
-			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
-			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
+			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod's (buildProxyPod).
+			HostAliases:                  []corev1.HostAlias{{IP: proxyAddr, Hostnames: []string{"wardyn-proxy"}}},
 			// Default ClusterFirst would point the agent at kube-dns, which its
 			// NetworkPolicy denies. Its one nameserver is its proxy pod, whose
 			// listener answers every query REFUSED and records it, except AAAA
 			// for its own name: a proxy-unaware lookup fails at once and leaves a run.dns.query row.
 			DNSPolicy: corev1.DNSNone,
-			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{proxyIP}},
+			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{proxyAddr}},
 			Containers: []corev1.Container{{
 				Name:    mainContainerName,
 				Image:   spec.Image,
@@ -482,6 +405,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := d.placeAgentPod(agentPod, spec); err != nil {
 		return fail(err)
 	}
+	preferNode(agentPod, warmNode)
 	agentPod.Labels[labelRecord] = strconv.FormatBool(spec.RecordWithin(d.cfg.Record))
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)
@@ -489,6 +413,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := recheckDriveClaims(ctx, d.clientset, ns, spec.Drives, claims); err != nil {
 		return fail(err)
 	}
+	keepAgent(agentPod, keepSvc)
 	if d.cfg.AgentSandbox {
 		if err := d.createAgentSandbox(ctx, clock, agentPod); err != nil {
 			return fail(err)

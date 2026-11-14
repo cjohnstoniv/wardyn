@@ -197,12 +197,15 @@ func (d *Driver) startCanaryRecheck() {
 	}()
 }
 
-// Close stops the canary re-check loop, if one runs, and waits for a check in flight to remove its
+// Close stops the canary re-check loop and the warm pool loop, if they run, and waits for a check in flight to remove its
 // canary pod and policy. The driver's owner calls it at shutdown: wardynd through the orchestrator's
 // Close, wardyn-runnerd when its runtime closes. Calling it again does nothing more.
 func (d *Driver) Close() error {
 	if d.stopRecheck != nil {
 		d.stopRecheck()
+	}
+	if d.warm.stop != nil {
+		d.warm.stop()
 	}
 	return nil
 }

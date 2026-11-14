@@ -412,6 +412,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - The guarantee covers create and gate-removal hooks, and only while those two identities are configured right. A kind run has not yet proven it.
     - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
   - Refused with `k8s.ackAmbientDefaultDeny` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` too, as a literal or a `valueFrom`.
+  - `k8s.agentSandbox.keep.enabled` (`WARDYN_K8S_AGENT_SANDBOX_KEEP`, default `false`, **experimental**): keeps an ended interactive `claude-code` or `codex-cli` run whose work folder is a kept drive, and revives it. Needs `k8s.agentSandbox.enabled=true`.
+    - Adds `create`, `get`, `delete` on `services` and `create`, `get`, `update`, `delete`, `deletecollection` on `endpointslices.discovery.k8s.io` to the runner Role. See [keep and revive](../../../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive).
+- `k8s.warmPools` (`WARDYN_K8S_WARM_POOLS`, default `[]`, **experimental**): idle placeholder pods per pool that hold room on a node with the pool's image pulled. No new Role verb. See [Kubernetes: warm pools](../../../docs/operations/kubernetes-warm-pools.md).
+  - `k8s.warmPoolPriorityClass.create` (default `true`) renders a PriorityClass of value -10 that never preempts. `.name` names it (`WARDYN_K8S_WARM_PRIORITY_CLASS`).
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
   - Ships at 1000m/2048Mi so a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size.
   - `runner.sandbox.proxyResources` sizes each run's `wardyn-proxy` sidecar (500m/256Mi).

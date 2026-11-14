@@ -1,0 +1,81 @@
+{{- /*
+Keep and revive on the agent-sandbox backend (experimental). Rendered only when k8s.enabled,
+k8s.agentSandbox.enabled and k8s.agentSandbox.keep.enabled are all on.
+
+Keep gives wardynd create and update on Services and EndpointSlices in the runs namespace. These two policies hold
+those writes to what keep needs: a ClusterIP Service named for a run, with no selector and no external IPs, and
+EndpointSlices labelled for such a Service. Like the pod policies, they select on the authenticated requester. They
+do not limit deletes. One policy per kind, so each expression is type-checked against the one kind it reads.
+*/ -}}
+{{- if and .Values.k8s.enabled (.Values.k8s.agentSandbox | default dict).enabled ((.Values.k8s.agentSandbox | default dict).keep | default dict).enabled }}
+{{- $wardynUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "wardyn.serviceAccountName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "wardyn.fullname" . }}-keep-service
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  matchConditions:
+    - name: requested-by-wardynd
+      expression: {{ printf "request.userInfo.username == '%s'" $wardynUser | quote }}
+  validations:
+    - expression: "object.metadata.name.startsWith('wardyn-proxy-svc-') && object.spec.type == 'ClusterIP' && (!has(object.spec.selector) || size(object.spec.selector) == 0) && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)"
+      message: "wardynd may make only a run's own ClusterIP Service, with no selector and no external IPs"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "wardyn.fullname" . }}-keep-endpoints
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["discovery.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["endpointslices"]
+  matchConditions:
+    - name: requested-by-wardynd
+      expression: {{ printf "request.userInfo.username == '%s'" $wardynUser | quote }}
+  validations:
+    - expression: "has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')"
+      message: "wardynd may write EndpointSlices only for a run's own Service"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "wardyn.fullname" . }}-keep-service
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "wardyn.fullname" . }}-keep-service
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "wardyn.fullname" . }}-keep-endpoints
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "wardyn.fullname" . }}-keep-endpoints
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+{{- end }}

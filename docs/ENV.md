@@ -208,7 +208,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_CONTROL_PLANE_NAMESPACE` | string | (unset) | the namespace of wardynd's own pods: with the labels below, the only peer a No network run's proxy pod may reach (`-tags k8s`). The chart sets it. [Details](#wardyn_k8s_control_plane_namespace) |
 | `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` | `k=v,k=v` | (unset) | wardynd's pod labels for that peer. The chart sets its selector labels and `app.kubernetes.io/component=control-plane`. Set both or neither. |
 | `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
+| `WARDYN_K8S_AGENT_SANDBOX_KEEP` | bool | off | experimental: on the agent-sandbox backend, keeps an ended interactive `claude-code` or `codex-cli` run whose work folder is a kept drive, for revive (`-tags k8s`). Needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.keep.enabled`. [Details](#wardyn_k8s_agent_sandbox_keep) |
 | `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE` | string | empty | experimental: a `SandboxTemplate` in each runs namespace whose `sandbox-template.wardyn.dev/` annotations the agent pod takes; needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.template`. [Details](#wardyn_k8s_agent_sandbox_template) |
+| `WARDYN_K8S_WARM_POOLS` | JSON | empty | experimental: idle placeholder pods per pool that hold room on a node with the pool's image pulled; a run that fits a pool prefers that node (`-tags k8s`); server mode only. Chart: `k8s.warmPools`. [Details](#wardyn_k8s_warm_pools) |
+| `WARDYN_K8S_WARM_PRIORITY_CLASS` | string | empty | the PriorityClass warm placeholders take, so any run evicts them (`-tags k8s`). Chart: `k8s.warmPoolPriorityClass`. [Details](#wardyn_k8s_warm_pools) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -835,12 +838,25 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Boot refuses when the cluster does not serve `agents.x-k8s.io/v1beta1`, when wardynd lacks a needed verb, under `wardyn-runnerd`, or beside `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`.
 - Tested with agent-sandbox v1.0.9 only. Setup, what it widens and what is not supported: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md). Chart: `k8s.agentSandbox.*`.
 
+### `WARDYN_K8S_AGENT_SANDBOX_KEEP`
+
+- Experimental, off by default (`-tags k8s`). Needs `WARDYN_K8S_AGENT_SANDBOX`. Boot refuses it alone, under `wardyn-runnerd`, and when wardynd lacks a verb on `services` or `endpointslices.discovery.k8s.io` in a runs namespace.
+- A run that can be kept (interactive, with its work folder on a kept drive) gets a ClusterIP Service with no selector and an EndpointSlice Wardyn writes. Its agent's `wardyn-proxy` address and nameserver are the Service's, so a replaced proxy is reached without changing the agent pod.
+- Every other run is built as with the switch off.
+- Keep, revive and what turning keep on widens: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md#keep-and-revive).
 ### `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`
 
 - Experimental, empty by default (`-tags k8s`). The name of an agent-sandbox `SandboxTemplate` in each runs namespace. The agent pod takes only its annotations under `sandbox-template.wardyn.dev/`. Placement and runtime come only from `WARDYN_K8S_SANDBOX_PLACEMENT` and the confinement class, where the boot canary checks NetworkPolicy enforcement.
 - A template that sets any pod field (placement included) or other field, or changes an annotation Wardyn set, refuses the run before its `Sandbox` is created. Boot refuses a template that is missing, unreadable or refused, a name that is not a valid object name, and the variable without `WARDYN_K8S_AGENT_SANDBOX`.
 - Needs `get` on that one name of `sandboxtemplates.extensions.agents.x-k8s.io`. [A platform template](operations/kubernetes-agent-sandbox.md#a-platform-template).
 
+### `WARDYN_K8S_WARM_POOLS`
+
+- Experimental, empty by default (`-tags k8s`). A JSON array of pools: `name` (a DNS label, at most 30 characters), `image`, `class` (`CC1`, `CC2` or `CC3`), `cpu`, `memory` and `size` (0 to 20; at most 50 across all pools).
+- Wardyn keeps `size` placeholder pods per pool in the default runs namespace. Each runs the pool's image idle, with no settings, secrets, files or credentials and, where the namespace enforces NetworkPolicy, no network. Each reserves `cpu` and `memory` plus a proxy's share.
+- A run whose image and class match a pool, and whose requests fit, removes one placeholder and prefers its node. The run's own pods are made fresh and checked as always.
+- Boot refuses a malformed value, a `CC2` or `CC3` pool whose RuntimeClass is not pinned, and any value under `wardyn-runnerd`. `WARDYN_K8S_WARM_PRIORITY_CLASS` names the PriorityClass placeholders take.
+- How placeholders are kept and claimed, and what they cost: [Kubernetes: warm pools](operations/kubernetes-warm-pools.md).
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 
 - Where the `k8s` substrate puts every pod it creates: the agent pod, the proxy pod and the boot-time egress canary (`-tags k8s`).

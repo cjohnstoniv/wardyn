@@ -107,6 +107,9 @@ An extraEnv entry for the override with no literal value (valueFrom) is unreadab
 rather than read as off.
 */}}
 {{- $agentSandbox := (.Values.k8s.agentSandbox | default dict) -}}
+{{- if and (($agentSandbox.keep | default dict).enabled) (not $agentSandbox.enabled) -}}
+{{- fail "wardyn: k8s.agentSandbox.keep.enabled needs k8s.agentSandbox.enabled=true: keep and revive work only on the agent-sandbox backend." -}}
+{{- end -}}
 {{- if and $agentSandbox.template (not $agentSandbox.enabled) -}}
 {{- fail "wardyn: k8s.agentSandbox.template needs k8s.agentSandbox.enabled=true: only the agent-sandbox backend reads a SandboxTemplate." -}}
 {{- end -}}
@@ -239,6 +242,16 @@ rules:
     resources: ["sandboxtemplates"]
     resourceNames: [{{ . | quote }}]
     verbs: ["get"]
+{{- end }}
+{{- if ($agentSandbox.keep | default dict).enabled }}
+  # Keep and revive (k8s.agentSandbox.keep): each run's Service with no selector, and the one EndpointSlice Wardyn writes
+  # for it, so a replaced proxy is reached at the same address. No list or watch on Services; no other discovery resource.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["create", "get", "update", "delete", "deletecollection"]
 {{- end }}
 {{- end }}
   - apiGroups: [""]

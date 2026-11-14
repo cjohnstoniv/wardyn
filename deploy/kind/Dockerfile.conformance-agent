@@ -4,7 +4,10 @@
 # an image that fails Exec closed. wardyn-rec is staged into the build
 # context by the caller (make build-conformance-agent-image / ci.yml) — the
 # same `go build ./cmd/wardyn-rec` every agent image's own builder stage
-# runs — not rebuilt here, so this file stays exactly what it is: busybox
-# plus one binary.
+# runs — not rebuilt here, so this file stays exactly what it is: busybox,
+# one binary, an idle agent-run stub for interactive runs, and the agent user
+# (uid 1000) with a home folder it owns, as every agent image has.
 FROM busybox:1.38@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
 COPY wardyn-rec /usr/local/bin/wardyn-rec
+RUN printf '%s\n' '#!/bin/sh' '[ "$1" = --idle ] || exit 2' 'trap "exit 143" TERM' 'while :; do sleep 3600 & wait $!; done' > /usr/local/bin/agent-run && chmod 0755 /usr/local/bin/agent-run
+RUN echo 'agent:x:1000:1000::/home/agent:/bin/sh' >> /etc/passwd && echo 'agent:x:1000:' >> /etc/group && mkdir -p /home/agent && chown 1000:1000 /home/agent

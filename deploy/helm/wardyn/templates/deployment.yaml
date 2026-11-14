@@ -1095,6 +1095,16 @@ $ is the root here too.
             - name: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE
               value: {{ . | quote }}
             {{- end }}
+            {{- if (.Values.k8s.agentSandbox.keep | default dict).enabled }}
+            - name: WARDYN_K8S_AGENT_SANDBOX_KEEP
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- with .Values.k8s.warmPools }}
+            - name: WARDYN_K8S_WARM_POOLS
+              value: {{ toJson . | quote }}
+            - name: WARDYN_K8S_WARM_PRIORITY_CLASS
+              value: {{ include "wardyn.warmPriorityClassName" $ | quote }}
             {{- end }}
             {{- $rtc := list -}}
             {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}

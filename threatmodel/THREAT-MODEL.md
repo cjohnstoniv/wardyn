@@ -443,6 +443,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 - A scheduling gate (`wardyn.dev/verify`) holds the pod. Wardynd reads it back and removes the gate only if it matches what Wardyn asked for.
 - The gate holds unless the controller or an admission hook removes it. Two admission policies now cover the create and the gate removal, only as far as the controller's identity and wardynd's are configured right.
 - A pod read back without its gate is refused and torn down with "may have started", never "nothing ran".
+- **[0.10, experimental]** With `k8s.agentSandbox.keep.enabled`, wardynd also holds Service and EndpointSlice verbs in the runs namespace, and a kept run is revived from its `Sandbox`. At revive, wardynd reads the held pod back against the Sandbox's stored template, not against a pod it has just built. It refuses a Sandbox whose spec was edited, or whose UID is not the one wardynd recorded on the run's EndpointSlice when it made the Sandbox. Anyone who can create `sandboxes` and write `endpointslices` in the runs namespace can defeat that record ([keep and revive](../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive)).
 - What backs these claims is the cases of the `conformance-k8s-agent-sandbox` CI job, which is new and not a required check. Treat them as true only while that job is green on the release you run.
 
 | Crossing | Guard | Residual |

@@ -477,7 +477,7 @@ test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_T
 # builder-stage duplicate) into a throwaway build context — mirrors
 # test-envbuild-integration's own tools-staging recipe.
 CONFORMANCE_AGENT_IMAGE ?= wardyn/conformance-agent:local
-build-conformance-agent-image: ## Build the busybox+wardyn-rec conformance agent image (deploy/kind/Dockerfile.conformance-agent)
+build-conformance-agent-image: ## Build the conformance agent image: busybox, wardyn-rec and an idle agent-run stub (deploy/kind/Dockerfile.conformance-agent)
 	@echo "Building the conformance agent image ($(CONFORMANCE_AGENT_IMAGE))..."
 	@set -eu; \
 	tools_dir="$$(mktemp -d)"; \
@@ -846,6 +846,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	./scripts/check-helm-templates.sh
 	./scripts/test-helm-runnerd.sh
 	./scripts/test-helm-agent-sandbox.sh
+	./scripts/test-helm-warm-pools.sh
 	./scripts/test-helm-groundtruth.sh
 	./scripts/test-helm-env-once.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true

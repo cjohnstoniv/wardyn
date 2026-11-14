@@ -2827,6 +2827,124 @@ jobs:
         run: |
           grep -E 'node-restart: list (kept|lost)' node-restart.log || echo "no case line, so the test did not reach its verdict"
 
+  # Keep and revive on the agent-sandbox backend, through the API as a signed-in person
+  # (scripts/kind-agent-sandbox-keep-walk.sh, ui/e2e/walk/agent-sandbox-keep.spec.ts): an interactive run
+  # with a kept work folder ends, reads as kept with its agent pod held and no node, is extended and revived,
+  # and reads its file back; a run that is not kept is torn down at its end. The driver pins and the
+  # conformance cases never drive that path through wardynd's own routes.
+  #
+  # The cluster is made here on Kubernetes v1.30.0, the version the backend's docs name (the same node
+  # image and kind release as ci.yml's conformance-k8s-agent-sandbox), with the quickstart's own kind config
+  # and ports; `make kind-quickstart` reuses a cluster that already exists. Then the same Dex overlay as
+  # kind-sso-walk. The script installs the controller by its pins and upgrades the release itself.
+  #
+  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT (scripts/test-repo-guards.sh), kept out of
+  # notify-new-lanes' needs and release.yml's watched= until two scheduled runs in a row are green.
+  # `if: inputs.scope != 'candidate'` keeps train-gate's candidate dispatch from running it.
+  kind-agent-sandbox-keep-walk:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-26.04
+    # 60 before the kept run lived 600 s instead of 240 s: its end wait grows by 360 s, so 60 + 6 = 66.
+    timeout-minutes: 66
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - name: Docker available
+        run: docker --version
+      - name: Install UI deps (run-ui-e2e.sh drives Playwright directly from ui/)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build the agent images the SSO overlay needs (agent-aws-sso + the rest of agent-images-core)
+        run: make agent-images
+      # The quickstart's kind config with the SSO recipe's host ports, as deploy/kind/quickstart.sh renders it.
+      - name: Render the quickstart kind config (SSO recipe's ports)
+        run: |
+          sed -e 's/hostPort: 8080$/hostPort: 8280/' -e 's/hostPort: 2222$/hostPort: 2322/' \
+            deploy/kind/quickstart-kind-config.yaml > "$RUNNER_TEMP/quickstart-kind-config.yaml"
+          grep -c 'hostPort: 8280' "$RUNNER_TEMP/quickstart-kind-config.yaml"
+          grep -c 'hostPort: 2322' "$RUNNER_TEMP/quickstart-kind-config.yaml"
+      - uses: ./.github/actions/kind-binary
+        with:
+          version: v0.23.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.23.0
+          node_image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
+          cluster_name: wardyn-quickstart
+          config: ${{ runner.temp }}/quickstart-kind-config.yaml
+          wait: 90s
+      - name: Bring up the kind quickstart cluster (reuses the cluster above; SSO recipe's ports)
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+          WARDYN_QUICKSTART_SSH_PORT: "2322"
+        run: make kind-quickstart
+      - name: Add the SSO overlay (Dex + the fake AWS endpoints)
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+          WARDYN_QUICKSTART_SSH_PORT: "2322"
+        run: make kind-sso
+      - name: Keep and revive walk (controller, upgrade, member session through the API)
+        env:
+          WARDYN_TEST_K8S: "1"
+          # This runner's wardyn-quickstart cluster was created above and belongs to nothing else: safe to
+          # change. See scripts/kind-agent-sandbox-keep-walk.sh's own guard.
+          WARDYN_ACK_SHARED_QUICKSTART: "1"
+          WARDYN_KIND_AGENT_SANDBOX_KEEP_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-agent-sandbox-keep
+        shell: bash
+        run: |
+          set +e   # capture the real exit code below instead of failing the step on it
+          mkdir -p test/reports/e2e
+          ./scripts/kind-agent-sandbox-keep-walk.sh 2>&1 | tee test/reports/e2e/kind-agent-sandbox-keep-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      # Asserts on the walk's own exit code (77 is common.sh's skip_lane: opted out, proved nothing) and
+      # that it reached its closing PASS line, as kind-survival-walk's does.
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-agent-sandbox-keep-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-agent-sandbox-keep-walk.sh self-skipped (exit 77): WARDYN_TEST_K8S or WARDYN_ACK_SHARED_QUICKSTART did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-agent-sandbox-keep-walk.sh exited ${WALK_EXIT:-<unset>}: see the uploaded log"
+            exit 1
+          fi
+          grep -q '^kind-agent-sandbox-keep-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: kind-agent-sandbox-keep-walk-results
+          path: |
+            test/reports/e2e/kind-agent-sandbox-keep-walk.log
+            test/reports/e2e/kind-agent-sandbox-keep/**
+          if-no-files-found: error
+
   # ai-gateway-kind is outside notify-new-lanes (scripts/test-repo-guards.sh, NOTIFY_EXEMPT), so a
   # scheduled red reaches someone through this job instead.
   notify-ai-gateway-kind:

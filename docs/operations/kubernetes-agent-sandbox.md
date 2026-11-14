@@ -31,7 +31,7 @@
 ## Install the controller
 
 - Wardyn's chart never installs the controller or its CRD. You do, and only the core install.
-- Do not install the extensions manifest. Its ClusterRole adds NetworkPolicy write rights cluster-wide, and claims and warm pools are unsupported here. A [platform template](#a-platform-template) needs only one CRD from it, not its controller.
+- Do not install the extensions manifest. Its ClusterRole adds NetworkPolicy write rights cluster-wide, and Wardyn does not use its claims or warm pools. A [platform template](#a-platform-template) needs only one CRD from it, not its controller.
 
 1. Download `sandbox.yaml` from the agent-sandbox `v1.0.9` release.
 2. Check its sha256 against the one that release publishes.
@@ -60,7 +60,7 @@
 ## A platform template
 
 - A platform team can own an agent-sandbox `SandboxTemplate` that Wardyn reads for the agent pod. Experimental, off by default.
-- What this delivers: templates, contributing annotations under `sandbox-template.wardyn.dev/` only, with claims and warm pools as a written design (below). Placement comes only from Wardyn's own settings, and a template's own placement fields are refused. Wardyn still builds the whole agent pod: its containers, env, Secret references, security context, resources, volumes, DNS, `hostAliases`, deadline, gate, labels, ServiceAccount settings, placement and runtime.
+- What this delivers: templates, contributing annotations under `sandbox-template.wardyn.dev/` only. Wardyn's own warm pools and claim stand in for the upstream ones (below). Placement comes only from Wardyn's own settings, and a template's own placement fields are refused. Wardyn still builds the whole agent pod: its containers, env, Secret references, security context, resources, volumes, DNS, `hostAliases`, deadline, gate, labels, ServiceAccount settings, placement and runtime.
 
 ### Install the template's CRD only
 
@@ -88,17 +88,13 @@
 
 ### Claims and warm pools
 
-- Not supported. A pod from a warm pool cannot meet the gate claim today:
-  - The extensions controller creates a warm pod from the template before any run exists. Wardyn's per-run parts are not in it: its env and Secret references, managed files, the `hostAliases` entry for the run's proxy, and the run labels its NetworkPolicies select.
-  - Most of a pod's spec cannot change once it is created, so a claim cannot add those parts later.
-  - A warm pod is already scheduled and running when it is claimed. The read-back checks a held pod, so it could not say that nothing ran before the check.
-  - The v1.0.9 `SandboxClaim` spec offers `additionalPodMetadata`, plain-value `env`, `lifecycle`, `volumeClaimTemplates` and `warmPoolRef`: no scheduling gate, no Secret reference, no `hostAliases`.
-  - Its controller's ClusterRole adds NetworkPolicy write rights in every namespace.
-- What it would take. No single item is enough; it needs one design from the first list and the boundary in the second.
-  - A design that delivers both the gate and the per-run fields, either:
-    - an upstream claim that keeps a warm pod behind a gate the claimant removes, and carries the per-run pod fields; or
-    - Wardyn delivering its per-run parts after start (Secrets, files, the proxy address), with the warm pod running under a deny-all policy and an agreed image until claimed. The gate claim would then change to "ran only under deny-all before the run".
-  - In addition, an acceptable controller boundary: an extensions controller whose NetworkPolicy and pod rights are limited to the runs namespace. On its own this fixes neither problem above.
+- Wardyn has its own warm pools and claim: idle placeholders that hold room on a node, and a run that removes one and prefers its node. See [Kubernetes: warm pools](kubernetes-warm-pools.md).
+- The upstream `SandboxWarmPool` and `SandboxClaim` are not used. A pod from an upstream warm pool cannot meet the gate claim:
+  - its per-run parts are missing: env and Secret references, managed files, the proxy address and the run labels its NetworkPolicies select;
+  - most of a pod's spec cannot change after create, so a claim cannot add them later;
+  - it is already running when claimed, and the read-back checks a held pod;
+  - the v1.0.9 `SandboxClaim` carries no scheduling gate, Secret reference or `hostAliases`;
+  - its controller's ClusterRole adds NetworkPolicy write rights in every namespace.
 
 ## What turning it on widens
 
@@ -107,6 +103,7 @@
 | 1 | The controller becomes a trusted actor. Its ClusterRole can create, delete, patch and watch pods, services and PVCs in every namespace. | It can create any pod, with any ServiceAccount. Pod Security Admission still applies. | Trust it, or leave this off. Install the core controller only. |
 | 2 | wardynd gains `patch` on `pods` in the runs namespace, to remove the gate. | Small. wardynd already creates and deletes pods and NetworkPolicies there. | The patch carries the pod's UID and resourceVersion. |
 | 3 | A second way to take a pod out of its NetworkPolicy: edit the Sandbox's template labels. The controller copies label edits onto the live pod. | The same power as `patch` on pods, but a different verb on a different resource. An existing RBAC review may not cover it. | Nobody else may write `sandboxes` in the runs namespace. Keep the admission policies on. |
+| 4 | With keep on, wardynd gains `create`, `get`, `delete` on `services` and `create`, `get`, `update`, `delete`, `deletecollection` on `endpointslices.discovery.k8s.io` in the runs namespace. | The chart's admission policy holds what wardynd creates or changes to ClusterIP Services with no selector or external IPs, named for a run, and to EndpointSlices of those Services. It does not limit deletes: wardynd can delete any Service or EndpointSlice in the runs namespace. | Keep the admission policies on. Keep other Services out of the runs namespace. |
 
 - Widening 1 in plain words: a pod that runs outside any NetworkPolicy is not confined. The controller can make one.
 - Wardyn's own verbs on Sandboxes are create, get, list and delete. It holds no update, patch, watch or deletecollection on them.
@@ -162,6 +159,31 @@
 | Under `wardyn-runnerd`, at boot | k8s: the agent-sandbox backend does not run under wardyn-runnerd; unset WARDYN_K8S_AGENT_SANDBOX |
 | The template sets a pod field | k8s: agent sandbox: SandboxTemplate `<namespace>`/`<name>`: spec.podTemplate.spec.`<field>` is refused: Wardyn builds the whole agent pod and takes its placement and runtime only from its own settings, where the boot canary proves NetworkPolicy enforcement; a template sets only annotations under sandbox-template.wardyn.dev/ |
 
+## Keep and revive
+
+- Experimental, off by default: `k8s.agentSandbox.keep.enabled` (`WARDYN_K8S_AGENT_SANDBOX_KEEP`). Needs the backend on.
+- Kubernetes has no pause button. A run is kept only when its time runs out. Extend it, then revive it from its page.
+
+| Step | What happens |
+| --- | --- |
+| A run that can be kept starts | It is interactive, with its work folder on a kept drive. It gets a Service with no selector and an EndpointSlice that points at its proxy pod, and its agent reaches the proxy at the Service's address. |
+| Its time runs out | If its agent is `claude-code` or `codex-cli`, Wardyn stops the proxy, then deletes the agent pod. The controller makes it again behind the gate, with no node and no compute. The work folder and the run's Secret stay. A run of any other agent ends as with keep off, and its `run.ended` audit row says why. |
+| Extend, then revive | A new proxy pod with a fresh run token and the current limits, then the same check before start on the held pod, then the gate comes off. The task is not run again. |
+| Restart with current limits, on a live run that can be kept | A new proxy pod. The agent keeps running and reaches it at the same address. |
+| Any other run | Built as with keep off. Its end stops it, and revive answers 409 `revive_unsupported`. |
+
+- Lost at keep: running programs, memory, open connections and the agent's conversation, which lives in the home folder. The work folder stays.
+- After a revive the conversation does not continue. Start the agent again from the terminal.
+- A revived pod's deadline counts again from its new start.
+- A kept run's held pod still counts against a ResourceQuota in the runs namespace.
+- A kept run keeps its Secret for the whole grace: secret env, managed files and its first proxy config, with the old run token and the run's CA key. Revive revokes that token. Docker keeps the config only sealed in the database.
+- Keep leaves a marker file in the kept work folder, `.wardyn/booted-<run id>`. If it is deleted, the next revive starts the agent as on a first boot.
+- The agent of a run that can be kept no longer goes with its proxy pod. Deleting that proxy pod by hand leaves the agent running with no network: its NetworkPolicy allows only its own proxy pod.
+- Revive checks the held pod against its `Sandbox`'s stored template. It refuses a `Sandbox` whose spec was edited, and one deleted and made again under the same name: Wardyn records the UID of the `Sandbox` it made on the run's EndpointSlice and checks it at each end, status read and revive. Anyone who can both create `sandboxes` and write `endpointslices` in the runs namespace can defeat that record, so keep those rights to wardynd.
+- The pool's keep chip and the ending-soon notice say files are kept on every interactive run of such an install. Only runs with a kept work folder and a `claude-code` or `codex-cli` agent are kept.
+- An EndpointSlice pointed anywhere else does not reach the agent. Its NetworkPolicy allows only its own proxy pod, matched after Service translation; Wardyn's conformance suite checks this on Calico.
+- Pause in place, which freezes a running run with its memory, is Docker-only. Kubernetes has no safe way to freeze a pod without a privileged program on every node.
+
 ## Switching it off with live runs
 
 - Switching off does not stop existing pods. A run that already started keeps running, because Wardyn removed its gate. Off also removes the RBAC on Sandboxes, so Wardyn can no longer delete them.
@@ -172,6 +194,8 @@
 - A Sandbox left behind keeps the controller watching it. If its pod is ever replaced, the controller makes the replacement from the template, which carries the gate, so it stays held and never starts.
 - Switching off also removes the two admission policies with the chart. After that, a replacement stays held only because the controller copies the template; no policy checks it.
 
+- Turning keep off tears kept runs down at the next lease pass, about a minute later. A run started with keep on that is still running keeps using its Service, and the Service owns its agent: deleting the Service ends that run. Once those runs have ended, their Services are left and route nowhere. Delete them then with `kubectl delete services -l wardyn.managed=true,wardyn.component=proxy` in the runs namespace; each Service's EndpointSlice goes with it.
+
 - Stop and kill delete the Sandbox before the pods, so the controller does not recreate the agent pod. A failed Sandbox delete returns an error and keeps the NetworkPolicies. The orphan sweep also lists Sandboxes.
 
 ## Not supported
@@ -179,11 +203,11 @@
 | Not supported | What happens |
 | --- | --- |
 | Runner mode (`wardyn-runnerd`) | Refused at boot. |
-| Claims, warm pools | No code path. See [Claims and warm pools](#claims-and-warm-pools). |
+| The upstream claims and warm pools | Not used. Wardyn's own are in [Kubernetes: warm pools](kubernetes-warm-pools.md); see [Claims and warm pools](#claims-and-warm-pools). |
 | Template fields outside the list | Refused before the `Sandbox` is created. See [A platform template](#a-platform-template). |
-| Pause and resume | Never offered. Wardyn never suspends a Sandbox. |
+| Pause in place | Never offered. Wardyn never suspends a Sandbox. With keep on, a run is kept at its end and revived instead: [Keep and revive](#keep-and-revive). |
 | `linux_vm` | Refused as before. |
-| Revive, restart with current limits | 409 `revive_unsupported`, as on the plain path. |
+| Revive, restart with current limits | With keep on, for a run that can be kept: [Keep and revive](#keep-and-revive). Otherwise 409 `revive_unsupported`, as on the plain path. |
 | Controller versions other than v1.0.9 | Unsupported. |
 
 - Other limits of the Kubernetes substrate are in [Kubernetes: known gaps](kubernetes-known-gaps.md).
