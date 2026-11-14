@@ -54,7 +54,8 @@
 - `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
   refused begin leaves the agent running. End stays open.
 - A limit set during a sign-in stops new entry. An open display stays until it
-  ends, and the agent comes back at End or within 30 minutes.
+  ends, and the agent comes back at End or within 30 minutes. If the end cannot
+  finish, Wardyn ends the run after 3 failed retries.
 - The person's browser is a different uid in the same sandbox, not a
   sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
   states what that holds and what it does not. After a share the agent holds

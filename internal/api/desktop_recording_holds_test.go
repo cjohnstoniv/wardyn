@@ -285,6 +285,34 @@ func TestDesktopSignin_EndOnAReplicaHoldingNoPauseTellsTheOthers(t *testing.T) {
 	}
 }
 
+// TestDesktopSignin_EndOnAReplicaHoldingThePauseStillTellsTheOthers: a sign-in ended on a replica that
+// holds its pause too, as every replica whose desktop watch read it open does, ends it here and still sends
+// the notice, so the replica that began it resumes as well.
+func TestDesktopSignin_EndOnAReplicaHoldingThePauseStillTellsTheOthers(t *testing.T) {
+	srv, _ := miscCovBusServer(t, "replica-b")
+	srv.cfg.RecordingStore = fsRecordingStore(t)
+	logs := miscCovCaptureLogs(t)
+	run := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}
+	hold := uuid.NewString()
+	srv.PauseDesktopRecording(context.Background(), run, desktopPauseSignin, hold)
+	srv.endDesktopHold(context.Background(), run, hold, nil)
+	srv.WaitBackground()
+	if srv.desktopRecs.holds(run.ID, hold) {
+		t.Fatal("the sign-in's end left its hold here")
+	}
+	announced := false
+	logs.mu.Lock()
+	for _, r := range logs.recs {
+		if v, _ := logs.attr(r, "kind"); strings.Contains(r.Message, "a notice to the other replicas was not sent") && v.String() == livebus.KindRecordingGap {
+			announced = true
+		}
+	}
+	logs.mu.Unlock()
+	if !announced {
+		t.Fatal("the sign-in's end was not announced (no recording_gap publish attempted) because this replica held it")
+	}
+}
+
 // TestDesktopRecording_AnEndedRunsForgottenPauseWritesItsResume: a pause the run outlives (its relay
 // closed after the run ended, before any hand back) is forgotten with a resume row, so every pause
 // row has one.
