@@ -106,7 +106,7 @@ func TestEntryRunner_MintAndTakeover(t *testing.T) {
 			if readOnly, release := srv.registerAttachHolder(run.ID, held); readOnly {
 				t.Fatal("could not seed the holder")
 			} else {
-				defer release()
+				defer func() { _ = release() }()
 			}
 			take := doSSO(t, srv, http.MethodPost, base+"/attach/takeover", ses[tc.actor], "")
 			if take.Code != tc.want {

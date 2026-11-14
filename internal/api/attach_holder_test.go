@@ -891,7 +891,7 @@ func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
 	if readOnly, release := srv.registerAttachHolder(run.ID, held); readOnly {
 		t.Fatal("could not seed the web holder")
 	} else {
-		defer release()
+		defer func() { _ = release() }()
 	}
 
 	ch := newFakeSSHChannel()
@@ -990,7 +990,7 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 			if readOnly {
 				t.Fatal("could not seed the holder")
 			}
-			defer release()
+			defer func() { _ = release() }()
 
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach/takeover", tc.session(t), "")
 			if w.Code != tc.want {
