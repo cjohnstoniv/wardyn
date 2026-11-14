@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -260,4 +261,67 @@ func TestEventSink_ConcurrentEmitDuringCloseNoPanic(t *testing.T) {
 	defer cancel()
 	sink.close(ctx)
 	wg.Wait()
+}
+
+// A heartbeat-only batch the control plane refuses raises dropped_total and neither kernel event
+// count: /healthz reads a rise in observed_total plus dropped_unmapped as kernel events still
+// arriving, so a lost heartbeat must not move those two. The beat is built as main's heartbeat loop
+// builds it.
+func TestEventSink_LostHeartbeatRaisesOnlyDroppedTotal(t *testing.T) {
+	var (
+		calls atomic.Int64
+		mu    sync.Mutex
+		beats []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest) // the first heartbeat-only batch is refused
+			return
+		}
+		var b struct {
+			Events []struct {
+				Data map[string]any `json:"data"`
+			} `json:"events"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		mu.Lock()
+		for _, ev := range b.Events {
+			beats = append(beats, ev.Data)
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	sink := newEventSink(srv.URL, "tok", 16, 1, 10*time.Millisecond, srv.Client())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+	mapper := &gatedMapper{inner: groundtruth.NewMapper(nil)}
+	beat := func() {
+		sink.emit(heartbeatFor("node-a", sink.droppedCount(), sink.observedCount(), mapper.droppedUnmappedCount(), sink.observedByKindSnapshot()))
+	}
+
+	beat()
+	for deadline := time.Now().Add(2 * time.Second); sink.droppedCount() < 1 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sink.droppedCount() != 1 {
+		t.Fatalf("dropped = %d after the refused heartbeat batch, want 1", sink.droppedCount())
+	}
+	beat()
+	for deadline := time.Now().Add(2 * time.Second); sink.postedCount() < 1 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(beats) != 1 {
+		t.Fatalf("accepted heartbeats = %d, want 1", len(beats))
+	}
+	num := func(k string) float64 { v, _ := beats[0][k].(float64); return v } // dropped_unmapped is omitted at 0
+	if num("dropped_total") != 1 || num("observed_total") != 0 || num("dropped_unmapped") != 0 {
+		t.Fatalf("the next heartbeat carries dropped_total %v, observed_total %v, dropped_unmapped %v; want 1, 0, 0",
+			num("dropped_total"), num("observed_total"), num("dropped_unmapped"))
+	}
 }

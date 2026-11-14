@@ -369,9 +369,9 @@ export const health = {
   // GET /healthz — liveness + trust boundary (unauthenticated; surfaced in the
   // shell so the real trust domain / identity provider are always visible).
   // ebpf_groundtruth is the kernel ground-truth stream's honest health
-  // (server.go ebpfGroundtruthStatus): unavailable = no sensor has ever beaten,
-  // degraded = stale heartbeat, idle = beating but blind, healthy = fresh beats
-  // AND real kernel events. Absent on an older daemon.
+  // (healthz.go ebpfGroundtruthStatus): unavailable = no sensor heartbeat on record
+  // (or unreadable), degraded = stale heartbeat, idle = beating with no kernel events, none
+  // new in 15 minutes or none known yet, healthy = fresh beats AND new kernel events. Absent on an older daemon.
   async health(): Promise<{
     // "ok" iff the daemon actually answered — the {} returned below on a
     // network error or a non-2xx has none, which is how the shell's heartbeat

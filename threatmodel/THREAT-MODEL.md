@@ -1647,7 +1647,7 @@ These risks are **not closed by v1 Wardyn**.
 12. **eBPF ground-truth stream live-validated on ONE host; the sensor has measured ceilings.**
     - The control-plane plumbing — ingest endpoint, audience-separated write-only token, append-only recording, `/healthz` honest-degradation gate — is shipped and unit-tested, and the Tetragon→`kernel.*` mapper has run against a live Tetragon (v1.1.2, the compose `groundtruth` profile).
     - The measured ceilings are recorded where operators read them ([`deploy/compose/README.md`](../deploy/compose/README.md)).
-    - A host without a working sensor reports `ebpf_groundtruth=unavailable` and the stream never falsely reads `healthy`.
+    - No recorded heartbeat reads `ebpf_groundtruth=unavailable`; `healthy` needs counts that rose within the last 15 minutes.
     - Broader-fleet validation is the follow-up.
 
 13. **A BYOI base is trusted-by-the-operator, and the wrap that adds Wardyn's tools runs on the HOST — and so does the RECOMMENDED devcontainer build.**

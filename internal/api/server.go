@@ -891,7 +891,7 @@ type Server struct {
 
 	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
 	desktopRecs desktopRecordings
-
+	sensorBeat  sensorBeatState // the sensor heartbeat read's cache (healthz_sensor_beat.go)
 	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
 	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
 	// once more. A durable mark on the person row would need a migration.

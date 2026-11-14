@@ -612,7 +612,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 		if p.Purged {
 			errs = append(errs, s.finishPurge(ctx, st, p.ID, scimSweeperSlot))
 		} else {
-			errs = append(errs, s.suspendIdentity(ctx, st, p.ID, scimSweeperSlot))
+			errs = append(errs, s.resumeSuspension(ctx, st, p))
 		}
 	}
 	// A mover stays active, so their group removals are not leaver work and are resumed on their own. A

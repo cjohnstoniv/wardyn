@@ -94,14 +94,14 @@ func memSettle(ch *store.ProxyStartChange, now time.Time) {
 	}
 }
 
-func (m *memProxyStarts) BeginProxyStart(_ context.Context, runID uuid.UUID, gen int, jti, mode string) (store.ProxyStart, error) {
+func (m *memProxyStarts) BeginProxyStart(_ context.Context, runID uuid.UUID, gen int, jti, mode string, inPlace bool) (store.ProxyStart, error) {
 	now := m.tick()
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	if m.starts[runID] == nil {
 		m.starts[runID] = map[int]*store.ProxyStart{}
 	}
-	p := &store.ProxyStart{RunID: runID, Generation: gen, JTI: jti, Mode: mode, StartedAt: now, State: types.ProxyStartPending}
+	p := &store.ProxyStart{RunID: runID, Generation: gen, JTI: jti, Mode: mode, InPlace: inPlace, StartedAt: now, State: types.ProxyStartPending}
 	m.starts[runID][gen] = p
 	return *p, nil
 }
@@ -643,11 +643,12 @@ func TestReadback_NoNetworkFirstStartNamesTheCNI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := context.Background()
 			if tc.narrowed {
-				ctx = withNarrowedStart(ctx)
+				f.rb.pmu.Lock()
+				f.rb.starts[f.run.ID][tc.gen].InPlace = true
+				f.rb.pmu.Unlock()
 			}
-			if err := f.srv.stopUnconfirmedProxyAt(ctx, run, tc.gen); err != nil {
+			if err := f.srv.stopUnconfirmedProxyAt(context.Background(), run, tc.gen); err != nil {
 				t.Fatalf("stopUnconfirmedProxyAt: %v", err)
 			}
 			lostAt, _ := f.st.lost()
@@ -665,6 +666,92 @@ func TestReadback_NoNetworkFirstStartNamesTheCNI(t *testing.T) {
 			}
 			if got := f.st.FailureHint(); got != tc.want {
 				t.Errorf("failure hint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A failed start that a live egress edit applied in place ends its run with the narrowed words when the
+// reconcile sweep contains it on a plain context, as when the edit does; a start the replace path recorded
+// keeps the replace words. Catches the narrowed words riding only the edit's own context.
+func TestReadback_InPlaceStartHintWhoeverContains(t *testing.T) {
+	other := &types.WallPresetOnRun{ID: "other", Name: "Other", Scope: types.WallPresetScopeBuiltin}
+	for _, tc := range []struct {
+		name    string
+		inPlace bool
+		want    string
+	}{
+		{"applied in place", true, unconfirmedNarrowedHint},
+		{"applied by a replace", false, unconfirmedPolicyHint},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEgressEditFixture(t)
+			f.srv.cfg.RunnerTarget = "k8s"
+			f.srv.cfg.Runner = f.orchestrated("k8s", noReviver, false)
+			f.st.run.WallPreset, f.st.run.Interactive = other, false
+			f.seedFailedStart(2, "")
+			f.rb.pmu.Lock()
+			f.rb.starts[f.run.ID][2].InPlace = tc.inPlace
+			f.rb.pmu.Unlock()
+			if err := f.srv.sweepOverdueProxyStarts(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if lostAt, _ := f.st.lost(); f.st.State() != types.RunFailed || lostAt != nil {
+				t.Errorf("state %s, lost %v; want the run ended, not lost", f.st.State(), lostAt)
+			}
+			if got := f.st.FailureHint(); got != tc.want {
+				t.Errorf("failure hint = %q, want %q", got, tc.want)
+			}
+			if p := f.rb.get(f.run.ID, 2); p.ContainedAt == nil {
+				t.Errorf("start 2 = %+v, want its stop recorded", p)
+			}
+		})
+	}
+}
+
+// A No network run on a registered runner whose first proxy start never reported names the CNI cause when
+// the runner's last caps say EndsUnkept (a Kubernetes runner), and is ended, never kept lost, even when it is
+// interactive. A runner without that cap, or whose caps are not held, gets the plain hint. The server's own
+// substrate is Docker that can revive, so only the runner's caps can make the run Kubernetes. Catches the
+// runner arm of the CNI case left untested: every other pin runs in server mode.
+func TestReadback_RunnerModeNoNetworkFirstStartNamesTheCNI(t *testing.T) {
+	noNetwork := &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Name: "No network", Scope: types.WallPresetScopeBuiltin}
+	cni := unconfirmedPolicyHint + unconfirmedNoNetworkCause
+	for _, tc := range []struct {
+		name        string
+		caps        *runnerwire.Caps // the runner's last caps; nil: none held
+		interactive bool
+		want        string
+	}{
+		{"Kubernetes runner, interactive", &runnerwire.Caps{EndsUnkept: true}, true, cni},
+		{"Kubernetes runner, background", &runnerwire.Caps{EndsUnkept: true}, false, cni},
+		{"another runner, background", &runnerwire.Caps{MachineName: "build-mac"}, false, unconfirmedPolicyHint},
+		{"caps not held, background", nil, false, unconfirmedPolicyHint},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEgressEditFixture(t)
+			f.srv.cfg.RunnerTarget = "docker"
+			f.srv.cfg.Runner = f.orchestrated("docker", canRevive, false)
+			rid := uuid.New()
+			if tc.caps != nil {
+				seedRunnerCaps(t, f.srv, rid, *tc.caps)
+			}
+			// remote: reconcileFinalize leaves a local runner run with a sandbox to its runner.
+			f.st.run.RunnerID, f.st.run.Placement = &rid, types.PlacementRemote
+			f.st.run.WallPreset, f.st.run.Interactive = noNetwork, tc.interactive
+			f.run = f.st.run
+			f.seedFailedStart(1, "")
+			if err := f.srv.sweepOverdueProxyStarts(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if lostAt, _ := f.st.lost(); f.st.State() != types.RunFailed || lostAt != nil {
+				t.Errorf("state %s, lost %v; want the run ended, not lost", f.st.State(), lostAt)
+			}
+			if got := f.st.FailureHint(); got != tc.want {
+				t.Errorf("failure hint = %q, want %q", got, tc.want)
+			}
+			if p := f.rb.get(f.run.ID, 1); p.ContainedAt == nil {
+				t.Errorf("start 1 = %+v, want its stop recorded", p)
 			}
 		})
 	}
@@ -1211,7 +1298,7 @@ func TestReadback_DispatchReportWhileCreateBlockedThenMismatch(t *testing.T) {
 func TestReadback_LateCreateReturnIsFenced(t *testing.T) {
 	for name, fence := range map[string]func(d *dispatchReadback){
 		"new generation": func(d *dispatchReadback) {
-			_, _ = d.st.BeginProxyStart(context.Background(), d.run.ID, 2, "J-next", store.ProxyStartExpected)
+			_, _ = d.st.BeginProxyStart(context.Background(), d.run.ID, 2, "J-next", store.ProxyStartExpected, false)
 		},
 		"start failed": func(d *dispatchReadback) {
 			d.st.pmu.Lock()

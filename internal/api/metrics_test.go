@@ -291,7 +291,7 @@ func (s *apiTokenErrStore) Ping(context.Context) error { return nil }
 // …and the scrape's OTHER read answers too, for the same reason the ping does:
 // this double is scraped, and the sensor heartbeat is read immediately after
 // wardyn_store_up. ErrNotFound is the no-sensor deployment (#323).
-func (s *apiTokenErrStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (s *apiTokenErrStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	return types.AuditEvent{}, store.ErrNotFound
 }
 

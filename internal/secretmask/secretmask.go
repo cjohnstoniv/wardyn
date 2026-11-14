@@ -162,10 +162,10 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 	if known {
 		return nil
 	}
-	// Commit first, cache second: a failed commit must leave the value unknown
-	// here, or the retry would see it as known and never persist it.
+	// Commit first, cache second: a failed commit must leave the value unknown here, or the retry would see
+	// it as known and never persist it. A backend that caches (runCacher) has put it here itself.
 	if b != nil {
-		if err := b.PutRun(runID, value); err != nil {
+		if err := b.PutRun(runID, value); err != nil || cachesRuns(b) {
 			return err
 		}
 	}

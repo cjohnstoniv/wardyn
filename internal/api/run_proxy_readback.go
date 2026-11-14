@@ -142,14 +142,14 @@ type proxyStartRec struct {
 }
 
 // beginProxyStart records run's pending start under gen and jti. A revive calls it only after the old
-// token lineage is retired, so no report on the old lineage can land on it.
-func (s *Server) beginProxyStart(ctx context.Context, run types.AgentRun, gen int, jti string) (proxyStartRec, error) {
+// token lineage is retired, so no report on the old lineage can land on it. inPlace marks a start a live egress edit applies by narrowing the running proxy.
+func (s *Server) beginProxyStart(ctx context.Context, run types.AgentRun, gen int, jti string, inPlace bool) (proxyStartRec, error) {
 	st, ok := s.cfg.Store.(store.RunProxyStarts)
 	if !ok || gen < 1 { // gen 0: a store without generations, whose starts could not be fenced
 		return proxyStartRec{}, nil
 	}
 	mode := s.proxyStartMode(ctx, run)
-	if _, err := st.BeginProxyStart(ctx, run.ID, gen, jti, mode); err != nil {
+	if _, err := st.BeginProxyStart(ctx, run.ID, gen, jti, mode, inPlace); err != nil {
 		return proxyStartRec{}, err
 	}
 	return proxyStartRec{active: true, gen: gen, mode: mode}, nil
@@ -420,7 +420,7 @@ func (s *Server) stopUnconfirmedProxyAt(ctx context.Context, run types.AgentRun,
 		// the end, as before.
 		left := run.RunnerID == nil && s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") == nil
 		ok := left || s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
-		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedRunHint(runStopHint(ctx, ok), cni))
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedRunHint(runStopHint(ctx, s.startInPlace(ctx, run.ID, gen), ok), cni))
 		switch {
 		case !ok:
 			return errProxyStopUnconfirmed
@@ -686,17 +686,28 @@ const (
 // narrowedStartKey marks a context as the one of an in-place narrowing's stop (withNarrowedStart).
 type narrowedStartKey struct{}
 
-// withNarrowedStart marks ctx as an in-place narrowing's: a running run its stop ends there records the
-// narrowed hints (runStopHint), not the image cause. The mark rides the edit's own wait, which
-// contains the failed start itself; a stop a sweep or a report's handler gets to first keeps the
-// replace path's words, since the start's row does not say how it was applied.
+// withNarrowedStart marks ctx as an in-place narrowing's own wait. The start's row (store.ProxyStart.InPlace)
+// gives the narrowed words to whoever contains the start; the mark covers the edit's own stop of a start it
+// abandoned, which is no longer the run's active one, so no row is read for it.
 func withNarrowedStart(ctx context.Context) context.Context {
 	return context.WithValue(ctx, narrowedStartKey{}, true)
 }
 
-// runStopHint is unconfirmedHint, or its in-place variant on a context withNarrowedStart marked.
-func runStopHint(ctx context.Context, stopped bool) string {
-	if narrowed, _ := ctx.Value(narrowedStartKey{}).(bool); narrowed {
+// startInPlace says whether gen is the run's active start and a live egress edit applied it by narrowing
+// the running proxy (store.ProxyStart.InPlace). A read that fails answers false: the replace path's words.
+func (s *Server) startInPlace(ctx context.Context, runID uuid.UUID, gen int) bool {
+	st, ok := s.cfg.Store.(store.RunProxyStarts)
+	if !ok || gen < 1 {
+		return false
+	}
+	p, found, err := st.ActiveProxyStart(ctx, runID)
+	return err == nil && found && p.Generation == gen && p.InPlace
+}
+
+// runStopHint is unconfirmedHint, or its in-place variant for a start whose row says it was applied in
+// place (inPlace) or on a context withNarrowedStart marked.
+func runStopHint(ctx context.Context, inPlace, stopped bool) string {
+	if narrowed, _ := ctx.Value(narrowedStartKey{}).(bool); narrowed || inPlace {
 		if stopped {
 			return unconfirmedNarrowedHint
 		}
@@ -827,7 +838,7 @@ func (s *Server) beginDispatchProxyStart(ctx context.Context, run types.AgentRun
 	claims, err := s.cfg.Identity.Verify(ctx, token, internalAudience)
 	var rec proxyStartRec
 	if err == nil {
-		rec, err = s.beginProxyStart(ctx, run, 1, claims.JTI)
+		rec, err = s.beginProxyStart(ctx, run, 1, claims.JTI, false)
 	}
 	if err != nil {
 		done()

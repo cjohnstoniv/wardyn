@@ -575,16 +575,18 @@ type Changes struct {
 // ChangesSince counts the key_domain.assignment.set and .delete audit rows
 // recorded since since: the mitigation for a database writer moving where a
 // person's next keys are made, which no assignment row can show once deleted.
+// Only this organisation's own rows count: an enrolled laptop may forward any
+// action, and its row must neither raise the warning nor name the latest change.
 func (s *Service) ChangesSince(ctx context.Context, since time.Time) (Changes, error) {
 	var c Changes
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action IN ('key_domain.assignment.set','key_domain.assignment.delete') AND time >= $1`, since).Scan(&c.Count)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action IN ('key_domain.assignment.set','key_domain.assignment.delete') AND time >= $1 AND NOT `+db.FederatedRowSQL, since).Scan(&c.Count)
 	if err != nil {
 		return c, unavailable("count the assignment changes", err)
 	}
 	if c.Count == 0 {
 		return c, nil
 	}
-	err = s.pool.QueryRow(ctx, `SELECT time, actor FROM audit_events WHERE action IN ('key_domain.assignment.set','key_domain.assignment.delete') AND time >= $1 ORDER BY time DESC LIMIT 1`, since).Scan(&c.Latest, &c.LatestBy)
+	err = s.pool.QueryRow(ctx, `SELECT time, actor FROM audit_events WHERE action IN ('key_domain.assignment.set','key_domain.assignment.delete') AND time >= $1 AND NOT `+db.FederatedRowSQL+` ORDER BY time DESC LIMIT 1`, since).Scan(&c.Latest, &c.LatestBy)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return c, unavailable("read the latest assignment change", err)
 	}

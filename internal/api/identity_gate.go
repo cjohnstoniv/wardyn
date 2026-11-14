@@ -13,6 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The owner guard and the sign-in gate adapter: how a deactivated identity is refused when a
@@ -79,6 +80,16 @@ func ownerGuard(ctx context.Context, owner string) store.IdentityGuard {
 // stale-epoch owner inside their own transaction (store.WithIdentityGuard).
 func guardOwner(ctx context.Context, owner string) context.Context {
 	return store.WithIdentityGuard(ctx, ownerGuard(ctx, owner))
+}
+
+// mintGuard is guardOwner for a new API token t, the self-service mint's and an invitation claim's: the
+// insert is also refused when a session cut or a revocation of t's owner drew a revocation sequence above
+// the one t records. The late session check before the insert reads cuts and token use does not, so a group
+// removal's cut that lands between the two would otherwise leave a live token holding the removed group.
+func mintGuard(ctx context.Context, t types.APIToken) context.Context {
+	g := ownerGuard(ctx, t.Principal)
+	g.CutAfter, g.Email = t.RevSeq, t.Email
+	return store.WithIdentityGuard(ctx, g)
 }
 
 type identitySharer interface {
