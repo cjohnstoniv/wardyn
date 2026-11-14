@@ -91,9 +91,10 @@ describe("DesktopReviewRow", () => {
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
   });
 
-  it("a released approval reads as downloaded and offers Request download again", () => {
+  it("an approval spent with no file in this browser says it was used, never Downloaded at the decision time", () => {
     renderRow(row({ state: "APPROVED", minted_jti: "jti-1", decided_at: aheadByHours(-1) }));
-    expect(screen.getByText(/Downloaded [^·]*\d{1,2}:\d\d[^·]* · sha256 9f2c…41ab/)).toBeTruthy();
+    expect(screen.getByText(C.approvalUsed)).toBeTruthy();
+    expect(screen.queryByText(/Downloaded/)).toBeNull();
     expect(screen.queryByRole("button", { name: C.downloadApproved })).toBeNull();
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
   });

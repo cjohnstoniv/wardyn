@@ -4,17 +4,27 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/iotest"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -48,16 +58,22 @@ func (s *envelopeStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ i
 	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
 }
 
-// fakeTransferFolder plays the three in-sandbox scripts against a map.
+// fakeTransferFolder plays the three in-sandbox scripts against a map. A nonzero failCode replaces the
+// exit code after the script has run, its output included; waitErr is what Wait reports, as when the exec
+// stream is lost; stdoutErr fails the first read of stdout.
 type fakeTransferFolder struct {
-	mu    sync.Mutex
-	files map[string][]byte
-	execs int
+	mu        sync.Mutex
+	files     map[string][]byte
+	execs     int
+	failCode  int
+	waitErr   error
+	stdoutErr error
 }
 
 func (f *fakeTransferFolder) exec(spec runner.ExecSpec) (*runner.ExecSession, error) {
 	f.mu.Lock()
 	f.execs++
+	failCode, waitErr, stdoutErr := f.failCode, f.waitErr, f.stdoutErr
 	f.mu.Unlock()
 	script, args := spec.Argv[2], spec.Argv[4:]
 	var out bytes.Buffer
@@ -91,9 +107,20 @@ func (f *fakeTransferFolder) exec(spec runner.ExecSpec) (*runner.ExecSession, er
 	}()
 	stdout, ow := io.Pipe()
 	go func() { <-done; _, _ = ow.Write(out.Bytes()); ow.Close() }()
+	var read io.Reader = stdout
+	if stdoutErr != nil {
+		_ = stdout.Close()
+		read = iotest.ErrReader(stdoutErr)
+	}
 	return &runner.ExecSession{
-		Stdin: pw, Stdout: stdout, Stderr: strings.NewReader(""),
-		Wait:  func() (int, error) { <-done; return code, nil },
+		Stdin: pw, Stdout: read, Stderr: strings.NewReader(""),
+		Wait: func() (int, error) {
+			<-done
+			if failCode != 0 {
+				return failCode, waitErr
+			}
+			return code, waitErr
+		},
 		Close: func() error { return nil },
 	}, nil
 }
@@ -570,5 +597,350 @@ func TestDesktopFiles_PercentEncodedNamesAreDecodedOnce(t *testing.T) {
 	e := newDesktopFilesEnv(t, nil)
 	if w := doSSO(t, e.srv, http.MethodPut, e.path("a%2Fb(1)"), e.ses["owner"], "x"); w.Code != http.StatusBadRequest || len(e.folder.files) != 1 {
 		t.Fatalf("an encoded slash: %d %s (folder has %v)", w.Code, w.Body.String(), e.folder.files)
+	}
+}
+
+// writeShim puts an executable script named name in dir, for a PATH that runs it instead of the real tool.
+func writeShim(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The upload script on a real shell: a write that fails part way, a rename that fails and a short body each
+// exit 4 with no dot file and nothing under the name, and a whole upload lands with no dot file. A folder that
+// can no longer be searched cannot show the dot file is gone, so that failure exits 1, never 4. Catches a failure
+// that exits before removing the dot file, or reports 4 while the dot file may still be there.
+func TestDesktopUploadScript_EveryFailureRemovesItsDotFileBeforeExit4(t *testing.T) {
+	for _, tc := range []struct {
+		name, shim, body, shimBody string
+		size, want                 int
+	}{
+		{name: "a write that fails part way", shim: "cat", shimBody: "dd bs=1 count=3 2>/dev/null; exit 1", body: "abcdef", size: 6, want: 4},
+		{name: "a folder that cannot be searched", shim: "cat", shimBody: `dd bs=1 count=3 2>/dev/null; chmod 000 "$HOME/Transfers"; exit 1`, body: "abcdef", size: 6, want: 1},
+		{name: "a rename that fails", shim: "mv", shimBody: "exit 1", body: "abcdef", size: 6, want: 4},
+		{name: "a short body", body: "abc", size: 6, want: 4},
+		{name: "a whole upload", body: "abcdef", size: 6, want: 0},
+	} {
+		if tc.want == 1 && os.Geteuid() == 0 {
+			continue // root searches any folder, so the unsearchable case cannot happen
+		}
+		home, shims := t.TempDir(), t.TempDir()
+		folder := filepath.Join(home, "Transfers")
+		t.Cleanup(func() { _ = os.Chmod(folder, 0o755) }) // before TempDir's removal
+		if tc.shim != "" {
+			writeShim(t, shims, tc.shim, tc.shimBody)
+		}
+		cmd := exec.Command("/bin/sh", "-c", desktopUploadScript, "sh", "in.txt", strconv.Itoa(tc.size))
+		cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+		cmd.Stdin = strings.NewReader(tc.body)
+		code := 0
+		if err := cmd.Run(); err != nil {
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			code = ee.ExitCode()
+		}
+		_ = os.Chmod(folder, 0o755)
+		left, _ := filepath.Glob(filepath.Join(folder, ".wardyn-upload-*"))
+		got, readErr := os.ReadFile(filepath.Join(folder, "in.txt"))
+		switch {
+		case code != tc.want || (code == 4 || code == 0) && len(left) != 0:
+			t.Errorf("%s: exit %d with dot files %v, want exit %d (none left on 0 or 4)", tc.name, code, left, tc.want)
+		case tc.want == 0 && string(got) != tc.body:
+			t.Errorf("%s: the file holds %q (%v), want %q", tc.name, got, readErr, tc.body)
+		case tc.want != 0 && readErr == nil:
+			t.Errorf("%s: a failed upload left %q under its name", tc.name, got)
+		}
+	}
+}
+
+// The console says "Nothing was kept" only on the script's own exit 4, which comes after the dot file is
+// gone. Any other exit, or an exec stream lost before its exit status, says some bytes may remain.
+func TestDesktopFiles_UploadSaysNothingWasKeptOnlyWhenTheScriptConfirmedIt(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failCode int
+		waitErr  error
+		kept     bool
+	}{
+		{name: "exit 4", failCode: 4},
+		{name: "exit 1", failCode: 1, kept: true},
+		{name: "a lost exit status", waitErr: errors.New("exec stream lost"), kept: true},
+	} {
+		e := newDesktopFilesEnv(t, nil)
+		e.folder.failCode, e.folder.waitErr = tc.failCode, tc.waitErr
+		w := doSSO(t, e.srv, http.MethodPut, e.path("notes.csv"), e.ses["owner"], fileSentinel)
+		body := w.Body.String()
+		if w.Code != http.StatusBadGateway || reasonOf(t, w) != reasonDesktopTransferFailed {
+			t.Fatalf("%s: %d %s, want 502 %s", tc.name, w.Code, body, reasonDesktopTransferFailed)
+		}
+		if tc.kept != !strings.Contains(body, "Nothing was kept") || tc.kept != strings.Contains(body, "some bytes may remain") {
+			t.Errorf("%s: %s", tc.name, body)
+		}
+		if rows := e.transferRows("upload"); len(rows) != 1 || rows[0].Outcome != "failure" {
+			t.Errorf("%s: upload audit rows = %+v", tc.name, rows)
+		}
+	}
+}
+
+// A listed name keeps a space at its end, so two names that differ only by it both list and each
+// downloads its own bytes. Catches a listing that trims the line before it splits the size off.
+func TestDesktopFiles_ListingKeepsASpaceAtTheEndOfAName(t *testing.T) {
+	if got := parseDesktopListing("6/report \n5/report\n   7/ lead\n"); len(got) != 3 ||
+		got[0] != (desktopFile{Name: "report ", Bytes: 6}) || got[1] != (desktopFile{Name: "report", Bytes: 5}) || got[2] != (desktopFile{Name: " lead", Bytes: 7}) {
+		t.Fatalf("parseDesktopListing = %+v", got)
+	}
+	e := newDesktopFilesEnv(t, &types.DesktopControls{Download: types.TransferAllowed})
+	e.folder.files = map[string][]byte{"report ": []byte("spaced"), "report": []byte("plain")}
+	w := doSSO(t, e.srv, http.MethodGet, e.path(""), e.ses["owner"], "")
+	var view desktopFilesView
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil || len(view.Files) != 2 {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	for _, f := range view.Files {
+		w := doSSO(t, e.srv, http.MethodGet, e.path(url.PathEscape(f.Name)), e.ses["owner"], "")
+		if w.Code != http.StatusOK || w.Body.String() != string(e.folder.files[f.Name]) {
+			t.Errorf("download %q: %d %q", f.Name, w.Code, w.Body.String())
+		}
+	}
+}
+
+// downloadOverHTTP runs a download through a real listener, so the client sees whether the transfer ended
+// cleanly or was cut off.
+func downloadOverHTTP(t *testing.T, e *desktopFilesEnv, name string) (int, []byte, error) {
+	t.Helper()
+	ts := httptest.NewServer(panicFails(t, e.srv.Handler()))
+	t.Cleanup(ts.Close)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+e.path(name), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(e.ses["owner"])
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("download request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, readErr
+}
+
+// A download that fails after its first byte, by the script's exit or a lost exec stream, is cut off, so
+// the client's read fails and cannot take the bytes so far for the whole file; a whole one ends cleanly.
+func TestDesktopFiles_ADownloadThatFailsAfterItBeganIsCutOff(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failCode int
+		waitErr  error
+	}{
+		{name: "a nonzero exit", failCode: 1},
+		{name: "a lost exec stream", waitErr: errors.New("exec stream lost")},
+		{name: "a whole file"},
+	} {
+		e := newDesktopFilesEnv(t, &types.DesktopControls{Download: types.TransferAllowed})
+		e.folder.failCode, e.folder.waitErr = tc.failCode, tc.waitErr
+		status, body, readErr := downloadOverHTTP(t, e, "agent-report.csv")
+		rows := e.transferRows("download")
+		if tc.failCode == 0 && tc.waitErr == nil {
+			if status != http.StatusOK || readErr != nil || string(body) != "agent,wrote,this\n" || len(rows) != 1 || rows[0].Outcome != "success" {
+				t.Errorf("%s: %d %q %v, rows %+v", tc.name, status, body, readErr, rows)
+			}
+			continue
+		}
+		if status != http.StatusOK || !errors.Is(readErr, io.ErrUnexpectedEOF) {
+			t.Errorf("%s: status %d, read error %v after %d bytes, want the committed 200 and io.ErrUnexpectedEOF", tc.name, status, readErr, len(body))
+		}
+		if len(rows) != 1 || rows[0].Outcome != "failure" {
+			t.Errorf("%s: download audit rows = %+v", tc.name, rows)
+		}
+	}
+}
+
+// stuckStdin is an exec's stdin whose write blocks until the session closes and then fails late. writing closes
+// as the write starts, and done just before it returns.
+type stuckStdin struct{ writing, closed, done chan struct{} }
+
+func (s stuckStdin) Write([]byte) (int, error) {
+	close(s.writing)
+	<-s.closed
+	time.Sleep(100 * time.Millisecond)
+	close(s.done)
+	return 0, errors.New("exec stream closed")
+}
+
+func (s stuckStdin) Close() error { return nil }
+
+func newStuckStdin() stuckStdin {
+	return stuckStdin{writing: make(chan struct{}), closed: make(chan struct{}), done: make(chan struct{})}
+}
+
+// stuckExec is an exec whose stdin is in: its exit status is lost once the stdin copy is writing, and closes
+// counts its session's Close calls.
+func stuckExec(in stuckStdin, closes *atomic.Int32) func(runner.ExecSpec) (*runner.ExecSession, error) {
+	return func(runner.ExecSpec) (*runner.ExecSession, error) {
+		return &runner.ExecSession{
+			Stdin: in, Stdout: strings.NewReader(""), Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { <-in.writing; return 0, errors.New("exec stream lost") },
+			Close: func() error {
+				if closes.Add(1) == 1 {
+					close(in.closed)
+				}
+				return nil
+			},
+		}, nil
+	}
+}
+
+// desktopExec never returns while its stdin copy runs, a lost exit status included: the copy reads the caller's
+// body (an upload hashes it as it goes), so it must have ended before the caller reads the hash. It closes the
+// session once. Catches a return on a Wait error that leaves the copy running.
+func TestDesktopExec_JoinsItsStdinCopyWhenTheExitStatusIsLost(t *testing.T) {
+	e := newDesktopFilesEnv(t, nil)
+	in := newStuckStdin()
+	var closes atomic.Int32
+	e.srv.cfg.Runner = &sshFakeRunner{execFn: stuckExec(in, &closes)}
+	code, err := e.srv.desktopExec(context.Background(), e.run, desktopUploadScript, strings.NewReader("abcdef"), nil, "in.txt", "6")
+	if code != -1 || err == nil {
+		t.Fatalf("desktopExec = %d, %v; want -1 and the lost exit status", code, err)
+	}
+	select {
+	case <-in.done:
+	default:
+		t.Fatal("desktopExec returned while its stdin copy was still running")
+	}
+	if n := closes.Load(); n != 1 {
+		t.Errorf("the session was closed %d times, want once", n)
+	}
+}
+
+// A panic while desktopExec reads the exec's output still closes the session.
+func TestDesktopExec_ClosesItsSessionWhenItsReaderPanics(t *testing.T) {
+	e := newDesktopFilesEnv(t, nil)
+	var closes atomic.Int32
+	e.srv.cfg.Runner = &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+		_, pw := io.Pipe()
+		return &runner.ExecSession{
+			Stdin: pw, Stdout: strings.NewReader("x"), Stderr: strings.NewReader(""),
+			Wait:  func() (int, error) { return 0, nil },
+			Close: func() error { closes.Add(1); return nil },
+		}, nil
+	}}
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = e.srv.desktopExec(context.Background(), e.run, desktopListScript, nil, func(io.Reader) error { panic("reader failed") }, "1")
+	}()
+	if n := closes.Load(); n != 1 {
+		t.Fatalf("the session was closed %d times after a panic, want once", n)
+	}
+}
+
+// uploadOverConn sends an upload on a raw HTTP/1.1 connection: the headers for a size-byte body, then only sent,
+// so a browser that stops sending part way can be played. It fails unless a reply comes within 5 seconds.
+func uploadOverConn(t *testing.T, e *desktopFilesEnv, size int, sent string) (*http.Response, string) {
+	t.Helper()
+	ts := httptest.NewServer(panicFails(t, e.srv.Handler()))
+	t.Cleanup(ts.Close)
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() }) // before ts.Close, which waits for the handler
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	c := e.ses["owner"]
+	if _, err := fmt.Fprintf(conn, "PUT %s HTTP/1.1\r\nHost: %s\r\nCookie: %s=%s\r\nContent-Length: %d\r\n\r\n%s",
+		e.path("notes.csv"), ts.Listener.Addr(), c.Name, c.Value, size, sent); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no reply within 5 seconds: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, string(body)
+}
+
+// stalledExec is an exec that answers code and waitErr once the first sent bytes have reached its stdin, while
+// the browser still owes the rest: the stdin copy is left waiting on the request body.
+func stalledExec(code int, waitErr error) func(runner.ExecSpec) (*runner.ExecSession, error) {
+	return func(runner.ExecSpec) (*runner.ExecSession, error) {
+		pr, pw := io.Pipe()
+		arrived := make(chan struct{})
+		go func() {
+			if _, err := io.ReadFull(pr, make([]byte, 1)); err == nil {
+				close(arrived)
+			}
+			_, _ = io.Copy(io.Discard, pr)
+		}()
+		return &runner.ExecSession{
+			Stdin: pw, Stdout: strings.NewReader(""), Stderr: strings.NewReader(""),
+			Wait:  func() (int, error) { <-arrived; return code, waitErr },
+			Close: func() error { return pr.Close() },
+		}, nil
+	}
+}
+
+// An upload that fails while the browser has stopped sending answers at once, with the outcome's sentence and its
+// failure row, and closes the connection. So does one whose whole body was read while its exec was gone: stopping
+// the read there leaves the connection unfit for another request. A whole upload keeps its connection. Catches a
+// join that waits on the browser, a connection kept after a stopped read, and a stopped read on a whole upload.
+func TestDesktopFiles_AnUploadThatFailsWhileTheBrowserStopsSendingAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		fake       func(runner.ExecSpec) (*runner.ExecSession, error) // nil: the transfer folder
+		size       int
+		sent, says string
+		status     int
+		closes     bool
+	}{
+		{name: "a lost exit status", fake: stalledExec(0, errors.New("exec stream lost")), size: 1 << 20, sent: "0123456789",
+			status: http.StatusBadGateway, says: "some bytes may remain", closes: true},
+		{name: "exit 4", fake: stalledExec(4, nil), size: 1 << 20, sent: "0123456789",
+			status: http.StatusBadGateway, says: "Nothing was kept", closes: true},
+		{name: "a whole body stuck on a gone exec", fake: stuckExec(newStuckStdin(), new(atomic.Int32)), size: 6, sent: "abcdef",
+			status: http.StatusBadGateway, says: "some bytes may remain", closes: true},
+		{name: "a whole upload", size: 6, sent: "abcdef", status: http.StatusOK, says: `"sha256"`},
+	} {
+		e := newDesktopFilesEnv(t, nil)
+		if tc.fake != nil {
+			e.srv.cfg.Runner = &sshFakeRunner{execFn: tc.fake}
+		}
+		resp, body := uploadOverConn(t, e, tc.size, tc.sent)
+		if resp.StatusCode != tc.status || !strings.Contains(body, tc.says) || resp.Close != tc.closes {
+			t.Errorf("%s: %d %s (connection closes: %v), want %d with %q (connection closes: %v)", tc.name, resp.StatusCode, body, resp.Close, tc.status, tc.says, tc.closes)
+		}
+		want := "success"
+		if tc.status != http.StatusOK {
+			want = "failure"
+		}
+		if rows := e.transferRows("upload"); len(rows) != 1 || rows[0].Outcome != want {
+			t.Errorf("%s: upload audit rows = %+v, want one %s", tc.name, rows, want)
+		}
+	}
+}
+
+// A download whose stream fails before its first byte is a failed download, never an empty file, while an empty
+// file still downloads. Catches a first-read error taken for an empty file.
+func TestDesktopFiles_ADownloadWhoseStreamFailsBeforeItsFirstByteFails(t *testing.T) {
+	e := newDesktopFilesEnv(t, &types.DesktopControls{Download: types.TransferAllowed})
+	e.folder.stdoutErr = errors.New("exec stream reset")
+	w := doSSO(t, e.srv, http.MethodGet, e.path("agent-report.csv"), e.ses["owner"], "")
+	if w.Code != http.StatusBadGateway || w.Header().Get("Content-Disposition") != "" {
+		t.Errorf("failed stream: %d %v %s, want 502 with no attachment", w.Code, w.Header(), w.Body.String())
+	}
+	if rows := e.transferRows("download"); len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Errorf("failed stream: download audit rows = %+v", rows)
+	}
+	e = newDesktopFilesEnv(t, &types.DesktopControls{Download: types.TransferAllowed})
+	e.folder.files["empty.txt"] = nil
+	w = doSSO(t, e.srv, http.MethodGet, e.path("empty.txt"), e.ses["owner"], "")
+	if w.Code != http.StatusOK || w.Body.Len() != 0 || w.Header().Get("Content-Disposition") == "" {
+		t.Errorf("empty file: %d %v %q, want an empty 200 attachment", w.Code, w.Header(), w.Body.String())
+	}
+	if rows := e.transferRows("download"); len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Errorf("empty file: download audit rows = %+v", rows)
 	}
 }

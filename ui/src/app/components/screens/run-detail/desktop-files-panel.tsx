@@ -181,7 +181,7 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
     );
   }
   const { rules } = view;
-  const status = { sending: C.sending, delivered: C.delivered, too_large: C.tooLarge, failed: C.notSent };
+  const status = { sending: C.sending, delivered: C.delivered, too_large: C.tooLarge, failed: C.uploadFailed };
 
   return (
     <section aria-label={C.title} data-testid="desktop-files" className="mt-4">

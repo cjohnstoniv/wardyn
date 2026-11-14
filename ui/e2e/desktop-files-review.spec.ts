@@ -149,7 +149,7 @@ test.describe("Run detail — Files panel under review", () => {
     await expect(denied).toContainText(/sam\.okafor@acme\.example: “Customer records leave through the data team\.” · \d{1,2}:\d\d(?: [AP]M)?/);
     await expect(denied.getByRole("button", { name: C.requestDownload })).toBeVisible();
     const released = row(panel, "notes.md");
-    await expect(released).toContainText(/Downloaded \d{1,2}:\d\d(?: [AP]M)? · sha256 9f2c…41ab/);
+    await expect(released).toContainText(C.approvalUsed);
     await expect(released.getByRole("button", { name: C.requestDownload })).toBeVisible();
     const expired = row(panel, "screenshot.png");
     await expect(expired).toContainText(/Nobody decided it in time · \d{1,2}:\d\d(?: [AP]M)?/);

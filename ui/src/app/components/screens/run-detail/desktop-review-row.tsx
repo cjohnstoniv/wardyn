@@ -109,10 +109,11 @@ export function DesktopReviewRow({ runId, file, latest, onAsked, onRefused }: De
     );
     line = <p className="text-meta text-muted-foreground">{C.approvedLine(latest.decided_by ?? "", clockOf(latest.decided_at))}</p>;
   } else if (latest && spent) {
-    line = (
-      <p className="font-mono text-meta text-muted-foreground">
-        {C.downloaded(releasedHere ? released.at : clockOf(latest.decided_at), releasedHere ? released.sha : shaOf(latest))}
-      </p>
+    // Only a release this browser received says Downloaded; the approval is spent before the file is sent.
+    line = releasedHere ? (
+      <p className="font-mono text-meta text-muted-foreground">{C.downloaded(released.at, released.sha)}</p>
+    ) : (
+      <p className="text-meta text-muted-foreground">{C.approvalUsed}</p>
     );
   } else if (latest && state === "DENIED") {
     chip = <Chip tone="danger" dot>{C.stateDenied}</Chip>;
