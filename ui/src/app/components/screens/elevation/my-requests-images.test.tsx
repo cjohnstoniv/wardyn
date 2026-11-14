@@ -177,11 +177,18 @@ describe("Your requests: image rows", () => {
     expect(screen.getByRole("button", { name: "Withdraw" })).toBeInTheDocument();
   });
 
-  it("approved", () => {
+  it("approved: who approved it and when, never that the image launches now", () => {
     setup(list([imageRow({ state: "applied", decided_by: "priya.nair", decided_at: aheadByHours(-0.5) })]));
     expect(screen.getByText("Approved")).toBeInTheDocument();
-    expect(screen.getByText("You can launch exactly this image now. The digest rule and image checks still apply.")).toBeInTheDocument();
+    expect(screen.getByText("priya.nair · 30m ago")).toBeInTheDocument();
+    expect(screen.queryByText(/launch/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
+  });
+
+  it("approved, its decider no longer named: just the time, with no leading separator", () => {
+    setup(list([imageRow({ state: "applied", decided_at: aheadByHours(-0.5) })]));
+    expect(screen.getByText("30m ago")).toBeInTheDocument();
+    expect(screen.queryByText(/^ · /)).toBeNull();
   });
 
   it("denied: the decider's reason", () => {
