@@ -602,6 +602,16 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     else return false;
     return true;
   };
+  // The server's 409 for a request that is no longer pending: someone else decided it, or it ended. The card on screen
+  // is stale, so the lists are read again at once, and the caller waits: the card stays busy until that read answers.
+  const refreshIfDecided = async (err: unknown): Promise<boolean> => {
+    if (!(err instanceof HttpError) || err.reason !== "approval_already_decided") return false;
+    onChanged?.();
+    await fetchAllRef.current().catch(() => {
+      /* transient refresh failure: the next poll tick catches the view up */
+    });
+    return true;
+  };
 
   const decide = async (reason: string, decisionScope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!prompt) return false;
@@ -630,6 +640,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           { description: getErrorMessage(err) },
         );
       }
+      // The dialog is for a request that is decided, so it closes with the card.
+      if (await refreshIfDecided(err)) setPrompt(null);
       return false;
     }
   };
@@ -654,6 +666,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
+      await refreshIfDecided(err);
     }
   };
 
@@ -674,6 +687,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       onChanged?.();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+      await refreshIfDecided(err);
     }
   };
 

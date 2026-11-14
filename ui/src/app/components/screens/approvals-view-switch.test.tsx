@@ -8,11 +8,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { HttpError } from "../../lib/api/core";
+import { APPROVALS } from "../../lib/approvals-copy";
 import type { ApprovalRequest } from "../../lib/types";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 type View = "user" | "admin";
 const approveMock = vi.fn<() => Promise<unknown>>();
+const declineMock = vi.fn<() => Promise<unknown>>();
 const pendingFor = { user: vi.fn<() => Promise<ApprovalRequest[]>>(), admin: vi.fn<() => Promise<ApprovalRequest[]>>() };
 const decidedFor = { user: vi.fn<(state: string) => Promise<ApprovalRequest[]>>(), admin: vi.fn<(state: string) => Promise<ApprovalRequest[]>>() };
 vi.mock("../../lib/api/approvals", () => ({
@@ -22,9 +26,12 @@ vi.mock("../../lib/api/approvals", () => ({
     listDecidableByMe: async () => ({ rows: [], truncated: false }),
     approve: () => approveMock(),
     deny: vi.fn(),
+    decline: () => declineMock(),
   },
 }));
-vi.mock("../../lib/api/governance-requests", () => ({ requests: { list: async () => null } }));
+const elevationList = vi.fn<() => Promise<unknown>>(async () => null);
+const elevationApprove = vi.fn<() => Promise<unknown>>();
+vi.mock("../../lib/api/governance-requests", () => ({ requests: { list: () => elevationList(), approve: () => elevationApprove() } }));
 vi.mock("../../lib/api/permissions", () => ({
   permissions: {
     getMyCapabilities: () =>
@@ -33,6 +40,7 @@ vi.mock("../../lib/api/permissions", () => ({
 }));
 vi.mock("../../lib/api/runs", () => ({ runs: { getRun: () => Promise.reject(new Error("unused")) } }));
 
+import { OperatorProvider } from "../wardyn/operator-context";
 import { ApprovalsScreen } from "./approvals";
 
 const NOW = new Date().toISOString();
@@ -53,6 +61,7 @@ const push = (id: string): ApprovalRequest => ({
   state: "PENDING",
   requested_at: NOW,
 });
+const takeover = (id: string) => egress(id, { kind: "human_takeover", requested_scope: { reason: "stuck on a prompt" } });
 const later = <T,>() => {
   let answer: (v: T) => void = () => {};
   let fail: (e: Error) => void = () => {};
@@ -71,12 +80,14 @@ function Nav() {
   go = (path) => void navigate(path);
   return null;
 }
-async function mount(url: string) {
+async function mount(url: string, securityOperator = true) {
   render(
-    <MemoryRouter initialEntries={[url]}>
-      <ApprovalsScreen />
-      <Nav />
-    </MemoryRouter>,
+    <OperatorProvider operator={false} securityOperator={securityOperator}>
+      <MemoryRouter initialEntries={[url]}>
+        <ApprovalsScreen />
+        <Nav />
+      </MemoryRouter>
+    </OperatorProvider>,
   );
   await flush();
 }
@@ -90,6 +101,7 @@ const empty = () => screen.queryByRole("button", { name: /^(see decided|back to 
 
 beforeEach(() => {
   vi.useFakeTimers();
+  elevationList.mockReset().mockResolvedValue(null);
   for (const v of ["user", "admin"] as const) {
     pendingFor[v].mockReset().mockResolvedValue([]);
     decidedFor[v].mockReset().mockResolvedValue([]);
@@ -180,7 +192,7 @@ describe("ApprovalsScreen: a read for the view left answers after a switch", () 
   });
 
   // A card's own Approve opens no dialog, so the switch can come while the decision is out; its refresh then asks in
-  // the view left, after the new view's own read has landed.
+  // the view shown, never the view left, so no User row can reach the Admin queue or history.
   it("a decision sent before the switch does not draw the User queue or history as the Admin one when it refreshes", async () => {
     for (const tab of ["pending", "decided"] as const) {
       const approve = later<unknown>();
@@ -197,14 +209,15 @@ describe("ApprovalsScreen: a read for the view left answers after a switch", () 
         fireEvent.mouseDown(screen.getByRole("tab", { name: /decided/i }));
         await flush();
       }
-      const [mine, theirs] = tab === "pending" ? ["Reach a1.example.com", "Reach u9.example.com"] : ["Reach da.example.com", "Reach du.example.com"];
+      const mine = tab === "pending" ? "Reach a1.example.com" : "Reach da.example.com";
       expect(screen.getByText(mine), tab).toBeInTheDocument();
       const adminReads = pendingFor.admin.mock.calls.length;
       await act(async () => approve.answer({}));
       await flush();
       expect(pendingFor.user, tab).toHaveBeenCalledTimes(1);
       expect(pendingFor.admin.mock.calls.length, tab).toBe(adminReads + 1);
-      expect(screen.queryByText(theirs), tab).toBeNull();
+      // The User mocks' second answer (u9, du) is never read, so no assertion on those rows could fail: the call counts
+      // above are what show the refresh did not ask the view left.
       expect(screen.getByText(mine), tab).toBeInTheDocument();
       cleanup();
     }
@@ -226,5 +239,120 @@ describe("ApprovalsScreen: a read for the view left answers after a switch", () 
     await flush();
     expect(screen.queryByTestId("push-content-card")).toBeNull();
     expect(pendingFor.admin).toHaveBeenCalledTimes(2);
+  });
+
+  it("a Needs you request declined before the switch has no Decline in the Admin queue once the decline answers", async () => {
+    const decline = later<unknown>();
+    declineMock.mockReset().mockReturnValueOnce(decline.promise);
+    pendingFor.user.mockReset().mockResolvedValue([takeover("t1")]);
+    pendingFor.admin.mockReset().mockResolvedValueOnce([takeover("t1")]).mockResolvedValue([]);
+    await mount("/approvals");
+    fireEvent.click(within(screen.getByTestId("takeover-card")).getByRole("button", { name: /^Decline$/ }));
+    await flush();
+    await switchTo("/admin/approvals");
+    expect(screen.getByTestId("takeover-card")).toBeInTheDocument();
+    await act(async () => decline.answer({}));
+    await flush();
+    expect(screen.queryByTestId("takeover-card")).toBeNull();
+    expect(pendingFor.user).toHaveBeenCalledTimes(1);
+  });
+
+  // A decider's elevation card refreshes through the same ref: the pending read after its answer is in the view shown.
+  it("an elevation request decided before the switch refreshes the Admin queue, not the User one", async () => {
+    const approve = later<unknown>();
+    elevationApprove.mockReset().mockReturnValueOnce(approve.promise);
+    elevationList.mockReset().mockResolvedValue({
+      requests: [
+        { id: "e1", kind: "elevation", target_kind: "governance_elevation", op: "create", target_key: "u1", state: "pending", unit_id: "u1", unit_name: "Payments", duration: "4h", proposed_by: "dana@acme.example", proposed_at: NOW, expires_at: NOW, diff: { before: null, after: null, changed: [] }, mine: false, decidable: true, deciders: [{ kind: "security" }], note: { reason: "ship it" } },
+      ],
+      offered: [],
+      image_offered: false,
+    });
+    await mount("/approvals", false);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: /waiting on you/i }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+    await flush();
+    expect(elevationApprove).toHaveBeenCalledTimes(1);
+    await switchTo("/admin/approvals");
+    const [userReads, adminReads] = [pendingFor.user.mock.calls.length, pendingFor.admin.mock.calls.length];
+    await act(async () => approve.answer({}));
+    await flush();
+    expect(pendingFor.user.mock.calls.length).toBe(userReads);
+    expect(pendingFor.admin.mock.calls.length).toBe(adminReads + 1);
+  });
+
+  // The reason dialog is modal, but the browser's Back and Forward still switch the view under it.
+  it("a request approved from the reason dialog before the switch is gone from the Admin queue once the decision answers", async () => {
+    const approve = later<unknown>();
+    approveMock.mockReset().mockReturnValueOnce(approve.promise);
+    pendingFor.user.mockReset().mockResolvedValue([egress("p1")]);
+    pendingFor.admin.mockReset().mockResolvedValueOnce([egress("p1")]).mockResolvedValue([]);
+    await mount("/approvals");
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+    await flush();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^approve$/i }));
+    await flush();
+    await switchTo("/admin/approvals");
+    expect(screen.getByText("Reach p1.example.com")).toBeInTheDocument();
+    await act(async () => approve.answer({}));
+    await flush();
+    expect(screen.queryByText("Reach p1.example.com")).toBeNull();
+    expect(pendingFor.user).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Someone else decided the request first, so the server refuses the click: 409, reason approval_already_decided. The toast
+// says so in the server's words, and the stale card goes with the read that follows at once, not at the next poll.
+describe("ApprovalsScreen: a decision the server refuses as already decided", () => {
+  const refused = (sentence = "approval already decided") => new HttpError(409, sentence, "approval_already_decided");
+
+  it("a card's own Approve stays busy while the queue is read again, and the card is gone when that read answers", async () => {
+    const again = later<ApprovalRequest[]>();
+    approveMock.mockReset().mockRejectedValueOnce(refused());
+    pendingFor.user.mockReset().mockResolvedValueOnce([push("p1")]).mockReturnValueOnce(again.promise);
+    vi.mocked(toast.error).mockClear();
+    await mount("/approvals");
+    fireEvent.click(within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ }));
+    await flush();
+    expect(toast.error).toHaveBeenCalledWith(APPROVALS.TOAST_APPROVE_FAILED, { description: "approval already decided" });
+    expect(pendingFor.user).toHaveBeenCalledTimes(2);
+    expect(within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ })).toBeDisabled();
+    await act(async () => again.answer([]));
+    await flush();
+    expect(screen.queryByTestId("push-content-card")).toBeNull();
+  });
+
+  it("the reason dialog closes with the card", async () => {
+    approveMock.mockReset().mockRejectedValueOnce(refused());
+    pendingFor.user.mockReset().mockResolvedValueOnce([egress("p1")]).mockResolvedValue([]);
+    await mount("/approvals");
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+    await flush();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^approve$/i }));
+    await flush();
+    expect(pendingFor.user).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("Reach p1.example.com")).toBeNull();
+  });
+
+  it("a Decline of a Needs you request that is no longer open takes its card away", async () => {
+    declineMock.mockReset().mockRejectedValueOnce(refused("this takeover request is no longer open"));
+    pendingFor.user.mockReset().mockResolvedValueOnce([takeover("t1")]).mockResolvedValue([]);
+    await mount("/approvals");
+    fireEvent.click(within(screen.getByTestId("takeover-card")).getByRole("button", { name: /^Decline$/ }));
+    await flush();
+    expect(pendingFor.user).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("takeover-card")).toBeNull();
+  });
+
+  it("any other refusal leaves the card and reads nothing", async () => {
+    approveMock.mockReset().mockRejectedValueOnce(new HttpError(500, "internal error"));
+    pendingFor.user.mockReset().mockResolvedValue([push("p1")]);
+    await mount("/approvals");
+    fireEvent.click(within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ }));
+    await flush();
+    expect(pendingFor.user).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ })).toBeEnabled();
   });
 });
