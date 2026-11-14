@@ -209,6 +209,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_CONTROL_PLANE_POD_LABELS` | `k=v,k=v` | (unset) | wardynd's pod labels for that peer. The chart sets its selector labels and `app.kubernetes.io/component=control-plane`. Set both or neither. |
 | `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
 | `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE` | string | empty | experimental: a `SandboxTemplate` in each runs namespace whose `sandbox-template.wardyn.dev/` annotations the agent pod takes; needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.template`. [Details](#wardyn_k8s_agent_sandbox_template) |
+| `WARDYN_K8S_WARM_POOLS` | JSON | empty | experimental: idle placeholder pods per pool that hold room on a node with the pool's image pulled; a run that fits a pool prefers that node (`-tags k8s`); server mode only. Chart: `k8s.warmPools`. [Details](#wardyn_k8s_warm_pools) |
+| `WARDYN_K8S_WARM_PRIORITY_CLASS` | string | empty | the PriorityClass warm placeholders take, so any run evicts them (`-tags k8s`). Chart: `k8s.warmPoolPriorityClass`. [Details](#wardyn_k8s_warm_pools) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -841,6 +843,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A template that sets any pod field (placement included) or other field, or changes an annotation Wardyn set, refuses the run before its `Sandbox` is created. Boot refuses a template that is missing, unreadable or refused, a name that is not a valid object name, and the variable without `WARDYN_K8S_AGENT_SANDBOX`.
 - Needs `get` on that one name of `sandboxtemplates.extensions.agents.x-k8s.io`. [A platform template](operations/kubernetes-agent-sandbox.md#a-platform-template).
 
+### `WARDYN_K8S_WARM_POOLS`
+
+- Experimental, empty by default (`-tags k8s`). A JSON array of pools: `name` (a DNS label, at most 30 characters), `image`, `class` (`CC1`, `CC2` or `CC3`), `cpu`, `memory` and `size` (0 to 20; at most 50 across all pools).
+- Wardyn keeps `size` placeholder pods per pool in the default runs namespace. Each runs the pool's image idle, with no settings, secrets, files or network, and reserves `cpu` and `memory` plus a proxy's share.
+- A run whose image and class match a pool, and whose requests fit, removes one placeholder and prefers its node. The run's own pods are made fresh and checked as always.
+- Boot refuses a malformed value, a `CC2` or `CC3` pool whose RuntimeClass is not pinned, and any value under `wardyn-runnerd`. `WARDYN_K8S_WARM_PRIORITY_CLASS` names the PriorityClass placeholders take.
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 
 - Where the `k8s` substrate puts every pod it creates: the agent pod, the proxy pod and the boot-time egress canary (`-tags k8s`).

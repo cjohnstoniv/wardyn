@@ -64,6 +64,9 @@ func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
 	if cfg.AgentSandbox {
 		return nil, errAgentSandboxRunner
 	}
+	if os.Getenv("WARDYN_K8S_WARM_POOLS") != "" {
+		return nil, errWarmPoolsRunner
+	}
 	apply(&cfg)
 	if cfg.RunnerID == "" {
 		return nil, errors.New("k8s: runner driver has no runner id")
@@ -87,6 +90,15 @@ func init() {
 			return nil, err
 		}
 		cfg.ControlPlanePeer = peer
+		pools, err := parseWarmPools(os.Getenv("WARDYN_K8S_WARM_POOLS"))
+		if err != nil {
+			return nil, err
+		}
+		if err := checkWarmPoolClasses(pools, cfg.ConfinementRuntimes); err != nil {
+			return nil, err
+		}
+		cfg.WarmPools = pools
+		cfg.WarmPriorityClass = os.Getenv("WARDYN_K8S_WARM_PRIORITY_CLASS")
 		s, err := New(cfg)
 		if err != nil {
 			return nil, err

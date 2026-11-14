@@ -202,6 +202,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			return runner.Sandbox{}, err
 		}
 	}
+	warmNode := d.claimWarm(ctx, spec, enforced)
 
 	// SECURITY: fail tears down via teardownByRunID, the same
 	// wait-before-netpol-drop guard Stop/KillSandbox use — a bare LIFO delete
@@ -307,6 +308,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(err)
 	}
+	preferNode(proxyPod, warmNode)
 	createdProxy, err := d.createPod(ctx, spec.RunID, componentProxy, proxyPod)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
@@ -393,6 +395,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := d.placeAgentPod(agentPod, spec); err != nil {
 		return fail(err)
 	}
+	preferNode(agentPod, warmNode)
 	agentPod.Labels[labelRecord] = strconv.FormatBool(spec.RecordWithin(d.cfg.Record))
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)
