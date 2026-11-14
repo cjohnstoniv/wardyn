@@ -71,6 +71,17 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, fenced 
 	return nil, reason, err
 }
 
+// errSSHChannelClosed is the cause a session channel's context ends with when its request stream ends while the
+// connection's context is still live: the client closed the channel or its whole connection.
+var errSSHChannelClosed = errors.New("the client closed the SSH channel")
+
+// sshClientClosedFirst reports whether ctx, a session channel's context, ended because its client closed the channel
+// or its connection (errSSHChannelClosed), not because the daemon stopped, which ends the connection's context and so
+// the channel's with that context's own cause.
+func sshClientClosedFirst(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errSSHChannelClosed)
+}
+
 // sftpServerMissing is the image contract a missing sftp-server breaks.
 const sftpServerMissing = "sftp unavailable: the sandbox image has no " + sftpServerPath
 
@@ -126,8 +137,14 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	}
 	sess, reason, err := s.execSFTPServer(ctx, run, true, "-d", "%d")
 	if err != nil {
-		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
-			runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+		outcome, data := "failure", map[string]any{"error": err.Error()}
+		if sshClientClosedFirst(ctx) && (startCut(err) || errors.Is(err, context.Canceled)) {
+			// A start its client's own close cut is the client's end, as a close under the running process is
+			// (bridgeOutcome): a success that names no error, with nothing moved.
+			outcome, data = "success", map[string]any{"bytes": 0, "bytes_in": 0, "bytes_out": 0}
+		}
+		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
+			runID.String(), outcome, mustJSON(data)))
 		sendChannelError(channel, reason)
 		return
 	}
