@@ -42,6 +42,13 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 		}
 		return runner.Status{}, fmt.Errorf("k8s: status: get pod: %w", err)
 	}
+	kept, isKept, err := d.keptPodStatus(ctx, ns, pod)
+	if err != nil {
+		return runner.Status{}, fmt.Errorf("k8s: status: %w", err)
+	}
+	if isKept {
+		return kept, nil
+	}
 	st, replaced, err := d.replacedPodStatus(ctx, ns, pod)
 	if err != nil {
 		return runner.Status{}, fmt.Errorf("k8s: status: %w", err)

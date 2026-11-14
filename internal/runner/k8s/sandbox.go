@@ -335,7 +335,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// allows no DNS at all).
 	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
-		idleCmd = []string{"agent-run", "--idle"}
+		idleCmd = d.interactiveIdleCmd(spec)
 	}
 	if spec.Resources.PidsLimit > 0 {
 		slog.Warn("wardynd: k8s substrate: PidsLimit requested but not enforced (Kubernetes has no per-container pids ResourceName; the fork-bomb guard is a node-level kubelet setting, not a per-pod one); running WITHOUT a pids cap",

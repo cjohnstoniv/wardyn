@@ -215,6 +215,7 @@ func (d *Driver) createAgentSandbox(ctx context.Context, clock *startClock, pod 
 		d.deleteAgentSandbox(pod.Namespace, pod.Name, created.GetUID())
 		return err
 	}
+	d.recordKeptSandbox(ctx, pod, created.GetUID())
 	return nil
 }
 
