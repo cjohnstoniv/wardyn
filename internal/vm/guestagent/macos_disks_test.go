@@ -149,6 +149,13 @@ func TestMacDisksRefusals(t *testing.T) {
 		"a new disk asked for read-only": {make([]byte, 4096), func(h string) Disk {
 			return Disk{ID: "wardyn-disk1", Label: "Wardyn-1a2b3c4d", Target: filepath.Join(h, "x"), ReadOnly: true, SizeBytes: macDiskSize}
 		}, "never formatted"},
+		// A short read, or none, is not a blank disk: its first 4 KiB were never seen.
+		"a disk that gives less than 4 KiB": {make([]byte, 100), func(h string) Disk {
+			return Disk{ID: "wardyn-disk1", Label: "Wardyn-1a2b3c4d", Target: filepath.Join(h, "x"), SizeBytes: macDiskSize}
+		}, "its first 4 KiB could not be read, so it was not formatted"},
+		"a disk that gives nothing": {nil, func(h string) Disk {
+			return Disk{ID: "wardyn-disk1", Label: "Wardyn-1a2b3c4d", Target: filepath.Join(h, "x"), SizeBytes: macDiskSize}
+		}, "its first 4 KiB could not be read, so it was not formatted"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, r := macDiskGuest(t, tc.head)
@@ -166,7 +173,7 @@ func TestMacDisksRefusals(t *testing.T) {
 }
 
 func TestMacDisksWaitsForTheVolumeThenGivesUp(t *testing.T) {
-	m, r := macDiskGuest(t, []byte("not blank"))
+	m, r := macDiskGuest(t, append([]byte("not blank"), make([]byte, 4096)...))
 	r.out = func(argv []string) ([]byte, error) {
 		switch {
 		case argv[0] == "/usr/sbin/ioreg":

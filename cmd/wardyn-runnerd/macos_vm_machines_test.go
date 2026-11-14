@@ -361,7 +361,10 @@ func TestMachinesWaitBrieflyForTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(100 * time.Millisecond); unlock() }()
+	// The goroutine gets its own copy: the test assigns unlock again below, and the release is not an ordering
+	// the race detector sees.
+	release := unlock
+	go func() { time.Sleep(100 * time.Millisecond); release() }()
 	var out bytes.Buffer
 	if err := deleteKept(&out, rows[0]); err != nil {
 		t.Fatalf("a brief holder refused the delete: %v", err)

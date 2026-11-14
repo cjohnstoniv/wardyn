@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -225,5 +226,31 @@ func TestLockDiskAfterTheLockFileIsRemovedLocksTheNewFile(t *testing.T) {
 			u()
 		}
 		t.Fatalf("a second lock beside the waiter's: %v, want ErrDiskInUse", err)
+	}
+}
+
+// ownedFile is a file's FileInfo with the owner a test gives it: no test can give a file to another user.
+type ownedFile struct {
+	os.FileInfo
+	sys any
+}
+
+func (o ownedFile) Sys() any { return o.sys }
+
+// checkOwner refuses a file another user owns, and one whose owner it cannot read. os gives a file's owner
+// as *syscall.Stat_t, which is what the fake gives here: a check that asks for any other type passes every file.
+func TestCheckOwnerRefusesAFileAnotherUserOwns(t *testing.T) {
+	fi, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkOwner(fi); err != nil {
+		t.Fatalf("this user's own folder: %v", err)
+	}
+	if err := checkOwner(ownedFile{fi, &syscall.Stat_t{Uid: uint32(os.Getuid()) + 1}}); err == nil {
+		t.Fatal("a file another user owns passed")
+	}
+	if err := checkOwner(ownedFile{fi, nil}); err == nil {
+		t.Fatal("a file whose owner cannot be read passed")
 	}
 }
