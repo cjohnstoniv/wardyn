@@ -138,9 +138,11 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	sess, reason, err := s.execSFTPServer(ctx, run, true, "-d", "%d")
 	if err != nil {
 		outcome, data := "failure", map[string]any{"error": err.Error()}
-		if sshClientClosedFirst(ctx) && (startCut(err) || errors.Is(err, context.Canceled)) {
+		if errors.Is(err, context.Canceled) && sshClientClosedFirst(ctx) {
 			// A start its client's own close cut is the client's end, as a close under the running process is
-			// (bridgeOutcome): a success that names no error, with nothing moved.
+			// (bridgeOutcome): a success that names no error, with nothing moved. Only a wait the channel's end
+			// cut reads so: the fence's own refusals (its wait's bound, the start budget, a lost lock) are never
+			// that close, so they stay failures when the client happens to close too.
 			outcome, data = "success", map[string]any{"bytes": 0, "bytes_in": 0, "bytes_out": 0}
 		}
 		s.recordStreamAuditDetached(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
