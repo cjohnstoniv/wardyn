@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Kubernetes warm pools (experimental): idle placeholder pods per pool hold room on a node with the pool's image pulled, and a run that fits a pool prefers that node. It is a preference: the run's pods are still made fresh and checked before start, and no time saving is measured. At most 20 placeholders per pool and 50 in all, at low priority and set not to preempt other pods. The pools and the claim are Wardyn's own and work beside the agent-sandbox controller; the upstream `SandboxWarmPool` and `SandboxClaim` are not built, and no run is handed a pod that already ran. Settings: `k8s.warmPools`, `WARDYN_K8S_WARM_POOLS`.
+- Kubernetes keep and revive on the agent-sandbox backend (experimental, off by default): with `k8s.agentSandbox.keep.enabled` (`WARDYN_K8S_AGENT_SANDBOX_KEEP`), an interactive `claude-code` or `codex-cli` run whose work folder is a kept drive is kept when its time runs out, with no compute, and after an extend it can be revived. This is keep and revive, not a freeze: Kubernetes has no pause button, and running programs, memory, open connections and the agent's conversation are lost. Only the work folder stays, and its storage is still used. Such a run reaches its proxy through its own Service, so restart with current limits works on it while it runs; if its proxy pod is deleted, its agent keeps running with no network. Turning keep on gives wardynd Service and EndpointSlice rights in the runs namespace, and the chart's admission policy limits what it creates there to each run's own Service. Pause in place stays Docker-only.
+
+### Known issues
+
+- On a Kubernetes install with keep on, the pool's keep chip and the ending-soon notice say files are kept for every interactive run. Only runs with a kept work folder and a `claude-code` or `codex-cli` agent are kept.
+
 ## [0.10.0-rc.20] — 2026-11-12
 
 ### Added
