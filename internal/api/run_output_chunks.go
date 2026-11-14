@@ -34,6 +34,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -207,12 +208,15 @@ func (e *execOutputTail) dropChunks() {
 }
 
 // readSharedOutput answers a live read from the chunks another replica wrote, when this replica
-// holds no tail for the run. true: the response is written.
-func (s *Server) readSharedOutput(w http.ResponseWriter, r *http.Request, id uuid.UUID, limit int) bool {
+// holds no tail for the run. true: the response is written. A run that ended longer ago than
+// WARDYN_RUN_OUTPUT_RETENTION_DAYS is never answered from chunks, whatever a fault left of them:
+// its output has expired, and the read's last answer says so.
+func (s *Server) readSharedOutput(w http.ResponseWriter, r *http.Request, run types.AgentRun, limit int) bool {
 	cs, ok := s.cfg.Store.(store.RunOutputChunkStore)
-	if !ok || s.runOutputStore() == nil {
+	if !ok || s.runOutputStore() == nil || (run.State.IsTerminal() && s.runOutputExpiredByRetention(run)) {
 		return false
 	}
+	id := run.ID
 	ch, err := cs.ReadRunOutputChunks(r.Context(), id, limit)
 	switch {
 	case errors.Is(err, store.ErrRunOutputErased):
@@ -231,25 +235,39 @@ func (s *Server) readSharedOutput(w http.ResponseWriter, r *http.Request, id uui
 	return true
 }
 
+// chunkSave is how saveRowFromChunks ended.
+type chunkSave int
+
+const (
+	// chunksAbsent: the store answered that there are no chunks to save, or that the run's row is
+	// already final, so a plain gap row loses nothing.
+	chunksAbsent chunkSave = iota
+	// chunksDone: the row was written from the chunks, or the output was erased and the tail fenced.
+	chunksDone
+	// chunksFailed: the save failed, so whether chunks exist is unknown. The pending row and any chunks
+	// stay for the next try: a gap row now would delete bytes nothing else holds.
+	chunksFailed
+)
+
 // saveRowFromChunks writes runID's row from the chunks a replica that is gone left, as an
-// incomplete capture gap, and reports whether it did. A run with no chunks, or whose final row
-// exists, is left to the plain gap row.
-func (s *Server) saveRowFromChunks(ctx context.Context, runID uuid.UUID, reason string) bool {
+// incomplete capture gap, and reports how that ended.
+func (s *Server) saveRowFromChunks(ctx context.Context, runID uuid.UUID, reason string) chunkSave {
 	cs, ok := s.cfg.Store.(store.RunOutputChunkStore)
 	if !ok {
-		return false
+		return chunksAbsent
 	}
 	wrote, err := cs.SaveChunkedRunOutput(ctx, runID, s.liveMaskScope(false), s.cfg.RunOutputTailBytes)
 	switch {
 	case errors.Is(err, store.ErrRunOutputErased):
 		s.fenceRunOutput(runID)
-		return true
+		return chunksDone
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: could not write a run's row from its live chunks",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
-		return false
+		return chunksFailed
 	case wrote:
 		s.auditOutputFinalize(ctx, runID, map[string]any{"capture_gap": true, "incomplete": true, "reason": reason, "from_chunks": true})
+		return chunksDone
 	}
-	return wrote
+	return chunksAbsent
 }

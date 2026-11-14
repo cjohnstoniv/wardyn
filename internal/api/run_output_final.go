@@ -317,9 +317,22 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 }
 
 // writeGapRow resolves runID's pending row (or writes the row) as a capture
-// gap with no bytes, never over a final row, and audits it.
+// gap with no bytes, never over a final row, and audits it. Chunks a gone
+// replica left are written into the row instead. A failed read of them writes
+// no gap, which would delete them unread: the chunks stay, with a pending row
+// (made here when there was none) that the stale-pending sweep tries again.
 func (s *Server) writeGapRow(ctx context.Context, st store.RunOutputStore, runID uuid.UUID, reason string) {
-	if s.saveRowFromChunks(ctx, runID, reason) {
+	switch s.saveRowFromChunks(ctx, runID, reason) {
+	case chunksDone:
+		return
+	case chunksFailed:
+		switch err := st.InsertPendingRunOutput(ctx, runID); {
+		case errors.Is(err, store.ErrRunOutputErased):
+			s.fenceRunOutput(runID)
+		case err != nil:
+			slog.WarnContext(ctx, "wardynd: could not keep a run's output pending after a failed read of its live chunks",
+				slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
 		return
 	}
 	wrote, err := st.SaveGapRunOutput(ctx, runID)
@@ -486,7 +499,9 @@ func (s *Server) tryPersistOutput(ctx context.Context, e *execOutputTail, st sto
 		e.fmu.Unlock()
 		s.releaseRunOutput(row.RunID, e)
 		if lateSince {
-			s.markLateIncomplete(ctx, row.RunID)
+			// Owed whatever becomes of ctx, which may be a request's that is ending: the daemon's retries settle it.
+			id := row.RunID
+			s.goBackground(func() { s.markLateIncompleteOwed(id) })
 		}
 		return persistDone
 	case errors.Is(err, store.ErrRunOutputErased):
@@ -571,18 +586,41 @@ func (s *Server) lateRunOutput(runID uuid.UUID, e *execOutputTail) {
 	if !committed || fenced {
 		return
 	}
-	s.goBackground(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.cfg.BaseCtx), 10*time.Second)
-		defer cancel()
-		s.markLateIncomplete(ctx, runID)
-	})
+	s.goBackground(func() { s.markLateIncompleteOwed(runID) })
 }
 
-// markLateIncomplete flips the committed row to incomplete and audits it.
-func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) {
+// lateMarkAttemptWait bounds one try of the incomplete mark a committed row owes.
+const lateMarkAttemptWait = 10 * time.Second
+
+// markLateIncompleteOwed settles the incomplete mark a committed row owes for a byte dropped after its
+// commit. Each try runs on the daemon's context, bounded by lateMarkAttemptWait, with the final write's
+// backoff (outputRetryBase doubling to runOutputRetryMax) between tries, until the mark lands or the output is erased: one failed write must not leave a
+// capture that lost bytes labelled complete, and nothing else re-reads a committed row for this. Only the
+// daemon's shutdown ends it early. Run it on a tracked goroutine.
+func (s *Server) markLateIncompleteOwed(runID uuid.UUID) {
+	base := s.cfg.BaseCtx
+	for backoff := s.outputRetryBase(); ; backoff = min(backoff*2, runOutputRetryMax) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(base), lateMarkAttemptWait)
+		settled := s.markLateIncomplete(ctx, runID)
+		cancel()
+		if settled {
+			return
+		}
+		select {
+		case <-base.Done():
+			return
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// markLateIncomplete flips the committed row to incomplete and audits it. It reports whether the mark is
+// settled: written, nothing committed to mark, no store, or the output erased (the tail is fenced). false
+// is a failed write, which markLateIncompleteOwed tries again.
+func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) bool {
 	st := s.runOutputStore()
 	if st == nil {
-		return
+		return true
 	}
 	marked, err := st.MarkRunOutputIncomplete(ctx, runID)
 	switch {
@@ -591,9 +629,11 @@ func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) {
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: could not mark a run's output row incomplete",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
 	case marked:
 		s.auditOutputFinalize(ctx, runID, map[string]any{"incomplete": true, "late_write": true})
 	}
+	return true
 }
 
 // auditOutputFinalize records a capture that was not clean: its flags, never
@@ -631,9 +671,11 @@ func withFinalizeStep(data map[string]any) map[string]any {
 }
 
 // SweepRunOutputs is one pass of the retention sweeper: it deletes final rows
-// older than the retention window, then resolves the pending rows of terminal
-// runs whose claim went stale to capture-gap rows (when persistence is on, the
-// only time pending rows are written). A tail this process still holds is the
+// older than the retention window and the live chunks of runs that ended
+// before it, gives chunks that have no row the pending row they were owed
+// (adoptOrphanChunks), then resolves the pending rows of terminal runs whose
+// claim went stale to capture-gap rows (when persistence is on, the only time
+// pending rows are written). A tail this process still holds is the
 // finisher's own, and is left alone.
 func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	st, _ := s.cfg.Store.(store.RunOutputStore)
@@ -650,12 +692,19 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/run-output-sweeper", "run.output.retention.sweep",
 				"run_outputs", "success", mustJSON(map[string]any{"deleted": n, "retention_days": int(retention.Hours() / 24)})))
 		}
+		// A run's live chunks expire with it, whatever row it has: a fault can leave chunks no row ages.
+		if err := s.deleteEndedRunOutputChunks(ctx, retention); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if err := s.sweepAgentCasts(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if s.cfg.RunOutputPersistOff {
 		return firstErr
+	}
+	if err := s.adoptOrphanChunks(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if err := s.sweepStalePending(ctx, st); err != nil {
 		return err

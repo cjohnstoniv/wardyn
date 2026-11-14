@@ -51,6 +51,7 @@ type miscCovOutStore struct {
 	reads    []int
 	saveRes  bool
 	saveErr  error
+	saveFn   func(call int) (bool, error) // when set, answers instead of saveRes and saveErr
 	saveArgs []miscCovSaveChunked
 
 	// run outputs
@@ -65,6 +66,8 @@ type miscCovOutStore struct {
 	refreshFn      func(call int) error
 	refreshCalls   int
 	markErr        error
+	markFails      int // the next N MarkRunOutputIncomplete calls fail
+	markCalls      int
 	eraseErr       error
 	gapCalls       int
 }
@@ -106,9 +109,13 @@ func (s *miscCovOutStore) ReadRunOutputChunks(_ context.Context, _ uuid.UUID, li
 
 func (s *miscCovOutStore) SaveChunkedRunOutput(_ context.Context, run uuid.UUID, scope string, limit int) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.saveArgs = append(s.saveArgs, miscCovSaveChunked{run, scope, limit})
-	return s.saveRes, s.saveErr
+	call, fn, res, err := len(s.saveArgs), s.saveFn, s.saveRes, s.saveErr
+	s.mu.Unlock()
+	if fn != nil {
+		return fn(call)
+	}
+	return res, err
 }
 
 func (s *miscCovOutStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
@@ -171,8 +178,19 @@ func (s *miscCovOutStore) RefreshRunOutputClaim(ctx context.Context, id uuid.UUI
 }
 
 func (s *miscCovOutStore) MarkRunOutputIncomplete(ctx context.Context, id uuid.UUID) (bool, error) {
-	if s.markErr != nil {
-		return false, s.markErr
+	s.mu.Lock()
+	s.markCalls++
+	fail := s.markFails > 0
+	if fail {
+		s.markFails--
+	}
+	markErr := s.markErr
+	s.mu.Unlock()
+	if fail {
+		return false, errors.New("postgres is down")
+	}
+	if markErr != nil {
+		return false, markErr
 	}
 	return s.memRunOutputs.MarkRunOutputIncomplete(ctx, id)
 }
@@ -527,7 +545,7 @@ func TestMiscCovReadSharedOutput(t *testing.T) {
 	read := func(t *testing.T, srv *Server, id uuid.UUID, limit int) (*httptest.ResponseRecorder, bool) {
 		t.Helper()
 		w := httptest.NewRecorder()
-		ok := srv.readSharedOutput(w, httptest.NewRequest(http.MethodGet, "/", nil), id, limit)
+		ok := srv.readSharedOutput(w, httptest.NewRequest(http.MethodGet, "/", nil), types.AgentRun{ID: id}, limit)
 		return w, ok
 	}
 
@@ -591,15 +609,15 @@ func TestMiscCovReadSharedOutput(t *testing.T) {
 func TestMiscCovSaveRowFromChunks(t *testing.T) {
 	t.Run("a store with no chunk record writes nothing", func(t *testing.T) {
 		f := newOutputFixture(t)
-		if f.srv.saveRowFromChunks(t.Context(), f.run.ID, "no_tail") {
-			t.Error("reported a row written")
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "no_tail"); got != chunksAbsent {
+			t.Errorf("saveRowFromChunks = %v, want chunksAbsent", got)
 		}
 	})
 	t.Run("a row from chunks is audited as an incomplete capture gap", func(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		cs.saveRes = true
-		if !f.srv.saveRowFromChunks(t.Context(), f.run.ID, "replica_gone") {
-			t.Fatal("reported no row")
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "replica_gone"); got != chunksDone {
+			t.Fatalf("saveRowFromChunks = %v, want chunksDone", got)
 		}
 		if len(cs.saveArgs) != 1 || cs.saveArgs[0].run != f.run.ID || cs.saveArgs[0].limit != f.srv.cfg.RunOutputTailBytes || cs.saveArgs[0].scope != "" {
 			t.Errorf("store asked %+v, want this run, the tail size and no mask scope", cs.saveArgs)
@@ -611,16 +629,16 @@ func TestMiscCovSaveRowFromChunks(t *testing.T) {
 	})
 	t.Run("no chunks to save is left to the plain gap row", func(t *testing.T) {
 		f, _ := miscCovOutFixture(t)
-		if f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x") || len(miscCovFinalizeData(t, f)) != 0 {
+		if f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x") != chunksAbsent || len(miscCovFinalizeData(t, f)) != 0 {
 			t.Error("reported or audited a row with nothing saved")
 		}
 	})
-	t.Run("a failed save is logged and not reported", func(t *testing.T) {
+	t.Run("a failed save is logged and reported as failed", func(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		cs.saveErr = errors.New("save refused")
 		logs := miscCovCaptureLogs(t)
-		if f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x") {
-			t.Error("reported a row written")
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x"); got != chunksFailed {
+			t.Errorf("saveRowFromChunks = %v, want chunksFailed", got)
 		}
 		if _, ok := logs.find("could not write a run's row from its live chunks"); !ok {
 			t.Error("the failure was not logged")
@@ -630,8 +648,8 @@ func TestMiscCovSaveRowFromChunks(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		f.open(t)
 		cs.saveErr = store.ErrRunOutputErased
-		if !f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x") {
-			t.Error("an erased run was not treated as handled")
+		if got := f.srv.saveRowFromChunks(t.Context(), f.run.ID, "x"); got != chunksDone {
+			t.Errorf("saveRowFromChunks = %v, want chunksDone for an erased run", got)
 		}
 		if f.srv.tailFor(f.run.ID) != nil || len(miscCovFinalizeData(t, f)) != 0 {
 			t.Error("the tail was not fenced, or an erased run was audited as a gap")
