@@ -31,6 +31,10 @@ import type { GovernanceDeciders } from "./deciders";
 import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, asNoContent, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
+// The pending changes as listChanges returns them: the rows, marked truncated when the server cut the list. A
+// bare array (every existing caller and mock) reads as not cut.
+export type GovernanceChangeList = GovernanceChange[] & { truncated?: boolean };
+
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
 // and `!!limits.deny_x` is how every read is written.
@@ -663,10 +667,12 @@ export const governance = {
 
   // GET /api/v1/governance/changes -> the pending changes (the server's default state), newest first. A
   // change of a kind the caller may not approve is not listed. `approver: "security"` narrows it to the
-  // changes only a security admin can decide.
-  async listChanges(opts?: { approver?: "security" }): Promise<GovernanceChange[]> {
+  // changes only a security admin can decide. The server cuts the queue at 500 changes the caller may see and
+  // says so with X-Wardyn-Truncated, which the list carries as `truncated`.
+  async listChanges(opts?: { approver?: "security" }): Promise<GovernanceChangeList> {
     const res = await wfetch(`/governance/changes${opts?.approver ? `?approver=${opts.approver}` : ""}`, { method: "GET" });
-    return unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
+    const rows = unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
+    return res.headers.get("X-Wardyn-Truncated") === "true" ? Object.assign(rows, { truncated: true }) : rows;
   },
 
   // GET /api/v1/governance/changes/{id} -> the change in whatever state it is now (pending, applied, rejected, expired).

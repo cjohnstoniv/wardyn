@@ -421,7 +421,11 @@ export const BASELINE = {
 export const CHANGES = {
   TAB: "Changes",
   TAB_COUNT: (n: number) => `Changes · ${n}`,
+  // The tab when the server cut the list (X-Wardyn-Truncated): more wait than the rows it sent.
+  TAB_COUNT_CUT: (n: number) => `Changes · ${n}+`,
   LEAD: "Changes and requests waiting for a second person. A change or request applies only when someone other than its proposer approves it.",
+  // Above the list when the server says it cut it (X-Wardyn-Truncated): the 500 newest the viewer may see.
+  TRUNCATED: "Showing the first 500 matching changes.",
   COL_CHANGE: "Change",
   COL_TARGET: "Target",
   COL_BY: "Proposed by",

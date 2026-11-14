@@ -56,6 +56,7 @@ func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
 // pending, the queue an approver works. ?approver=security narrows to the changes only a security admin
 // may decide. A change of a kind the caller may not approve is not listed.
 func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Request) {
+	r = withDeciderMemo(r) // the deciders rules are read once for the whole queue, not once per change
 	state := r.URL.Query().Get("state")
 	if state == "" {
 		state = types.GovernanceChangePending
@@ -75,18 +76,28 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "list governance changes", err)
 		return
 	}
-	// The store reads one row past MaxGovernanceChangeList and the visibility filter below runs after
-	// that limit, so a longer read means older changes are hidden from this caller: trim and say so
-	// (the header the other capped lists set). A list of exactly the bound is complete.
-	if len(all) > store.MaxGovernanceChangeList {
-		all = all[:store.MaxGovernanceChangeList]
-		w.Header().Set("X-Wardyn-Truncated", "true")
+	// The pending queue is read whole, so the bound is applied to what this caller may see: an older
+	// change they may decide is never hidden behind newer ones they may not. Any other state is read to
+	// one row past MaxGovernanceChangeList, so a longer read means older changes may be hidden from this
+	// caller. Either way a cut list says so (the header the other capped lists set), and a list of
+	// exactly the bound is complete.
+	truncated := false
+	if state != types.GovernanceChangePending && len(all) > store.MaxGovernanceChangeList {
+		all, truncated = all[:store.MaxGovernanceChangeList], true
 	}
-	out := make([]types.GovernanceChange, 0, len(all))
+	out := make([]types.GovernanceChange, 0, min(len(all), store.MaxGovernanceChangeList))
 	for _, ch := range all {
-		if s.canSeeGovernanceChange(r, ch) && (approver == "" || s.securityOnlyChange(r, ch)) {
-			out = append(out, s.changeForRead(r, ch))
+		if !s.canSeeGovernanceChange(r, ch) || (approver != "" && !s.securityOnlyChange(r, ch)) {
+			continue
 		}
+		if len(out) == store.MaxGovernanceChangeList {
+			truncated = true
+			break
+		}
+		out = append(out, s.changeForRead(r, ch))
+	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
 	writeJSON(w, http.StatusOK, out)
 }
