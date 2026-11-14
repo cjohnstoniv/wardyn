@@ -297,6 +297,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy config secret: %w", err))
 	}
+	keepSvc, err := d.keepService(ctx, ns, spec, objLabels(componentProxy))
+	if err != nil {
+		return fail(err)
+	}
 
 	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
 	proxyPod, err := d.buildProxyPod(proxyPodInputs{
@@ -321,6 +325,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// Contained before it ever opens, rather than running to its deadline.
 		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
 	}
+	proxyAddr, err := d.keepAddress(ctx, ns, spec.RunID, keepSvc, proxyIP)
+	if err != nil {
+		return fail(err)
+	}
 
 	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" to
 	// the resolved IP (its only route there, since the agent NetworkPolicy
@@ -344,13 +352,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod's (buildProxyPod).
-			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
+			HostAliases:                  []corev1.HostAlias{{IP: proxyAddr, Hostnames: []string{"wardyn-proxy"}}},
 			// Default ClusterFirst would point the agent at kube-dns, which its
 			// NetworkPolicy denies. Its one nameserver is its proxy pod, whose
 			// listener answers every query REFUSED and records it, except AAAA
 			// for its own name: a proxy-unaware lookup fails at once and leaves a run.dns.query row.
 			DNSPolicy: corev1.DNSNone,
-			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{proxyIP}},
+			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{proxyAddr}},
 			Containers: []corev1.Container{{
 				Name:    mainContainerName,
 				Image:   spec.Image,
@@ -397,6 +405,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)
 	}
+	keepAgent(agentPod, keepSvc)
 	if d.cfg.AgentSandbox {
 		if err := d.createAgentSandbox(ctx, clock, agentPod); err != nil {
 			return fail(err)

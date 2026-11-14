@@ -375,6 +375,12 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 		}
 	}
 
+	if d.keepOn() {
+		if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
+			return fmt.Errorf("k8s: teardown: %w", err)
+		}
+	}
+
 	// Secret FIRST, NetworkPolicies after (mirrors CreateSandbox's order): the
 	// orphan sweep keys the Secret on the netpols, since listing Secrets needs
 	// a body-returning verb it's never granted. Reversing the order would
