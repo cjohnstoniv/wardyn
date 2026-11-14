@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,11 +105,12 @@ func (r *tlsRunnerd) serve(c net.Conn) {
 
 // startRunnerSinkSidecar builds a sidecar from Config with its decisions going to r, as cmd/wardyn-proxy
 // does on a runner, and runs ListenAndServe. Every dial it makes reaches upstream; edit, if any, adjusts the
-// Config first.
-func startRunnerSinkSidecar(t *testing.T, r *tlsRunnerd, upstream string, edit ...func(*Config)) (*Server, string, chan error) {
+// Config first. It listens on 127.0.0.1:0, as startSidecar does: listening reports whether OnListening ran
+// within the wait, never a dial, and the address it bound is then srv.BoundAddr().
+func startRunnerSinkSidecar(t *testing.T, r *tlsRunnerd, upstream string, edit ...func(*Config)) (*Server, func(time.Duration) bool, chan error) {
 	t.Helper()
-	addr, sink := freeAddr(t), r.cfg
-	cfg := &Config{RunID: uuid.New(), RunToken: "seed", Listen: addr, DecisionBufferSize: defaultBufferSize,
+	sink := r.cfg
+	cfg := &Config{RunID: uuid.New(), RunToken: "seed", Listen: "127.0.0.1:0", DecisionBufferSize: defaultBufferSize,
 		DecisionSink: &sink, Policy: types.RunPolicySpec{AllowAllEgress: true}}
 	for _, e := range edit {
 		e(cfg)
@@ -118,6 +120,8 @@ func startRunnerSinkSidecar(t *testing.T, r *tlsRunnerd, upstream string, edit .
 	if err != nil {
 		t.Fatal(err)
 	}
+	var bound atomic.Bool
+	srv.OnListening(func() { bound.Store(true) })
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
 	t.Cleanup(func() {
@@ -125,7 +129,7 @@ func startRunnerSinkSidecar(t *testing.T, r *tlsRunnerd, upstream string, edit .
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	})
-	return srv, addr, served
+	return srv, func(within time.Duration) bool { return gateEventually(within, bound.Load) }, served
 }
 
 func awaitHello(t *testing.T, r *tlsRunnerd) {
@@ -142,19 +146,19 @@ func awaitHello(t *testing.T, r *tlsRunnerd) {
 // in, and a run whose proxy never had one owes no loss. A Shutdown before the grant ends ListenAndServe.
 func TestServer_RunnerSinkProxyListensOnlyAfterItsFirstGrant(t *testing.T) {
 	r := newTLSRunnerd(t)
-	_, addr, _ := startRunnerSinkSidecar(t, r, "127.0.0.1:1")
+	_, listening, _ := startRunnerSinkSidecar(t, r, "127.0.0.1:1")
 	awaitHello(t, r)
-	if isListening(addr, 300*time.Millisecond) {
+	if listening(300 * time.Millisecond) {
 		t.Fatal("the proxy listened once its sink accepted it, before the sink granted it credit")
 	}
 	close(r.release)
-	if !isListening(addr, 5*time.Second) {
+	if !listening(5 * time.Second) {
 		t.Fatal("the proxy never listened after its sink's first grant")
 	}
 
 	t.Run("a Shutdown before the first grant", func(t *testing.T) {
 		r := newTLSRunnerd(t) // never released
-		srv, addr, served := startRunnerSinkSidecar(t, r, "127.0.0.1:1")
+		srv, listening, served := startRunnerSinkSidecar(t, r, "127.0.0.1:1")
 		awaitHello(t, r)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -167,7 +171,7 @@ func TestServer_RunnerSinkProxyListensOnlyAfterItsFirstGrant(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("ListenAndServe kept waiting for a grant after Shutdown")
 		}
-		if isListening(addr, 100*time.Millisecond) {
+		if listening(100 * time.Millisecond) {
 			t.Fatal("a proxy shut down before its first grant listened")
 		}
 	})
@@ -193,11 +197,11 @@ func TestServer_ShutdownEndsTunnelsBeforeTheRunnerSinkCloses(t *testing.T) {
 	}()
 	r := newTLSRunnerd(t)
 	close(r.release)
-	srv, addr, served := startRunnerSinkSidecar(t, r, held.Addr().String())
-	if !isListening(addr, 5*time.Second) {
+	srv, listening, served := startRunnerSinkSidecar(t, r, held.Addr().String())
+	if !listening(5 * time.Second) {
 		t.Fatal("the proxy never listened")
 	}
-	client, answer := connectThrough(t, "http://"+addr, "held.example:443")
+	client, answer := connectThrough(t, "http://"+srv.BoundAddr().String(), "held.example:443")
 	defer client.Close()
 	if !strings.Contains(answer, "200") {
 		t.Fatalf("CONNECT answer %q", answer)
@@ -237,10 +241,10 @@ func TestServer_ShutdownEndsTunnelsBeforeTheRunnerSinkCloses(t *testing.T) {
 // any grant, the row was lost and its drained reply counted a loss.
 func TestServer_RunnerSinkWritesTheUpstreamHopRowOnceGranted(t *testing.T) {
 	r := newTLSRunnerd(t)
-	_, addr, _ := startRunnerSinkSidecar(t, r, "127.0.0.1:1", func(c *Config) { c.UpstreamProxyURL = "http://192.0.2.7:3128" })
+	_, listening, _ := startRunnerSinkSidecar(t, r, "127.0.0.1:1", func(c *Config) { c.UpstreamProxyURL = "http://192.0.2.7:3128" })
 	awaitHello(t, r)
 	close(r.release)
-	if !isListening(addr, 5*time.Second) {
+	if !listening(5 * time.Second) {
 		t.Fatal("the proxy never listened after its sink's first grant")
 	}
 	close(r.drain)
