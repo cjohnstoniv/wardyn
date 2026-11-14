@@ -501,9 +501,16 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		yielded()
 		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 	}
+	s.relayDesktopStream(r.Context(), ctx, sess, c, ws, conn, viewer, filtered, windowOpened)
+}
+
+// relayDesktopStream carries frames both ways until either side ends, the stream's bound or Close lands, or a
+// re-check ends the session, and tells the viewer why with the stream's close code (serveDesktopRFB).
+func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession, c desktopSocket, ws *websocket.Conn,
+	conn net.Conn, viewer *viewerHijack, filtered *rfbfilter.Conn, windowOpened func()) {
 	done := make(chan struct{}, 2)
 	go func() {
-		_ = relayViewer(r.Context(), ws, filtered)
+		_ = relayViewer(reqCtx, ws, filtered)
 		if err := viewer.frames.Refused(); err != nil {
 			filtered.Refuse(err) // a frame the library would have refused unnamed
 		}
