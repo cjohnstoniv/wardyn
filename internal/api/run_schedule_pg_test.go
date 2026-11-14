@@ -86,7 +86,7 @@ func TestPG_ScheduledRunRechecksPolicyAtTheStart(t *testing.T) {
 	}
 	policy := decodeJSON[types.RunPolicy](t, w)
 	out := e.queuedLaunch(nil, pool, `,"policy_id":"`+policy.ID.String()+`"`+scheduleAt(time.Hour))
-	if _, err := e.pg.UpdatePolicy(context.Background(), policy.ID, "reviewed", types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"pypi.org"}}); err != nil {
+	if _, err := e.pg.UpdatePolicy(context.Background(), policy.ID, policy.UpdatedAt, "reviewed", types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"pypi.org"}}); err != nil {
 		t.Fatal(err)
 	}
 	e.due(out.ID)

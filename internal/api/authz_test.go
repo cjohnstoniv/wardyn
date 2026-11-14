@@ -2352,7 +2352,7 @@ func (s *authzStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, err
 	return types.RunPolicy{}, store.ErrNotFound
 }
 func (s *authzStore) ListPolicies(context.Context) ([]types.RunPolicy, error) { return nil, nil }
-func (s *authzStore) UpdatePolicy(context.Context, uuid.UUID, string, types.RunPolicySpec) (types.RunPolicy, error) {
+func (s *authzStore) UpdatePolicy(context.Context, uuid.UUID, time.Time, string, types.RunPolicySpec) (types.RunPolicy, error) {
 	return types.RunPolicy{}, store.ErrNotFound
 }
 func (s *authzStore) DeletePolicy(context.Context, uuid.UUID) error { return nil }

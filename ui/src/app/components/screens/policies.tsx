@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
-import { getExpectedPrincipal, LIST_LIMIT } from "../../lib/api/core";
+import { getExpectedPrincipal, HttpError, LIST_LIMIT } from "../../lib/api/core";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -78,6 +78,7 @@ import {
 } from "../wardyn/availability-control";
 import { AVAILABILITY } from "../../lib/availability-copy";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
+import { SavedElsewhereBanner } from "../wardyn/saved-elsewhere-banner";
 import { ADOAccessSummary } from "../wardyn/ado-access-summary";
 import { setup as setupApi } from "../../lib/api/setup";
 import { scmAccess as scmAccessApi } from "../../lib/api/scm-access";
@@ -515,20 +516,37 @@ function PolicyEditor({
   // F5-F9: what the editor opened WITH — the dirty check below compares
   // against this, not against empty/starter values.
   const initial = React.useRef({ name: "", specText: "" });
+  // A create landed, so the spec on screen is the saved policy's: a late setup status must not re-seed it.
+  const landed = React.useRef(false);
   // A new policy asks who gets it (#923 decision 4). Create writes the policy,
   // then the list, then Only these; a refused list write keeps the editor open
   // on the saved policy, which stays available to everyone meanwhile.
   const [audience, setAudience] = React.useState<AvailabilityDraftValue>({ restricted: false, audiences: [] });
   const [partial, setPartial] = React.useState<{ policy: RunPolicy; message: string } | null>(null);
-  const editing = partial?.policy ?? (editor?.mode === "edit" ? editor.policy : undefined);
+  // A save refused because the policy was saved since it opened (409 policy_stale): the draft stays in the
+  // editor, the shared saved-elsewhere banner offers a copy of it, and Discard reloads the stored policy.
+  const [stale, setStale] = React.useState(false);
+  const [reloaded, setReloaded] = React.useState<RunPolicy | null>(null);
+  // Discard's GET can answer late: a close, an open or a newer Discard moves the generation on, and an answer that
+  // finds it moved is dropped, so it never replaces another policy's draft or retargets its save. The editor body
+  // and Save stay frozen while the reload is pending, so nothing typed meanwhile is lost to it.
+  const reloadGeneration = React.useRef(0);
+  const [reloading, setReloading] = React.useState(false);
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+  const editing = reloaded ?? partial?.policy ?? (editor?.mode === "edit" ? editor.policy : undefined);
   // Once the create landed, closing must re-read even without another save.
   const close = partial ? onSaved : onClose;
 
   React.useEffect(() => {
+    reloadGeneration.current += 1;
+    setReloading(false);
     if (!editor) return;
+    landed.current = false;
     setError(null);
     setSaving(false);
     setPartial(null);
+    setStale(false);
+    setReloaded(null);
     setAudience({ restricted: false, audiences: [] });
     const seedName = editor.mode === "edit" && editor.policy ? editor.policy.name : "";
     const seedSpec = specToSource(editor.mode === "edit" && editor.policy ? editor.policy.spec : STARTER_SPEC);
@@ -557,7 +575,7 @@ function PolicyEditor({
         const providers = st.unreachable ? undefined : st.model_providers;
         setModelProviders(providers);
         // A new, untouched policy re-opens on the starter that follows the providers.
-        if (editor.mode !== "edit") {
+        if (editor.mode !== "edit" && !landed.current) {
           const seeded = specToSource(minimalSpec(providers));
           const was = initial.current.specText;
           setSpecText((prev) => (prev === was ? seeded : prev));
@@ -598,8 +616,10 @@ function PolicyEditor({
     setSaving(true);
     try {
       if (editing) {
-        await api.updatePolicy(editing.id, name.trim(), spec);
+        await api.updatePolicy(editing.id, name.trim(), spec, editing.updated_at);
       } else {
+        // Sent: from here no setup status may replace the person's spec, answered or refused.
+        landed.current = true;
         const created = await api.createPolicy(name.trim(), spec);
         try {
           await writeAvailability("policy", created.id, audience, person);
@@ -612,16 +632,49 @@ function PolicyEditor({
       }
       onSaved();
     } catch (e) {
+      setSaving(false);
+      if (e instanceof HttpError && e.status === 409 && e.reason === "policy_stale") {
+        setStale(true);
+        return;
+      }
       // Surface the server's validation message (HttpError carries the body).
       setError(getErrorMessage(e, "Failed to save policy."));
-      setSaving(false);
+    }
+  };
+
+  // Discard mine and reload: the stored policy replaces the draft, and the next save is made against it.
+  const reload = async () => {
+    if (!editing) return;
+    const requestedId = editing.id;
+    const generation = ++reloadGeneration.current;
+    // Discard holds focus and is about to be disabled, and the dialog's focus trap cannot hand focus back to a
+    // disabled control: park focus on the dialog itself first.
+    dialogRef.current?.focus();
+    setReloading(true);
+    try {
+      const fresh = await api.getPolicy(requestedId);
+      if (generation !== reloadGeneration.current) return;
+      setReloading(false);
+      if (fresh.id !== requestedId) return;
+      const seedSpec = specToSource(fresh.spec);
+      setReloaded(fresh);
+      setName(fresh.name);
+      setSpecText(seedSpec);
+      setFormat("yaml");
+      initial.current = { name: fresh.name, specText: seedSpec };
+      setStale(false);
+      setError(null);
+    } catch (e) {
+      if (generation !== reloadGeneration.current) return;
+      setReloading(false);
+      setError(getErrorMessage(e));
     }
   };
 
   const isEdit = !!editing;
 
   return (
-    <Dialog open={!!editor} onOpenChange={(o) => !o && close()}>
+    <Dialog open={!!editor} onOpenChange={(o) => !o && !saving && close()}>
       {/* F3-F8: the primitive (ui/dialog.tsx) now carries the max-height/
           overflow/scroll-thin floor itself — this local patch, narrower than
           the primitive's (85vh vs 100dvh-2rem), is deleted. */}
@@ -632,6 +685,7 @@ function PolicyEditor({
           dialog only. ponytail: block, don't confirm — same call as that
           precedent. */}
       <DialogContent
+        ref={dialogRef}
         className="sm:max-w-2xl"
         onPointerDownOutside={(e) => dirty && e.preventDefault()}
         onEscapeKeyDown={(e) => dirty && e.preventDefault()}
@@ -641,7 +695,7 @@ function PolicyEditor({
           <DialogDescription>{POLICY_DIALOG.LEDE}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-1">
+        <fieldset disabled={reloading} inert={reloading} className="m-0 min-w-0 space-y-4 border-0 px-0 py-1">
           {partial && (
             <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
               <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
@@ -694,6 +748,7 @@ function PolicyEditor({
               )}
             </div>
           )}
+          {stale && <SavedElsewhereBanner documentText={specText} onDiscard={() => void reload()} disabled={reloading || saving} />}
           {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
               plus wiring into the Save button's aria-describedby below — a
               rejected save previously only ever showed visually. */}
@@ -711,22 +766,22 @@ function PolicyEditor({
               {OPERATOR_ONLY_REASON}
             </p>
           )}
-        </div>
+        </fieldset>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={close}>
+          <Button variant="ghost" onClick={close} disabled={saving}>
             Cancel
           </Button>
           <Button
             onClick={save}
-            disabled={!operator || saving || !name.trim() || !parsed.ok || audience.pending}
+            disabled={!operator || saving || reloading || !name.trim() || !parsed.ok || audience.pending}
             aria-describedby={
               [error ? "policy-editor-error" : undefined, !operator ? "policy-editor-operator-reason" : undefined]
                 .filter(Boolean)
                 .join(" ") || undefined
             }
           >
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+            {saving || reloading ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
             {isEdit ? "Save changes" : "Create policy"}
           </Button>
         </DialogFooter>

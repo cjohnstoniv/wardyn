@@ -8,6 +8,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -82,7 +83,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 		AllowedDomains:      []string{"github.com"},
 		MinConfinementClass: types.CC3,
 	}
-	updated, err := store.NewPG(pool).UpdatePolicy(ctx, id, newName, updatedSpec)
+	updated, err := store.NewPG(pool).UpdatePolicy(ctx, id, created.UpdatedAt, newName, updatedSpec)
 	if err != nil {
 		t.Fatalf("update policy: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 	}
 
 	// Update of an unknown id => ErrNotFound.
-	if _, err := store.NewPG(pool).UpdatePolicy(ctx, uuid.New(), "ghost", updatedSpec); !errors.Is(err, store.ErrNotFound) {
+	if _, err := store.NewPG(pool).UpdatePolicy(ctx, uuid.New(), updated.UpdatedAt, "ghost", updatedSpec); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("update unknown id err = %v, want ErrNotFound", err)
 	}
 
@@ -156,11 +157,55 @@ func TestPG_UpdatePolicy_DuplicateName(t *testing.T) {
 	}
 	src := types.RunPolicy{ID: uuid.New(), Name: "policy-rename-mover-" + uuid.New().String(),
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Spec: spec}
-	if _, err := store.NewPG(pool).CreatePolicy(ctx, src); err != nil {
+	mover, err := store.NewPG(pool).CreatePolicy(ctx, src)
+	if err != nil {
 		t.Fatalf("create mover: %v", err)
 	}
 
-	if _, err := store.NewPG(pool).UpdatePolicy(ctx, src.ID, taken, spec); !errors.Is(err, store.ErrConflict) {
+	if _, err := store.NewPG(pool).UpdatePolicy(ctx, src.ID, mover.UpdatedAt, taken, spec); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("rename onto a taken name err = %v, want ErrConflict", err)
+	}
+}
+
+// TestPG_UpdatePolicy_StaleCopyIsRefused: A and B read the same policy. B removes
+// an allowed host and saves; A then saves the copy it read, which still lists the
+// host. A is refused, the host stays removed, and a save from a fresh read lands.
+// Its updated_at is stamped an hour ahead of the database clock (a clock that
+// stepped back), so B's save must still move updated_at forward.
+func TestPG_UpdatePolicy_StaleCopyIsRefused(t *testing.T) {
+	pg := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	created, err := pg.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "policy-stale-" + uuid.NewString(),
+		CreatedAt: now, UpdatedAt: now.Add(time.Hour), Spec: types.RunPolicySpec{MinConfinementClass: types.CC2,
+			AllowedDomains: []string{"api.anthropic.com", "removed.example.com"}}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	a, aerr := pg.GetPolicy(ctx, created.ID)
+	b, berr := pg.GetPolicy(ctx, created.ID)
+	if aerr != nil || berr != nil {
+		t.Fatalf("reads: %v, %v", aerr, berr)
+	}
+	narrowed := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	saved, err := pg.UpdatePolicy(ctx, b.ID, b.UpdatedAt, b.Name, narrowed)
+	if err != nil {
+		t.Fatalf("B's save: %v", err)
+	}
+	if !saved.UpdatedAt.After(b.UpdatedAt) {
+		t.Errorf("B's save left updated_at at %v, want it after %v", saved.UpdatedAt, b.UpdatedAt)
+	}
+	if _, err := pg.UpdatePolicy(ctx, a.ID, a.UpdatedAt, a.Name, a.Spec); !errors.Is(err, store.ErrPolicyStale) {
+		t.Fatalf("A's save from the older copy err = %v, want ErrPolicyStale", err)
+	}
+	got, err := pg.GetPolicy(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if !slices.Equal(got.Spec.AllowedDomains, narrowed.AllowedDomains) || !got.UpdatedAt.Equal(saved.UpdatedAt) {
+		t.Errorf("after the stale save: domains %v at %v, want %v at %v", got.Spec.AllowedDomains, got.UpdatedAt, narrowed.AllowedDomains, saved.UpdatedAt)
+	}
+	if _, err := pg.UpdatePolicy(ctx, got.ID, got.UpdatedAt, got.Name, a.Spec); err != nil {
+		t.Errorf("a save from a fresh read: %v", err)
 	}
 }

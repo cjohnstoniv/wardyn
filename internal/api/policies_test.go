@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -381,14 +383,72 @@ func (m *memPolicyStore) GetPolicy(_ context.Context, id uuid.UUID) (types.RunPo
 	return p, nil
 }
 
-func (m *memPolicyStore) UpdatePolicy(_ context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
+// UpdatePolicy keeps the store's guard: it writes only while updated_at equals seen, and moves it on.
+func (m *memPolicyStore) UpdatePolicy(_ context.Context, id uuid.UUID, seen time.Time, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
 	p, ok := m.rows[id]
 	if !ok {
 		return types.RunPolicy{}, store.ErrNotFound
 	}
-	p.Name, p.Spec = name, spec
+	if !p.UpdatedAt.Equal(seen) {
+		return types.RunPolicy{}, store.ErrPolicyStale
+	}
+	p.Name, p.Spec, p.UpdatedAt = name, spec, p.UpdatedAt.Add(time.Microsecond)
 	m.rows[id] = p
 	return p, nil
+}
+
+// policyPut is a PUT /policies/{id} body that names the updated_at its caller read.
+func policyPut(name string, seen time.Time, spec string) string {
+	return `{"name":"` + name + `","expected_updated_at":"` + seen.Format(time.RFC3339Nano) + `","spec":` + spec + `}`
+}
+
+// assertStaleSaveRefused is the two-writer case on srv: A and B read one policy, B removes an allowed host
+// and saves, then A saves the copy it read. A gets 409 policy_stale and the host stays removed; a save
+// naming no updated_at is a 400 policy_revision_required; a save from a fresh read lands.
+func assertStaleSaveRefused(t *testing.T, srv *Server) {
+	t.Helper()
+	name := "stale-" + uuid.NewString()
+	spec := func(domains string) string {
+		return `{"min_confinement_class":"CC2","allowed_domains":[` + domains + `]}`
+	}
+	read := func(w *httptest.ResponseRecorder) types.RunPolicy {
+		t.Helper()
+		var p types.RunPolicy
+		if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+			t.Fatalf("read = %d %s", w.Code, w.Body.String())
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	created := read(do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, `{"name":"`+name+`","spec":`+spec(`"api.anthropic.com","removed.example.com"`)+`}`))
+	path := "/api/v1/policies/" + created.ID.String()
+	a, b := read(do(t, srv, http.MethodGet, path, adminToken, "")), read(do(t, srv, http.MethodGet, path, adminToken, ""))
+	if w := do(t, srv, http.MethodPut, path, adminToken, policyPut(name, b.UpdatedAt, spec(`"api.anthropic.com"`))); w.Code != http.StatusOK {
+		t.Fatalf("B's save = %d %s", w.Code, w.Body.String())
+	}
+	w := do(t, srv, http.MethodPut, path, adminToken, policyPut(name, a.UpdatedAt, spec(`"api.anthropic.com","removed.example.com"`)))
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonPolicyStale {
+		t.Fatalf("A's save from the older copy = %d %s, want 409 %s", w.Code, w.Body.String(), reasonPolicyStale)
+	}
+	w = do(t, srv, http.MethodPut, path, adminToken, `{"name":"`+name+`","spec":`+spec(`"removed.example.com"`)+`}`)
+	if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonPolicyRevisionRequired || !strings.Contains(w.Body.String(), "update the CLI or SDK") {
+		t.Errorf("a save naming no updated_at = %d %s, want 400 %s telling an older client to update", w.Code, w.Body.String(), reasonPolicyRevisionRequired)
+	}
+	now := read(do(t, srv, http.MethodGet, path, adminToken, ""))
+	if !slices.Equal(now.Spec.AllowedDomains, []string{"api.anthropic.com"}) {
+		t.Fatalf("after the refused saves the policy allows %v, want only api.anthropic.com", now.Spec.AllowedDomains)
+	}
+	if w := do(t, srv, http.MethodPut, path, adminToken, policyPut(name, now.UpdatedAt, spec(`"api.anthropic.com","removed.example.com"`))); w.Code != http.StatusOK {
+		t.Errorf("a save from a fresh read = %d %s, want 200", w.Code, w.Body.String())
+	}
+}
+
+// TestPolicyPut_StaleCopyIsRefused runs the two-writer case on the in-memory policy store.
+func TestPolicyPut_StaleCopyIsRefused(t *testing.T) {
+	h := newHarness(t)
+	assertStaleSaveRefused(t, New(baseTestConfig(h, &memPolicyStore{rows: map[uuid.UUID]types.RunPolicy{}})))
 }
 
 func (m *memPolicyStore) DeletePolicy(_ context.Context, id uuid.UUID) error {
@@ -424,7 +484,7 @@ func TestPolicyWrites_AuditRowsRecordTheSpec(t *testing.T) {
 		t.Errorf("policy.create after = %s, want the stored spec", got)
 	}
 
-	w = do(t, srv, http.MethodPut, "/api/v1/policies/"+created.ID.String(), adminToken, `{"name":"prod2","spec":{"min_confinement_class":"CC2","allowed_domains":["b.example.com"]}}`)
+	w = do(t, srv, http.MethodPut, "/api/v1/policies/"+created.ID.String(), adminToken, policyPut("prod2", created.UpdatedAt, `{"min_confinement_class":"CC2","allowed_domains":["b.example.com"]}`))
 	if w.Code != http.StatusOK {
 		t.Fatalf("update = %d %s", w.Code, w.Body.String())
 	}

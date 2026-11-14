@@ -596,31 +596,6 @@ func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 	return s.ListPoliciesPage(ctx, Page{})
 }
 
-// UpdatePolicy replaces a policy's name and spec and bumps updated_at. Returns
-// ErrNotFound when no policy has the given id, and ErrConflict when the rename
-// collides with run_policies.name's UNIQUE constraint — same mapping as
-// CreatePolicy, since a rename onto a taken name is the same caller-fixable
-// mistake as an insert under one. The caller validates the spec before calling.
-func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
-	specJSON, err := json.Marshal(spec)
-	if err != nil {
-		return types.RunPolicy{}, fmt.Errorf("store: marshal policy spec: %w", err)
-	}
-	const q = `
-		UPDATE run_policies SET name=$1, spec=$2, updated_at=now()
-		WHERE id=$3
-		RETURNING id, name, created_at, updated_at, spec`
-	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, name, specJSON, id))
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return types.RunPolicy{}, ErrConflict
-		}
-		return types.RunPolicy{}, err
-	}
-	return out, nil
-}
-
 // DeletePolicy removes a policy by id. Returns ErrNotFound when no row matched.
 // agent_runs.policy_id has no foreign key, so referencing runs keep a dangling
 // policy_id; their authorization envelope survives via the run.policy.resolve

@@ -69,12 +69,20 @@ export const policies = {
     return asJson<PolicySaved>(res);
   },
 
-  // PUT /api/v1/policies/{id}  { name, spec } -> updated policy.
-  async updatePolicy(id: string, name: string, spec: RunPolicySpec): Promise<PolicySaved> {
+  // GET /api/v1/policies/{id} -> one stored policy (the editor's reload after a refused save).
+  async getPolicy(id: string): Promise<RunPolicy> {
+    const res = await wfetch(`/policies/${encodeURIComponent(id)}`, { method: "GET" });
+    return asJson<RunPolicy>(res);
+  },
+
+  // PUT /api/v1/policies/{id}  { name, spec, expected_updated_at } -> updated policy.
+  // expectedUpdatedAt is the policy's updated_at exactly as it was read: a policy
+  // saved since answers 409 policy_stale and nothing is written.
+  async updatePolicy(id: string, name: string, spec: RunPolicySpec, expectedUpdatedAt: string): Promise<PolicySaved> {
     const res = await wfetch(`/policies/${encodeURIComponent(id)}`, {
       method: "PUT",
       asPerson: true,
-      body: JSON.stringify({ name, spec }),
+      body: JSON.stringify({ name, spec, expected_updated_at: expectedUpdatedAt }),
     });
     return asJson<PolicySaved>(res);
   },
