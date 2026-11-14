@@ -24,6 +24,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run created just as the person who saved one of its components erased their components, or deleted that component, could keep a copy of it in the run's record if the server stopped at that moment. The copy is now checked in the same database transaction that writes it, and the create fails instead.
 - File recording store: retention (`WARDYN_RECORDING_RETENTION_DAYS`) could delete a recording saved again under the same name just as the sweep reached it. The sweep now checks the file's age again, under the recording's lock, before it deletes it.
 - File recording store: an upload for a run whose recordings were erased is now refused before any of it is written to disk. Before, it was written to a staging file first, and a crash during the upload could leave that file until retention removed it.
+- A recording upload whose save failed before reading any of it, and whose body then stalled, could wait for the rest of the body with no time limit before it was answered. It is now answered within 60 seconds of the failure, the upload's read window.
 - A credential value registered for masking a run's output at the moment the run's masking values were erased (`mask_copies`) or purged by retention could stay in the server's memory until it restarted; the stored copy was erased as before. That registration is now refused and leaves no copy.
 
 ## [0.10.0-rc.20] — 2026-11-12
