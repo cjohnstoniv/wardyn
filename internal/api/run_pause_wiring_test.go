@@ -355,10 +355,10 @@ func TestAttachHolder_OnlyAWritersInputIsPresence(t *testing.T) {
 	var writerInputs, observerInputs int
 	writer := &attachHolder{principal: holderOwner, source: attachSourceWeb, onInput: func() { writerInputs++ }}
 	_, release := srv.registerAttachHolder(runID, writer)
-	defer release()
+	defer func() { _ = release() }()
 	observer := &attachHolder{principal: holderSecond, source: attachSourceWeb, onInput: func() { observerInputs++ }}
 	readOnly, releaseObserver := srv.registerAttachHolder(runID, observer)
-	defer releaseObserver()
+	defer func() { _ = releaseObserver() }()
 	if !readOnly {
 		t.Fatal("the second attach was admitted as a writer")
 	}
