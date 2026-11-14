@@ -268,12 +268,18 @@ func TestDispatch_ResidentNotAfterBound(t *testing.T) {
 	if !f.srv.deliverResident(t.Context(), ok, types.RunPolicySpec{}, []residentValue{f.value(t, ok, "v2")}) {
 		t.Fatal("a delivery inside the bound was refused")
 	}
-	delivered, _ := f.side.calls()
-	if len(delivered) != 1 || !delivered[0].NotAfter.Equal(capAt) {
-		t.Fatalf("delivered %+v, want one value bounded by the 2h cap %v", delivered, capAt)
+	// The stored cap is re-anchored to the database's clock at insert (stampRunTimes),
+	// so the bound is the run's own cap, which sits within a clock reading of capAt.
+	if ok.LifetimeCapAt == nil || ok.LifetimeCapAt.Sub(capAt).Abs() > time.Second {
+		t.Fatalf("stored cap %v, want about %v", ok.LifetimeCapAt, capAt)
 	}
-	if _, _, _, _, notAfter := f.obligation(t, ok.ID); !notAfter.Equal(capAt) {
-		t.Fatalf("stored not_after %v, want %v", notAfter, capAt)
+	stored := *ok.LifetimeCapAt
+	delivered, _ := f.side.calls()
+	if len(delivered) != 1 || !delivered[0].NotAfter.Equal(stored) {
+		t.Fatalf("delivered %+v, want one value bounded by the 2h cap %v", delivered, stored)
+	}
+	if _, _, _, _, notAfter := f.obligation(t, ok.ID); !notAfter.Equal(stored) {
+		t.Fatalf("stored not_after %v, want %v", notAfter, stored)
 	}
 }
 
