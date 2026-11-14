@@ -415,8 +415,11 @@ func TestEgressEditBudget_CoversEveryWindowAfterTheClaim(t *testing.T) {
 	const statedAnswer = 8 * time.Minute                         // docs/operations/run-lifetime.md, docs/sdk.md
 
 	// Docker's two windows on a ctx of their own, read from the driver: a created proxy's removal, and StopSandbox.
-	dockerRollback := dockerSeconds(t, "driver.go", "stopTimeout")
-	dockerStop := dockerSeconds(t, "driver_network.go", "stopSandboxBudget")
+	dockerRollback := sourceSeconds(t, "runner/docker/driver.go", "stopTimeout")
+	dockerStop := sourceSeconds(t, "runner/docker/driver_network.go", "stopSandboxBudget")
+	// The audit sinks read a run's correlation id on a ctx of their own for each row that fans out
+	// (cmd/wardynd fanoutRecorder): past the hard end that is the proxy stop's failure row and the sandbox stop's.
+	sinkLookup := sourceSeconds(t, "audit/sinks/correlation.go", "correlationLookupBudget")
 
 	if before := narrowRouteTimeout + leaseWait + lock + reviveRunnerTimeout; before > egressEditCallBudget {
 		t.Errorf("a revive's own windows take %v before its claim, past the edit's call budget %v", before, egressEditCallBudget)
@@ -445,16 +448,16 @@ func TestEgressEditBudget_CoversEveryWindowAfterTheClaim(t *testing.T) {
 			t.Errorf("%s: its windows close at %v, past the edit's hard end %v", c.name, end, hard)
 		}
 	}
-	if answer := hard + 2*verify + dockerStop + release; answer > statedAnswer {
+	if answer := hard + 2*(verify+sinkLookup) + dockerStop + release; answer > statedAnswer {
 		t.Errorf("the edit answers within %v, past the stated %v", answer, statedAnswer)
 	}
 }
 
-// dockerSeconds is the Docker driver's name, declared in file as "<n> * time.Second", read from its source: the
-// census counts the driver's two windows on a ctx of their own, which are unexported in that package.
-func dockerSeconds(t *testing.T, file, name string) time.Duration {
+// sourceSeconds is name, declared in internal/<file> as "<n> * time.Second", read from its source: the census
+// counts windows on a ctx of their own in the Docker driver and the audit sinks, which are unexported there.
+func sourceSeconds(t *testing.T, file, name string) time.Duration {
 	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", "runner", "docker", file), nil, 0)
+	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", filepath.FromSlash(file)), nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +484,7 @@ func dockerSeconds(t *testing.T, file, name string) time.Duration {
 		return true
 	})
 	if d == 0 {
-		t.Fatalf("internal/runner/docker/%s declares no %s = <n> * time.Second: count that window from its new form", file, name)
+		t.Fatalf("internal/%s declares no %s = <n> * time.Second: count that window from its new form", file, name)
 	}
 	return d
 }
