@@ -588,16 +588,27 @@ func copyHashed(dst string, open func() (io.ReadCloser, error)) (string, error) 
 }
 
 // waitConnected polls My runners until the runner is connected. When it is not within setupConnectWait it
-// prints runnerd's last error and, after an upgrade, the restore line, and fails.
+// prints runnerd's last error and, after an upgrade, the restore line, and fails. When the runner could not be
+// read at all, or the organisation refused the credential, it says the connection could not be confirmed
+// instead, with the read's error and no restore line: nothing says the runner is at fault.
 func waitConnected(ctx context.Context, c *sdk.Client, out io.Writer, id uuid.UUID, stateDir, org, oldVersion string) error {
 	fmt.Fprintf(out, copySetupWaiting+"\n", setupConnectWait)
 	deadline := time.Now().Add(setupConnectWait)
+	read := false
 	for {
-		if v, err := c.GetMyRunner(ctx, id); err == nil && v.Online {
+		v, err := c.GetMyRunner(ctx, id)
+		if err == nil && v.Online {
 			fmt.Fprintf(out, copySetupConnected+"\n", id)
 			return nil
 		}
-		if !time.Now().Before(deadline) {
+		read = read || err == nil
+		var ae *sdk.APIError
+		refused := errors.As(err, &ae) && (ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden)
+		past := !time.Now().Before(deadline)
+		if refused || (past && err != nil && !read) {
+			return fmt.Errorf(errSetupNotConfirmed, err)
+		}
+		if past {
 			break
 		}
 		select {

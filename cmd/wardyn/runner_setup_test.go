@@ -46,6 +46,7 @@ type setupRig struct {
 	mintStatus        int
 	mintBody          string
 	claimStatus       int
+	readStatus        int // when set, GET of this runner answers it
 	advertised        string
 	signIn            bool         // /healthz.cli_sign_in
 	fallback          http.Handler // the sign-in fake, for routes this rig does not answer
@@ -135,6 +136,8 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		r.claimed = true
 		_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: r.runnerID, State: types.RunnerClaimed})
+	case req.Method == http.MethodGet && p == me && r.readStatus != 0:
+		w.WriteHeader(r.readStatus)
 	case req.Method == http.MethodGet && p == me:
 		state := types.RunnerUnclaimed
 		if r.claimed {

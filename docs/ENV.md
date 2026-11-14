@@ -2444,7 +2444,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Read-only checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
 - It never prints a token or a proxy credential, writes nothing and exits 1 when a stage fails; `--json` gives the stages as data.
-- It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle would verify the server: the CLI trusts the system roots alone, and a runner trusts the bundle.
+- It trusts what the CLI trusts: the system roots, and for the organisation's host the CAs `wardyn ca add` stored. It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle, which a runner trusts, would verify the server.
 - With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)). Its `runner-exits` stage fails when the organisation parked one of that runner's exit receipts ([runner-offline.md](runner-offline.md)).
 
 ### `WARDYN_URL`

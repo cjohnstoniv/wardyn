@@ -7,8 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,9 +26,15 @@ func claimStep(cmd *cobra.Command, plan setupPlan, id runneridentity.Identity, t
 		fmt.Fprintf(out, "Key fingerprint %s. Claim this runner as its owner in the console (Settings → My runner), or run\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n", id.Fingerprint)
 		return nil
 	}
-	c := sdk.New(plan.org, token)
-	c.HTTPClient = &http.Client{Timeout: 30 * time.Second}
-	if err := claimRunner(cmd.Context(), c, id, plan, out); err != nil {
+	// The claim reaches the organisation the way registration and the connection check did: the same roots,
+	// the route that check chose, and no redirects.
+	oc, err := registrationClient(registerArgs{trustedCAFile: plan.trustedCAFile, orgCAFile: plan.orgCAFile})
+	if err == nil {
+		c := registrationSDK(cmd.Context(), plan.org, oc)
+		c.Token = token
+		err = claimRunner(cmd.Context(), c, id, plan, out)
+	}
+	if err != nil {
 		state := "installed and running"
 		if plan.noService {
 			state = "registered"
