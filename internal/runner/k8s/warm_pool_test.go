@@ -33,12 +33,23 @@ func TestWarmPoolParse(t *testing.T) {
 	if !reflect.DeepEqual(pools, want) {
 		t.Fatalf("pools = %+v, want %+v", pools, want)
 	}
+	if pools, err = parseWarmPools(good + " \n"); err != nil || !reflect.DeepEqual(pools, want) {
+		t.Fatalf("white space after the array = %+v, %v; want the same pools", pools, err)
+	}
+	edge := `[{"name":"` + strings.Repeat("a", warmPoolNameMax) + `","image":"i","class":"CC1","cpu":"1","memory":"1Gi","size":20},` +
+		`{"name":"b","image":"i","class":"CC1","cpu":"1","memory":"1Gi","size":20},` +
+		`{"name":"c","image":"i","class":"CC1","cpu":"1","memory":"1Gi","size":10}]`
+	if _, err := parseWarmPools(edge); err != nil {
+		t.Fatalf("a name of %d characters, a size of %d and a total of %d are refused: %v", warmPoolNameMax, warmPoolMaxSize, warmPoolMaxTotal, err)
+	}
 	one := func(name, image, class, cpu, mem string, size int) string {
 		return `[{"name":"` + name + `","image":"` + image + `","class":"` + class + `","cpu":"` + cpu + `","memory":"` + mem + `","size":` + strconv.Itoa(size) + `}]`
 	}
 	cases := []struct{ name, raw, want string }{
 		{"unknown field", `[{"name":"a","image":"i","class":"CC1","cpu":"1","memory":"1Gi","size":1,"extra":1}]`, "unknown field"},
 		{"trailing data", one("a", "i", "CC1", "1", "1Gi", 1) + ` []`, "data after the array"},
+		{"a stray closing bracket", `[]]`, "data after the array"},
+		{"a stray closing brace", one("a", "i", "CC1", "1", "1Gi", 1) + `}`, "data after the array"},
 		{"not an array", `{"name":"a"}`, "cannot read"},
 		{"bad name", one("A_b", "i", "CC1", "1", "1Gi", 1), "DNS label"},
 		{"name of 31 characters", one(strings.Repeat("a", 31), "i", "CC1", "1", "1Gi", 1), "DNS label"},
@@ -120,6 +131,7 @@ func TestWarmPoolMatch(t *testing.T) {
 		want        string
 	}{
 		{"first match wins", "i", types.CC1, "250m", "512Mi", "small"},
+		{"an exact fit", "i", types.CC1, "500m", "1Gi", "small"},
 		{"empty class is CC1", "i", "", "250m", "512Mi", "small"},
 		{"cpu excludes the small pool", "i", types.CC1, "1", "512Mi", "big"},
 		{"memory excludes the small pool", "i", types.CC1, "250m", "2Gi", "big"},
