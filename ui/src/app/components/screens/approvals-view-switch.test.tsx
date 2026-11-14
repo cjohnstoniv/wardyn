@@ -408,3 +408,126 @@ describe("ApprovalsScreen: a request with a decision out has no live buttons in 
     expect(approveMock).toHaveBeenCalledTimes(2);
   });
 });
+
+// The hold is the screen's, so it covers every way a decision goes out, not only a card's own Approve.
+describe("ApprovalsScreen: every decision path holds its request, and a refusal frees it", () => {
+  const approveOf = (i: number) => screen.getAllByRole("button", { name: /^approve$/i })[i];
+  const inDialog = (name: RegExp) => within(screen.getByRole("dialog")).getByRole("button", { name });
+  async function sendFromDialog(i = 0) {
+    approveOf(i).focus();
+    fireEvent.click(approveOf(i));
+    await flush();
+    fireEvent.click(inDialog(/^approve$/i));
+    await flush();
+  }
+
+  it("a reason dialog closed while its decision is out leaves the card with both buttons off, until the decision is refused", async () => {
+    const approve = later<unknown>();
+    approveMock.mockReset().mockReturnValueOnce(approve.promise);
+    pendingFor.user.mockReset().mockResolvedValue([egress("p1")]);
+    await mount("/approvals");
+    await sendFromDialog();
+    fireEvent.click(inDialog(/^cancel$/i));
+    await flush();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(approveOf(0)).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
+    await act(async () => approve.fail(new HttpError(500, "internal error")));
+    await flush();
+    expect(approveOf(0)).toBeEnabled();
+  });
+
+  it.each([
+    ["goes through", (a: ReturnType<typeof later<unknown>>) => a.answer({})],
+    ["is refused as already decided", (a: ReturnType<typeof later<unknown>>) => a.fail(new HttpError(409, "approval already decided", "approval_already_decided"))],
+  ])("a decision that %s after its dialog was closed does not close the dialog opened since for another request", async (_name, settle) => {
+    const approve = later<unknown>();
+    approveMock.mockReset().mockReturnValueOnce(approve.promise);
+    pendingFor.user.mockReset().mockResolvedValueOnce([egress("p1"), egress("p2")]).mockResolvedValue([egress("p2")]);
+    await mount("/approvals");
+    await sendFromDialog();
+    fireEvent.click(inDialog(/^cancel$/i));
+    await flush();
+    fireEvent.click(approveOf(1));
+    await flush();
+    await act(async () => settle(approve));
+    await flush();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.queryByText("Reach p1.example.com")).toBeNull();
+  });
+
+  it("a dialog decision that takes its card away leaves focus on the next card's Approve, not on the page heading", async () => {
+    const again = later<ApprovalRequest[]>();
+    approveMock.mockReset().mockResolvedValueOnce({});
+    pendingFor.user.mockReset().mockResolvedValueOnce([egress("p1"), egress("p2")]).mockReturnValueOnce(again.promise);
+    await mount("/approvals");
+    await sendFromDialog();
+    await flush(300);
+    await act(async () => again.answer([egress("p2")]));
+    await flush(300);
+    expect(screen.queryByText("Reach p1.example.com")).toBeNull();
+    expect(approveOf(0)).toHaveFocus();
+  });
+
+  it("a Needs you request declined before the switch has Decline off in the Admin queue, and a refused decline frees it", async () => {
+    const decline = later<unknown>();
+    declineMock.mockReset().mockReturnValueOnce(decline.promise);
+    pendingFor.user.mockReset().mockResolvedValue([takeover("t1")]);
+    pendingFor.admin.mockReset().mockResolvedValue([takeover("t1")]);
+    const declineButton = () => within(screen.getByTestId("takeover-card")).getByRole("button", { name: /^Decline$/ });
+    await mount("/approvals");
+    fireEvent.click(declineButton());
+    await flush();
+    await switchTo("/admin/approvals");
+    expect(declineButton()).toBeDisabled();
+    await act(async () => decline.fail(new HttpError(500, "internal error")));
+    await flush();
+    expect(declineButton()).toBeEnabled();
+  });
+
+  it("a refusal that has its own toast frees the card too", async () => {
+    approveMock.mockReset().mockRejectedValueOnce(new HttpError(403, "above the rule", "decision_scope_above_rule"));
+    pendingFor.user.mockReset().mockResolvedValue([push("p1")]);
+    await mount("/approvals");
+    const approve = () => within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ });
+    fireEvent.click(approve());
+    await flush();
+    expect(approve()).toBeEnabled();
+  });
+
+  // A decider's elevation card sends its own decision and keeps its own busy state, which a remount loses.
+  it("an elevation request with a decision out has both buttons off after leaving the tab and coming back, until the read after it answers", async () => {
+    const approve = later<unknown>();
+    const again = later<unknown>();
+    const list = (requests: unknown[]) => ({ requests, offered: [], image_offered: false });
+    const e1 = { id: "e1", kind: "elevation", target_kind: "governance_elevation", op: "create", target_key: "u1", state: "pending", unit_id: "u1", unit_name: "Payments", duration: "4h", proposed_by: "dana@acme.example", proposed_at: NOW, expires_at: NOW, diff: { before: null, after: null, changed: [] }, mine: false, decidable: true, deciders: [{ kind: "security" }], note: { reason: "ship it" } };
+    elevationApprove.mockReset().mockReturnValueOnce(approve.promise);
+    elevationList.mockReset().mockResolvedValueOnce(list([e1])).mockReturnValueOnce(again.promise).mockResolvedValue(list([]));
+    const tab = async (name: RegExp) => {
+      fireEvent.mouseDown(screen.getByRole("tab", { name }));
+      await flush();
+    };
+    const buttons = () => [screen.getByRole("button", { name: /^approve$/i }), screen.getByRole("button", { name: /^deny$/i })];
+    await mount("/approvals", false);
+    await tab(/waiting on you/i);
+    fireEvent.click(buttons()[0]);
+    await flush();
+    await tab(/^pending/i);
+    await tab(/waiting on you/i);
+    for (const button of buttons()) expect(button).toBeDisabled();
+    await act(async () => approve.answer({}));
+    await flush();
+    expect(elevationList).toHaveBeenCalledTimes(2);
+    for (const button of buttons()) expect(button).toBeDisabled();
+    await act(async () => again.answer(list([])));
+    await flush();
+    expect(screen.queryByRole("button", { name: /^approve$/i })).toBeNull();
+  });
+
+  // Tailwind writes space-y with no specificity, so any margin class on a row wins over it and the cards touch.
+  it("a card's row carries no margin class, so the list's gap between cards holds", async () => {
+    pendingFor.user.mockReset().mockResolvedValue([push("p1")]);
+    await mount("/approvals");
+    expect(screen.getByTestId("push-content-card").closest("fieldset")?.className).not.toMatch(/(^|\s)-?m[trblxy]?-/);
+  });
+});

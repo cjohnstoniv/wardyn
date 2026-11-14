@@ -12,6 +12,7 @@ import { ChevronDown } from "lucide-react";
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
 import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
+import { isAlreadyDecided } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
 import { getErrorMessage, shortTime } from "../../lib/format";
 import { isBackgroundRun, mayEnterRunOrUnknown } from "../../lib/run-entry";
@@ -180,6 +181,8 @@ export function NeedsYouBanner({
       onChanged();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+      // Someone else decided it first: the banner is stale, so its data is read again at once.
+      if (isAlreadyDecided(err)) onChanged();
     } finally {
       setBusy(null);
     }

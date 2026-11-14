@@ -23,7 +23,7 @@ import {
 } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { requests as elevationApi } from "../../lib/api/governance-requests";
-import type { GovernanceRequestList } from "../../lib/types/governance-requests";
+import type { GovernanceRequest, GovernanceRequestList } from "../../lib/types/governance-requests";
 import { anyCapabilityEnforced, useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
 import { HttpError, isAlreadyDecided, LIST_LIMIT } from "../../lib/api/core";
@@ -642,15 +642,18 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       if (prompt.action === "approve") await api.approve(prompt.id, reason, ...args);
       else await api.deny(prompt.id, reason, ...args);
       toast.success(prompt.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      setPrompt(null);
+      onChanged?.();
       // F5-F11: load() would flip status back to "loading" first — the whole
       // queue would flash to a skeleton after every single decision, losing
       // scroll position. fetchAll() is the same silent refresh the poll
       // uses instead; a refresh failure here is not fatal — the decide
       // itself already succeeded, and the next poll tick will catch the
       // view up.
-      void readAfterDecision(id);
-      onChanged?.();
+      // The dialog closes when that read has answered: closed while its card is still held, focus would find no
+      // usable control in the list and go to the page heading instead of the next card. Only this request's dialog
+      // closes, never one opened since for another request.
+      await readAfterDecision(id);
+      setPrompt((cur) => (cur?.id === id ? null : cur));
       return true;
     } catch (err) {
       noteRefusal(prompt.id, err);
@@ -661,7 +664,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         );
       }
       // The dialog is for a request that is decided, so it closes with the card.
-      if (await refreshIfDecided(err)) setPrompt(null);
+      if (await refreshIfDecided(err)) setPrompt((cur) => (cur?.id === id ? null : cur));
       releaseDeciding(id);
       return false;
     }
@@ -719,16 +722,25 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
   // One card for both lists; the Waiting on you tab passes waiting so the card trusts the server's verdict on it.
-  const elevationDecided = () => {
-    fetchAllRef.current().catch(() => {
-      /* transient refresh failure — the decision itself already succeeded */
-    });
+  // A decider card sends its own decision, with a governance request id: it is held from its click (onStart) until
+  // the read after its answer, like every other card, so leaving the tab and coming back draws no live buttons.
+  const elevationDecided = (id: string) => {
+    void readAfterDecision(id);
     onChanged?.();
   };
+  const deciderCard = (r: GovernanceRequest) => {
+    const Card = r.kind === "image" ? ImageDeciderCard : ElevationDeciderCard;
+    return (
+      <fieldset key={r.id} disabled={deciding.has(r.id)} className="min-w-0 border-0 p-0">
+        <Card request={r} onStart={() => markDeciding(r.id)} onDone={() => elevationDecided(r.id)} />
+      </fieldset>
+    );
+  };
   // data-focus-row: when a decision removes the card whose button opened the dialog, focus moves to the next card.
-  // A disabled fieldset turns off every button in the card, whatever its kind, while a decision for it is out.
+  // A disabled fieldset turns off every button in the card, whatever its kind, while a decision for it is out. It
+  // carries no margin class: one would beat the gap the list's space-y gives its rows.
   const approvalCard = (a: ApprovalRequest, waiting: boolean) => (
-    <fieldset key={a.id} data-focus-row disabled={deciding.has(a.id)} className="m-0 min-w-0 border-0 p-0">
+    <fieldset key={a.id} data-focus-row disabled={deciding.has(a.id)} className="min-w-0 border-0 p-0">
       <ApprovalCard
         item={wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a}
         presetBlocked={presetRefused.has(a.id)}
@@ -821,13 +833,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
               </TruncatedNote>
             )}
             <div className="space-y-3.5">
-              {deciderRequests.map((r) =>
-                r.kind === "image" ? (
-                  <ImageDeciderCard key={r.id} request={r} onDone={elevationDecided} />
-                ) : (
-                  <ElevationDeciderCard key={r.id} request={r} onDone={elevationDecided} />
-                ),
-              )}
+              {deciderRequests.map(deciderCard)}
               {waitingRows.map((a) => approvalCard(a, true))}
             </div>
           </>

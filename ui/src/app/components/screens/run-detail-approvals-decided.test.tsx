@@ -77,12 +77,13 @@ const PUSH = {
   requested_scope: { repo: "github.com/acme/widgets", branch: "refs/heads/feature/x", acts_as: "github_token:11111111-1111-1111-1111-111111111111", paths: ["a.txt"], paths_total: 1, commits: ["deadbeef".repeat(5)], paths_digest: "a".repeat(64), acts_as_kind: "github_app", acts_as_label: "dana@acme.example" },
 } as ApprovalRequest;
 const TAKEOVER = { ...base, id: "takeover-1", kind: "human_takeover", requested_scope: { reason: "stuck on a prompt" } } as ApprovalRequest;
+const EGRESS2 = { ...base, id: "egress-2", kind: "egress_domain", requested_scope: { host: "other.example.test" } } as ApprovalRequest;
 const decided = () => new HttpError(409, "approval already decided", "approval_already_decided");
 
-// Opens the run's Approvals tab with `row` pending on the first read and nothing on the ones after it.
-async function openTab(row: ApprovalRequest) {
+// Opens the run's Approvals tab with `rows` pending on the first read and `after` on the ones after it.
+async function openTab(rows: ApprovalRequest | ApprovalRequest[], after: ApprovalRequest[] = []) {
   getRunMock.mockResolvedValue(RUN_ROW);
-  listApprovalsMock.mockReset().mockResolvedValueOnce([row]).mockResolvedValue([]);
+  listApprovalsMock.mockReset().mockResolvedValueOnce([rows].flat()).mockResolvedValue(after);
   render(
     <MemoryRouter initialEntries={["/runs/run-1"]}>
       <OperatorProvider operator={false} securityOperator={true} principal={ME}>
@@ -144,5 +145,54 @@ describe("RunDetailScreen Approvals tab: a request the server says was already d
     await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
     await new Promise((r) => setTimeout(r, 300));
     expect(listApprovalsMock.mock.calls.length).toBe(before);
+  });
+
+  it("a push card's own Approve stays off until the read after an already-decided answer comes back", async () => {
+    approveMock.mockRejectedValueOnce(decided());
+    const region = await openTab(PUSH);
+    let answer: (rows: ApprovalRequest[]) => void = () => {};
+    listApprovalsMock.mockReset().mockReturnValueOnce(new Promise<ApprovalRequest[]>((r) => (answer = r))).mockResolvedValue([]);
+    const card = await within(region).findByTestId("push-content-card");
+    fireEvent.click(within(card).getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(within(card).getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    answer([]);
+    await waitFor(() => expect(screen.queryByTestId("push-content-card")).toBeNull());
+  });
+
+  it("a Decline stays off until the read after an already-decided answer comes back", async () => {
+    declineMock.mockRejectedValueOnce(decided());
+    const region = await openTab(TAKEOVER);
+    let answer: (rows: ApprovalRequest[]) => void = () => {};
+    listApprovalsMock.mockReset().mockReturnValueOnce(new Promise<ApprovalRequest[]>((r) => (answer = r))).mockResolvedValue([]);
+    const card = await within(region).findByTestId("takeover-card");
+    fireEvent.click(within(card).getByRole("button", { name: /^decline$/i }));
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(within(card).getByRole("button", { name: /^decline$/i })).toBeDisabled();
+    answer([]);
+    await waitFor(() => expect(screen.queryByTestId("takeover-card")).toBeNull());
+  });
+
+  it.each([
+    ["goes through", (a: { ok: () => void; fail: (e: unknown) => void }) => a.ok()],
+    ["is refused as already decided", (a: { ok: () => void; fail: (e: unknown) => void }) => a.fail(decided())],
+  ])("a decision that %s after its dialog was closed does not close the dialog opened since for another request", async (_name, settle) => {
+    let ok: () => void = () => {};
+    let fail: (e: unknown) => void = () => {};
+    approveMock.mockReturnValueOnce(new Promise((res, rej) => ((ok = () => res({})), (fail = rej))));
+    const region = await openTab([EGRESS, EGRESS2], [EGRESS2]);
+    const approves = within(region).getAllByRole("button", { name: /^approve$/i });
+    fireEvent.click(approves[0]);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(within(region).getAllByRole("button", { name: /^approve$/i })[1]);
+    await screen.findByRole("dialog");
+    settle({ ok, fail });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });
