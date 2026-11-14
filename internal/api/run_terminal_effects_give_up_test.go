@@ -70,9 +70,10 @@ func keptForCopyBack() types.RunLocalFolderStatus {
 // failed, so nothing was brought back or recorded) gives the copy back up before it clears the run's ref: made while
 // the ref is still set, due at once (a zero cap), its final record keeps the count and names of the changes left
 // behind, and its run.folder.transfer row is written; then the ref is cleared. A give-up that leaves the record
-// open, or a read the give-up needs that fails, keeps the ref and answers an error. A killed run owes nothing: its
-// ref is cleared with no give-up. Catches: a ref cleared while the record still shows the changes owed, with no
-// given_up row; a read that fails answered as nothing owed.
+// open, or a read the give-up needs that fails inside the keep (that give-up waits for the keep to run out), keeps
+// the ref and answers an error. A killed run owes nothing: its ref is cleared with no give-up. Catches: a ref
+// cleared while the record still shows the changes owed, with no given_up row; a read that fails answered as nothing
+// owed.
 func TestFinalizeRunEffects_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing.T) {
 	down := errors.New("the database did not answer")
 	neverRun := types.RunLocalFolderStatus{Gen: 3, Settled: 3}
@@ -89,7 +90,8 @@ func TestFinalizeRunEffects_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing
 		{"the folder seed could not be read", types.RunCompleted, keptForCopyBack(), true, down, nil, true, 1, true},
 		{"the data out rule could not be read", types.RunCompleted, keptForCopyBack(), true, nil, down, true, 1, true},
 		{"left open", types.RunCompleted, keptForCopyBack(), false, down, nil, true, 1, false},
-		{"a read the give-up needs fails", types.RunCompleted, neverRun, true, down, nil, false, 0, false},
+		{"a read the give-up needs fails, inside the keep", types.RunCompleted, neverRun, false, down, nil, false, 1, false},
+		{"a read the give-up needs fails, past the keep", types.RunCompleted, neverRun, true, down, nil, false, 1, true},
 		{"a killed run owes nothing", types.RunKilled, neverRun, true, nil, nil, false, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,15 +108,20 @@ func TestFinalizeRunEffects_GivesUpAnOwedCopyBackBeforeClearingTheRef(t *testing
 			if len(cs.giveUps) != tc.giveUps || slices.ContainsFunc(*refAt, func(r string) bool { return r != "sbx" }) {
 				t.Fatalf("%d give-ups, refs at give-up %v; want %d, each made while the ref was set", len(cs.giveUps), *refAt, tc.giveUps)
 			}
-			if tc.giveUps == 1 {
+			if tc.giveUps == 1 && tc.rec.Resume != nil {
 				p := cs.giveUps[0]
 				if p.Cap != 0 || p.D1 || p.Back.GivenUpAt == nil || p.Back.GivenUpCount == nil || *p.Back.GivenUpCount != 3 ||
 					!slices.Equal(p.Back.GivenUpPaths, []string{"a.txt", "b.txt"}) || p.Back.GivenUpPathsMore != 1 {
 					t.Errorf("give-up %+v; want a zero cap, no containment terms, and 3 changes given up, 2 named and 1 more", p)
 				}
 			}
+			if tc.giveUps == 1 && tc.rec.Resume == nil {
+				if p := cs.giveUps[0]; p.Cap != s.pendingCap() || !strings.HasSuffix(p.Back.Error, folderRuleUnreadable) {
+					t.Errorf("give-up %+v; want the keep as its cap and the unreadable seed or rule noted", p)
+				}
+			}
 			wantRows := 0
-			if tc.final && tc.giveUps == 1 {
+			if tc.final && tc.giveUps == 1 && tc.rec.Resume != nil {
 				wantRows = 1
 			}
 			cur, _ := cs.GetRun(context.Background(), run.ID)
