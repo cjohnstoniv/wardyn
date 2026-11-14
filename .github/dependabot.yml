@@ -9,16 +9,6 @@ updates:
       # (e.g. React 18->19) stands out instead of drowning in the weekly pile.
       minor-and-patch:
         update-types: [minor, patch]
-    ignore:
-      # These modules' next versions need go 1.27 while go.mod is go 1.26, so
-      # Dependabot leaves them alone. Remove these entries with the toolchain
-      # bump planned for 0.10.1.
-      - dependency-name: "github.com/sigstore/sigstore-go"
-      - dependency-name: "github.com/sigstore/sigstore"
-      - dependency-name: "github.com/sigstore/rekor"
-      - dependency-name: "github.com/sigstore/rekor-tiles/v2"
-      - dependency-name: "github.com/sigstore/timestamp-authority/v2"
-      - dependency-name: "github.com/digitorus/pkcs7"
   - package-ecosystem: npm
     directory: /ui
     schedule:

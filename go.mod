@@ -1,8 +1,8 @@
 module github.com/cjohnstoniv/wardyn
 
-go 1.26.0
+go 1.27.0
 
-toolchain go1.26.11
+toolchain go1.27.4
 
 require (
 	filippo.io/age v1.3.2
@@ -17,7 +17,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/containerd/errdefs v1.0.0
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352
+	github.com/digitorus/pkcs7 v0.0.0-20260821105541-05f79448fa77
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/distribution/reference v0.6.0
 	github.com/go-chi/chi/v5 v5.5.0
@@ -34,9 +34,9 @@ require (
 	github.com/moby/profiles/seccomp v0.3.0
 	github.com/pkg/sftp v1.13.12
 	github.com/sigstore/protobuf-specs v0.5.2
-	github.com/sigstore/rekor v1.5.3
-	github.com/sigstore/sigstore v1.10.8
-	github.com/sigstore/sigstore-go v1.3.0
+	github.com/sigstore/rekor v1.5.5
+	github.com/sigstore/sigstore v1.11.1
+	github.com/sigstore/sigstore-go v1.4.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
 	github.com/spiffe/go-spiffe/v2 v2.9.0
@@ -74,7 +74,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.9 // indirect
 	github.com/blacktop/go-dwarf v1.1.0 // indirect
-	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
@@ -138,8 +137,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.1 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
-	github.com/sigstore/rekor-tiles/v2 v2.3.0 // indirect
-	github.com/sigstore/timestamp-authority/v2 v2.1.3 // indirect
+	github.com/sigstore/rekor-tiles/v2 v2.4.0 // indirect
+	github.com/sigstore/timestamp-authority/v2 v2.2.0 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
@@ -168,3 +167,8 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
+
+// macOS and Windows builds keep verifying against the system trust store when
+// SSL_CERT_FILE or SSL_CERT_DIR is set, as they did under go 1.26; the go 1.27
+// default would load roots from those files instead. See go.dev/doc/godebug.
+godebug x509sslcertoverrideplatform=0

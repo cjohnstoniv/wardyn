@@ -35,7 +35,6 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/aws/smithy-go` | Apache-2.0 | https://github.com/aws/smithy-go/blob/v1.28.8/LICENSE |
 | `github.com/aws/smithy-go/internal/sync/singleflight` | BSD-3-Clause | https://github.com/aws/smithy-go/blob/v1.28.8/internal/sync/singleflight/LICENSE |
 | `github.com/aws/smithy-go/transport/http/protocol/internal/json/internal/stdlib` | BSD-3-Clause | https://github.com/aws/smithy-go/blob/v1.28.8/transport/http/protocol/internal/json/internal/stdlib/LICENSE |
-| `github.com/blang/semver` | MIT | https://github.com/blang/semver/blob/v3.5.1/LICENSE |
 | `github.com/bradleyfalzon/ghinstallation/v2` | Apache-2.0 | https://github.com/bradleyfalzon/ghinstallation/blob/v2.19.0/LICENSE |
 | `github.com/cenkalti/backoff/v5` | MIT | https://github.com/cenkalti/backoff/blob/v5.0.3/LICENSE |
 | `github.com/cespare/xxhash/v2` | MIT | https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt |
@@ -45,7 +44,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE |
 | `github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer` | Apache-2.0 | https://github.com/cyberphone/json-canonicalization/blob/19d51d7fe467/LICENSE |
 | `github.com/davecgh/go-spew/spew` | ISC | https://github.com/davecgh/go-spew/blob/d8f796af33cc/LICENSE |
-| `github.com/digitorus/pkcs7` | MIT | https://github.com/digitorus/pkcs7/blob/3a137a874352/LICENSE |
+| `github.com/digitorus/pkcs7` | MIT | https://github.com/digitorus/pkcs7/blob/05f79448fa77/LICENSE |
 | `github.com/digitorus/timestamp` | BSD-2-Clause | https://github.com/digitorus/timestamp/blob/220c5c2851b7/LICENSE |
 | `github.com/distribution/reference` | Apache-2.0 | https://github.com/distribution/reference/blob/v0.6.0/LICENSE |
 | `github.com/docker/go-connections` | Apache-2.0 | https://github.com/docker/go-connections/blob/v0.8.2/LICENSE |
@@ -118,11 +117,11 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/secure-systems-lab/go-securesystemslib` | MIT | https://github.com/secure-systems-lab/go-securesystemslib/blob/v0.11.1/LICENSE |
 | `github.com/shibumi/go-pathspec` | Apache-2.0 | https://github.com/shibumi/go-pathspec/blob/v1.3.0/LICENSE |
 | `github.com/sigstore/protobuf-specs/gen/pb-go` | Apache-2.0 | https://github.com/sigstore/protobuf-specs/blob/v0.5.2/LICENSE |
-| `github.com/sigstore/rekor-tiles/v2` | Apache-2.0 | https://github.com/sigstore/rekor-tiles/blob/v2.3.0/LICENSE |
-| `github.com/sigstore/rekor/pkg` | Apache-2.0 | https://github.com/sigstore/rekor/blob/v1.5.3/LICENSE |
-| `github.com/sigstore/sigstore-go` | Apache-2.0 | https://github.com/sigstore/sigstore-go/blob/v1.3.0/LICENSE |
-| `github.com/sigstore/sigstore/pkg` | Apache-2.0 | https://github.com/sigstore/sigstore/blob/v1.10.8/LICENSE |
-| `github.com/sigstore/timestamp-authority/v2/pkg/verification` | Apache-2.0 | https://github.com/sigstore/timestamp-authority/blob/v2.1.3/LICENSE |
+| `github.com/sigstore/rekor-tiles/v2` | Apache-2.0 | https://github.com/sigstore/rekor-tiles/blob/v2.4.0/LICENSE |
+| `github.com/sigstore/rekor/pkg` | Apache-2.0 | https://github.com/sigstore/rekor/blob/v1.5.5/LICENSE |
+| `github.com/sigstore/sigstore-go` | Apache-2.0 | https://github.com/sigstore/sigstore-go/blob/v1.4.0/LICENSE |
+| `github.com/sigstore/sigstore/pkg` | Apache-2.0 | https://github.com/sigstore/sigstore/blob/v1.11.1/LICENSE |
+| `github.com/sigstore/timestamp-authority/v2/pkg` | Apache-2.0 | https://github.com/sigstore/timestamp-authority/blob/v2.2.0/LICENSE |
 | `github.com/spf13/cobra` | Apache-2.0 | https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt |
 | `github.com/spf13/pflag` | BSD-3-Clause | https://github.com/spf13/pflag/blob/v1.1.0/LICENSE |
 | `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.9.0/LICENSE |
