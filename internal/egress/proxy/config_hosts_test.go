@@ -51,6 +51,7 @@ var configHostSpellings = []configHostSpelling{
 	numericSpelling("010.0.0.1.", twoReadings),
 	// Every trailing dot is taken off, so both readings are still named.
 	numericSpelling("010.0.0.1..", twoReadings),
+	numericSpelling("010.0.0.1...", twoReadings),
 	numericSpelling("0X7F.1", "its standard form is 127.0.0.1"),
 	{v: "::ffff:010.0.0.1", what: colonWhat, form: twoReadings},
 	{v: "2001:db8::1%eth0", auth: "[2001:db8::1%25eth0]", entry: "[2001:db8::1%eth0]", what: colonWhat, form: "its standard form is 2001:db8::1"},
