@@ -18,8 +18,8 @@ package conformance_test
 // internal/runner/k8s/canary.go) and runs `make test-conformance-k8s`.
 //
 // Agent image: WARDYN_TEST_K8S_AGENT_IMAGE — must be built from
-// deploy/kind/Dockerfile.conformance-agent (busybox:1.36 + a real wardyn-rec
-// binary; `make build-conformance-agent-image`), NOT bare busybox. The suite
+// deploy/kind/Dockerfile.conformance-agent (busybox, a real wardyn-rec binary
+// and an idle agent-run stub; `make build-conformance-agent-image`), NOT bare busybox. The suite
 // builds the substrate with Record: true, the production default (recording is
 // off only under WARDYN_RECORDING_STORE=off) — a bare busybox agent image fails EVERY Exec closed
 // (no wardyn-rec on PATH), so this suite would never reach a real verdict
