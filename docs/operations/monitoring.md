@@ -45,7 +45,7 @@
 | `wardyn_auth_store_errors_total` | Requests an authentication path couldn't decide because its store read failed and answered `503`. The SSO path records `auth.fail`; every other path records nothing. |
 | `wardyn_ssh_connections_refused_total{bound}` | SSH gateway connections closed at a [bound](../SSH.md#bounds): `handshake`, `source`, `established` or `principal`; per replica. |
 | `wardyn_device_ingest_failures_suppressed_total` | Counter. Refused device audit pushes whose `device.audit.ingest` row was folded into a streak or dropped by the per-device rate limit. |
-| `wardyn_model_tokens_total{vendor,direction}` | Model tokens counted from providers' answers. `vendor`: `anthropic`, `openai`, `bedrock`, `ollama` or `other`. `direction`: `input`, `output`, `cache_read`, `cache_write` or `reasoning`. No run label. |
+| `wardyn_model_tokens_total{vendor,direction}` | Model tokens counted from providers' answers. `vendor`: `anthropic`, `openai`, `bedrock`, `ollama` or `other`. `direction`: `input`, `output`, `cache_read`, `cache_write` or `reasoning`. No run label. A count that would pass 9,223,372,036,854,775,807 is left out. |
 | `wardyn_org_federation_lag` | Gauge, on a hybrid laptop only. Local audit rows the organisation has not yet acknowledged. See [Managed laptops](hybrid-laptops.md). |
 
 - The `wardyn_runner_up` probe is one read-only call (Kubernetes: a namespaced pod list of limit 1, which the chart's Role already grants; Docker: a daemon ping), cached for 5 seconds and bounded by a 3-second deadline.
@@ -67,6 +67,7 @@
 | An answer whose `usage` is missing, for example from a gateway that omits it | uncounted, `no_usage` |
 | A body over 8 MiB, one that does not parse, or a coding Wardyn cannot decode | uncounted, `body_oversize`, `parse_error`, `undecodable` |
 | The meter itself failing | uncounted, `meter_error` |
+| The calls of a model line whose counts add up past 9,223,372,036,854,775,807, or would take a total of the view past it | uncounted, `count_out_of_range`, in the line and the totals |
 | Batch APIs, whose results are fetched later as files, and upgraded (WebSocket) sessions | not seen |
 | An answer that is not a success | not billed, so not recorded |
 
