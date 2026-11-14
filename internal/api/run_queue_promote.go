@@ -41,7 +41,7 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 	defer cancel()
 	promoted, held, err := qs.PromoteRunQueue(pctx, store.PromotePass{
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
-		AtCapacityDetail: statusDetailQueuePrefix + string(runnerpool.WaitAtCapacity),
+		AtCapacityDetail: statusDetailQueuePrefix + string(runnerpool.WaitAtCapacity), HoldKey: queueHoldKey,
 	}, s.queueAdmit)
 	var errs []error
 	switch {
@@ -53,9 +53,17 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 			slog.Int("promoted", len(promoted)), slog.Any("err", err))
 		errs = append(errs, fmt.Errorf("promote the queue of pool %s: %w", poolID, err))
 	}
+	// The promoted runs are committed with a lease that only their start renews, so they start before
+	// the waits below are recorded: that write is advisory, and one held up behind a lock must not keep a
+	// promoted run from its start until the sweep fails it as lost.
+	for _, p := range promoted {
+		s.runEvents.moved(p.Run.ID, types.RunQueued, types.RunPending)
+		s.goBackground(func() { s.startQueuedRun(context.WithoutCancel(s.cfg.BaseCtx), p) })
+	}
 	// Reason precedence for a waiting run: the pool's cap (runner_pool_at_capacity) outranks a reason
 	// found while judging, because the judging held no lock and the pool may have filled since. The store
-	// drops these writes when the pool is full by the time it writes them.
+	// drops these writes when the pool is full by the time it writes them. The write is held to the pass's
+	// bound (pctx), so a stuck one gives up and the next pass writes the waits again.
 	details := map[uuid.UUID]string{}
 	for _, h := range held {
 		if h.Wait != "" {
@@ -63,16 +71,43 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 		}
 	}
 	if len(details) > 0 {
-		if err := qs.SetHeldQueueWaits(ctx, poolID, details); err != nil {
+		if err := qs.SetHeldQueueWaits(pctx, poolID, details); err != nil {
 			slog.WarnContext(ctx, "wardynd: record queue waits", slog.String("pool_id", poolID.String()), slog.Any("err", err))
 			errs = append(errs, fmt.Errorf("record queue waits of pool %s: %w", poolID, err))
 		}
 	}
-	for _, p := range promoted {
-		s.runEvents.moved(p.Run.ID, types.RunQueued, types.RunPending)
-		s.goBackground(func() { s.startQueuedRun(context.WithoutCancel(s.cfg.BaseCtx), p) })
-	}
 	return errors.Join(errs...)
+}
+
+// queueHoldKey is the runs one owner-wide wait holds (store.PromotePass.HoldKey): the owner under one
+// identity and one frozen unit, which see the same pools and runners. The identity is the stored
+// authority without its session epoch, revocation sequence, delegated token id and agent, which differ
+// between one person's sessions and tokens. queueAuthority.context puts the epoch and the sequence on no
+// context: only the start's owner check (queueOwnerLive) reads them. It puts the token id and agent back
+// only as the delegation mark (audit.WithDelegation), and the reads of pools and runners ask that mark
+// only whether a token was used (neverOperator). A pool or runner read that comes to use the token id or
+// agent must be added to this key first.
+// A launch that cannot be read is held by no other run: queueAdmit admits it for its start to end.
+func queueHoldKey(e store.RunQueueEntry) string {
+	var launch queuedLaunch
+	if json.Unmarshal(e.Launch, &launch) != nil {
+		return e.RunID.String()
+	}
+	unit := "-"
+	if launch.UnitID != nil {
+		unit = launch.UnitID.String()
+	}
+	identity := string(e.Authority)
+	var auth queueAuthority
+	if json.Unmarshal(e.Authority, &auth) == nil {
+		auth.Epoch, auth.Seq, auth.Actor = nil, 0, nil
+		if auth.Grant != nil {
+			auth.Grant = &uuid.UUID{}
+		}
+		b, _ := json.Marshal(auth) //nolint:errcheck // plain fields only, so it cannot fail
+		identity = string(b)
+	}
+	return e.Owner + "\x00" + identity + "\x00" + unit
 }
 
 // queueAdmit is the verdict on one waiting run, asked before the pass takes any lock: the run must be
@@ -94,8 +129,7 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 		return store.QueueVerdict{}, err
 	}
 	if room.wait != "" {
-		// Only an unpinned run's wait is its owner's: a run pinned to one runner waits for that runner alone.
-		return store.QueueVerdict{Wait: string(room.wait), Owner: !room.pinned}, nil
+		return store.QueueVerdict{Wait: string(room.wait), Owner: room.ownerWide}, nil
 	}
 	if wait := s.queueOwnerSignIn(octx, e, launch); wait != "" {
 		return store.QueueVerdict{Wait: string(wait)}, nil
@@ -128,6 +162,11 @@ type queueRoom struct {
 	pool       string
 	candidates []poolTarget
 	fits       map[string]runnerFit
+	// ownerWide says the wait holds every other run of the owner too, whatever it asks for: the pool needs
+	// a recording store there is none of, or no runner the owner may use there is online with room for a
+	// run of no size. A run that names its runner, or waits for its own barrier, kind, drives, folders or
+	// size while a runner has room for another run, holds only itself.
+	ownerWide bool
 }
 
 // queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now.
@@ -174,7 +213,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// A required setting with no store has no room anywhere, and no runner coming online changes that, so
 	// it is said before any runner is looked at: the start would refuse recording_store_off.
 	if requireRecording && s.cfg.RecordingStore == nil {
-		out.wait = runnerpool.WaitRecordingStoreOff
+		out.wait, out.ownerWide = runnerpool.WaitRecordingStoreOff, !out.pinned
 		return out, nil
 	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
@@ -232,7 +271,20 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	case len(out.runners)+len(out.remotes) == 0:
 		out.wait = runnerpool.WaitRunnersAtCapacity
 	}
+	// Every filter above (kind, barrier, drives, folders, size) only narrows targets, and a run of no size
+	// fits wherever any run fits: when no target has room for one, no run that sees these targets (the
+	// same queueHoldKey) can start here.
+	out.ownerWide = out.wait != "" && !out.pinned && !roomForARun(targets, fits)
 	return out, nil
+}
+
+// roomForARun reports whether one of targets is online, serves its namespace and has room for a run of
+// no size, by the runner limits fits read.
+func roomForARun(targets []poolTarget, fits map[string]runnerFit) bool {
+	return slices.ContainsFunc(targets, func(t poolTarget) bool {
+		f := fits[t.id]
+		return !t.offline && t.servesRunsNamespace() && !t.full && runnerpool.Fits(f.limits, f.used, types.RunnerAmounts{}) == runnerpool.FitOK
+	})
 }
 
 // kickQueue asks every pool with waiting runs to promote, off the caller's path. Concurrent kicks

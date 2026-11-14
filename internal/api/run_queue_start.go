@@ -657,13 +657,19 @@ func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 // provider, deadline), waiting for reason, and kicks the queue for the slot it freed unless kick is false (the
 // queue's sweep tick then promotes it). false when the run
 // had already moved (a kill won, and wrote its own rows) or the store could not do it; the caller then
-// ends it as before, which a moved run ignores.
+// ends it as before, which a moved run ignores. A run whose pool was deleted since its promotion has no
+// queue to go back to: it is ended runner_pool_removed, as the delete ended the runs it found waiting,
+// and true is returned.
 func (s *Server) requeuePromoted(st *queuedStart, reason runnerpool.WaitReason, kick bool) bool {
 	qs, ok := s.queueStore()
 	if !ok {
 		return false
 	}
 	moved, err := qs.RequeuePromotedRun(st.base, st.entry, statusDetailQueuePrefix+string(reason))
+	if errors.Is(err, store.ErrNotFound) {
+		s.endPromoted(st, &queueEnd{token: string(types.RunEndRunnerPoolRemoved), hint: types.RunEndRunnerPoolRemoved.Sentence()})
+		return true
+	}
 	if err != nil {
 		slog.WarnContext(st.base, queueStartFailedLogName+": return the run to its queue", slog.String("run_id", st.run.ID.String()), slog.Any("err", err))
 		return false
