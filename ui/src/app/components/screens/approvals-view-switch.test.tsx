@@ -199,12 +199,32 @@ describe("ApprovalsScreen: a read for the view left answers after a switch", () 
       }
       const [mine, theirs] = tab === "pending" ? ["Reach a1.example.com", "Reach u9.example.com"] : ["Reach da.example.com", "Reach du.example.com"];
       expect(screen.getByText(mine), tab).toBeInTheDocument();
+      const adminReads = pendingFor.admin.mock.calls.length;
       await act(async () => approve.answer({}));
       await flush();
-      expect(pendingFor.user, tab).toHaveBeenCalledTimes(2);
+      expect(pendingFor.user, tab).toHaveBeenCalledTimes(1);
+      expect(pendingFor.admin.mock.calls.length, tab).toBe(adminReads + 1);
       expect(screen.queryByText(theirs), tab).toBeNull();
       expect(screen.getByText(mine), tab).toBeInTheDocument();
       cleanup();
     }
+  });
+
+  // The new view's own read can land while the decision is out and still list the request as pending; the refresh after
+  // the answer is then the only thing that takes its Approve and Deny away, so it asks in the view shown.
+  it("a request decided before the switch has no Approve or Deny in the Admin queue once the decision answers", async () => {
+    const approve = later<unknown>();
+    approveMock.mockReset().mockReturnValueOnce(approve.promise);
+    pendingFor.user.mockReset().mockResolvedValue([push("p1")]);
+    pendingFor.admin.mockReset().mockResolvedValueOnce([push("p1")]).mockResolvedValue([]);
+    await mount("/approvals");
+    fireEvent.click(within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ }));
+    await flush();
+    await switchTo("/admin/approvals");
+    expect(within(screen.getByTestId("push-content-card")).getByRole("button", { name: /^Approve$/ })).toBeInTheDocument();
+    await act(async () => approve.answer({}));
+    await flush();
+    expect(screen.queryByTestId("push-content-card")).toBeNull();
+    expect(pendingFor.admin).toHaveBeenCalledTimes(2);
   });
 });

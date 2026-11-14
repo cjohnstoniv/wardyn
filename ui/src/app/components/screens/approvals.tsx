@@ -406,7 +406,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // shows it gone. A read still out holds no older answer back, so a list is never marked ready without one.
   // A view switch keeps this screen mounted, so a read asked for the other view neither lands nor marks a list ready or
   // failed here: its rows, or the ones shown before the switch, are not this view's. A decision sent before the switch
-  // asks for such a read after it.
+  // asks for such a read after it, in the view then shown (fetchAllRef), so the request it decided is gone from that list.
   const viewRef = React.useRef(view);
   viewRef.current = view;
   const pendingAsked = React.useRef(0);
@@ -487,6 +487,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     const elevationRead = fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
     return Promise.all([main, waitingRead, elevationRead]).then(() => undefined);
   }, [fetchPending, fetchDecided, fetchWaiting, fetchElevation, view]);
+  // A decision's answer can land after a view switch: its refresh asks in the view shown then, not the one it was sent in.
+  const fetchAllRef = React.useRef(fetchAll);
+  fetchAllRef.current = fetchAll;
   const loadWaiting = React.useCallback(() => {
     setWaitingStatus((st) => (st === "ready" ? st : "loading"));
     fetchWaiting().catch(() => setWaitingStatus((st) => (st === "ready" ? st : "error")));
@@ -614,7 +617,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       // uses instead; a refresh failure here is not fatal — the decide
       // itself already succeeded, and the next poll tick will catch the
       // view up.
-      fetchAll().catch(() => {
+      fetchAllRef.current().catch(() => {
         /* transient refresh failure — decide() itself already succeeded */
       });
       onChanged?.();
@@ -642,7 +645,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       if (approve) await api.approve(id, "approved", ...opts);
       else await api.deny(id, "denied", ...opts);
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      fetchAll().catch(() => {
+      fetchAllRef.current().catch(() => {
         /* transient refresh failure — the decide itself already succeeded */
       });
       onChanged?.();
@@ -665,7 +668,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const declineTakeover = async (id: string): Promise<void> => {
     try {
       await api.decline(id);
-      fetchAll().catch(() => {
+      fetchAllRef.current().catch(() => {
         /* transient refresh failure — the decline itself already succeeded */
       });
       onChanged?.();
@@ -679,7 +682,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // when a tool_call approval is actually in view.
   // One card for both lists; the Waiting on you tab passes waiting so the card trusts the server's verdict on it.
   const elevationDecided = () => {
-    fetchAll().catch(() => {
+    fetchAllRef.current().catch(() => {
       /* transient refresh failure — the decision itself already succeeded */
     });
     onChanged?.();
