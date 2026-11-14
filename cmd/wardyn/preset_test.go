@@ -115,3 +115,26 @@ func TestPresetSet_SingleDocumentWithTrailingNewlineApplies(t *testing.T) {
 		t.Error("no write was issued for a valid single document")
 	}
 }
+
+// A later preset that fails to store leaves the earlier ones stored, and they are still printed with the error.
+func TestPresetSet_KeepsTheStoredPresetsWhenALaterOneFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/presets/bad" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"preset_invalid"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"name":"good","version":1,"user_types":[],"request":{"agent":"claude-code"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	doc := `{"presets":[{"name":"good","request":{"agent":"claude-code"}},{"name":"bad","request":{"agent":"claude-code"}}]}`
+	out, err := operatorCommand(t, srv.URL, doc, "preset", "set", "-")
+	if err == nil {
+		t.Fatal("a failed write was reported as success")
+	}
+	var got sdk.PresetsDocument
+	if jerr := json.Unmarshal([]byte(out), &got); jerr != nil || len(got.Presets) != 1 || got.Presets[0].Name != "good" {
+		t.Fatalf("stdout = %q (%v), want the one stored preset", out, jerr)
+	}
+}

@@ -139,6 +139,9 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 			for _, d := range docs {
 				res, err := c.ApplyWorkload(cmd.Context(), d.Name, d.Request())
 				if err != nil {
+					if asJSON && len(results) > 0 {
+						_ = emitJSON(cmd.OutOrStdout(), results) // the workloads already stored stay on record; the error is the exit
+					}
 					return fmt.Errorf("workload/%s: %w", d.Name, err)
 				}
 				results = append(results, res)

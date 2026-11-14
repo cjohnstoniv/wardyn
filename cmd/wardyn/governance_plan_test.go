@@ -102,3 +102,11 @@ func TestGovernancePlan_PruneListsEveryDeleteAndWritesNothing(t *testing.T) {
 			fake.writeCount, len(fake.profiles), len(fake.assignments))
 	}
 }
+
+func TestPrintGovernancePlanSummaryNamesARemovedRestriction(t *testing.T) {
+	var b strings.Builder
+	printGovernancePlanSummary(&b, sdk.GovernancePlan{Destructive: true, Steps: []sdk.ApplyStep{{Kind: "restriction", Op: "delete", Name: "no-egress"}}})
+	if want := "  restriction \"no-egress\"\n"; !strings.Contains(b.String(), want) || strings.Contains(b.String(), "assignment") {
+		t.Fatalf("summary = %q, want it to contain %q and no assignment line", b.String(), want)
+	}
+}
