@@ -351,6 +351,9 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 	for {
 		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
+			if errors.Is(err, errSessionChanged) {
+				return err // the command's sign-in changed: no later poll is sent, so none can succeed
+			}
 			if context.Cause(waitCtx) == errWaitTimeout {
 				return &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s (last state %s)", timeout, runID, lastState)}
 			}

@@ -185,7 +185,7 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 	if _, err := laptopGit(ctx, root, "bundle", "verify", "-q", tmp.Name()); err != nil {
 		return err
 	}
-	branch := "wardyn/sync-" + runID[:8]
+	branch := reviewBranch(runID)
 	if _, err := laptopGit(ctx, root, pullCommitsFetch(tmp.Name(), branch)...); err != nil {
 		return err
 	}
@@ -236,6 +236,10 @@ func (sy *Syncer) DownloadFile(src, dst string) error {
 	}
 	return err
 }
+
+// reviewBranch is the laptop branch --pull-commits fetches a run's commits into. It holds the run's whole
+// id, so two runs synced into one repository whose ids start alike never write to the same branch.
+func reviewBranch(runID string) string { return "wardyn/sync-" + runID }
 
 // pullCommitsFetch is the laptop fetch of a sandbox bundle into branch: every
 // object checked, no tags, and no submodule the bundle names fetched.

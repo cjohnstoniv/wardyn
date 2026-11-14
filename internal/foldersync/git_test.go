@@ -14,3 +14,13 @@ func TestPullCommitsFetch_ChecksObjectsAndSkipsTagsAndSubmodules(t *testing.T) {
 		t.Errorf("fetch argv = %q, want %q", got, want)
 	}
 }
+
+func TestReviewBranch_HoldsTheWholeRunID(t *testing.T) {
+	a, b := "a1b2c3d4-5566-4788-99aa-bbccddeeff00", "a1b2c3d4-0000-4000-8000-000000000000"
+	if got := reviewBranch(a); got != "wardyn/sync-"+a {
+		t.Errorf("reviewBranch(%s) = %q, want wardyn/sync- and the whole id", a, got)
+	}
+	if reviewBranch(a) == reviewBranch(b) {
+		t.Errorf("two runs whose ids start alike share the branch %s", reviewBranch(a))
+	}
+}

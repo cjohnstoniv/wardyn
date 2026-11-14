@@ -232,6 +232,9 @@ func waitForRunRunning(ctx context.Context, errW io.Writer, c *sdk.Client, runID
 	for {
 		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
+			if errors.Is(err, errSessionChanged) {
+				return err // the command's sign-in changed: no later poll is sent, so none can succeed
+			}
 			if context.Cause(waitCtx) == errWaitTimeout {
 				return timedOut(last)
 			}

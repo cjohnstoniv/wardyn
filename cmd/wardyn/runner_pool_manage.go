@@ -271,6 +271,10 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 			if err := printPoolCreated(cmd.OutOrStdout(), p, asJSON, len(runners) > 0); err != nil || len(runners) == 0 {
 				return err
 			}
+			if asJSON {
+				// --json prints the pool and nothing else on stdout: the lines about its runners go to stderr.
+				cmd.SetOut(cmd.ErrOrStderr())
+			}
 			return poolMembers(cmd, c, p, runners, true, true, "")
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")

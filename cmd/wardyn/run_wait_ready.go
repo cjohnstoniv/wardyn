@@ -59,7 +59,12 @@ sandbox to an external tool over the SSH gateway.
 			if err != nil {
 				return err
 			}
-			res, err := waitForRunReady(cmd.Context(), cmd.ErrOrStderr(), client(), id, timeout, expectGit)
+			// The budget starts before client() reads and renews the sign-in, so a wait for another
+			// command's renewal is inside it: client() takes the root's context.
+			ctx, cancel := context.WithDeadlineCause(cmd.Context(), time.Now().Add(timeout), errWaitTimeout)
+			defer cancel()
+			cmd.Root().SetContext(ctx)
+			res, err := waitForRunReady(ctx, cmd.ErrOrStderr(), client(), id, timeout, expectGit)
 			if err != nil {
 				return err
 			}
@@ -116,6 +121,9 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 	for {
 		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
+			if errors.Is(err, errSessionChanged) {
+				return res, err // the command's sign-in changed: no later poll is sent, so none can succeed
+			}
 			if context.Cause(waitCtx) == errWaitTimeout {
 				return res, timedOut()
 			}
@@ -141,6 +149,9 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 					wantGit = true
 				}
 				files, ferr := c.RunFiles(waitCtx, runID)
+				if errors.Is(ferr, errSessionChanged) {
+					return res, ferr // the command's sign-in changed: the next poll would be refused too
+				}
 				if ferr != nil && context.Cause(waitCtx) == errWaitTimeout {
 					return res, timedOut()
 				}
