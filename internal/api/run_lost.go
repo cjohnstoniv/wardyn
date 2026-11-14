@@ -274,7 +274,7 @@ type lostEnd int
 const (
 	lostEndPast       lostEnd = iota // not an outage, or an outage past its end: the agent is stopped
 	lostEndOpen                      // an outage inside its end: only the proxy is stopped
-	lostEndReadFailed                // an outage whose end could not be read: the proxy is cut, nothing else is stopped
+	lostEndReadFailed                // an outage whose end could not be read: the proxy is cut; where no cut can happen the agent is stopped as well
 	lostEndNoReader                  // an outage on a store that cannot read it: the proxy is cut, then the agent stopped
 )
 
@@ -282,10 +282,12 @@ const (
 // answer (store.RunEndsReader.RunEndsOpen, endsOpen), never a comparison with this server's clock. Any other
 // lost run is lostEndPast, with no read. An end that cannot be read is never taken as open or as past: the
 // proxy is cut first, because the stop that follows can send nothing (an end the substrate cannot do,
-// runner.ErrEndUnsupported) or be held off while every end hold is taken. A failed read then stops nothing
-// else and returns the read error, so the run stays kept and the lease sweep reads again on its next pass; a
-// store with no reader never will, so there the agent is stopped as well, where the substrate can end it.
-// The read's error comes back with lostEndReadFailed.
+// runner.ErrEndUnsupported) or be held off while every end hold is taken. Where the cut was sent, a failed
+// read then stops nothing else and returns the read error, so the run stays kept and the lease sweep reads
+// again on its next pass. Where no cut can happen (no runner.ProxyStopper, or a cut that answered
+// runner.ErrEndUnsupported), the agent is stopped as well, as on a store with no reader, which never reads:
+// an ended run that cannot be contained must not keep its network. The read's error comes back with
+// lostEndReadFailed.
 func (s *Server) outageEnd(ctx context.Context, run types.AgentRun) (lostEnd, error) {
 	if run.LostReason != types.LostOutage {
 		return lostEndPast, nil
@@ -309,18 +311,16 @@ func (s *Server) outageEnd(ctx context.Context, run types.AgentRun) (lostEnd, er
 // errLostEndUnread marks lostReadFailure's error: the lost run's end could not be read.
 var errLostEndUnread = errors.New("read the lost run's end")
 
-// lostReadFailure is a stop's answer when a lost run's end could not be read: the cut's error when the cut
-// failed, else the read's error, wrapped. runner.ErrEndUnsupported from the cut is not let through (it would
-// tear the run down through stopKeptRun; a read that keeps failing is retried by the lease sweep instead), and
-// it wins if a cut error carries both. A cut queued for the runner (runner.ErrPendingOnRunner) is let through
-// beside the read's error, so the run is audited as pending on its runner, as it is when the end was read.
+// lostReadFailure is a stop's answer when a lost run's end could not be read and its proxy cut was sent: the
+// cut's error when the cut failed, else the read's error, wrapped. A cut that answered runner.ErrEndUnsupported
+// does not come here: no cut can happen then, and the stop ends the agent as well (stopLostSandbox). A cut
+// queued for the runner (runner.ErrPendingOnRunner) is let through beside the read's error, so the run is
+// audited as pending on its runner, as it is when the end was read.
 func lostReadFailure(readErr, cutErr error) error {
 	wrapped := fmt.Errorf("%w: %w", errLostEndUnread, readErr)
 	switch {
 	case cutErr == nil:
 		return wrapped
-	case errors.Is(cutErr, runner.ErrEndUnsupported):
-		return fmt.Errorf("%w (its proxy stop answered: %v)", wrapped, cutErr)
 	case errors.Is(cutErr, runner.ErrPendingOnRunner):
 		return fmt.Errorf("%w; %w", wrapped, cutErr) // one line: it is recorded as lost_error
 	}
@@ -330,8 +330,10 @@ func lostReadFailure(readErr, cutErr error) error {
 // stopLostSandbox stops a lost run's proxy, and its agent where outageEnd says so. An outage run inside its
 // lease keeps its agent running (lostEndOpen); any other lost run (a reboot, or an outage past its end) has
 // its agent stopped as at the end. A run whose end could not be read has its proxy cut and returns the read
-// error with no end call; one on a store with no reader has its proxy cut and then its agent ended. If that end
-// is unsupported and the cut failed, the cut's error is the answer: containment is unresolved. An outage run's
+// error with no end call; where no cut can happen (no stopper, or runner.ErrEndUnsupported) its agent is ended
+// as well, and an end that is unsupported too answers runner.ErrEndUnsupported carrying the read's error. One on
+// a store with no reader has its proxy cut and then its agent ended. If that end is unsupported and the cut
+// failed, the cut's error is the answer: containment is unresolved. An outage run's
 // stopped agent is recorded (store.RunLeaser.MarkRunAgentStopped), so extending the run later does not make it
 // hold a slot again.
 func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun) error {
@@ -349,7 +351,10 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun) error 
 			}
 			return cutErr
 		case lostEndReadFailed:
-			return lostReadFailure(readErr, cutErr)
+			if ok && !errors.Is(cutErr, runner.ErrEndUnsupported) {
+				return lostReadFailure(readErr, cutErr)
+			}
+			// No cut can happen: the agent is ended as well, as with no reader.
 		}
 	}
 	_, err := s.endSandbox(ctx, run)
@@ -360,6 +365,9 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun) error 
 			slog.WarnContext(ctx, "wardynd: recording a kept run's stopped agent failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", merr))
 		}
+	}
+	if readErr != nil && errors.Is(err, runner.ErrEndUnsupported) {
+		return fmt.Errorf("%w (its end could not be read: %v)", err, readErr) // neither stop can happen: torn down
 	}
 	if errors.Is(err, runner.ErrEndUnsupported) && cutErr != nil {
 		return cutErr // the cut failed too: containment unresolved, retried by the lease sweep

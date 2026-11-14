@@ -159,16 +159,17 @@ func TestStopLostSandbox_NoAnswerFromTheDatabase(t *testing.T) {
 	})
 }
 
-// A cut that fails answers with its own error when the read failed. An unsupported cut is not let through as
-// such (it would send the run to stopKeptRun); the read's error is the answer then. A cut queued for the runner
-// is let through beside the read's error, so the run is audited as pending on its runner.
+// A cut that fails answers with its own error when the read failed. An unsupported cut cannot contain the run,
+// so its agent is ended as well, and an end that is unsupported too answers runner.ErrEndUnsupported carrying
+// the read's error (that sends the run to stopKeptRun). A cut queued for the runner is let through beside the
+// read's error, so the run is audited as pending on its runner.
 func TestStopLostSandbox_AReadErrorAndACutThatFails(t *testing.T) {
 	errRead, errCut := errors.New("database down"), errors.New("runner refused the cut")
 	for _, c := range []struct {
 		name    string
 		cut     error
 		wantCut bool // the cut's own error is the answer
-	}{{"cut fails", errCut, true}, {"cut unsupported", runner.ErrEndUnsupported, false}} {
+	}{{"cut fails", errCut, true}} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newLostFixture(t)
 			run := oneClockRun(f, f.now.Add(time.Minute))
@@ -185,6 +186,18 @@ func TestStopLostSandbox_AReadErrorAndACutThatFails(t *testing.T) {
 			}
 		})
 	}
+	t.Run("cut unsupported: the end is tried and carries the read's error", func(t *testing.T) {
+		f := newLostFixture(t)
+		run := oneClockRun(f, f.now.Add(time.Minute))
+		f.st.endsErr, f.lr.proxyErr, f.rn.endErr = errRead, runner.ErrEndUnsupported, runner.ErrEndUnsupported
+		err := f.srv.stopLostSandbox(context.Background(), run)
+		if !errors.Is(err, runner.ErrEndUnsupported) || !strings.Contains(fmt.Sprint(err), "database down") {
+			t.Errorf("err = %v; want ErrEndUnsupported carrying the read's error", err)
+		}
+		if f.lr.endCount() != 1 || f.lr.proxyStopCount() != 1 {
+			t.Errorf("ends %d, proxy stops %d; want the cut tried and the end tried (1, 1)", f.lr.endCount(), f.lr.proxyStopCount())
+		}
+	})
 	t.Run("cut queued", func(t *testing.T) {
 		f := newLostFixture(t)
 		run := oneClockRun(f, f.now.Add(time.Minute))
@@ -317,5 +330,87 @@ func TestLoseRunStopped_AQueuedCutAndAnUnreadEndRecordTheReadError(t *testing.T)
 	}
 	if msg, _ := data["lost_error"].(string); !strings.Contains(msg, "database down") || strings.Contains(msg, "\n") {
 		t.Errorf("lost_error = %q, want the read's error on one line", data["lost_error"])
+	}
+}
+
+// An outage run whose end cannot be read, on a substrate where no proxy cut can happen, takes the stronger end,
+// as a store with no reader does: an ended run that cannot be contained must not keep its network. Server-mode
+// Kubernetes (the cut and the end unsupported) and a runner with neither stop are torn down (FAILED, one
+// StopSandbox), and the run.lost row keeps the read's error with kept false. A runner whose cut is unsupported
+// but whose end lands has its agent ended and stays kept. RED before, where the read's error kept each of them
+// RUNNING with no end call.
+func TestLostRun_AnUnreadEndWhereNoCutCanHappenTakesTheStrongerEnd(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		arrange func(f *lostFixture)
+		torn    bool
+	}{
+		{"server-mode Kubernetes: the cut and the end unsupported", func(f *lostFixture) {
+			f.lr.proxyErr, f.rn.endErr = runner.ErrEndUnsupported, runner.ErrEndUnsupported
+		}, true},
+		{"a runner with no proxy stop and an unsupported end", func(f *lostFixture) {
+			f.srv.cfg.Runner, f.rn.endErr = f.rn, runner.ErrEndUnsupported
+		}, true},
+		{"a cut unsupported and an end that lands", func(f *lostFixture) {
+			f.lr.proxyErr = runner.ErrEndUnsupported
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newLostFixture(t)
+			f.ls.lapsed = true
+			f.st.endsErr = errors.New("database down")
+			c.arrange(f)
+			f.sweepTokens(t)
+			if !c.torn {
+				if f.st.State() != types.RunRunning || f.rn.endCount() != 1 || f.rn.stopCount() != 0 {
+					t.Fatalf("state %s, ends %d, StopSandbox %d; want RUNNING, 1, 0: the agent ended and the run kept",
+						f.st.State(), f.rn.endCount(), f.rn.stopCount())
+				}
+				return
+			}
+			if f.st.State() != types.RunFailed || f.rn.stopCount() != 1 {
+				t.Fatalf("state %s, StopSandbox %d; want FAILED, 1: an unread end that cannot be cut must not keep its network",
+					f.st.State(), f.rn.stopCount())
+			}
+			rows := f.audit.eventsFor(f.run.ID, "run.lost")
+			if len(rows) == 0 {
+				t.Fatal("no run.lost row")
+			}
+			data := leaseAuditData(t, rows[len(rows)-1])
+			if msg, _ := data["lost_error"].(string); data["kept"] != false || !strings.Contains(msg, "database down") {
+				t.Errorf("run.lost data = %v; want kept false and the read's error in lost_error", data)
+			}
+		})
+	}
+}
+
+// unsupportedGenRunner is genStopRunner on a substrate that can do neither stop: each stop records its call
+// and answers runner.ErrEndUnsupported.
+type unsupportedGenRunner struct{ *genStopRunner }
+
+func (r unsupportedGenRunner) StopProxyAt(ctx context.Context, ref string, gen int) error {
+	_ = r.genStopRunner.StopProxyAt(ctx, ref, gen)
+	return runner.ErrEndUnsupported
+}
+
+func (r unsupportedGenRunner) EndSandboxAt(ctx context.Context, ref string, gen int) error {
+	_ = r.genStopRunner.EndSandboxAt(ctx, ref, gen)
+	return runner.ErrEndUnsupported
+}
+
+// The generation path takes the stronger end too: a read that fails on a substrate whose cut is unsupported
+// tries the end ("stop@3", then "end@3"), and the unsupported end carries the read's error. RED before, where
+// the read's error was the answer after "stop@3" alone.
+func TestStopLostSandboxAt_AnUnreadEndWithAnUnsupportedCutTriesTheEnd(t *testing.T) {
+	f, gr, _ := newGenStopFixture(t, 3)
+	f.srv.cfg.Runner = unsupportedGenRunner{gr}
+	run := oneClockRun(f, f.now.Add(time.Minute))
+	f.st.endsErr = errors.New("database down")
+	err := f.srv.stopLostSandboxAt(context.Background(), run, 3)
+	if !errors.Is(err, runner.ErrEndUnsupported) || !strings.Contains(fmt.Sprint(err), "database down") {
+		t.Errorf("err = %v; want ErrEndUnsupported carrying the read's error", err)
+	}
+	if got := gr.atCalls(); len(got) != 2 || got[0] != "stop@3" || got[1] != "end@3" {
+		t.Errorf("generation stops = %v, want [stop@3 end@3]", got)
 	}
 }
