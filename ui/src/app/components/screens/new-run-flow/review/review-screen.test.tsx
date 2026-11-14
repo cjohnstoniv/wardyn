@@ -349,7 +349,7 @@ describe("Review: Add a secret that is not stored (#2108)", () => {
     setField(within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL), "s3cret");
     await user.click(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
 
-    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret", { scope: "personal", createOnly: true }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret", { scope: "personal", createOnly: true, person: "alice" }));
     expect(await screen.findByText(NR_TOOLS.TOKEN_SAVED)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(preflight).toHaveBeenCalledTimes(1);
