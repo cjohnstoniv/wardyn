@@ -36,7 +36,7 @@ import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { canonicalAuditAction, exitCodeFromAudit, gatewayCallId } from "../../lib/api/audit";
-import { LIST_LIMIT } from "../../lib/api/core";
+import { isAlreadyDecided, LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
@@ -212,6 +212,11 @@ function RunDetailPage({ id }: { id: string }) {
       toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
+      // Someone else decided it first: the card is stale, so the list is read at once and the dialog closes with it.
+      if (isAlreadyDecided(err)) {
+        await load(false);
+        setDecide(null);
+      }
       return false;
     }
   };
@@ -231,6 +236,7 @@ function RunDetailPage({ id }: { id: string }) {
       void load(false);
     } catch (err) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
+      if (isAlreadyDecided(err)) await load(false);
     }
   };
 
@@ -248,6 +254,7 @@ function RunDetailPage({ id }: { id: string }) {
       void load(false);
     } catch (err) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+      if (isAlreadyDecided(err)) await load(false);
     }
   };
 

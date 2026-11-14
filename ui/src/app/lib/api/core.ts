@@ -648,6 +648,10 @@ export type AuthProbe = "authed" | "unauthed" | "unreachable";
 const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session", "identity_deactivated"]);
 export const isSessionEnded = (reason: string): boolean => SESSION_ENDED_REASONS.has(reason);
 
+// The server's 409 for a decision on an approval that is no longer pending (internal/api/approvals.go, writeDecideError;
+// approvals_takeover.go for a Decline): someone else decided it, or it ended. A screen that sent it reads its list at once.
+export const isAlreadyDecided = (e: unknown): boolean => e instanceof HttpError && e.reason === "approval_already_decided";
+
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the
 // response status, so it asks for a single row (?limit=1) rather than pulling
 // the whole runs list just to discard it.
