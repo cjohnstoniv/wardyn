@@ -97,8 +97,14 @@ func run(out, plist string) error {
 	}
 	srv.ScreenLockOff = guestagent.ScreenLock{Run: runner, Stdin: runner, Console: guestagent.ConsoleOwner{}}.Off
 	srv.Scrub, srv.RecordMCPTables = scrub.Scrub, scrub.RecordMCPTables
-	hostPrefs := guestagent.HostPrefsCarry{Run: runner, Console: guestagent.ConsoleOwner{}, MarkerDir: srv.MarkerDir, Cred: cred, Self: self}.Carry(ctx)
-	slog.Info("wardyn-guest-agent host prefs", "status", hostPrefs)
+	carry := guestagent.HostPrefsCarry{Run: runner, Console: guestagent.ConsoleOwner{}, MarkerDir: srv.MarkerDir, Cred: cred, Self: self}
+	// The sign-in hold runs the carry itself. With its switch on it can restart the guest before serving.
+	hold := guestagent.LoginHold{Run: runner, Console: guestagent.ConsoleOwner{}, MarkerDir: srv.MarkerDir, AgentUID: ids.UID}
+	hostPrefs, held := hold.Start(ctx, carry.Carry)
+	slog.Info("wardyn-guest-agent host prefs", "status", hostPrefs, "login_hold", held.Path, "reason", held.Reason)
+	if held.Restarting {
+		return nil
+	}
 	// Before the agent serves, so before any Init: what a past run wrote is gone, whether it stopped
 	// gracefully or not. A restart of this service after Init skips it (BootScrubDue).
 	if guestagent.BootScrubDue(srv.MarkerDir) {
@@ -110,6 +116,22 @@ func run(out, plist string) error {
 		if err := guestagent.WriteHostPrefsStatus(guestagent.MacHostPrefsStatusPath, hostPrefs); err != nil {
 			slog.Warn("wardyn-guest-agent host prefs status", "err", err)
 		}
+		// After the scrub, which removes the status folder: waits for the agent at the console, then
+		// leaves auto-login off again when the hold is on, or arms the disk once its switch files appear.
+		go func() {
+			write := func(line string) {
+				slog.Info("wardyn-guest-agent login hold", "status", line)
+				if err := guestagent.WriteHostPrefsStatus(guestagent.MacLoginHoldStatusPath, line); err != nil {
+					slog.Warn("wardyn-guest-agent login hold status", "err", err)
+				}
+			}
+			write(hold.Settle(ctx, held))
+			if held.Path == "off" {
+				if line := hold.Watch(ctx); line != "" {
+					write(line)
+				}
+			}
+		}()
 	}
 	h, err := srv.Handler()
 	if err != nil {

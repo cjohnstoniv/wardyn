@@ -16,6 +16,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `/metrics` has a new counter, `wardyn_lock_holds_over_limit_total`: holds of a run's lock that ran past 10 minutes. Each such hold is also logged at WARN with the functions that took the lock, and again with its length when it is released. The watchdog never frees the lock or cancels the holder's work.
 - Helm: `uiSandbox.ingress` renders the UI-sandbox gateway's Ingress: the `advertiseURL` host and the wildcard host `originTemplate` needs (`run-{run}.ui.example.com` gives `*.ui.example.com`), to the `ui` port. DNS and the certificate stay yours.
 - Helm: with `uiSandbox.enabled`, no SSO, no `uiSandbox.originTemplate` and no `uiSandbox.acceptSharedOrigin`, `helm install` and `helm upgrade` now print a warning: every run's apps share one browser origin, so a page one run serves can reach another run's app in the same person's browser. It names both settings, and the chart renders as before.
+- macOS VM bases: a second opt-in switch, `/Library/Wardyn/carry-before-login`, beside `/Library/Wardyn/setup-assistant-carry`, which alone never turns it on. The base then rests with auto-login off: at each boot the guest agent runs the per-host settings carry with nobody at the console, writes auto-login back only after it, and restarts the guest once. The boot after that restart writes `/Library/Wardyn/run/login-hold.status`, and a run starts one restart later. Off by default; not yet tried on a real Mac.
 
 ### Changed
 
@@ -184,6 +185,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A model call sent to a gateway with run identity on as a plain proxy request, not through a tunnel, now carries the run's identity and call id like the gateway's other calls, or is not sent when the identity cannot be had. Affects 0.10.0 prereleases only.
 - The UI relay no longer passes the common caller-address and front-proxy sign-in headers, such as `X-Real-IP` or any `X-Forwarded-*`, to the app in the sandbox. An inbound app still gets `X-Wardyn-Caller`.
 - With `push_rules.max_file_size_mib` set, an Azure DevOps REST push that renames a file, or makes any change other than a delete without carrying its new content, is now refused (`403`, `brokered:git:push-rules`), because the size of that content cannot be checked. It used to be forwarded with no size check.
+- macOS VM runs: a guest agent that restarts after the run's setup now refuses each command with "the guest agent restarted and lost the run's environment; end this run and start a new one", as a Linux VM's agent does. Before, such a command ran without the run's proxy settings, CA or secrets. Run the tools update once to get the new guest agent. Not yet tried on a real Mac.
 
 ### Security
 
@@ -231,6 +233,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If your own Tetragon policy hooks `security_file_permission`, export its access mask as an `int` argument and its return value as an `int` (`return: true` with a `returnArg`). A write is no longer recorded without both, and `/healthz` does not report its absence. The Compose policy has both.
 - A connect is now recorded only from a hook on `tcp_connect`, `security_socket_connect`, `__sys_connect`, `__x64_sys_connect` or `sys_connect`. If your own policy hooks another function that carries a socket, that hook's connects are no longer recorded. `/healthz` shows the loss only when your policy hooks none of the five: it then reports `partial` and lists `kernel.network.connect` under `missing_kinds`, once every live sensor has recorded an event. If your policy also hooks one of the five, `/healthz` shows nothing.
 - Upgrade the kernel sensor before the server or with it. In Compose the sensor is its own image, `wardyn/wardyn-tetragon-ingest`, built from source, so rebuild it too; in Helm the sensor DaemonSet and the server roll out separately. A sensor older than the server still splits the command line into words before it sends it; the server joins the words back with single spaces before it masks them, so only a registered secret whose white space is single spaces between words is sure to be masked: one that contains a tab, a line break, a non-breaking space or two spaces in a row, or that starts or ends with a space, can still be stored as words until that sensor is upgraded. A server older than the sensor stores the sensor's command line as one `arguments` field beside an `argv` that holds only the binary, and drops it from an event that loses its run.
+
+### Known issues
+
+- macOS VM bases with `/Library/Wardyn/carry-before-login`: not yet known on a real Mac are whether a restart started inside the guest keeps the VM running, whether macOS then keeps `agent` at the login window until the carry is done, and whether the carried settings keep Setup Assistant's Apple Account pane closed. If runs on a test base fail as stopped while booting, remove the two items from its list.
 
 ## [0.10.0-rc.20] — 2026-11-12
 

@@ -282,6 +282,10 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 // errStopping refuses an Init or an exec after the stop scrub.
 var errStopping = errors.New("the sandbox is stopping: its run's settings are removed")
 
+// errRestarted is the refusal of an exec after the agent restarted: its Init marker is there, but its
+// memory of the run's env is not, and an exec would run without the proxy, the CA and the secrets.
+var errRestarted = errors.New("the guest agent restarted and lost the run's environment; end this run and start a new one")
+
 // handleScrub runs the stop scrub. It first closes the agent to Init and execs, so nothing starts on
 // a guest whose walls and CA are gone; it does not hold the lock while the scrub runs.
 func (s *Server) handleScrub(w http.ResponseWriter, r *http.Request) {
@@ -500,6 +504,13 @@ func (s *Server) command(er ExecRequest) (*exec.Cmd, error) {
 		s.mu.Unlock()
 		return nil, errStopping
 	}
+	// launchd starts this agent again after it ends, with none of the run's settings Init gave it.
+	if !s.inited {
+		if _, err := os.Lstat(filepath.Join(s.MarkerDir, initMarkerFile)); err == nil {
+			s.mu.Unlock()
+			return nil, errRestarted
+		}
+	}
 	env := append([]string{"HOME=" + s.Home, "USER=" + s.User, "LOGNAME=" + s.User, "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=en_US.UTF-8"}, s.env...)
 	s.mu.Unlock()
 	if er.TTY {
@@ -528,7 +539,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmd, err := s.command(er)
-	if errors.Is(err, errStopping) {
+	if errors.Is(err, errStopping) || errors.Is(err, errRestarted) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

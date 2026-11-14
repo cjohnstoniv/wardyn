@@ -592,3 +592,51 @@ func TestDarwinInitTurnsTheScreenLockOffBeforeItAnswersAndNeverFailsInit(t *test
 		}
 	}
 }
+
+// postExec sends an exec spec and returns the answer.
+func postExec(h http.Handler, er ExecRequest) *httptest.ResponseRecorder {
+	spec, _ := json.Marshal(er)
+	var body bytes.Buffer
+	_ = WriteFrame(&body, FrameSpec, spec)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body))
+	return w
+}
+
+// An agent that launchd started again after its run's Init has none of the run's settings in memory: an
+// exec, attached or detached, is refused with 409 and runs nothing, and the Init is not taken again. Catches
+// an exec that runs with no proxy, CA or secrets after the service restarts.
+func TestDarwinExecRefusedAfterAServiceRestart(t *testing.T) {
+	s, _, h := newDarwinServer(t)
+	if w := postInit(h, Init{SignInsOff: true, Env: map[string]string{"HTTPS_PROXY": "http://proxy:3128"}}); w.Code != 200 {
+		t.Fatalf("Init = %d %s", w.Code, w.Body)
+	}
+	if w := postExec(h, ExecRequest{Argv: []string{"/usr/bin/true"}}); w.Code != 200 {
+		t.Fatalf("an exec before the restart = %d %s", w.Code, w.Body)
+	}
+
+	restarted := &Server{Version: "t", Home: s.Home, User: s.User, OutDir: s.OutDir, MarkerDir: s.MarkerDir, ToolsDial: &ToolsDialRecord{}}
+	h2, err := restarted.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := filepath.Join(t.TempDir(), "ran")
+	for _, detach := range []bool{false, true} {
+		w := postExec(h2, ExecRequest{Argv: []string{"/usr/bin/touch", ran}, Detach: detach})
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "restarted and lost the run's environment") {
+			t.Errorf("exec (detach %v) after the restart = %d %s, want 409 errRestarted", detach, w.Code, w.Body)
+		}
+	}
+	if _, err := os.Lstat(ran); err == nil {
+		t.Error("the restarted agent ran the exec")
+	}
+	if w := postInit(h2, Init{SignInsOff: true}); w.Code != http.StatusConflict {
+		t.Errorf("Init after the restart = %d %s, want 409", w.Code, w.Body)
+	}
+
+	// A new boot clears the marker folder: an exec before its Init still runs, as before.
+	_, _, h3 := newDarwinServer(t)
+	if w := postExec(h3, ExecRequest{Argv: []string{"/usr/bin/true"}}); w.Code != 200 {
+		t.Errorf("an exec before a new boot's Init = %d %s, want 200", w.Code, w.Body)
+	}
+}
