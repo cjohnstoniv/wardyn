@@ -3889,7 +3889,7 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   - A parent counts only when GitHub's compare API reports it inside the current history of the default branch or a branch the push updates.
     - An updated branch counts only at the forge's tip, which must equal the push's stated old value.
   - A merge passes an entry that matches any counted parent.
-    - Demanding all would refuse merging the default branch in after it changed a denied path, and closes nothing a single-parent commit on the same base could not already do.
+    - An updated branch may hold only its tip's entry at each deny or review path ([`push_forge_tip.go`](../internal/egress/proxy/push_forge_tip.go)), so an older parent restores nothing; for `max_file_size_mib` and `deny_new_executables` it still can.
 - **History a push re-sends is taken out the same way.**
   - A clone whose base is no longer a tip the forge advertises re-sends its history, and the first commit of that history reads as though the push added every file the repository has.
   - The carried commits GitHub places in that same current history are taken out (`internal/gitpack`'s `Result.Settle`) and the push is judged against them; a commit once found new is never taken as held.
