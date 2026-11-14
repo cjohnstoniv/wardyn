@@ -351,8 +351,8 @@ const DISCARD_DRAFT = {
   TITLE: "Clear this draft?",
   BODY: "Closing clears what you entered here.",
 };
-// A save that fails after its dialog was closed and opened again is said by name, in a toast. Only a refusal proves
-// nothing was saved: after a server error, or no answer, the value may already be held.
+// A save that fails after its dialog was closed and opened again, or unmounted, is said by name, in a toast. Only a
+// refusal proves nothing was saved: after a server error, or no answer, the value may already be held.
 const LATE_SAVE = {
   REFUSED: (name: string) => `${name} was not saved`,
   UNCONFIRMED: (name: string) => `${name} may not have been saved`,
@@ -453,6 +453,8 @@ export function AddSecretDialog({
     setConfirmOverwrite(false);
     setConfirmDiscard(false);
   }, [open, initialName]);
+  // Unmounting (the page was left) ends the draft too, so a save still in flight answers as a late one.
+  React.useEffect(() => () => void (draft.current += 1), []);
 
   // PUT is an upsert server-side: storing a name that already exists overwrites
   // its value. Detect that case (exact match on the trimmed name) so we can warn.

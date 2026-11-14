@@ -84,6 +84,33 @@ describe("AddSecretDialog: a save that finishes after the dialog was reopened", 
     expect(valueField().value).toBe("bbb");
   });
 
+  // Leaving the page unmounts the dialog mid-save: its answer is a late one, said by name or refreshed, never onSaved.
+  it.each([
+    ["a server error", new HttpError(500, "store secret failed"), "secret-a may not have been saved", "store secret failed"],
+    ["a refusal", new HttpError(400, "secret too short"), "secret-a was not saved", "secret too short"],
+  ])("a failure (%s) after the dialog unmounted is said by name", async (_kind, failure, title, description) => {
+    const a = held();
+    const { unmount } = render(<AddSecretDialog open ownRows onOpenChange={() => {}} />);
+    await typeDraft("secret-a", "aaa");
+    await userEvent.click(saveButton());
+    unmount();
+    await act(async () => a.fail(failure));
+    expect(toastError).toHaveBeenCalledWith(title, { description });
+  });
+
+  it("a success after the dialog unmounted refreshes, never reaching onSaved", async () => {
+    const a = held();
+    const saved = vi.fn();
+    const storedLate = vi.fn();
+    const { unmount } = render(<AddSecretDialog open ownRows onOpenChange={() => {}} onSaved={saved} onStoredLate={storedLate} />);
+    await typeDraft("secret-a", "aaa");
+    await userEvent.click(saveButton());
+    unmount();
+    await act(async () => a.done());
+    expect(storedLate).toHaveBeenCalledWith("secret-a");
+    expect(saved).not.toHaveBeenCalled();
+  });
+
   it("while a save is in flight, Cancel is disabled and Escape does not close", async () => {
     held();
     const changed = vi.fn();
