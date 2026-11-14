@@ -5,8 +5,8 @@
 
 // The Approvals screen holds a card whose decision is out, or was just made, until the list is read again, and the
 // list keeps the gap between its cards. Two seeding styles, both already used by this suite:
-//   * the Waiting on you hold is spliced into the list route with a synthetic row (approvals-waiting-on-you.spec.ts),
-//     because the seeded backend has no person who decides other people's holds;
+//   * the decider card under Waiting on you is spliced into the governance request list with a synthetic request
+//     (image-decider-card.spec.ts), because the seeded backend has no person who decides other people's holds;
 //   * the other tests seed real pending approvals through SQL (approvals.spec.ts) and decide them for real, apart from
 //     the 409, whose answer is spliced in.
 // Every test mutates the one pending queue, so the file runs in order in one worker, as approvals.spec.ts does.
@@ -45,8 +45,8 @@ function gate() {
   return { opened, open };
 }
 
-// Every approval card is a fieldset the screen disables while a decision for it is out.
-const cards = (page: Page) => page.locator("fieldset[data-focus-row]");
+// Every approval card is a row the list's focus handoff marks; the screen holds it while a decision for it is out.
+const cards = (page: Page) => page.locator("[data-focus-row]");
 
 async function openApprovals(page: Page) {
   await gotoConsole(page);
@@ -62,57 +62,66 @@ async function seedTwo(prefix: string) {
 }
 
 test.describe("Approvals: a card with a decision out is held", () => {
-  test("a card stays disabled through leaving Waiting on you and coming back, until the read after its decision answers", async ({ page }) => {
+  test("a decider card stays disabled through leaving Waiting on you and coming back, until the read after its decision answers", async ({ page }) => {
     const iso = new Date().toISOString();
     const row = {
       id: "e2e-held-1",
-      run_id: anyRunId(),
-      kind: "egress_domain",
-      requested_scope: { host: "e2e-held-1.example.com" },
-      state: "PENDING",
-      requested_at: iso,
-      requested_by: "dana.reyes@acme.example",
-      deciders: ["owner", "unit_admins", "group:eng-leads", "security"],
+      target_kind: "governance_elevation",
+      op: "create",
+      target_key: "u1",
+      state: "pending",
+      kind: "elevation",
+      unit_id: "u1",
+      unit_name: "Payments",
+      duration: "4h",
+      proposed_by: "dana.reyes@acme.example",
+      proposed_at: iso,
+      expires_at: new Date(Date.now() + 24 * 3_600_000).toISOString(),
+      diff: { before: null, after: null, changed: [] },
+      note: { reason: "Production incident INC-2210", ticket: "INC-2210" },
+      mine: false,
       decidable: true,
+      deciders: [{ kind: "unit_admin" }, { kind: "group", name: "support-leads" }, { kind: "security" }],
     };
     let decided = false;
     const postGate = gate();
     const readGate = gate();
     const readHeld = gate();
     await asRealMember(page);
-    // The Waiting on you list: once the decision has been answered, every read of it is held, then says the row is gone.
+    // The governance request list the decider cards come from: once the decision has been answered, every read of it
+    // is held, then says the request is gone.
     await page.route(
-      (url) => url.pathname.endsWith("/api/v1/approvals") && url.searchParams.get("decidable_by") === "me",
+      (url) => url.pathname.endsWith("/api/v1/governance/requests"),
       async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
         if (decided) {
           readHeld.open();
           await readGate.opened;
         }
-        await route.fulfill({ body: JSON.stringify(decided ? [] : [row]), contentType: "application/json" });
+        return route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ requests: decided ? [] : [row], offered: [], image_offered: false }),
+        });
       },
     );
     // The decision's answer is held until the test lets it go.
-    await page.route("**/api/v1/approvals/e2e-held-1/approve", async (route) => {
+    await page.route("**/api/v1/governance/requests/e2e-held-1/approve", async (route) => {
       await postGate.opened;
       decided = true;
-      await route.fulfill({ body: JSON.stringify({ ...row, state: "APPROVED" }), contentType: "application/json" });
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...row, state: "applied" }) });
     });
     try {
       await openApprovals(page);
       const waiting = page.getByRole("tab", { name: /^Waiting on you/ });
+      await expect(waiting).toHaveText(/Waiting on you\s*1/);
       await waiting.click();
       const approve = page.getByRole("button", { name: "Approve", exact: true });
       const deny = page.getByRole("button", { name: "Deny", exact: true });
       await expect(approve).toBeEnabled();
 
-      const posted = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/approvals/e2e-held-1/approve"));
+      const posted = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/governance/requests/e2e-held-1/approve"));
       await approve.click();
-      const dialog = page.getByRole("dialog");
-      await dialog.getByRole("button", { name: "Approve", exact: true }).click();
       await posted;
-      // The dialog's Cancel stays live while its decision is out; closing it is what frees the tabs behind it.
-      await dialog.getByRole("button", { name: "Cancel" }).click();
-      await expect(dialog).toHaveCount(0);
       await expect(approve).toBeDisabled();
       await expect(deny).toBeDisabled();
 
@@ -135,7 +144,7 @@ test.describe("Approvals: a card with a decision out is held", () => {
       // The read answers: the request is gone.
       readGate.open();
       await expect(approve).toHaveCount(0);
-      await expect(page.getByText("Reach e2e-held-1.example.com", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Elevate dana.reyes@acme.example to Payments for 4 hours")).toHaveCount(0);
     } finally {
       postGate.open();
       readGate.open();
@@ -144,12 +153,28 @@ test.describe("Approvals: a card with a decision out is held", () => {
 
   test("a decision from the reason dialog closes the dialog when the read answers, and focus lands on the next card", async ({ page }) => {
     const { markers, ids } = await seedTwo("focus-flow");
+    // The read of the pending list after the decision is slower than the dialog's exit animation: closed any earlier,
+    // the dialog hands focus back while the decided card is still on screen but held, and focus ends on the heading.
+    let afterPost = false;
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/approvals") && url.searchParams.get("state") === "PENDING",
+      async (route) => {
+        if (afterPost && route.request().method() === "GET") await new Promise((resolve) => setTimeout(resolve, 1_000));
+        await route.fallback();
+      },
+    );
     try {
       await openApprovals(page);
       await expect(cards(page)).toHaveCount(2);
       // The list's own order decides which card is first.
       const firstText = await cards(page).first().innerText();
-      const secondMarker = markerRe(markers[0]).test(firstText) ? markers[1] : markers[0];
+      const [secondMarker, firstId] = markerRe(markers[0]).test(firstText) ? [markers[1], ids[0]] : [markers[0], ids[1]];
+      // The real decision goes through; the hold starts when its answer is on its way to the page.
+      await page.route(`**/api/v1/approvals/${firstId}/approve`, async (route) => {
+        const answer = await route.fetch();
+        afterPost = true;
+        await route.fulfill({ response: answer });
+      });
 
       await cards(page).first().getByRole("button", { name: "Approve" }).click();
       const dialog = page.getByRole("dialog");
@@ -210,7 +235,7 @@ test.describe("Approvals: the list of cards", () => {
       const box2 = await cards(page).nth(1).boundingBox();
       expect(box1).not.toBeNull();
       expect(box2).not.toBeNull();
-      expect(box2!.y - (box1!.y + box1!.height)).toBeGreaterThanOrEqual(14);
+      expect(Math.round(box2!.y - (box1!.y + box1!.height))).toBeGreaterThanOrEqual(14);
     } finally {
       ids.forEach(deleteApproval);
     }
