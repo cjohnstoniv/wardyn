@@ -284,7 +284,7 @@ func (l *login) store(kind string, it cliItem, stepUp bool) (prev cliItem, repla
 		cur.AdminToken, cur.AdminExpiresAt = it.AdminToken, it.AdminExpiresAt
 		return prev, false, st.put(l.origin, cur)
 	}
-	old, prev, replacing, readErr := l.previous()
+	old, prev, replacing, readErr := l.previous(kind)
 	if err := st.put(l.origin, it); err != nil {
 		return prev, false, err
 	}
@@ -311,13 +311,15 @@ func (l *login) store(kind string, it cliItem, stepUp bool) (prev cliItem, repla
 	return prev, replacing, nil
 }
 
-// previous is the sign-in this computer holds for the organisation, which a new one replaces: the store
-// holding it, the item, whether it is live, and the error reading it from the store the profile names.
+// previous is the sign-in this computer holds for the organisation, which a new one in kind replaces: the
+// store holding it, the item, whether it is live, and the error reading it from the store the profile names.
 // When the profile names no store (a first sign-in, or a profile cliprofile.Write replaced because it could
-// not be read), it is the item found first in the keychain, then the file, and a store that cannot be read
-// is no sign one was stored. A profile that cannot be read now is no error here: WriteSessionStore refuses
-// it, and the login fails.
-func (l *login) previous() (string, cliItem, bool, error) {
+// not be read), it is the item found first in kind, whose item the put overwrites, then, when kind is the
+// keychain, in the file; a store that cannot be read is no sign one was stored. The keychain is not read when
+// kind is the file: chooseStore picked the file because the keychain could not be read, and reading it again
+// can ask to unlock it while cli.lock is held. A profile that cannot be read now is no error here:
+// WriteSessionStore refuses it, and the login fails.
+func (l *login) previous(kind string) (string, cliItem, bool, error) {
 	named, err := cliprofile.ReadSessionStore(l.dir, l.origin)
 	if err != nil {
 		return "", cliItem{}, false, nil
@@ -326,7 +328,11 @@ func (l *login) previous() (string, cliItem, bool, error) {
 		it, ok, err := storeFor(named, l.dir).get(l.origin)
 		return named, it, ok && it.endedWhy(cliNow()) == "", err
 	}
-	for _, k := range []string{types.CLIStoreKeychain, types.CLIStoreFile} {
+	stores := []string{kind}
+	if kind == types.CLIStoreKeychain {
+		stores = append(stores, types.CLIStoreFile)
+	}
+	for _, k := range stores {
 		if it, ok, err := storeFor(k, l.dir).get(l.origin); err == nil && ok {
 			return k, it, it.endedWhy(cliNow()) == "", nil
 		}

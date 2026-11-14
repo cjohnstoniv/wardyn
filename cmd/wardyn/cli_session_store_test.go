@@ -273,6 +273,73 @@ func TestLoginOverAProfileThatCannotBeReadSignsOutTheOtherStore(t *testing.T) {
 	}
 }
 
+// TestLoginOverAProfileThatCannotBeReadSignsOutItsOwnStoreFirst: the keychain holds a sign-in the fallback
+// with no session bus could not remove, the file holds the one that replaced it, and the profile cannot be
+// read. A login to the keychain signs out the keychain's sign-in, which its put overwrites. A login that chose
+// the file because the keychain read failed signs out the file's sign-in and does not read the keychain again.
+func TestLoginOverAProfileThatCannotBeReadSignsOutItsOwnStoreFirst(t *testing.T) {
+	for _, kind := range []string{types.CLIStoreKeychain, types.CLIStoreFile} {
+		t.Run(kind, func(t *testing.T) {
+			f := newSignInOrg(t)
+			dir := cliEnv(t, nil)
+			approve := approveInBrowser(t, f, nil)
+			openBrowser = func(a string) error { go approve(a); return nil }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("keychain login: %v", err)
+			}
+			keychainReady = func() error { return errors.New("no session bus (DBUS_SESSION_BUS_ADDRESS is unset)") }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("file login: %v", err)
+			}
+			keychainReady = func() error { return nil }
+			inKeychain, okK, errK := keychainStore{}.get(f.srv.URL)
+			inFile, okF, errF := fileStore{dir}.get(f.srv.URL)
+			if !okK || !okF || errK != nil || errF != nil || f.liveSessions() != 2 {
+				t.Fatalf("want a live sign-in in each store: keychain %v %v, file %v %v, live %d", okK, errK, okF, errF, f.liveSessions())
+			}
+			if err := os.WriteFile(filepath.Join(dir, cliprofile.FileName), []byte("{"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			replaced, other, reads := inKeychain, inFile, 0
+			if kind == types.CLIStoreFile {
+				replaced, other = inFile, inKeychain
+				raw, err := keyring.Get(cliKeyringService, f.srv.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				keyring.MockInitWithError(errors.New("the keychain is locked")) // so the store chosen is the file
+				openBrowser = func(a string) error {
+					// The keychain answers again once the store is chosen; each read of it from here counts.
+					keyring.MockInit()
+					if err := keyring.Set(cliKeyringService, f.srv.URL, raw); err != nil {
+						t.Error(err)
+					}
+					keychainReady = func() error { reads++; return nil }
+					go approve(a)
+					return nil
+				}
+			}
+			if _, stderr, err := runCLI(t, "", "login", f.srv.URL); err != nil || strings.Contains(stderr, "could not be") {
+				t.Fatalf("third login: %v, stderr %q", err, stderr)
+			}
+			ended := func(it cliItem) bool {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				return f.sessions[it.SessionID].ended != ""
+			}
+			if !ended(replaced) || ended(other) {
+				t.Errorf("signed out: the %s sign-in %v, the other store's %v; want only the %s one", kind, ended(replaced), ended(other), kind)
+			}
+			if now, ok, err := storeFor(kind, dir).get(f.srv.URL); !ok || err != nil || now.SessionID == replaced.SessionID {
+				t.Errorf("the %s store still holds the replaced sign-in (found=%v, %v)", kind, ok, err)
+			}
+			if reads != 0 {
+				t.Errorf("the keychain was read %d times after the file was chosen, want 0", reads)
+			}
+		})
+	}
+}
+
 // TestOrgTransportsBoundTheHeaderWait: the transport a stored sign-in's requests go through, and an
 // organisation's anchor transport, both bound the wait for response headers, as the SDK's own transport
 // does, so a streamed request cannot wait forever on a peer that never answers.
