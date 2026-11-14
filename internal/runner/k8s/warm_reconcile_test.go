@@ -22,6 +22,8 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const warmTestImage = "registry.example/agent:1"
@@ -254,6 +256,38 @@ func TestWarmPlaceholderTakesPriorityClass(t *testing.T) {
 	}
 }
 
+func TestWarmPlaceholderCC2TakesThePinnedRuntimeClass(t *testing.T) {
+	d, cs := newTestDriver(t, Config{ConfinementRuntimes: map[types.ConfinementClass]string{types.CC2: "gvisor"}})
+	mustCreateRuntimeClass(t, cs, "gvisor", "runsc")
+	cc2 := warmTestPool("a", 1)
+	cc2.Class = "CC2"
+	pod, err := d.warmPlaceholderPod(context.Background(), cc2, testNamespace, 0)
+	if err != nil {
+		t.Fatalf("warmPlaceholderPod: %v", err)
+	}
+	if rc := pod.Spec.RuntimeClassName; rc == nil || *rc != "gvisor" {
+		t.Errorf("CC2 runtime class is %v, want gvisor", rc)
+	}
+	pod, err = d.warmPlaceholderPod(context.Background(), warmTestPool("b", 1), testNamespace, 0)
+	if err != nil {
+		t.Fatalf("warmPlaceholderPod: %v", err)
+	}
+	if pod.Spec.RuntimeClassName != nil {
+		t.Errorf("CC1 runtime class is %q, want none", *pod.Spec.RuntimeClassName)
+	}
+}
+
+func TestWarmPlaceholderCarriesThePullSecret(t *testing.T) {
+	d, _ := newTestDriver(t, Config{ImagePullSecret: "regcred"})
+	pod, err := d.warmPlaceholderPod(context.Background(), warmTestPool("a", 1), testNamespace, 0)
+	if err != nil {
+		t.Fatalf("warmPlaceholderPod: %v", err)
+	}
+	if s := pod.Spec.ImagePullSecrets; len(s) != 1 || s[0].Name != "regcred" {
+		t.Errorf("pull secrets %v, want regcred alone", s)
+	}
+}
+
 func TestWarmReconcileDenyPolicyBeforeFirstPlaceholder(t *testing.T) {
 	d, cs := warmTestDriver(t, warmTestPool("a", 1))
 	d.reconcileWarmPools(context.Background())
@@ -341,6 +375,47 @@ func TestWarmReconcileDeletesFailedStaleAndUnknown(t *testing.T) {
 	}
 }
 
+func TestWarmReconcileTerminatingPlaceholderIsNotLiveAndKeepsItsName(t *testing.T) {
+	p := warmTestPool("a", 1)
+	d, cs := warmTestDriver(t, p)
+	seedDeny(t, cs)
+	seedPlaceholder(t, d, cs, p, 0, func(pod *corev1.Pod) {
+		gone := metav1.NewTime(d.now())
+		pod.DeletionTimestamp = &gone
+	})
+	cs.ClearActions()
+	d.reconcileWarmPools(context.Background())
+	var made []string
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" && a.GetResource().Resource == "pods" {
+			made = append(made, a.(clienttesting.CreateAction).GetObject().(*corev1.Pod).Name)
+		}
+	}
+	if !slices.Equal(made, []string{"wardyn-warm-a-1"}) {
+		t.Fatalf("pods made %v, want wardyn-warm-a-1 alone (the stopping one is not live, and holds its name)", made)
+	}
+	if n := len(deletesOf(cs, "pods")); n != 0 {
+		t.Fatalf("%d pod deletes, want none for a placeholder already stopping", n)
+	}
+}
+
+func TestWarmReconcileKeepsAnOldRunningPlaceholder(t *testing.T) {
+	p := warmTestPool("a", 1)
+	d, cs := warmTestDriver(t, p)
+	seedDeny(t, cs)
+	seedPlaceholder(t, d, cs, p, 0, func(pod *corev1.Pod) {
+		pod.CreationTimestamp = metav1.NewTime(d.now().Add(-d.cfg.StartTimeout - time.Minute))
+	})
+	cs.ClearActions()
+	d.reconcileWarmPools(context.Background())
+	if n := len(deletesOf(cs, "pods")); n != 0 {
+		t.Fatalf("%d pod deletes, want none: only a Pending placeholder goes stale", n)
+	}
+	if n := countOf(warmSeq(cs), "create pods"); n != 0 {
+		t.Fatalf("%d pods made beside a full pool", n)
+	}
+}
+
 func TestWarmReconcileNoPoolsDeletesAll(t *testing.T) {
 	d, cs := warmTestDriver(t)
 	p := warmTestPool("a", 1)
@@ -372,6 +447,36 @@ func TestWarmReconcileBacksOffAfterCreateError(t *testing.T) {
 	d.reconcileWarmPools(context.Background())
 	if n := countOf(warmSeq(cs), "create pods"); n != 0 {
 		t.Fatalf("second pass made %d create calls, want none", n)
+	}
+}
+
+func TestWarmReconcileCreatesResumeAfterTheBackoff(t *testing.T) {
+	d, cs := warmTestDriver(t, warmTestPool("a", 1))
+	clock := time.Now()
+	d.now = func() time.Time { return clock }
+	failed := false
+	cs.PrependReactor("create", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if failed {
+			return false, nil, nil
+		}
+		failed = true
+		return true, nil, errors.New("quota exceeded")
+	})
+	d.reconcileWarmPools(context.Background())
+	if !d.warmBackedOff("a") {
+		t.Fatal("the pool is not backed off after a failed create")
+	}
+	clock = clock.Add(warmBackoff - time.Second)
+	cs.ClearActions()
+	d.reconcileWarmPools(context.Background())
+	if n := countOf(warmSeq(cs), "create pods"); n != 0 {
+		t.Fatalf("%d creates before the backoff ended, want none", n)
+	}
+	clock = clock.Add(2 * time.Second)
+	cs.ClearActions()
+	d.reconcileWarmPools(context.Background())
+	if n := countOf(warmSeq(cs), "create pods"); n != 1 {
+		t.Fatalf("%d creates after the backoff ended, want 1", n)
 	}
 }
 
