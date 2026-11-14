@@ -35,8 +35,11 @@ const KUBE_RUNS_NAMESPACE = process.env.WARDYN_WALK_KUBE_NAMESPACE || "wardyn-ru
 /** The scheduling gate wardynd holds an agent-sandbox agent pod behind (internal/runner/k8s/agentsandbox.go). */
 const GATE = "wardyn.dev/verify";
 const PROOF_PATH = "/home/agent/work/keep-walk-proof";
-/** How long the kept run lives before its lease ends; it must outlast the sandbox coming up. */
-const KEPT_ENDS_AFTER_SEC = 240;
+/**
+ * How long the kept run lives before its lease ends. The lease counts from the run's creation, not from RUNNING,
+ * so it must outlast the sandbox coming up: a hosted start has taken more than 300 s.
+ */
+const KEPT_ENDS_AFTER_SEC = 600;
 const PLAIN_ENDS_AFTER_SEC = 120;
 /** Past the end the lease pass has to notice it and stop the sandbox. */
 const END_GRACE_MS = 180_000;

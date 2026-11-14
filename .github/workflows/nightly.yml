@@ -2844,7 +2844,8 @@ jobs:
   kind-agent-sandbox-keep-walk:
     if: inputs.scope != 'candidate'
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    # 60 before the kept run lived 600 s instead of 240 s: its end wait grows by 360 s, so 60 + 6 = 66.
+    timeout-minutes: 66
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
