@@ -601,9 +601,23 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	// lost since that read is refused.
 	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
 		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID, id.JTI, claims.JTI)
+		var ended store.RunTokenRunEndedError
+		if errors.As(serr, &ended) {
+			// The run ended after the read above: answer as its terminal arm does, with no token.
+			s.auditRenewDenied(r, claims, "run_terminal:"+string(ended.State))
+			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
+			return
+		}
 		if errors.Is(serr, store.ErrRunTokenLineage) {
 			// A revive replaced this token's proxy: retryable, so a proxy the revive kept renews
 			// again once its lineage is handed back, and a replaced one is gone by then.
+			// An end that committed while the stamp waited on the run's row reads here as a lineage miss: the
+			// stamp's own reads could not see it. A fresh read tells the two apart.
+			if cur, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr == nil && isTerminalRunState(cur.State) {
+				s.auditRenewDenied(r, claims, "run_terminal:"+string(cur.State))
+				writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
+				return
+			}
 			s.auditRenewDenied(r, claims, "token_lineage_retired")
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStampFailed, "the run's token was retired by a revive; retry the renewal")
 			return

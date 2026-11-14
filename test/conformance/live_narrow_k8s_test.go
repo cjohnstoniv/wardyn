@@ -488,9 +488,14 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 	if err != nil || before.ConfigSHA256 != h {
 		t.Fatalf("before the restart: %+v, %v; want hash %s", before, err, h)
 	}
+	// The agent stand-in, asked once before the reboot: a stand-in the proxy does not admit must not pass
+	// the new-address case below by reaching nothing.
+	standIn := newAgentStandIn(t, cs, ns, s.spec.RunID)
+	assertStandInNarrowed(t, ns, standIn, pinnedProxy, false)
 	node := s.pod.Spec.NodeName
 	oldNodeIP := dockerNodeIP(t, node)
 
+	restartedAt := time.Now()
 	// 2. Reboot the node with the pod still bound to it.
 	if out, err := exec.Command("docker", "restart", node).CombinedOutput(); err != nil {
 		t.Fatalf("docker restart %s: %v\n%s", node, err, out)
@@ -504,9 +509,15 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 		pointKubeconfigAt(t, newIP, node)
 		rebuild = true
 	}
+	// One driver build runs k8s.New's boot canary, which can take up to seven minutes, and waitFor checks
+	// its bound only between attempts: a rebuild must not start without that much time left.
+	const rebuildBudget = 8 * time.Minute
 	lastBuildErr := ""
 	waitFor(t, 5*time.Minute, "the API, the node and the proxy pod to be ready", func() bool {
 		if rebuild {
+			if d, ok := t.Deadline(); ok && time.Until(d) < rebuildBudget {
+				t.Fatalf("no time left before the test's -timeout for another driver rebuild after the node restart (last error: %s)", lastBuildErr)
+			}
 			nr, ncs, nns, err := build()
 			if err != nil {
 				if err.Error() != lastBuildErr {
@@ -554,33 +565,61 @@ func TestK8sNodeRestartKeepsLiveDenies(t *testing.T) {
 		t.Fatalf("after a node restart the proxy holds %+v; want the list %v at hash %s, or no list at the launch hash %s", st, []string{narrowedHost}, h, l)
 	}
 
-	// 7. The agent-side check needs a live agent to exec into. The agent pod has RestartPolicy Never, so a
-	// node reboot usually leaves it dead; the verdict above stands without it.
+	// 7. The agent-side check. The agent pod has RestartPolicy Never, so a node reboot usually leaves it
+	// dead; then the stand-in, which the kubelet starts again, is asked in its place. A phase alone can still
+	// read Running from before the node went down, so both are read for a container started after the restart.
+	// A stand-in probe that needs a proxy reply to pass asks again while none came back (standInAnswer's retry):
+	// the run's policies may not yet admit the stand-in's new address.
+	waitFor(t, 3*time.Minute, "the agent stand-in to start again after the node restart", func() bool {
+		p, err := cs.CoreV1().Pods(ns).Get(ctx, standIn, metav1.GetOptions{})
+		return err == nil && startedSince(p, restartedAt)
+	})
+	ask, who := func(host string, _ bool) string { return proxyAnswer(t, r, s.sb.Ref, host) }, "agent"
 	agent, err := cs.CoreV1().Pods(ns).Get(ctx, "wardyn-agent-"+s.spec.RunID.String(), metav1.GetOptions{})
-	if err != nil {
-		t.Logf("agent-side check skipped: read the agent pod: %v", err)
-		return
+	if err != nil || !startedSince(agent, restartedAt) {
+		ask, who = func(host string, retry bool) string { return standInAnswer(t, ns, standIn, pinnedProxy, host, retry) }, "agent stand-in"
+		t.Log("node-restart: agent-side check from the agent stand-in")
 	}
-	if agent.Status.Phase != corev1.PodRunning {
-		t.Logf("agent-side check skipped: the agent pod is %s, not Running, after the node restart", agent.Status.Phase)
-		return
+	if pod, err = cs.CoreV1().Pods(ns).Get(ctx, s.pod.Name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("read the proxy pod again: %v", err)
 	}
 	if pod.Status.PodIP == ip {
-		assertNarrowed(t, r, s.sb.Ref)
+		if got := ask(narrowedHost, true); !strings.Contains(got, deniedBy) {
+			t.Errorf("the %s's answer for %s lacks %q:\n%s", who, narrowedHost, deniedBy, got)
+		}
+		if got := ask(otherHost, true); strings.Contains(got, deniedBy) {
+			t.Errorf("the proxy refused %s to the %s by policy, which the narrowing did not name:\n%s", otherHost, who, got)
+		}
 		return
 	}
-	// The agent's pinned address reaches no proxy now: neither host may get through. Each probe must
-	// show it ran, so an exec that printed nothing does not pass.
+	// The rebooted proxy's deny list, asked from the agent's position at the proxy's address now: the run's
+	// policies admit the agent's labels to the proxy's wherever its pod landed. It is asked before the old
+	// address: its refusal shows the policies admit the stand-in again, so no reply below is the old
+	// address's answer, not a policy that has yet to catch up.
+	assertStandInNarrowed(t, ns, standIn, pod.Status.PodIP, true)
+	// The pinned address reaches no proxy now: neither host may get through. Each probe must show it ran,
+	// so an exec that printed nothing does not pass. No reply is the passing answer here, so it is asked once.
 	for _, host := range []string{narrowedHost, otherHost} {
-		got := proxyAnswer(t, r, s.sb.Ref, host)
+		got := ask(host, false)
 		switch {
 		case !strings.Contains(got, probeDone):
-			t.Errorf("the agent's probe for %s at the old address printed no end marker, so it proves nothing:\n%s", host, got)
+			t.Errorf("the %s's probe for %s at the old address printed no end marker, so it proves nothing:\n%s", who, host, got)
 		case strings.Contains(got, "http/1."):
-			t.Errorf("the agent reached a proxy for %s at the old address: %s", host, got)
+			t.Errorf("the %s reached a proxy for %s at the old address: %s", who, host, got)
 		}
 	}
-	t.Log("the proxy pod came back on a new address; the agent reaches none, which is narrower")
+	t.Logf("the proxy pod came back on %s; the %s reaches no proxy at the old address, and the proxy still refuses %s", pod.Status.PodIP, who, narrowedHost)
+}
+
+// startedSince reports whether one of p's containers is running and started after at. A phase alone can
+// still be the pod's status from before the node went down, when its agent is already dead.
+func startedSince(p *corev1.Pod, at time.Time) bool {
+	for _, c := range p.Status.ContainerStatuses {
+		if c.State.Running != nil && c.State.Running.StartedAt.Time.After(at) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitFor(t *testing.T, bound time.Duration, what string, ok func() bool) {
