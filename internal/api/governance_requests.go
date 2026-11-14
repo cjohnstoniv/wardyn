@@ -237,14 +237,17 @@ func (s *Server) requestView(r *http.Request, ch types.GovernanceChange, names m
 func (s *Server) requestViewOf(r *http.Request, ch types.GovernanceChange, name, decider string, f requestFields, names map[uuid.UUID]string) GovernanceRequestView {
 	ctx := r.Context()
 	_, principal := actorFromRequest(r)
+	email := oidcEmailFromContext(ctx)
 	v := GovernanceRequestView{GovernanceChange: s.changeForRead(r, ch), Kind: name, UnitID: f.unitID, Duration: f.duration,
-		EndsAt: f.endsAt, Image: f.image, Mine: sameGovernanceHuman(ch, principal, oidcEmailFromContext(ctx)),
+		EndsAt: f.endsAt, Image: f.image, Mine: s.ownsGovernanceChange(ch, principal, email),
 		Deciders: s.requestApprovers(ctx, ch, decider)}
 	v.NoEnd = f.noEnd
 	if f.unitID != nil {
 		v.UnitName = names[*f.unitID]
 	}
-	v.Decidable = ch.State == types.GovernanceChangePending && !v.Mine && governanceChangeKinds[ch.TargetKind].forChange(ch).approver.allowed(s, r)
+	// Mine is ownership; Decidable keeps the conservative same-human test an approval refuses on.
+	v.Decidable = ch.State == types.GovernanceChangePending && !sameGovernanceHuman(ch, principal, email) &&
+		governanceChangeKinds[ch.TargetKind].forChange(ch).approver.allowed(s, r)
 	return v
 }
 
