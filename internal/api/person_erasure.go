@@ -146,7 +146,7 @@ func tokensNotRevokedOf(err error) map[string]any {
 // /people/{principal}/erasure, where the scopes before credentials may be done.
 const (
 	credentialEraseRevokeUnfinishedMsg = "Wardyn could not finish revoking the Azure DevOps tokens it created for this person's runs, so nothing was erased. Try again."
-	erasureRevokeUnfinishedMsg         = "erasure is not complete: Wardyn could not finish revoking the Azure DevOps tokens it created for this person's runs, so their credentials were not erased; retry with the same scopes to finish the rest"
+	erasureRevokeUnfinishedMsg         = "Erasure is not complete: Wardyn could not finish revoking the Azure DevOps tokens it created for this person's runs, so their credentials were not erased; retry with the same scopes to finish the rest"
 )
 
 // The two answers credential.erase gives for what held back a writer that began before it:
