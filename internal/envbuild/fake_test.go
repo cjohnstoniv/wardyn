@@ -80,6 +80,10 @@ type fakeEnvbuilderDocker struct {
 
 	// exitCode is the exit code that ContainerWait returns. 0 = success.
 	exitCode int64
+	// waitErr, when set, makes ContainerWait fail with it; blockLogs makes ContainerLogs hold its stream
+	// open until the caller's ctx ends, as a follow of a still-running container does.
+	waitErr   error
+	blockLogs bool
 
 	// Track call counts for assertions.
 	pullCalled bool
@@ -393,10 +397,15 @@ func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ cli
 	return client.ContainerStartResult{}, nil
 }
 
-func (f *fakeEnvbuilderDocker) ContainerLogs(_ context.Context, _ string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+func (f *fakeEnvbuilderDocker) ContainerLogs(ctx context.Context, _ string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	f.mu.Lock()
-	body := f.logsBody
+	body, block := f.logsBody, f.blockLogs
 	f.mu.Unlock()
+	if block {
+		pr, pw := io.Pipe()
+		go func() { <-ctx.Done(); pw.CloseWithError(ctx.Err()) }()
+		return pr, nil
+	}
 	if body == nil {
 		return io.NopCloser(strings.NewReader("build log output\n")), nil
 	}
@@ -419,8 +428,12 @@ func (f *fakeEnvbuilderDocker) ContainerWait(_ context.Context, _ string, _ clie
 	resultC := make(chan container.WaitResponse, 1)
 	errC := make(chan error, 1)
 	f.mu.Lock()
-	code := f.exitCode
+	code, werr := f.exitCode, f.waitErr
 	f.mu.Unlock()
+	if werr != nil {
+		errC <- werr
+		return client.ContainerWaitResult{Result: resultC, Error: errC}
+	}
 	resultC <- container.WaitResponse{StatusCode: code}
 	return client.ContainerWaitResult{Result: resultC, Error: errC}
 }
