@@ -22,12 +22,14 @@ import { Chip } from "../../wardyn/primitives";
 import { splitImageRef } from "./image-ref";
 import { decidersPhrase } from "./request-phrases";
 
-export function ImageDeciderCard({ request, onDone }: { request: GovernanceRequest; onDone: () => void }) {
+// onStart tells the screen a decision is going out, so it can hold the card through a remount.
+export function ImageDeciderCard({ request, onStart, onDone }: { request: GovernanceRequest; onStart?: () => void; onDone: () => void }) {
   const [busy, setBusy] = React.useState(false);
   const person = request.proposed_by;
   const { name, digest } = splitImageRef(request.image ?? "");
   const decide = async (approve: boolean) => {
     setBusy(true);
+    onStart?.();
     try {
       if (approve) await requests.approve(request.id);
       else await requests.reject(request.id, "");

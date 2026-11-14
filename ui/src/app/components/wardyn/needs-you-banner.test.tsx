@@ -6,10 +6,11 @@
 // #2963 "Needs you" banner (mock M8 Option A): the request, the takeover strip, the one-click hand
 // back and its confirmation — the strings are the boards', through copy/needs-you.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
+import { HttpError } from "../../lib/api/core";
 import { NEEDS_YOU } from "./copy/needs-you";
 import { RUN_SSH } from "./copy";
 
@@ -222,6 +223,21 @@ describe("NeedsYouBanner", () => {
     await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.decline }));
     expect(api.decline).toHaveBeenCalledWith("ap-1");
     expect(cb.onChanged).toHaveBeenCalled();
+  });
+
+  it("a Decline the server says was already decided reads the banner's data again; any other refusal reads nothing", async () => {
+    api.decline.mockRejectedValueOnce(new HttpError(409, "approval already decided", "approval_already_decided"));
+    const cb = mount([request()]);
+    await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.decline }));
+    await waitFor(() => expect(cb.onChanged).toHaveBeenCalledTimes(1));
+    expect(toastError).toHaveBeenCalled();
+    cleanup();
+    vi.clearAllMocks();
+    api.decline.mockRejectedValueOnce(new HttpError(409, "not pending", "approval_not_pending"));
+    const other = mount([request()]);
+    await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.decline }));
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(other.onChanged).not.toHaveBeenCalled();
   });
 
   it("Snooze shrinks the banner to one line that still offers Take over", async () => {

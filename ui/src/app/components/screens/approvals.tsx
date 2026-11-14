@@ -23,10 +23,10 @@ import {
 } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { requests as elevationApi } from "../../lib/api/governance-requests";
-import type { GovernanceRequestList } from "../../lib/types/governance-requests";
+import type { GovernanceRequest, GovernanceRequestList } from "../../lib/types/governance-requests";
 import { anyCapabilityEnforced, useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
-import { HttpError, LIST_LIMIT } from "../../lib/api/core";
+import { HttpError, isAlreadyDecided, LIST_LIMIT } from "../../lib/api/core";
 import { governance } from "../../lib/api/governance";
 import { usePoll } from "../../lib/use-poll";
 import { useRunTitles } from "../../lib/use-run-titles";
@@ -408,12 +408,17 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // An answer lands unless a read of the same list that started after it has landed already: a poll read that started
   // before a decision must not put the decided request back, with Approve and Deny live, after the refresh that
   // shows it gone. A read still out holds no older answer back, so a list is never marked ready without one.
+  // A view switch keeps this screen mounted, so a read asked for the other view neither lands nor marks a list ready or
+  // failed here: its rows, or the ones shown before the switch, are not this view's. A decision sent before the switch
+  // asks for such a read after it, in the view then shown (fetchAllRef), so the request it decided is gone from that list.
+  const viewRef = React.useRef(view);
+  viewRef.current = view;
   const pendingAsked = React.useRef(0);
   const pendingLanded = React.useRef(0);
   const fetchPending = React.useCallback(() => {
     const read = ++pendingAsked.current;
     return api.listApprovals("PENDING", "", view).then((items) => {
-      if (read < pendingLanded.current) return;
+      if (read < pendingLanded.current || viewRef.current !== view) return;
       pendingLanded.current = read;
       setPendingItems(items);
     });
@@ -455,7 +460,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       api.listApprovals("EXPIRED", "", view),
       api.listApprovals("CANCELLED", "", view),
     ]).then(([approved, denied, expired, cancelled]) => {
-      if (read < decidedLanded.current) return;
+      if (read < decidedLanded.current || viewRef.current !== view) return;
       decidedLanded.current = read;
       // Each state is its own capped fetch, so the truncation test is per list:
       // the merged decidedItems length would false-positive on three large but
@@ -470,8 +475,6 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // the one on screen (#2487: it is up to four capped lists, and only grows).
   const filterRef = React.useRef(filter);
   filterRef.current = filter;
-  const viewRef = React.useRef(view);
-  viewRef.current = view;
   // A refresh that loads the decided lists for the view still on screen also heals a failed first load of the tab.
   // The Waiting on you list rides every refresh while the tab is possible; its failure is its own, never the screen's.
   const fetchAll = React.useCallback(() => {
@@ -491,6 +494,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     });
     return Promise.all([main, waitingRead, elevationRead]).then(() => undefined);
   }, [fetchPending, fetchDecided, fetchWaiting, fetchElevation, view]);
+  // A decision's answer can land after a view switch: its refresh asks in the view shown then, not the one it was sent in.
+  const fetchAllRef = React.useRef(fetchAll);
+  fetchAllRef.current = fetchAll;
   const loadWaiting = React.useCallback(() => {
     setWaitingStatus((st) => (st === "ready" ? st : "loading"));
     fetchWaiting().catch(() => setWaitingStatus((st) => (st === "ready" ? st : "error")));
@@ -523,12 +529,15 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const loadDecided = React.useCallback(() => {
     setDecidedStatus((st) => (st === "ready" ? st : "loading"));
     fetchDecided()
-      .then(() => setDecidedStatus("ready"))
+      .then(() => {
+        if (viewRef.current === view) setDecidedStatus("ready");
+      })
       .catch((e) => {
+        if (viewRef.current !== view) return;
         setDecidedMessage(failureSentence(e));
         setDecidedStatus((st) => (st === "ready" ? st : "error"));
       });
-  }, [fetchDecided]);
+  }, [fetchDecided, view]);
   // A view switch keeps this screen mounted: the other view's decided rows are not "ready" for this one.
   React.useEffect(() => setDecidedStatus("idle"), [view]);
   React.useEffect(() => {
@@ -563,12 +572,15 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const load = React.useCallback(() => {
     setStatus("loading");
     fetchPending()
-      .then(() => setStatus("ready"))
+      .then(() => {
+        if (viewRef.current === view) setStatus("ready");
+      })
       .catch((e) => {
+        if (viewRef.current !== view) return;
         setPendingMessage(failureSentence(e));
         setStatus("error");
       });
-  }, [fetchPending]);
+  }, [fetchPending, view]);
   React.useEffect(load, [load]);
 
   // A HITL queue is blocking — newly-arrived requests must surface
@@ -589,7 +601,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     if (!securityOperator && knows === null) void probeKnows();
     return fetchAll()
       .then(() => {
-        setStatus("ready");
+        if (viewRef.current === view) setStatus("ready");
         onChanged?.();
       })
       .catch(() => {
@@ -611,25 +623,58 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     else return false;
     return true;
   };
+  // The requests with a decision out, from the click until the read after it has answered. The card's own busy state
+  // is lost when a view switch remounts it, and is already clear when the unawaited read after a decision starts, so
+  // this screen-level set keeps every view's card for the request disabled through both.
+  const [deciding, setDeciding] = React.useState<ReadonlySet<string>>(() => new Set());
+  const markDeciding = (id: string) => setDeciding((cur) => new Set(cur).add(id));
+  const releaseDeciding = (id: string) =>
+    setDeciding((cur) => {
+      if (!cur.has(id)) return cur;
+      const next = new Set(cur);
+      next.delete(id);
+      return next;
+    });
+  // The read after a decision that went through: the request stays held until it has answered, or failed, in which
+  // case the next poll tick catches the view up.
+  const readAfterDecision = (id: string): Promise<void> =>
+    fetchAllRef.current()
+      .catch(() => {
+        /* transient refresh failure: the decision itself already succeeded */
+      })
+      .finally(() => releaseDeciding(id));
+  // The server's 409 for a request that is no longer pending: someone else decided it, or it ended. The card on screen
+  // is stale, so the lists are read again at once, and the caller waits: the card stays busy until that read answers.
+  const refreshIfDecided = async (err: unknown): Promise<boolean> => {
+    if (!isAlreadyDecided(err)) return false;
+    onChanged?.();
+    await fetchAllRef.current().catch(() => {
+      /* transient refresh failure: the next poll tick catches the view up */
+    });
+    return true;
+  };
 
   const decide = async (reason: string, decisionScope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!prompt) return false;
+    const id = prompt.id;
+    markDeciding(id);
     try {
       const args = decisionArgs(decisionScope, until);
       if (prompt.action === "approve") await api.approve(prompt.id, reason, ...args);
       else await api.deny(prompt.id, reason, ...args);
       toast.success(prompt.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      setPrompt(null);
+      onChanged?.();
       // F5-F11: load() would flip status back to "loading" first — the whole
       // queue would flash to a skeleton after every single decision, losing
       // scroll position. fetchAll() is the same silent refresh the poll
       // uses instead; a refresh failure here is not fatal — the decide
       // itself already succeeded, and the next poll tick will catch the
       // view up.
-      fetchAll().catch(() => {
-        /* transient refresh failure — decide() itself already succeeded */
-      });
-      onChanged?.();
+      // The dialog closes when that read has answered: closed while its card is still held, focus would find no
+      // usable control in the list and go to the page heading instead of the next card. Only this request's dialog
+      // closes, never one opened since for another request.
+      await readAfterDecision(id);
+      setPrompt((cur) => (cur?.id === id ? null : cur));
       return true;
     } catch (err) {
       noteRefusal(prompt.id, err);
@@ -639,6 +684,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           { description: getErrorMessage(err) },
         );
       }
+      // The dialog is for a request that is decided, so it closes with the card.
+      if (await refreshIfDecided(err)) setPrompt((cur) => (cur?.id === id ? null : cur));
+      releaseDeciding(id);
       return false;
     }
   };
@@ -650,19 +698,23 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // decision_scope — see ado-capability-card.tsx's adoDecisionArgs for why a
   // bodyless decide can't be used here. The push card passes no opts at all.
   const decideAdoDirect = async (id: string, approve: boolean, opts: [] | [DecisionOptions]): Promise<void> => {
+    markDeciding(id);
     try {
       if (approve) await api.approve(id, "approved", ...opts);
       else await api.deny(id, "denied", ...opts);
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      fetchAll().catch(() => {
-        /* transient refresh failure — the decide itself already succeeded */
-      });
+      void readAfterDecision(id);
       onChanged?.();
     } catch (err) {
-      if (refusalToast(err)) return;
+      if (refusalToast(err)) {
+        releaseDeciding(id);
+        return;
+      }
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
+      await refreshIfDecided(err);
+      releaseDeciding(id);
     }
   };
 
@@ -675,14 +727,15 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
 
   // #2963 — a "Needs you" request's Decline: not a decide() verb (approvals_takeover.go).
   const declineTakeover = async (id: string): Promise<void> => {
+    markDeciding(id);
     try {
       await api.decline(id);
-      fetchAll().catch(() => {
-        /* transient refresh failure — the decline itself already succeeded */
-      });
+      void readAfterDecision(id);
       onChanged?.();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+      await refreshIfDecided(err);
+      releaseDeciding(id);
     }
   };
 
@@ -690,15 +743,25 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
   // One card for both lists; the Waiting on you tab passes waiting so the card trusts the server's verdict on it.
-  const elevationDecided = () => {
-    fetchAll().catch(() => {
-      /* transient refresh failure — the decision itself already succeeded */
-    });
+  // A decider card sends its own decision, with a governance request id: it is held from its click (onStart) until
+  // the read after its answer, like every other card, so leaving the tab and coming back draws no live buttons.
+  const elevationDecided = (id: string) => {
+    void readAfterDecision(id);
     onChanged?.();
   };
+  const deciderCard = (r: GovernanceRequest) => {
+    const Card = r.kind === "image" ? ImageDeciderCard : ElevationDeciderCard;
+    return (
+      <fieldset key={r.id} disabled={deciding.has(r.id)} className="min-w-0 border-0 p-0">
+        <Card request={r} onStart={() => markDeciding(r.id)} onDone={() => elevationDecided(r.id)} />
+      </fieldset>
+    );
+  };
   // data-focus-row: when a decision removes the card whose button opened the dialog, focus moves to the next card.
+  // A disabled fieldset turns off every button in the card, whatever its kind, while a decision for it is out. It
+  // carries no margin class: one would beat the gap the list's space-y gives its rows.
   const approvalCard = (a: ApprovalRequest, waiting: boolean) => (
-    <div key={a.id} data-focus-row>
+    <fieldset key={a.id} data-focus-row disabled={deciding.has(a.id)} className="min-w-0 border-0 p-0">
       <ApprovalCard
         item={wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a}
         presetBlocked={presetRefused.has(a.id)}
@@ -710,7 +773,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         onDecline={declineTakeover}
         refused={refused.has(a.id)}
       />
-    </div>
+    </fieldset>
   );
 
   const waitingCount = (waitingStatus === "ready" ? waitingRows.length : 0) + deciderRequests.length;
@@ -791,13 +854,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
               </TruncatedNote>
             )}
             <div className="space-y-3.5">
-              {deciderRequests.map((r) =>
-                r.kind === "image" ? (
-                  <ImageDeciderCard key={r.id} request={r} onDone={elevationDecided} />
-                ) : (
-                  <ElevationDeciderCard key={r.id} request={r} onDone={elevationDecided} />
-                ),
-              )}
+              {deciderRequests.map(deciderCard)}
               {waitingRows.map((a) => approvalCard(a, true))}
             </div>
           </>
