@@ -455,7 +455,12 @@ jobs:
       # added anywhere is picked up with no list to edit. Unraced and uncached,
       # WARDYN_TEST_PG unset, like the guard-package step of the `go` job. Every
       # package runs even after one fails, so a push shows all the red guards.
+      # Four green runs on 2026-11-13 took 9-10 min for the whole list. A package
+      # gets 8 min, so a stuck one fails by name with a goroutine dump, and the
+      # step 20, so an overrun fails here with its log instead of the job being
+      # cancelled at its limit with none.
       - name: Whole-tree guard tests (every Go test that reads the repository)
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           out="$(python3 -I scripts/lib/candidate-tests.py guards)"
@@ -463,7 +468,7 @@ jobs:
           rc=0
           while IFS=$'\t' read -r dir names; do
             echo "::group::./$dir"
-            WARDYN_TEST_PG='' go test -count=1 -run "^(${names})\$" "./$dir" || rc=1
+            WARDYN_TEST_PG='' go test -count=1 -timeout 8m -run "^(${names})\$" "./$dir" || rc=1
             echo "::endgroup::"
           done <<<"$out"
           exit "$rc"
