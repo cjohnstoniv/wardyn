@@ -279,6 +279,33 @@ func TestServiceIdentityGov_StaleApply(t *testing.T) {
 		stale(t, e, ch.ID)
 		unwritten(t, e)
 	})
+	// A held sponsor change that also names the suspension the identity has now (here none) must not
+	// undo a suspension made after it was proposed.
+	t.Run("transfer_suspended_since", func(t *testing.T) {
+		e := newSvcGovEnv(t)
+		e.mustCreate(t, svcName, svcSponsor)
+		e.on(t)
+		ch := e.held(t, e.patch(t, e.sec, svcName, `{"sponsor":"`+svcSponsor2+`","suspended":false}`))
+		yes := true
+		if _, err := e.st.UpdateServiceIdentity(ctx, svcName, store.ServiceIdentityChange{Suspended: &yes, By: "x"}); err != nil {
+			t.Fatal(err)
+		}
+		stale(t, e, ch.ID)
+		if si := e.stored(t, svcName); si.SuspendedAt == nil || si.Sponsor != svcSponsor {
+			t.Errorf("a stale held PATCH undid the later suspension or moved the sponsor: %+v", si)
+		}
+	})
+	t.Run("transfer_description_changed", func(t *testing.T) {
+		e, ch := transfer(t)
+		later := "later"
+		if _, err := e.st.UpdateServiceIdentity(ctx, svcName, store.ServiceIdentityChange{Description: &later, By: "x"}); err != nil {
+			t.Fatal(err)
+		}
+		stale(t, e, ch.ID)
+		if si := e.stored(t, svcName); si.Description != later {
+			t.Errorf("a stale held PATCH overwrote the later description: %+v", si)
+		}
+	})
 }
 
 // TestServiceIdentityGov_AdminTokenBypass: the admin token creates and moves a service identity directly

@@ -65,13 +65,17 @@ func (g storeIdentityGate) Bound(ctx context.Context, ref oidc.IdentityRef) (str
 // ownerGuard is the guard for a write made for owner. The request's own authority epoch counts only
 // when the request is the owner's own, or is the sign-in being issued for them (no session yet, the
 // epoch from oidc.WithAuthorityEpoch): an admin writing for someone else carries an epoch that says
-// nothing about them.
+// nothing about them. A service identity's request writing for itself is held to the identity's row as
+// its token was admitted against it (store.IdentityGuard.ServiceSince).
 func ownerGuard(ctx context.Context, owner string) store.IdentityGuard {
 	g := store.IdentityGuard{Principal: owner, Epoch: -1}
 	if e, ok := oidc.AuthorityEpochFromContext(ctx); ok {
 		if p := oidc.PrincipalFromContext(ctx); p == "" || p == owner {
 			g.Epoch = e
 		}
+	}
+	if name, since, ok := serviceAdmittedFromContext(ctx); ok && owner == types.ServicePrincipalPrefix+name {
+		g.ServiceSince = since
 	}
 	return g
 }
