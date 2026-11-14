@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -209,6 +211,68 @@ func TestDesktopSignin_ADesktopAdmittedReadsTheSigninRow(t *testing.T) {
 	}
 	if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
 		t.Errorf("desktop.recording rows: %d pause, %d resume, want one of each", p, r)
+	}
+}
+
+// signinReadOnInsert is signinTestStore whose new sign-in row a desktop admission here reads at once,
+// as a desktop watch that rechecks between a begin's insert and that begin's failure does.
+type signinReadOnInsert struct {
+	*signinTestStore
+	srv *Server
+}
+
+func (s signinReadOnInsert) BeginDesktopSignin(ctx context.Context, si types.DesktopSignin) error {
+	if err := s.signinTestStore.BeginDesktopSignin(ctx, si); err != nil {
+		return err
+	}
+	w, err := s.srv.watchVMSignIn(ctx, si.RunID)
+	w.stop()
+	return err
+}
+
+// signinNoExecRunner says the run's substrate takes sign-ins but cannot stop the agent (no SigninExecer).
+type signinNoExecRunner struct{ runner.Runner }
+
+func (signinNoExecRunner) SigninsFor(context.Context, types.ConfinementClass) bool { return true }
+
+// signinStopFailRunner is signinFakeRunner whose SIGSTOP of the agent fails.
+type signinStopFailRunner struct{ *signinFakeRunner }
+
+func (r signinStopFailRunner) SignalMain(ctx context.Context, ref, signal string) error {
+	if signal == "SIGSTOP" {
+		return errors.New("the agent could not be stopped")
+	}
+	return r.signinFakeRunner.SignalMain(ctx, ref, signal)
+}
+
+// TestDesktopSignin_ABeginThatFailsBeforeTheAgentStopsEndsTheHoldAWatchTook: a begin that fails before
+// the agent is stopped (no SigninExecer, or a failed SIGSTOP) closes its row, and ends the recording
+// hold a desktop watch took from that row while it was open, with one pause and one resume row.
+func TestDesktopSignin_ABeginThatFailsBeforeTheAgentStopsEndsTheHoldAWatchTook(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rn   func(*signinFakeRunner) runner.Runner
+		code int
+	}{
+		"no SigninExecer": {func(rn *signinFakeRunner) runner.Runner { return signinNoExecRunner{rn} }, http.StatusConflict},
+		"SIGSTOP failed":  {func(rn *signinFakeRunner) runner.Runner { return signinStopFailRunner{rn} }, http.StatusBadGateway},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := recordedSigninFixture(t)
+			f.srv.cfg.Store = signinReadOnInsert{signinTestStore: f.st, srv: f.srv}
+			f.srv.cfg.Runner = tc.rn(f.rn)
+			if code, body := f.post(t, "/desktop-signin", ""); code != tc.code {
+				t.Fatalf("begin = %d %s, want %d", code, body, tc.code)
+			}
+			if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
+				t.Fatalf("sign-in row = ended %v, reason %q, want closed as %q", si.EndedAt, si.EndReason, signinEndFailed)
+			}
+			if held := f.srv.desktopRecs.heldWith(f.run.ID, ""); len(held) != 0 {
+				t.Fatalf("holds after the failed begin = %v, want none", held)
+			}
+			if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
+				t.Errorf("desktop.recording rows: %d pause, %d resume, want one of each", p, r)
+			}
+		})
 	}
 }
 

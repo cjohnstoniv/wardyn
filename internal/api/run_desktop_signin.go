@@ -367,12 +367,12 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	// process of its uid, proven stopped by the helper.
 	se, _ := s.cfg.Runner.(runner.SigninExecer)
 	if se == nil {
-		_, _ = st.EndDesktopSignin(ctx, si.ID, signinEndFailed, s.cfg.Now())
+		s.endUnstartedDesktopSignin(ctx, st, run, si)
 		fail(0, "", "", "pause", runner.ErrSigninUnsupported)
 		return
 	}
 	if err := se.SignalMain(ctx, run.SandboxRef, "SIGSTOP"); err != nil {
-		_, _ = st.EndDesktopSignin(ctx, si.ID, signinEndFailed, s.cfg.Now())
+		s.endUnstartedDesktopSignin(ctx, st, run, si)
 		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be stopped, so the sign-in did not start", "pause", err)
 		return
 	}
@@ -416,6 +416,14 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorHuman, principal, "desktop_signin.begin", run.ID.String(), "success",
 		mustJSON(map[string]any{"signin_id": si.ID, "expires_at": si.ExpiresAt})))
 	writeJSON(w, http.StatusCreated, desktopSigninBeginResponse{SigninID: si.ID, ExpiresAt: si.ExpiresAt, App: desktopSigninApp})
+}
+
+// endUnstartedDesktopSignin closes the row of a sign-in that failed before the agent was stopped.
+// A desktop watch may already have read the row open and held the recording, so the hold ends too.
+func (s *Server) endUnstartedDesktopSignin(ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, si types.DesktopSignin) {
+	if ended, _ := st.EndDesktopSignin(ctx, si.ID, signinEndFailed, s.cfg.Now()); ended {
+		s.endDesktopHold(ctx, run, si.ID.String(), nil)
+	}
 }
 
 // rollbackDesktopSignin ends a sign-in that failed after the agent stopped.
