@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -224,6 +225,13 @@ type remoteSink struct {
 	lapsed       *SinkFrame
 	closed       bool
 	conn         net.Conn
+	// inFlight counts the requests being served (enter): close waits for them, so none writes a record
+	// after the session that would carry it has ended.
+	inFlight int
+	// granted closes at the first grant (grantSeen): a proxy with a runner sink listens only after it
+	// (Server.awaitOpen), so one that never had a session served nothing.
+	granted   chan struct{}
+	grantSeen bool
 	// activityIgnore is Config.ActivityIgnoreHosts: allowed requests to these hosts carry no Activity flag.
 	activityIgnore []string
 }
@@ -238,7 +246,7 @@ func newRemoteSink(runID uuid.UUID, c DecisionSinkConfig) (*remoteSink, error) {
 		return nil, err
 	}
 	s := &remoteSink{runID: runID, addr: addr, key: c.Key, tls: sinkPinConfig(c.SPKISHA256), instance: hex.EncodeToString(inst[:]),
-		retry: time.Second, drainFor: 3 * time.Second, res: map[uuid.UUID]spoolReservation{}}
+		retry: time.Second, drainFor: 3 * time.Second, res: map[uuid.UUID]spoolReservation{}, granted: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	s.dial = func(ctx context.Context) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: s.tls}
@@ -419,14 +427,50 @@ func (p *Proxy) trackTunnel(c net.Conn) func() {
 	return p.sink.remote.track(c)
 }
 
+// enter counts a request being served until the returned func runs.
+func (s *remoteSink) enter() func() {
+	s.mu.Lock()
+	s.inFlight++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.cond.Broadcast()
+		s.mu.Unlock()
+	}
+}
+
+// countedHandler is the Proxy as its Server's handler. On a runner sink each request is counted (enter)
+// while it is served, a terminated tunnel's inner requests within their CONNECT, so the sink closes only
+// once they have written their records.
+func (p *Proxy) countedHandler() http.Handler {
+	if p.sink == nil || p.sink.remote == nil {
+		return p
+	}
+	rs := p.sink.remote
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer rs.enter()()
+		p.ServeHTTP(w, r)
+	})
+}
+
+// sinkGranted closes at the runner sink's first grant; nil without a runner sink.
+func (p *Proxy) sinkGranted() <-chan struct{} {
+	if p.sink == nil || p.sink.remote == nil {
+		return nil
+	}
+	return p.sink.remote.granted
+}
+
 // close flushes the unacked tail (and a queued lapsed frame, and on a live
-// session a drained reply not yet written) until ctx ends, then ends the
-// session for good.
+// session a drained reply not yet written) and waits for the requests still
+// being served (enter) until ctx ends, then ends the session for good.
 func (s *remoteSink) close(ctx context.Context) error {
 	s.mu.Lock()
 	s.draining = true
+	s.cond.Broadcast() // an admission waiting for credit refuses now, ending its request
 	stop := context.AfterFunc(ctx, func() { s.mu.Lock(); s.cond.Broadcast(); s.mu.Unlock() })
-	for ctx.Err() == nil && (len(s.buf) > 0 || s.lapsePending || s.lapsed != nil || s.live && s.drainedOwed) {
+	for ctx.Err() == nil && (len(s.buf) > 0 || s.lapsePending || s.lapsed != nil || s.live && s.drainedOwed || s.inFlight > 0) {
 		s.cond.Wait()
 	}
 	stop()
@@ -538,6 +582,10 @@ func (s *remoteSink) read(conn net.Conn) error {
 				if r.seq > f.Base {
 					s.sinceBase += int64(len(r.body))
 				}
+			}
+			if !s.grantSeen {
+				s.grantSeen = true
+				close(s.granted)
 			}
 			s.cond.Broadcast()
 		case FrameDrain:

@@ -91,7 +91,7 @@ func startedSink(t *testing.T) (*remoteSink, *fakeRunnerd) {
 	t.Helper()
 	f := &fakeRunnerd{t: t, sessions: make(chan net.Conn, 4)}
 	rs := &remoteSink{runID: uuid.New(), key: testKey(), instance: "0123456789abcdef0123456789abcdef", dial: f.dial,
-		retry: 20 * time.Millisecond, drainFor: 200 * time.Millisecond, res: map[uuid.UUID]spoolReservation{}}
+		retry: 20 * time.Millisecond, drainFor: 200 * time.Millisecond, res: map[uuid.UUID]spoolReservation{}, granted: make(chan struct{})}
 	rs.cond = sync.NewCond(&rs.mu)
 	go rs.run()
 	t.Cleanup(func() {
@@ -298,6 +298,73 @@ func TestRemoteSink_CloseWaitsForTheDrainedReplyOfARecordLostAfterIt(t *testing.
 	}
 	if d := readUntil(t, c, FrameDrained); d.Consumed != 1 {
 		t.Fatalf("drained again %+v; want the record lost after the first reply in the exact loss", d)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRemoteSink_CloseWaitsForARequestStillServed: close waits for a request still being served, so a
+// record it writes after the drained reply is counted in that reply, sent again, before the session ends.
+func TestRemoteSink_CloseWaitsForARequestStillServed(t *testing.T) {
+	rs, f := startedSink(t)
+	c := accept(t, rs, f.next(), 1, 0, 4, 1<<20)
+	done := rs.enter()
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	if d := readUntil(t, c, FrameDrained); d.Consumed != 0 {
+		t.Fatalf("drained %+v; want nothing consumed", d)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- rs.close(ctx) }()
+	rs.emit(egress.DecisionLog{Request: egress.Request{Host: "late.test"}, Decision: egress.Deny}) // stopped
+	if d := readUntil(t, c, FrameDrained); d.Consumed != 1 {
+		t.Fatalf("drained again %+v; want the record of the request still served in the exact loss", d)
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("close returned (%v) while a request was still being served", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	done()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close kept waiting once the request ended")
+	}
+}
+
+// TestRemoteSink_CloseEndsAnAdmissionWaitingForCredit: close refuses an admission still waiting for credit
+// at once, so the request waiting on it ends rather than holding close to that admission's own timeout.
+func TestRemoteSink_CloseEndsAnAdmissionWaitingForCredit(t *testing.T) {
+	rs, f := startedSink(t)
+	accept(t, rs, f.next(), 1, 0, 1, 1<<20)
+	if _, err := rs.reserve(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	done := rs.enter() // the request whose admission waits
+	refused := make(chan error, 1)
+	go func() {
+		_, err := rs.reserve(t.Context(), 100)
+		done()
+		refused <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // it waits for credit the exhausted grant does not have
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- rs.close(ctx) }()
+	select {
+	case err := <-refused:
+		if !errors.Is(err, runnerspool.ErrFull) {
+			t.Fatalf("an admission waiting when the sink began to close = %v, want ErrFull", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("an admission waiting for credit kept waiting once the sink began to close")
 	}
 	if err := <-closed; err != nil {
 		t.Fatal(err)

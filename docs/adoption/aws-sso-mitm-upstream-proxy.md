@@ -131,7 +131,7 @@ the corp proxy resolves and dials; the forward then runs over the shared transpo
 `internal/egress/proxy/upstream.go`'s own comment says every forward-egress dial is included, "the
 MITM LLM path" named explicitly.
 
-**`builtin:upstream-proxy` is emitted once per run, at proxy construction — not once per dial.** So
+**`builtin:upstream-proxy` is emitted once per run, as the proxy starts — not once per dial.** So
 "used exactly once and never again" is not something that datum can show; its presence proves only
 that an upstream *was configured* for that run. (The console compounds this by rendering that row as
 "Refused by the built-in guard" although it is an allow.)
