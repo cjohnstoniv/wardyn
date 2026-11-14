@@ -867,19 +867,20 @@ func (d *Driver) vmLogTail(ref string) string {
 // touches nothing for a run that is not a VM. A VM this runner can no longer reach (VM sandboxes off
 // since it was made) is still ended: its QEMU container is stopped without the guest's power down.
 // An engine that cannot say what the run is answers an error. wardyn-runnerd calls it when a VM
-// run's audit spool is full.
+// run's audit spool is full, and tries a failed end again: a failed AWS cache wipe alone is a finished
+// end (runner.KeptDespiteAWSCacheWipe), which an end asked again of the stopped VM always answers.
 func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
 	ref := agentContainerName(runID)
 	v, err := d.vmLookup(ctx, ref)
 	if errors.Is(err, errVMUnreachable) {
 		// EndSandbox finds no VM to tear down here (vmFor is nil with VM sandboxes off), so the
 		// sidecars go by name.
-		return true, errors.Join(d.EndSandbox(ctx, ref), d.removeVMSidecars(ctx, runID))
+		return true, runner.KeptDespiteAWSCacheWipe(ctx, ref, endAnswer(d.EndSandbox(ctx, ref), d.removeVMSidecars(ctx, runID)))
 	}
 	if err != nil || v == nil {
 		return false, err // an engine that cannot say is an error the caller retries, never "not a VM"
 	}
-	return true, d.EndSandbox(ctx, ref)
+	return true, runner.KeptDespiteAWSCacheWipe(ctx, ref, d.EndSandbox(ctx, ref))
 }
 
 // teardownVM removes what a VM run adds to a container run's teardown: its sidecars and its run

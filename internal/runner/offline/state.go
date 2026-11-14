@@ -44,6 +44,13 @@ type localRun struct {
 	ProxyExited *proxyExit `json:"proxy_exited,omitempty"`
 	// ContainmentPending holds a run whose proxy is not proven stopped (design K1 §3.1 Q2).
 	ContainmentPending *runnerwire.ContainmentPending `json:"containment_pending,omitempty"`
+	// TeardownUnconfirmed holds a run whose pending kill or end the substrate could not see finish
+	// (runner.TeardownUnconfirmedError): that action was refused, and each session's Pending makes the
+	// call again until it finishes (retryUnconfirmedTeardowns).
+	TeardownUnconfirmed *teardownHold `json:"teardown_unconfirmed,omitempty"`
+	// TeardownCleared is the last such hold once its kill or end finished, with when, kept so every later
+	// state page tells the org (clearTeardown).
+	TeardownCleared *runnerwire.TeardownHold `json:"teardown_cleared,omitempty"`
 	// OutputCapture records that the create handed the sandbox an output
 	// writer; a retirement that says the run had no output is refused when set.
 	OutputCapture bool `json:"output_capture,omitempty"`

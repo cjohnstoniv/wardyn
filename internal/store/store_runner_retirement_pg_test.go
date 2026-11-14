@@ -239,6 +239,137 @@ func TestPG_Retirement_RetireQueuedOnlyAfterKillSuccess(t *testing.T) {
 	f.candidates(t) // a settled run is never a candidate
 }
 
+// A run its runner holds for a kill or end it could not see finish gets no retirement kill until the runner
+// reports that the hold finished: that kill would be refused, and a refusal closes the retirement for good.
+func TestPG_Retirement_WaitsWhileTheRunnersTeardownHoldIsOpen(t *testing.T) {
+	f := newActionFixture(t)
+	run, _ := f.endedRetirementRun(t, false)
+	if _, err := f.pool.Exec(t.Context(), `INSERT INTO run_teardown_holds (run_id, runner_id, kind, since) VALUES ($1, $2, 'kill', now())`, run.ID, f.rn.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(t, run.ID, store.RetirementIdle)
+	if got := f.retirementState(t, run.ID); got != "kill" {
+		t.Fatalf("retirement %q while the hold is open, want its snapshot open and waiting", got)
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE run_id = $1`, run.ID); n != 0 {
+		t.Fatalf("%d actions queued while the hold is open, want none", n)
+	}
+	if _, err := f.pool.Exec(t.Context(), `UPDATE run_teardown_holds SET cleared_at = now() WHERE run_id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(t, run.ID, store.RetirementKill)
+}
+
+// On an online runner the run's own teardown is a call, which holds nothing, so the retirement's own kill can
+// be the first to meet a hold: the runner refuses it, then reports the hold on the session's state page. The
+// retirement stays open, and once the hold clears after that refusal it kills again and settles. A refusal
+// with no hold, or with one that cleared before it, still closes the retirement as refused.
+func TestPG_Retirement_KillsAgainOnceTheHoldThatRefusedItsKillClears(t *testing.T) {
+	f := newActionFixture(t)
+	f.reportRetireCapable(t)
+	f.pagesIn(t)
+	run, _ := f.endedRetirementRun(t, false)
+	f.candidates(t, run.ID) // the ref is still live: nothing tore the run down before its retirement
+	f.advance(t, run.ID, store.RetirementKill)
+	first := f.tip(t, run.ID)
+	refuse := func(a types.RunnerPendingAction, at time.Time) {
+		t.Helper()
+		if _, _, err := f.st.RecordRunnerActionResult(t.Context(), f.rn.ID, a.RunID, a.ID, types.RunnerActionRefused,
+			"the VM is not known to have stopped", at, prepareSpoolTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hold := func(runID uuid.UUID, since time.Time, cleared *time.Time) {
+		t.Helper()
+		if _, err := f.pool.Exec(t.Context(), `INSERT INTO run_teardown_holds (run_id, runner_id, kind, since, cleared_at) VALUES ($1, $2, 'kill', $3, $4)
+			ON CONFLICT (run_id) DO UPDATE SET since = EXCLUDED.since, cleared_at = EXCLUDED.cleared_at`, runID, f.rn.ID, since, cleared); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refusedAt := time.Now().UTC().Add(-time.Hour)
+	refuse(first, refusedAt)
+	hold(run.ID, refusedAt.Add(-time.Second), nil)
+	if got := f.retirementState(t, run.ID); got != "kill" {
+		t.Fatalf("retirement %q after its kill was refused under a hold, want it open", got)
+	}
+	f.advance(t, run.ID, store.RetirementIdle) // the hold is still open
+	clearedAt := refusedAt.Add(time.Minute)
+	hold(run.ID, refusedAt.Add(-time.Second), &clearedAt)
+	f.advance(t, run.ID, store.RetirementSuccessor)
+	again := f.tip(t, run.ID)
+	if again.Kind != types.RunnerActionKill || again.ObligationID != first.ObligationID || again.ID == first.ID {
+		t.Fatalf("kill after the hold cleared = %+v", again)
+	}
+	if err := f.result(t, again, types.RunnerActionSuccess); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(t, run.ID, store.RetirementRetire)
+	if err := f.result(t, f.tip(t, run.ID), types.RunnerActionSuccess); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.retirementState(t, run.ID); got != "settled" {
+		t.Fatalf("retirement %q, want settled", got)
+	}
+
+	for name, cleared := range map[string]*time.Time{"no hold": nil, "a hold cleared before the refusal": &refusedAt} {
+		other, _ := f.endedRetirementRun(t, false)
+		f.advance(t, other.ID, store.RetirementKill)
+		refuse(f.tip(t, other.ID), refusedAt.Add(time.Minute))
+		if cleared != nil {
+			hold(other.ID, refusedAt.Add(-time.Second), cleared)
+		}
+		f.advance(t, other.ID, store.RetirementIdle)
+		if got := f.retirementState(t, other.ID); got != "refused" {
+			t.Fatalf("%s: retirement %q, want refused", name, got)
+		}
+		if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE run_id = $1`, other.ID); n != 1 {
+			t.Fatalf("%s: %d actions, want only the refused kill", name, n)
+		}
+	}
+
+	// A kill queued again counts against the bound, like the successor of a deferred action.
+	spent, _ := f.endedRetirementRun(t, false)
+	f.advance(t, spent.ID, store.RetirementKill)
+	refuse(f.tip(t, spent.ID), refusedAt)
+	hold(spent.ID, refusedAt.Add(-time.Second), &clearedAt)
+	if _, err := f.pool.Exec(t.Context(), `UPDATE runner_retirements SET successors = $2 WHERE run_id = $1`, spent.ID, store.RetirementSuccessorBound); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(t, spent.ID, store.RetirementAbandoned)
+	if got := f.retirementState(t, spent.ID); got != "abandoned" {
+		t.Fatalf("retirement %q with its successors spent, want abandoned", got)
+	}
+}
+
+// pagesIn marks the state pages of the runner's session as all in, as its final page does.
+func (f actionFixture) pagesIn(t *testing.T) {
+	t.Helper()
+	if _, err := f.pool.Exec(t.Context(), `UPDATE runner_inventories SET complete = true WHERE runner_id = $1`, f.rn.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A refused kill is recorded before its session's state pages, which carry the runner's hold. Until those
+// pages are all in the retirement stays open, whichever server reads it; with them in and no hold it closes.
+func TestPG_Retirement_ARefusedKillWaitsForTheRunnersStatePages(t *testing.T) {
+	f := newActionFixture(t)
+	f.reportRetireCapable(t) // a session began: none of its state pages is in
+	run, _ := f.endedRetirementRun(t, false)
+	f.advance(t, run.ID, store.RetirementKill)
+	if err := f.result(t, f.tip(t, run.ID), types.RunnerActionRefused); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(t, run.ID, store.RetirementIdle)
+	if got := f.retirementState(t, run.ID); got != "kill" {
+		t.Fatalf("retirement %q before the runner's state pages, want it open", got)
+	}
+	f.pagesIn(t)
+	f.advance(t, run.ID, store.RetirementIdle)
+	if got := f.retirementState(t, run.ID); got != "refused" {
+		t.Fatalf("retirement %q with the pages in and no hold, want refused", got)
+	}
+}
+
 // A deferred retire_run's successor carries a recomputed receipt: the
 // watermark may have moved since.
 func TestPG_Retirement_DeferredSuccessorSettlesPredecessors(t *testing.T) {

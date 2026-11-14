@@ -172,12 +172,12 @@ func TestPG_AuditDDL_Protected(t *testing.T) {
 	t.Cleanup(app.Close)
 
 	t.Run("split app role is reported protected", func(t *testing.T) {
-		got, err := AuditDDLProtected(ctx, app)
+		routes, err := AuditDDLBypassRoutes(ctx, app)
 		if err != nil {
-			t.Fatalf("AuditDDLProtected(app pool): %v", err)
+			t.Fatalf("AuditDDLBypassRoutes(app pool): %v", err)
 		}
-		if !got {
-			t.Fatalf("a non-owner, non-superuser role with only INSERT+SELECT is reported NOT protected")
+		if got := routesBeyondPublicCreate(t, pool, routes); len(got) != 0 {
+			t.Fatalf("a non-owner, non-superuser role with only INSERT+SELECT is reported NOT protected: %v", got)
 		}
 	})
 

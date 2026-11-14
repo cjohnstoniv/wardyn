@@ -71,10 +71,7 @@ func (s *Server) stopLostSandboxAt(ctx context.Context, run types.AgentRun, gen 
 			return lostReadFailure(readErr, cutErr)
 		}
 	}
-	err := gs.EndSandboxAt(ctx, run.SandboxRef, gen)
-	if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
-		err = nil
-	}
+	_, err := runner.SplitAWSCacheWipe(gs.EndSandboxAt(ctx, run.SandboxRef, gen))
 	if newer(err) {
 		return nil
 	}

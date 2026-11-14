@@ -123,6 +123,12 @@ func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun
 	if run.State == types.RunKilled && s.recoverAbandonedKillTail(ctx, run) {
 		return true
 	}
+	if run.SandboxRef != "" && run.RunnerID != nil && s.teardownHoldClearedAfterRefusal(ctx, run) {
+		// A kill its runner refused while it held the run, and has since reported finished: the boot pass's
+		// answer (the kill queued again, or the ref cleared once it is applied) without waiting for a start.
+		s.reconcileOrphanedRun(ctx, run, sandboxSweepAction)
+		return false
+	}
 	if run.SandboxRef == "" {
 		return false
 	}

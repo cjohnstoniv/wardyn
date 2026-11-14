@@ -607,11 +607,21 @@ func httpsOnly(c *http.Client) *http.Client {
 // against its SHA-256 through that same handle, so what is pushed is what was
 // checked. A file already in the cache is reused only if it still matches. A
 // download that does not match is deleted and refused. The caller closes it.
+//
+// Updates of different bases and kept machines share dir, so the download runs
+// under the pin's own lock: a second writer of the staging file would truncate
+// the inode the first checked and pushes, and the first's clean-up would delete
+// the second's staging file. Once renamed, the file is never written again.
 func fetchPinned(ctx context.Context, c *http.Client, p ToolPin, dir string) (*os.File, error) {
 	if err := mkdirPrivate(dir); err != nil {
 		return nil, err
 	}
 	final := filepath.Join(dir, p.ID+"-"+p.Version+".download")
+	unlock, err := lockFile(ctx, final+".lock", true)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if f, err := os.Open(final); err == nil {
 		if ok, herr := hasSHA256(f, p.SHA256); herr == nil && ok {
 			return f, nil

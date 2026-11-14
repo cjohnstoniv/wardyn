@@ -30,6 +30,7 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 	m.mu.Lock()
 	m.retryRetiredReleases(ctx)
 	m.mu.Unlock()
+	m.retryUnconfirmedTeardowns(ctx)
 	for _, a := range actions {
 		result, err := m.apply(ctx, a)
 		if err != nil {
@@ -197,20 +198,22 @@ func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction,
 		}
 		return m.refuseAction(ctx, a, err)
 	}
+	if unconfirmed := (*runner.TeardownUnconfirmedError)(nil); errors.As(err, &unconfirmed) {
+		// Held and refused for the same reason: the run keeps its sandbox and what it holds, and the
+		// runner reaches READY for its other runs.
+		if herr := m.holdTeardownLocked(a.RunID, a.Kind); herr != nil {
+			return runnerwire.ActionResult{}, herr
+		}
+		return m.refuseAction(ctx, a, err)
+	}
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
 	r := m.state.Runs[a.RunID]
 	at := m.now().UTC()
-	r.ProxyStoppedAt = &at
-	// StopProxy returned nil only on completion evidence, so a pending report the tick held goes with it.
-	r.ContainmentPending = nil
 	outcome := "deferred"
-	if m.mutationsDrained(a.RunID) && (r.Containment.Contained || r.Containment.Operation == string(a.Kind)) {
+	if m.settleFinishedLocked(a.RunID, &r, a.Kind, at) {
 		outcome = "success"
-		marker := *r.Containment
-		marker.Contained = true
-		r.Containment = &marker
 	}
 	m.state.Runs[a.RunID] = r
 	result := runnerwire.ActionResult{ID: a.ID, Outcome: outcome, ObservedAt: at}
@@ -219,6 +222,26 @@ func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction,
 		return runnerwire.ActionResult{}, err
 	}
 	return result, nil
+}
+
+// settleFinishedLocked stamps r, run id's record, for a kill, end or proxy stop (kind) that the substrate
+// finished at at: the proxy is stopped, a pending report the tick held goes, a held kill or end is dropped,
+// and the containment marker is stamped contained once no mutation of the run is in flight. It reports
+// whether the marker is contained. m.mu is held.
+func (m *Manager) settleFinishedLocked(id uuid.UUID, r *localRun, kind types.RunnerActionKind, at time.Time) bool {
+	r.ProxyStoppedAt = &at
+	// StopProxy returned nil only on completion evidence, so a pending report the tick held goes with it.
+	r.ContainmentPending = nil
+	if kind == types.RunnerActionKill || kind == types.RunnerActionEnd {
+		r.clearTeardown(at) // this kill or end finished
+	}
+	contained := m.mutationsDrained(id) && (r.Containment.Contained || r.Containment.Operation == string(kind))
+	if contained {
+		marker := *r.Containment
+		marker.Contained = true
+		r.Containment = &marker
+	}
+	return contained
 }
 
 // AgentExited records exit before reporting it. Only org reconciliation may

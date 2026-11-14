@@ -691,6 +691,16 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 		slog.InfoContext(ctx, "db: replayed migration to restore an audit trigger",
 			slog.String("file", name), slog.String("trigger", trigger))
 	}
+	// Each of those files leaves the chain function with the install's schema on its search_path, which
+	// 0285_audit_functions_search_path took off so that a role that may CREATE there cannot put a
+	// function of its own in the way of a call the chain makes. A restore must not undo that.
+	if _, err := tx.Exec(ctx, `DO $$ BEGIN
+		EXECUTE pg_catalog.format('ALTER FUNCTION %I.audit_events_chain() SET search_path = pg_catalog, pg_temp',
+			(SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			  WHERE c.oid = 'audit_events'::regclass));
+	END $$`); err != nil {
+		return fmt.Errorf("db: pin the search_path of the function behind trigger %s: %w", trigger, err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("db: commit the replay that restores trigger %s: %w", trigger, err)
 	}
