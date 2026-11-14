@@ -11,6 +11,7 @@ import { secrets as secretsApi, type SecretScope } from "../../lib/api/secrets";
 import { SECRET_EXISTS_REASON } from "../../lib/secret-refusals";
 import { providers as providersApi } from "../../lib/api/providers";
 import { getErrorMessage } from "../../lib/format";
+import { toast } from "sonner";
 import { useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
 import { LANE_META, laneOfName, patLaneMeta, type Lane } from "../../lib/scm-provider";
@@ -41,6 +42,7 @@ import {
 } from "../ui/dialog";
 import { Field, fieldHintId } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
+import { UNSAVED_GUARD } from "../wardyn/copy/shell";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
@@ -323,6 +325,7 @@ export function SecretsScreen() {
         open={addOpen}
         onOpenChange={setAddOpen}
         onSaved={load}
+        onStoredLate={load}
         existingNames={mine}
         scope={listedIn}
         ownRows
@@ -336,6 +339,7 @@ export function SecretsScreen() {
           setRotate(null);
           load();
         }}
+        onStoredLate={load}
         existingNames={mine}
         scope={rotate?.scope}
         ownRows
@@ -377,6 +381,18 @@ function lockedNameHint(lane: Lane, hasHost: boolean): string {
   return hasHost ? `Locked — the conventional name for this host. ${bound}` : `Locked. ${bound}`;
 }
 
+// Closing the dialog with a typed name or value asks first; the buttons are the unsaved-changes guard's.
+const DISCARD_DRAFT = {
+  TITLE: "Clear this draft?",
+  BODY: "Closing clears what you entered here.",
+};
+// A save that fails after its dialog was closed and opened again, or unmounted, is said by name, in a toast. Only a
+// refusal proves nothing was saved: after a server error, or no answer, the value may already be held.
+const LATE_SAVE = {
+  REFUSED: (name: string) => `${name} was not saved`,
+  UNCONFIRMED: (name: string) => `${name} may not have been saved`,
+};
+
 // A write-only Add-secret dialog: name Input + value Textarea. The value field is
 // cleared after submit and its content is NEVER echoed back anywhere. Exported so
 // the New Run wizard can offer "Add secret" inline, and so this screen can reuse
@@ -385,6 +401,7 @@ export function AddSecretDialog({
   open,
   onOpenChange,
   onSaved,
+  onStoredLate,
   existingNames = [],
   initialName = "",
   lockName,
@@ -397,6 +414,9 @@ export function AddSecretDialog({
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onSaved?: (name: string) => void;
+  // A save that outlived its draft (the dialog was closed and opened again before it answered) was stored: a cue to
+  // refresh a list. Never onSaved, which callers use to close the dialog and apply the name.
+  onStoredLate?: (name: string) => void;
   // The names already stored, so we can warn before silently
   // overwriting one. Optional — callers without the list (e.g. inline in a
   // wizard) simply skip the overwrite warning.
@@ -452,21 +472,32 @@ export function AddSecretDialog({
   // Require an explicit confirm-overwrite click when the typed name
   // already exists, so a save never silently clobbers a secret in use by runs.
   const [confirmOverwrite, setConfirmOverwrite] = React.useState(false);
+  const [confirmDiscard, setConfirmDiscard] = React.useState(false);
+  // Each open or close starts a new draft. A save remembers the draft it began in, so one that finishes after the
+  // dialog was closed and opened again never clears, closes or reports into the draft typed since.
+  const draft = React.useRef(0);
   // A name the server already held although existingNames did not have it (the list was read before someone else
   // stored it): the save asks before replacing it, exactly as for a listed name.
   const [foundExisting, setFoundExisting] = React.useState("");
 
   React.useEffect(() => {
-    if (open) {
-      setFoundExisting("");
-      setName(initialName);
+    draft.current += 1;
+    if (!open) {
+      // A closed dialog keeps no typed value.
       setValue("");
-      setReveal(false);
-      setError(null);
-      setSaving(false);
-      setConfirmOverwrite(false);
+      return;
     }
+    setFoundExisting("");
+    setName(initialName);
+    setValue("");
+    setReveal(false);
+    setError(null);
+    setSaving(false);
+    setConfirmOverwrite(false);
+    setConfirmDiscard(false);
   }, [open, initialName]);
+  // Unmounting (the page was left) ends the draft too, so a save still in flight answers as a late one.
+  React.useEffect(() => () => void (draft.current += 1), []);
 
   // PUT is an upsert server-side: storing a name that already exists overwrites
   // its value. Detect that case (exact match on the trimmed name) so we can warn.
@@ -508,26 +539,53 @@ export function AddSecretDialog({
       return;
     }
     setSaving(true);
+    // A save in flight takes the discard prompt down with it: nothing closes until the save answers.
+    setConfirmDiscard(false);
+    const mine = draft.current;
     try {
       // Create-only unless the person has said to replace: the list behind isOverwrite can be stale.
       await secretsApi.setSecret(n, value, { scope, createOnly: !confirmOverwrite });
+      // Stored either way; a dialog closed and opened again since holds a new draft, which this save leaves alone.
+      if (draft.current !== mine) {
+        onStoredLate?.(n);
+        return;
+      }
       // Clear the value immediately — never retain or echo it.
       setValue("");
       onOpenChange(false);
       onSaved?.(n);
     } catch (e) {
+      const why = getErrorMessage(e, "Failed to store secret.");
+      if (draft.current !== mine) {
+        // Not the new draft's error: said by name, so it is neither lost nor shown against the new draft.
+        const refused = e instanceof HttpError && e.status >= 400 && e.status < 500;
+        toast.error(refused ? LATE_SAVE.REFUSED(n) : LATE_SAVE.UNCONFIRMED(n), { description: why });
+        return;
+      }
       if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) {
         setFoundExisting(n);
         setSaving(false);
         return;
       }
-      setError(getErrorMessage(e, "Failed to store secret."));
+      setError(why);
       setSaving(false);
     }
   };
 
+  // Typed text that closing would lose. Nothing closes while a save is in flight.
+  const dirty = value !== "" || name !== initialName;
+  // A prompt left up while the typed text is removed again has nothing left to ask about.
+  React.useEffect(() => {
+    if (!dirty) setConfirmDiscard(false);
+  }, [dirty]);
+  const requestClose = () => {
+    if (saving) return;
+    if (dirty) setConfirmDiscard(true);
+    else onOpenChange(false);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : requestClose())}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{isOverwrite ? "Rotate secret" : "Add secret"}</DialogTitle>
@@ -568,7 +626,11 @@ export function AddSecretDialog({
                 rotate/fix-flow or locked open that already knows what it wants) —
                 prefill the name only, never a value. */}
             {suggest && (
-              <ProviderNameChips onPick={setName} />
+              <ProviderNameChips
+                onPick={(n) => {
+                  if (!saving) setName(n);
+                }}
+              />
             )}
             <Input
               id="secret-name"
@@ -578,14 +640,23 @@ export function AddSecretDialog({
               value={name}
               // Guarded, not just the readOnly attribute below: readOnly stops a
               // real user's keystrokes, but a dispatched change event still
-              // reaches a controlled input's onChange. Locked means locked.
+              // reaches a controlled input's onChange. Locked means locked, and a save in flight holds the
+              // draft it sent: an edit made then would be cleared, unsaved, when the save answers.
               onChange={(e) => {
-                if (!lockName) setName(e.target.value);
+                if (!lockName && !saving) setName(e.target.value);
+              }}
+              // Enter submits from this single-line field; the Value textarea keeps its newlines.
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                // A held key repeats: it must not walk through the overwrite confirmation by itself.
+                if (e.repeat) return;
+                if (mayWrite && !saving && name.trim() && value) void save();
               }}
               className="font-mono"
               autoComplete="off"
-              readOnly={lockName}
-              aria-readonly={lockName}
+              readOnly={lockName || saving}
+              aria-readonly={lockName || saving}
               required
             />
           </Field>
@@ -602,7 +673,11 @@ export function AddSecretDialog({
                 id="secret-value"
                 placeholder="sk-…"
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
+                // Held while a save is in flight, as the Name field is.
+                onChange={(e) => {
+                  if (!saving) setValue(e.target.value);
+                }}
+                readOnly={saving}
                 rows={3}
                 spellCheck={false}
                 autoComplete="off"
@@ -644,8 +719,29 @@ export function AddSecretDialog({
           )}
         </div>
 
+        {confirmDiscard && (
+          <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs">
+            <p className="font-medium text-foreground">{DISCARD_DRAFT.TITLE}</p>
+            <p className="mt-1 text-muted-foreground">{DISCARD_DRAFT.BODY}</p>
+            <div className="mt-2 flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setConfirmDiscard(false)}>
+                {UNSAVED_GUARD.STAY}
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => {
+                  setConfirmDiscard(false);
+                  onOpenChange(false);
+                }}
+              >
+                {UNSAVED_GUARD.LEAVE}
+              </Button>
+            </div>
+          </div>
+        )}
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" disabled={saving} onClick={requestClose}>
             Cancel
           </Button>
           <Button

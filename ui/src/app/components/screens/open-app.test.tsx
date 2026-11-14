@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 const healthMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => healthMock(...a) } }));
@@ -44,7 +46,8 @@ describe("/open/{run}/{app}", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Opening api…");
     await waitFor(() => expect(enterMock).toHaveBeenCalledTimes(1));
     expect(appTicketMock).toHaveBeenCalledWith("7c41e0a9", "api", "");
-    expect(enterMock).toHaveBeenCalledWith("7c41e0a9", "api", SANDBOX, { ticket: "tkt", target: "_self" });
+    expect(enterMock).toHaveBeenCalledWith("7c41e0a9", "api", SANDBOX, expect.objectContaining({ ticket: "tkt", target: "_self" }));
+    expect(enterMock.mock.calls[0][3].stale()).toBe(false);
   });
 
   it("the ticket asked for after the health read still names the person who opened the page", async () => {
@@ -96,5 +99,75 @@ describe("/open/{run}/{app}", () => {
     appTicketMock.mockRejectedValue(refusal(500, ""));
     open();
     expect(await screen.findByRole("alert")).toHaveTextContent("server words");
+  });
+});
+
+describe("/open/{run}/{app}: only the attempt for the page on screen acts", () => {
+  // A ticket that answers when the test says so.
+  const held = () => {
+    let answer!: (t: string) => void;
+    let refuse!: (e: unknown) => void;
+    appTicketMock.mockImplementationOnce(() => new Promise<string>((res, rej) => ((answer = res), (refuse = rej))));
+    return { answer: (t: string) => answer(t), refuse: (e: unknown) => refuse(e) };
+  };
+  function Pages() {
+    return (
+      <MemoryRouter initialEntries={["/open/run-a/api"]}>
+        <Link to="/open/run-b/web">to b</Link>
+        <Link to="/runs">to runs</Link>
+        <Routes>
+          <Route path="/open/:run/:app" element={<OpenAppScreen />} />
+          <Route path="/runs" element={<p>runs list</p>} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("under StrictMode mints one ticket and enters once, as the live attempt", async () => {
+    render(
+      <React.StrictMode>
+        <MemoryRouter initialEntries={["/open/7c41e0a9/api"]}>
+          <Routes>
+            <Route path="/open/:run/:app" element={<OpenAppScreen />} />
+          </Routes>
+        </MemoryRouter>
+      </React.StrictMode>,
+    );
+    await waitFor(() => expect(enterMock).toHaveBeenCalledTimes(1));
+    expect(appTicketMock).toHaveBeenCalledTimes(1);
+    expect(enterMock.mock.calls[0][3].stale()).toBe(false);
+  });
+
+  it("an attempt superseded by another app's link never enters; the new one enters once", async () => {
+    const a = held();
+    render(<Pages />);
+    await waitFor(() => expect(appTicketMock).toHaveBeenCalledWith("run-a", "api", ""));
+    await userEvent.click(screen.getByRole("link", { name: "to b" }));
+    await waitFor(() => expect(enterMock).toHaveBeenCalledTimes(1));
+    expect(enterMock.mock.calls[0].slice(0, 2)).toEqual(["run-b", "web"]);
+    await act(async () => a.answer("tkt-a"));
+    expect(enterMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an attempt whose page was left never enters", async () => {
+    const a = held();
+    render(<Pages />);
+    await waitFor(() => expect(appTicketMock).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("link", { name: "to runs" }));
+    expect(screen.getByText("runs list")).toBeInTheDocument();
+    await act(async () => a.answer("tkt-a"));
+    expect(enterMock).not.toHaveBeenCalled();
+  });
+
+  it("a superseded attempt's late refusal never replaces the new page", async () => {
+    const a = held();
+    held();
+    render(<Pages />);
+    await waitFor(() => expect(appTicketMock).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("link", { name: "to b" }));
+    await waitFor(() => expect(appTicketMock).toHaveBeenCalledTimes(2));
+    await act(async () => a.refuse(refusal(404, "run_not_found")));
+    expect(screen.getByRole("status")).toHaveTextContent("Opening web…");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

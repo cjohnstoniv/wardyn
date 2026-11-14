@@ -435,6 +435,51 @@ describe("DesktopFilesPanel on a run that keeps its content in", () => {
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
+  it("a dropped connection or a timeout gets the same sentence and Try again, which reads again", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(0, "Wardyn did not answer in time."));
+    render(<DesktopFilesPanel runId="r1" />);
+    expect(await screen.findByText(C.loadFailed)).toBeTruthy();
+    expect(screen.queryByText("Wardyn did not answer in time.")).toBeNull();
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    await userEvent.click(screen.getByRole("button", { name: C.retry }));
+    expect(await screen.findByText(C.drop)).toBeTruthy();
+    expect(screen.queryByText(C.loadFailed)).toBeNull();
+  });
+
+  it("a paused run keeps being checked through a dropped connection, and comes back by itself", async () => {
+    vi.useFakeTimers();
+    listMock.mockRejectedValueOnce(pausedRefusal());
+    render(<DesktopFilesPanel runId="r1" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByTestId("desktop-files-paused").textContent).toBe(pausedMsg);
+
+    listMock.mockRejectedValueOnce(new HttpError(0, "Wardyn did not answer in time."));
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(C.loadFailed)).toBeTruthy();
+    expect(screen.getByRole("button", { name: C.retry })).toBeTruthy();
+
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    expect(listMock).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText(C.loadFailed)).toBeNull();
+    expect(screen.getByText(C.drop)).toBeTruthy();
+  });
+
+  it("a refusal while paused ends the checking and offers no Try again", async () => {
+    vi.useFakeTimers();
+    listMock.mockRejectedValueOnce(pausedRefusal());
+    render(<DesktopFilesPanel runId="r1" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    listMock.mockRejectedValue(new HttpError(409, "The run is not running.", "attach_not_running"));
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("The run is not running.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: C.retry })).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(20000));
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
   it("a server error gets the same sentence and Try again, not the server's raw text", async () => {
     listMock.mockRejectedValue(new HttpError(500, "Internal Server Error", "internal"));
     render(<DesktopFilesPanel runId="r1" />);
