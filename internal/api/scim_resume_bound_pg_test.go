@@ -407,6 +407,67 @@ func TestSCIMEarlierSuspensionLeavesALaterOnesFailedKillAfterAnotherReactivation
 	}
 }
 
+// A request's suspension of P, another issuer's sign-in, spares a run its probe read as made after a reactivation.
+// Before it closes that run's kill row, the step 1 of the SCIM leaver whose entra:<tenant>:<object> form is P's
+// principal deactivates P without resetting P's ledger, P's own pass bound to that deactivation fails the run's
+// kill, and P is reactivated again. The earlier pass reads P active, as when it spared the run, but P's ledger no
+// longer records its deactivation: the kill row stays pending with its failure, and the earlier pass writes no
+// audit row. Guarded by WARDYN_TEST_PG (newSCIMEnv).
+func TestSCIMEarlierSuspensionLeavesAFailedKillAfterAnotherIdentitysSuspension(t *testing.T) {
+	e := newSCIMEnv(t)
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	o := e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
+	p, err := e.st.GetIdentityByObject(context.Background(), o.issuer, e.tenant, purgeOID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := p.ID.String()
+	var later uuid.UUID
+	paused := &pausedSuspension{PG: e.st}
+	paused.afterStep1 = func() {
+		if w := e.patch(e.b, id, patchOf("true")); w.Code != http.StatusOK {
+			t.Errorf("reactivate = %d %s", w.Code, w.Body.String())
+		}
+		later = e.seedRun(o.p, types.RunRunning)
+	}
+	paused.afterRunProbe = func() {
+		y := e.identity(f.id)
+		if _, err := e.st.SuspendIdentity(context.Background(), store.SuspendPlan{IdentityID: y.ID, Principal: y.Principal,
+			Principals: []string{y.Principal, o.p}}); err != nil {
+			t.Errorf("the leaver's step 1 = %v", err)
+		}
+		if got := e.identity(id); got.DeactivatedAt == nil {
+			t.Error("control: the leaver's step 1 left P active")
+		}
+		if _, ok := jobByKey(e.ledger(id), jobStepKillRun, later.String()); !ok {
+			t.Error("control: the leaver's step 1 reset P's ledger")
+		}
+		e.b.runner.setFailKills(1000)
+		if w := e.patch(e.b, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+			t.Errorf("P's pass bound to that deactivation, with a failing runner = %d %s, want 5xx", w.Code, w.Body.String())
+		}
+		if w := e.patch(e.b, id, patchOf("true")); w.Code != http.StatusOK {
+			t.Errorf("reactivate again = %d %s", w.Code, w.Body.String())
+		}
+	}
+	n := e.node(func(c *Config) { c.Store = paused })
+	if w := e.patch(n, id, patchOf("false")); w.Code != http.StatusOK {
+		t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
+	}
+	if later == uuid.Nil {
+		t.Fatal("step 1 never ran")
+	}
+	if e.identity(id).DeactivatedAt != nil {
+		t.Error("the second reactivation did not stand")
+	}
+	if j, ok := jobByKey(e.ledger(id), jobStepKillRun, later.String()); !ok || j.Done || j.LastError == "" {
+		t.Errorf("the kill row of %s = %+v (found %v), want pending with the later pass's failure", later, j, ok)
+	}
+	if rows := e.rows(n, "person.deprovision"); len(rows) != 0 {
+		t.Errorf("the earlier pass wrote %d person.deprovision rows, want none", len(rows))
+	}
+}
+
 // A person is reactivated and suspended again right after an earlier request's step 1, and the later suspension's
 // request dies after its own step 1. The earlier pass still revokes and kills, which the later suspension owes
 // too, but closes none of its steps: the sweep and kill rows stay pending for the sweeper, the answer is 200 and
