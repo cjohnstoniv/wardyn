@@ -120,7 +120,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Editing one of your own saved MCP server components in the console no longer removes its server address and transport.
 - A granted organisation MCP server is now listed under MCP in New run's Add tools and access, not under APIs. A remote server's address is shown as its scheme, host and port only.
 - Components saved with Save to reuse are now offered in New run's Add tools and access, marked "Saved to your components", so a later run can add them.
-- A recording whose later part could not be read is no longer served as a shorter, complete recording: its replay now fails part-way, and a run's output recovered from it is a capture gap, which is read again later.
+- A recording whose later part could not be read is no longer served as a shorter, complete recording: its replay now fails part-way, and a run's output is not recovered from it while that part cannot be read; the recovery stays owed and is tried again later, as for a recording whose first part cannot be read.
 - A UI app is now refused at most 30 seconds after its run ended or was kept after an outage; before, its requests kept reaching the app for as long as the server's connection to the app stayed open. A stream that is already open is not re-checked by this change.
 - The recorder now also retries its last upload when the server answers 500, within the same 30-second retry window, so a short run's recording is not lost to one failed write of the recording store.
 - A desktop clipboard paste is now audited as relayed (`ui.clipboard.transfer` `success`) only once it was written to the desktop; a paste in a message the relay refused, or whose write to the desktop failed, is no longer recorded as relayed.
