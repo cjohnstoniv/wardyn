@@ -268,6 +268,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn apply --json` and `wardyn preset set` now print the workloads or presets that were stored before a later one failed, and still exit with the error.
 - `wardyn governance plan` names a restriction it would delete (`restriction "name"`) instead of an empty assignment line.
 - `wardyn-runnerd drive open` says the changes were written back only after the throwaway VM confirmed it had written them; when it does not confirm, the folder is kept and the command fails.
+- A laptop's audit forwarding no longer stops at a row made by a service identity. The organisation answered it with 400 `invalid_row`, and every later row waited behind it; it now stores the row, with its claimed actor type `service`, as it does a human, agent or system row.
+- After every organisation server runs this release, restart `wardynd` on each laptop whose audit forwarding had already stopped at a service identity's row; it does not start again by itself. Such a laptop's log says forwarding is halted until wardynd restarts, and its `/healthz` `org_federation.lag` stays above 0. After the restart the laptop sends again from the first row the organisation has not acknowledged. This fix needs no change on the laptop besides that restart.
 
 ### Security
 
