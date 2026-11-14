@@ -18,7 +18,7 @@ import (
 // A member's source, or a folder above it, swapped for a link to a folder outside their roots
 // between the source check and its open is refused with the member refusal, and nothing outside is
 // opened. With no swap the handle is the checked folder.
-func TestOpenUserSource_ASourceOrAFolderAboveItSwappedForALinkAfterItsCheckIsRefused(t *testing.T) {
+func TestOpenScanSource_AMembersSourceOrAFolderAboveItSwappedForALinkAfterItsCheckIsRefused(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
 	}
@@ -53,18 +53,18 @@ func TestOpenUserSource_ASourceOrAFolderAboveItSwappedForALinkAfterItsCheckIsRef
 				}
 				t.Cleanup(func() { userSourceChecked = old })
 			}
-			dir, err := UserMountPolicy{Roots: []string{root}}.OpenUserSource("alice", filepath.Join(root, tc.src), foldersync.OpenFromTop)
+			dir, err := UserMountPolicy{Roots: []string{root}}.OpenScanSource("alice", filepath.Join(root, tc.src), nil, foldersync.OpenFromTop)
 			if tc.swap != "" {
 				if dir != nil {
 					_ = dir.Close()
 				}
 				if !errors.Is(err, errMemberSourceRefused) || dir != nil || strings.Contains(err.Error(), outside) {
-					t.Fatalf("OpenUserSource = %v, %v; want no handle and the member refusal, without the outside path", dir, err)
+					t.Fatalf("OpenScanSource = %v, %v; want no handle and the member refusal, without the outside path", dir, err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("OpenUserSource = %v, want the checked folder", err)
+				t.Fatalf("OpenScanSource = %v, want the checked folder", err)
 			}
 			t.Cleanup(func() { _ = dir.Close() })
 			f, err := dir.Open(".env.example")

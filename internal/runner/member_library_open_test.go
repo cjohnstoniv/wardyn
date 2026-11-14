@@ -19,7 +19,7 @@ import (
 // folder above it, standing as a link to a folder outside the roots that hold it is refused with the
 // member refusal and nothing outside is opened, also where the link leads into another person's own
 // root. A plain folder there is opened, and a folder outside every member root gets no handle.
-func TestOpenSourceInMemberRoots_AFolderInAMemberRootIsOpenedAsAMembersOwn(t *testing.T) {
+func TestOpenScanSource_AFolderInAMemberRootIsOpenedAsAMembersOwn(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
 	}
@@ -55,19 +55,19 @@ func TestOpenSourceInMemberRoots_AFolderInAMemberRootIsOpenedAsAMembersOwn(t *te
 		"a folder above it is a link":    filepath.Join(alice, "up", "app"),
 		"a link into another one's root": filepath.Join(alice, "to-bob"),
 	} {
-		dir, err := policy.OpenSourceInMemberRoots(src, foldersync.OpenFromTop)
+		dir, err := policy.OpenScanSource("", src, nil, foldersync.OpenFromTop)
 		if dir != nil {
 			_ = dir.Close()
 		}
 		if dir != nil || !errors.Is(err, errMemberSourceRefused) || strings.Contains(err.Error(), outside) || strings.Contains(err.Error(), bob) {
-			t.Errorf("%s: OpenSourceInMemberRoots = %v, %v; want no handle and the member refusal naming only the roots that hold it", name, dir, err)
+			t.Errorf("%s: OpenScanSource = %v, %v; want no handle and the member refusal naming only the roots that hold it", name, dir, err)
 		}
 	}
 	for src, want := range map[string]string{
 		filepath.Join(alice, "app"):  "ALICE_TOKEN=\n",
 		filepath.Join(shared, "app"): "SHARED_TOKEN=\n",
 	} {
-		dir, err := policy.OpenSourceInMemberRoots(src, foldersync.OpenFromTop)
+		dir, err := policy.OpenScanSource("", src, nil, foldersync.OpenFromTop)
 		if err != nil {
 			t.Fatalf("%s: %v, want the folder opened", src, err)
 		}
@@ -82,10 +82,10 @@ func TestOpenSourceInMemberRoots_AFolderInAMemberRootIsOpenedAsAMembersOwn(t *te
 			t.Errorf("%s: read %q through the handle, want %q", src, body, want)
 		}
 	}
-	if dir, err := policy.OpenSourceInMemberRoots(filepath.Join(outside, "app"), foldersync.OpenFromTop); dir != nil || err != nil {
+	if dir, err := policy.OpenScanSource("", filepath.Join(outside, "app"), nil, foldersync.OpenFromTop); dir != nil || err != nil {
 		t.Errorf("a folder outside every member root = %v, %v; want no handle and no error", dir, err)
 	}
-	if dir, err := (UserMountPolicy{}).OpenSourceInMemberRoots(filepath.Join(alice, "out"), foldersync.OpenFromTop); dir != nil || err != nil {
+	if dir, err := (UserMountPolicy{}).OpenScanSource("", filepath.Join(alice, "out"), nil, foldersync.OpenFromTop); dir != nil || err != nil {
 		t.Errorf("no member roots set = %v, %v; want no handle and no error", dir, err)
 	}
 }
@@ -95,7 +95,7 @@ func TestOpenSourceInMemberRoots_AFolderInAMemberRootIsOpenedAsAMembersOwn(t *te
 // refuses it too, though the shared root holds both. So is a link to a credential folder inside the
 // root. A plain folder there is opened. A root of "/" admits no member folder and makes no operator
 // folder a member's.
-func TestOpenSourceInMemberRoots_AFolderMustResolveInsideEveryRootThatHoldsIt(t *testing.T) {
+func TestOpenScanSource_AFolderMustResolveInsideEveryRootThatHoldsIt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
 	}
@@ -117,18 +117,18 @@ func TestOpenSourceInMemberRoots_AFolderMustResolveInsideEveryRootThatHoldsIt(t 
 	}
 	policy := UserMountPolicy{Roots: []string{shared}, RootsByPrincipal: map[string][]string{"alice": {alice}}}
 
-	dir, err := policy.OpenSourceInMemberRoots(filepath.Join(alice, "to-team"), foldersync.OpenFromTop)
+	dir, err := policy.OpenScanSource("", filepath.Join(alice, "to-team"), nil, foldersync.OpenFromTop)
 	if dir != nil {
 		_ = dir.Close()
 	}
 	if dir != nil || !errors.Is(err, errMemberSourceRefused) {
 		t.Errorf("a link from one person's root into the shared root around it = %v, %v; want no handle and the member refusal", dir, err)
 	}
-	if dir, err := policy.OpenSourceInMemberRoots(filepath.Join(alice, "to-keys"), foldersync.OpenFromTop); dir != nil || err == nil {
+	if dir, err := policy.OpenScanSource("", filepath.Join(alice, "to-keys"), nil, foldersync.OpenFromTop); dir != nil || err == nil {
 		t.Errorf("a link to a credential folder inside the root = %v, %v; want no handle and a refusal", dir, err)
 	}
 	for _, src := range []string{filepath.Join(alice, "app"), filepath.Join(shared, "team")} {
-		dir, err := policy.OpenSourceInMemberRoots(src, foldersync.OpenFromTop)
+		dir, err := policy.OpenScanSource("", src, nil, foldersync.OpenFromTop)
 		if err != nil {
 			t.Fatalf("%s: %v, want the folder opened", src, err)
 		}
@@ -138,7 +138,7 @@ func TestOpenSourceInMemberRoots_AFolderMustResolveInsideEveryRootThatHoldsIt(t 
 		"the shared list":  {Roots: []string{"/"}},
 		"one person's own": {RootsByPrincipal: map[string][]string{"alice": {"/"}}},
 	} {
-		if dir, err := top.OpenSourceInMemberRoots(outside, foldersync.OpenFromTop); dir != nil || err != nil {
+		if dir, err := top.OpenScanSource("", outside, nil, foldersync.OpenFromTop); dir != nil || err != nil {
 			t.Errorf("a root of / in %s = %v, %v; want no handle and no error", name, dir, err)
 		}
 	}
@@ -146,7 +146,7 @@ func TestOpenSourceInMemberRoots_AFolderMustResolveInsideEveryRootThatHoldsIt(t 
 
 // A folder inside a member root, or a folder above it, swapped for a link to a folder outside the
 // roots after its check is not opened through at the library door either.
-func TestOpenSourceInMemberRoots_ASourceSwappedForALinkAfterItsCheckIsRefused(t *testing.T) {
+func TestOpenScanSource_ASourceSwappedForALinkAfterItsCheckIsRefused(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
 	}
@@ -177,12 +177,12 @@ func TestOpenSourceInMemberRoots_ASourceSwappedForALinkAfterItsCheckIsRefused(t 
 			}
 			t.Cleanup(func() { userSourceChecked = old })
 
-			dir, err := (UserMountPolicy{Roots: []string{root}}).OpenSourceInMemberRoots(filepath.Join(root, "team", "app"), foldersync.OpenFromTop)
+			dir, err := (UserMountPolicy{Roots: []string{root}}).OpenScanSource("", filepath.Join(root, "team", "app"), nil, foldersync.OpenFromTop)
 			if dir != nil {
 				_ = dir.Close()
 			}
 			if dir != nil || !errors.Is(err, errMemberSourceRefused) {
-				t.Errorf("OpenSourceInMemberRoots = %v, %v; want no handle and the member refusal", dir, err)
+				t.Errorf("OpenScanSource = %v, %v; want no handle and the member refusal", dir, err)
 			}
 		})
 	}
@@ -191,7 +191,7 @@ func TestOpenSourceInMemberRoots_ASourceSwappedForALinkAfterItsCheckIsRefused(t 
 // A member root set through a link, the root itself or a folder above it, holds a folder named by the
 // root as it is set and as it resolves. Under either name a link that leaves the root is refused and a
 // plain folder is opened.
-func TestOpenSourceInMemberRoots_ARootSetThroughALinkHoldsBothNamesOfAFolder(t *testing.T) {
+func TestOpenScanSource_ARootSetThroughALinkHoldsBothNamesOfAFolder(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
 	}
@@ -220,14 +220,14 @@ func TestOpenSourceInMemberRoots_ARootSetThroughALinkHoldsBothNamesOfAFolder(t *
 	} {
 		policy := UserMountPolicy{Roots: []string{set}}
 		for _, named := range []string{set, resolved} {
-			dir, err := policy.OpenSourceInMemberRoots(filepath.Join(named, "out"), foldersync.OpenFromTop)
+			dir, err := policy.OpenScanSource("", filepath.Join(named, "out"), nil, foldersync.OpenFromTop)
 			if dir != nil {
 				_ = dir.Close()
 			}
 			if dir != nil || !errors.Is(err, errMemberSourceRefused) {
 				t.Errorf("%s, a link out named under %s = %v, %v; want no handle and the member refusal", name, named, dir, err)
 			}
-			dir, err = policy.OpenSourceInMemberRoots(filepath.Join(named, "app"), foldersync.OpenFromTop)
+			dir, err = policy.OpenScanSource("", filepath.Join(named, "app"), nil, foldersync.OpenFromTop)
 			if err != nil {
 				t.Errorf("%s, a plain folder named under %s: %v, want the folder opened", name, named, err)
 				continue
