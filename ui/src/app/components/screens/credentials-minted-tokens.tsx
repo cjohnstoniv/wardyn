@@ -35,6 +35,9 @@ const personOf = (t: AdminMintedToken) => t.email || t.principal;
 // console does not know shows as written in a neutral chip; a row with none (a daemon that predates the
 // field) shows nothing.
 const isExpired = (t: AdminMintedToken) => !t.revoked_at && !!t.expires_at && Date.parse(t.expires_at) <= Date.now();
+// Unrevoked, but authentication refuses it for its owner. The server sets owner_refused from the same check
+// authentication runs; revoke and expiry alone do not say whether a token works.
+const ownerRefused = (t: AdminMintedToken) => !t.revoked_at && !!t.owner_refused;
 
 function StateCell({ t }: { t: AdminMintedToken }) {
   if (!t.disposition) return null;
@@ -44,6 +47,14 @@ function StateCell({ t }: { t: AdminMintedToken }) {
       <>
         <Chip tone="neutral" dot>{MINTED.EXPIRED}</Chip>
         <span className="mt-1 block text-xs text-muted-foreground">{MINTED.EXPIRED_SUB}</span>
+      </>
+    );
+  }
+  if (ownerRefused(t)) {
+    return (
+      <>
+        <Chip tone="neutral" dot>{MINTED.OWNER_REFUSED}</Chip>
+        <span className="mt-1 block text-xs text-muted-foreground">{MINTED.OWNER_REFUSED_SUB}</span>
       </>
     );
   }
@@ -89,8 +100,8 @@ export function AdminMintedTokens() {
   const live = tokens ? tokens.filter((t) => !t.revoked_at) : [];
   // The rows the toggle brings: the server lists revoked tokens and expired ones minted for others only when asked.
   const toggleShown = tokens ? tokens.filter((t) => t.revoked_at || isExpired(t)).length : 0;
-  // "Still work" counts what authenticates: an expired token is listed, but is not one of them.
-  const working = live.filter((t) => !isExpired(t)).length;
+  // "Still work" counts what authenticates: an expired token, or one refused for its owner, is listed, but is not one of them.
+  const working = live.filter((t) => !isExpired(t) && !ownerRefused(t)).length;
   const shown = includeRevoked ? (tokens ?? []) : live;
 
   const revoke = async () => {

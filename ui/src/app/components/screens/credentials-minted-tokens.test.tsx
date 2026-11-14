@@ -97,6 +97,29 @@ describe("the State column", () => {
     expect(screen.getByText(MINTED.CHIP(3))).toBeInTheDocument();
   });
 
+  it("reads an unrevoked token the server marks as refused for its owner as not working, says so, and does not count it", async () => {
+    listMintedMock.mockResolvedValue([
+      ...live,
+      token("m8", "hal", "needs_decision", { owner_refused: true }),
+      token("m9", "ivy", "awaiting_owner", { owner_refused: true }),
+    ]);
+    render(<AdminMintedTokens />);
+    await screen.findByText("hal@example.com");
+    const hal = rowOf("hal@example.com");
+    expect(hal.getByText(MINTED.OWNER_REFUSED)).toBeInTheDocument();
+    expect(hal.getByText(MINTED.OWNER_REFUSED_SUB)).toBeInTheDocument();
+    expect(hal.queryByText("Needs a decision")).not.toBeInTheDocument();
+    const ivy = rowOf("ivy@example.com");
+    expect(ivy.getByText(MINTED.OWNER_REFUSED)).toBeInTheDocument();
+    expect(ivy.getByText(MINTED.OWNER_REFUSED_SUB)).toBeInTheDocument();
+    expect(ivy.queryByText("Waiting for the owner")).not.toBeInTheDocument();
+    // both keep their Revoke
+    expect(hal.getByRole("button", { name: "Revoke" })).toBeInTheDocument();
+    expect(ivy.getByRole("button", { name: "Revoke" })).toBeInTheDocument();
+    expect(screen.getByText(MINTED.CHIP(3))).toBeInTheDocument();
+    expect(screen.getByText(MINTED.COUNT(3))).toBeInTheDocument();
+  });
+
   it("counts only the tokens that still work, and points to the CLI for what the console does not do", async () => {
     render(<AdminMintedTokens />);
     await screen.findByText("alice@example.com");

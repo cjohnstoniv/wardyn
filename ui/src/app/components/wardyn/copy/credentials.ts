@@ -167,6 +167,10 @@ export const MINTED = {
   // console derives it from expires_at, so DISPOSITION keeps exactly the daemon's six.
   EXPIRED: "Expired",
   EXPIRED_SUB: "No longer works. Nothing to decide.",
+  // An unrevoked token the server marks owner_refused: authentication refuses it for its owner, for any of the
+  // owner check's reasons, so it does not still work. One label for every reason: Revoke is the action for each.
+  OWNER_REFUSED: "Refused",
+  OWNER_REFUSED_SUB: "Doesn't work now: Wardyn refuses it because of its owner.",
   // The footnote's two command names render mono; the parts join into the sentence.
   FOOTNOTE: ["Invite the owner with ", "wardyn person invite", ", or move the token with ", "wardyn token move", ". The console does neither."],
 } as const;

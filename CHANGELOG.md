@@ -175,6 +175,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A takeover whose desktop did not open now says the person has control and keeps Hand back, with an Open the desktop button to try again, instead of saying the takeover failed.
 - After a hand back, a new takeover request on the same run page now shows its Take over instead of the finished banner.
 - A copy offer already showing in a run's terminal when the page learns that the run keeps its content in now closes, and its Copy copies nothing. Before, it still copied under the line saying copying out of this terminal is off. When the page cannot read the run's `data_out` rule, the terminal now keeps copying off and says it could not read the rule; before, a failed read left copying on.
+- Your account, Your API tokens: without the API token feature, the card now hides its Mint button and keeps listing your tokens with their Revoke buttons; with no token to list, the card stays hidden. Before, the whole card disappeared, though the server still lists and revokes those tokens.
+- Admin > Credentials, Tokens an admin created for someone else: a token is no longer counted as one that still works, and reads Refused, when authentication refuses it because its owner is deactivated, because a revocation of its owner's credentials came after it was made, because its owner's name is reserved, or, with `WARDYN_ROLE_STAMP_TTL` set, because its role stamp is older than that. The list asks the same check authentication runs on a person's token. `GET /api/v1/tokens?minted_for_others=true` now leaves out every such token, as it already did a deactivated owner's; with `&include_revoked=true` they are listed with `owner_refused: true`.
 
 ### Security
 
