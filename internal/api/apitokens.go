@@ -542,7 +542,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 func (s *Server) insertAPIToken(w http.ResponseWriter, r *http.Request, t types.APIToken) (types.APIToken, bool) {
 	plaintext := newBearer(apiTokenPrefix)
 	t.ID = uuid.New()
-	created, err := s.cfg.Store.CreateAPIToken(guardOwner(r.Context(), t.Principal), t, plaintext)
+	created, err := s.cfg.Store.CreateAPIToken(mintGuard(r.Context(), t), t, plaintext)
 	if err != nil {
 		writeServerError(w, r, "create api token", err)
 		return types.APIToken{}, false

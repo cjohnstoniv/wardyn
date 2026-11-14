@@ -249,7 +249,7 @@ Limits:
   - The sidecar binds kernel events to runs from a `docker events` stream plus a `docker ps -a` reconcile,
   - and keeps a mapping for `containerRetention` (15 min) after the container is gone, because the tail runs behind.
   - An event arriving later than that correlates to nothing and is dropped
-  - Counted as `dropped_unmapped` on the heartbeat and named in `/healthz`'s `idle` reason, so a broken correlation can never again read the same as a blind sensor.
+  - Counted as `dropped_unmapped` on the heartbeat and `/metrics`; `/healthz`'s `idle` reason names it without the count, so a broken correlation never reads as a blind sensor.
 - The token has the identity provider's ~1h TTL.
   - The compose stack keeps it fresh AUTOMATICALLY: wardynd's rotator re-mints and rewrites the shared `groundtruth_token` file and the sidecar re-reads it on a 401, so ground truth does NOT go blind ~1h in.
   - The manual `WARDYN_GROUNDTRUTH_TOKEN` env is a static fallback that cannot refresh.

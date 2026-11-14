@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -58,7 +59,7 @@ func (s *nodeSensorStore) ListGroundtruthSensors(_ context.Context, since time.T
 	return out, nil
 }
 
-func (s *nodeSensorStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+func (s *nodeSensorStore) LatestOrganisationAuditEvent(context.Context, string, types.ActorType, string) (types.AuditEvent, error) {
 	if s.beat.Action == "" {
 		return types.AuditEvent{}, store.ErrNotFound
 	}
@@ -255,7 +256,7 @@ func TestHealthzEbpfOneNodeMatchesToday(t *testing.T) {
 
 	today := nodeSensorServer(h, stubHeartbeatStore{ev: beat}, now)
 	oneNode := nodeSensorServer(h, &nodeSensorStore{beat: beat, sensors: []store.GroundtruthSensor{
-		{Node: "", LastBeat: beat.Time, DroppedTotal: 1, ObservedTotal: 6, ObservedByKind: healthyKinds},
+		{Node: "", LastBeat: beat.Time, DroppedTotal: 1, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &beat.Time},
 		{Node: "gone-node", LastBeat: now.Add(-30 * time.Hour)},
 	}}, now)
 
@@ -277,9 +278,10 @@ func TestHealthzEbpfOneNodeMatchesToday(t *testing.T) {
 func TestHealthzEbpfTwoNodesOneStaleDegraded(t *testing.T) {
 	h := newHarness(t)
 	now := time.Now().UTC().Truncate(time.Second)
+	rose := now.Add(-5 * time.Minute)
 	st := &nodeSensorStore{sensors: []store.GroundtruthSensor{
-		{Node: "node-a", LastBeat: now.Add(-20 * time.Second), ObservedTotal: 6, ObservedByKind: healthyKinds},
-		{Node: "node-b", LastBeat: now.Add(-5 * time.Minute), ObservedTotal: 3, ObservedByKind: healthyKinds},
+		{Node: "node-a", LastBeat: now.Add(-20 * time.Second), ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &rose},
+		{Node: "node-b", LastBeat: now.Add(-5 * time.Minute), ObservedTotal: 3, ObservedByKind: healthyKinds, EvidenceAt: &rose},
 		{Node: "node-c", LastBeat: now.Add(-25 * time.Hour), ObservedTotal: 9},
 	}}
 	srv := nodeSensorServer(h, st, now)
@@ -486,7 +488,7 @@ func TestGroundtruthPodEventAfterLeaseEndedDowngrades(t *testing.T) {
 // TestHealthzEbpfNodeReadFailureIsDegraded: a failed per-node read (say a split-role install missing
 // the grant on groundtruth_sensors) must not fall back to the newest heartbeat anywhere, which would
 // read healthy while another node is dead. It reads degraded, with the same reason anonymously. A
-// successful read of zero nodes keeps today's answer.
+// successful read of zero nodes reads the sensor's audit beat, which holds no rise in its counts.
 func TestHealthzEbpfNodeReadFailureIsDegraded(t *testing.T) {
 	h := newHarness(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -503,12 +505,86 @@ func TestHealthzEbpfNodeReadFailureIsDegraded(t *testing.T) {
 		t.Errorf("anonymous ebpf_groundtruth = %v, want degraded with the same reason", anon)
 	}
 
-	today := nodeSensorServer(h, stubHeartbeatStore{ev: beat}, now)
 	zero := nodeSensorServer(h, &nodeSensorStore{beat: beat}, now)
-	want, _ := json.Marshal(today.ebpfGroundtruthStatus(context.Background()))
-	got, _ := json.Marshal(zero.ebpfGroundtruthStatus(context.Background()))
-	if string(got) != string(want) {
-		t.Fatalf("zero-node status = %s\nwant today's    %s", got, want)
+	if got := zero.ebpfGroundtruthStatus(context.Background()); got["state"] != "idle" || got["reason"] != groundtruthNotYetKnown ||
+		got["last_heartbeat"] != beat.Time.Format(time.RFC3339) {
+		t.Fatalf("zero-node status = %v, want the audit beat read idle with %q", got, groundtruthNotYetKnown)
+	}
+}
+
+// Lifetime counts prove nothing about now: a fresh beat with counts but no rise in them on record
+// (a first beat, a rise across a long gap, or no node row at all) reads idle with its own reason
+// and note, never healthy, alone or beside a healthy node.
+func TestHealthzEbpfNotYetKnownIsNeverHealthy(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	rose := now.Add(-time.Minute)
+	beat := groundtruth.HeartbeatEventWithDropped(0, 6, 0, healthyKinds)
+	beat.Time = now.Add(-10 * time.Second)
+	for name, tc := range map[string]struct {
+		st                   *nodeSensorStore
+		wantReason, wantNote string
+	}{
+		"a node row with no rise on record": {st: &nodeSensorStore{sensors: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: beat.Time, ObservedTotal: 6, ObservedByKind: healthyKinds}}},
+			wantReason: groundtruthNotYetKnown, wantNote: hostSensorNotYetKnownCaveat},
+		"no node row, the audit beat only": {st: &nodeSensorStore{beat: beat},
+			wantReason: groundtruthNotYetKnown, wantNote: hostSensorNotYetKnownCaveat},
+		"one of two nodes": {st: &nodeSensorStore{sensors: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: beat.Time, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &rose},
+			{Node: "node-b", LastBeat: beat.Time, ObservedTotal: 4, ObservedByKind: healthyKinds}}},
+			wantReason: "1 of 2 node sensors idle", wantNote: fmt.Sprintf(hostSensorsNotYetKnownCaveat, 1, 2)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := nodeSensorServer(h, tc.st, now)
+			got := srv.ebpfGroundtruthStatus(context.Background())
+			if got["state"] != "idle" {
+				t.Fatalf("state = %v (%v), want idle, never healthy", got["state"], got)
+			}
+			if got["reason"] != tc.wantReason {
+				t.Errorf("reason = %v, want %q", got["reason"], tc.wantReason)
+			}
+			if note := srv.hostSensorCaveat(context.Background()); note != tc.wantNote {
+				t.Errorf("note = %q\nwant %q", note, tc.wantNote)
+			}
+		})
+	}
+}
+
+// With two or more node sensors the reason only counts the idle nodes, so the note comes from their
+// causes: nodes whose counts stopped rising get the quiet note, never "zero mapped kernel events",
+// and a quiet node beside a zero-count one still gets it, counting the quiet one.
+func TestHostSensorCaveatTwoNodesQuiet(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	quiet := now.Add(-store.GroundtruthEvidenceWindow - time.Minute)
+	fresh := now.Add(-10 * time.Second)
+	for name, tc := range map[string]struct {
+		rows []store.GroundtruthSensor
+		want string
+	}{
+		"both quiet": {rows: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: fresh, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &quiet},
+			{Node: "node-b", LastBeat: fresh, ObservedTotal: 4, ObservedByKind: healthyKinds, EvidenceAt: &quiet}},
+			want: fmt.Sprintf(hostSensorsQuietCaveat, 2, 2)},
+		"one quiet, one zero-count": {rows: []store.GroundtruthSensor{
+			{Node: "node-a", LastBeat: fresh, ObservedTotal: 6, ObservedByKind: healthyKinds, EvidenceAt: &quiet},
+			{Node: "node-b", LastBeat: fresh}},
+			want: fmt.Sprintf(hostSensorsQuietCaveat, 1, 2)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := nodeSensorServer(h, &nodeSensorStore{sensors: tc.rows}, now)
+			if st := srv.ebpfGroundtruthStatus(context.Background()); st["state"] != "idle" {
+				t.Fatalf("state = %v, want idle", st["state"])
+			}
+			note := srv.hostSensorCaveat(context.Background())
+			if note != tc.want {
+				t.Errorf("note = %q\nwant %q", note, tc.want)
+			}
+			if strings.Contains(note, "mapped zero") || strings.Contains(note, "zero mapped") {
+				t.Errorf("note = %q says zero mapped events for nodes whose counts are positive", note)
+			}
+		})
 	}
 }
 

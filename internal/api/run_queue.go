@@ -663,8 +663,20 @@ func (s *Server) cancelQueuedRunsOf(ctx context.Context, owner, reason string) (
 	if err != nil {
 		return 0, err
 	}
+	ids := make([]uuid.UUID, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.RunID)
+	}
+	// A suspension tail leaves the runs a reactivated person made after its deactivation (withSuspensionBound).
+	spared, err := runsMadeAfterBound(ctx, s.cfg.Store, ids)
+	if err != nil {
+		return 0, err
+	}
 	n := 0
 	for _, e := range entries {
+		if spared[e.RunID] {
+			continue
+		}
 		run, err := s.cfg.Store.GetRun(ctx, e.RunID)
 		if err != nil {
 			return n, err

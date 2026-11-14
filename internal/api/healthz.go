@@ -24,6 +24,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -43,7 +44,7 @@ import (
 
 // ebpfHeartbeatTTL is how recent the most recent kernel.sensor.ping must
 // be for /healthz to report ebpf_groundtruth=healthy. Past it, the stream is
-// degraded; with no heartbeat ever, it is unavailable. This makes the overclaim
+// degraded; with no heartbeat on record, it is unavailable. This makes the overclaim
 // structurally impossible: the stream is "healthy" only while events arrive.
 const ebpfHeartbeatTTL = 2 * time.Minute
 
@@ -185,9 +186,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"components": s.cfg.Components,
 		// ebpf_groundtruth is the honest health of the SECOND audit stream. It
 		// is driven by the most recent kernel.sensor.ping: healthy only when
-		// beats are fresh AND real kernel events have been observed, idle when the
-		// sidecar is alive but blind (no events), degraded if the beat is stale,
-		// unavailable if no sensor has ever beaten. The overclaim ("we have eBPF
+		// beats are fresh AND their kernel event counts rose in the last 15
+		// minutes, idle when they show no events or none new, degraded if the
+		// beat is stale, unavailable if no beat is on record. The overclaim ("we have eBPF
 		// ground truth") is structurally impossible — healthy reflects real events.
 		"ebpf_groundtruth": gtPublic,
 		// llm_egress_inspection advertises that the OPTIONAL outbound content-
@@ -340,15 +341,34 @@ func (g healthzGateWriter) Header() http.Header       { return g.h }
 func (healthzGateWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (healthzGateWriter) WriteHeader(int)             {}
 
+// sensorBeatReadTimeout bounds the read of the sensor's latest beat. The Helm
+// startup probe calls /healthz with the Kubernetes default 1s timeout and the
+// liveness probe with 3s, so the read gives way inside both: a read that ran
+// to a probe's own timeout would fail that probe and restart the daemon. A var
+// so the stalled-store test need not wait it out;
+// TestSensorBeatReadTimeoutStaysInsideTheProbes pins the production value.
+var sensorBeatReadTimeout = 500 * time.Millisecond
+
+// groundtruthBeatReadFailed is the reason /healthz gives when that read fails
+// or runs out of time (it is made only when no node row holds the sensor's
+// latest beat), anonymous view included: it names no error text. The state is
+// still unavailable; with no reason, unavailable means no beat is on record here.
+const groundtruthBeatReadFailed = "Sensor heartbeat could not be read"
+
 // ebpfGroundtruthStatus reports the eBPF/Tetragon ground-truth stream's health
-// from the latest kernel.sensor.ping:
+// from the latest kernel.sensor.ping the sensor itself sent:
 //
-//	unavailable — no heartbeat ever (no sensor configured on this host)
+//	unavailable — no heartbeat on record (no sensor configured on this host), or,
+//	              with reason groundtruthBeatReadFailed, no node row holds a
+//	              beat and the read failed
 //	degraded    — last heartbeat older than ebpfHeartbeatTTL (sensor stalled/dead)
 //	idle        — heartbeat fresh but observed_total==0: the sidecar process is
 //	              alive and reachable, yet has mapped ZERO kernel events (sensor
-//	              blind, or the run is genuinely quiet) — NOT proof of ground truth
-//	healthy     — heartbeat fresh AND real kernel events observed (ground truth flowing)
+//	              blind, or the run is genuinely quiet) — NOT proof of ground truth;
+//	              also fresh beats with counts whose node row shows no rise in
+//	              them on record (groundtruthNotYetKnown) or none within
+//	              store.GroundtruthEvidenceWindow (groundtruthNoRecentEvents)
+//	healthy     — heartbeat fresh AND its counts rose within the window (ground truth flowing)
 //
 // A live heartbeat alone only proves the sidecar PROCESS is alive; "healthy"
 // additionally requires observed kernel events, so the "we have eBPF ground
@@ -359,9 +379,16 @@ func (healthzGateWriter) WriteHeader(int)             {}
 // correlation — see the idle branch. When no Store is wired (tests), reports
 // unavailable.
 func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
+	out, _ := s.ebpfGroundtruthVerdict(ctx)
+	return out
+}
+
+// ebpfGroundtruthVerdict is ebpfGroundtruthStatus with the live sensors'
+// causes, which the capture note is picked from.
+func (s *Server) ebpfGroundtruthVerdict(ctx context.Context) (map[string]any, sensorCauses) {
 	out := map[string]any{"state": "unavailable", "dropped_total": uint64(0)}
 	if s.cfg.Store == nil {
-		return out
+		return out, nil
 	}
 	// A sensor on each Kubernetes node: judge every node, so one live node
 	// cannot mask a dead one. With one node (or the Compose sensor) the
@@ -370,25 +397,52 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	if live >= 2 {
 		return s.ebpfGroundtruthNodesStatus(rows)
 	}
-	ev, err := s.cfg.Store.LatestAuditEventByAction(ctx, groundtruth.ActionSensorHeartbeat)
-	if err != nil {
-		// ErrNotFound (no sensor ever) or any query error: report unavailable.
-		return out
+	var (
+		at       time.Time
+		hb       groundtruthBeat
+		evidence *time.Time
+	)
+	if len(rows) > 0 {
+		// The sensor's own node row, newest beat first: only
+		// handleGroundtruthEvents writes it, never a laptop, it holds when the
+		// counts last rose, and reading it scans no audit rows.
+		g := rows[0]
+		at, evidence = g.LastBeat, g.EvidenceAt
+		hb = groundtruthBeat{DroppedTotal: g.DroppedTotal, ObservedTotal: g.ObservedTotal,
+			DroppedUnmapped: g.DroppedUnmapped, ObservedByKind: g.ObservedByKind}
+	} else {
+		// No node row: the sensor's own audit beat only. handleGroundtruthEvents
+		// stamps every row it takes as the system sensor, while a laptop can
+		// forward a beat with any counts and time, which must not decide this
+		// organisation's sensor health. Bounded and cached (latestSensorBeat):
+		// forwarded beats are passed over row by row, and the probes that call
+		// /healthz must be answered inside their own timeouts however many there are.
+		ev, err := s.latestSensorBeat(ctx)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			// No beat on record: unavailable, with no reason.
+			return out, sensorCauses{sensorNoBeat: 1}
+		case err != nil:
+			// A failed or timed-out read says so, so that no surface reads it
+			// as no beat on record.
+			out["reason"] = groundtruthBeatReadFailed
+			return out, sensorCauses{sensorUnreadable: 1}
+		}
+		at = ev.Time
+		// dropped_total and observed_total are published by the sensor on the
+		// heartbeat data when available; tolerate their absence.
+		if len(ev.Data) > 0 {
+			_ = json.Unmarshal(ev.Data, &hb)
+		}
 	}
-	out["last_heartbeat"] = ev.Time.UTC().Format(time.RFC3339)
-	// dropped_total and observed_total are published by the sensor on the
-	// heartbeat data when available; tolerate their absence.
-	var hb groundtruthBeat
-	if len(ev.Data) > 0 {
-		_ = json.Unmarshal(ev.Data, &hb)
-	}
+	out["last_heartbeat"] = at.UTC().Format(time.RFC3339)
 	out["dropped_total"] = hb.DroppedTotal
 	out["observed_total"] = hb.ObservedTotal
 	out["dropped_unmapped"] = hb.DroppedUnmapped
 	if len(hb.ObservedByKind) > 0 {
 		out["observed_by_kind"] = hb.ObservedByKind
 	}
-	state, reason, missing := s.groundtruthBeatVerdict(ev.Time, hb)
+	state, reason, cause, missing := s.groundtruthBeatVerdict(at, hb, evidence)
 	out["state"] = state
 	if reason != "" {
 		out["reason"] = reason
@@ -400,11 +454,11 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		// The per-node read failed, so whether another node is dead is
 		// unknown: the newest beat anywhere must not read healthy for all
 		// of them. A sensor exists (it has beaten), so this is degraded.
-		out["state"] = "degraded"
+		out["state"], cause = "degraded", sensorStale
 		out["reason"] = groundtruthNodeReadFailed
 		delete(out, "missing_kinds")
 	}
-	return out
+	return out, sensorCauses{cause: 1}
 }
 
 // groundtruthBeat is the counts one sensor heartbeat carries on its data.
@@ -416,13 +470,15 @@ type groundtruthBeat struct {
 }
 
 // groundtruthBeatVerdict is one sensor's state from its latest beat (taken at
-// at) and that beat's counts, with the reason and the missing kinds that go
-// with it. ebpfGroundtruthStatus's doc comment defines the states.
-func (s *Server) groundtruthBeatVerdict(at time.Time, hb groundtruthBeat) (state, reason string, missing []string) {
+// at), that beat's counts and when its node row last saw them rise (nil: no
+// rise on record, or no row), with the reason, the cause and the missing kinds
+// that go with it. ebpfGroundtruthStatus's doc comment defines the states.
+func (s *Server) groundtruthBeatVerdict(at time.Time, hb groundtruthBeat, evidence *time.Time) (state, reason string, cause sensorCause, missing []string) {
+	now := s.cfg.Now()
 	switch {
-	case s.cfg.Now().Sub(at) > ebpfHeartbeatTTL:
+	case now.Sub(at) > ebpfHeartbeatTTL:
 		// Heartbeat stale: the sensor process itself has stalled/died.
-		return "degraded", "", nil
+		return "degraded", "", sensorStale, nil
 	case hb.ObservedTotal == 0:
 		// Process alive and beating, but it has mapped ZERO kernel events: the
 		// sensor is blind (Tetragon dead / wrong export path / no TracingPolicy)
@@ -432,11 +488,21 @@ func (s *Server) groundtruthBeatVerdict(at time.Time, hb groundtruthBeat) (state
 		// The two idle causes are NOT the same failure and must not read the
 		// same: dropped_unmapped>0 means the sensor saw kernel events and could
 		// not bind ANY of them to a run — a broken correlation, which no amount
-		// of waiting fixes.
+		// of waiting fixes. The reason is anonymous, so it names the failure and
+		// not the count: that is wardyn_groundtruth_dropped_unmapped_total.
 		if hb.DroppedUnmapped > 0 {
-			return "idle", fmt.Sprintf("kernel events observed but none correlated to a run (%d dropped as unmapped)", hb.DroppedUnmapped), nil
+			return "idle", "kernel events observed but none correlated to a run", sensorNoEvents, nil
 		}
-		return "idle", "no kernel events observed", nil
+		return "idle", "no kernel events observed", sensorNoEvents, nil
+	case evidence == nil:
+		// The ingest keeps beating its lifetime counts after Tetragon or its
+		// export stops, so counts alone prove nothing about now, and with no
+		// rise on record whether events still arrive is not known yet.
+		return "idle", groundtruthNotYetKnown, sensorNotYetKnown, nil
+	case now.Sub(*evidence) > store.GroundtruthEvidenceWindow:
+		// Fresh beats whose counts have stopped rising: the ingest process is
+		// alive, but Tetragon or its export may have stopped.
+		return "idle", groundtruthNoRecentEvents, sensorQuiet, nil
 	default:
 		// A single aggregate over every kernel event kind would let a sensor
 		// seeing only process.exec (a mis-scoped TracingPolicy that never fires
@@ -449,9 +515,9 @@ func (s *Server) groundtruthBeatVerdict(at time.Time, hb groundtruthBeat) (state
 		// fall back to the aggregate-only "healthy" rather than downgrading
 		// on missing DATA rather than a missing EVENT KIND.
 		if miss := missingGroundtruthKinds(hb.ObservedByKind); len(hb.ObservedByKind) > 0 && len(miss) > 0 {
-			return "partial", "", miss
+			return "partial", "", sensorFine, miss
 		}
-		return "healthy", "", nil
+		return "healthy", "", sensorFine, nil
 	}
 }
 
@@ -509,12 +575,14 @@ var groundtruthStateRank = map[string]int{"healthy": 0, "partial": 1, "idle": 2,
 // that state; missing_kinds joins what the partial nodes miss; last_heartbeat
 // is the newest live beat and the counters sum the live nodes. sensors lists
 // every node, gone ones included; handleHealthz shows it to a signed-in
-// caller only, since node names are cluster topology.
-func (s *Server) ebpfGroundtruthNodesStatus(rows []store.GroundtruthSensor) map[string]any {
+// caller only, since node names are cluster topology. The causes count the
+// live nodes, so a capture note can name them.
+func (s *Server) ebpfGroundtruthNodesStatus(rows []store.GroundtruthSensor) (map[string]any, sensorCauses) {
 	now := s.cfg.Now()
 	var (
 		worst                       = "healthy"
 		inState                     = map[string]int{}
+		causes                      = sensorCauses{}
 		missing                     = map[string]bool{}
 		dropped, observed, unmapped uint64
 		byKind                      = map[string]uint64{}
@@ -528,11 +596,12 @@ func (s *Server) ebpfGroundtruthNodesStatus(rows []store.GroundtruthSensor) map[
 			sensors = append(sensors, groundtruthNodeSensor{Node: g.Node, State: "gone", LastHeartbeat: beat})
 			continue
 		}
-		state, _, miss := s.groundtruthBeatVerdict(g.LastBeat, groundtruthBeat{DroppedTotal: g.DroppedTotal,
-			ObservedTotal: g.ObservedTotal, DroppedUnmapped: g.DroppedUnmapped, ObservedByKind: g.ObservedByKind})
+		state, _, cause, miss := s.groundtruthBeatVerdict(g.LastBeat, groundtruthBeat{DroppedTotal: g.DroppedTotal,
+			ObservedTotal: g.ObservedTotal, DroppedUnmapped: g.DroppedUnmapped, ObservedByKind: g.ObservedByKind}, g.EvidenceAt)
 		sensors = append(sensors, groundtruthNodeSensor{Node: g.Node, State: state, LastHeartbeat: beat})
 		live++
 		inState[state]++
+		causes[cause]++
 		if groundtruthStateRank[state] > groundtruthStateRank[worst] {
 			worst = state
 		}
@@ -573,7 +642,7 @@ func (s *Server) ebpfGroundtruthNodesStatus(rows []store.GroundtruthSensor) map[
 		}
 		out["missing_kinds"] = kinds
 	}
-	return out
+	return out, causes
 }
 
 // ebpfGroundtruthPublicFields is what the ANONYMOUS /healthz may publish from
@@ -585,9 +654,8 @@ func (s *Server) ebpfGroundtruthNodesStatus(rows []store.GroundtruthSensor) map[
 // the reason "a member … would learn operational volumes", and this endpoint is
 // reachable with no credential at all — publishing them here would hand the
 // fleet's kernel event volume to anyone who could open the port. The counters stay on the
-// gated scrape; the dropped_unmapped COUNT still reaches an operator here
-// inside the idle `reason` sentence, which is the form deploy/compose/README.md
-// points them at.
+// gated scrape, and no reason sentence carries one: the idle reason names a
+// broken correlation without its count.
 var ebpfGroundtruthPublicFields = []string{"state", "last_heartbeat", "reason", "missing_kinds"}
 
 // ebpfGroundtruthPublic projects the full status down to the anonymous view.
@@ -611,7 +679,7 @@ func ebpfGroundtruthPublic(status map[string]any) map[string]any {
 // every other volume series already requires.
 //
 // Read off the same heartbeat /healthz reads, so the two can never disagree.
-// Omitted entirely when no sensor has ever beaten (state "unavailable"): a
+// Omitted entirely when no beat is on record (state "unavailable"): a
 // deployment with no eBPF sidecar carries no dead series.
 func (s *Server) writeEbpfGroundtruthCounters(ctx context.Context, w io.Writer) {
 	status := s.ebpfGroundtruthStatus(ctx)
