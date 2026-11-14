@@ -100,7 +100,14 @@ func TestPG_ApprovalExpiresAtFollowsTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetApproval: %v", err)
 	}
-	check(t, "the end comes first (GetApproval)", fresh.ExpiresAt, &endsAt)
+	stored, err := pg.GetRun(ctx, endFirst.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if !spanFrom(stored.CreatedAt, stored.EndsAt, endsAt.Sub(endFirst.CreatedAt)) { // re-anchored with created_at (stampRunTimes)
+		t.Fatalf("ends_at = %v, want %v from created_at %v", stored.EndsAt, endsAt.Sub(endFirst.CreatedAt), stored.CreatedAt)
+	}
+	check(t, "the end comes first (GetApproval)", fresh.ExpiresAt, stored.EndsAt)
 
 	ap = raise(newRun(types.RunRunning))
 	check(t, "legacy run", ap.ExpiresAt, nil)
