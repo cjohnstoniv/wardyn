@@ -19,7 +19,7 @@ import (
 // path honours it; a store that keeps no revision (a test double) ignores it and upserts.
 
 // secretExistsRefusal answers a create-only PUT of a name its namespace already holds.
-const secretExistsRefusal = "a secret with this name already exists, so nothing was stored; send the write without If-None-Match: * to replace it"
+const secretExistsRefusal = "A secret with this name already exists, so nothing was stored; send the write without If-None-Match: * to replace it"
 
 // secretCreateOnly is ctx with secretstore.WithIfRevision(ctx, "") (the row must not exist) when r carries
 // If-None-Match: *; any other request keeps the plain upsert.

@@ -153,7 +153,7 @@ describe("AddSecretDialog — a name the list did not have but the server did", 
   beforeEach(() => {
     setSecretMock
       .mockReset()
-      .mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists"))
+      .mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists"))
       .mockResolvedValue(undefined);
   });
 

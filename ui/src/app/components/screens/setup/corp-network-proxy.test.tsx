@@ -248,7 +248,7 @@ describe("Host proxy tab — panel states", () => {
   });
 
   it("cred: a proxy secret name already stored: the first Save stores nothing and warns; Overwrite secret replaces it", async () => {
-    setSecretMock.mockReset().mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+    setSecretMock.mockReset().mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
     const { saveSiteConfig } = renderStep();
     const url = "http://ops-egress:secret123@proxy.corp.acme.com:8080";
     await userEvent.type(screen.getByLabelText(/proxy url/i), url);

@@ -58,7 +58,7 @@ describe("deleteSecret names a person", () => {
 
   it("a create-only write sends If-None-Match: *, and a name already stored rejects with its reason, sent once", async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ error: "a secret with this name already exists", reason: "secret_exists" }), {
+      new Response(JSON.stringify({ error: "A secret with this name already exists", reason: "secret_exists" }), {
         status: 409,
         headers: { "Content-Type": "application/json" },
       }),

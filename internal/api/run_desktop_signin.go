@@ -278,7 +278,7 @@ func (s *Server) signinRun(w http.ResponseWriter, r *http.Request) (types.AgentR
 }
 
 // signinNotRunningMsg is the sign-in doors' answer for a run that is not running, or is kept.
-const signinNotRunningMsg = "the run is not running, so it has no desktop to sign in to"
+const signinNotRunningMsg = "The run is not running, so it has no desktop to sign in to"
 
 type desktopSigninBeginResponse struct {
 	SigninID  uuid.UUID `json:"signin_id"`

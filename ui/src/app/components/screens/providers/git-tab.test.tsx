@@ -730,7 +730,7 @@ describe("GitTab", () => {
     const row = { id: "gh", kind: "github" as const, base_urls: ["https://github.com/acme"] };
 
     it("a token name already stored although the lane showed none: the first Save stores nothing and warns; Overwrite secret replaces it", async () => {
-      setSecretMock.mockReset().mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+      setSecretMock.mockReset().mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
       const onStatusRefresh = vi.fn();
       render(<CredHarness initial={[row]} present={[]} githubApp={false} onStatusRefresh={onStatusRefresh} />);
       const lane = screen.getByTestId("provider-row-github");

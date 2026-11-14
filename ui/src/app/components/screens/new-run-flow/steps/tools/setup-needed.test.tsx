@@ -171,7 +171,7 @@ describe("the add-token door", () => {
   });
 
   it("a token name the server already holds: the first save stores nothing and warns; Overwrite secret replaces it", async () => {
-    setSecret.mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+    setSecret.mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
     show([COMPONENT_SECRET]);
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
     await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
@@ -185,7 +185,7 @@ describe("the add-token door", () => {
   });
 
   it("after the overwrite warning, Enter in the field stores nothing: only Overwrite secret replaces the stored token", async () => {
-    setSecret.mockRejectedValueOnce(new HttpError(409, "a secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
+    setSecret.mockRejectedValueOnce(new HttpError(409, "A secret with this name already exists", "secret_exists")).mockResolvedValue(undefined);
     show([COMPONENT_SECRET]);
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
     await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok{Enter}");

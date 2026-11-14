@@ -68,7 +68,7 @@ describe("AddSecretDialog: a save that finishes after the dialog was reopened", 
   // Only a refusal proves nothing was saved: a server error can follow the write, and no answer says nothing.
   it.each([
     ["a refusal", new HttpError(400, "secret too short"), "secret-a was not saved", "secret too short"],
-    ["a name already stored", new HttpError(409, "a secret with this name already exists", "secret_exists"), "secret-a was not saved", "a secret with this name already exists"],
+    ["a name already stored", new HttpError(409, "A secret with this name already exists", "secret_exists"), "secret-a was not saved", "A secret with this name already exists"],
     ["a server error", new HttpError(500, "store secret failed"), "secret-a may not have been saved", "store secret failed"],
     ["no answer", new HttpError(0, "Could not reach the control plane."), "secret-a may not have been saved", "Could not reach the control plane."],
   ])("a late failure (%s) is said by name, not shown against the new draft", async (_kind, failure, title, description) => {

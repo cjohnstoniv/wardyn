@@ -83,8 +83,8 @@ func (s *Server) fenceRunsStarts(ctx context.Context, runs []types.AgentRun) fun
 // The start fence's own refusals, each one the person may retry, in fixed words a 5xx body may carry. A start that
 // cannot take the fence is startUnfenced (lockUnavailableMsg's words).
 const (
-	startTooSlowMsg  = "the runner took too long to start the command; try again"
-	startLockLostMsg = "the server lost its hold on the run while starting the command; try again"
+	startTooSlowMsg  = "The runner took too long to start the command; try again"
+	startLockLostMsg = "The server lost its hold on the run while starting the command; try again"
 )
 
 var (
