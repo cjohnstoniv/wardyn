@@ -376,28 +376,7 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 		// but only once the runner's state pages are all in: the refusal is recorded before its session's
 		// pages, which carry the hold. Until then, or while a hold they brought is open, the snapshot waits.
 		// One statement, so a hold the pages brought is never missed.
-		var cleared, paged bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at > $2),
-			EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $3 AND complete)
-			AND NOT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at IS NULL)`,
-			run.ID, tip.ObservedAt, t.runnerID).Scan(&cleared, &paged); err != nil {
-			return RetirementIdle, err
-		}
-		if !cleared && !paged {
-			return RetirementIdle, nil
-		}
-		if !cleared {
-			_, err := closeRetirementTx(ctx, tx, run.ID, "refused", RetirementRunnerRefused)
-			return RetirementIdle, err
-		}
-		if t.successors >= RetirementSuccessorBound {
-			return RetirementAbandoned, abandonRetirementTx(ctx, tx, t, RetirementDeferredExhausted, prepare)
-		}
-		if _, err := tx.Exec(ctx, `UPDATE runner_retirements SET successors = successors + 1 WHERE run_id = $1`, run.ID); err != nil {
-			return RetirementIdle, err
-		}
-		// A refused action is never marked superseded (runner_pending_actions_chain); supersedes links it.
-		return RetirementSuccessor, insertRetirementActionTx(ctx, tx, owner, t, types.RunnerActionKill, nil, &tip.ID)
+		return advanceRefusedKillTx(ctx, tx, owner, run, t, tip, prepare)
 	case tip.Outcome == types.RunnerActionSuccess && t.state == "kill":
 		// The retire_run is the kill's success successor: never queued beside
 		// a kill, so it always meets a containment the runner settled.
@@ -408,6 +387,33 @@ func advanceRetirementTx(ctx context.Context, tx pgx.Tx, owner string, run types
 		return RetirementRetire, queueRetireTx(ctx, tx, owner, t, nil, prepare)
 	}
 	return RetirementIdle, nil
+}
+
+// advanceRefusedKillTx is advanceRetirementTx's step for a retirement whose latest kill the runner refused.
+func advanceRefusedKillTx(ctx context.Context, tx pgx.Tx, owner string, run types.AgentRun, t runnerRetirement,
+	tip types.RunnerPendingAction, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (string, error) {
+	var cleared, paged bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at > $2),
+		EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $3 AND complete)
+		AND NOT EXISTS (SELECT 1 FROM run_teardown_holds WHERE run_id = $1 AND cleared_at IS NULL)`,
+		run.ID, tip.ObservedAt, t.runnerID).Scan(&cleared, &paged); err != nil {
+		return RetirementIdle, err
+	}
+	if !cleared && !paged {
+		return RetirementIdle, nil
+	}
+	if !cleared {
+		_, err := closeRetirementTx(ctx, tx, run.ID, "refused", RetirementRunnerRefused)
+		return RetirementIdle, err
+	}
+	if t.successors >= RetirementSuccessorBound {
+		return RetirementAbandoned, abandonRetirementTx(ctx, tx, t, RetirementDeferredExhausted, prepare)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runner_retirements SET successors = successors + 1 WHERE run_id = $1`, run.ID); err != nil {
+		return RetirementIdle, err
+	}
+	// A refused action is never marked superseded (runner_pending_actions_chain); supersedes links it.
+	return RetirementSuccessor, insertRetirementActionTx(ctx, tx, owner, t, types.RunnerActionKill, nil, &tip.ID)
 }
 
 // insertRetirementActionTx queues one action of t's obligation, bound to the
