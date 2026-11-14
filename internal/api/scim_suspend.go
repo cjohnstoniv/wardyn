@@ -443,6 +443,7 @@ func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, 
 	)
 	// A suspension begun after a reactivation owns the ledger now (finishStep): it finishes and audits itself.
 	if errors.Is(stepErr, store.ErrSuperseded) {
+		slog.WarnContext(ctx, "api: a suspension tail stopped for a newer suspension; its step errors are not in the answer", slog.String("identity", id.String()), slog.Any("err", stepErr))
 		return nil
 	}
 	if stepErr != nil {
