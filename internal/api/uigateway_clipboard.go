@@ -52,7 +52,12 @@ func uiDesktopApp(app string) bool { return app == "novnc" || app == desktopSign
 // uiFilterUpgrade puts the clipboard filter on a desktop's relayed WebSocket. That socket is RFB
 // or it closes (rfbfilter): a desktop whose server does not speak RFB is closed and audited. A 101
 // that negotiates an extension is refused: uiRewrite offers none on a desktop, and a compressed
-// frame would hide the RFB stream from the filter. Other apps' sockets pass untouched.
+// frame would hide the RFB stream from the filter. The browser's frames are checked first, as a
+// WebSocket server checks a client's (rfbfilter.CheckBrowserFrames): one that breaks the protocol is
+// refused here, and named, rather than passed on to the desktop's own server.
+// The check is on ReverseProxy's writes to the desktop, so every byte the desktop gets goes through it,
+// and it checks them up to the browser's close frame; what net/http buffered past the upgrade request is
+// not relayed at all. Other apps' sockets pass untouched.
 func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 	if !uiDesktopApp(sess.App) {
 		return nil
@@ -86,7 +91,7 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 	if s.uiDesktopSink != nil {
 		filtered.SetSink(s.uiDesktopSink(sess))
 	}
-	resp.Body = filtered
+	resp.Body = filtered.CheckBrowserFrames()
 	return nil
 }
 

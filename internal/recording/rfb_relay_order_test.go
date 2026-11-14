@@ -199,3 +199,101 @@ func TestStopKeepsTheFirstStopMark(t *testing.T) {
 		t.Fatalf("stop mark at %d ms for %q, want 1 ms for the first stop", pb.StoppedMS, pb.StopReason)
 	}
 }
+
+// TestEachRefusalEndsTheRecordingWithItsStopMark runs the relay order with a stand-in for the desktop doors'
+// refusal handler (stopRefusedRecording, in internal/api), for every refusal but a pixel format's: each ends the
+// recording with a stop mark in the fixed words of what the relay refused (rfbfilter.Refusal), at the refusal,
+// after frames the recording keeps. The two connection setup cases have a desktop that sent ahead, which the
+// recorder read before the relay did. A desktop message the recorder cannot follow either keeps the recorder's own
+// stop, which has no reason.
+func TestEachRefusalEndsTheRecordingWithItsStopMark(t *testing.T) {
+	type step = func(*rfbfilter.Conn, *desk, *RFBRecorder) error
+	mask := []byte{1, 2, 3, 4}
+	browser := func(msg []byte, op byte) step {
+		return func(c *rfbfilter.Conn, _ *desk, _ *RFBRecorder) error {
+			_, err := c.Write(wsFrame(true, op, msg, mask))
+			return err
+		}
+	}
+	desktop := func(msg []byte, op byte) step {
+		return func(c *rfbfilter.Conn, d *desk, _ *RFBRecorder) error {
+			d.chunks = append(d.chunks, wsFrame(true, op, msg, nil))
+			_, err := io.ReadAll(c)
+			return err
+		}
+	}
+	for name, tc := range map[string]struct {
+		viewOnly, setup bool // setup: the case runs the connection setup itself
+		refuse          step
+		reason          string
+	}{
+		"a browser frame":    {refuse: browser([]byte("x"), 1), reason: "a WebSocket frame from the browser that it cannot read"},
+		"a desktop frame":    {refuse: desktop(bell, 0x42), reason: "a WebSocket frame from the desktop that it cannot read"},
+		"a browser message":  {refuse: browser([]byte{7}, 2), reason: "a message from the browser that it cannot follow"},
+		"a desktop message":  {refuse: desktop(fbu(1, rect(1, 1, 5), []byte{1}, make([]byte, 4)), 2), reason: "a message from the desktop that it cannot follow"},
+		"a view-only action": {viewOnly: true, refuse: browser([]byte{251}, 2), reason: "a control message from the browser on a view-only desktop"},
+		"the desktop's setup": {setup: true, refuse: desktop(cat(rfbHello(), bell), 2),
+			reason: "the desktop's connection setup, which it cannot follow"},
+		"the browser's setup": {setup: true, refuse: func(c *rfbfilter.Conn, d *desk, r *RFBRecorder) error {
+			_ = desktop(rfbHello()[:12], 2)(c, d, r)
+			_, _ = r.Write(wsFrame(true, 2, cat(rfbHello()[12:], bell), nil)) // read by the recorder, not yet by the relay
+			return browser([]byte("RFB 004.000\n"), 2)(c, d, r)
+		}, reason: "the browser's connection setup, which it cannot follow"},
+		"a desktop message the recorder cannot follow": {refuse: desktop([]byte{99}, 2)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			at := time.Unix(1, 0)
+			d, r := &desk{}, NewRFBFrameRecorder(func() time.Time { return at })
+			var refusal *rfbfilter.Refusal
+			c := rfbfilter.Wrap(ReadSide(d, r, func() {}), rfbfilter.Rules{ViewOnly: tc.viewOnly, Recorded: true}, func(rfbfilter.Event) {}, func(err error) {
+				if errors.As(err, &refusal) {
+					r.Stop("refused: " + refusal.Kind)
+				}
+			})
+			if at = at.Add(time.Second); !tc.setup {
+				relayHandshake(t, c, d, mask, rfbHello())
+				d.chunks = append(d.chunks, wsFrame(true, 2, bell, nil))
+				_, _ = io.ReadAll(c)
+			}
+			at = at.Add(time.Second)
+			if err := tc.refuse(c, d, r); err == nil || refusal == nil {
+				t.Fatalf("err %v, refusal %v: want the relay to refuse and name what it refused", err, refusal)
+			}
+			want := ""
+			if tc.reason != "" {
+				want = "refused: " + tc.reason
+			}
+			pb := playback(t, r)
+			if _, had := r.Playback(); !had || pb.StoppedMS != 2000 || pb.StopReason != want {
+				t.Fatalf("frames kept %v, stop mark at %d ms for %q: want frames and the mark at 2000 ms for %q", had, pb.StoppedMS, pb.StopReason, want)
+			}
+		})
+	}
+}
+
+// TestARefusalBeforeTheDesktopsFirstMessageStoresNothing: a desktop whose first message is not RFB, and a browser
+// that sends too much before the desktop's first message, are refused with no Refusal kind, and no recording is
+// stored, since none kept a frame.
+func TestARefusalBeforeTheDesktopsFirstMessageStoresNothing(t *testing.T) {
+	for name, refuse := range map[string]func(*rfbfilter.Conn, *desk) error{
+		"not RFB": func(c *rfbfilter.Conn, d *desk) error {
+			d.chunks = append(d.chunks, wsFrame(true, 2, []byte(`{"hello":1}`), nil), wsFrame(true, 2, cat(rfbHello(), bell), nil))
+			_, err := io.ReadAll(c)
+			return err
+		},
+		"too much held": func(c *rfbfilter.Conn, _ *desk) error { _, err := c.Write(make([]byte, 64<<10+1)); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, r := &desk{}, NewRFBFrameRecorder(time.Now)
+			var refused error
+			c := rfbfilter.Wrap(ReadSide(d, r, func() {}), rfbfilter.Rules{Recorded: true}, func(rfbfilter.Event) {}, func(err error) { refused = err })
+			var refusal *rfbfilter.Refusal
+			if err := refuse(c, d); err == nil || refused == nil || errors.As(refused, &refusal) {
+				t.Fatalf("err %v, refused %v: want a refusal with no Refusal kind", err, refused)
+			}
+			if _, had := r.Playback(); had {
+				t.Fatal("a recording refused before the desktop's first message kept a frame, so it would be stored")
+			}
+		})
+	}
+}

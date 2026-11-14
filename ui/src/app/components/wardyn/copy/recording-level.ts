@@ -91,7 +91,7 @@ export const RECORDING_REPLAY = {
     `${reason.charAt(0).toUpperCase()}${reason.slice(1)}, so no screen frames were kept. The action log kept going. The gap is marked in the audit log.`,
   GAP: (d: string) => `Gap ${d}`,
   // Pending the owner's approval of the copy: the recording hit its size cap or the stream stopped being followable.
-  // The reason, when the recording carries one, is Wardyn's own sentence (Go: desktopStopPixels and the refused format).
+  // The reason, when the recording carries one, is Wardyn's own sentence (Go: stopRefusedRecording's, in fixed words).
   STOPPED_AT: (time: string, reason?: string) => `Screen recording stopped at ${time}; the action log continues.${reason ? ` ${reason}.` : ""}`,
   KEYSTROKES: "Keystrokes are never recorded.",
   LOG_TITLE: "Tamper-evident log",

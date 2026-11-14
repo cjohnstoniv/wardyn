@@ -53,8 +53,8 @@ type RFBPlayback struct {
 	ClipboardOmitted int `json:"clipboard_omitted,omitempty"`
 	// StoppedMS is when the stream stopped being one the recorder could follow; nothing after it is kept.
 	StoppedMS int64 `json:"stopped_ms,omitempty"`
-	// StopReason says why the recording stopped at StoppedMS when the relay stopped it (Stop: a pixel format
-	// the relay refused) rather than the recorder; it is empty otherwise.
+	// StopReason says why the recording stopped at StoppedMS when the relay stopped it (Stop: what the relay
+	// refused) rather than the recorder; it is empty otherwise.
 	StopReason string `json:"stop_reason,omitempty"`
 }
 
@@ -364,9 +364,9 @@ func (r *RFBRecorder) StoppedMS() int64 {
 	return r.stopped
 }
 
-// Stop ends the recording now, for reason: the relay closes a stream it refused (a pixel format), and the
-// playback's StoppedMS and StopReason say where and why rather than the frames just ending. Nothing read
-// after it is kept. A recording already stopped keeps its first stop.
+// Stop ends the recording now, for reason: the relay closes a stream it refused (rfbfilter's PixelFormatError or
+// Refusal), and the playback's StoppedMS and StopReason say where and why rather than the frames just ending.
+// Nothing read after it is kept. A recording already stopped keeps its first stop.
 func (r *RFBRecorder) Stop(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

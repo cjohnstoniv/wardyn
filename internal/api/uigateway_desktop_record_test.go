@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -319,32 +321,35 @@ var (
 	rfbPixelsAsked  = []byte{3, 0, 0, 0, 0, 0, 5, 0, 3, 32}
 )
 
-// pixelFormatCase is a viewer's message on a desktop, and, when the desktop is recorded and the relay refuses
-// the message, the format the refusal's stop mark names.
-type pixelFormatCase struct {
+// refusedCase is a viewer's message on a desktop, binary unless text, and, when the desktop is recorded and the
+// relay refuses the message, the reason the refusal's stop mark gives: the refused format, or what else the relay
+// refused.
+type refusedCase struct {
 	recorded bool
 	msg      []byte
-	refused  string
+	reason   string
+	text     bool
 }
 
-var pixelFormatCases = map[string]pixelFormatCase{
-	"recorded, SetPixelFormat": {true, rfbPixelFormat8,
-		"8 bits per pixel, depth 8, little-endian true colour, maxima of 7, 7 and 3 and shifts of 5, 2 and 0 for red, green and blue"},
-	"recorded, ServerInit": {true, rfbPixelsAsked,
-		"32 bits per pixel, depth 24, little-endian true colour, maxima of 255, 255 and 255 and shifts of 16, 8 and 0 for red, green and blue"},
-	"unrecorded": {false, rfbPixelFormat8, ""},
+var refusedCases = map[string]refusedCase{
+	"recorded, SetPixelFormat": {true, rfbPixelFormat8, desktopStopPixels +
+		"8 bits per pixel, depth 8, little-endian true colour, maxima of 7, 7 and 3 and shifts of 5, 2 and 0 for red, green and blue", false},
+	"recorded, ServerInit": {true, rfbPixelsAsked, desktopStopPixels +
+		"32 bits per pixel, depth 24, little-endian true colour, maxima of 255, 255 and 255 and shifts of 16, 8 and 0 for red, green and blue", false},
+	"recorded, a message it cannot follow": {true, []byte{7}, "Wardyn refused a message from the browser that it cannot follow", false},
+	"recorded, a text message":             {true, []byte("text"), "Wardyn refused a WebSocket frame from the browser that it cannot read", true},
+	"unrecorded":                           {false, rfbPixelFormat8, "", false},
 }
 
-// stoppedForPixels checks a recording its relay ended at a refused pixel format: the write row carries
-// stopped_ms, as every early stop's does, and the recording's last record is the stop mark, whose reason
-// names the refused format.
-func stoppedForPixels(t *testing.T, write map[string]any, pb recording.RFBPlayback, refused string) {
+// stoppedWhereRefused checks a recording its relay ended at a refusal: the write row carries stopped_ms, as
+// every early stop's does, and the recording's last record is the stop mark, with reason.
+func stoppedWhereRefused(t *testing.T, write map[string]any, pb recording.RFBPlayback, reason string) {
 	t.Helper()
 	if ms, _ := write["stopped_ms"].(float64); ms <= 0 || int64(ms) != pb.StoppedMS {
 		t.Fatalf("write row stopped_ms = %v, recording stopped at %d ms: want the same stop mark in both", write["stopped_ms"], pb.StoppedMS)
 	}
-	if want := desktopStopPixels + refused; pb.StopReason != want {
-		t.Fatalf("stop reason = %q, want %q", pb.StopReason, want)
+	if pb.StopReason != reason {
+		t.Fatalf("stop reason = %q, want %q", pb.StopReason, reason)
 	}
 	for _, f := range pb.Frames {
 		ms, _, _ := strings.Cut(strings.TrimPrefix(f, "{"), "{")
@@ -354,13 +359,14 @@ func stoppedForPixels(t *testing.T, write map[string]any, pb recording.RFBPlayba
 	}
 }
 
-// TestVMDesktopRecording_RefusesAPixelFormatItCannotFrame: on a recorded VM desktop the relay's filter is
+// TestVMDesktopRecording_ARefusalEndsWithAStopMark: on a recorded VM desktop the relay's filter is
 // told the display is recorded, so a SetPixelFormat the recorder cannot frame, or a request for pixels in
 // the display's own format when that is not the replay's, closes the viewer's socket and never reaches the
-// display, and the stored recording ends with a stop mark naming the format. Unrecorded, the same message
-// reaches the display.
-func TestVMDesktopRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
-	for name, tc := range pixelFormatCases {
+// display, and the stored recording ends with a stop mark naming the format; so does a message the relay
+// cannot follow at all, or a text message, which the door hands the filter rather than refusing it itself, with
+// what it refused. Unrecorded, the same SetPixelFormat reaches the display.
+func TestVMDesktopRecording_ARefusalEndsWithAStopMark(t *testing.T) {
+	for name, tc := range refusedCases {
 		t.Run(name, func(t *testing.T) {
 			h, dr, send, got := vmDesktopRun(t)
 			if !tc.recorded {
@@ -370,7 +376,13 @@ func TestVMDesktopRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			v := openVMDesktop(t, ctx, h, dr)
-			v.write(tc.msg)
+			if tc.text {
+				if err := v.ws.Write(ctx, websocket.MessageText, tc.msg); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				v.write(tc.msg)
+			}
 			if !tc.recorded {
 				var reached []byte
 				for len(reached) < len(tc.msg) {
@@ -397,20 +409,20 @@ func TestVMDesktopRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
 			endVMDesktop(t, h, v, send)
 			select {
 			case b := <-got:
-				t.Fatalf("the VM read %x: the refused format reached it", b)
+				t.Fatalf("the VM read %x: the refused message reached it", b)
 			default:
 			}
 			write, pb, _ := storedVMRecording(t, h)
-			stoppedForPixels(t, write, pb, tc.refused)
+			stoppedWhereRefused(t, write, pb, tc.reason)
 		})
 	}
 }
 
-// TestDesktopAppRecording_RefusesAPixelFormatItCannotFrame is the same for a container's noVNC app, whose
-// filter goes on in uiFilterUpgrade: recorded, the message closes the browser's socket, never reaches the
-// desktop and ends the recording with the stop mark; unrecorded, it reaches the desktop.
-func TestDesktopAppRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
-	for name, tc := range pixelFormatCases {
+// TestDesktopAppRecording_ARefusalEndsWithAStopMark is the same for a container's noVNC app, whose
+// filter goes on in uiFilterUpgrade: recorded, each message closes the browser's socket, never reaches the
+// desktop and ends the recording with its stop mark; unrecorded, the SetPixelFormat reaches the desktop.
+func TestDesktopAppRecording_ARefusalEndsWithAStopMark(t *testing.T) {
+	for name, tc := range refusedCases {
 		t.Run(name, func(t *testing.T) {
 			offered, pasted := make(chan string, 1), make(chan []byte, 1)
 			h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
@@ -424,7 +436,11 @@ func TestDesktopAppRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
 			if next, err := readWSFrame(ds.br); err != nil || !bytes.Equal(next, []byte{2}) {
 				t.Fatalf("after ServerInit the browser got %q (err %v), want the Bell", next, err)
 			}
-			if _, err := ds.conn.Write(wsFrame(tc.msg, true)); err != nil {
+			f := wsFrame(tc.msg, true)
+			if tc.text {
+				f[0] = 0x81
+			}
+			if _, err := ds.conn.Write(f); err != nil {
 				t.Fatalf("%x write: %v", tc.msg, err)
 			}
 			if !tc.recorded {
@@ -445,10 +461,10 @@ func TestDesktopAppRecording_RefusesAPixelFormatItCannotFrame(t *testing.T) {
 			write, pb, _ := storedVMRecording(t, h) // the relay closed and stored its recording
 			select {
 			case b := <-pasted:
-				t.Fatalf("the desktop read %x: the refused format reached it", b)
+				t.Fatalf("the desktop read %x: the refused message reached it", b)
 			default:
 			}
-			stoppedForPixels(t, write, pb, tc.refused)
+			stoppedWhereRefused(t, write, pb, tc.reason)
 		})
 	}
 }
