@@ -505,7 +505,8 @@ func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, ti
 // Deduped by run id, since teardownByRunID reaches every object from the id.
 //
 // A drive PVC is never touched: it carries labelDrive, never labelRun, and
-// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets.
+// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets; with
+// keep on it also deletes the run's Service and EndpointSlices (deleteKeepAddress).
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	candidates, hasPod, err := d.sweepCandidates(ctx)
 	if err != nil {
