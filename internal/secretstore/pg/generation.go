@@ -90,7 +90,8 @@ func (s *Store) putFenced(ctx context.Context, name string, gen int64, r sealedR
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", rowRef(s.owner, name), err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// On ctx, so it never outlasts the caller's bound (see putExternal).
+	defer func() { _ = tx.Rollback(ctx) }()
 	if err := s.checkGeneration(ctx, tx, gen); err != nil {
 		return err
 	}

@@ -88,7 +88,10 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", ref, err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// The rollback runs on ctx, as every call here does. Once ctx has ended it
+	// fails at once and pgx closes the connection, which ends the transaction on
+	// the server, so it never outlasts the Put's bound.
+	defer func() { _ = tx.Rollback(ctx) }()
 	// The counter row's share lock comes before the row's advisory lock, the
 	// order DeleteEverywhere takes them in: an erase queued for the counter
 	// row would otherwise leave this Put holding the advisory lock while it

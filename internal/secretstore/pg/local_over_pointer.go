@@ -22,7 +22,8 @@ func (s *Store) putOverPointer(ctx context.Context, name string, r sealedRow) er
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", ref, err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// On ctx, so it never outlasts the caller's bound (see putExternal).
+	defer func() { _ = tx.Rollback(ctx) }()
 	// The counter row's share lock before the row's advisory lock, putExternal's order.
 	if gen, fenced := s.generationFence(ctx); fenced {
 		if err := s.checkGeneration(ctx, tx, gen); err != nil {
