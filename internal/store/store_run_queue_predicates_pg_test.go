@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -189,7 +190,10 @@ func TestPG_RequeueIntoADeletedPoolIsRefused(t *testing.T) {
 	})
 	t.Run("waits for the pool row", func(t *testing.T) {
 		p, run := promoted(t)
-		tx, err := pool.Begin(ctx)
+		// The row lock is held on a session of its own: RequeuePromotedRun asks pool for a
+		// connection while it is held, and a second acquire from this goroutine trips
+		// WARDYN_TEST_POOL_GUARD.
+		tx, err := testutil.PGConn(t, pool).Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
