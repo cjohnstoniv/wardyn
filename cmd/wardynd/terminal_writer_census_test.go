@@ -166,7 +166,8 @@ func TestTerminalRunStateWriterCensus(t *testing.T) {
 
 // writesTerminalState reports whether call is a run-state write whose TARGET is
 // one of the terminal states — the three primitives every transition goes
-// through (internal/api's casRunState, its StopKeptRunIf and StopKeptRunForcedIf
+// through (internal/api's casRunState and casRunStateHeld, its bounded twin for a holder of the run's lock
+// (run_held_store.go), its StopKeptRunIf and StopKeptRunForcedIf
 // siblings for a kept run's atomic-mark CAS (F04) and its forced end, and the reaper's guarded UpdateRunStateIfIdle)
 // — or a finalize helper handed a terminal state — or one of the store methods
 // that end runs themselves (RevokeRunner, AcceptRunnerExit, FailStalePromotedRun).
@@ -183,7 +184,7 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		// Store methods that end runs in SQL, with the terminal state inside the
 		// statement rather than in an argument.
 		return true
-	case "casRunState", "StopKeptRunIf", "StopKeptRunForcedIf", "UpdateRunStateIfIdle", "reconcileFinalize", "reconcileFinalizeHint":
+	case "casRunState", "casRunStateHeld", "StopKeptRunIf", "StopKeptRunForcedIf", "UpdateRunStateIfIdle", "reconcileFinalize", "reconcileFinalizeHint":
 	default:
 		return false
 	}
