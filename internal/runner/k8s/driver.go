@@ -307,6 +307,7 @@ func New(cfg Config) (*Driver, error) {
 		return nil, err
 	}
 	d.startCanaryRecheck()
+	d.startWarmPools()
 	return d, nil
 }
 
