@@ -24,8 +24,8 @@ import (
 // strictly after the bound is the only one not owed: one stamped at the bound itself, one before it and one from
 // before the stamp existed (NULL) are owed. RunsInsertedAfter and APITokensInsertedAfter name only the later
 // row, and DeleteSSHKeysUpTo deletes every key but the later one. SubCutSince counts a cutoff written at the
-// bound and not one written before it. FinishSuspensionJobAt closes a step for the identity's current
-// deactivation and refuses one bound to another instant.
+// bound and not one written before it, and none while the person is deactivated. FinishSuspensionJobAt closes a
+// step for the identity's current deactivation and refuses one bound to another instant.
 func TestPG_SuspensionBounds_TheBoundItselfIsOwed(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
@@ -152,17 +152,20 @@ func TestPG_SuspensionBounds_TheBoundItselfIsOwed(t *testing.T) {
 			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, c.at); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := st.SubCutSince(ctx, "sub-cut", bound); err != nil || got != c.want {
+		if got, err := st.SubCutSince(ctx, leaver.ID, "sub-cut", bound); err != nil || got != c.want {
 			t.Errorf("cutoff written %v before the bound: cut since = %v, %v; want %v", bound.Sub(c.at), got, err, c.want)
 		}
 	}
-	if got, err := st.SubCutSince(ctx, "sub-never-cut", bound); err != nil || got {
+	if got, err := st.SubCutSince(ctx, leaver.ID, "sub-never-cut", bound); err != nil || got {
 		t.Errorf("a sub with no cutoff: cut since = %v, %v; want false", got, err)
 	}
 
 	res, err = st.SuspendIdentity(ctx, plan)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, err := st.SubCutSince(ctx, leaver.ID, "sub-cut", bound); err != nil || got {
+		t.Errorf("while the person is deactivated, a cutoff at the bound: cut since = %v, %v; want false", got, err)
 	}
 	key := store.JobKey{Step: "sweep", Target: "x"}
 	if err := st.EnsureDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend, []store.JobKey{key}); err != nil {
