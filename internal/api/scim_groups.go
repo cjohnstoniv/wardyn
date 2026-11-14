@@ -366,7 +366,8 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		errs = append(errs, finish(store.GroupStepSessions, cutErr, map[string]int{"sessions_cut": len(cuts)}))
 	}
 	// A newer removal replaced this one's rows: it cuts, revokes and writes its own row, so this one stops.
-	if errors.Is(errors.Join(errs...), store.ErrSuperseded) {
+	if err := errors.Join(errs...); errors.Is(err, store.ErrSuperseded) {
+		slog.WarnContext(ctx, "api: a group removal stopped for a newer removal; its session cut errors are not in the answer", slog.String("group", g.ID.String()), slog.String("identity", identityID.String()), slog.Any("err", err))
 		return nil
 	}
 	if pending(store.GroupStepTokens) {
