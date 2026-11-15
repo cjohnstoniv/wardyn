@@ -1630,7 +1630,9 @@ func TestSweepForcedStops_AGivenUpRecordIsStoppedAndStaysGivenUp(t *testing.T) {
 
 // Rule R's control, lock held: a forced retry stops the sandbox when nothing is owed: a one way folder, or a final
 // record, settled or not (a pass back that found the record already brought back leaves its own generation
-// unsettled). Catches: a rule R widened to keep a sandbox that owes no copy back.
+// unsettled). Catches: a rule R widened to keep a sandbox that owes no copy back; and a record brought back with its
+// generation unsettled taken by the settle as one a forced end left unsettled, which cuts the agent a second time on
+// every tick.
 func TestSweepForcedStops_NothingOwedStopsWithTheLockHeld(t *testing.T) {
 	at := time.Now()
 	for name, tc := range map[string]struct {
@@ -1649,9 +1651,12 @@ func TestSweepForcedStops_NothingOwedStopsWithTheLockHeld(t *testing.T) {
 			}
 			f.claimOnly(t)
 			f.setRecord(tc.rec)
+			rn := &proxyCounted{passWindowSandbox: f.s.cfg.Runner.(*passWindowSandbox)}
+			f.s.cfg.Runner = rn
 			f.tick(t, f.s) // the lock is held
-			if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 {
-				t.Errorf("%d stops, %d marks; want the sandbox stopped and the mark cleared", f.sb.stopCount(), f.leaser.markCount())
+			if f.sb.stopCount() != 1 || f.leaser.markCount() != 0 || rn.proxyStops.Load() != 1 {
+				t.Errorf("%d stops, %d marks, %d cuts; want the sandbox stopped, the mark cleared and one cut, the stop path's own",
+					f.sb.stopCount(), f.leaser.markCount(), rn.proxyStops.Load())
 			}
 		})
 	}
