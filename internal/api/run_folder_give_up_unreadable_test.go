@@ -191,3 +191,24 @@ func TestGiveUpFolderStopped_AnUnreadableRecordIsDecidedWithoutDecodingIt(t *tes
 		})
 	}
 }
+
+// A record read that the caller's bound cuts, as the boot pass's heldCall cuts one that never answers, is a read that
+// failed, and past the keep its give-up still lands: the statement, its given_up row and the final answer run on a
+// bound of their own. Catches: the statements after the read run on the caller's expired context, so the give-up
+// never lands and the forced retry stops the sandbox again on every tick.
+func TestGiveUpFolderStopped_ARecordReadCutByTheCallersBoundStillGivesUp(t *testing.T) {
+	old := heldStoreCallBound
+	heldStoreCallBound = 50 * time.Millisecond
+	t.Cleanup(func() { heldStoreCallBound = old })
+	s, st, audit, run := unreadFolderServer(t, types.RunCompleted, &orphanSweepRunner{fakeRunner: &fakeRunner{}})
+	st.past = true
+	var once atomic.Bool
+	st.hang = func() bool { return once.CompareAndSwap(false, true) }
+	var final bool
+	var err error
+	heldCall(context.Background(), heldStoreCallBound, func(ctx context.Context) { final, err = s.giveUpFolderStopped(ctx, run) })
+	if st.hung.Load() != 1 || !final || err != nil || len(st.liveGiveUps()) != 1 || unreadRows(audit, run) != 1 {
+		t.Fatalf("%d hung reads, final %v, err %v, %d live give-ups, %d rows; want 1, true, nil, 1, 1",
+			st.hung.Load(), final, err, len(st.liveGiveUps()), unreadRows(audit, run))
+	}
+}

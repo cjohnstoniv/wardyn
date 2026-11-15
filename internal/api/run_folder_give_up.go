@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -118,7 +119,9 @@ func (s *Server) unreadOwed(ctx context.Context, run types.AgentRun) (bool, erro
 // record again on its next tick, and a killed run's resume is given up here, at the end of the history tail it takes.
 // A folder seed or data_out rule that cannot be read has the copy back given up the same way, noted
 // folderRuleUnreadable, by the statement that also finds a record already final without decoding it. Inside the keep
-// that is not final, so a read that fails for a while throws no count away. Not final whatever the keep, a read that
+// that is not final, so a read that fails for a while throws no count away. Everything after the record read runs on a
+// bound of its own (heldStoreCallBound, with the caller's fencing and none of its deadline), so a record read cut by
+// the caller's budget is a read that failed, and its give-up can still land. Not final whatever the keep, a read that
 // never answers would keep the ref for good, and a forced-marked run's retry, which the tail owner passes over, would
 // stop its sandbox again on every tick.
 func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (final bool, err error) {
@@ -127,10 +130,17 @@ func (s *Server) giveUpFolderStopped(ctx context.Context, run types.AgentRun) (f
 		return true, nil
 	}
 	st, err := ss.RunLocalFolderStatus(ctx, run.ID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
+	if errors.Is(err, store.ErrNotFound) {
 		return true, nil
-	case err != nil:
+	}
+	// The reads and the statement after the record read run on a bound of their own, with the caller's fencing and
+	// none of its deadline: a record read cut by the caller's budget (the boot pass's heldCall, the end tail's stop)
+	// is a read that failed, and the give-up it is decided by must still be able to land.
+	fenced, release := db.WithoutCancelUnlessLost(ctx)
+	defer release()
+	ctx, cancel := withinHold(fenced, heldStoreCallBound)
+	defer cancel()
+	if err != nil {
 		if owed, oerr := s.unreadOwed(ctx, run); oerr == nil && !owed {
 			return true, nil
 		}
