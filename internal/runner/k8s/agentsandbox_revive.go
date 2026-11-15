@@ -147,8 +147,9 @@ func (d *Driver) agentDeadline(ctx context.Context, ns string, runID uuid.UUID) 
 }
 
 // swapProxy empties the run's endpoint, removes old (the proxy pod the replace read; nil for none) with the replacement
-// config Secret it mounted, starts the new one for policy generation gen and points the endpoint at it. Every error from
-// here on wraps runner.ErrProxyReplaceFailed: the old proxy may be gone.
+// config Secret it mounted, starts the new one for policy generation gen and points the endpoint at it, while no newer
+// proxy pod is there (pointKeepEndpointsAt). Every error from here on wraps runner.ErrProxyReplaceFailed: the old proxy
+// may be gone.
 func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc *corev1.Service, in proxyPodInputs, old *corev1.Pod, gen int) error {
 	fail := func(step string, err error) error {
 		return fmt.Errorf("%w: %s: %v", runner.ErrProxyReplaceFailed, step, err)
@@ -177,7 +178,7 @@ func (d *Driver) swapProxy(ctx context.Context, ns string, runID uuid.UUID, svc 
 	if err != nil {
 		return fail("wait for the new proxy pod", err)
 	}
-	if err := d.writeKeepEndpoints(ctx, ns, runID, svc, ip); err != nil {
+	if err := d.pointKeepEndpointsAt(ctx, ns, runID, svc, gen, ip); err != nil {
 		return fail("point the endpoint at the new proxy pod", err)
 	}
 	return nil

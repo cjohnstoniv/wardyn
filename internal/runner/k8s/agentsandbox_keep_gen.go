@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -80,6 +82,42 @@ func (d *Driver) emptyKeepEndpointsAt(ctx context.Context, ns string, runID uuid
 	slice.Endpoints = nil
 	if _, err := eps.Update(ctx, slice, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("k8s: keep: empty the run's EndpointSlice: %w", err)
+	}
+	return nil
+}
+
+// pointKeepEndpointsAt points the run's EndpointSlice at ip, the address of the proxy pod a replace acting for policy
+// generation gen made, so the agent reaches it. With gen > 0 the slice is read first, then the proxy pod
+// (proxyNotNewer), and the slice is updated as read: a newer revive that removed this replace's pod and pointed the
+// slice at its own either is still there for the pod read to refuse with runner.ErrProxyGenerationNewer, or wrote
+// after the slice read, and the update, which carries the resourceVersion read, fails with a conflict. With no proxy
+// pod at all, the one this replace made was removed after its address was read, and nothing is written. With gen 0 it
+// is writeKeepEndpoints.
+func (d *Driver) pointKeepEndpointsAt(ctx context.Context, ns string, runID uuid.UUID, svc *corev1.Service, gen int, ip string) error {
+	if gen <= 0 {
+		return d.writeKeepEndpoints(ctx, ns, runID, svc, ip)
+	}
+	eps := d.clientset.DiscoveryV1().EndpointSlices(ns)
+	slice, err := eps.Get(ctx, keepServiceName(runID), metav1.GetOptions{})
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("k8s: keep: read the run's EndpointSlice: %w", err)
+	}
+	pod, perr := d.proxyNotNewer(ctx, ns, runID, gen, false)
+	if perr != nil {
+		return perr
+	}
+	if pod == nil {
+		return errors.New("k8s: keep: the proxy pod this replace made is gone")
+	}
+	if err != nil { // no slice yet: make it, pointed at ip
+		return d.writeKeepEndpoints(ctx, ns, runID, svc, ip)
+	}
+	if addressFamily(ip) != slice.AddressType {
+		return fmt.Errorf("k8s: keep: the proxy's address %s is not of the %s family of the run's EndpointSlice", ip, slice.AddressType)
+	}
+	slice.Endpoints = []discoveryv1.Endpoint{{Addresses: []string{ip}, Conditions: discoveryv1.EndpointConditions{Ready: boolPtr(true)}}}
+	if _, err := eps.Update(ctx, slice, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("k8s: keep: update the run's EndpointSlice: %w", err)
 	}
 	return nil
 }
