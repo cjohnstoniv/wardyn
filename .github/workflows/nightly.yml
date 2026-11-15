@@ -286,15 +286,21 @@ jobs:
           free -m
       # The package is compiled here first with two workers, so the step below finds it in the build cache, and
       # memory and disk are printed around it. vmstat writes to the step log every 15 s.
-      - name: Prebuild the docker-tagged api test binary with two workers
+      - name: Prebuild the docker-tagged api test binary with one worker
         env:
           GOMAXPROCS: "2"
+          # The api compile peaked at 15.4-15.6 GB of the runner's 16 GB, here beside the agent images in
+          # docker. A soft heap limit has the compiler collect harder near it, and one worker keeps a second
+          # compile or link from running beside it.
+          GOMEMLIMIT: "10GiB"
         run: |
           free -m; df -h /
           vmstat -t 15 &
           vm=$!
           trap 'kill "$vm" 2>/dev/null || true' EXIT
-          /usr/bin/time -v go test -c -tags docker -p 2 -o "$RUNNER_TEMP/api-docker.test" ./internal/api/
+          /usr/bin/time -v -o "$RUNNER_TEMP/api.time" go test -c -tags docker -p 1 -o "$RUNNER_TEMP/api-docker.test" ./internal/api/ || { cat "$RUNNER_TEMP/api.time"; exit 1; }
+          cat "$RUNNER_TEMP/api.time"
+          echo "::notice title=internal/api test compile::$(grep -E 'Maximum resident|Elapsed' "$RUNNER_TEMP/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
           rm -f "$RUNNER_TEMP/api-docker.test"
           free -m; df -h /
       - name: Docker conformance at CC2 (runsc)
